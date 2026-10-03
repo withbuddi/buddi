@@ -59,6 +59,7 @@ and in that one `deliver` call, and nowhere else.
 | `http.header` | core's `http` area | exact host and header name, HTTPS only | pre-approved |
 | `http.url` | core's `http` area (1.9) | the plugin that stored it and the exact host, HTTPS and GET only | pre-approved |
 | `http.basic` | core's `http` area (1.26) | the plugin that stored it and the host (exact, or `*.` a domain), HTTPS, WebDAV verbs only | pre-approved |
+| `http.bearer` | core's `http` area (1.28) | the plugin that asked for the sign-in and one of its provider's API hosts, HTTPS; written only by core's sign-in | pre-approved |
 | `developer.env` | developer, for `start` and `run` | workspace and variable name | pre-approved per workspace |
 | `browser.native.type` | browser (macOS accessibility) | the app's bundle id | every time |
 | `browser.form.data` | browser | exact or wildcard origin, and field | every time, every use logged |
@@ -111,6 +112,18 @@ and in that one `deliver` call, and nowhere else.
   and 120 requests a minute per secret; the plugin keeps the user name and
   never holds the password. The calendar plugin's CalDAV accounts are the
   first.
+- **An account sign-in.** A Google account is signed in with OAuth, not a
+  password. A plugin asks core to run the sign-in (`secrets.signIn`): core
+  makes the PKCE pair and the state, listens on a loopback port for Google's
+  answer (or takes the address the owner pastes back when the browser is on
+  another computer), exchanges the code and writes the tokens as an owner
+  secret the plugin named, bound to `http.bearer` with `{ plugin, host }`.
+  The plugin asks with `auth: { secret, as: 'bearer' }`; core refreshes the
+  access token at the provider that issued it and inserts it, retries once
+  after a 401, and throws `SignInExpiredError` when the provider refuses the
+  refresh. The secret's value is the token envelope; the scrubber hides each
+  token in it. The plugin never holds a token, and cannot write a bearer
+  binding itself. The calendar plugin's Google accounts are the first.
 - **Process environment.** `developer.start` and `developer.run` deliver
   every binding for their workspace into the child's environment, subject
   to each rule; the card on first use names the variables and the command.

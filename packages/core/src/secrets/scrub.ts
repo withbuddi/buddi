@@ -390,6 +390,16 @@ function scrubValue(value: unknown, seen: Set<object>): unknown {
 /** The vault names a connection's OAuth envelope is kept under (`MCP_CONNECTION_<id>`). */
 export const MCP_CONNECTION_SECRET = /^MCP_CONNECTION_[A-Za-z0-9_]+$/;
 
+/** The access and refresh tokens of an OAuth envelope, or none when it is not one. */
+function envelopeTokens(raw: string): string[] {
+  try {
+    const envelope = JSON.parse(raw) as { accessToken?: unknown; refreshToken?: unknown };
+    return [envelope.accessToken, envelope.refreshToken].filter((t): t is string => typeof t === 'string' && t.length >= 8);
+  } catch {
+    return [];
+  }
+}
+
 export async function loadScrubEntries(
   pool: { query(sql: string, params?: unknown[]): Promise<{ rows: any[] }> },
   vault: Vault | undefined,
@@ -402,6 +412,10 @@ export async function loadScrubEntries(
       try {
         const value = await vault.get(ownerSecretVaultName(String(row.id)));
         if (value !== null && value !== '') entries.push({ name: String(row.name), value });
+        // A plugin's OAuth sign-in (`http.bearer`, 1.28) is an envelope: its tokens are what could leak.
+        if (value !== null && value.startsWith('{') && value.includes('"accessToken"')) {
+          for (const token of envelopeTokens(value)) entries.push({ name: String(row.name), value: token });
+        }
       } catch {
         // Locked or vanished: that one is not in this automaton round.
       }

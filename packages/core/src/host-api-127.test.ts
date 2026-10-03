@@ -29,8 +29,8 @@ const parse = (page: unknown) =>
   }).pages;
 
 describe('host API 1.27', () => {
-  it('is this build', () => {
-    expect(HOST_API_VERSION).toBe('1.27');
+  it('is in this build', () => {
+    expect(Number(HOST_API_VERSION.split('.')[1])).toBeGreaterThanOrEqual(27);
   });
 
   describe('page grammar', () => {

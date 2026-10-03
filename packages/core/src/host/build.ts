@@ -49,17 +49,22 @@ import { localDateString, ownerTimezone } from '../time.js';
 import {
   createHttpArea,
   isOwnBasicBinding,
+  isOwnBearerBinding,
   isOwnUrlBinding,
   registerHttpBasicDestination,
+  registerHttpBearerDestination,
   registerHttpHeaderDestination,
   registerHttpUrlDestination,
   type HttpTransportFactory,
 } from './http.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
-import { primeSecretScrubber, scrubText, setSecretScrubSource, loadScrubEntries } from '../secrets/scrub.js';
+import { invalidateSecretScrubber, primeSecretScrubber, scrubText, setSecretScrubSource, loadScrubEntries } from '../secrets/scrub.js';
+import { OAUTH_PROVIDERS, oauthHostCovered, type OAuthProvider, type OAuthSignInStatus } from '../plugin/sign-in.js';
+import { ownerSecretVaultName, type Vault } from '../vault/types.js';
 import {
   assertBindings,
   deleteOwnerSecret,
+  assertOwnerSecretName,
   findSecret,
   listOwnerSecrets,
   putOwnerSecret,
@@ -68,7 +73,6 @@ import {
   secretBindings,
 } from '../secrets/store.js';
 import { useOwnerSecret } from '../secrets/use.js';
-import type { Vault } from '../vault/types.js';
 import type { CoreSourceContext, CoreToolContext, PluginManifest, ToolContext } from '../tools.js';
 import type {
   AccountsArea,
@@ -85,6 +89,7 @@ import type {
   ProposalsArea,
   ScheduleArea,
   SecretsArea,
+  PluginSignInService,
   ToolsArea,
 } from './types.js';
 
@@ -208,6 +213,14 @@ export interface PluginHostServices {
    * is refused in a sentence.
    */
   images?: AssetImageCodec;
+  /**
+   * How a plugin's OAuth sign-in runs and its tokens stay fresh (1.28,
+   * `secrets.signIn`, `auth: { as: 'bearer' }`): the gateway's, over the
+   * runtime's OAuth pieces. Without it, both are refused in a sentence.
+   */
+  signIns?: PluginSignInService;
+  /** The providers a sign-in may name. `OAUTH_PROVIDERS` unless a test points them at a fixture. */
+  oauthProviders?: Readonly<Record<string, OAuthProvider>>;
 }
 
 let services: PluginHostServices = {};
@@ -227,6 +240,8 @@ export function configurePluginHost(more: PluginHostServices): void {
   // And `http.basic` (1.26): a sign-in's password, sent only by the plugin
   // its binding names, to the hosts it names.
   registerHttpBasicDestination();
+  // And `http.bearer` (1.28): an OAuth sign-in core made for a plugin.
+  registerHttpBearerDestination();
 }
 
 /** Forget them. Tests only. */
@@ -543,6 +558,38 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
                 if ('pending' in result) return { pending: result.pending };
                 return { refused: result.refused };
               },
+              // An OAuth sign-in (`http.bearer`, 1.28): the use is recorded
+              // like any other, then the envelope is refreshed in the vault
+              // when it must be and only the access token goes on.
+              async deliverBearerFor(name, requestHost, rejected) {
+                const signIns = services.signIns;
+                if (signIns === undefined) return { refused: 'This buddi cannot keep an OAuth sign-in fresh.' };
+                let delivered = false;
+                const result = await useOwnerSecret(
+                  {
+                    pool: facts.db,
+                    vault: services.vault,
+                    plugin: 'http',
+                    buddi: host,
+                    agentId: facts.agentId,
+                    conversationId: facts.conversationId,
+                    now: () => facts.now(),
+                    deliverInto: () => {
+                      delivered = true;
+                    },
+                  },
+                  { name, kind: 'http.bearer', target: { plugin, host: requestHost } },
+                );
+                if ('pending' in result) return { pending: result.pending };
+                if ('refused' in result) return { refused: result.refused };
+                const secret = await findSecret(facts.db, name);
+                if (!delivered || secret === null || services.vault === undefined) {
+                  return { refused: `The destination did not take "${name}".` };
+                }
+                const fresh = await signIns.fresh(services.vault, ownerSecretVaultName(secret.id), name, rejected === undefined ? {} : { rejected });
+                if (fresh.refreshed) invalidateSecretScrubber();
+                return { ok: true, value: fresh.accessToken };
+              },
             },
     });
   }
@@ -807,6 +854,13 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
     own(b.kind) ||
     (binding.uses.includes('http') &&
       (isOwnUrlBinding({ kind: b.kind, target: b.target }, plugin) || isOwnBasicBinding({ kind: b.kind, target: b.target }, plugin)));
+  /*
+   * A sign-in's tokens (`http.bearer`, 1.28) are core's to write — only
+   * `signIn` stores them — but the plugin that asked for the sign-in may
+   * rename or delete it like any secret of its own (Sign out).
+   */
+  const ownedBinding = (b: { kind: string; target?: unknown }): boolean =>
+    ownBinding(b) || (binding.uses.includes('http') && isOwnBearerBinding({ kind: b.kind, target: b.target }, plugin));
   const ownKinds = (bindings: readonly { kind: string; target?: unknown }[]): void => {
     const foreign = bindings.find((b) => !ownBinding(b));
     if (foreign !== undefined) throw new Error(`${plugin} may bind a secret only to its own destinations, not ${foreign.kind}.`);
@@ -820,7 +874,7 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
     const secret = await findSecret(facts.db, name);
     if (secret === null) return false;
     const bindings = await secretBindings(facts.db, secret.id);
-    if (bindings.length === 0 || bindings.some((b) => !ownBinding(b))) {
+    if (bindings.length === 0 || bindings.some((b) => !ownedBinding(b))) {
       throw new Error(`"${name}" is not ${plugin}'s alone to change; the owner changes it in Settings.`);
     }
     return true;
@@ -847,6 +901,7 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
       await ownedSecret(name);
       await putOwnerSecret(facts.db, vault(), { name, value, bindings });
     },
+    ...(binding.uses.includes('http') ? signInMethods(plugin, facts, asOwner, ownedSecret, vault) : {}),
     async rename(name, to) {
       asOwner('renames a secret');
       if (!(await ownedSecret(name))) return false;
@@ -862,6 +917,77 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
       asOwner('deletes a secret');
       if (!(await ownedSecret(name))) return false;
       return deleteOwnerSecret(facts.db, vault(), name);
+    },
+  };
+}
+
+/** A sign-in's id is the service's; a stale or foreign one is just gone. */
+const SIGN_IN_GONE: OAuthSignInStatus = { state: 'expired', problem: 'That sign-in is over; start again.' };
+
+/**
+ * `secrets.signIn` and its three companions (1.28): an OAuth sign-in to one
+ * of core's providers, the tokens written by core as the owner secret the
+ * plugin names, bound to `http.bearer` for this plugin and one of the
+ * provider's API hosts, pre-approved — the owner's own sign-in is the
+ * approval. Every call is scoped to this plugin.
+ */
+function signInMethods(
+  plugin: string,
+  facts: HostFacts,
+  asOwner: (what: string) => void,
+  ownedSecret: (name: string) => Promise<boolean>,
+  vault: () => Vault,
+): Pick<SecretsArea, 'signIn' | 'signInStatus' | 'signInFinish' | 'signInCancel'> {
+  const service = (): PluginSignInService => {
+    if (services.signIns === undefined) throw new Error('This buddi cannot run a sign-in.');
+    return services.signIns;
+  };
+  return {
+    async signIn(req) {
+      asOwner('signs in');
+      const provider = (services.oauthProviders ?? OAUTH_PROVIDERS)[req.provider];
+      if (provider === undefined) throw new Error(`buddi does not sign in to "${req.provider}".`);
+      if (typeof req.clientId !== 'string' || !/^[A-Za-z0-9._-]{1,200}$/.test(req.clientId)) throw new Error('That is not an OAuth client id.');
+      if (req.clientSecret !== undefined && (typeof req.clientSecret !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(req.clientSecret))) {
+        throw new Error('That is not an OAuth client secret.');
+      }
+      if (!Array.isArray(req.scopes) || req.scopes.length === 0 || req.scopes.length > 20 || req.scopes.some((x) => typeof x !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(x))) {
+        throw new Error('A sign-in names the scopes it needs.');
+      }
+      const host = typeof req.host === 'string' ? req.host.toLowerCase() : '';
+      if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) || !provider.apiHosts.some((p) => oauthHostCovered(p, host))) {
+        throw new Error(`${provider.label}'s sign-in is sent only to ${provider.apiHosts.join(', ')}.`);
+      }
+      const name = assertOwnerSecretName(req.secret);
+      await ownedSecret(name); // One the owner also bound elsewhere is not the plugin's to fill.
+      const store = vault();
+      const started = await service().begin({
+        plugin,
+        provider,
+        clientId: req.clientId,
+        ...(req.clientSecret ? { clientSecret: req.clientSecret } : {}),
+        scopes: req.scopes,
+        save: async (envelope) => {
+          await putOwnerSecret(facts.db, store, {
+            name,
+            value: envelope,
+            bindings: [{ kind: 'http.bearer', target: { plugin, host }, rule: 'pre-approved' }],
+          });
+        },
+      });
+      return { id: started.id, authorizeUrl: started.authorizeUrl, redirectUri: started.redirectUri, expiresAt: new Date(started.expiresAt).toISOString() };
+    },
+    async signInStatus(id) {
+      return services.signIns?.status(plugin, String(id)) ?? SIGN_IN_GONE;
+    },
+    async signInFinish(id, pasted) {
+      asOwner('signs in');
+      if (typeof pasted !== 'string' || pasted.trim() === '') throw new Error('Paste the address the browser ended on.');
+      return service().finish(plugin, String(id), pasted);
+    },
+    async signInCancel(id) {
+      asOwner('cancels a sign-in');
+      services.signIns?.cancel(plugin, String(id));
     },
   };
 }

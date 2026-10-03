@@ -55,7 +55,7 @@ import dns from 'node:dns';
 import type { LookupFunction } from 'node:net';
 import { BlockedError, DEFAULT_POLICY, checkUrl, type AddressPolicy } from '../plugin/url.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
-import type { HttpArea, HttpResponse } from './types.js';
+import type { HttpArea, HttpRequest, HttpResponse } from './types.js';
 
 /* ------------------------------------------------------------------ *
  * The resolver the socket itself uses
@@ -337,6 +337,52 @@ export function isOwnBasicBinding(binding: { kind: string; target: unknown }, pl
   return binding.kind === HTTP_BASIC_KIND && asBasicTarget(binding.target)?.plugin === plugin;
 }
 
+/* ------------------------------------------------------------------ *
+ * The `http.bearer` destination (since host API 1.28)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Core's own OAuth destination (docs/owner-secrets.md §3): a secret that is
+ * an OAuth sign-in core made for a plugin (`secrets.signIn`) — the token
+ * envelope — sent as `Authorization: Bearer <access token>` to the host its
+ * binding names, refreshed by core at the provider that issued it. The plugin
+ * never holds a token.
+ */
+export const HTTP_BEARER_KIND = 'http.bearer';
+
+/** The methods a bearer request may use: an API's reads and writes. */
+export const HTTP_BEARER_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
+/** How many bearer requests one plugin may make with one sign-in in a minute. */
+export const HTTP_BEARER_PER_MINUTE = 300;
+
+/** Register `http.bearer` under core's own name, beside the other `http.*` kinds. Its target is `http.basic`'s shape. */
+export function registerHttpBearerDestination(): void {
+  registerSecretDestination(HTTP_HEADER_PLUGIN, {
+    kind: HTTP_BEARER_KIND,
+    maxRule: 'pre-approved',
+    checkTarget(target, bound) {
+      const asked = asBasicTarget(target);
+      const boundBearer = asBasicTarget(bound);
+      if (asked === undefined || boundBearer === undefined || asked.host.startsWith('*.')) return false;
+      return asked.plugin === boundBearer.plugin && basicHostCovers(boundBearer.host, asked.host);
+    },
+    describe(target) {
+      const asked = asBasicTarget(target);
+      return asked === undefined
+        ? 'the sign-in of a web service'
+        : `the sign-in ${asked.plugin} uses at ${asked.host}`;
+    },
+    deliver() {
+      throw new Error('http.bearer delivers through the http area itself, never through a destination');
+    },
+  });
+}
+
+/** Whether a binding names `http.bearer` for this plugin (written by `secrets.signIn`, since 1.28). */
+export function isOwnBearerBinding(binding: { kind: string; target: unknown }, plugin: string): boolean {
+  return binding.kind === HTTP_BEARER_KIND && asBasicTarget(binding.target)?.plugin === plugin;
+}
+
 /**
  * How the area asks for a secret's value for one header. Built by the host
  * over `useOwnerSecret` with `deliverInto`, so the value crosses only this
@@ -357,6 +403,17 @@ export interface HttpSecretDelivery {
   deliverBasicFor?(
     name: string,
     host: string,
+  ): Promise<{ ok: true; value: string } | { pending: string } | { refused: string }>;
+  /**
+   * The access token of an OAuth sign-in (`http.bearer`, since 1.28), fresh:
+   * refreshed first when it is about to expire, or when `rejected` is the
+   * token a 401 just answered. Throws `SignInExpiredError` when the provider
+   * refuses the refresh.
+   */
+  deliverBearerFor?(
+    name: string,
+    host: string,
+    rejected?: string,
   ): Promise<{ ok: true; value: string } | { pending: string } | { refused: string }>;
 }
 
@@ -413,6 +470,8 @@ export interface HttpAreaOptions {
   now?: () => number;
   /** The Basic-auth budget; the process-wide one unless a test hands its own. */
   basicBudget?: BasicBudget;
+  /** The bearer budget (1.28); likewise. */
+  bearerBudget?: BasicBudget;
 }
 
 /**
@@ -458,6 +517,7 @@ export function createBasicBudget(perMinute = HTTP_BASIC_PER_MINUTE): BasicBudge
 }
 
 const sharedBasicBudget = createBasicBudget();
+const sharedBearerBudget = createBasicBudget(HTTP_BEARER_PER_MINUTE);
 
 /**
  * Headers a caller may not set on a request that carries a secret: anything
@@ -515,7 +575,41 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
   const policy = options.policy ?? DEFAULT_POLICY;
   let transport: PluginHostTransport | undefined;
   const basicBudget = options.basicBudget ?? sharedBasicBudget;
+  const bearerBudget = options.bearerBudget ?? sharedBearerBudget;
   const now = options.now ?? (() => Date.now());
+  /** Send one checked request on the transport; `capped`: a sign-in's answer, at most 10 MB. */
+  const dispatch = (req: HttpRequest, url: string, headers: Record<string, string>, capped: boolean): Promise<HttpResponse> => {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    /*
+     * Logged, not refused, in 1.0: the hosts a manifest lists were
+     * documentation until now, and refusing an undeclared one before every
+     * plugin has written its down would break plugins that did nothing
+     * wrong (§4.2).
+     */
+    if (!options.network.some((declared) => hostMatches(declared, host))) {
+      const key = `${options.plugin}\u0000${host}`;
+      if (!undeclaredSeen.has(key)) {
+        undeclaredSeen.add(key);
+        options.log(`a request to ${host}, which its manifest does not declare under network`);
+      }
+    }
+    if (options.transport === undefined) {
+      return Promise.reject(new Error('This process has no HTTP transport for plugins.'));
+    }
+    transport ??= options.transport({ lookup: guardedLookup(options.resolve, policy) });
+    // A cap that is not a whole number of bytes (NaN, Infinity, -1) is no cap at all to the transport: it counts as unset, so the default applies.
+    const cap = validCap(req.maxBytes);
+    return transport(url, {
+      method: req.method ?? 'GET',
+      headers,
+      ...(req.body === undefined ? {} : { body: req.body }),
+      ...(req.signal === undefined ? {} : { signal: req.signal }),
+      ...(req.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: req.idleTimeoutMs }),
+      ...(capped
+        ? { maxBytes: Math.min(cap ?? HTTP_BASIC_MAX_RESPONSE, HTTP_BASIC_MAX_RESPONSE) }
+        : cap === undefined ? {} : { maxBytes: cap }),
+    });
+  };
   return {
     async request(req) {
       let parsedUrl: URL;
@@ -573,6 +667,52 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         secretUrl = { name, value: url };
         // The address is the credential: no caller header may point it at another virtual host.
         headers = withoutIdentity(req.headers, 'host');
+      } else if (req.auth !== undefined && req.auth.as === 'bearer') {
+        /*
+         * An OAuth sign-in (`as: 'bearer'`, since 1.28): core reads the token
+         * envelope the binding allows for this plugin and this host, refreshes
+         * it at its provider when it is about to expire, and inserts the
+         * access token itself. A 401 is answered once: refreshed (unless
+         * another request already did) and sent again. The same fences as a
+         * Basic sign-in, with an API's verbs.
+         */
+        if (parsedUrl.protocol !== 'https:') throw new Error('a secret goes only into an HTTPS request');
+        const method = (req.method ?? 'GET').toUpperCase();
+        if (!HTTP_BEARER_METHODS.has(method)) {
+          throw new Error(`a sign-in is sent only with ${[...HTTP_BEARER_METHODS].join(', ')}, not ${method}`);
+        }
+        if (req.auth.header !== undefined || req.auth.username !== undefined) throw new Error('a bearer sign-in always goes into Authorization, with no user name');
+        const size = req.body === undefined ? 0 : typeof req.body === 'string' ? Buffer.byteLength(req.body) : req.body.length;
+        if (size > HTTP_BASIC_MAX_BODY) throw new Error(`a request with a sign-in carries at most ${HTTP_BASIC_MAX_BODY / 1024} KiB`);
+        const deliverBearer = options.secrets?.deliverBearerFor;
+        if (deliverBearer === undefined) throw new Error('This process cannot deliver a secret into a request.');
+        const secretName = req.auth.secret;
+        const token = async (rejected?: string): Promise<string> => {
+          const at = now();
+          if (!bearerBudget.take(options.plugin, secretName, at)) {
+            throw new Error(`too many requests with "${secretName}" this minute (at most ${HTTP_BEARER_PER_MINUTE}); try again shortly`);
+          }
+          let delivered: Awaited<ReturnType<NonNullable<HttpSecretDelivery['deliverBearerFor']>>>;
+          try {
+            delivered = await deliverBearer(secretName, host, rejected);
+          } catch (err) {
+            bearerBudget.refund(options.plugin, secretName, at);
+            throw err;
+          }
+          if (!('ok' in delivered)) bearerBudget.refund(options.plugin, secretName, at);
+          if ('pending' in delivered) throw new SecretPendingError(delivered.pending);
+          if ('refused' in delivered) throw new Error(delivered.refused);
+          return delivered.value;
+        };
+        const base = withoutIdentity(req.headers, 'authorization');
+        const first = await token();
+        const send = (access: string): Promise<HttpResponse> =>
+          dispatch(req, url, { ...base, Authorization: `Bearer ${access}` }, true);
+        const answer = await send(first);
+        if (answer.status !== 401) return answer;
+        // Read and drop the 401's body so its connection is free, then once more with a fresh token.
+        await answer.arrayBuffer().catch(() => undefined);
+        return send(await token(first));
       } else if (req.auth !== undefined && req.auth.as === 'basic') {
         /*
          * A sign-in's password (`as: 'basic'`, since 1.26): the caller names
@@ -636,35 +776,7 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         headers = withoutIdentity(req.headers, headerName);
         headers[headerName] = delivered.value;
       }
-      /*
-       * Logged, not refused, in 1.0: the hosts a manifest lists were
-       * documentation until now, and refusing an undeclared one before every
-       * plugin has written its down would break plugins that did nothing
-       * wrong (§4.2).
-       */
-      if (!options.network.some((declared) => hostMatches(declared, host))) {
-        const key = `${options.plugin}\u0000${host}`;
-        if (!undeclaredSeen.has(key)) {
-          undeclaredSeen.add(key);
-          options.log(`a request to ${host}, which its manifest does not declare under network`);
-        }
-      }
-      if (options.transport === undefined) {
-        throw new Error('This process has no HTTP transport for plugins.');
-      }
-      transport ??= options.transport({ lookup: guardedLookup(options.resolve, policy) });
-      // A cap that is not a whole number of bytes (NaN, Infinity, -1) is no cap at all to the transport: it counts as unset, so the default applies.
-      const cap = validCap(req.maxBytes);
-      const sent = transport(url, {
-        method: req.method ?? 'GET',
-        headers: headers ?? {},
-        ...(req.body === undefined ? {} : { body: req.body }),
-        ...(req.signal === undefined ? {} : { signal: req.signal }),
-        ...(req.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: req.idleTimeoutMs }),
-        ...(basicCap
-          ? { maxBytes: Math.min(cap ?? HTTP_BASIC_MAX_RESPONSE, HTTP_BASIC_MAX_RESPONSE) }
-          : cap === undefined ? {} : { maxBytes: cap }),
-      });
+      const sent = dispatch(req, url, headers ?? {}, basicCap);
       if (secretUrl === undefined) return sent;
       const { name, value } = secretUrl;
       return sent.catch((err: unknown) => {

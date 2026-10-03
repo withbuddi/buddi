@@ -6,6 +6,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Plugins can sign you in to an account with OAuth, starting with Google (host API 1.28): buddi opens Google's consent, catches the answer on this computer (or takes the address you paste back when your browser is on another one), keeps the tokens in Keys and secrets, renews them itself and sends them only to Google's API for that plugin. The plugin never sees a token; a sign-in Google stops accepting is reported as such.
+
 - Agents try before they decline: every agent is told to look with the browser when it has one (your own browser where you are signed in, or buddi's with a login you stored in Keys and secrets, asking you to take over at a code it cannot answer), to hand a colleague's question to that colleague and relay the answer, and only then to say exactly what it lacks with one next step. An agent without the browser says it could look if you gave it browser control.
 - Catalogue agents can be given the browser's stored logins (`secret.list`, `secret.fill`) and colleagues to hand work to: a package's `delegates` resolve at install to the agents you have, an agent added later joins the lists that name it and the front desk's, and the approval card says who may ask whom.
 

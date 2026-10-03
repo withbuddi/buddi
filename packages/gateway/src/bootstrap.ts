@@ -39,7 +39,7 @@ import {
   type ToolRegistry,
   type Vault,
 } from '@buddi/core';
-import { createHttpTransport, createOAuthPort, createProvider, defaultHttpTransport, type RuntimeProvider } from '@buddi/runtime';
+import { createHttpTransport, createOAuthPort, createPluginSignInService, createProvider, defaultHttpTransport, type RuntimeProvider } from '@buddi/runtime';
 import { bindConnections, type ConnectionsService } from '@buddi/tool-mcp';
 import { ProviderSettings } from './providers.js';
 import { ProviderAccounts } from './provider-accounts.js';
@@ -378,6 +378,9 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     env,
     // Plugin assets (1.27): decoded and drawn again as PNG here, never served as given.
     images: assetImageCodec,
+    // A plugin's OAuth sign-in (1.28): a loopback listener per sign-in, and the
+    // refresh behind `auth: { as: 'bearer' }`, on the shared transport.
+    signIns: createPluginSignInService({ transport: defaultHttpTransport }),
   });
 
   const now = (): Date => new Date();

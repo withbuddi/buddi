@@ -276,7 +276,17 @@ target is `{ plugin, host }`, the host exact or `*.` a domain of at least two
 labels (`*.icloud.com`, where an account's calendars live on a numbered host
 found at discovery), the plugin filled in by the area; `secrets.put` accepts
 it from a plugin that declares `http`. The plugin keeps the user name; it
-never holds the password. `checkUrl` lives in
+never holds the password. Since 1.28 a secret may be an OAuth sign-in
+core made for the plugin (`auth: { secret, as: 'bearer' }`, kind
+`http.bearer`, written only by `secrets.signIn`): core inserts `Authorization:
+Bearer <access token>`, refreshing the token at the provider that issued it
+when it expires within five minutes, and once more — then sending again —
+when the answer is 401. HTTPS; GET, HEAD, POST, PUT, PATCH and DELETE; a body
+of at most 256 KiB; an answer capped at 10 MB; 300 requests a minute per
+secret. A provider that refuses the refresh (revoked, expired) marks the
+sign-in out, and every request with it throws `SignInExpiredError` (`code:
+'sign-in-expired'`) without asking the provider again until the owner signs
+in anew. `checkUrl` lives in
 `@buddi/core/plugin`; `guardedLookup` lives in core but not in `/plugin`, and
 the gateway hands it to browser's proxy.
 
@@ -357,7 +367,28 @@ Never a reminder's text or another plugin's jobs.
 `registerDestination`, `use(name, kind, target)`, `list`, `put`, `rename`,
 `rebind`, `delete`. `list` returns names and bindings that point at this
 plugin's destinations, never values; `put` is for an `ownerOnly` tool storing
-an account credential the owner typed.
+an account credential the owner typed. Since 1.28, with `http` declared,
+`signIn`, `signInStatus`, `signInFinish` and `signInCancel` run an OAuth
+sign-in to one of core's providers (`OAUTH_PROVIDERS` in
+`@buddi/core/plugin`; Google today) on the plugin's behalf: PKCE and a state,
+core listening on a loopback port (`http://127.0.0.1:<port>/`) while the
+sign-in waits, ten minutes at most, and the address the browser ended on
+pasted back when the owner's browser is on another computer. The tokens are
+written by core as the owner secret the plugin names, bound to `http.bearer`
+for that plugin and one of the provider's API hosts; the plugin sees a state,
+never a token. The calendar plugin's Google accounts are the first:
+
+```ts
+const started = await ctx.buddi!.secrets!.signIn!({
+  provider: 'google', clientId, clientSecret, // a Desktop client's secret is not confidential
+  scopes: ['https://www.googleapis.com/auth/calendar.events'],
+  secret: 'Calendar sign-in: Google', host: 'www.googleapis.com',
+});
+// show started.authorizeUrl as a link; later
+await ctx.buddi!.secrets!.signInStatus!(started.id); // { state: 'signed-in', scopes }
+await ctx.buddi!.http!.request({ url: 'https://www.googleapis.com/calendar/v3/users/me/calendarList',
+  auth: { secret: 'Calendar sign-in: Google', as: 'bearer' } });
+```
 
 A plugin that delivers secrets declares **destinations** in its manifest:
 `{ kind, checkTarget(target, bound), describe(target), deliver(value,
@@ -442,7 +473,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.27`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.28`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -661,6 +692,14 @@ package that uses any of them asks for `^1.27`:
     `label` keeps a letter tile in its place when there is no kept picture. A
     `multiselect` setting may carry `inTitle`: the placement is named by every
     option ticked ("Top stories · AI, US politics").
+
+1.28 is OAuth sign-ins for plugins: `secrets.signIn`, `signInStatus`,
+`signInFinish` and `signInCancel` (optional methods, present with `http`
+declared), `http.request`'s `auth: { as: 'bearer' }` with the core kind
+`http.bearer`, and `OAUTH_PROVIDERS`, `SignInExpiredError` and
+`isSignInExpired` in `@buddi/core/plugin`. An older buddi has no `signIn`
+and treats a bearer auth as a header secret it cannot find, so a plugin that
+uses them asks for `^1.28`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

@@ -245,6 +245,9 @@ describe('which group a secret sits in', () => {
     expect(secretTitle(secret({ name: 'Calendar sign-in: iCloud sam@icloud.com', bindings: [bound('http.basic', { plugin: 'calendar', host: '*.icloud.com' })] }))).toBe('iCloud sam@icloud.com');
     expect(placeWords('http.basic', { plugin: 'calendar', host: '*.icloud.com' })).toBe('Sent only to *.icloud.com');
     expect(kindWords('http.basic')).toBe('A plugin’s sign-in');
+    expect(secretGroup(secret({ bindings: [bound('http.bearer', { plugin: 'calendar', host: 'www.googleapis.com' })] }))).toBe('plugin:calendar');
+    expect(placeWords('http.bearer', { plugin: 'calendar', host: 'www.googleapis.com' })).toBe('Sent only to www.googleapis.com');
+    expect(kindWords('http.bearer')).toBe('A plugin’s account sign-in');
     expect(secretGroup(secret({ bindings: [bound('browser.field', 'https://www.pnc.com')] }))).toBe('mine');
     expect(secretGroup(secret({}))).toBe('mine');
   });

@@ -53,6 +53,7 @@ export function targetPlaceholder(kind: string): string {
   if (kind === 'http.header') return 'the host, then the header name — e.g. localhost:9200 Authorization';
   if (kind === 'http.url') return 'the plugin, then the host — e.g. calendar calendar.google.com';
   if (kind === 'http.basic') return 'the plugin, then the host — e.g. calendar *.icloud.com';
+  if (kind === 'http.bearer') return 'the plugin, then the host — e.g. calendar www.googleapis.com';
   if (kind === 'developer.env') return 'the workspace, then the variable name — e.g. cour des comptes ADMIN_PASSWORD';
   if (isAccountKind(kind)) return 'the account id, e.g. acct-1';
   return 'the place, as JSON — e.g. {"host":"localhost","header":"Authorization"}';
@@ -64,6 +65,7 @@ const TWO_PART_KINDS: Record<string, { hint: string; build: (first: string, seco
   'http.header': { hint: 'a host, then the header name', build: (host, header) => ({ host, header }) },
   'http.url': { hint: 'a plugin, then the host', build: (plugin, host) => ({ plugin, host }) },
   'http.basic': { hint: 'a plugin, then the host', build: (plugin, host) => ({ plugin, host }) },
+  'http.bearer': { hint: 'a plugin, then the host', build: (plugin, host) => ({ plugin, host }) },
   'developer.env': { hint: 'a workspace, then the variable name', build: (workspace, variable) => ({ workspace, variable }) },
 };
 
@@ -252,7 +254,7 @@ export function secretGroup(secret: SecretListingView): SecretGroupId {
   if (users.some((u) => u.kind === 'model-account') || kinds.includes(PROVIDER_ACCOUNT_KIND) || MODEL_NAME.test(secret.name)) return 'models';
   if (users.some((u) => u.kind === 'connection') || kinds.includes('mcp.env') || CONNECTION_NAME.test(secret.name)) return 'connections';
   for (const binding of secret.bindings) {
-    if ((binding.kind === 'http.url' || binding.kind === 'http.basic') && isRecord(binding.target) && typeof binding.target.plugin === 'string') return `plugin:${binding.target.plugin}`;
+    if ((binding.kind === 'http.url' || binding.kind === 'http.basic' || binding.kind === 'http.bearer') && isRecord(binding.target) && typeof binding.target.plugin === 'string') return `plugin:${binding.target.plugin}`;
     if (isAccountKind(binding.kind)) return `plugin:${binding.kind.slice(0, -'.account'.length)}`;
   }
   return 'mine';
@@ -335,7 +337,7 @@ export function placeWords(kind: string, target: unknown): string {
   if (kind === 'browser.field' && typeof target === 'string') return `Filled on ${siteWords(target)}`;
   if (kind === 'browser.form.data' && str('origin')) return `Filled into “${str('field')}” on ${siteWords(str('origin'))}`;
   if (kind === 'browser.native.type' && typeof target === 'string') return `Typed into the app ${target}`;
-  if ((kind === 'http.header' || kind === 'http.url' || kind === 'http.basic') && str('host')) return `Sent only to ${str('host')}`;
+  if ((kind === 'http.header' || kind === 'http.url' || kind === 'http.basic' || kind === 'http.bearer') && str('host')) return `Sent only to ${str('host')}`;
   if (kind === 'developer.env' && str('variable')) return `Given to ${str('workspace')} as ${str('variable')}`;
   if (kind === 'mcp.env' && str('variable')) return `Given to a program as ${str('variable')}`;
   if (kind === 'email.account') return 'Used by a mailbox';
@@ -535,6 +537,7 @@ export function kindWords(kind: string): string {
     'http.header': 'A request to a host',
     'http.url': 'A plugin’s web address',
     'http.basic': 'A plugin’s sign-in',
+    'http.bearer': 'A plugin’s account sign-in',
     'developer.env': 'A workspace variable',
     'mcp.env': 'A program’s variable',
     [PROVIDER_ACCOUNT_KIND]: 'A model account',
@@ -570,6 +573,7 @@ export function placeExample(kind: string): string {
   if (kind === 'http.header') return 'api.github.com Authorization';
   if (kind === 'http.url') return 'calendar calendar.google.com';
   if (kind === 'http.basic') return 'calendar caldav.fastmail.com';
+  if (kind === 'http.bearer') return 'calendar www.googleapis.com';
   if (kind === 'developer.env') return 'my-app ADMIN_PASSWORD';
   if (isAccountKind(kind)) return 'acct-1';
   return '{"host":"localhost","header":"Authorization"}';

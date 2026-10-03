@@ -27,6 +27,8 @@ export {
 } from './url.js';
 export { AGENT_ONLY_FIELD, REPORT_MAX_DEFAULT, REPORT_MAX_LIMIT, ToolRefusal, isToolRefusal } from '../tools.js';
 export { HOST_API_VERSION, hostApiProblem } from './version.js';
+export { OAUTH_PROVIDERS, SignInExpiredError, isSignInExpired, oauthHostCovered } from './sign-in.js';
+export type { OAuthProvider, OAuthSignInRequest, OAuthSignInStart, OAuthSignInStatus } from './sign-in.js';
 export { NATIVE_BACKEND_ID, SEARCH_BACKEND_VAR, parseSearchBackend } from './search.js';
 export { AUTHOR_NAME_MAX, authorOfPackageJson, parsePluginAuthor, pluginAuthorMismatch } from './author.js';
 export {

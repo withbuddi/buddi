@@ -15,6 +15,8 @@
  */
 import type { OwnerPlace } from '../places.js';
 import type { PluginAsset } from '../plugin/assets.js';
+import type { OAuthProvider, OAuthSignInRequest, OAuthSignInStart, OAuthSignInStatus } from '../plugin/sign-in.js';
+import type { Vault } from '../vault/types.js';
 import type { ToolPermission } from '../actions/permissions.js';
 import type { ArtifactKind, ArtifactRow, ArtifactSource } from '../artifacts/store.js';
 import type { ProposePolicyInput } from '../learning/policies.js';
@@ -337,8 +339,18 @@ export interface HttpRequest {
    * of at most 256 KiB; an answer of at most 10 MB; 120 requests a minute per
    * secret. The binding names this plugin and the host (or `*.` a domain),
    * so no other plugin can sign in with it.
+   *
+   * `as: 'bearer'` (since 1.28): the secret is an OAuth sign-in core made
+   * with `secrets.signIn` (`http.bearer`), and core sends `Authorization:
+   * Bearer <access token>`, refreshing the token at the provider first when
+   * it is about to expire, and once more — then sending again — when the
+   * answer is 401. HTTPS only, to the host the binding names; GET, HEAD,
+   * POST, PUT, PATCH or DELETE; a body of at most 256 KiB; an answer of at
+   * most 10 MB; 300 requests a minute per secret. When the provider refuses
+   * the refresh (revoked, expired), the request throws `SignInExpiredError`
+   * (`code: 'sign-in-expired'`): the owner signs in again.
    */
-  auth?: { secret: string; header?: string; as?: 'header' | 'url' | 'basic'; username?: string };
+  auth?: { secret: string; header?: string; as?: 'header' | 'url' | 'basic' | 'bearer'; username?: string };
   body?: string | Buffer;
   signal?: AbortSignal;
   /** How long the request may go silent. */
@@ -602,6 +614,61 @@ export interface SecretsArea {
   rebind(name: string, bindings: SecretBinding[]): Promise<boolean>;
   /** Owner only. Delete a secret bound only to this plugin's kinds, value and all. */
   delete(name: string): Promise<boolean>;
+  /**
+   * Owner only (1.28; with `http` declared). Start an OAuth sign-in to one of
+   * core's providers (`OAUTH_PROVIDERS`): PKCE and a state, core listening on
+   * a loopback port for the provider's answer. The tokens never reach the
+   * plugin: core keeps them as the owner secret `secret`, bound to
+   * `http.bearer` for this plugin and `host`, and sends them with `auth: {
+   * secret, as: 'bearer' }`. Signing in again under the same secret replaces
+   * the tokens and keeps the name. Absent on an older buddi.
+   */
+  signIn?(req: OAuthSignInRequest): Promise<OAuthSignInStart>;
+  /** Where one of this plugin's sign-ins stands; `expired` once it is gone. */
+  signInStatus?(id: string): Promise<OAuthSignInStatus>;
+  /**
+   * Owner only. Finish a sign-in with what the owner pasted: the address the
+   * provider sent the browser to (when that browser is on another computer,
+   * the loopback page does not load) or the code alone.
+   */
+  signInFinish?(id: string, pasted: string): Promise<OAuthSignInStatus>;
+  /** Owner only. Drop a sign-in that is still waiting. */
+  signInCancel?(id: string): Promise<void>;
+}
+
+/**
+ * How core runs a plugin's OAuth sign-in and keeps its tokens fresh: the
+ * loopback listener, PKCE, the code exchange and the refresh. Built by the
+ * composition root over `@buddi/runtime`'s OAuth pieces (core may not import
+ * the runtime) and handed in with `configurePluginHost({ signIns })`. Never a
+ * plugin's surface: the `secrets` area scopes every call to its plugin, and
+ * `save` is core writing the owner secret.
+ */
+export interface PluginSignInService {
+  begin(input: {
+    plugin: string;
+    provider: OAuthProvider;
+    clientId: string;
+    clientSecret?: string;
+    scopes: readonly string[];
+    /** Keep the envelope (JSON): core writes it as the owner secret. */
+    save(envelope: string): Promise<void>;
+  }): Promise<{ id: string; authorizeUrl: string; redirectUri: string; expiresAt: number }>;
+  status(plugin: string, id: string): OAuthSignInStatus | undefined;
+  finish(plugin: string, id: string, pasted: string): Promise<OAuthSignInStatus>;
+  cancel(plugin: string, id: string): void;
+  /**
+   * The access token under vault entry `ref`, refreshed first when it expires
+   * within five minutes, or when `rejected` is the token stored (a 401
+   * answered it). Throws `SignInExpiredError` when the provider refuses the
+   * refresh. `refreshed` says the entry changed (the scrubber rebuilds).
+   */
+  fresh(
+    vault: Pick<Vault, 'get' | 'set'>,
+    ref: string,
+    secret: string,
+    opts?: { rejected?: string },
+  ): Promise<{ accessToken: string; refreshed: boolean }>;
 }
 
 /* ------------------------------------------------------------------ *

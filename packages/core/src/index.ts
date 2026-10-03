@@ -56,4 +56,5 @@ export * from './plugin/uses.js';
 export * from './plugin/requires.js';
 export * from './plugin/author.js';
 export * from './plugin/version.js';
+export * from './plugin/sign-in.js';
 export * from './plugin/url.js';
