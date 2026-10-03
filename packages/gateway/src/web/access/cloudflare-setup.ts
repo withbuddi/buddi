@@ -38,6 +38,8 @@ export const tunnelNameFor = (host: string): string => `buddi-${host}`;
 export const policyNameFor = (host: string): string => `buddi — ${host}`;
 export const appNameFor = (host: string): string => `buddi (${host})`;
 /** The DNS record's comment: buddi's tag on it. */
+/** After the Done line: a new Access application takes a minute or two to reach Cloudflare's sign-in page. */
+export const SETUP_PROPAGATION = 'Cloudflare needs a minute or two before the first sign-in works; if its page says it can’t find the application, reload.';
 export const DNS_COMMENT = 'Made by buddi for Sign in from elsewhere. Remove it from buddi.';
 const ownsRecord = (r: CfDnsRecord): boolean => (r.comment ?? '').startsWith('Made by buddi');
 

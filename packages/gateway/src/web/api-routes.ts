@@ -197,6 +197,12 @@ export const API_ROUTES: readonly ApiRoute[] = [
     errors: '400 a hostname, email or token that is not one, or no token kept; 403 not from the computer buddi runs on; 409 a setup or removal already going, or the vault refused the token',
   },
   {
+    method: 'POST', path: '/api/access/cloudflare-access/zones', area: 'session', localOnly: true, token: 'access',
+    summary: 'Check a Cloudflare API token (omit it to use the kept one) and list the domains (zones) it can see, for the setup form\'s domain choice. The pasted token is not kept and never echoed.',
+    body: '{ token?: string }', answer: '{ zones: [{ id, name }] }',
+    errors: '400 a token Cloudflare refuses, one that cannot list domains (Zone · DNS · Edit missing), or no token kept or given; 403 not from the computer buddi runs on; 502 Cloudflare unreachable or failing',
+  },
+  {
     method: 'POST', path: '/api/access/cloudflare-access/setup/stop', area: 'session', localOnly: true, token: 'access',
     summary: 'Stop waiting for the tunnel. What buddi made stays; a new run picks it up.',
     answer: 'as GET', errors: '403 not from the computer buddi runs on; 409 a removal going',
@@ -1257,6 +1263,7 @@ export const API_SINCE: Readonly<Record<string, string>> = {
   'POST /api/access/cloudflare-access/setup': '0.1.0-pre.38',
   'POST /api/access/cloudflare-access/setup/stop': '0.1.0-pre.38',
   'POST /api/access/cloudflare-access/setup/remove': '0.1.0-pre.38',
+  'POST /api/access/cloudflare-access/zones': '0.1.0-pre.39',
   'POST /api/browser/pin': '0.1.0-pre.38',
   'POST /api/browser/card': '0.1.0-pre.38',
   'GET /api/browser/telemetry': '0.1.0-pre.38',

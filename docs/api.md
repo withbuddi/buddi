@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-310 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+311 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -206,6 +206,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 | POST | `/api/access/cloudflare-access/test` | "Test my setup": fetch the signing keys of the team domain given (or the stored one) and say what came back. Nothing is stored. | no |
 | GET | `/api/access/cloudflare-access/setup` | "Set it up for me": the run in progress (or the last one), whether a Cloudflare API token is kept, what buddi made last time, the token permissions to ask for and the ingress port. The install line in `progress.install` holds the tunnel's connector token. | yes |
 | POST | `/api/access/cloudflare-access/setup` | Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLARE_API_TOKEN; omit it to use the kept one), buddi finds the zone, creates (or reuses what it made before) the tunnel buddi-<host>, its ingress, the DNS record, the Access policy and application, fills in Cloudflare Access sign-in, shows the service install line, waits for the tunnel and runs the test. Poll GET for progress. An object of buddi's name that buddi did not make stops the run with `progress.adoptable`; `adopt: true` uses it anyway. | no |
+| POST | `/api/access/cloudflare-access/zones` | Check a Cloudflare API token (omit it to use the kept one) and list the domains (zones) it can see, for the setup form's domain choice. The pasted token is not kept and never echoed. | no |
 | POST | `/api/access/cloudflare-access/setup/stop` | Stop waiting for the tunnel. What buddi made stays; a new run picks it up. | no |
 | POST | `/api/access/cloudflare-access/setup/remove` | Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went. | no |
 | GET | `/api/tailscale` | Alias of GET /api/access/tailscale, kept for one release. | yes |
@@ -474,6 +475,20 @@ Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLAR
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"host":"…","email":"…"}' "$BUDDI_URL/api/access/cloudflare-access/setup"
+```
+
+#### `POST /api/access/cloudflare-access/zones`
+
+Check a Cloudflare API token (omit it to use the kept one) and list the domains (zones) it can see, for the setup form's domain choice. The pasted token is not kept and never echoed.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Body:** `{ token?: string }`
+- **Answer:** `{ zones: [{ id, name }] }`
+- **Errors:** 400 a token Cloudflare refuses, one that cannot list domains (Zone · DNS · Edit missing), or no token kept or given; 403 not from the computer buddi runs on; 502 Cloudflare unreachable or failing
+- **Since:** 0.1.0-pre.39
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/access/cloudflare-access/zones"
 ```
 
 #### `POST /api/access/cloudflare-access/setup/stop`

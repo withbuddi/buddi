@@ -10,9 +10,12 @@
  * Seen through any provider, the whole block is read-only: the setting that
  * let this browser in cannot be widened from the far end of it.
  */
-import { Fragment, useEffect, useState } from 'react';
-import { ApiError, api, type AccessState, type CloudflareAccessChange, type CloudflareAccessView, type CloudflareSetupProgress, type CloudflareSetupView, type TailscaleView } from '../api';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { ApiError, api, type AccessState, type CloudflareAccessChange, type CloudflareAccessView, type CloudflareSetupProgress, type CloudflareSetupView, type CloudflareZone, type TailscaleView } from '../api';
 import { Button, ButtonLink, ErrorBanner, Field, Icon, List, ListRow, Notice, Pill, Section, Stack, Toolbar, useAsync } from '../ui';
+
+/** After the Done line (the gateway's SETUP_PROPAGATION): a new Access application takes a minute or two to reach Cloudflare's sign-in page. */
+const SETUP_PROPAGATION = 'Cloudflare needs a minute or two before the first sign-in works; if its page says it can’t find the application, reload.';
 
 /** Put a command on the clipboard, where there is one. */
 async function copyText(text: string): Promise<void> {
@@ -427,18 +430,87 @@ export function CloudflareRow({ enabled, locked, onSaved }: { enabled: boolean; 
   );
 }
 
+/** The zone of the list that holds `host` (the longest match), and the name in front of it. */
+function splitHost(host: string, zones: CloudflareZone[]): { name: string; zone: string } | null {
+  const h = host.trim().toLowerCase().replace(/\.$/, '');
+  const zone = zones
+    .filter((z) => h.endsWith(`.${z.name.toLowerCase()}`))
+    .sort((a, b) => b.name.length - a.name.length)[0];
+  return zone ? { name: h.slice(0, -(zone.name.length + 1)), zone: zone.name } : null;
+}
+
+/**
+ * Two steps in one panel: the token, checked with Cloudflare (on the button,
+ * on leaving the field with a token in it, or at once when one is kept), then
+ * the name on one of the domains it lists, and the email. A token that lists
+ * no domain falls back to the full hostname typed out.
+ */
 function SetupForm({ setup, busy, failed, onCancel, onStart }: {
   setup: CloudflareSetupView | null;
   busy: boolean;
   failed: string | null;
   onCancel: () => void;
-  onStart: (input: { token?: string; host: string; email: string }) => void;
+  onStart: (input: { token?: string; host: string; email: string; zone?: string }) => void;
 }): JSX.Element {
+  const known = setup?.record?.host ?? setup?.progress.host ?? '';
   const [token, setToken] = useState('');
-  const [host, setHost] = useState(setup?.record?.host ?? setup?.progress.host ?? '');
+  const [zones, setZones] = useState<CloudflareZone[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [name, setName] = useState('buddi');
+  const [zone, setZone] = useState('');
+  const [host, setHost] = useState(known);
   const [email, setEmail] = useState(setup?.record?.email ?? setup?.progress.email ?? '');
+  /** The token the last check was for, and its number: a stale answer is dropped, a blur doesn't ask twice. */
+  const asked = useRef<{ token: string; seq: number }>({ token: '', seq: 0 });
   const kept = setup?.tokenStored === true;
-  const ready = (kept || token.trim() !== '') && host.trim() !== '' && email.trim() !== '';
+  const pasted = token.trim();
+
+  const check = (): void => {
+    if (!pasted && !kept) return;
+    const seq = asked.current.seq + 1;
+    asked.current = { token: pasted, seq };
+    setChecking(true);
+    setCheckError(null);
+    api.cloudflareZones(pasted ? { token: pasted } : {})
+      .then(({ zones: listed }) => {
+        if (asked.current.seq !== seq) return;
+        setZones(listed);
+        const split = splitHost(known, listed);
+        const recorded = listed.find((z) => z.name === setup?.record?.zone)?.name;
+        if (split) {
+          if (split.name) setName(split.name);
+          setZone(split.zone);
+        } else {
+          setZone(recorded ?? (listed.length === 1 ? listed[0]!.name : ''));
+        }
+      })
+      .catch((error: unknown) => {
+        if (asked.current.seq !== seq) return;
+        setZones(null);
+        setCheckError(error instanceof ApiError ? error.message : String(error));
+      })
+      .finally(() => { if (asked.current.seq === seq) setChecking(false); });
+  };
+
+  // A kept token needs no paste: check it on opening the form.
+  useEffect(() => {
+    if (kept) check();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const edit = (value: string): void => {
+    setToken(value);
+    setZones(null);
+    setCheckError(null);
+    setChecking(false);
+    asked.current = { token: '', seq: asked.current.seq + 1 };
+  };
+
+  const picking = zones !== null && zones.length > 0;
+  const label = name.trim().replace(/\.+$/, '');
+  const composed = picking ? (label && zone ? `${label}.${zone}` : '') : host.trim();
+  const ready = zones !== null && !checking && composed !== '' && email.trim() !== '';
+  const plain = { autoComplete: 'off', spellCheck: false, disabled: busy } as const;
   return (
     <Stack gap="sm">
       <ErrorBanner message={failed} />
@@ -449,20 +521,56 @@ function SetupForm({ setup, busy, failed, onCancel, onStart }: {
       <Toolbar>
         <ButtonLink size="sm" href={setup?.tokenUrl ?? 'https://dash.cloudflare.com/profile/api-tokens'} target="_blank" rel="noreferrer">Open Cloudflare &#8599;</ButtonLink>
       </Toolbar>
-      <div className="access-grid">
-        <Field label="API token" hint="Kept as an owner secret, used only to set this up and to remove it.">
-          <input type="password" className="mono" value={token} placeholder={kept ? 'Kept. Paste a new one to replace it' : 'Paste the token'} autoComplete="off" spellCheck={false} disabled={busy} onChange={(e) => setToken(e.target.value)} />
-        </Field>
-        <Field label="Hostname" hint="A name on a domain the token can edit. buddi finds the zone.">
-          <input type="text" value={host} placeholder="buddi.example.com" autoComplete="off" spellCheck={false} disabled={busy} onChange={(e) => setHost(e.target.value)} />
-        </Field>
-        <Field label="Your email" hint="The one Cloudflare will let in.">
-          <input type="email" value={email} placeholder="you@example.com" autoComplete="off" spellCheck={false} disabled={busy} onChange={(e) => setEmail(e.target.value)} />
-        </Field>
-      </div>
+      <Field
+        label="API token"
+        hint="Kept as an owner secret, used only to set this up and to remove it."
+        action={<Button disabled={busy || checking || (!pasted && !kept)} onClick={check}>Check the token</Button>}
+      >
+        <input
+          type="password"
+          className="mono"
+          value={token}
+          placeholder={kept ? 'Kept. Paste a new one to replace it' : 'Paste the token'}
+          {...plain}
+          onChange={(e) => edit(e.target.value)}
+          onBlur={() => { if (pasted && asked.current.token !== pasted) check(); }}
+        />
+      </Field>
+      {checking ? <p className="ui-card-meta" role="status">Checking the token with Cloudflare…</p> : null}
+      <ErrorBanner message={checkError} />
+      {zones !== null ? (
+        <div className="access-grid">
+          {picking ? (
+            <>
+              <Field label="Name" hint={composed ? `Makes ${composed}.` : 'The part in front of the domain.'}>
+                <input type="text" value={name} placeholder="buddi" {...plain} onChange={(e) => setName(e.target.value)} />
+              </Field>
+              <Field label="Domain" hint="One of the domains the token can edit.">
+                <select value={zone} disabled={busy} onChange={(e) => setZone(e.target.value)}>
+                  {zone === '' ? <option value="">Choose a domain</option> : null}
+                  {zones.map((z) => <option key={z.id} value={z.name}>{z.name}</option>)}
+                </select>
+              </Field>
+            </>
+          ) : (
+            <Field label="Hostname" hint="The token lists no domain; type the full name.">
+              <input type="text" value={host} placeholder="buddi.example.com" {...plain} onChange={(e) => setHost(e.target.value)} />
+            </Field>
+          )}
+          <Field label="Your email" hint="The one Cloudflare will let in.">
+            <input type="email" value={email} placeholder="you@example.com" {...plain} onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+        </div>
+      ) : null}
       <Toolbar align="end">
         <Button disabled={busy} onClick={onCancel}>Cancel</Button>
-        <Button variant="accent" disabled={busy || !ready} onClick={() => onStart({ ...(token.trim() ? { token: token.trim() } : {}), host: host.trim(), email: email.trim() })}>Set it up</Button>
+        <Button
+          variant="accent"
+          disabled={busy || !ready}
+          onClick={() => onStart({ ...(pasted ? { token: pasted } : {}), host: composed, email: email.trim(), ...(picking ? { zone } : {}) })}
+        >
+          Set it up
+        </Button>
       </Toolbar>
     </Stack>
   );
@@ -506,7 +614,7 @@ function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, 
     <Stack gap="sm">
       <ErrorBanner message={failed} />
       {progress.state === 'done' && progress.url ? (
-        <Notice tone="good" role="status">Done. Open {progress.url} from another device and sign in as {progress.email}.</Notice>
+        <Notice tone="good" role="status">Done. Open {progress.url} from another device and sign in as {progress.email}. {SETUP_PROPAGATION}</Notice>
       ) : null}
       {progress.state === 'stopped' && progress.error ? <Notice role="status">{progress.error}</Notice> : null}
       <ol className="cat-steps access-run" aria-live="polite">

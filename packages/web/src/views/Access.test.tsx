@@ -19,6 +19,7 @@ vi.mock('../api', async (load) => ({
     setCloudflareAccess: vi.fn(),
     testCloudflareAccess: vi.fn(),
     cloudflareSetup: vi.fn(),
+    cloudflareZones: vi.fn(),
     startCloudflareSetup: vi.fn(),
     stopCloudflareSetup: vi.fn(),
     removeCloudflareSetup: vi.fn(),
@@ -165,9 +166,10 @@ describe('the Cloudflare row', () => {
 });
 
 describe('Set it up for me', () => {
-  it('takes the token, hostname and email, then shows the run with the one command to copy', async () => {
+  it('checks the token, and with no domain listed takes the full hostname, then shows the run with the one command to copy', async () => {
     vi.mocked(api.access).mockResolvedValue(ROWS);
     vi.mocked(api.cloudflareSetup).mockResolvedValue(SETUP);
+    vi.mocked(api.cloudflareZones).mockResolvedValue({ zones: [] });
     const waiting = progress('waiting', 6, { install: { command: 'sudo cloudflared service install eyJtoken', note: 'If sudo can’t find it, use /opt/homebrew/bin/cloudflared.' } });
     vi.mocked(api.startCloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: waiting });
     render(<AccessSettings />);
@@ -176,15 +178,62 @@ describe('Set it up for me', () => {
     expect(screen.getByText('Account · Cloudflare Tunnel · Edit')).toBeInTheDocument();
     const start = screen.getByRole('button', { name: 'Set it up' });
     expect(start).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/API token/), { target: { value: 'cf-token-0123456789abcdef' } });
+    const token = screen.getByLabelText(/API token/);
+    fireEvent.change(token, { target: { value: 'cf-token-0123456789abcdef' } });
+    fireEvent.blur(token);
+    await waitFor(() => expect(api.cloudflareZones).toHaveBeenCalledWith({ token: 'cf-token-0123456789abcdef' }));
+    expect(await screen.findByText('The token lists no domain; type the full name.')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/Hostname/), { target: { value: 'buddi.example.com' } });
     fireEvent.change(screen.getByLabelText(/Your email/), { target: { value: 'owner@example.com' } });
     fireEvent.click(start);
     await waitFor(() => expect(api.startCloudflareSetup).toHaveBeenCalledWith({ token: 'cf-token-0123456789abcdef', host: 'buddi.example.com', email: 'owner@example.com' }));
+    expect(api.cloudflareZones).toHaveBeenCalledTimes(1);
     const command = await screen.findByText('sudo cloudflared service install eyJtoken');
     expect(within(command.closest('.tailscale-command') as HTMLElement).getByRole('button', { name: 'Copy' })).toBeInTheDocument();
     expect(screen.getByText(/never runs sudo itself/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop waiting' })).toBeInTheDocument();
+  });
+
+  it('after the check, composes the hostname from the name and the domain picked', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    vi.mocked(api.cloudflareSetup).mockResolvedValue(SETUP);
+    vi.mocked(api.cloudflareZones).mockResolvedValue({ zones: [{ id: 'z1', name: 'example.com' }, { id: 'z2', name: 'sam.dev' }] });
+    vi.mocked(api.startCloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: progress('running', 1) });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Set it up for me' }));
+    fireEvent.change(screen.getByLabelText(/API token/), { target: { value: 'cf-token-0123456789abcdef' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check the token' }));
+    const domain = await screen.findByLabelText(/Domain/);
+    expect(screen.queryByLabelText(/Hostname/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Name/)).toHaveValue('buddi');
+    fireEvent.change(domain, { target: { value: 'sam.dev' } });
+    expect(screen.getByText('Makes buddi.sam.dev.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Name/), { target: { value: 'home' } });
+    fireEvent.change(screen.getByLabelText(/Your email/), { target: { value: 'owner@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set it up' }));
+    await waitFor(() => expect(api.startCloudflareSetup).toHaveBeenCalledWith({ token: 'cf-token-0123456789abcdef', host: 'home.sam.dev', email: 'owner@example.com', zone: 'sam.dev' }));
+  });
+
+  it('checks a kept token at once and splits the recorded hostname into name and domain', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    const record = { host: 'home.example.com', email: 'owner@example.com', zone: 'example.com', teamDomain: 'team.cloudflareaccess.com' };
+    vi.mocked(api.cloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, record: record as never, progress: progress('removed', 0, { steps: [] }) });
+    vi.mocked(api.cloudflareZones).mockResolvedValue({ zones: [{ id: 'z1', name: 'example.com' }] });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Set it up again' }));
+    expect(await screen.findByLabelText(/Domain/)).toHaveValue('example.com');
+    expect(api.cloudflareZones).toHaveBeenCalledWith({});
+    expect(screen.getByLabelText(/Name/)).toHaveValue('home');
+  });
+
+  it('says to give Cloudflare a minute when it is done', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    vi.mocked(api.cloudflareSetup).mockResolvedValue({ ...SETUP, progress: progress('done', 9, { url: 'https://buddi.example.com' }) });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    expect(await screen.findByText(/sign in as owner@example\.com\. Cloudflare needs a minute or two before the first sign-in works; if its page says it can’t find the application, reload\./)).toBeInTheDocument();
   });
 
   it('shows a failure in its step, with Remove what buddi made and Try again', async () => {

@@ -21,6 +21,7 @@ import {
   ownerSecretTokenStore,
   removeCloudflareSetup,
   removedInWords,
+  SETUP_PROPAGATION,
   runCloudflareSetup,
   toCloudflareSetting,
   type SetupProgress,
@@ -146,7 +147,7 @@ export async function runAccess(
     ).finally(() => process.removeListener('SIGINT', onSigint));
     if (done.state === 'done') {
       console.log('');
-      console.log(`Done. Open ${done.url} from another device and sign in as ${email}.`);
+      console.log(`Done. Open ${done.url} from another device and sign in as ${email}. ${SETUP_PROPAGATION}`);
       console.log(dim('The running buddi picks the setting up within 15 seconds.'));
       return 0;
     }

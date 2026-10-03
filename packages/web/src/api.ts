@@ -1919,6 +1919,9 @@ export interface CloudflareSetupProgress {
   /** It stopped at something of buddi's name that buddi didn't make: "Use it anyway" runs again with adopt. */
   adoptable?: boolean;
 }
+/** A domain (Cloudflare zone) the setup token can see. */
+export interface CloudflareZone { id: string; name: string }
+
 export interface CloudflareSetupView {
   progress: CloudflareSetupProgress;
   tokenStored: boolean;
@@ -2953,7 +2956,8 @@ export const api = {
   setCloudflareAccess: (change: CloudflareAccessChange) => put<CloudflareAccessView>('/access/cloudflare-access', change),
   testCloudflareAccess: (change: { teamDomain: string }) => post<CloudflareAccessTest>('/access/cloudflare-access/test', change),
   cloudflareSetup: () => get<CloudflareSetupView>('/access/cloudflare-access/setup'),
-  startCloudflareSetup: (input: { token?: string; host: string; email: string; adopt?: boolean }) => post<CloudflareSetupView>('/access/cloudflare-access/setup', input),
+  cloudflareZones: (input: { token?: string } = {}) => post<{ zones: CloudflareZone[] }>('/access/cloudflare-access/zones', input),
+  startCloudflareSetup: (input: { token?: string; host: string; email: string; zone?: string; adopt?: boolean }) => post<CloudflareSetupView>('/access/cloudflare-access/setup', input),
   stopCloudflareSetup: () => post<CloudflareSetupView>('/access/cloudflare-access/setup/stop'),
   removeCloudflareSetup: (input: { token?: string } = {}) => post<CloudflareSetupView>('/access/cloudflare-access/setup/remove', input),
   /* ---- owner API tokens (docs/api.md, "Authentication") ---- */

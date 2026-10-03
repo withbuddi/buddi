@@ -186,7 +186,7 @@ import {
 } from './access/cloudflare.js';
 import { arrivalOf } from './access/arrival.js';
 import type { HttpTransport } from '@buddi/runtime';
-import { createCloudflareApi, CLOUDFLARE_PERMISSION_LINES, CLOUDFLARE_TOKEN_URL } from './access/cloudflare-api.js';
+import { CloudflareApiError, createCloudflareApi, CLOUDFLARE_PERMISSION_LINES, CLOUDFLARE_TOKEN_URL } from './access/cloudflare-api.js';
 import {
   CLOUDFLARE_SETUP_KEY,
   checkSetupInput,
@@ -2961,6 +2961,29 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, 202, await setupView());
       } finally {
         if (!handedOff) lease.release();
+      }
+    }
+    /*
+     * The setup form's domain choice: check the token and list the zones it
+     * can see. The pasted token is only used for these two calls — keeping it
+     * stays with setup — and never goes back out, not even in an error.
+     */
+    if (path === '/api/access/cloudflare-access/zones') {
+      if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+      const body = await readJsonBody(req).catch(() => ({} as Record<string, unknown>));
+      const pasted = typeof body?.token === 'string' ? body.token.trim() : '';
+      if (pasted && (/\s/.test(pasted) || pasted.length < 20 || pasted.length > 400)) return sendJson(res, 400, { error: 'That doesn’t look like a Cloudflare API token.' });
+      const token = pasted || await tokenStore().use().catch(() => null);
+      if (!token) return sendJson(res, 400, { error: 'Paste a Cloudflare API token.' });
+      const api = createCloudflareApi({ token, transport: deps.cloudflare?.api?.transport, baseUrl: deps.cloudflare?.api?.baseUrl });
+      try {
+        if (await api.verifyToken() === 'inactive') return sendJson(res, 400, { error: 'Cloudflare says this API token is not active. Check that it has not expired or been turned off.' });
+        const zones = await api.zones();
+        return sendJson(res, 200, { zones: zones.map((z) => ({ id: z.id, name: z.name })) });
+      } catch (error) {
+        if (!(error instanceof CloudflareApiError)) throw error;
+        const refused = error.status === 401 || error.permission !== undefined || (error.status >= 400 && error.status < 500 && error.status !== 429);
+        return sendJson(res, refused ? 400 : 502, { error: error.message });
       }
     }
     if (path === '/api/access/cloudflare-access/test') {

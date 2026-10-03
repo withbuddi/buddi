@@ -185,8 +185,8 @@ describe('Set it up for me, through the server', () => {
 interface View { progress: { state: string; error: string | null; adoptable?: boolean; url: string | null; install: { command: string } | null }; tokenStored: boolean }
 
 /** A server with the fake Cloudflare, a local browser session, and helpers. */
-async function bench() {
-  const cf = await fakeCloudflare({ team: TEAM });
+async function bench(opts: { zones?: string[] } = {}) {
+  const cf = await fakeCloudflare({ team: TEAM, ...opts });
   fakes.push(cf);
   const team = fakeTeam({ now: () => new Date() });
   const tokens = memoryTokenStore();
@@ -230,3 +230,50 @@ async function bench() {
   };
   return { app, cf, tokens, main, headers, post, until };
 }
+
+describe('The setup form\'s domain choice', () => {
+  it('lists the zones a valid token sees, without keeping or echoing the token', async () => {
+    const t = await bench({ zones: ['example.com', 'sam.dev'] });
+    const res = await t.post('/zones', { token: FAKE_TOKEN });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ zones: [{ id: expect.any(String), name: 'example.com' }, { id: expect.any(String), name: 'sam.dev' }] });
+    expect(text).not.toContain(FAKE_TOKEN);
+    expect(t.tokens.value).toBeNull();
+    expect(t.cf.calls).toContain('GET /user/tokens/verify');
+  });
+
+  it('uses the kept token when none is given, and asks for one when none is kept', async () => {
+    const t = await bench();
+    expect((await t.post('/zones', {})).status).toBe(400);
+    t.tokens.value = FAKE_TOKEN;
+    const res = await t.post('/zones', {});
+    expect(res.status).toBe(200);
+    expect((await res.json() as { zones: unknown[] }).zones).toHaveLength(1);
+  });
+
+  it('answers 400 with a plain line for a token Cloudflare refuses', async () => {
+    const t = await bench();
+    const bad = 'cf-wrong-token-0123456789abcdef0123';
+    const res = await t.post('/zones', { token: bad });
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(JSON.parse(text).error).toContain('doesn’t accept this API token');
+    expect(text).not.toContain(bad);
+  });
+
+  it('names the DNS permission when the token cannot list domains', async () => {
+    const t = await bench();
+    t.cf.deny.add('dns');
+    const res = await t.post('/zones', { token: FAKE_TOKEN });
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: string }).error).toContain('Zone · DNS · Edit');
+  });
+
+  it('answers an empty list when the token sees no domain', async () => {
+    const t = await bench({ zones: [] });
+    const res = await t.post('/zones', { token: FAKE_TOKEN });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ zones: [] });
+  });
+});
