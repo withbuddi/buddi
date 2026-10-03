@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-02
+updated: 2026-10-03
 ---
 
 # The HTTP API
@@ -1534,7 +1534,7 @@ The update sheet for an agent added from this package: changes, persona diff, to
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ agentId }`
-- **Answer:** `{ plan, agentId, handle, name, title, fromVersion, version, changes, via, edited, replacesOwn: string[], retires: string[], widened, added: [{ name, tier, description }], removed, personaDiff: string[], missionsAdded, preview }`
+- **Answer:** `{ plan, agentId, handle, name, title, fromVersion, version, changes, via, edited, replacesOwn: string[], retires: string[], widened, added: [{ name, tier, description }], removed, personaDiff: string[] (unified hunks: @@ -a,b +c,d @@ headers, then - removed, + added and two-space context lines), missionsAdded, preview }`
 - **Errors:** 400; 409 already up to date
 - **Since:** 0.1.0-pre.32
 

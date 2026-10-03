@@ -4501,6 +4501,10 @@ button.lk-chip:disabled { cursor: default; }
 .cat-diff-line[data-kind='add'] { background: var(--good-soft); color: var(--good); }
 .cat-diff-line[data-kind='del'] { background: var(--critical-soft); color: var(--critical); }
 .cat-diff-k { flex: 0 0 auto; width: 1ch; color: inherit; opacity: 0.8; }
+.cat-diff-line[data-kind='ctx'] { color: var(--text-muted); }
+.cat-diff-line[data-kind='gap'] { color: var(--text-faint); border-block: 1px dashed var(--line); }
+.cat-diff-n { flex: 0 0 auto; min-width: 3ch; text-align: right; color: var(--text-faint); user-select: none; }
+.cat-diff-line[data-kind='add'] .cat-diff-n, .cat-diff-line[data-kind='del'] .cat-diff-n { color: inherit; opacity: 0.6; }
 
 /* Suggestions: the handover's tick rows and Home's compact cards. */
 .cat-pick { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); cursor: pointer; transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease; }

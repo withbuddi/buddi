@@ -36,6 +36,7 @@ import {
   type MissingNeed,
   type MissingPlugin,
 } from '../agents/platform-catalogue.js';
+import { ownerText } from '../agents/owner-text.js';
 import type { AgentPackage } from '../agents/catalogue-package.js';
 import { pluginAgentProposals, planCatalogueInstall } from '../agents/platform.js';
 import { loadMarketIndex, type MarketDeps, type MarketEntry } from './market.js';
@@ -123,12 +124,13 @@ export async function catalogueRoute(deps: CatalogueDeps, url: URL): Promise<Rou
   const state = await stateContext(deps.registry, deps.service, deps.binding);
   const listings = loaded.packages.some((p) => Object.keys(p.manifest.requires).length > 0) ? await marketPlugins(deps) : [];
   const agents: CatalogueCard[] = loaded.packages.map((pkg) => {
-    const view = entryView(pkg, packageState(pkg, state), deps.ctx.timezone);
+    const specs = deps.registry.list();
+    const view = entryView(pkg, packageState(pkg, state), deps.ctx.timezone, undefined, specs);
     const missing = missingViews(view.missing ?? [], listings);
     const { missing: _missing, skills: _skills, ...rest } = view;
     return {
       ...rest,
-      skills: pkg.skills.map((skill) => ({ name: skill.name, description: skill.description, text: skill.body })),
+      skills: pkg.skills.map((skill) => ({ name: skill.name, description: ownerText(skill.description, [...specs, ...pkg.manifest.tools.map((name) => ({ name }))]), text: skill.body })),
       ...(view.missing ? { missing } : {}),
       addable: addable(view, missing),
     };
@@ -755,7 +757,7 @@ export async function updatePlanRoute(deps: CatalogueDeps, name: string, body: R
         title: envelope.package.title,
         fromVersion: u.fromVersion,
         version: envelope.package.version,
-        changes: envelope.package.changes,
+        changes: ownerText(envelope.package.changes, [...deps.registry.list(), ...envelope.tools.map((name) => ({ name }))]),
         via: u.via,
         edited: u.edited,
         replacesOwn: u.replacesOwn,

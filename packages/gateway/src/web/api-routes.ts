@@ -459,7 +459,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'POST', path: '/api/catalogue/:name/update/plan', area: 'agents', summary: 'The update sheet for an agent added from this package: changes, persona diff, tools added and removed, new missions, and whether the owner edited it.',
-    body: '{ agentId }', answer: '{ plan, agentId, handle, name, title, fromVersion, version, changes, via, edited, replacesOwn: string[], retires: string[], widened, added: [{ name, tier, description }], removed, personaDiff: string[], missionsAdded, preview }',
+    body: '{ agentId }', answer: '{ plan, agentId, handle, name, title, fromVersion, version, changes, via, edited, replacesOwn: string[], retires: string[], widened, added: [{ name, tier, description }], removed, personaDiff: string[] (unified hunks: @@ -a,b +c,d @@ headers, then - removed, + added and two-space context lines), missionsAdded, preview }',
     errors: '400; 409 already up to date',
   },
   {

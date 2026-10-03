@@ -66,6 +66,7 @@ import { composeAgentFile, composeSkillFile, createAgentDirAtomic, trashStamp, w
 import { diffGrant, grantChangeBlock } from './platform-grant.js';
 import { agentMissionId, describeCadence } from '../missions/reminders.js';
 import { normaliseAvatar } from './avatar-image.js';
+import { ownerText, type ToolWords } from './owner-text.js';
 import { readAvatar, writeAvatar } from './avatars.js';
 import type { AccountChoice, CreateAgentEnvelope } from './platform.js';
 
@@ -620,8 +621,12 @@ export function resolvePicks(
   });
 }
 
-/** Lines that differ, `- ` removed and `+ ` added, from a plain longest-common-subsequence. */
-export function lineDiff(before: string, after: string): string[] {
+/**
+ * A unified diff of two texts, from a plain longest-common-subsequence: hunks headed `@@ -a,b +c,d @@`
+ * (1-based starts and line counts, as `diff -u` writes them), each line `- ` removed, `+ ` added or
+ * `  ` unchanged context, `context` lines of it around every change. Hunks closer than twice the context merge.
+ */
+export function lineDiff(before: string, after: string, context = 2): string[] {
   const a = before.trim().split('\n');
   const b = after.trim().split('\n');
   const n = a.length;
@@ -632,23 +637,78 @@ export function lineDiff(before: string, after: string): string[] {
       table[i]![j] = a[i] === b[j] ? table[i + 1]![j + 1]! + 1 : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
     }
   }
-  const out: string[] = [];
+  // Every line of both texts in order, with its 0-based place in the old (i) and new (j) text.
+  const ops: Array<{ k: ' ' | '-' | '+'; text: string; i: number; j: number }> = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
     if (a[i] === b[j]) {
+      ops.push({ k: ' ', text: a[i]!, i, j });
       i += 1;
       j += 1;
     } else if (table[i + 1]![j]! >= table[i]![j + 1]!) {
-      out.push(`- ${a[i]}`);
+      ops.push({ k: '-', text: a[i]!, i, j });
       i += 1;
     } else {
-      out.push(`+ ${b[j]}`);
+      ops.push({ k: '+', text: b[j]!, i, j });
       j += 1;
     }
   }
-  while (i < n) out.push(`- ${a[i++]}`);
-  while (j < m) out.push(`+ ${b[j++]}`);
+  while (i < n) ops.push({ k: '-', text: a[i]!, i: i++, j });
+  while (j < m) ops.push({ k: '+', text: b[j]!, i, j: j++ });
+  // Ranges of ops to show: each change widened by the context, overlapping or touching ranges joined.
+  const ranges: Array<[number, number]> = [];
+  ops.forEach((op, at) => {
+    if (op.k === ' ') return;
+    const from = Math.max(0, at - context);
+    const to = Math.min(ops.length - 1, at + context);
+    const last = ranges[ranges.length - 1];
+    if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to);
+    else ranges.push([from, to]);
+  });
+  const out: string[] = [];
+  for (const [from, to] of ranges) {
+    const hunk = ops.slice(from, to + 1);
+    const oldCount = hunk.filter((op) => op.k !== '+').length;
+    const newCount = hunk.filter((op) => op.k !== '-').length;
+    const oldStart = oldCount === 0 ? hunk[0]!.i : hunk[0]!.i + 1;
+    const newStart = newCount === 0 ? hunk[0]!.j : hunk[0]!.j + 1;
+    out.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+    for (const op of hunk) out.push(`${op.k} ${op.text}`);
+  }
+  return out;
+}
+
+/** The hunk header's new-file start and line count, or null when the line is not one. */
+export function hunkHeader(line: string): { newStart: number; newCount: number } | null {
+  const match = /^@@ -\d+,\d+ \+(\d+),(\d+) @@$/.exec(line);
+  return match ? { newStart: Number(match[1]), newCount: Number(match[2]) } : null;
+}
+
+/**
+ * The diff as the owner reads it: each line under its number in the new file (blank for a removed line),
+ * and `⋯ N lines` where unchanged lines between two hunks are left out. Hunk headers do not show.
+ */
+export function readableDiff(lines: readonly string[]): string[] {
+  const out: string[] = [];
+  let next = 0;
+  let shownTo = 0;
+  for (const line of lines) {
+    const header = hunkHeader(line);
+    if (header) {
+      const start = header.newCount === 0 ? header.newStart + 1 : header.newStart;
+      if (out.length > 0 && start - 1 > shownTo) out.push(`     ⋯ ${start - 1 - shownTo} line${start - 1 - shownTo === 1 ? '' : 's'}`);
+      next = start;
+      continue;
+    }
+    const kind = line.slice(0, 1);
+    const number = kind === '-' ? '' : String(next);
+    if (kind !== '-') {
+      shownTo = next;
+      next += 1;
+    }
+    out.push(`${number.padStart(4)} ${line}`);
+  }
   return out;
 }
 
@@ -1018,10 +1078,20 @@ async function buildUpdate(
   };
 }
 
-function missionLines(missions: readonly PackageMissionPlan[]): string[] {
+function personaBlock(diff: readonly string[]): string[] {
+  if (diff.length === 0) return ['Its persona is unchanged.'];
+  const lines = readableDiff(diff);
+  return [
+    'Its persona changes:',
+    ...lines.slice(0, 80).map((line) => `  ${line}`),
+    ...(lines.length > 80 ? [`  … and ${lines.length - 80} more lines`] : []),
+  ];
+}
+
+function missionLines(missions: readonly PackageMissionPlan[], specs: readonly ToolWords[]): string[] {
   return missions.map(
     (mission) =>
-      `  ${mission.name}, ${describeCadence(mission.cron, mission.timezone)} — ` +
+      `  ${ownerText(mission.name, specs)}, ${describeCadence(mission.cron, mission.timezone)} — ` +
       (mission.enabled ? 'ON from the start' : 'off until you turn it on'),
   );
 }
@@ -1037,7 +1107,7 @@ export function renderInstallPreview(
     return [
       `Update @${envelope.handle} from the catalogue: ${envelope.package.title} ${envelope.package.version}` +
         ` (you have ${u.via ? `${u.via} ${u.fromVersion}` : u.fromVersion}).`,
-      `What changed: ${envelope.package.changes}`,
+      `What changed: ${ownerText(envelope.package.changes, specs)}`,
       '',
       ...(u.edited
         ? [
@@ -1059,12 +1129,10 @@ export function renderInstallPreview(
         : []),
       ...grantChangeBlock(envelope.handle, { ...diffGrant(u.toolsBefore, envelope.tools) }, specs),
       '',
-      ...(u.personaDiff.length === 0
-        ? ['Its persona is unchanged.']
-        : ['Its persona changes:', ...u.personaDiff.slice(0, 80).map((line) => `  ${line}`), ...(u.personaDiff.length > 80 ? [`  … and ${u.personaDiff.length - 80} more lines`] : [])]),
+      ...personaBlock(u.personaDiff),
       ...(envelope.missions.length === 0
         ? []
-        : ['', 'New missions it suggests, each off until you turn it on:', ...missionLines(envelope.missions)]),
+        : ['', 'New missions it suggests, each off until you turn it on:', ...missionLines(envelope.missions, specs)]),
       '',
       'Missions it already has are yours and stay exactly as they are. Its handle, its account and its memory do not change.',
       `File:  ${envelope.file}`,
@@ -1091,12 +1159,12 @@ export function renderInstallPreview(
       : [
           `It arrives with ${envelope.skills.length} skill${envelope.skills.length === 1 ? '' : 's'} of its own ` +
             '(a procedure in its prompt; it grants no tool and lowers no tier):',
-          ...envelope.skills.map((s) => `  ${s.name} — ${s.description}`),
+          ...envelope.skills.map((s) => `  ${s.name} — ${ownerText(s.description, specs)}`),
           '',
         ]),
     ...(envelope.missions.length === 0
       ? []
-      : [`Its missions (pause or start any of them under Agents → Missions):`, ...missionLines(envelope.missions), '']),
+      : [`Its missions (pause or start any of them under Agents → Missions):`, ...missionLines(envelope.missions, specs), '']),
     `Once you approve, this file is YOURS: an update from the catalogue is always offered, never written`,
     'without your approval, and a file you change is never touched.',
   ].join('\n');
@@ -1137,16 +1205,28 @@ export interface CatalogueEntryView {
   reason?: string;
 }
 
-export function entryView(pkg: AgentPackage, state: PackageState, timezone: string, defaults?: FilledPick[]): CatalogueEntryView {
+/**
+ * `specs` are the tools this buddi knows: a tool name in the owner-facing text (pitch, description, about,
+ * changes, examples, mission names) is rewritten in words, for listings made before the market refused them.
+ */
+export function entryView(
+  pkg: AgentPackage,
+  state: PackageState,
+  timezone: string,
+  defaults?: FilledPick[],
+  specs: readonly ToolWords[] = [],
+): CatalogueEntryView {
   const m = pkg.manifest;
+  const known = [...specs, ...m.tools.filter((name) => !specs.some((s) => s.name === name)).map((name) => ({ name }))];
+  const words = (text: string): string => ownerText(text, known);
   return {
     name: m.name,
     version: m.version,
     handle: m.handle,
     title: m.title,
-    pitch: m.pitch,
-    description: m.description,
-    about: m.about,
+    pitch: words(m.pitch),
+    description: words(m.description),
+    about: words(m.about),
     category: m.category,
     trust: m.trust,
     author: m.author,
@@ -1156,7 +1236,7 @@ export function entryView(pkg: AgentPackage, state: PackageState, timezone: stri
     tools: m.tools,
     missions: m.missions.map((mission) => ({
       id: mission.id,
-      name: mission.name,
+      name: words(mission.name),
       cron: mission.cron,
       when: describeCadence(mission.cron, timezone),
       prompt: mission.prompt,
@@ -1168,9 +1248,9 @@ export function entryView(pkg: AgentPackage, state: PackageState, timezone: stri
       optional: fill.optional === true,
       default: defaults?.find((d) => d.id === fill.id)?.value ?? '',
     })),
-    examples: m.examples,
+    examples: m.examples.map(words),
     skills: pkg.skills.map((s) => s.name),
-    changes: m.changes,
+    changes: words(m.changes),
     replaces: m.replaces,
     avatar: pkg.avatar,
     page: pkg.page,
@@ -1223,7 +1303,7 @@ export function createCatalogueTools(
         fetchedAt: loaded.fetchedAt,
         ...(loaded.stale ? { stale: true } : {}),
         agents: loaded.packages.map((pkg) => {
-          const view = entryView(pkg, packageState(pkg, state), ctx.timezone);
+          const view = entryView(pkg, packageState(pkg, state), ctx.timezone, undefined, registry.list());
           return {
             name: view.name,
             version: view.version,

@@ -470,6 +470,26 @@ describe('the update sheet', () => {
   });
 });
 
+describe('the update sheet diff', () => {
+  it('draws context muted with new-file line numbers, and the unchanged run between hunks as one gap row', async () => {
+    vi.mocked(api.catalogueUpdatePlan).mockResolvedValue({
+      agentId: 'writer', handle: 'writer', name: 'writer', title: 'Writer', fromVersion: '1.0.0', version: '1.1.0', changes: 'Shorter edits.',
+      edited: false, widened: false, added: [], removed: [], missionsAdded: [], preview: null, plan: 'fp-writer',
+      personaDiff: [
+        '@@ -1,4 +1,4 @@', '  # Writer', '  ', '- Rewrite freely.', '+ Edit lightly.', '  Say what you changed.',
+        '@@ -18,3 +18,4 @@', '  ## Sign-off', '+ Keep it short.', '  Thanks.',
+      ],
+    });
+    render(<UpdateSheet entry={WRITER} agentId="writer" onClose={() => {}} />);
+    const region = await screen.findByRole('region', { name: 'Writer 1.0 against 1.1' });
+    const rows = [...region.querySelectorAll('.cat-diff-line')];
+    expect(rows.map((row) => row.getAttribute('data-kind'))).toEqual(['ctx', 'ctx', 'del', 'add', 'ctx', 'gap', 'ctx', 'add', 'ctx']);
+    expect(rows.map((row) => row.querySelector('.cat-diff-n')?.textContent)).toEqual(['1', '2', '', '3', '4', '', '18', '19', '20']);
+    expect(rows[5]).toHaveTextContent('⋯ 13 lines');
+    expect(region).not.toHaveTextContent('@@');
+  });
+});
+
 describe('suggestions', () => {
   it('follows the rule: mailbox or My days → Chief of Staff; Finance → CFO; Pictures → Illustrator; filled with Researcher, then Tutor', () => {
     expect(suggestNames({ mailbox: true })).toEqual(['chief-of-staff', 'researcher', 'tutor']);

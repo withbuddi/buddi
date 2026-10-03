@@ -17,7 +17,7 @@ import {
   PackageRefusal,
   sriSha256,
 } from './catalogue-package.js';
-import { lineDiff } from './platform-catalogue.js';
+import { lineDiff, readableDiff } from './platform-catalogue.js';
 
 function refusal(entry: Record<string, unknown>): string {
   try {
@@ -128,7 +128,23 @@ describe('the picks and the missions', () => {
     expect(cronAt('*/5 * * * *', '07:30')).toBe('*/5 * * * *');
   });
 
-  it('diffs a persona by line', () => {
-    expect(lineDiff('a\nb\nc', 'a\nc\nd')).toEqual(['- b', '+ d']);
+  it('diffs a persona by line, in hunks with two lines of context', () => {
+    expect(lineDiff('a\nb\nc', 'a\nc\nd')).toEqual(['@@ -1,3 +1,3 @@', '  a', '- b', '  c', '+ d']);
+    expect(lineDiff('same', 'same')).toEqual([]);
+    const before = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const after = [...before];
+    after[2] = 'third, rewritten';
+    after.splice(16, 1);
+    const diff = lineDiff(before.join('\n'), after.join('\n'));
+    expect(diff).toEqual([
+      '@@ -1,5 +1,5 @@', '  line 1', '  line 2', '- line 3', '+ third, rewritten', '  line 4', '  line 5',
+      '@@ -15,5 +15,4 @@', '  line 15', '  line 16', '- line 17', '  line 18', '  line 19',
+    ]);
+    // What the owner reads: numbers in the new file, the unchanged run between hunks counted.
+    expect(readableDiff(diff)).toEqual([
+      '   1   line 1', '   2   line 2', '     - line 3', '   3 + third, rewritten', '   4   line 4', '   5   line 5',
+      '     ⋯ 9 lines',
+      '  15   line 15', '  16   line 16', '     - line 17', '  17   line 18', '  18   line 19',
+    ]);
   });
 });

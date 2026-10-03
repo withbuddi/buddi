@@ -8,6 +8,14 @@ What changes in buddi from one release to the next, newest first.
 
 - Two scripts for working on buddi: `pnpm test:db` runs the suites against a throwaway Postgres in Docker (migrated first, removed afterwards, never the dev database), and `pnpm release pre.N` cuts a release: stamps new API routes, dates the changelog, refreshes the API and CLI pages, commits, tags and pushes.
 
+### Changed
+
+- The catalogue update sheet shows where in the persona a change sits: each change comes with two lines of muted context and its line number, and the unchanged lines between changes fold into a "⋯ 12 lines" row. `buddi agents update` prints the same. `POST /api/catalogue/:name/update/plan` returns `personaDiff` as unified hunks (`@@ -a,b +c,d @@` and context lines).
+
+### Fixed
+
+- A tool name in a catalogue listing's owner-facing text (pitch, description, about, what changed, examples, mission names, skill descriptions), such as "(artifacts.write)", is rewritten in words from the tool's description, or dropped, wherever buddi shows it.
+
 ## 0.1.0-pre.35 — 2026-10-03
 
 ### Added

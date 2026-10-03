@@ -492,18 +492,55 @@ export function InstallSheet({
  * Update
  * ------------------------------------------------------------------ */
 
+type DiffRow = { kind: 'add' | 'del' | 'ctx'; text: string; n: number | null } | { kind: 'gap'; count: number };
+
+/**
+ * The gateway's unified diff (`@@ -a,b +c,d @@` hunks, `- `/`+ `/`  ` lines) as rows: each line with its
+ * number in the new file (none for a removed line), and a gap row for the unchanged lines between hunks.
+ */
+export function diffRows(lines: readonly string[]): DiffRow[] {
+  const rows: DiffRow[] = [];
+  let next: number | null = null;
+  let shownTo = 0;
+  for (const line of lines) {
+    const header = /^@@ -\d+,\d+ \+(\d+),(\d+) @@$/.exec(line);
+    if (header) {
+      const start = Number(header[2]) === 0 ? Number(header[1]) + 1 : Number(header[1]);
+      if (rows.length > 0 && start - 1 > shownTo) rows.push({ kind: 'gap', count: start - 1 - shownTo });
+      next = start;
+      continue;
+    }
+    const kind = line.startsWith('+ ') ? 'add' : line.startsWith('- ') ? 'del' : 'ctx';
+    const text = kind === 'ctx' && !line.startsWith('  ') ? line : line.slice(2);
+    if (kind === 'del' || next === null) {
+      rows.push({ kind, text, n: null });
+    } else {
+      rows.push({ kind, text, n: next });
+      shownTo = next;
+      next += 1;
+    }
+  }
+  return rows;
+}
+
 function Diff({ lines, label }: { lines: readonly string[]; label: string }): JSX.Element {
   return (
     <div className="cat-diff" role="region" aria-label={label}>
-      {lines.map((line, i) => {
-        const k = line.startsWith('+ ') ? '+' : line.startsWith('- ') ? '-' : ' ';
-        return (
-          <div key={i} className="cat-diff-line" data-kind={k === '+' ? 'add' : k === '-' ? 'del' : undefined}>
-            <span className="cat-diff-k" aria-hidden="true">{k}</span>
-            <span>{(k === ' ' ? line : line.slice(2)) || ' '}</span>
+      {diffRows(lines).map((row, i) =>
+        row.kind === 'gap' ? (
+          <div key={i} className="cat-diff-line" data-kind="gap">
+            <span className="cat-diff-n" aria-hidden="true" />
+            <span className="cat-diff-k" aria-hidden="true" />
+            <span>⋯ {row.count} {row.count === 1 ? 'line' : 'lines'}</span>
           </div>
-        );
-      })}
+        ) : (
+          <div key={i} className="cat-diff-line" data-kind={row.kind}>
+            <span className="cat-diff-n" aria-hidden="true">{row.n ?? ''}</span>
+            <span className="cat-diff-k" aria-hidden="true">{row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' '}</span>
+            <span>{row.text || ' '}</span>
+          </div>
+        ),
+      )}
     </div>
   );
 }

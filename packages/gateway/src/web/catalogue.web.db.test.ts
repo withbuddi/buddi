@@ -368,16 +368,25 @@ suite('the agent catalogue', () => {
       agentEntry('researcher', {
         persona: `${RESEARCHER_PERSONA}\n- Say what would change your mind.`,
         skills: [{ file: 'answering-with-sources.md', text: RESEARCHER_SKILL }],
-        manifest: { version: '1.1.0', changes: 'Says what would change its mind; can set schedules.', tools: ['memory.*', 'reminder.*', 'owner.notify', 'schedule.*'] },
+        manifest: { version: '1.1.0', changes: 'Says what would change its mind; can set schedules (schedule.propose).', tools: ['memory.*', 'reminder.*', 'owner.notify', 'schedule.*'] },
       }),
     ]);
     expect(await card('researcher')).toMatchObject({ state: 'installed', installed: { drift: 'update', version: '1.0.0' } });
+    // A tool name in an older listing's owner-facing text reads as words, on the card and on the sheet.
+    expect((await card('researcher') as { changes: string }).changes).not.toContain('schedule.propose');
     const plan = await updatePlanRoute(deps, 'researcher', { agentId: 'researcher' });
     expect(plan.status, JSON.stringify(plan.body)).toBe(200);
     const body = plan.body as Record<string, any>;
     expect(body).toMatchObject({ edited: false, widened: true, fromVersion: '1.0.0', version: '1.1.0' });
     expect(body.added.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(['schedule.propose']));
     expect(body.personaDiff).toContain('+ - Say what would change your mind.');
+    expect(body.changes).toMatch(/^Says what would change its mind; can set schedules( \([^.]+\))?\.$/);
+    expect(body.changes).not.toContain('schedule.propose');
+    // Hunks with two lines of context, numbered in the preview the CLI prints.
+    expect(body.personaDiff[0]).toMatch(/^@@ -\d+,\d+ \+\d+,\d+ @@$/);
+    expect(body.personaDiff.filter((l: string) => l.startsWith('  ')).length).toBeGreaterThan(0);
+    expect(body.preview).toMatch(/^\s+\d+ \+ - Say what would change your mind\.$/m);
+    expect(body.preview).not.toContain('@@');
 
     // Its face did not arrive at install: the update brings it.
     await pool.query('delete from core.agent_avatars where agent_id = $1', ['researcher']);
