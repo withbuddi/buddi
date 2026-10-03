@@ -21,12 +21,15 @@ What changes in buddi from one release to the next, newest first.
 
 - `pnpm review` for working on buddi: Codex reviews everything since the last release tag (from the Unreleased lines and a standard focus list) into a file, the script prints the brief for a second review agent, and `--merge` puts both reviews into one findings file.
 
+- Each story in a news edition card has its ways out under ⋯, as on the News page: Not interested, Mute an outlet, Quiet the topic for a week, Mute the topic. The story leaves a sentence and Undo in its place.
+
 ### Changed
 
 - Reports on Telegram keep their formatting: headings become bold lines in capitals (an edition's topics), bold, italic and code show as such, and a link sits on its words instead of being spelled out; raw addresses stay as they are, and a long report still splits at a paragraph (before a topic when one is near), never inside a link. If Telegram refuses the markup, the report goes as plain text.
 
 ### Fixed
 
+- The edition card in chat no longer sits under a "Mission · Report" row: the card carries its own name, time and Open edition.
 - A mission or agent run that was mid-flight when buddi restarted no longer stays "leased" until a later restart: buddi hands its runs back when it stops, settles every run a previous start left behind as soon as it starts, and checks every minute for a run whose heartbeat stopped. A run that had not yet acted is queued again once; one that had already called a tool with an effect fails in Activity → Jobs with "interrupted by a restart" and what it had done, so nothing happens twice without you retrying it.
 
 ## 0.1.0-pre.36 — 2026-10-03

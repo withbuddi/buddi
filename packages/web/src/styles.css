@@ -4835,6 +4835,13 @@ button.lk-chip:disabled { cursor: default; }
 .ed-topic { margin: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-muted); }
 .ed-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
 .ed-story { display: flex; align-items: flex-start; gap: var(--space-3); padding-right: var(--space-8); }
+.ed-story { position: relative; }
+/* The story's ⋯, top right, shown on hover or focus (always on a phone): the kit's ways out. */
+.ed-more-btn { position: absolute; right: 0; top: calc(var(--space-1) * -1); opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
+.ed-story:hover .ed-more-btn, .ed-more-btn:focus-within, .ed-more-btn:has([aria-expanded='true']) { opacity: 1; }
+@media (max-width: 720px), (hover: none) { .ed-more-btn { opacity: 1; } }
+/* A story turned away: its sentence and Undo where it stood. */
+.ed-story-gone { align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-3); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); font-size: var(--text-sm); color: var(--text-muted); }
 .ed-story .pl-logo { margin-top: var(--space-0); }
 .ed-story-text { display: flex; flex-direction: column; gap: var(--space-0); min-width: 0; }
 .ed-story-title { font-size: var(--text-md); font-weight: var(--weight-semibold); line-height: var(--leading-tight); }

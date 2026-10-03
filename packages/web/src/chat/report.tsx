@@ -45,6 +45,11 @@ export function reportView(input: unknown, output: unknown): ReportView {
   };
 }
 
+/** Whether the report is drawn as a news edition card (its link names a saved edition, and it has text). */
+export function isEditionReport(view: ReportView): boolean {
+  return Boolean(view.text && view.link && editionIdOf(view.link.route));
+}
+
 /**
  * The report as it was sent: the player above the text, the link under it.
  * A report whose link names a saved news edition is drawn as the edition

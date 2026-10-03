@@ -8,15 +8,18 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api } from '../api';
-import { MissionReport, reportView } from './report';
-import { editionIdOf, editionOf } from './EditionCard';
+import { MissionReport, isEditionReport, reportView } from './report';
+import { edWays, editionIdOf, editionOf } from './EditionCard';
+import { MessageList } from './MessageList';
+import type { ChatMessage } from './types';
+import * as Tooltip from '@radix-ui/react-tooltip';
 
 vi.mock('../api', async (load) => ({
   ...(await load<typeof import('../api')>()),
-  api: { pageQuery: vi.fn() },
+  api: { pageQuery: vi.fn(), pageAct: vi.fn() },
 }));
 
-afterEach(() => { cleanup(); vi.mocked(api.pageQuery).mockReset(); });
+afterEach(() => { cleanup(); vi.mocked(api.pageQuery).mockReset(); vi.mocked(api.pageAct).mockReset(); });
 
 const TEXT = `Morning edition · Sat 3 Oct
 Seven stories. West African leaders meet in Lomé today.
@@ -43,6 +46,8 @@ const EDITION = {
             storyId: 's1', title: 'ECOWAS leaders open a two-day summit in Lomé', lead: 'Leaders from the fifteen member states open a two-day summit in Lomé today.',
             outlet: 'RFI Afrique', more: 3, link: { url: 'https://www.rfi.fr/fr/afrique/cedeao', label: 'rfi.fr' },
             logos: [{ name: 'RFI Afrique', logo: 'rfi.fr' }, { name: 'Reuters' }],
+            topicId: 'west-africa', topicName: 'Togo & West Africa',
+            mutable: [{ id: 'o_rfi', name: 'RFI Afrique' }, { id: 'o_reuters', name: 'Reuters' }, { id: '../bad', name: 'Bad' }],
           },
           {
             mark: 'update', markLabel: 'UPDATE', title: 'Ghana raises the cocoa price', lead: 'It takes effect on Monday.', outlet: 'Reuters', more: 0,
@@ -118,6 +123,55 @@ describe('a news edition in chat', () => {
     expect(screen.queryByRole('button', { name: 'Show as text' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Open edition' })).toBeInTheDocument();
   });
+});
+
+describe('the ways out on an edition story', () => {
+  it('offers the kit\'s ways for a told story, and none for one the edition did not match', () => {
+    const e = editionOf(EDITION)!;
+    const [told, stray] = e.groups[0]!.stories;
+    expect(told!.mutable).toEqual([{ id: 'o_rfi', name: 'RFI Afrique' }, { id: 'o_reuters', name: 'Reuters' }]);
+    const ways = edWays(told!, new Date('2026-10-03T08:00:00Z'));
+    expect(ways.map((w) => w.label)).toEqual(['Not interested', 'Mute RFI Afrique', 'Mute Reuters', 'Quiet Togo & West Africa for a week', 'Mute Togo & West Africa']);
+    expect(ways[0]).toMatchObject({ tool: 'news.hide_story', args: { id: 's1', action: 'not_interested' }, undo: { id: 's1', action: 'undo' } });
+    expect(ways[1]).toMatchObject({ tool: 'news.mute_outlet', args: { outlet: 'o_rfi', muted: true }, undo: { outlet: 'o_rfi', muted: false } });
+    expect(ways[3]).toMatchObject({ tool: 'news.set_topic', args: { topic: 'west-africa', mutedForHours: 168 }, hint: 'Back on its own next Saturday' });
+    expect(ways[4]).toMatchObject({ tool: 'news.set_topic', args: { topic: 'west-africa', muted: true } });
+    expect(edWays(stray!)).toEqual([]);
+  }, 180_000);
+
+  it('runs the owner tool, leaves the sentence and Undo in the story\'s place, and Undo takes it back', async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(api.pageQuery).mockResolvedValue({ data: EDITION });
+    vi.mocked(api.pageAct).mockResolvedValue({ result: {} });
+    render(<MissionReport view={report('#/p/news/stories?edition=e_abc')} />);
+    const card = await screen.findByTestId('edition-card');
+    // Only the told story has a ⋯.
+    expect(within(card).getAllByRole('button', { name: /^Ways out for/ })).toHaveLength(1);
+    await user.click(within(card).getByRole('button', { name: 'Ways out for ECOWAS leaders open a two-day summit in Lomé' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Not interested/ }));
+    expect(api.pageAct).toHaveBeenCalledWith('news', { tool: 'news.hide_story', args: { id: 's1', action: 'not_interested' } });
+    expect(await within(card).findByText('Hidden. It won’t come back.')).toBeInTheDocument();
+    expect(within(card).queryByText('ECOWAS leaders open a two-day summit in Lomé')).toBeNull();
+    await user.click(within(card).getByRole('button', { name: 'Undo' }));
+    expect(api.pageAct).toHaveBeenLastCalledWith('news', { tool: 'news.hide_story', args: { id: 's1', action: 'undo' } });
+    expect(await within(card).findByText('ECOWAS leaders open a two-day summit in Lomé')).toBeInTheDocument();
+  }, 180_000);
+
+  it('draws the edition card without the Mission · Report row above it; another report keeps its row', async () => {
+    vi.mocked(api.pageQuery).mockResolvedValue({ data: EDITION });
+    const turn = (id: string, link: string): ChatMessage[] => [
+      { id: `a-${id}`, role: 'assistant', at: '', blocks: [{ type: 'tool_use', id, name: 'mission.report', input: { urgency: 'normal', text: TEXT } }] },
+      { id: `u-${id}`, role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: id, name: 'mission.report', ok: true, output: { delivered: 'queued', link, linkLabel: 'Open' } }] },
+    ];
+    expect(isEditionReport(report('#/p/news/stories?edition=e_abc'))).toBe(true);
+    expect(isEditionReport(report('#/p/weather/now'))).toBe(false);
+    const { container } = render(<Tooltip.Provider><MessageList messages={turn('t1', '#/p/news/stories?edition=e_abc')} live={[]} now={0} onOpen={() => {}} emptyHint="" /></Tooltip.Provider>);
+    await screen.findByTestId('edition-card');
+    expect(container.querySelector('.wb-tool-label')).toBeNull();
+    cleanup();
+    const other = render(<Tooltip.Provider><MessageList messages={turn('t2', '#/p/weather/now')} live={[]} now={0} onOpen={() => {}} emptyHint="" /></Tooltip.Provider>);
+    expect(other.container.querySelector('.wb-tool-label')).not.toBeNull();
+  }, 180_000);
 });
 
 describe('a plain-text brief from any agent', () => {

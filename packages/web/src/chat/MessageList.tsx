@@ -15,7 +15,7 @@
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { NOTIFY_TOOL, deliveredOf } from './notify';
-import { MissionReport, REPORT_TOOL, reportView } from './report';
+import { MissionReport, REPORT_TOOL, isEditionReport, reportView } from './report';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { delegatedFiles, isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
@@ -336,6 +336,8 @@ export function MessageList({
                 const sent = !gate && block.name === NOTIFY_TOOL && result ? deliveredOf(result.output) : null;
                 // A scheduled run's report is the message it sent: its voice note, its text, its link (1.27).
                 const report = !gate && block.name === REPORT_TOOL && result?.ok ? reportView(block.input, result.output) : null;
+                // An edition card carries its own head (name, time, Open edition): the generic row above it is noise.
+                if (report && isEditionReport(report)) return <MissionReport key={blockIndex} view={report} />;
                 return (
                   <Fragment key={blockIndex}>
                   <ToolRow

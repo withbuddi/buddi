@@ -10,11 +10,17 @@
  *
  * Logos come from buddi's own plugin-assets route only (`AssetImage`); a link
  * out is http(s) only. Every string is a React text child.
+ *
+ * One logo per story, the outlet Anchor named (the kit's choice): "and N
+ * more" says the rest. Each story the edition told carries the kit's ⋯ ways
+ * out — Not interested, Mute an outlet, Quiet the topic for a week, Mute the
+ * topic — run through the news plugin's owner tools (the same ones the News
+ * page's ways call); the story then leaves its sentence and Undo in place.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import { AssetImage, assetSrc } from '../pages/AssetImage';
-import { Button, ButtonLink } from '../ui';
+import { ActionMenu, Button, ButtonLink } from '../ui';
 import { AudioCard, clock, useAudioPlayer } from './AudioCard';
 import type { ReportView } from './report';
 
@@ -40,6 +46,12 @@ export interface EditionStory {
   more: number;
   link?: { url: string; label: string };
   logos: Array<{ name: string; logo?: string }>;
+  /** The told story it matched; only such a story has ways out. */
+  storyId?: string;
+  topicId?: string;
+  topicName?: string;
+  /** Outlets that can be muted, the named one first (up to four). */
+  mutable?: Array<{ id: string; name: string }>;
 }
 
 export interface Edition {
@@ -53,6 +65,8 @@ export interface Edition {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+const ID = /^[A-Za-z0-9_.:-]{1,80}$/;
+const id = (v: unknown): string => (typeof v === 'string' && ID.test(v) ? v : '');
 const isWeb = (url: string): boolean => /^https?:\/\/[^\s]+$/i.test(url);
 
 /** The query's answer, read defensively: anything off is left out, nothing is trusted to be a string. */
@@ -70,6 +84,15 @@ export function editionOf(data: unknown): Edition | null {
       const link = o['link'] !== null && typeof o['link'] === 'object' ? (o['link'] as Record<string, unknown>) : null;
       const url = link ? str(link['url']) : '';
       const mark = o['mark'] === 'update' || o['mark'] === 'opinion' ? o['mark'] : undefined;
+      const storyId = id(o['storyId']);
+      const topicId = id(o['topicId']);
+      const topicName = str(o['topicName']).trim();
+      const mutable = (Array.isArray(o['mutable']) ? o['mutable'] : []).flatMap((m) => {
+        if (m === null || typeof m !== 'object') return [];
+        const outletId = id((m as Record<string, unknown>)['id']);
+        const name = str((m as Record<string, unknown>)['name']).trim();
+        return outletId && name ? [{ id: outletId, name }] : [];
+      }).slice(0, 4);
       return [{
         ...(mark ? { mark, markLabel: str(o['markLabel']) || undefined } : {}),
         title,
@@ -83,6 +106,9 @@ export function editionOf(data: unknown): Edition | null {
           const logo = str((l as Record<string, unknown>)['logo']);
           return name ? [{ name, ...(logo ? { logo } : {}) }] : [];
         }),
+        ...(storyId ? { storyId } : {}),
+        ...(storyId && topicId ? { topicId, topicName: topicName || topicId } : {}),
+        ...(storyId && mutable.length > 0 ? { mutable } : {}),
       }];
     });
     return stories.length > 0 ? [{ topic: str((g as Record<string, unknown>)['topic']), stories }] : [];
@@ -100,11 +126,112 @@ export function editionOf(data: unknown): Edition | null {
   };
 }
 
+/** One way out: the owner tool it runs, what it says after, and the call that takes it back. */
+export interface EdWay {
+  label: string;
+  hint?: string;
+  heading?: string;
+  tool: string;
+  args: Record<string, unknown>;
+  done: string;
+  undo: Record<string, unknown>;
+}
+
+/** "Back on its own next Saturday": a week from now, by its weekday. */
+function weekHint(now: Date): string {
+  const at = new Date(now.getTime() + 7 * 86_400_000);
+  return `Back on its own next ${new Intl.DateTimeFormat('en-GB', { weekday: 'long' }).format(at)}`;
+}
+
+/** The kit's ways out for a story the edition told, in its order; none for a story it did not match. */
+export function edWays(s: EditionStory, now: Date = new Date()): EdWay[] {
+  if (!s.storyId) return [];
+  const ways: EdWay[] = [{
+    label: 'Not interested', hint: 'Hides it and shows fewer like it', tool: 'news.hide_story',
+    args: { id: s.storyId, action: 'not_interested' }, done: 'Hidden. It won’t come back.', undo: { id: s.storyId, action: 'undo' },
+  }];
+  for (const o of s.mutable ?? []) {
+    ways.push({
+      label: `Mute ${o.name}`, heading: 'Mute an outlet', tool: 'news.mute_outlet',
+      args: { outlet: o.id, muted: true }, done: `Muted ${o.name}. Its stories are hidden.`, undo: { outlet: o.id, muted: false },
+    });
+  }
+  if (s.topicId) {
+    const t = s.topicName ?? s.topicId;
+    ways.push({
+      label: `Quiet ${t} for a week`, hint: weekHint(now), tool: 'news.set_topic',
+      args: { topic: s.topicId, mutedForHours: 168 }, done: `${t} is quiet for a week.`, undo: { topic: s.topicId, mutedForHours: 0 },
+    });
+    ways.push({
+      label: `Mute ${t}`, hint: 'Undo it in Sources', tool: 'news.set_topic',
+      args: { topic: s.topicId, muted: true }, done: `Muted ${t}. Anchor leaves it out too.`, undo: { topic: s.topicId, muted: false },
+    });
+  }
+  return ways;
+}
+
+/** The menu's items: Not interested · Mute an outlet · Quiet and Mute, hairlines between the groups. */
+function menuItems(ways: EdWay[], onPick: (way: EdWay) => void): Array<{ label: string; hint?: string; onSelect: () => void } | { heading: string } | 'separator'> {
+  const items: Array<{ label: string; hint?: string; onSelect: () => void } | { heading: string } | 'separator'> = [];
+  let group: string | undefined | null = null;
+  ways.forEach((way, i) => {
+    const g = way.heading ?? (way.tool === 'news.set_topic' ? 'topic' : way.tool);
+    if (i > 0 && g !== group) items.push('separator');
+    if (way.heading && g !== group) items.push({ heading: way.heading });
+    group = g;
+    items.push({ label: way.label, ...(way.hint ? { hint: way.hint } : {}), onSelect: () => onPick(way) });
+  });
+  return items;
+}
+
+/** What a picked way left in the story's place. */
+interface Gone { text: string; undo?: { tool: string; args: Record<string, unknown> } }
+
 function EdStory({ s }: { s: EditionStory }): JSX.Element {
+  const [gone, setGone] = useState<Gone | null>(null);
   const first = s.logos[0] ?? { name: s.outlet || s.title };
   const outlet = s.outlet || first.name;
+  const ways = edWays(s);
+
+  const pick = async (way: EdWay): Promise<void> => {
+    try {
+      const answer = await api.pageAct(NEWS, { tool: way.tool, args: way.args });
+      setGone(answer.approvalId ? { text: 'Waiting for your approval.' } : { text: way.done, undo: { tool: way.tool, args: way.undo } });
+    } catch (error) {
+      setGone({ text: error instanceof Error && error.message ? `That did not work: ${error.message}` : 'That did not work.' });
+    }
+  };
+  const undo = async (held: NonNullable<Gone['undo']>): Promise<void> => {
+    try {
+      await api.pageAct(NEWS, { tool: held.tool, args: held.args });
+      setGone(null);
+    } catch {
+      setGone({ text: 'Could not take it back. Undo it in News → Sources.' });
+    }
+  };
+
+  if (gone) {
+    return (
+      <li className="ed-story ed-story-gone" role="status">
+        <span>{gone.text}</span>
+        {gone.undo ? (
+          <>
+            <span className="pl-story-gone-sep" aria-hidden="true">·</span>
+            <Button size="sm" variant="ghost" onClick={() => void undo(gone.undo!)}>Undo</Button>
+          </>
+        ) : null}
+      </li>
+    );
+  }
+
+  const words = [s.topicName, outlet ? (s.more > 0 ? `${outlet} and ${s.more} more` : outlet) : ''].filter(Boolean).join(' · ');
   return (
     <li className="ed-story">
+      {ways.length > 0 ? (
+        <span className="ed-more-btn">
+          <ActionMenu label={`Ways out for ${s.title}`} items={menuItems(ways, (way) => void pick(way))} sheet={{ title: s.title, sub: words }} stacked />
+        </span>
+      ) : null}
       <AssetImage src={first.logo ? assetSrc(NEWS, first.logo) : null} label={first.name} className="pl-logo-md" />
       <span className="ed-story-text">
         <span className="ed-story-title">
