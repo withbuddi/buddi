@@ -19,6 +19,8 @@ What changes in buddi from one release to the next, newest first.
 - Widgets in the market: Browse has a **Widgets** shelf beside All · Plugins · Agents with every widget a listed plugin brings, drawn as Home draws it from the plugin's sample data, and a listing's sheet shows each widget at every size it offers; Home's Add widgets and the lock screen's Add a widget end with **Get more widgets**. A plugin declares the sample as `preview` on a widget (one body, or one per size), `buddi plugins describe` now reports each widget (id, title, sizes, settings, preview) for the market's check, and a plugin that is only a widget is welcome.
 - A news edition in chat is drawn as an edition card: its name and time, the voice note as a waveform, its first sentence, each topic with its stories (the outlet's logo, the headline with Update or Opinion, Anchor's line, the outlet linked out and "and N more"), and the next edition's time. The text as sent is one tap away under "Show as text", and is what shows when News cannot read the edition back.
 
+- `pnpm review` for working on buddi: Codex reviews everything since the last release tag (from the Unreleased lines and a standard focus list) into a file, the script prints the brief for a second review agent, and `--merge` puts both reviews into one findings file.
+
 ### Changed
 
 - Reports on Telegram keep their formatting: headings become bold lines in capitals (an edition's topics), bold, italic and code show as such, and a link sits on its words instead of being spelled out; raw addresses stay as they are, and a long report still splits at a paragraph (before a topic when one is near), never inside a link. If Telegram refuses the markup, the report goes as plain text.

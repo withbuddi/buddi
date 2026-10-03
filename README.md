@@ -155,6 +155,16 @@ refreshes `docs/api.md` and `docs/cli.md`, commits, tags `v0.1.0-pre.N`,
 pushes both and prints the workflow run to watch. `--dry-run` shows the plan
 and writes nothing.
 
+**Reviewing a release.** Before `pnpm release`, `pnpm review` finds the last
+`v0.1.0-pre.N` tag, writes the release-review prompt (the Unreleased lines of
+`CHANGELOG.md` and a standard focus list; `--focus "…"` adds to it) and runs
+`codex exec --sandbox read-only` over `git diff <tag>..HEAD` into
+`codex-review-pre.<N+1>.md` (in `$BUDDI_REVIEW_DIR`, a temp folder by default,
+or `--out <dir>`). It then prints the brief for a second, independent review
+agent; save that agent's findings to a file and `pnpm review --merge <file>`
+puts both into `review-pre.<N+1>.md`. `--print` shows the prompt and the brief
+and runs nothing.
+
 **The packaged install.** `pnpm release:pack` builds the npm tarball;
 `pnpm release:trial` puts it in a Docker image and starts it on a fresh
 volume, without touching your machine.
