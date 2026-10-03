@@ -310,6 +310,7 @@ suite('the lock screen', () => {
     expect((await ticketed.get('/api/lock')).body).toMatchObject({ locked: false });
     // Ten seconds on, the old tab's own clock reaches the delay and asks for an idle lock on the shared cookie.
     advance(10_000);
+    expect((await ticketed.post('/api/lock', { reason: 'idle', idleForMs: 60_000 })).body).toMatchObject({ locked: false });
     expect((await ticketed.post('/api/lock', { reason: 'idle' })).body).toMatchObject({ locked: false });
     expect((await ticketed.get('/api/overview')).status).toBe(200);
     // An honest idle claim still locks, and Lock now always does.
@@ -317,6 +318,23 @@ suite('the lock screen', () => {
     expect((await ticketed.post('/api/lock', { reason: 'idle' })).body).toMatchObject({ locked: true, reason: 'idle' });
     await ticketed.post('/api/lock/unlock', { pin: '2468' });
     expect((await ticketed.post('/api/lock', { reason: 'owner' })).body).toMatchObject({ locked: true, reason: 'owner' });
+  });
+
+  it('honours an idle claim when the activity report trailed the last use, as it always does', async () => {
+    const owner = await browser();
+    await owner.put('/api/lock/pin', { pin: '2468' });
+    await owner.put('/api/lock/settings', { delayMinutes: 1 });
+    // The owner's last use; the page reports it on its next tick past the 30 s throttle, 34 s later.
+    advance(34_000);
+    expect((await owner.post('/api/lock/activity')).status).toBe(204);
+    // The page reaches the delay from the use itself, 26 s after the report: the claim holds.
+    advance(26_000);
+    expect((await owner.post('/api/lock', { reason: 'idle', idleForMs: 60_000 })).body).toMatchObject({ locked: true, reason: 'idle' });
+    await owner.post('/api/lock/unlock', { pin: '2468' });
+    // A page that does not say how long counts the delay, with the same allowance.
+    expect((await owner.post('/api/lock/activity')).status).toBe(204);
+    advance(30_000);
+    expect((await owner.post('/api/lock', { reason: 'idle' })).body).toMatchObject({ locked: true, reason: 'idle' });
   });
 
   it('keeps a lock across a restart of the session store', async () => {
@@ -541,5 +559,10 @@ suite('the lock screen', () => {
     expect(allowedWhileLocked('PUT', '/api/lock/pin')).toBe(false);
     expect(allowedWhileLocked('GET', '/api/overview')).toBe(false);
     expect(allowedWhileLocked('POST', '/api/lock/screen')).toBe(false);
+    // The widget rows' logos draw on the lock screen; nothing else under plugins does.
+    expect(allowedWhileLocked('GET', '/api/plugin-assets/news/lemonde.fr')).toBe(true);
+    expect(allowedWhileLocked('PUT', '/api/plugin-assets/news/lemonde.fr')).toBe(false);
+    expect(allowedWhileLocked('GET', '/api/plugin-assetsx')).toBe(false);
+    expect(allowedWhileLocked('GET', '/api/plugins')).toBe(false);
   });
 });

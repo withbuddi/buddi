@@ -119,7 +119,9 @@ describe('the lock gate', () => {
     await act(async () => { vi.advanceTimersByTime(10_000); });
     expect(activity).toHaveBeenCalledTimes(1);
     await act(async () => { vi.advanceTimersByTime(65_000); });
-    expect(lockNow).toHaveBeenCalledWith('idle');
+    // The claim says how long this tab saw no use: at least the delay.
+    expect(lockNow).toHaveBeenCalledWith('idle', expect.any(Number));
+    expect(lockNow.mock.calls[0]![1]).toBeGreaterThanOrEqual(60_000);
   });
 
   it('stays open, and tells no other tab, when the server refuses its idle lock (the session was opened elsewhere)', async () => {
@@ -135,7 +137,7 @@ describe('the lock gate', () => {
     render(<LockGate><App /></LockGate>);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { vi.advanceTimersByTime(65_000); });
-    expect(lockNow).toHaveBeenCalledWith('idle');
+    expect(lockNow).toHaveBeenCalledWith('idle', expect.any(Number));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(screen.getByText('The secret inbox')).toBeInTheDocument();
     vi.useRealTimers();

@@ -225,7 +225,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/lock"
 Lock this session now.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin); answered while locked. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
-- **Body:** `{ reason?: 'owner'|'idle' }`
+- **Body:** `{ reason?: 'owner'|'idle', idleForMs?: number }`
 - **Answer:** `the lock state`
 - **Errors:** 409 no PIN is set, or the client is not covered by the lock screen
 - **Since:** 0.1.0-pre.29
@@ -3127,7 +3127,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/plugins"
 
 A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin fetched, 128 px square, or 64 with ?size=64.
 
-- **Auth:** Session or API token.
+- **Auth:** Session or API token; answered while locked.
 - **Kind:** bytes, not JSON
 - **Answer:** `image/png, with an ETag`
 - **Errors:** 404 no such asset

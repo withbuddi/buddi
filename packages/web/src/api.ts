@@ -2621,7 +2621,8 @@ export const api = {
   /** The lock screen (docs/dashboard.md, "Lock screen"). */
   lockState: () => get<LockState>('/lock'),
   lockScreen: () => get<LockScreenData>('/lock/screen', hourCycle()),
-  lockNow: (reason: 'owner' | 'idle' = 'owner') => post<LockState>('/lock', { reason }),
+  lockNow: (reason: 'owner' | 'idle' = 'owner', idleForMs?: number) =>
+    post<LockState>('/lock', { reason, ...(reason === 'idle' && idleForMs !== undefined ? { idleForMs: Math.max(0, Math.round(idleForMs)) } : {}) }),
   unlock: (pin: string) => post<LockState>('/lock/unlock', { pin }),
   lockActivity: () => post<null>('/lock/activity'),
   setPin: (pin: string, current?: string) => put<LockState>('/lock/pin', current === undefined ? { pin } : { pin, current }),

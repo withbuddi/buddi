@@ -35,6 +35,8 @@ What changes in buddi from one release to the next, newest first.
 - A plugin's logo can no longer exhaust buddi's memory: images are capped at a megapixel (2048 on a side) before any pixel buffer is made, a PNG with a second header or data that inflates past its own size is refused (also inside an ICO), a GIF frame must fit its canvas, and decoding runs one at a time in a worker thread with a memory limit and a five-second deadline.
 - A mission's material (`context`) now reaches its run between unique data markers, with the reminder that it is data after it; when the material cannot be read, the run gets a fixed sentence and at most 200 characters of the plugin's error, inside the same markers, instead of the whole error. A mission report's voice note is refused when the run has no conversation to prove it was made there.
 - A catalogue update now brings missions the agent already has the package's new material and report length (`context`, `reportMax`): the update sheet and the approval name each one ("Morning edition: new settings — …"), and approving changes just those two settings, never the mission's prompt, hour or switch. Before, installed missions kept their old settings for good.
+- The idle lock lands on time again: the page's claim says how long it saw no use, and the server allows for its own record trailing the use by up to 40 seconds, instead of refusing ordinary idle locks and leaving the lock to land at twice the delay.
+- Logos on the lock screen's widget rows draw instead of falling back to a letter: plugin assets are answered while locked.
 
 ## 0.1.0-pre.35 — 2026-10-03
 

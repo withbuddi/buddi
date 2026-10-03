@@ -106,7 +106,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'POST', path: '/api/lock', area: 'session', whileLocked: true, token: 'access',
-    summary: 'Lock this session now.', body: "{ reason?: 'owner'|'idle' }",
+    summary: 'Lock this session now.', body: "{ reason?: 'owner'|'idle', idleForMs?: number }",
     answer: 'the lock state', errors: '409 no PIN is set, or the client is not covered by the lock screen',
   },
   {
@@ -716,7 +716,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   /* ---------------- plugins and pages ---------------- */
   { method: 'GET', path: '/api/plugins', area: 'plugins', summary: 'Installed plugins, staged ones waiting to be read, and the trust sentence.' },
   {
-    method: 'GET', path: '/api/plugin-assets/:plugin/:key', area: 'plugins', kind: 'bytes',
+    method: 'GET', path: '/api/plugin-assets/:plugin/:key', area: 'plugins', kind: 'bytes', whileLocked: true,
     summary: "A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin fetched, 128 px square, or 64 with ?size=64.",
     answer: 'image/png, with an ETag', errors: '404 no such asset',
   },

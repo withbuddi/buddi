@@ -37,6 +37,7 @@
  *   POST /api/lock/background      a JPEG or PNG (multipart), DELETE to remove
  */
 import {
+  ASSET_ROUTE,
   DEFAULT_LOCK_CLOCK,
   getOwnerProfile,
   hashPin,
@@ -74,6 +75,13 @@ export const LOCK_GRACE_MS = 60_000;
 export const LOCK_CACHE_MS = 2_000;
 export { LOCK_WIDGETS_MAX } from './widgets.js';
 
+/**
+ * How far the server's record of use may trail the use itself: the page
+ * reports at most every 30 s and looks every 5 s, plus a few seconds for the
+ * request. An idle claim within this of the server's record still holds.
+ */
+export const IDLE_REPORT_LAG_MS = 40_000;
+
 /** The one body every refused call gets: the page turns it into the lock screen. */
 export const LOCKED_BODY = { error: 'This dashboard is locked. Unlock it with your PIN.', locked: true } as const;
 
@@ -84,6 +92,8 @@ export const LOCKED_BODY = { error: 'This dashboard is locked. Unlock it with yo
  */
 export function allowedWhileLocked(method: string, path: string): boolean {
   const read = method === 'GET' || method === 'HEAD';
+  // Plugin assets are logos core re-drew as PNGs (an outlet's, a bank's): the lock screen's widget rows draw them.
+  if (read && path.startsWith(`${ASSET_ROUTE}/`)) return true;
   if (read) return path === '/api/session' || path === '/api/lock' || path === '/api/lock/screen' || path === '/api/lock/background';
   return method === 'POST' && (path === '/api/lock' || path === '/api/lock/unlock');
 }
@@ -347,16 +357,22 @@ export function createLock(deps: LockDeps) {
       const reason: LockReason = body.reason === 'idle' ? 'idle' : 'owner';
       /*
        * An idle lock is the page's claim that nobody used this session for
-       * the delay. The server's own record of use only ever lags the page's,
-       * so an honest claim always holds here. When it does not, the claim
-       * came from a tab that never saw the use — typically an old tab left
-       * open while `buddi dashboard --unlock` replaced the cookie both share
-       * with a fresh, open session — and honouring it would lock the session
-       * the ticket just opened. The answer is the state as it stands.
+       * `idleForMs` (the delay, from a page that does not say). The server's
+       * record of use is the page's activity report, which runs up to
+       * IDLE_REPORT_LAG_MS behind the use itself (reported at most every 30 s,
+       * looked at every 5 s), so an honest claim can find `activeAt` a little
+       * after the moment the page counts from, and still holds. A claim that
+       * use the server saw well after that moment never happened came from a
+       * tab that never saw the use — typically an old tab left open while
+       * `buddi dashboard --unlock` replaced the cookie both share with a
+       * fresh, open session — and honouring it would lock the session the
+       * ticket just opened. The answer is then the state as it stands.
        */
       if (reason === 'idle') {
         const delay = state.settings.delayMinutes;
-        if (delay === null || now.getTime() - session.activeAt.getTime() < delay * 60_000) {
+        const said = body.idleForMs;
+        const idleFor = typeof said === 'number' && Number.isFinite(said) && said >= 0 ? said : (delay ?? 0) * 60_000;
+        if (delay === null || session.activeAt.getTime() > now.getTime() - idleFor + IDLE_REPORT_LAG_MS) {
           return { status: 200, body: stateOf(session, state) };
         }
       }

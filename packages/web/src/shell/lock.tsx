@@ -140,7 +140,8 @@ export function LockGate({ children }: { children: ReactNode }): JSX.Element | n
     setPhase('locked');
     remember(true);
     if (reason === 'owner') channel.current?.postMessage({ type: 'locked' } satisfies Message);
-    api.lockNow(reason).then((next) => {
+    // An idle claim says how long this tab saw no use, so the server can allow for its own record trailing the use.
+    (reason === 'idle' ? api.lockNow('idle', Date.now() - lastActive.current) : api.lockNow(reason)).then((next) => {
       // An idle lock is this tab's view; the server may know of use it never
       // saw (another tab, a fresh session from `buddi dashboard --unlock`) and
       // refuse it. Only a lock it took is passed on to the other tabs.
