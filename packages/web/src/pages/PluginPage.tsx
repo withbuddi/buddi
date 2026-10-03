@@ -3080,7 +3080,8 @@ function StoriesPiece({ component, data }: { component: Of<'stories'>; data: unk
       const words = (ref: string | ValueRef | undefined): string =>
         ref === undefined ? '' : typeof ref === 'string' ? ref : String(readRef(query.data, ref) ?? '');
       const actions = (state.actions ?? []).map((action, index, all) => {
-        const primary = index === all.length - 1 && all.length > 1;
+        // The last is the primary: beside another, or alone on a first time's warm ground.
+        const primary = index === all.length - 1 && (all.length > 1 || state.warm === true);
         if (action.set) {
           return (
             <Button key={index} size="sm" variant={primary ? 'accent' : 'ghost'} onClick={() => scope.setParams(action.set!)}>
@@ -3167,6 +3168,7 @@ function StoriesPiece({ component, data }: { component: Of<'stories'>; data: unk
                     </button>
                   }
                   items={storyMenu(lessWays, open, (way, item) => void pick(way, open, item, 0))}
+                  stacked
                 />
               ) : null}
               <Spacer />
@@ -3288,6 +3290,7 @@ function StoryCard({
               label={`Ways out for ${row.title}`}
               items={menu.map((item) => (typeof item === 'string' || 'heading' in item ? item : { label: item.label, ...(item.hint ? { hint: item.hint } : {}), onSelect: item.onSelect }))}
               sheet={{ title: row.title, sub: [row.kicker ?? row.group?.name, words].filter(Boolean).join(' · ') }}
+              stacked
             />
           </span>
         ) : null}

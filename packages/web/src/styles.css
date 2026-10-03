@@ -4823,3 +4823,6 @@ button.lk-chip:disabled { cursor: default; }
   .ui-list-group[data-aside='true'] { flex-direction: column; gap: var(--space-0); }
 }
 @media (prefers-reduced-motion: reduce) { .pl-story, .pl-story-title, .pl-story-more { transition: none; } .pl-story:hover { transform: none; } }
+/* A menu whose hints sit under their items (the News kit's ways out). */
+.ui-menu[data-stacked='true'] .ui-menu-item { flex-direction: column; align-items: flex-start; justify-content: center; gap: var(--space-0); }
+.ui-menu[data-stacked='true'] .ui-menu-item-hint { margin-left: 0; }

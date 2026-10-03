@@ -813,6 +813,7 @@ export function ActionMenu({
   note,
   trigger,
   sheet,
+  stacked,
 }: {
   /** The button's name: "More for finance". */
   label: string;
@@ -828,10 +829,12 @@ export function ActionMenu({
    * under them — the chat head's menu, as a primitive.
    */
   sheet?: { title: ReactNode; sub?: ReactNode };
+  /** Each item's hint as a second quiet line under it, rather than on its right (the News kit's ways out). */
+  stacked?: boolean;
 }): JSX.Element {
   const phone = useMediaQuery(PHONE_MENU_QUERY);
   if (sheet && phone && !trigger) return <ActionSheet label={label} items={items} title={sheet.title} sub={sheet.sub} />;
-  return <ActionPopover label={label} items={items} note={note} trigger={trigger} />;
+  return <ActionPopover label={label} items={items} note={note} trigger={trigger} stacked={stacked} />;
 }
 
 /** The width under which a row's ⋯ menu is a sheet from the bottom. */
@@ -901,11 +904,13 @@ function ActionPopover({
   items,
   note,
   trigger,
+  stacked,
 }: {
   label: string;
   items: Array<MenuAction | { heading: ReactNode } | 'separator' | null | false | undefined>;
   note?: ReactNode;
   trigger?: ReactNode;
+  stacked?: boolean | undefined;
 }): JSX.Element {
   const stop = (event: { stopPropagation: () => void }): void => event.stopPropagation();
   /*
@@ -925,6 +930,7 @@ function ActionPopover({
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           className="ui-menu"
+          data-stacked={stacked ? 'true' : undefined}
           align="end"
           sideOffset={4}
           onClick={stop}
