@@ -103,7 +103,7 @@
 import { Agent as HttpAgent, request as httpRequest, type ClientRequest } from 'node:http';
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
 import type { IncomingMessage } from 'node:http';
-import type { LookupFunction } from 'node:net';
+import { isIP, type LookupFunction } from 'node:net';
 import { StringDecoder } from 'node:string_decoder';
 
 /**
@@ -313,6 +313,11 @@ function attempt(
           ...(body === undefined ? {} : { 'content-length': String(body.byteLength) }),
         },
         agent,
+        // TLS identity is the URL's host, always. Left to Node, SNI (and the
+        // certificate check) would follow a caller's `Host` header, so a
+        // request bound to one host could be handed to another's virtual host.
+        // An address literal carries no SNI.
+        ...(secure && isIP(target.hostname.replace(/^\[|\]$/g, '')) === 0 ? { servername: target.hostname } : {}),
         // Only present when the caller supplied one; `undefined` here would
         // override the socket's own default with nothing on some Node versions.
         ...(options.lookup === undefined ? {} : { lookup: options.lookup }),

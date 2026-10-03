@@ -411,6 +411,86 @@ export interface HttpAreaOptions {
   resolve?: LookupAll;
   /** The clock the Basic-auth budget counts by. A test moves it. */
   now?: () => number;
+  /** The Basic-auth budget; the process-wide one unless a test hands its own. */
+  basicBudget?: BasicBudget;
+}
+
+/**
+ * The Basic-auth budget, shared by every area in the process: keyed by plugin
+ * and secret, so a plugin's separate runs, page queries and exports draw on
+ * one minute's allowance instead of each getting their own. Old stamps are
+ * dropped as they are counted, and a key whose stamps have all aged out is
+ * removed, so the map holds only what sent in the last minute.
+ */
+export interface BasicBudget {
+  /** Count one request at `at`; false (and nothing counted) when the minute is full. */
+  take(plugin: string, secret: string, at: number): boolean;
+  /** Give back the stamp `take` counted at `at`: the password was never delivered, so nothing was sent. */
+  refund(plugin: string, secret: string, at: number): void;
+}
+
+export function createBasicBudget(perMinute = HTTP_BASIC_PER_MINUTE): BasicBudget {
+  const sent = new Map<string, number[]>();
+  return {
+    take(plugin, secret, at) {
+      // Bounded cleanup: whenever the map grows past a handful of keys, drop the stale ones.
+      if (sent.size > 64) {
+        for (const [key, stamps] of sent) if (stamps.every((t) => at - t >= 60_000)) sent.delete(key);
+      }
+      const key = `${plugin}\u0000${secret}`;
+      const recent = (sent.get(key) ?? []).filter((t) => at - t < 60_000);
+      if (recent.length >= perMinute) {
+        sent.set(key, recent);
+        return false;
+      }
+      recent.push(at);
+      sent.set(key, recent);
+      return true;
+    },
+    refund(plugin, secret, at) {
+      const key = `${plugin}\u0000${secret}`;
+      const stamps = sent.get(key);
+      const i = stamps?.indexOf(at) ?? -1;
+      if (stamps !== undefined && i >= 0) stamps.splice(i, 1);
+      if (stamps !== undefined && stamps.length === 0) sent.delete(key);
+    },
+  };
+}
+
+const sharedBasicBudget = createBasicBudget();
+
+/**
+ * Headers a caller may not set on a request that carries a secret: anything
+ * that names which server or virtual host the request is for (`Host` decides
+ * TLS SNI and a CDN's routing; the forwarding headers decide it behind some
+ * proxies) or that carries a proxy credential. The URL's own host is the only
+ * identity a secret is bound to. `Cookie` stays the caller's: it is the
+ * plugin's own state, never the owner's secret.
+ */
+const IDENTITY_HEADERS: ReadonlySet<string> = new Set([
+  'host',
+  'x-forwarded-host',
+  'x-forwarded-server',
+  'x-host',
+  'x-original-host',
+  'forwarded',
+  'proxy-authorization',
+]);
+
+/** The caller's headers without the identity headers and without `drop` (case-insensitive). */
+function withoutIdentity(headers: Record<string, string> | undefined, drop: string): Record<string, string> {
+  const lower = drop.toLowerCase();
+  return Object.fromEntries(
+    Object.entries(headers ?? {}).filter(([name]) => {
+      const n = name.toLowerCase();
+      return n !== lower && !IDENTITY_HEADERS.has(n);
+    }),
+  );
+}
+
+/** A response cap that is a finite, non-negative whole number, or undefined. */
+function validCap(maxBytes: unknown): number | undefined {
+  return typeof maxBytes === 'number' && Number.isSafeInteger(maxBytes) && maxBytes >= 0 ? maxBytes : undefined;
 }
 
 /** Hosts already said to be undeclared, per plugin, so a loop logs once. */
@@ -434,8 +514,7 @@ function hostMatches(declared: string, host: string): boolean {
 export function createHttpArea(options: HttpAreaOptions): HttpArea {
   const policy = options.policy ?? DEFAULT_POLICY;
   let transport: PluginHostTransport | undefined;
-  /** When each recent Basic-auth request went, per secret: the minute's budget. */
-  const basicSent = new Map<string, number[]>();
+  const basicBudget = options.basicBudget ?? sharedBasicBudget;
   const now = options.now ?? (() => Date.now());
   return {
     async request(req) {
@@ -492,6 +571,8 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         checkUrl(stored.toString(), policy);
         url = stored.toString();
         secretUrl = { name, value: url };
+        // The address is the credential: no caller header may point it at another virtual host.
+        headers = withoutIdentity(req.headers, 'host');
       } else if (req.auth !== undefined && req.auth.as === 'basic') {
         /*
          * A sign-in's password (`as: 'basic'`, since 1.26): the caller names
@@ -516,17 +597,23 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         if (options.secrets?.deliverBasicFor === undefined) {
           throw new Error('This process cannot deliver a secret into a request.');
         }
+        // Counted before the delivery, so concurrent requests cannot all slip
+        // under the line; given back when no password is delivered.
         const at = now();
-        const recent = (basicSent.get(req.auth.secret) ?? []).filter((t) => at - t < 60_000);
-        if (recent.length >= HTTP_BASIC_PER_MINUTE) {
+        if (!basicBudget.take(options.plugin, req.auth.secret, at)) {
           throw new Error(`too many requests with "${req.auth.secret}" this minute (at most ${HTTP_BASIC_PER_MINUTE}); try again shortly`);
         }
-        recent.push(at);
-        basicSent.set(req.auth.secret, recent);
-        const delivered = await options.secrets.deliverBasicFor(req.auth.secret, host);
+        let delivered: Awaited<ReturnType<NonNullable<HttpSecretDelivery['deliverBasicFor']>>>;
+        try {
+          delivered = await options.secrets.deliverBasicFor(req.auth.secret, host);
+        } catch (err) {
+          basicBudget.refund(options.plugin, req.auth.secret, at);
+          throw err;
+        }
+        if (!('ok' in delivered)) basicBudget.refund(options.plugin, req.auth.secret, at);
         if ('pending' in delivered) throw new SecretPendingError(delivered.pending);
         if ('refused' in delivered) throw new Error(delivered.refused);
-        headers = Object.fromEntries(Object.entries(req.headers ?? {}).filter(([name]) => name.toLowerCase() !== 'authorization'));
+        headers = withoutIdentity(req.headers, 'authorization');
         headers.Authorization = `Basic ${Buffer.from(`${username}:${delivered.value}`, 'utf8').toString('base64')}`;
         basicCap = true;
       } else if (req.auth !== undefined) {
@@ -545,7 +632,8 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         if ('pending' in delivered) throw new SecretPendingError(delivered.pending);
         if ('refused' in delivered) throw new Error(delivered.refused);
         // The caller's own spelling of the same header goes, whatever its case: one header, the bound value.
-        headers = Object.fromEntries(Object.entries(req.headers ?? {}).filter(([name]) => name.toLowerCase() !== headerName.toLowerCase()));
+        if (IDENTITY_HEADERS.has(headerName.toLowerCase())) throw new Error(`a secret cannot go into ${headerName}`);
+        headers = withoutIdentity(req.headers, headerName);
         headers[headerName] = delivered.value;
       }
       /*
@@ -565,6 +653,8 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         throw new Error('This process has no HTTP transport for plugins.');
       }
       transport ??= options.transport({ lookup: guardedLookup(options.resolve, policy) });
+      // A cap that is not a whole number of bytes (NaN, Infinity, -1) is no cap at all to the transport: it counts as unset, so the default applies.
+      const cap = validCap(req.maxBytes);
       const sent = transport(url, {
         method: req.method ?? 'GET',
         headers: headers ?? {},
@@ -572,8 +662,8 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         ...(req.signal === undefined ? {} : { signal: req.signal }),
         ...(req.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: req.idleTimeoutMs }),
         ...(basicCap
-          ? { maxBytes: Math.min(req.maxBytes ?? HTTP_BASIC_MAX_RESPONSE, HTTP_BASIC_MAX_RESPONSE) }
-          : req.maxBytes === undefined ? {} : { maxBytes: req.maxBytes }),
+          ? { maxBytes: Math.min(cap ?? HTTP_BASIC_MAX_RESPONSE, HTTP_BASIC_MAX_RESPONSE) }
+          : cap === undefined ? {} : { maxBytes: cap }),
       });
       if (secretUrl === undefined) return sent;
       const { name, value } = secretUrl;

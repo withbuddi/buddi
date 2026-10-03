@@ -449,3 +449,33 @@ describe('the silence budget', () => {
     expect((impatient as TransportError).message).toContain('went silent');
   }, 10_000);
 });
+
+describe('the TLS identity of a request', () => {
+  it('is the URL’s host, whatever Host header the caller sets', async () => {
+    // A bare socket reads the ClientHello, whose SNI is plain text, then hangs up.
+    let hello = Buffer.alloc(0);
+    const seen = new Promise<Buffer>((resolve) => {
+      const server = createSocketServer((socket) => {
+        socket.on('data', (chunk: Buffer) => {
+          hello = Buffer.concat([hello, chunk]);
+          resolve(hello);
+          socket.destroy();
+        });
+      });
+      servers.push(server);
+      server.listen(0, '127.0.0.1');
+    });
+    const server = servers[servers.length - 1] as NetServer;
+    await new Promise<void>((resolve) => (server.listening ? resolve() : server.once('listening', () => resolve())));
+    const port = (server.address() as AddressInfo).port;
+    const transport = createHttpTransport({
+      lookup: ((_host: string, opts: { all?: boolean }, cb: (e: null, a: unknown, f?: number) => void) =>
+        opts?.all === true ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4)) as never,
+    });
+    const sent = transport(`https://bound.example:${port}/`, { method: 'GET', headers: { Host: 'attacker.example' } }).catch((e) => e);
+    const bytes = (await seen).toString('latin1');
+    await sent;
+    expect(bytes).toContain('bound.example');
+    expect(bytes).not.toContain('attacker.example');
+  });
+});

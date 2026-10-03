@@ -137,6 +137,16 @@ describe('the auth param', () => {
   });
 });
 
+describe('caller headers beside a header secret', () => {
+  it('drops Host and the forwarding headers, and refuses to put a secret into Host', async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const a = area({ calls, deliver: async () => ({ ok: true, value: 'tok' }) });
+    await a.request({ url: 'https://api.example.test/x', headers: { host: 'evil.example', 'X-Host': 'evil.example', Accept: 'a' }, auth: { secret: 'K' } });
+    expect(calls[0]!.headers).toEqual({ Accept: 'a', Authorization: 'tok' });
+    await expect(a.request({ url: 'https://api.example.test/x', auth: { secret: 'K', header: 'Host' } })).rejects.toThrow(/cannot go into Host/);
+  });
+});
+
 describe('the http.header destination', () => {
   it('is registered under core’s own name, and describes a target in its own words', () => {
     registerHttpHeaderDestination();
@@ -351,6 +361,56 @@ describe('a sign-in password', () => {
     clock += 61_000;
     await a.request({ url: 'https://caldav.icloud.com/', auth });
     expect(calls).toHaveLength(HTTP_BASIC_PER_MINUTE + 1);
+  });
+
+  it('shares the budget across separate areas of the same plugin, not across plugins', async () => {
+    calls.length = 0;
+    clock = 5_000_000;
+    const auth = { secret: 'Shared', as: 'basic' as const, username: 'me' };
+    const first = basicArea(async () => ({ ok: true, value: 'p' }));
+    const second = basicArea(async () => ({ ok: true, value: 'p' }));
+    for (let i = 0; i < HTTP_BASIC_PER_MINUTE / 2; i++) await first.request({ url: 'https://caldav.icloud.com/', auth });
+    for (let i = 0; i < HTTP_BASIC_PER_MINUTE / 2; i++) await second.request({ url: 'https://caldav.icloud.com/', auth });
+    await expect(first.request({ url: 'https://caldav.icloud.com/', auth })).rejects.toThrow(/too many requests/);
+    await expect(second.request({ url: 'https://caldav.icloud.com/', auth })).rejects.toThrow(/too many requests/);
+    const other = createHttpArea({
+      plugin: 'contacts', network: [], log: () => {}, transport: transport as never, now: () => clock,
+      secrets: { deliverFor: async () => ({ refused: 'no' }), deliverBasicFor: async () => ({ ok: true, value: 'p' }) },
+    });
+    await other.request({ url: 'https://caldav.icloud.com/', auth });
+    expect(calls).toHaveLength(HTTP_BASIC_PER_MINUTE + 1);
+  });
+
+  it('drops any caller header that names another host or carries a proxy credential', async () => {
+    calls.length = 0;
+    const a = basicArea(async () => ({ ok: true, value: 'p' }));
+    await a.request({
+      url: 'https://caldav.icloud.com/',
+      headers: { HOST: 'attacker.example', 'X-Forwarded-Host': 'attacker.example', Forwarded: 'host=attacker.example', 'Proxy-Authorization': 'x', Cookie: 'c=1', Depth: '1' },
+      auth: { secret: 'Hosty', as: 'basic', username: 'me' },
+    });
+    expect(Object.keys(calls[0]!.headers).sort()).toEqual(['Authorization', 'Cookie', 'Depth']);
+  });
+
+  it('a refused or pending delivery does not use up the budget', async () => {
+    clock = 9_000_000;
+    const auth = { secret: 'Refunds', as: 'basic' as const, username: 'me' };
+    const refused = basicArea(async () => ({ refused: 'no' }));
+    for (let i = 0; i < HTTP_BASIC_PER_MINUTE + 5; i++) await expect(refused.request({ url: 'https://caldav.icloud.com/', auth })).rejects.toThrow(/no/);
+    calls.length = 0;
+    await basicArea(async () => ({ ok: true, value: 'p' })).request({ url: 'https://caldav.icloud.com/', auth });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('a cap that is not a whole number of bytes falls back to the ceiling', async () => {
+    calls.length = 0;
+    const a = basicArea(async () => ({ ok: true, value: 'p' }));
+    const auth = { secret: 'Caps', as: 'basic' as const, username: 'me' };
+    for (const maxBytes of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+      await a.request({ url: 'https://caldav.icloud.com/', maxBytes, auth });
+    }
+    await a.request({ url: 'https://caldav.icloud.com/', maxBytes: 1000, auth });
+    expect(calls.map((c) => c.maxBytes)).toEqual([10 * 1024 * 1024, 10 * 1024 * 1024, 10 * 1024 * 1024, 10 * 1024 * 1024, 1000]);
   });
 
   it('a pending approval is the same typed error', async () => {
