@@ -7,3 +7,11 @@ packages:
 # vitest's esbuild only unpacks its prebuilt binary in this script.
 allowBuilds:
   esbuild: true
+
+overrides:
+  # jsdom's selector engine. 2.2.25–2.2.27 answer `:modal`/`:fullscreen` by
+  # calling element.matches, which jsdom routes straight back into nwsapi: a
+  # recursion to stack overflow, caught and retried, on every check. Floating
+  # UI asks `:modal` each time a Radix popover is placed, so every menu open in
+  # a test cost 6–8 s. 2.2.28 guards the re-entry.
+  nwsapi: '>=2.2.28'
