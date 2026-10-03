@@ -25,6 +25,7 @@ import {
   CATALOGUE_OFFLINE,
   entryView,
   packageState,
+  missionSettingsWords,
   resolvePicks,
   stateContext,
   type CatalogueBinding,
@@ -767,6 +768,7 @@ export async function updatePlanRoute(deps: CatalogueDeps, name: string, body: R
         removed: u.removed,
         personaDiff: u.personaDiff,
         missionsAdded: missionView(envelope),
+        missionsChanged: (u.missionSettings ?? []).map((c) => ({ id: c.id, name: c.name, words: missionSettingsWords(c) })),
         preview,
       },
     };

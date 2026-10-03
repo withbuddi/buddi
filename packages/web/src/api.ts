@@ -823,6 +823,8 @@ export interface CatalogueUpdatePlan {
   /** The persona's lines that differ, `- ` in the file and `+ ` in the new version. */
   personaDiff: string[];
   missionsAdded: Array<{ id: string; name: string; cron: string; enabled: boolean; prompt: string }>;
+  /** Missions it already has that take the package's new settings (what it reads first, how long it reports). */
+  missionsChanged?: Array<{ id: string; name: string; words: string }>;
   preview: string | null;
 }
 

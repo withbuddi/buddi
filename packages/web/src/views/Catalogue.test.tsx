@@ -448,6 +448,17 @@ describe('the update sheet', () => {
     expect(updated).toHaveBeenCalled();
   });
 
+  it('names the new settings a mission it already has takes, and says the rest stays the owner\'s', async () => {
+    vi.mocked(api.catalogueUpdatePlan).mockResolvedValue({
+      agentId: 'writer', handle: 'writer', name: 'writer', title: 'Writer', fromVersion: '1.0.0', version: '1.1.0', changes: 'Reads first.',
+      edited: false, widened: false, added: [], removed: [], personaDiff: [], missionsAdded: [], preview: null, plan: 'fp-writer',
+      missionsChanged: [{ id: 'agent:writer:morning', name: 'Morning edition', words: 'reads news.edition_material before each run; reports up to 3,800 characters' }],
+    });
+    render(<UpdateSheet entry={WRITER} agentId="writer" onClose={() => {}} onUpdated={() => {}} />);
+    expect(await screen.findByText('Morning edition: new settings — reads news.edition_material before each run; reports up to 3,800 characters.')).toBeInTheDocument();
+    expect(screen.getByText('None added. Their prompt, hour and switch stay yours.')).toBeInTheDocument();
+  });
+
   it('edited: nothing is touched; Keep mine closes, See what changed shows the diff, Replace my changes replaces', async () => {
     vi.mocked(api.catalogueUpdatePlan).mockResolvedValue({
       agentId: 'home', handle: 'home', name: 'home-manager', title: 'Home Manager', fromVersion: '1.1.0', version: '1.2.0', changes: 'Asks about frost only when it is cold.',

@@ -558,6 +558,46 @@ suite('the agent catalogue', () => {
     catalog.reload();
   });
 
+  it('an update brings a mission it already has the package\'s new context and reportMax, and nothing else', async () => {
+    const before = await getMission(pool, 'agent:gardener:sunday-log');
+    expect(before).toMatchObject({ enabled: true });
+    await pool.query(`update core.missions set prompt = 'My own words.' where id = 'agent:gardener:sunday-log'`);
+    const schedule = await getActiveSchedule(pool, 'agent:gardener:sunday-log');
+    const current = JSON.parse(readFileSync(path.join(agentsDir, 'gardener', 'plugin.json'), 'utf8')) as { version: string };
+    const version = `${current.version.split('.').slice(0, 2).join('.')}.9`;
+    publish([
+      gardener({
+        version,
+        changes: 'Reads the beds first.',
+        missions: [
+          { id: 'morning-round', name: 'Morning round', cron: '0 7 * * *', prompt: 'Walk the beds.' },
+          { id: 'sunday-log', name: 'Sunday log', cron: '0 18 * * 0', prompt: 'Write the week up.', alwaysDeliver: true, reportMax: 3800, context: { plugin: 'garden', export: 'beds', args: { week: true } } },
+        ],
+      }),
+    ]);
+    const plan = await updatePlanRoute(deps, 'gardener', { agentId: 'gardener' });
+    expect(plan.status, JSON.stringify(plan.body)).toBe(200);
+    const body = plan.body as Record<string, any>;
+    expect(body.missionsChanged).toEqual([
+      { id: 'agent:gardener:sunday-log', name: 'Sunday log', words: 'reads garden.beds before each run; reports up to 3,800 characters' },
+    ]);
+    expect(body.preview).toContain('New settings for missions it already has');
+    expect(body.preview).toContain('Sunday log: reads garden.beds before each run; reports up to 3,800 characters');
+    const done = await update('gardener', 'gardener', body.edited ? { replace: true } : {});
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    const after = await getMission(pool, 'agent:gardener:sunday-log');
+    expect(after).toMatchObject({ enabled: true, prompt: 'My own words.', reportMax: 3800, context: { plugin: 'garden', export: 'beds', args: { week: true } } });
+    expect(await getActiveSchedule(pool, 'agent:gardener:sunday-log')).toMatchObject({ cron: schedule!.cron, timezone: schedule!.timezone });
+    expect(await getMission(pool, 'agent:gardener:morning-round')).toMatchObject({ context: null, reportMax: null });
+    // Up to date now: the next plan proposes no settings change.
+    publish([gardener({ version: `${version}1`, changes: 'Same.', missions: [
+      { id: 'morning-round', name: 'Morning round', cron: '0 7 * * *', prompt: 'Walk the beds.' },
+      { id: 'sunday-log', name: 'Sunday log', cron: '0 18 * * 0', prompt: 'Write the week up.', alwaysDeliver: true, reportMax: 3800, context: { args: { week: true }, export: 'beds', plugin: 'garden' } },
+    ] })]);
+    const again = await updatePlanRoute(deps, 'gardener', { agentId: 'gardener' });
+    expect((again.body as Record<string, any>).missionsChanged).toEqual([]);
+  });
+
   it('removes an agent: its missions paused, the plugins nobody else uses named, the directory in the trash', async () => {
     publish([gardener({ version: '1.1.0', changes: 'Kinder.' }, 'You are the kind gardener. Today is {{today}}.')]);
     const preview = await removePreviewRoute(deps, 'gardener');

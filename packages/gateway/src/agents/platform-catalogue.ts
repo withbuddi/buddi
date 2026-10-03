@@ -486,7 +486,38 @@ export interface InstallAgentEnvelope {
     removed: string[];
     widened: boolean;
     personaDiff: string[];
+    /**
+     * Missions the agent already has whose package now reads other material
+     * first or reports at another length (host API 1.27). Approving sets just
+     * these two settings; the owner's prompt, hour and switch stay. Absent in
+     * an envelope from before pre.36.
+     */
+    missionSettings?: MissionSettingsChange[];
   };
+}
+
+/** One existing mission's new `context`/`reportMax`, as the package now says. */
+export interface MissionSettingsChange {
+  id: string;
+  name: string;
+  context: { plugin: string; export: string; args?: Record<string, unknown> } | null;
+  reportMax: number | null;
+}
+
+/** JSON with sorted keys, so a jsonb column's own key order never reads as a change. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableJson((value as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** A settings change in the owner's words: "reads news.edition_material before each run; reports up to 3,800 characters". */
+export function missionSettingsWords(change: MissionSettingsChange): string {
+  const reads = change.context ? `reads ${change.context.plugin}.${change.context.export} before each run` : 'reads nothing before it runs';
+  const length = change.reportMax ? `reports up to ${change.reportMax.toLocaleString('en-US')} characters` : 'reports at the usual length';
+  return `${reads}; ${length}`;
 }
 
 export const installAgentInput = z
@@ -1041,13 +1072,22 @@ async function buildUpdate(
   }
   const grant = diffGrant(agent.tools, tools);
   const existing = new Set<string>();
+  const plans = missionPlans(pkg, agent.id, picks, deps.timezone, new Set());
+  const missionSettings: MissionSettingsChange[] = [];
   if (deps.db) {
-    for (const mission of m.missions) {
-      const row = await getMission(deps.db as never, agentMissionId(agent.id, mission.id)).catch(() => null);
-      if (row) existing.add(mission.id);
+    for (const plan of plans) {
+      const row = await getMission(deps.db as never, plan.id).catch(() => null);
+      if (!row) continue;
+      existing.add(plan.slug);
+      // An existing mission is the owner's; only what the package says it reads and how long it reports may follow it.
+      const context = plan.context ?? null;
+      const reportMax = plan.reportMax ?? null;
+      if (stableJson(row.context ?? null) !== stableJson(context) || (row.reportMax ?? null) !== reportMax) {
+        missionSettings.push({ id: plan.id, name: row.name, context, reportMax });
+      }
     }
   }
-  const missions = missionPlans(pkg, agent.id, picks, deps.timezone, new Set()).filter((plan) => !existing.has(plan.slug));
+  const missions = plans.filter((plan) => !existing.has(plan.slug));
   return {
     tool: 'platform.install_agent',
     mode: 'update',
@@ -1080,6 +1120,7 @@ async function buildUpdate(
       removed: grant.removed,
       widened: grant.widened,
       personaDiff: lineDiff(before.body, persona),
+      missionSettings,
     },
   };
 }
@@ -1139,8 +1180,17 @@ export function renderInstallPreview(
       ...(envelope.missions.length === 0
         ? []
         : ['', 'New missions it suggests, each off until you turn it on:', ...missionLines(envelope.missions, specs)]),
+      ...((u.missionSettings ?? []).length === 0
+        ? []
+        : [
+            '',
+            'New settings for missions it already has (their prompt, hour and switch stay yours):',
+            ...(u.missionSettings ?? []).map((c) => `  ${ownerText(c.name, specs)}: ${missionSettingsWords(c)}`),
+          ]),
       '',
-      'Missions it already has are yours and stay exactly as they are. Its handle, its account and its memory do not change.',
+      (u.missionSettings ?? []).length === 0
+        ? 'Missions it already has are yours and stay exactly as they are. Its handle, its account and its memory do not change.'
+        : 'Otherwise the missions it already has stay exactly as they are. Its handle, its account and its memory do not change.',
       `File:  ${envelope.file}`,
       `Proposed by ${envelope.proposedBy}.`,
     ].join('\n');
@@ -1479,6 +1529,12 @@ export function createCatalogueTools(
       }
       const created: string[] = [];
       if (ctx.db) {
+        // The settings the owner approved for missions the agent already has: just these two, nothing the owner controls.
+        if (envelope.mode === 'update') {
+          for (const change of envelope.update?.missionSettings ?? []) {
+            await setMissionExtras(ctx.db as never, change.id, { context: change.context, reportMax: change.reportMax });
+          }
+        }
         for (const mission of envelope.missions) {
           if (envelope.mode === 'update' && (await getMission(ctx.db as never, mission.id).catch(() => null))) {
             // The owner's prompt and hour stay; what the package says it reads and how long it reports follow it.

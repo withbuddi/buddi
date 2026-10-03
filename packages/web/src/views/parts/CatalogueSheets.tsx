@@ -697,9 +697,13 @@ export function UpdateSheet({
           <h3 className="cat-block-title">Missions</h3>
           <p className="cat-prose">
             {plan.missionsAdded.length > 0
-              ? `${and(plan.missionsAdded.map((m) => m.name))} added, off until you turn ${plan.missionsAdded.length === 1 ? 'it' : 'them'} on. Yours stay as they are.`
-              : 'None added. Yours stay as they are.'}
+              ? `${and(plan.missionsAdded.map((m) => m.name))} added, off until you turn ${plan.missionsAdded.length === 1 ? 'it' : 'them'} on.`
+              : 'None added.'}
+            {(plan.missionsChanged ?? []).length > 0 ? ' Their prompt, hour and switch stay yours.' : ' Yours stay as they are.'}
           </p>
+          {(plan.missionsChanged ?? []).map((m) => (
+            <p key={m.id} className="cat-prose">{m.name}: new settings — {m.words}.</p>
+          ))}
         </div>
         {plan.retires && plan.retires.length > 0 ? (
           <div className="cat-block">
