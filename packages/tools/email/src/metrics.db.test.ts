@@ -250,10 +250,10 @@ suite('the email metrics (postgres, read-only)', () => {
     expect(await widget.produce(ctx, { size: 'small' })).toEqual({ kind: 'text', icon: 'mail', text: 'Add a mailbox on Settings → Email to see who is waiting on you.' });
     await mailbox();
     // A calm zero first: a sentence, not a bare 0.
-    expect(await widget.produce(ctx, { size: 'small' })).toEqual({ kind: 'text', icon: 'check', text: 'Nobody’s waiting on you.', sub: '0 unread in your inbox' });
+    expect(await widget.produce(ctx, { size: 'small' })).toEqual({ kind: 'text', icon: 'check', text: 'Nobody’s waiting on you.', sub: 'Nothing unread' });
     await waitingThread({ uid: 2, from: 'agent@letting.test' });
     expect(await widget.produce(ctx, { size: 'small' })).toEqual({
-      kind: 'stat', icon: 'mail', value: '1', caption: 'conversation', foot: '0 unread in your inbox', // these rows carry no folder generation
+      kind: 'stat', icon: 'mail', value: '1', caption: 'conversation', foot: 'Nothing unread', // these rows carry no folder generation
     });
   });
 
@@ -267,7 +267,7 @@ suite('the email metrics (postgres, read-only)', () => {
     expect(widget.settings!.map((f) => f.key)).toEqual(['mailbox']);
     expect((await widget.options!('mailbox', ctx)).map((o) => o.label)).toEqual(['All mailboxes', OWNER_ADDRESS, 'owner@work.test']);
     expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: '' } })).toMatchObject({ value: '3' });
-    expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: String(work.accountId) } })).toMatchObject({ value: '2', foot: '0 unread in owner@work.test' });
+    expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: String(work.accountId) } })).toMatchObject({ value: '2', foot: 'Nothing unread' });
     expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: String(accountId) } })).toMatchObject({ value: '1', caption: 'conversation' });
     // A mailbox since removed is no choice: every mailbox.
     expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: '99999' } })).toMatchObject({ value: '3' });

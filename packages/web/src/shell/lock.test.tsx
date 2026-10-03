@@ -209,13 +209,26 @@ describe('the lock screen', () => {
 
   it('draws a sentence one column wide, so an empty day is never a hollow card', async () => {
     vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({
-      widgets: [{ key: 'l2', id: 'demo.today', title: 'Coming up', size: 'medium', view: { state: 'ok', body: { kind: 'text', icon: 'calendar', text: 'Free for the rest of today.' } } }],
+      widgets: [{ key: 'l2', id: 'demo.today', title: 'Coming up', size: 'medium', view: { state: 'ok', body: { kind: 'text', icon: 'calendar', text: 'Free for the rest of today.', sub: 'Next: Standup, tomorrow 09:30' } } }],
     }));
     render(<LockScreen initial={locked} onUnlocked={() => {}} />);
     const tile = await screen.findByRole('group', { name: 'Coming up' });
     expect(tile).toHaveAttribute('data-size', 'small');
     expect(tile).toHaveAttribute('data-kind', 'text');
     expect(tile.closest('.lk-grid')).toHaveAttribute('data-cols', '1');
+  });
+
+  it('leaves out a sentence with nothing under it, and the rest close up', async () => {
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({
+      widgets: [
+        { key: 'l1', id: 'demo.now', title: 'Weather at home', size: 'small', view: { state: 'ok', body: { kind: 'stat', value: '19°C', caption: 'Partly cloudy' } as never } },
+        { key: 'l2', id: 'demo.today', title: 'Coming up', size: 'medium', view: { state: 'ok', body: { kind: 'text', icon: 'calendar', text: 'Nothing on your calendar.' } } },
+      ],
+    }));
+    render(<LockScreen initial={locked} onUnlocked={() => {}} />);
+    const weather = await screen.findByRole('group', { name: 'Weather at home' });
+    expect(screen.queryByRole('group', { name: 'Coming up' })).toBeNull();
+    expect(weather.closest('.lk-grid')).toHaveAttribute('data-cols', '1');
   });
 
   it('opens Needs you once unlocked when its count was tapped', async () => {

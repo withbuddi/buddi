@@ -43,7 +43,8 @@ export const waitingWidget: WidgetDefinition = {
     if ((await stalestSync(ctx, ids)) === null) return { kind: 'text', icon: 'mail', text: 'Your mail has not finished its first sync yet.' };
     const waiting = await countNeedsYou(buddi.db, buddi.clock.now(), accounts.length > 0 ? ids.map(String) : undefined);
     const unread = await countInboxUnread(ctx, ids);
-    const inbox = `${unread.toLocaleString('en-US')} unread in ${accounts.length > 0 ? accounts[0]!.address : 'your inbox'}`;
+    // Never "0 unread": nothing unread is said in words.
+    const inbox = unread === 0 ? 'Nothing unread' : `${unread.toLocaleString('en-US')} unread in ${accounts.length > 0 ? accounts[0]!.address : 'your inbox'}`;
     // A calm zero: a sentence, not a bare 0.
     if (waiting === 0) return { kind: 'text', icon: 'check', text: 'Nobody’s waiting on you.', sub: inbox };
     return {

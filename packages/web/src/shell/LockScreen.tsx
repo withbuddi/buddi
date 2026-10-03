@@ -8,7 +8,7 @@
  * zone, their way unless picked for the lock screen, and a second zone if one
  * was — its own widgets (compact, at most four, never a sensitive one; a
  * sentence takes one column so an empty day never stretches into a hollow
- * card), how many approvals and other things need the owner (the one
+ * card, and one with nothing under it is left out), how many approvals and other things need the owner (the one
  * actionable rule Home and the rail count by) — counts, never
  * what they are; each a button that opens its list once unlocked — and the
  * focus while one is on. `LockFace` draws all but the unlock, and the lock
@@ -206,7 +206,17 @@ export function lockColumns(sizes: ReadonlyArray<'small' | 'medium'>, phone: boo
   return widest;
 }
 
-function Widgets({ widgets, phone }: { widgets: LockScreenData['widgets']; phone: boolean }): JSX.Element | null {
+/**
+ * The widgets the lock screen draws: a sentence with nothing under it (a day
+ * with nothing next, a setup prompt) is left out — the lock screen is a
+ * glance, not a list of chores — and the rest close up (the kit's rule).
+ */
+export function lockShown<T extends { view: { body: LockScreenData['widgets'][number]['view']['body'] } }>(widgets: readonly T[]): T[] {
+  return widgets.filter((w) => !(w.view.body.kind === 'text' && !w.view.body.sub));
+}
+
+function Widgets({ widgets: all, phone }: { widgets: LockScreenData['widgets']; phone: boolean }): JSX.Element | null {
+  const widgets = lockShown(all);
   if (widgets.length === 0) return null;
   // A sentence (nothing today, nobody waiting) takes one column, so it never stretches into a hollow card.
   const sized = widgets.map((w) => ({ w, size: phone || w.view.body.kind === 'text' ? ('small' as const) : w.size }));

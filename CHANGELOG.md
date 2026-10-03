@@ -29,6 +29,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- The lock screen leaves out a widget with nothing to show (a day with nothing next, a setup prompt) and closes up the rest, instead of drawing a near-empty card; Mail's widget says "Nothing unread" rather than "0 unread".
 - The edition card in chat no longer sits under a "Mission · Report" row: the card carries its own name, time and Open edition.
 - A mission or agent run that was mid-flight when buddi restarted no longer stays "leased" until a later restart: buddi hands its runs back when it stops, settles every run a previous start left behind as soon as it starts, and checks every minute for a run whose heartbeat stopped. A run that had not yet acted is queued again once; one that had already called a tool with an effect fails in Activity → Jobs with "interrupted by a restart" and what it had done, so nothing happens twice without you retrying it.
 
