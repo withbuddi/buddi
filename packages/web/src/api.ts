@@ -2873,6 +2873,9 @@ export const api = {
   setMissionEnabled: (id: string, enabled: boolean) =>
     post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/enabled`, { enabled }),
   keepMission: (id: string) => post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/keep`, {}),
+  /** Keep or Stop on "Still useful?": the first answer from any surface decides. */
+  answerStillUseful: (id: string, answer: 'keep' | 'stop') =>
+    post<{ id: string; enabled: boolean; outcome: string }>(`/missions/${encodeURIComponent(id)}/still-useful`, { answer }),
   setMisfirePolicy: (id: string, misfirePolicy: string, deadlineMinutes?: number | null) =>
     post<unknown>(`/missions/${encodeURIComponent(id)}/schedule`, {
       misfirePolicy,

@@ -6,6 +6,7 @@
  * The DB suite is skipped unless DATABASE_URL is set.
  */
 import {
+  answerStillUseful,
   createPool,
   ensureOwner,
   getMission,
@@ -184,6 +185,60 @@ suite('Keep and Stop taps', () => {
     await s.handleStillUsefulCallback(tap(stillUsefulCallbackData(noteId, 'keep')));
     expect(sent.filter((x) => x.method === 'answerCallbackQuery').at(-1)?.body.text).toBe('Already stopped.');
     expect((await getMission(pool, missionId))?.enabled).toBe(false);
+  });
+
+  it('Keep then Stop on the same prompt keeps the mission, and Stop says it was kept', async () => {
+    const missionId = 'agent:researcher:keep-then-stop';
+    const noteId = await asked(missionId);
+    const { s, sent } = surface();
+    await s.handleStillUsefulCallback(tap(stillUsefulCallbackData(noteId, 'keep')));
+    await s.handleStillUsefulCallback(tap(stillUsefulCallbackData(noteId, 'stop')));
+    expect((await getMission(pool, missionId))?.enabled).toBe(true);
+    expect(sent.filter((x) => x.method === 'answerCallbackQuery').at(-1)?.body.text).toBe('Already kept.');
+    const { rows } = await pool.query(`select answer from core.owner_notifications where id = $1`, [noteId]);
+    expect(rows[0].answer).toBe('keep');
+  });
+
+  it('an old prompt answers nothing once the mission was asked again', async () => {
+    const missionId = 'agent:researcher:stale-watch';
+    const first = await asked(missionId);
+    // Answered on the dashboard; later the mission went quiet again and was asked anew.
+    expect((await answerStillUseful(pool, { missionId }, 'keep')).outcome).toBe('kept');
+    // The answered row is settled: the new question is a row of its own.
+    const second = await asked(missionId);
+    expect(second).not.toBe(first);
+    const { s } = surface();
+    // The first prompt's Stop is a replay: the open question and the mission stay as they are.
+    await s.handleStillUsefulCallback(tap(stillUsefulCallbackData(first, 'stop')));
+    const mission = await getMission(pool, missionId);
+    expect(mission?.enabled).toBe(true);
+    expect(mission?.stillUsefulAskedAt).not.toBeNull();
+    // An old prompt that was never answered is older than the open question: refused too.
+    await pool.query(`update core.owner_notifications set answer = null, acted_at = null where id = $1`, [first]);
+    expect((await answerStillUseful(pool, { notificationId: first }, 'stop')).outcome).toBe('already-kept');
+    expect((await getMission(pool, missionId))?.enabled).toBe(true);
+    // The new prompt still works.
+    await s.handleStillUsefulCallback(tap(stillUsefulCallbackData(second, 'stop')));
+    expect((await getMission(pool, missionId))?.enabled).toBe(false);
+  });
+
+  it('a dashboard Keep and a Telegram Stop at once: exactly one decides', async () => {
+    for (let i = 0; i < 5; i++) {
+      const missionId = `agent:researcher:race-${i}`;
+      const noteId = await asked(missionId);
+      const [web, tg] = await Promise.all([
+        answerStillUseful(pool, { missionId }, 'keep'),
+        answerStillUseful(pool, { notificationId: noteId }, 'stop'),
+      ]);
+      const applied = [web.outcome, tg.outcome].filter((o) => o === 'kept' || o === 'stopped');
+      expect(applied).toHaveLength(1);
+      const mission = await getMission(pool, missionId);
+      expect(mission?.enabled).toBe(applied[0] === 'kept');
+      expect(mission?.stillUsefulAskedAt).toBeNull();
+      // Whatever lost reports the winner's decision on a later tap.
+      const again = await answerStillUseful(pool, { notificationId: noteId }, 'keep');
+      expect(again.outcome).toBe(applied[0] === 'kept' ? 'already-kept' : 'already-stopped');
+    }
   });
 
   it('ignores a tap from anyone but the owner', async () => {

@@ -41,7 +41,8 @@ import {
   listFailureGroups,
   takeOffer,
   setMissionEnabled,
-  keepMission,
+  answerStillUseful,
+  type StillUsefulOutcome,
   setPaused,
   setSchedule,
   toActionRecord,
@@ -228,14 +229,28 @@ export async function setMissionEnabledFromWeb(
   return { ok: true, status: 200, body: { id: mission.id, enabled: mission.enabled } };
 }
 
+/**
+ * The owner's Keep or Stop on "Still useful?": the same claim a Telegram tap
+ * makes, so whichever lands first decides and the other changes nothing.
+ */
+export async function answerStillUsefulFromWeb(
+  deps: WriteDeps,
+  missionId: string,
+  choice: 'keep' | 'stop',
+): Promise<WriteResult<{ id: string; enabled: boolean; outcome: StillUsefulOutcome }>> {
+  const { outcome } = await answerStillUseful(deps.pool, { missionId }, choice);
+  if (outcome === 'gone') return fail(404, `no such mission: ${missionId}`);
+  const mission = await getMission(deps.pool, missionId);
+  if (!mission) return fail(404, `no such mission: ${missionId}`);
+  return { ok: true, status: 200, body: { id: mission.id, enabled: mission.enabled, outcome } };
+}
+
 /** The owner's Keep on "Still useful?": the quiet count starts again. */
 export async function keepMissionFromWeb(
   deps: WriteDeps,
   missionId: string,
-): Promise<WriteResult<{ id: string; enabled: boolean }>> {
-  const mission = await keepMission(deps.pool, missionId);
-  if (!mission) return fail(404, `no such mission: ${missionId}`);
-  return { ok: true, status: 200, body: { id: mission.id, enabled: mission.enabled } };
+): Promise<WriteResult<{ id: string; enabled: boolean; outcome: StillUsefulOutcome }>> {
+  return answerStillUsefulFromWeb(deps, missionId, 'keep');
 }
 
 export interface ScheduleChange {

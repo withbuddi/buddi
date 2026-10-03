@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-283 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+284 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -1805,6 +1805,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/missions` | Every mission, its schedule, next run and recent occurrences. | yes |
 | POST | `/api/missions/:id/enabled` | Switch a mission on or off. | yes |
 | POST | `/api/missions/:id/keep` | Keep an agent’s quiet watch after “Still useful?”: its count of silent runs starts again. | yes |
+| POST | `/api/missions/:id/still-useful` | Answer “Still useful?” with Keep or Stop. The first answer from any surface decides; a later one changes nothing and says what was decided. | yes |
 | POST | `/api/missions/:id/schedule` | Change a mission’s schedule (a new revision). | yes |
 | GET | `/api/jobs` | The job queue, paged. `counts.failed` is the failed jobs still asking for the owner; `counts.dismissed` the ones dismissed or quiet after 14 days. | yes |
 | GET | `/api/jobs/failures` | Failed jobs grouped by cause, each group with a plain reason and whether a retry is likely to work; the dismissed ones apart. | yes |
@@ -1861,6 +1862,20 @@ Keep an agent’s quiet watch after “Still useful?”: its count of silent run
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/missions/<id>/keep"
+```
+
+#### `POST /api/missions/:id/still-useful`
+
+Answer “Still useful?” with Keep or Stop. The first answer from any surface decides; a later one changes nothing and says what was decided.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ answer: 'keep' | 'stop' }`
+- **Answer:** `{ id, enabled, outcome }`
+- **Errors:** 400; 404
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"answer":"keep"}' "$BUDDI_URL/api/missions/<id>/still-useful"
 ```
 
 #### `POST /api/missions/:id/schedule`

@@ -12,6 +12,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- "Still useful?" is answered once: Keep then Stop on Telegram no longer switches the watch off, an old prompt's button no longer acts on a later question or a re-enabled watch, and a Telegram tap racing the dashboard's Keep or Stop applies only one of them. A later tap says what was decided; the dashboard's Stop answers the question too (`POST /api/missions/:id/still-useful`).
 - `buddi status` (and every other command but `serve`) no longer prints "agents: … has its own skill … it shadows the shared one" above its output. The line stays in the gateway's log; a command shows it on stderr with `BUDDI_DEBUG=1`.
 
 ## 0.1.0-pre.34 — 2026-10-02

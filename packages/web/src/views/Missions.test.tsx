@@ -46,7 +46,7 @@ describe('missions that stop themselves', () => {
   it('asks "Still useful?" with Keep and Stop, and says when the watch stops and ends', async () => {
     vi.mocked(api.missions).mockResolvedValue({ missions: [watch] });
     const keep = vi.spyOn(api, 'keepMission').mockResolvedValue({ id: watch.id, enabled: true });
-    const stop = vi.spyOn(api, 'setMissionEnabled').mockResolvedValue({ id: watch.id, enabled: false });
+    const stop = vi.spyOn(api, 'answerStillUseful').mockResolvedValue({ id: watch.id, enabled: false, outcome: 'stopped' });
     render(<Missions timezone="UTC" />);
     expect(await screen.findByText('Still useful?')).toBeInTheDocument();
     expect(screen.getByText(/48 times in a row/)).toBeInTheDocument();
@@ -54,7 +54,7 @@ describe('missions that stop themselves', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Keep' }));
     await waitFor(() => expect(keep).toHaveBeenCalledWith(watch.id));
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    await waitFor(() => expect(stop).toHaveBeenCalledWith(watch.id, false));
+    await waitFor(() => expect(stop).toHaveBeenCalledWith(watch.id, 'stop'));
   });
 
   it('lists a watch past its end as ended, with no question', async () => {

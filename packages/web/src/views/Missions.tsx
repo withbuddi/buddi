@@ -87,7 +87,7 @@ function Mission({
           title="Still useful?"
           action={(
             <Toolbar align="end">
-              <Button size="sm" onClick={() => onRun(api.setMissionEnabled(mission.id, false))}>Stop</Button>
+              <Button size="sm" onClick={() => onRun(api.answerStillUseful(mission.id, 'stop'))}>Stop</Button>
               <Button size="sm" variant="accent" onClick={() => onRun(api.keepMission(mission.id))}>Keep</Button>
             </Toolbar>
           )}

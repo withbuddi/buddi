@@ -205,6 +205,8 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
     const { rows } = await db.query(
       `select ${NOTIFICATION_COLUMNS} from core.owner_notifications
         where dedupe_key = $1 and sent_at is null and state in ('shown', 'held', 'stored', 'failed')
+          -- A question the owner answered is settled: asking again is a new row.
+          and answer is null
         order by created_at desc limit 1`,
       [dedupeKey],
     );
@@ -264,7 +266,7 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
               channel = $12, fired_count = fired_count + 1, lowered = $13,
               seen_at = case when $17 then null else seen_at end, error = null, updated_at = $14,
               held_for = $16, action = $18
-        where id = $1 and sent_at is null and state in ('shown', 'held', 'stored', 'failed')
+        where id = $1 and sent_at is null and state in ('shown', 'held', 'stored', 'failed') and answer is null
         returning ${NOTIFICATION_COLUMNS}`,
       [existing.id, urgency, title, text, message.link?.route ?? null, offers, message.agentId ?? null,
         message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor,

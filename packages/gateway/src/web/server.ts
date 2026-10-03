@@ -298,6 +298,7 @@ import {
   undismissJobsFromWeb,
   setMissionEnabledFromWeb,
   keepMissionFromWeb,
+  answerStillUsefulFromWeb,
   setPausedFromWeb,
   setScheduleFromWeb,
   dismissOfferFromWeb,
@@ -2842,6 +2843,13 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     const missionKeep = /^\/api\/missions\/([^/]+)\/keep$/.exec(path);
     if (missionKeep) return finish(res, await keepMissionFromWeb(writeDeps, decodeURIComponent(missionKeep[1] as string)));
+
+    const missionStillUseful = /^\/api\/missions\/([^/]+)\/still-useful$/.exec(path);
+    if (missionStillUseful) {
+      const answer = body.answer;
+      if (answer !== 'keep' && answer !== 'stop') return sendJson(res, 400, { error: "`answer` must be 'keep' or 'stop'" });
+      return finish(res, await answerStillUsefulFromWeb(writeDeps, decodeURIComponent(missionStillUseful[1] as string), answer));
+    }
 
     const missionSchedule = /^\/api\/missions\/([^/]+)\/schedule$/.exec(path);
     if (missionSchedule) {

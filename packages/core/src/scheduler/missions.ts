@@ -414,30 +414,110 @@ export function missionIdOfStillUsefulKey(key: string | null | undefined): strin
 
 export type StillUsefulOutcome = 'kept' | 'stopped' | 'already-kept' | 'already-stopped' | 'gone';
 
+/** Which "Still useful?" an answer is for: one prompt (a button under it) or the mission's open one. */
+export type StillUsefulTarget = { notificationId: string } | { missionId: string };
+
 /**
- * The owner's answer to "Still useful?" from a surface with buttons: Keep is
- * `keepMission`, Stop switches the mission off. Idempotent: a second tap (or a
- * tap after the dashboard answered) changes nothing and says what already
- * happened.
+ * The owner's answer to "Still useful?", from any surface. Keep starts the
+ * quiet count again; Stop switches the mission off. Either way the question
+ * is closed and the answer is written on its notification rows.
+ *
+ * One transaction claims the question: the mission row is locked first, then
+ * the prompt's row, and the decision applies only while that very prompt is
+ * still the open one — not answered (here or on the dashboard), and not an
+ * older prompt of a mission that was asked again since. Anything else changes
+ * nothing and says what already happened, so a second tap, an opposite tap
+ * (Keep then Stop), a replayed old button and a race with the dashboard each
+ * apply at most once.
  */
 export async function answerStillUseful(
-  db: Queryable,
-  missionId: string,
+  pool: Pool,
+  target: StillUsefulTarget,
   choice: 'keep' | 'stop',
-): Promise<StillUsefulOutcome> {
-  // Every helper below only queries; a surface's `Queryable` is enough.
-  const pool = db as unknown as Pool;
-  const mission = await getMission(pool, missionId);
-  if (!mission) return 'gone';
-  if (choice === 'stop') {
-    if (!mission.enabled) return 'already-stopped';
-    await setMissionEnabled(pool, missionId, false);
-    return 'stopped';
+  now: Date = new Date(),
+): Promise<{ outcome: StillUsefulOutcome; missionId?: string }> {
+  let missionId: string | undefined;
+  let key: string;
+  if ('notificationId' in target) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target.notificationId)) return { outcome: 'gone' };
+    const { rows } = await pool.query<{ dedupe_key: string | null }>(
+      `select dedupe_key from core.owner_notifications where id = $1`,
+      [target.notificationId],
+    );
+    missionId = missionIdOfStillUsefulKey(rows[0]?.dedupe_key);
+    if (!missionId) return { outcome: 'gone' };
+  } else {
+    missionId = target.missionId;
   }
-  if (!mission.enabled) return 'already-stopped';
-  if (mission.stillUsefulAskedAt === null || mission.stillUsefulAskedAt === undefined) return 'already-kept';
-  await keepMission(pool, missionId);
-  return 'kept';
+  key = stillUsefulKey(missionId);
+
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const mission = await client.query<{ enabled: boolean; still_useful_asked_at: Date | null }>(
+      `select enabled, still_useful_asked_at from core.missions where id = $1 for update`,
+      [missionId],
+    );
+    const m = mission.rows[0];
+    if (!m) {
+      await client.query('commit');
+      return { outcome: 'gone', missionId };
+    }
+    const settled = (): StillUsefulOutcome => (m.enabled ? 'already-kept' : 'already-stopped');
+
+    let open = m.enabled && m.still_useful_asked_at !== null;
+    if ('notificationId' in target) {
+      const note = await client.query<{ answer: string | null; created_at: Date }>(
+        `select answer, created_at from core.owner_notifications where id = $1 for update`,
+        [target.notificationId],
+      );
+      const n = note.rows[0];
+      if (!n) {
+        await client.query('commit');
+        return { outcome: 'gone', missionId };
+      }
+      if (n.answer === 'keep' || n.answer === 'stop') {
+        await client.query('commit');
+        return { outcome: n.answer === 'keep' ? 'already-kept' : 'already-stopped', missionId };
+      }
+      // An older prompt than the open question answers nothing.
+      open = open && m.still_useful_asked_at !== null && n.created_at.getTime() >= m.still_useful_asked_at.getTime();
+    }
+    if (!open) {
+      if ('notificationId' in target) {
+        await client.query(
+          `update core.owner_notifications
+              set acted_at = coalesce(acted_at, $2), seen_at = coalesce(seen_at, $2), updated_at = $2
+            where id = $1`,
+          [target.notificationId, now],
+        );
+      }
+      await client.query('commit');
+      return { outcome: settled(), missionId };
+    }
+
+    await client.query(
+      `update core.missions
+          set enabled = case when $2 = 'stop' then false else enabled end,
+              quiet_runs = 0, still_useful_asked_at = null
+        where id = $1`,
+      [missionId, choice],
+    );
+    await client.query(
+      `update core.owner_notifications
+          set acted_at = coalesce(acted_at, $3), seen_at = coalesce(seen_at, $3), updated_at = $3,
+              answer = $2
+        where dedupe_key = $1 and answer is null and (acted_at is null or id = $4::uuid)`,
+      [key, choice, now, 'notificationId' in target ? target.notificationId : null],
+    );
+    await client.query('commit');
+    return { outcome: choice === 'keep' ? 'kept' : 'stopped', missionId };
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** The reason a disabled plugin's missions carry: "paused: finance is disabled". */

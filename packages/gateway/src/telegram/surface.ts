@@ -20,7 +20,6 @@ import {
   answerStillUseful,
   cancelReminder,
   getNotification,
-  markActedForKey,
   missionIdOfStillUsefulKey,
   getOnboarding,
   consumePairingCode,
@@ -53,6 +52,7 @@ import {
   type Reminder,
   idleRolloverMs,
 } from '@buddi/core';
+import type { Pool } from 'pg';
 import { InterjectionQueue, createConversation, type InterjectionSource } from '@buddi/runtime';
 import {
   MAX_CALLBACK_DATA_BYTES,
@@ -2679,14 +2679,18 @@ export class TelegramSurface {
     }
 
     const row = await getNotification(pool, parsed.notificationId);
-    const missionId = missionIdOfStillUsefulKey(row?.dedupeKey);
-    if (!row || !missionId) {
+    if (!row || !missionIdOfStillUsefulKey(row.dedupeKey)) {
       await api.answerCallbackQuery(query.id, stillUsefulOutcomeText('gone')).catch(() => {});
       return;
     }
-    const outcome = await answerStillUseful(pool, missionId, parsed.choice);
+    // The claim is bound to this prompt: a second, opposite or replayed tap reports what was decided.
+    const { outcome, missionId } = await answerStillUseful(
+      pool as unknown as Pool,
+      { notificationId: parsed.notificationId },
+      parsed.choice,
+      new Date(this.#now()),
+    );
     if (outcome === 'kept' || outcome === 'stopped') {
-      await markActedForKey(pool, row.dedupeKey!, new Date(this.#now())).catch(() => 0);
       await appendSurfaceEvent(pool, 'mission.still_useful_answered', {
         surface: SURFACE,
         missionId,
