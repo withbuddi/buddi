@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.37 — 2026-10-03
+
 ### Added
 
 - Knowing you: Settings → Profile takes your full name, pronouns and birthday (day and month, the year optional) beside what the agents call you, and every agent is told them — and that today is your birthday when it is. On the day your front desk greets you first thing in your zone with a short note from the team, on Telegram and on Home under "Happy birthday", with a picture from your Illustrator when the image plugin has an account (on by default; the switch is on Missions).

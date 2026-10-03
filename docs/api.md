@@ -784,7 +784,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/agents"
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ arg?: "" | "1d" | "1w" | "off" }`
 - **Answer:** `{ text }  // the sentence to show, the same one Telegram and the terminal say`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/quiet"
@@ -1271,7 +1271,7 @@ Read a skill bundle (.zip with SKILL.md, scripts/, assets/) before keeping it: s
 - **Body:** `the .zip bytes; X-Filename header`
 - **Answer:** `{ staged: { id, filename, packed, size, files: [{ path, size, kind: skill|script|font|image|template|data|other, setup? }], scripts, skill: { name, title, description, firstLines }, createdAt } }`
 - **Errors:** 400; 413 too big; 415 not a .zip; 422 refused, with { error, refusal: { kind: notzip|big|count|noskill|paths|frontmatter|executable|damaged, filename, size?, files?, entries?: [{ path, why, target? }], looked? } }
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -F "file=@./file" "$BUDDI_URL/api/skills/bundles"
@@ -1284,7 +1284,7 @@ One file of a staged upload, for the preview's viewer (?path=).
 - **Auth:** Session or API token.
 - **Answer:** `{ file: { path, size, kind, setup?, text? | binary: true, image? } }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/bundles/<staged>/file"
@@ -1298,7 +1298,7 @@ A picture in a staged upload (?path=), served under a CSP that runs nothing.
 - **Kind:** bytes, not JSON
 - **Answer:** `image/*`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/bundles/<staged>/image" -o out
@@ -1312,7 +1312,7 @@ Keep a staged bundle: unpacked into the skills folder under its own directory, S
 - **Body:** `{ every?: boolean, agents?: agent id[], mine?: boolean }`
 - **Answer:** `201 { skill: SkillRow }`
 - **Errors:** 400; 404 the upload is gone; 409 a shipped agent, or the catalog refused the result (nothing kept)
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/skills/bundles/<staged>"
@@ -1324,7 +1324,7 @@ Drop a staged upload nobody kept.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
 - **Answer:** `{ discarded }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/skills/bundles/<staged>"
@@ -1337,7 +1337,7 @@ One of a bundle's files, for the sheet's viewer (?path=): its text, or its size 
 - **Auth:** Session or API token.
 - **Answer:** `{ file: { path, size, kind, setup?, text? | binary: true, image? } }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>/file"
@@ -1351,7 +1351,7 @@ A picture in a bundle (?path=), served under a CSP that runs nothing.
 - **Kind:** bytes, not JSON
 - **Answer:** `image/*`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>/image" -o out
@@ -2460,7 +2460,7 @@ The owner’s people: who they are, how to address them, their dates, the next o
 
 - **Auth:** Session or API token.
 - **Answer:** `{ people: Array<{ id, name, relationship, addressAs, birthday, anniversary, notes, next: { what, inDays, turning }|null, reminders: boolean|null }>, today }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/people"
@@ -2474,7 +2474,7 @@ Add a person, or change one by id; reminders switches their date missions.
 - **Body:** `{ id?, name, relationship?, addressAs?, notes?: string|null, birthday?, anniversary?: { day, month, year? }|null, reminders?: boolean }`
 - **Answer:** `{ person, people }`
 - **Errors:** 400; 409 the name is taken
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/memory/people"
@@ -2487,7 +2487,7 @@ Forget a person; their reminders go with them.
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** `{ person, people }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/people/<id>/forget"
@@ -2500,7 +2500,7 @@ Bring a forgotten person back (Undo).
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** `{ person, people }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/people/<id>/restore"
@@ -2671,7 +2671,7 @@ Home on the owner’s birthday: whether it is today, and the team’s note and p
 
 - **Auth:** Session or API token.
 - **Answer:** `{ today, date, name, age, note, from, image }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/owner/birthday"
@@ -4415,7 +4415,7 @@ How the model fetch into the local Ollama stands.
 
 - **Auth:** Session or API token.
 - **Answer:** `{ pull: { model, state, completed, total, status, error? } | null }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/onboarding/ollama/pull"
@@ -4429,7 +4429,7 @@ Fetch a model into the local Ollama, with progress.
 - **Body:** `{ model: string }`
 - **Answer:** `202 { pull }`
 - **Errors:** 400 not a model name; 409 another fetch is going
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.37
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"model":"…"}' "$BUDDI_URL/api/onboarding/ollama/pull"

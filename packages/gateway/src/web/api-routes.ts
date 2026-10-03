@@ -1185,6 +1185,21 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * release has no entry and reads "unreleased" until the release adds it.
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'POST /api/quiet': '0.1.0-pre.37',
+  'POST /api/skills/bundles': '0.1.0-pre.37',
+  'GET /api/skills/bundles/:staged/file': '0.1.0-pre.37',
+  'GET /api/skills/bundles/:staged/image': '0.1.0-pre.37',
+  'POST /api/skills/bundles/:staged': '0.1.0-pre.37',
+  'DELETE /api/skills/bundles/:staged': '0.1.0-pre.37',
+  'GET /api/skills/:id/file': '0.1.0-pre.37',
+  'GET /api/skills/:id/image': '0.1.0-pre.37',
+  'GET /api/memory/people': '0.1.0-pre.37',
+  'POST /api/memory/people': '0.1.0-pre.37',
+  'POST /api/memory/people/:id/forget': '0.1.0-pre.37',
+  'POST /api/memory/people/:id/restore': '0.1.0-pre.37',
+  'GET /api/owner/birthday': '0.1.0-pre.37',
+  'GET /api/onboarding/ollama/pull': '0.1.0-pre.37',
+  'POST /api/onboarding/ollama/pull': '0.1.0-pre.37',
   'GET /api/plugin-assets/:plugin/:key': '0.1.0-pre.36',
   'POST /api/missions/:id/still-useful': '0.1.0-pre.35',
   'GET /api/artifacts/:id/export/:format': '0.1.0-pre.35',
