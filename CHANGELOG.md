@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.34 — 2026-10-02
+
 ### Changed
 
 - The chat canvas gathers a turn's web reads and searches into one **Sources** tab with a count, instead of a "Web · Read" tab per call: each page as a card (site tile, linked title, when read, length, the text taken behind Show more, failures in plain words) and each search with its results, the ones read marked. Raw JSON stays one quiet link away.
