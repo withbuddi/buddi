@@ -1,0 +1,4 @@
+#!/bin/sh
+# What the CI gate's typecheck lane runs. Skip once with `git push --no-verify`.
+echo "pre-push: pnpm check (typecheck incl. test tsconfigs, boundaries)…"
+exec pnpm -s check

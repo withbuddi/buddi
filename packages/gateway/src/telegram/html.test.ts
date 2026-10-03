@@ -33,8 +33,8 @@ describe('a report’s Markdown as Telegram HTML', () => {
     expect(html).toContain('trade corridors &amp; the regional currency');
     expect(html).not.toMatch(/[*#]/);
     // Paragraphs stay apart, and nothing else is invented.
-    expect(html.split('\n\n')).toHaveLength(9);
-    expect(html.endsWith('— Anchor · next at 12:30')).toBe(true);
+    expect(html!.split('\n\n')).toHaveLength(9);
+    expect(html!.endsWith('— Anchor · next at 12:30')).toBe(true);
   });
 
   it('leaves a raw URL as it is, escapes markup, and leaves arithmetic and identifiers alone', () => {

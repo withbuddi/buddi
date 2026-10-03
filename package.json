@@ -35,7 +35,8 @@
     "dev:install": "pnpm -r build && pnpm run link && node packages/cli/dist/main.js migrate && node packages/cli/dist/main.js service install",
     "buddi": "node packages/cli/dist/main.js",
     "doctor": "node packages/cli/dist/main.js doctor",
-    "init": "node packages/cli/dist/main.js init"
+    "init": "node packages/cli/dist/main.js init",
+    "check": "node scripts/check-boundaries.mjs && pnpm -r typecheck"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
