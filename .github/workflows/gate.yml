@@ -1,8 +1,22 @@
-# The full gate: `pnpm test` with a throwaway Postgres — boundaries, build,
-# typecheck, every suite including the database ones, the generic-install
-# check. About twelve minutes, so it runs where it earns its keep: before a
-# release, on a pull request, nightly, and on demand. A push to main gets the
-# quick lane in ci.yml instead.
+# The full gate, split across runners so its wall time is the slowest lane
+# rather than the sum: boundaries, build, typecheck (test tsconfigs too),
+# every suite including the database ones against a throwaway Postgres, the
+# generic-install check, the scripts' own tests. The docs pages are checked by
+# the suites themselves (docs/cli.md in cli's readme test, docs/api.md in the
+# gateway's api-routes test).
+#
+# - web: the jsdom suite, the slow one, in five lanes (see the matrix). It
+#   needs only @buddi/core built.
+# - gateway: its suite against its own Postgres, migrated first. It serves
+#   packages/web/dist in a test, so it builds everything.
+# - rest: boundaries, typecheck, every other package's suite (core, runtime,
+#   tools, cli, install, extension, examples) against its own Postgres, the
+#   generic-install check and scripts/.
+#
+# Each job builds what it needs: about forty seconds, quicker than handing dist
+# between jobs, which would also run the build before every lane instead of
+# beside it. Runs before a release (release.yml), on every push to main
+# (ci.yml), on a pull request, nightly, and on demand.
 name: gate
 on:
   workflow_call:
@@ -11,9 +25,47 @@ on:
   schedule:
     - cron: '17 4 * * *'   # nightly, 04:17 UTC
 jobs:
-  gate:
+  web:
+    name: web (${{ matrix.lane.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lanes by hand rather than `vitest --shard`, which splits by file
+        # name: four files take four to six minutes each on a runner (Radix
+        # menus under jsdom) and a hash put all of them in one shard, eleven
+        # minutes against one or two for the others. Each gets a lane of its
+        # own; everything else shares the last. A file that grows past a few
+        # minutes moves into its own lane here.
+        lane:
+          - name: rail
+            files: src/shell/Rail.test.tsx
+          - name: home-widgets
+            files: src/views/parts/HomeWidgets.test.tsx
+          - name: secrets
+            files: src/views/Secrets.test.tsx
+          - name: plugins
+            files: src/views/Plugins.test.tsx
+          - name: rest
+            exclude: >-
+              --exclude src/shell/Rail.test.tsx
+              --exclude src/views/parts/HomeWidgets.test.tsx
+              --exclude src/views/Secrets.test.tsx
+              --exclude src/views/Plugins.test.tsx
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      # The web package's dependencies (core), not the web bundle itself.
+      - run: pnpm --filter '@buddi/web^...' build
+      - run: pnpm --filter @buddi/web exec vitest run ${{ matrix.lane.files }} ${{ matrix.lane.exclude }}
+
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -35,4 +87,35 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - run: node scripts/migrate.mjs
-      - run: pnpm test
+      - run: pnpm --filter @buddi/gateway test
+
+  rest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: buddi
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: buddi
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U buddi" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgres://buddi:test@127.0.0.1:5432/buddi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-boundaries.mjs
+      - run: pnpm -r build
+      - run: pnpm -r typecheck
+      - run: node scripts/migrate.mjs
+      # `!buddi` is the workspace root, whose own test script is the whole gate.
+      - run: pnpm -r --filter '!buddi' --filter '!@buddi/web' --filter '!@buddi/gateway' test
+      - run: pnpm check:generic
+      - run: pnpm exec vitest run --dir scripts

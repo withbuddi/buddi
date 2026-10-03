@@ -1,9 +1,6 @@
-# The quick lane, on every push to main: four runners at once, because the
-# time is in two suites (the web app's jsdom tests and the gateway's) rather
-# than in the database (with no DATABASE_URL the database suites skip
-# themselves) and in typechecking every package. Wall time is the slowest
-# job, about four minutes. The full gate
-# with Postgres is gate.yml: pull requests, tags, nightly, on demand.
+# Every push to main: the changelog check, then the full gate (gate.yml),
+# which is parallel enough now to run on every push rather than only before a
+# release. Wall time is the slowest gate lane.
 name: ci
 on:
   push:
@@ -41,28 +38,5 @@ jobs:
             exit 1
           fi
           echo "Changelog check passed."
-  quick:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        lane:
-          - name: web
-            run: pnpm --filter @buddi/web test
-          - name: gateway
-            run: pnpm --filter @buddi/gateway test
-          - name: typecheck
-            run: node scripts/check-boundaries.mjs && pnpm -r typecheck
-          - name: rest
-            # `!buddi` is the workspace root, whose own test script is the whole gate.
-            run: pnpm -r --filter '!buddi' --filter '!@buddi/web' --filter '!@buddi/gateway' test && pnpm check:generic && pnpm exec vitest run --dir scripts
-    name: quick (${{ matrix.lane.name }})
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-      - run: ${{ matrix.lane.run }}
+  gate:
+    uses: ./.github/workflows/gate.yml
