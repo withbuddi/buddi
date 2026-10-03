@@ -190,6 +190,37 @@ suite('artifacts tools (postgres)', () => {
       expect(again.version).toBe(2);
     });
 
+    it('the same bytes from another conversation are reported as already there, not as saved', async () => {
+      const { rows } = await pool.query(`insert into core.conversations (agent_id) values ('finance-advisor') returning id`);
+      const other = String(rows[0].id);
+      const out = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: '# Heat pumps\n\nThree models.' }, other);
+      expect(out.unchanged).toBe(true);
+      expect(out.note).toMatch(/already in Files/);
+    });
+
+    it('counts versions over the whole conversation, not the newest 100 files', async () => {
+      const { rows } = await pool.query(`insert into core.conversations (agent_id) values ('finance-advisor') returning id`);
+      const conv = String(rows[0].id);
+      expect((await call('artifacts.write', { title: 'Old report', format: 'markdown', content: 'one' }, conv)).version).toBe(1);
+      expect((await call('artifacts.write', { title: 'Old report', format: 'markdown', content: 'two' }, conv)).version).toBe(2);
+      // 120 newer files push the report out of any page of the library.
+      for (let i = 0; i < 120; i++) {
+        await saveArtifact(pool, { bytes: Buffer.from(`note ${i}`), mime: 'text/plain', filename: `n${i}.txt`, createdBy: 'owner', conversationId: conv });
+      }
+      const third = await call('artifacts.write', { title: 'Old report', format: 'markdown', content: 'three' }, conv);
+      expect(third).toMatchObject({ filename: 'Old report (v3).md', version: 3 });
+    });
+
+    it('two writes at once get two versions', async () => {
+      const { rows } = await pool.query(`insert into core.conversations (agent_id) values ('finance-advisor') returning id`);
+      const conv = String(rows[0].id);
+      const outs = await Promise.all(
+        Array.from({ length: 6 }, (_, i) => call('artifacts.write', { title: 'Race', format: 'markdown', content: `draft ${i}` }, conv)),
+      );
+      expect(outs.map((o) => o.version).sort()).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(new Set(outs.map((o) => o.filename)).size).toBe(6);
+    });
+
     it('stores a JSON table as CSV', async () => {
       const out = await call('artifacts.write', { title: 'Budget', format: 'json', content: JSON.stringify([{ Item: 'Rent', Amount: 1200 }, { Item: 'Food, misc', Amount: 400 }]) }, conversationId);
       expect(out).toMatchObject({ filename: 'Budget.csv', mime: 'text/csv' });
@@ -205,7 +236,7 @@ suite('artifacts tools (postgres)', () => {
     });
 
     it('refuses bad input before writing anything', async () => {
-      const big = await registry.invoke('artifacts.write', { title: 'Big', format: 'markdown', content: 'x'.repeat(1_000_001) }, ctx(conversationId));
+      const big = await registry.invoke('artifacts.write', { title: 'Big', format: 'markdown', content: 'x'.repeat(600_000) }, ctx(conversationId));
       expect(big.ok).toBe(false);
       if (!big.ok) expect(big.reason).toBe('invalid-args');
       const badFormat = await registry.invoke('artifacts.write', { title: 'A', format: 'docx', content: 'x' }, ctx(conversationId));

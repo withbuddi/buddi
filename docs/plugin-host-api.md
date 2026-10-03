@@ -261,7 +261,9 @@ settings page, written through `accounts.bind(id)` from an `ownerOnly` tool.
 ```ts
 interface FilesArea {
   save(input: { bytes: Buffer; mime: string; filename?: string;
-                caption?: string; source?: ArtifactSource }): Promise<FileRow>;
+                caption?: string; source?: ArtifactSource;
+                version?: { base: string; ext: string } }):
+    Promise<FileRow & { existed?: boolean; version?: number }>;
   get(id: string): Promise<FileRow | null>;
   read(id: string): Promise<Buffer>;
   list(opts?: { since?: Date; before?: Date; kind?: string;
@@ -270,7 +272,12 @@ interface FilesArea {
 }
 ```
 
-`createdBy` and the data directory are filled in by core. `FileRow` has no
+`createdBy` and the data directory are filled in by core. Bytes already in
+Files come back as the file that held them, with `existed: true`; nothing new
+is written. `version` (1.25) names a document by its title: the host gives it
+the next version among every file of the calling conversation (`base.ext`,
+then `base (v2).ext`, …), counted and saved under one lock so two writes at
+once never share a name. `FileRow` has no
 `storagePath`, and says its `conversationId` only when that conversation
 exists. Scope: a plugin sees files it saved and files handed into a
 conversation its tool is running in. A manifest that declares
@@ -395,7 +402,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.24`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.25`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -494,6 +501,12 @@ waits in Home's Needs you and counts on every badge until the owner deals
 with it, and Telegram says it last; one without is information. An older
 buddi ignores the field and delivers the message as information, so a plugin
 that sets it need not ask for `^1.24`.
+
+1.25 adds an optional argument and two optional fields on a return:
+`files.save`'s `version` (the next version of a document in the calling
+conversation, allocated under a lock) and, on what it returns, `version` and
+`existed` (the bytes were already in Files). An older buddi ignores
+`version` and saves under `filename`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

@@ -208,6 +208,19 @@ export async function saveArtifact(
   input: SaveArtifactInput,
   env: EnvLike = process.env,
 ): Promise<ArtifactRow> {
+  return (await saveArtifactReporting(pool, input, env)).row;
+}
+
+/**
+ * `saveArtifact`, saying whether the bytes were already in Files (`existed`):
+ * then nothing new was written and the row is the one that held them, with
+ * its own name and conversation.
+ */
+export async function saveArtifactReporting(
+  pool: Pool,
+  input: SaveArtifactInput,
+  env: EnvLike = process.env,
+): Promise<{ row: ArtifactRow; existed: boolean }> {
   if (!Buffer.isBuffer(input.bytes) || input.bytes.length === 0) {
     throw new Error('saveArtifact: bytes must be a non-empty Buffer');
   }
@@ -234,7 +247,7 @@ export async function saveArtifact(
       limit 1`,
     [sha256, surface, chatId],
   );
-  if (existing.rows[0]) return toRow(existing.rows[0]);
+  if (existing.rows[0]) return { row: toRow(existing.rows[0]), existed: true };
 
   const now = new Date();
   const relative = storagePathFor(sha256, mime, filename, now);
@@ -253,7 +266,7 @@ export async function saveArtifact(
        set caption = coalesce(core.artifacts.caption, excluded.caption),
            -- The same bytes handed in again after a discard: the row comes back.
            deleted_at = null
-     returning ${SELECT_COLUMNS}`,
+     returning ${SELECT_COLUMNS}, (xmax = 0) as inserted`,
     [
       kindForMime(mime),
       mime,
@@ -271,7 +284,65 @@ export async function saveArtifact(
   );
   const row = rows[0];
   if (!row) throw new Error('saveArtifact: insert returned no row');
-  return toRow(row);
+  return { row: toRow(row), existed: row.inserted !== true };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The version a new write of `base.ext` gets among `existing` names: one past
+ * the highest of `base.ext` (version 1) and `base (vN).ext`, ignoring case.
+ */
+export function nextDocumentVersion(base: string, ext: string, existing: readonly (string | null)[]): number {
+  const pattern = new RegExp(`^${escapeRegExp(base)}(?: \\(v(\\d+)\\))?\\.${escapeRegExp(ext)}$`, 'i');
+  let highest = 0;
+  for (const name of existing) {
+    const match = name ? pattern.exec(name) : null;
+    if (!match) continue;
+    highest = Math.max(highest, match[1] ? Number(match[1]) : 1);
+  }
+  return highest + 1;
+}
+
+/** `base.ext` for version 1, `base (vN).ext` after. */
+export function documentVersionName(base: string, ext: string, version: number): string {
+  return version <= 1 ? `${base}.${ext}` : `${base} (v${version}).${ext}`;
+}
+
+/**
+ * Save the next version of the document `base.ext` in a conversation: the
+ * version is counted over every file the conversation ever had (not a page of
+ * the library), under an advisory lock on the conversation and the name, held
+ * until the row is in — two writes at once get two versions.
+ */
+export async function saveArtifactVersion(
+  pool: Pool,
+  input: Omit<SaveArtifactInput, 'filename' | 'conversationId'> & { conversationId: string; base: string; ext: string },
+  env: EnvLike = process.env,
+): Promise<{ row: ArtifactRow; existed: boolean; version: number }> {
+  const { base, ext, ...rest } = input;
+  const client = await pool.connect();
+  const lockKey = `buddi.files.version:${input.conversationId}:${base.toLowerCase()}.${ext.toLowerCase()}`;
+  try {
+    await client.query('select pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
+    try {
+      const { rows } = await client.query<{ filename: string | null }>(
+        `select filename from core.artifacts
+          where conversation_id = $1 and lower(filename) like $2 escape '\\'`,
+        [input.conversationId, `${base.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`],
+      );
+      const version = nextDocumentVersion(base, ext, rows.map((r) => r.filename));
+      // On the locking connection: a waiter holding a pool slot must never starve the holder of one.
+      const saved = await saveArtifactReporting(client as unknown as Pool, { ...rest, filename: documentVersionName(base, ext, version) }, env);
+      return { ...saved, version };
+    } finally {
+      await client.query('select pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]).catch(() => {});
+    }
+  } finally {
+    client.release();
+  }
 }
 
 /** One artifact by id. `null` when it does not exist or was deleted. */

@@ -3,8 +3,13 @@
  * version it is, and how a JSON table becomes a CSV. No database, no disk.
  */
 
-/** The most a written document may hold, in characters (about a 300-page report). */
-export const MAX_DOCUMENT_CHARS = 1_000_000;
+/**
+ * The most a written document may hold: 512 KiB once saved (about a
+ * 150-page report), the most buddi converts to PDF, Word or Excel. The
+ * character cap is what the tool's input refuses outright.
+ */
+export const MAX_DOCUMENT_BYTES = 512 * 1024;
+export const MAX_DOCUMENT_CHARS = MAX_DOCUMENT_BYTES;
 /** Longest title kept in the file name; the rest is cut at a word. */
 export const MAX_TITLE_CHARS = 100;
 /** Longest folder label. */
@@ -12,6 +17,8 @@ export const MAX_FOLDER_CHARS = 60;
 /** Most rows and columns a JSON table may have. */
 export const MAX_TABLE_ROWS = 50_000;
 export const MAX_TABLE_COLUMNS = 200;
+/** Most cells (rows × columns) a JSON table may describe, checked before any row is built. */
+export const MAX_TABLE_CELLS = 1_000_000;
 
 export type DocumentFormat = 'markdown' | 'csv' | 'json';
 
@@ -93,27 +100,57 @@ export function parseJsonTable(content: string): { columns: string[]; rows: unkn
   } catch (err) {
     throw new Error(`content is not valid JSON (${err instanceof Error ? err.message : String(err)}); for format 'json' send an array of objects, e.g. [{"Month":"Jan","Total":120}]`);
   }
-  let columns: string[];
-  let rows: unknown[][];
-  if (value && typeof value === 'object' && !Array.isArray(value) && Array.isArray((value as any).columns) && Array.isArray((value as any).rows)) {
-    columns = (value as any).columns.map((c: unknown) => String(c));
-    rows = (value as any).rows.map((r: unknown) => {
-      if (!Array.isArray(r)) throw new Error('every entry of `rows` must be an array of cells');
-      return r;
+  // Every limit is checked while scanning, before a rectangular table is
+  // built: a short input naming many distinct keys must not allocate
+  // rows × keys cells first and be refused after.
+  const tooManyRows = (n: number): never => {
+    throw new Error(`the table has ${n} rows; at most ${MAX_TABLE_ROWS}`);
+  };
+  const tooManyColumns = (n: number): never => {
+    throw new Error(`the table has ${n} columns; at most ${MAX_TABLE_COLUMNS}`);
+  };
+  const checkSize = (rowCount: number, columnCount: number): void => {
+    if (columnCount === 0) throw new Error('the table has no columns');
+    if (columnCount > MAX_TABLE_COLUMNS) tooManyColumns(columnCount);
+    if (rowCount > MAX_TABLE_ROWS) tooManyRows(rowCount);
+    if (rowCount * columnCount > MAX_TABLE_CELLS) {
+      throw new Error(`the table has ${rowCount} rows of ${columnCount} columns; at most ${MAX_TABLE_CELLS.toLocaleString('en-US')} cells`);
+    }
+  };
+  const checkRows = (rows: readonly unknown[], width: number, first: number): unknown[][] => {
+    rows.forEach((r, i) => {
+      if (!Array.isArray(r)) throw new Error('every row must be an array of cells');
+      if (r.length > width) throw new Error(`row ${i + first} has ${r.length} cells; the header has ${width}`);
     });
-  } else if (Array.isArray(value) && value.length > 0 && value.every((r) => Array.isArray(r))) {
-    columns = (value[0] as unknown[]).map((c) => String(c));
-    rows = value.slice(1) as unknown[][];
-  } else if (Array.isArray(value) && value.length > 0 && value.every((r) => r && typeof r === 'object' && !Array.isArray(r))) {
-    const seen = new Set<string>();
-    for (const row of value as Record<string, unknown>[]) for (const key of Object.keys(row)) seen.add(key);
-    columns = [...seen];
-    rows = (value as Record<string, unknown>[]).map((row) => columns.map((c) => row[c]));
-  } else {
-    throw new Error("for format 'json' send a non-empty array of objects ([{\"Month\":\"Jan\",\"Total\":120}]), an array of arrays with a header row first, or { \"columns\": [...], \"rows\": [[...]] }");
+    return rows as unknown[][];
+  };
+
+  if (value && typeof value === 'object' && !Array.isArray(value) && Array.isArray((value as any).columns) && Array.isArray((value as any).rows)) {
+    const header = (value as any).columns as unknown[];
+    const body = (value as any).rows as unknown[];
+    checkSize(body.length, header.length);
+    const columns = header.map((c) => String(c));
+    return { columns, rows: checkRows(body, columns.length, 1) };
   }
-  if (columns.length === 0) throw new Error('the table has no columns');
-  if (columns.length > MAX_TABLE_COLUMNS) throw new Error(`the table has ${columns.length} columns; at most ${MAX_TABLE_COLUMNS}`);
-  if (rows.length > MAX_TABLE_ROWS) throw new Error(`the table has ${rows.length} rows; at most ${MAX_TABLE_ROWS}`);
-  return { columns, rows };
+  if (Array.isArray(value) && value.length > 0 && value.every((r) => Array.isArray(r))) {
+    const header = value[0] as unknown[];
+    checkSize(value.length - 1, header.length);
+    const columns = header.map((c) => String(c));
+    return { columns, rows: checkRows(value.slice(1), columns.length, 1) };
+  }
+  if (Array.isArray(value) && value.length > 0 && value.every((r) => r && typeof r === 'object' && !Array.isArray(r))) {
+    if (value.length > MAX_TABLE_ROWS) tooManyRows(value.length);
+    const seen = new Set<string>();
+    for (const row of value as Record<string, unknown>[]) {
+      for (const key in row) {
+        if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+        seen.add(key);
+        if (seen.size > MAX_TABLE_COLUMNS) throw new Error(`the table has more than ${MAX_TABLE_COLUMNS} distinct keys; at most ${MAX_TABLE_COLUMNS} columns`);
+      }
+    }
+    const columns = [...seen];
+    checkSize(value.length, columns.length);
+    return { columns, rows: (value as Record<string, unknown>[]).map((row) => columns.map((c) => row[c])) };
+  }
+  throw new Error("for format 'json' send a non-empty array of objects ([{\"Month\":\"Jan\",\"Total\":120}]), an array of arrays with a header row first, or { \"columns\": [...], \"rows\": [[...]] }");
 }

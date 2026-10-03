@@ -353,7 +353,24 @@ export interface FileRow extends Omit<ArtifactRow, 'storagePath'> {
 
 /** The Files library, scoped to what this plugin saved and what its conversation was handed. */
 export interface FilesArea {
-  save(input: { bytes: Buffer; mime: string; filename?: string; caption?: string; source?: ArtifactSource }): Promise<FileRow>;
+  /**
+   * Save bytes into Files. The same bytes again are the file that already
+   * held them: it comes back with `existed: true` and nothing new is written.
+   *
+   * `version` (since 1.25) names a document by its title: the host gives it
+   * the next version among every file of the calling conversation —
+   * `base.ext`, then `base (v2).ext`, … — counted and saved under one lock, so
+   * two writes at once never share a name. `filename` is then ignored inside a
+   * conversation; outside one the name is `base.ext`.
+   */
+  save(input: {
+    bytes: Buffer;
+    mime: string;
+    filename?: string;
+    caption?: string;
+    source?: ArtifactSource;
+    version?: { base: string; ext: string };
+  }): Promise<FileRow & { existed?: boolean; version?: number }>;
   get(id: string): Promise<FileRow | null>;
   read(id: string): Promise<Buffer>;
   list(opts?: {

@@ -13,6 +13,8 @@ What changes in buddi from one release to the next, newest first.
 ### Fixed
 
 - "Still useful?" is answered once: Keep then Stop on Telegram no longer switches the watch off, an old prompt's button no longer acts on a later question or a re-enabled watch, and a Telegram tap racing the dashboard's Keep or Stop applies only one of them. A later tap says what was decided; the dashboard's Stop answers the question too (`POST /api/missions/:id/still-useful`).
+- `artifacts.write` numbers versions over the whole conversation and under a lock: a report pushed out of the newest 100 files no longer comes back as `Report.md`, and two writes at once no longer both become `(v2)`. Bytes already in Files from another conversation are reported as already there instead of "Saved". Host API 1.25: `files.save` takes `version` and says `existed`.
+- A JSON table for `artifacts.write` is checked while it is read: thousands of objects with distinct keys are refused at the 201st column instead of building rows × keys cells first, and a row wider than its header is refused in every shape. A written document is at most 512 KiB.
 - `buddi status` (and every other command but `serve`) no longer prints "agents: … has its own skill … it shadows the shared one" above its output. The line stays in the gateway's log; a command shows it on stderr with `BUDDI_DEBUG=1`.
 
 ## 0.1.0-pre.34 — 2026-10-02

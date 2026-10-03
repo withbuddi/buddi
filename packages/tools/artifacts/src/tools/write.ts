@@ -19,6 +19,7 @@ import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   FORMAT_FILE,
+  MAX_DOCUMENT_BYTES,
   MAX_DOCUMENT_CHARS,
   MAX_FOLDER_CHARS,
   MAX_TITLE_CHARS,
@@ -44,7 +45,7 @@ const writeInput = z.object({
     .string()
     .min(1)
     .max(MAX_DOCUMENT_CHARS)
-    .describe(`The whole document. At most ${MAX_DOCUMENT_CHARS.toLocaleString('en-US')} characters.`),
+    .describe(`The whole document. At most ${MAX_DOCUMENT_CHARS.toLocaleString('en-US')} characters (512 KiB once saved).`),
   folder: z
     .string()
     .trim()
@@ -94,32 +95,34 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
       text = input.content.endsWith('\n') ? input.content : `${input.content}\n`;
     }
     if (text.trim() === '') throw new Error('the document is empty');
+    const bytes = Buffer.from(text, 'utf8');
+    if (bytes.length > MAX_DOCUMENT_BYTES) {
+      throw new Error(`the document is ${Math.ceil(bytes.length / 1024)} KiB once saved; at most ${MAX_DOCUMENT_BYTES / 1024} KiB. Split it into parts.`);
+    }
 
-    // Versions are counted among this conversation's files. The library is
-    // read newest first; a document being revised is among its latest files.
-    // Outside a conversation (a mission, a test) every write is version 1.
-    const conversationId = ctx.conversationId;
-    const siblings = conversationId
-      ? (await files.list({ limit: 100 })).filter((row) => row.conversationId === conversationId)
-      : [];
-    const version = nextVersion(base, ext, siblings.map((row) => row.filename));
-    const filename = versionedName(base, ext, version);
-
+    // Files gives the next version among every file this conversation ever
+    // had, counted and saved under one lock: two writes at once get two
+    // versions. Outside a conversation (a mission, a test) it is version 1.
+    const fallbackName = versionedName(base, ext, 1);
     const saved = await files.save({
-      bytes: Buffer.from(text, 'utf8'),
+      bytes,
       mime,
-      filename,
+      filename: fallbackName,
+      version: { base, ext },
       ...(folder === undefined ? {} : { caption: folder }),
     });
-    const unchanged = saved.filename !== filename;
+    // The same bytes already in Files, here or in another conversation: nothing new was written.
+    const unchanged = saved.existed === true;
+    const filename = saved.filename ?? fallbackName;
+    // A file that already held these bytes keeps its own version number.
+    const version = saved.version ?? Math.max(1, nextVersion(base, ext, [saved.filename]) - 1);
     const kind = input.format === 'markdown' ? 'PDF or Word' : 'Excel or CSV';
     return {
       artifactId: saved.id,
-      filename: saved.filename ?? filename,
+      filename,
       title,
       format: input.format,
-      // The file that already held these bytes keeps its own version number.
-      version: unchanged ? Math.max(1, nextVersion(base, ext, [saved.filename]) - 1) : version,
+      version,
       mime: saved.mime,
       sizeBytes: saved.sizeBytes,
       ...(folder === undefined ? {} : { folder }),

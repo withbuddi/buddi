@@ -23,8 +23,10 @@ import { findToolPermission } from '../actions/permissions.js';
 import {
   readArtifactBytes,
   resolveDataDir,
-  saveArtifact,
+  saveArtifactReporting,
+  saveArtifactVersion,
   type ArtifactKind,
+  type ArtifactRow,
   type EnvLike,
 } from '../artifacts/store.js';
 import { proposePolicy } from '../learning/policies.js';
@@ -889,25 +891,34 @@ function filesArea(
         const { rows } = await pool().query(`select 1 from core.conversations where id = $1`, [facts.conversationId]);
         if (rows.length > 0) conversationId = facts.conversationId;
       }
-      const saved = await saveArtifact(
-        pool(),
-        {
-          bytes: input.bytes,
-          mime: input.mime,
-          ...(input.filename === undefined ? {} : { filename: input.filename }),
-          ...(input.source === undefined ? {} : { source: input.source }),
-          ...(input.caption === undefined ? {} : { caption: input.caption }),
-          createdBy: facts.agentId ?? binding.plugin,
-          conversationId,
-        },
-        env(),
-      );
+      const fields = {
+        bytes: input.bytes,
+        mime: input.mime,
+        ...(input.source === undefined ? {} : { source: input.source }),
+        ...(input.caption === undefined ? {} : { caption: input.caption }),
+        createdBy: facts.agentId ?? binding.plugin,
+      };
+      let result: { row: ArtifactRow; existed: boolean; version?: number };
+      if (input.version !== undefined && conversationId !== null) {
+        // The next version of a document in this conversation, counted and saved under one lock.
+        result = await saveArtifactVersion(pool(), { ...fields, conversationId, base: input.version.base, ext: input.version.ext }, env());
+      } else {
+        const filename = input.filename ?? (input.version === undefined ? undefined : `${input.version.base}.${input.version.ext}`);
+        result = await saveArtifactReporting(pool(), { ...fields, ...(filename === undefined ? {} : { filename }), conversationId }, env());
+        if (input.version !== undefined) result.version = 1;
+      }
+      const saved = result.row;
       await pool().query(
         `insert into core.plugin_files (plugin, artifact_id) values ($1, $2) on conflict do nothing`,
         [binding.plugin, saved.id],
       );
       const { storagePath: _hidden, ...row } = saved;
-      return { ...row, conversationId };
+      return {
+        ...row,
+        conversationId,
+        ...(result.existed ? { existed: true } : {}),
+        ...(result.version !== undefined && !result.existed ? { version: result.version } : {}),
+      };
     },
     async get(id) {
       const row = await get(id);
