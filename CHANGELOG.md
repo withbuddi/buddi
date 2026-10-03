@@ -4,7 +4,6 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
-
 ## 0.1.0-pre.38 — 2026-10-03
 
 - Cloudflare setup: after the token is checked, type just the name and pick the domain from your Cloudflare zones; the full hostname is still accepted when the token lists none.
