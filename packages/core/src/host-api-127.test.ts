@@ -72,6 +72,14 @@ describe('host API 1.27', () => {
       }
       expect(widgetBodyOf({ kind: 'list', rows: [{ title: 'S', image: { asset: 'x' } }] })).toEqual({ ok: true, body: { kind: 'list', rows: [{ title: 'S' }] } });
     });
+
+    it('keeps who a missing picture stands for, so the page draws a letter tile in its place', () => {
+      expect(body({ label: 'Reuters' })).toEqual({ ok: true, body: { kind: 'list', rows: [{ title: 'Story', image: { label: 'Reuters' } }] } });
+      expect(body({ asset: 'rfi.fr', label: 'RFI' })).toEqual({
+        ok: true, body: { kind: 'list', rows: [{ title: 'Story', image: { src: '/api/plugin-assets/news/rfi.fr?size=64', label: 'RFI' } }] },
+      });
+      expect(body({ asset: 'https://evil.example/x.png', label: 'Evil' })).toEqual({ ok: true, body: { kind: 'list', rows: [{ title: 'Story', image: { label: 'Evil' } }] } });
+    });
   });
 
   describe('mission context and reportMax', () => {

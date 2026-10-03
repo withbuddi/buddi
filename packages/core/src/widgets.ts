@@ -77,8 +77,10 @@ export interface WidgetListRow {
    * `{ asset: '<key>' }`, a key of its own `assets`; core turns it into the
    * same-origin path the page draws (`/api/plugin-assets/<plugin>/<key>`).
    * Drawn at both sizes and on the lock screen; a key that is not one is left off.
+   * `label` (1.27) is who the picture stands for: with no kept picture, a
+   * letter tile from it holds the row's place, so a list of logos stays even.
    */
-  image?: { asset?: string; src?: string };
+  image?: { asset?: string; src?: string; label?: string };
 }
 
 /**
@@ -292,10 +294,12 @@ export function cutLine(value: unknown, max: number): string | undefined {
  * plugin's assets, made into buddi's own path. Anything else — a URL, a key
  * that is not one, no plugin to bind it to — is left off.
  */
-function imageOf(value: unknown, plugin: string | undefined): { image?: { src: string } } {
+function imageOf(value: unknown, plugin: string | undefined): { image?: { src?: string; label?: string } } {
   if (!plugin || !value || typeof value !== 'object') return {};
   const src = assetPath(plugin, (value as { asset?: unknown }).asset, 64);
-  return src ? { image: { src } } : {};
+  const label = cutLine((value as { label?: unknown }).label, WIDGET_LINE_MAX);
+  if (!src && !label) return {};
+  return { image: { ...(src ? { src } : {}), ...(label ? { label } : {}) } };
 }
 
 /** A glyph from the pinned set; one outside it is left off rather than guessed at. */

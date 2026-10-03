@@ -657,7 +657,8 @@ package that uses any of them asks for `^1.27`:
 11. **Widget lists for headlines.** A `list` body's `max: 5` asks for five
     denser rows at medium (small and the lock screen still draw three), `wrap`
     lets a title take two lines, a row's title may be 120 characters (the page
-    cuts it to its line), and a row's `image` leads it at both sizes. A
+    cuts it to its line), and a row's `image` leads it at both sizes; its
+    `label` keeps a letter tile in its place when there is no kept picture. A
     `multiselect` setting may carry `inTitle`: the placement is named by every
     option ticked ("Top stories · AI, US politics").
 

@@ -129,6 +129,10 @@ describe('host API 1.27 on the page', () => {
     // The kit's small Top stories leads each headline with its outlet's logo too.
     const small = render(<WidgetBodyView body={body} size="small" />);
     expect(small.container.querySelectorAll('.wg-mark')).toHaveLength(2);
+    small.unmount();
+    // A row whose outlet has no kept logo keeps its place with a letter tile of the outlet.
+    const tile = render(<WidgetBodyView body={{ kind: 'list', rows: [{ title: 'Story', image: { label: 'Reuters' } }] }} size="small" />);
+    expect(tile.container.querySelector('.wg-mark[data-letter="true"]')).toHaveTextContent('R');
   });
 
   it('draws five denser rows at medium when a list asks, three at small, and two-line titles with wrap', () => {

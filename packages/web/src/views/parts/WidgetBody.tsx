@@ -44,7 +44,7 @@ export function WidgetBodyView({ body, size }: { body: WidgetBody; size: WidgetS
             {rows.map((row, i) => (
               <li key={`${row.title}-${i}`} className="wg-row" data-marked={row.image ? 'true' : undefined}>
                 {/* A plugin's kept image leads the row (1.27): buddi's own path, never a host. */}
-                {row.image ? <AssetImage className="wg-mark" src={isAssetSrc(row.image.src) ? row.image.src : null} label={row.title} /> : null}
+                {row.image ? <AssetImage className="wg-mark" src={isAssetSrc(row.image.src) ? row.image.src : null} label={row.image.label ?? row.title} /> : null}
                 <span className="wg-row-text">
                   <span className="wg-row-title">{row.title}</span>
                   {row.sub && size === 'medium' ? <span className="wg-row-sub">{row.sub}</span> : null}
