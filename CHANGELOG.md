@@ -10,7 +10,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
-- Reports on Telegram keep their formatting: headings become bold lines, bold, italic and code show as such, and a link sits on its words instead of being spelled out; raw addresses stay as they are, and a long report still splits at a paragraph (before a topic when one is near), never inside a link. If Telegram refuses the markup, the report goes as plain text.
+- Reports on Telegram keep their formatting: headings become bold lines in capitals (an edition's topics), bold, italic and code show as such, and a link sits on its words instead of being spelled out; raw addresses stay as they are, and a long report still splits at a paragraph (before a topic when one is near), never inside a link. If Telegram refuses the markup, the report goes as plain text.
 
 ## 0.1.0-pre.36 — 2026-10-03
 

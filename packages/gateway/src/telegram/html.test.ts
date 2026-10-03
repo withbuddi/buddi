@@ -23,10 +23,10 @@ The higher farm-gate price you heard about last night takes effect on Monday.
 — Anchor · next at 12:30`;
 
 describe('a report’s Markdown as Telegram HTML', () => {
-  it('turns a heading into a bold line, bold and italic into tags, and keeps the link on the outlet', () => {
+  it('turns a heading into a bold line in capitals, bold and italic into tags, and keeps the link on the outlet', () => {
     const [html, ...rest] = markdownToTelegramHtml(EDITION);
     expect(rest).toEqual([]);
-    expect(html).toContain('<b>Togo &amp; West Africa</b>');
+    expect(html).toContain('<b>TOGO &amp; WEST AFRICA</b>');
     expect(html).toContain('<b>ECOWAS leaders open a two-day summit in Lomé</b>');
     expect(html).toContain('<i>RFI Afrique (fr) and 3 more</i> · <a href="https://www.rfi.fr/fr/afrique/20261003-cedeao?a=1&amp;b=2">rfi.fr</a>');
     expect(html).toContain('<b>UPDATE · Ghana and Côte d\'Ivoire raise the cocoa farm-gate price</b>');
@@ -66,7 +66,7 @@ describe('a report’s Markdown as Telegram HTML', () => {
       }
     }
     // Every message after the first starts at a topic.
-    for (const part of parts.slice(1)) expect(part.startsWith('<b>Topic ')).toBe(true);
+    for (const part of parts.slice(1)) expect(part.startsWith('<b>TOPIC ')).toBe(true);
     // Nothing lost.
     expect(parts.join('\n\n').match(/Story \d+ headline/g)).toHaveLength(30);
   });

@@ -8,7 +8,8 @@
  * the whole message. So it is converted here, to the handful of tags Telegram
  * accepts, with every other character escaped:
  *
- * - `# Heading` (any level) → a bold line;
+ * - `# Heading` (any level) → a bold line in capitals (the kit's topic line on
+ *   Telegram), its words as written when it carries a link;
  * - `**bold**`, `__bold__` → `<b>`; `*italic*`, `_italic_` → `<i>`; `~~x~~` → `<s>`;
  * - `` `code` `` → `<code>`; a fenced block → `<pre>`;
  * - `[label](https://…)` → `<a href>`; a link to anything but http(s) keeps its label only;
@@ -115,7 +116,8 @@ export function markdownBlocks(markdown: string, limit = TELEGRAM_MAX_MESSAGE_CH
     const heading = HEADING.exec(line);
     if (heading) {
       flush();
-      blocks.push({ units: [`<b>${inlineHtml(heading[1]!)}</b>`], heading: true });
+      const words = heading[1]!;
+      blocks.push({ units: [`<b>${inlineHtml(/\]\(/.test(words) ? words : words.toLocaleUpperCase())}</b>`], heading: true });
       continue;
     }
     if (HR.test(line)) { flush(); continue; }
