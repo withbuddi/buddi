@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CLI_SURFACE,
   SCHEDULED_SURFACE,
+  scheduledSurface,
   SURFACE_PROFILES,
   SURFACE_SECTION_HEADING,
   surfaceSection,
@@ -27,8 +28,10 @@ describe('surfaceSection', () => {
     for (const profile of SURFACE_PROFILES) {
       const section = surfaceSection(profile);
       expect(section.startsWith(`${SURFACE_SECTION_HEADING}\n`)).toBe(true);
-      // Eight facts, eight sentences; the phone surface adds its one reading fact.
-      expect(bullets(profile)).toHaveLength(profile.reading === 'phone' ? 9 : 8);
+      // Eight facts, eight sentences; the phone surface adds its one reading
+      // fact, and a surface that splits long text adds that one.
+      const extra = (profile.reading === 'phone' ? 1 : 0) + (profile.splitsAt !== undefined ? 1 : 0);
+      expect(bullets(profile)).toHaveLength(8 + extra);
       expect(bullets(profile).every((line) => line.startsWith('- '))).toBe(true);
     }
   });
@@ -82,6 +85,13 @@ describe('surfaceSection', () => {
     expect(section).toContain('There is no button to tap here.');
     expect(section).toContain('No file can be sent or received here.');
     expect(section).toContain('One message holds at most 1500 characters here.');
+    expect(section).toContain('On Telegram, a message longer than 4000 characters arrives as several messages, split at paragraphs.');
+  });
+
+  it('gives a mission its own cap', () => {
+    const section = surfaceSection(scheduledSurface(4000));
+    expect(section).toContain('One message holds at most 4000 characters here.');
+    expect(section).not.toContain('1500');
   });
 
   it('derives every sentence from the profile, with no per-surface special case', () => {

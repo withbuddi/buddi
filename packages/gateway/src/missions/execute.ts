@@ -27,7 +27,7 @@ import {
   markFindingDelivered,
   mutedFindingKeys,
   offerActions,
-  SCHEDULED_SURFACE,
+  scheduledSurface,
   ToolRegistry,
   UnknownAgentError,
   type ActionRecord,
@@ -50,6 +50,7 @@ import { OwnerNotPairedError } from '../telegram/notify.js';
 import {
   createMissionManifest,
   NOTIFY_POLICY_SUFFIX,
+  reportMaxOf,
   type DecisionSink,
   type MissionDecision,
 } from './report.js';
@@ -63,7 +64,7 @@ export { UnknownAgentError };
  * What is true about being a *scheduled* run, and nothing else.
  *
  * Everything about rendering — plain text, no tables, nobody to answer you —
- * used to be restated here and is now `SCHEDULED_SURFACE`, the profile this
+ * used to be restated here and is now `scheduledSurface(reportMax)`, the profile this
  * executor passes to the run. What survives is the one thing a surface profile
  * cannot say: this run does not answer, it *decides*, by calling `mission.report`
  * or `mission.silent`. Presentation and procedure only: it changes no tool, tier
@@ -469,7 +470,7 @@ export function createMissionExecutor(
       ...(control?.resume
         ? { resume: control.resume.approval }
         : { userMessage }),
-      surface: SCHEDULED_SURFACE,
+      surface: scheduledSurface(reportMaxOf(mission.reportMax)),
       systemSuffix: SCHEDULED_RUN_SUFFIX,
       memoryPreamble: memoryPreambleFor(deps.pool),
       ...(deps.onToolCall ? { onToolCall: deps.onToolCall } : {}),

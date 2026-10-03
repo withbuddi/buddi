@@ -28,6 +28,7 @@ What changes in buddi from one release to the next, newest first.
 - Settings → Computer & browser no longer shows a red error when the computer helper is missing: the "Use my apps" choice carries one line saying so and how to fix it, and Check again answers instead of failing. `buddi doctor` prints a "computer helper" row on macOS (present, and its version).
 - Settings no longer asks to update the browser extension just because buddi's version differs from it ("buddi is 0.1.0-pre.35; the extension is 0.1.0"): it asks only when the extension is older than the minimum this buddi needs, which the store's current build meets.
 - A tool name in a catalogue listing's owner-facing text (pitch, description, about, what changed, examples, mission names, skill descriptions), such as "(artifacts.write)", is rewritten in words from the tool's description, or dropped, wherever buddi shows it.
+- A scheduled mission run now tells the agent its mission's own report cap (`reportMax`, such as 4,000 characters) instead of always 1,500, and that Telegram splits a message past 4,000 characters at paragraphs; a morning edition had dropped stories to fit the wrong limit.
 
 ## 0.1.0-pre.35 — 2026-10-03
 

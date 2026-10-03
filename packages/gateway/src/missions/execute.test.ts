@@ -292,6 +292,15 @@ describe('createMissionExecutor', () => {
     expect(systems[0]).toContain('There is no canvas here');
   });
 
+  it('states the mission\'s own reportMax as the cap, not the default', async () => {
+    const systems: string[] = [];
+    const { deps: d } = deps();
+    await createMissionExecutor({ ...d, provider: fakeProvider('ok', systems) })(occurrence, { ...mission, reportMax: 4000 });
+    expect(systems[0]).toContain('One message holds at most 4000 characters here.');
+    expect(systems[0]).not.toContain('at most 1500 characters');
+    expect(systems[0]).toContain('split at paragraphs');
+  });
+
   it('keeps in the suffix only what is about being a scheduled run', () => {
     // Everything about rendering is the profile's job now; a second copy here
     // would be the one that silently disagrees with it.

@@ -41,6 +41,11 @@ export interface SurfaceProfile {
   tables: boolean;
   /** Hard per-message character limit, or null when there is none. */
   maxMessageChars: number | null;
+  /**
+   * Past this many characters, Telegram delivers one message as several,
+   * split at paragraphs. Set where the text can be longer than that.
+   */
+  splitsAt?: number;
   /** Can a file be sent here? */
   attachments: boolean;
   /** Can the owner tap a button — approve an action without typing? */
@@ -119,12 +124,21 @@ export const SCHEDULED_SURFACE: SurfaceProfile = {
   markdown: false,
   tables: false,
   maxMessageChars: 1500,
+  splitsAt: 4000,
   attachments: false,
   buttons: false,
   canvas: false,
   interactive: false,
   reading: 'screen',
 };
+
+/**
+ * The scheduled profile for one mission: its cap is the mission's own
+ * `reportMax` (already bounded by the caller), not the default 1,500.
+ */
+export function scheduledSurface(maxChars: number): SurfaceProfile {
+  return { ...SCHEDULED_SURFACE, maxMessageChars: maxChars };
+}
 
 /** Every profile this repository ships, for tests and for enumeration. */
 export const SURFACE_PROFILES: readonly SurfaceProfile[] = [
@@ -157,6 +171,9 @@ export function surfaceSection(profile: SurfaceProfile): string {
     profile.maxMessageChars === null
       ? '- There is no limit on how long one message may be here.'
       : `- One message holds at most ${profile.maxMessageChars} characters here.`,
+    ...(profile.splitsAt !== undefined
+      ? [`- On Telegram, a message longer than ${profile.splitsAt} characters arrives as several messages, split at paragraphs.`]
+      : []),
     profile.attachments
       ? '- Files can be sent and received here.'
       : '- No file can be sent or received here.',
