@@ -392,10 +392,21 @@ function toBlocks(raw: unknown): TranscriptBlock[] {
           content: typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? null),
           isError: b.is_error === true,
         };
+      case 'provider_native':
+        // A provider's opaque block: today only Anthropic's thinking, kept
+        // so it can be replayed. Its payload is ciphertext and signatures,
+        // nothing the owner can read, so it never leaves the gateway.
+        return isNativeThinking(b) ? { type: 'thinking_hidden' } : { type };
       default:
         return { type, ref: b };
     }
   });
+}
+
+/** A `provider_native` block carrying the model's thinking (`redacted_thinking`, signed `thinking`). */
+function isNativeThinking(block: Record<string, unknown>): boolean {
+  const kind = (block.raw as { type?: unknown } | null | undefined)?.type;
+  return kind === 'redacted_thinking' || kind === 'thinking';
 }
 
 function safeParse(text: string): unknown {

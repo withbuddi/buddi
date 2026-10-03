@@ -472,7 +472,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'POST', path: '/api/agents/:id/remove', area: 'agents', token: 'decides', summary: 'Remove from team: the directory goes to the trash and its missions are paused. The click is the approval.',
-    answer: '{ approvalId, result: { id, movedTo, pausedMissions?, unusedPlugins? } }', errors: '400',
+    answer: '{ approvalId, result: { id, movedTo, pausedMissions?, unusedPlugins?, delegateListsNotUpdated?: { id, handle }[], message } }', errors: '400',
   },
   { method: 'GET', path: '/api/agent-offers', area: 'agents', summary: 'Agents a plugin offers while nobody has them.' },
   { method: 'POST', path: '/api/agent-offers/:plugin/:agent/dismiss', area: 'agents', summary: 'Stop offering this agent.', errors: '404' },

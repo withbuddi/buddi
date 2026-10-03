@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { api, AGENTS_CHANGED, ApiError, type AgentCatalogueProvenance, type AgentRemovePreview, type CatalogueAgent } from '../../api';
 import { AGENTS_ROUTE, catalogueRoute, settingsRoute } from '../../routes';
-import { Button, ErrorBanner, Modal, Panel, Toolbar, useAsync } from '../../ui';
+import { Button, ErrorBanner, Modal, Notice, Panel, Toolbar, useAsync } from '../../ui';
 import { UpdateSheet } from './CatalogueSheets';
 import { and, pluginTitle, shortVersion } from './catalogue-words';
 
@@ -81,6 +81,12 @@ export function RemoveFromTeam({ agentId, name, navigate }: { agentId: string; n
   const [preview, setPreview] = useState<AgentRemovePreview | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [leftover, setLeftover] = useState<string[] | null>(null);
+  const done = (): void => {
+    setAsking(false);
+    setLeftover(null);
+    navigate(AGENTS_ROUTE);
+  };
   const errorText = (err: unknown): string => (err instanceof ApiError ? err.message : String(err));
   const ask = (): void => {
     setAsking(true);
@@ -93,8 +99,14 @@ export function RemoveFromTeam({ agentId, name, navigate }: { agentId: string; n
     setFailure(null);
     api
       .removeAgent(agentId)
-      .then(() => {
+      .then((done) => {
         window.dispatchEvent(new Event(AGENTS_CHANGED));
+        const stuck = (done.result as { delegateListsNotUpdated?: unknown } | null)?.delegateListsNotUpdated;
+        if (Array.isArray(stuck) && stuck.length > 0) {
+          // Removed all the same; say which lists still name it before leaving.
+          setLeftover(stuck.map((a: { handle?: unknown; id?: unknown }) => String(a?.handle ?? a?.id ?? '')));
+          return;
+        }
         setAsking(false);
         navigate(AGENTS_ROUTE);
       })
@@ -113,7 +125,18 @@ export function RemoveFromTeam({ agentId, name, navigate }: { agentId: string; n
         </div>
         <Button variant="danger-ghost" onClick={ask}>Remove {name}…</Button>
       </Toolbar>
-      {asking ? (
+      {asking && leftover ? (
+        <Modal
+          title={`${name} is off your team`}
+          onClose={done}
+          foot={<Button variant="accent" onClick={done}>Done</Button>}
+        >
+          <Notice tone="warning" title="Cleanup is incomplete" role="status">
+            The delegate list of {and(leftover.map((id) => `@${id}`))} could not be updated and still names it.
+            That entry reaches nobody; edit the list to remove it.
+          </Notice>
+        </Modal>
+      ) : asking ? (
         <Modal
           title={`Remove ${name} from your team?`}
           onClose={() => setAsking(false)}

@@ -89,7 +89,7 @@ import {
 import { z } from 'zod';
 import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR, type ReloadableAgentCatalog } from './catalog.js';
-import { DELEGATES_FILE, readDelegates, stripDelegate } from './delegation.js';
+import { DELEGATES_FILE, applyDelegateEdits, readDelegates, stageDelegateStrip, type DelegateEdit } from './delegation.js';
 import { insideExamples } from './owner-tools.js';
 import { withCoreTools } from './core-tools.js';
 import { storeBundledMascot } from './mascots.js';
@@ -2798,27 +2798,40 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         binding, registry, db: ctx.db, installed: installedPluginNames(binding),
       });
       assertApprovedEffect(ctx, envelope);
-      const holders = ownerAllowlistHolders(binding, envelope.id);
-      const movedTo = moveAgentAside(envelope.directory, binding.trashRoot, trashStamp(ctx.now()));
       // Its id comes off every other allowlist, so no list keeps naming an
       // agent that is gone (and a later agent reusing the id is not silently
-      // granted what the old one had).
-      stripDelegate(envelope.id, holders);
+      // granted what the old one had). The edits are worked out before the
+      // move, and written after it best-effort: a list that cannot be written
+      // is named, never a reason to skip the reload, the missions or the
+      // recovery path (the loader ignores the id it still names).
+      let edits: DelegateEdit[] = [];
+      try {
+        edits = stageDelegateStrip(envelope.id, ownerAllowlistHolders(binding, envelope.id));
+      } catch {
+        edits = [];
+      }
+      const movedTo = moveAgentAside(envelope.directory, binding.trashRoot, trashStamp(ctx.now()));
+      const lists = applyDelegateEdits(edits);
       const reload = reloadResult(binding);
       const paused: string[] = [];
       for (const mission of envelope.pausesMissions ?? []) {
         if (ctx.db && (await setMissionEnabled(ctx.db as never, mission.id, false).catch(() => null))) paused.push(mission.id);
       }
+      const stuck = lists.failed.map((id) => ({ id, handle: binding.catalog.get(id)?.handle ?? id }));
+      const leftover = stuck.length === 0 ? '' :
+        ` Cleanup is incomplete: the delegate list of ${stuck.map((a) => `@${a.handle}`).join(', ')} ` +
+        `could not be updated (${DELEGATES_FILE} would not write) and still names it; that id reaches nobody, and editing the list removes it.`;
       return {
         ok: true,
         id: envelope.id,
         movedTo,
         ...(paused.length === 0 ? {} : { pausedMissions: paused }),
         ...(envelope.unusedPlugins ? { unusedPlugins: envelope.unusedPlugins } : {}),
+        ...(stuck.length === 0 ? {} : { delegateListsNotUpdated: stuck }),
         live: reload.reloaded,
         message:
           `@${envelope.handle} is gone from the catalog. Its files were not deleted — they are at ` +
-          `${movedTo}, and moving that directory back restores the agent. ${reload.message}`,
+          `${movedTo}, and moving that directory back restores the agent. ${reload.message}${leftover}`,
       };
     },
   };

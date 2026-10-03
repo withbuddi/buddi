@@ -18,12 +18,12 @@
  * Everything runs against a temporary private agents directory and the real
  * registry, so "is this tool installed?" is answered by the installation.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_MAX_TURNS, loadAgentCatalog, type CoreToolContext, type ToolDefinition } from '@buddi/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createToolRegistry,
   loadGatewayCatalog,
@@ -756,6 +756,34 @@ describe('delete moves, it does not destroy', () => {
     expect(preview).toContain('@desk will stop handing work to it');
     await h.tool('platform.delete_agent').execute({ id: 'scout' }, h.ctx);
     expect(JSON.parse(readFileSync(path.join(h.agentsDir, 'desk', 'delegates.json'), 'utf8'))).toEqual(['ghost']);
+  });
+
+  it('finishes the removal when a later list cannot be written, and names that list', async () => {
+    for (const id of ['alpha', 'beta', 'gamma']) {
+      mkdirSync(path.join(h.agentsDir, id), { recursive: true });
+      writeFileSync(path.join(h.agentsDir, id, 'agent.md'), SCOUT.replace(/scout/g, id).replace('Scout', id), 'utf8');
+      writeFileSync(path.join(h.agentsDir, id, 'delegates.json'), '["scout"]', 'utf8');
+    }
+    h.catalog.reload();
+    chmodSync(path.join(h.agentsDir, 'beta'), 0o555);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = (await h.tool('platform.delete_agent').execute({ id: 'scout' }, h.ctx)) as {
+        movedTo: string; message: string; delegateListsNotUpdated?: Array<{ id: string; handle: string }>; live: boolean;
+      };
+      expect(existsSync(result.movedTo)).toBe(true);
+      expect(h.catalog.get('scout')).toBeUndefined();
+      expect(result.delegateListsNotUpdated).toEqual([{ id: 'beta', handle: 'beta' }]);
+      expect(result.message).toContain(result.movedTo);
+      expect(result.message).toContain('Cleanup is incomplete');
+      expect(result.message).toContain('@beta');
+      expect(JSON.parse(readFileSync(path.join(h.agentsDir, 'alpha', 'delegates.json'), 'utf8'))).toEqual([]);
+      expect(JSON.parse(readFileSync(path.join(h.agentsDir, 'beta', 'delegates.json'), 'utf8'))).toEqual(['scout']);
+      expect(JSON.parse(readFileSync(path.join(h.agentsDir, 'gamma', 'delegates.json'), 'utf8'))).toEqual([]);
+    } finally {
+      chmodSync(path.join(h.agentsDir, 'beta'), 0o755);
+      warn.mockRestore();
+    }
   });
 
   it('describes the move before it happens', async () => {

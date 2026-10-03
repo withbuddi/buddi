@@ -611,6 +611,58 @@ suite('the dashboard API', () => {
     expect((await client.get('/api/conversations/00000000-0000-0000-0000-000000000000')).status).toBe(404);
   });
 
+  it('never lets encrypted thinking or signatures out in any dashboard response', async () => {
+    const client = await signedIn();
+    const { rows } = await pool.query(
+      `insert into core.conversations (agent_id) values ('demo-agent') returning id`,
+    );
+    const id = String(rows[0].id);
+    const CIPHER = 'ENCRYPTED-THINKING-CIPHERTEXT-zz91';
+    const SIGNATURE = 'THINKING-SIGNATURE-qq42';
+    const GEMINI = 'GEMINI-THOUGHT-SIGNATURE-ww77';
+    await pool.query(
+      `insert into core.messages (conversation_id, role, content) values ($1, 'user', $2::jsonb)`,
+      [id, JSON.stringify([{ type: 'text', text: 'think about it' }])],
+    );
+    await pool.query(
+      `insert into core.messages (conversation_id, role, content) values ($1, 'assistant', $2::jsonb)`,
+      [
+        id,
+        JSON.stringify([
+          { type: 'provider_native', raw: { type: 'redacted_thinking', data: CIPHER } },
+          { type: 'provider_native', raw: { type: 'thinking', thinking: 'mulling', signature: SIGNATURE } },
+          { type: 'thinking', text: 'visible thought', signature: SIGNATURE },
+          { type: 'tool_use', id: 'tu9', name: 'demo.send', input: { to: 'x' }, thoughtSignature: GEMINI },
+          { type: 'text', text: 'done' },
+        ]),
+      ],
+    );
+
+    const transcript = await client.json<any>(`/api/conversations/${id}`);
+    expect(transcript.messages[1].blocks.slice(0, 3)).toEqual([
+      { type: 'thinking_hidden' },
+      { type: 'thinking_hidden' },
+      { type: 'thinking', text: 'visible thought' },
+    ]);
+
+    for (const path of [
+      `/api/conversations/${id}`,
+      '/api/conversations',
+      `/api/chat/conversations/${id}`,
+      '/api/chat/conversations',
+      '/api/events?limit=100',
+      '/api/overview',
+    ]) {
+      const res = await client.get(path);
+      const body = await res.text();
+      expect(body, path).not.toContain(CIPHER);
+      expect(body, path).not.toContain(SIGNATURE);
+      expect(body, path).not.toContain(GEMINI);
+      expect(body, path).not.toContain('redacted_thinking');
+    }
+    expect((await client.get(`/api/chat/conversations/${id}`)).status).toBe(200);
+  });
+
   it('serves one action whole, so the approval canvas need not hunt in the list', async () => {
     const client = await signedIn();
     const id = await proposeAction('one@example.test');

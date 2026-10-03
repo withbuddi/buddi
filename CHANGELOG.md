@@ -17,6 +17,8 @@ What changes in buddi from one release to the next, newest first.
 - The Sources tab shows a read that came back as unreadable characters (from before this fix) as "Couldn’t read amazon.com — The page came back unreadable." instead of the garbage.
 - Claude answers with citations no longer break mid-sentence onto separate lines (". It has" / "Intel Iris Xe graphics" / "."): the pieces Claude splits a cited answer into are joined into one passage, and messages already stored that way read as one.
 - Removing an agent (Remove from team, Agent Father, `buddi agents remove`) now takes it off every other agent's delegate list, and the remove preview says which agents will stop handing work to it. A delegate list that still names an agent that is gone (like @concierge's after earlier removals) is ignored with one log line instead of offering a colleague that does not exist.
+- Activity no longer shows Claude's encrypted thinking: a transcript draws it as "Thinking (hidden)" and its ciphertext and signatures never leave the gateway, in any dashboard response.
+- Removing an agent finishes even when another agent's delegate list cannot be written (a read-only folder, a full disk): the agent still leaves the catalog, its missions are paused and the trash path is given, and the dashboard and `buddi agents remove` name the lists that still mention it.
 
 ## 0.1.0-pre.33 — 2026-10-02
 

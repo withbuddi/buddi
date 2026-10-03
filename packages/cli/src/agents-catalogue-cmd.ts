@@ -349,9 +349,15 @@ export async function runAgentsCatalogue(
         }
         if (!command.json) io.out(plan.preview);
         await approve(io, command.yes, `Remove @${plan.handle}?`, `buddi agents remove ${plan.handle} --yes`);
-        const done = await gateway.post<{ result?: { movedTo?: string } }>(`/api/agents/${encodeURIComponent(plan.id)}/remove`, {});
+        const done = await gateway.post<{ result?: { movedTo?: string; message?: string; delegateListsNotUpdated?: Array<{ id: string; handle: string }> } }>(`/api/agents/${encodeURIComponent(plan.id)}/remove`, {});
         if (command.json) io.out(JSON.stringify(done.body, null, 2));
-        else io.out(`@${plan.handle} is off the team. Its files are at ${done.body.result?.movedTo ?? 'the trash beside your agents'}.`);
+        else {
+          io.out(`@${plan.handle} is off the team. Its files are at ${done.body.result?.movedTo ?? 'the trash beside your agents'}.`);
+          const stuck = done.body.result?.delegateListsNotUpdated ?? [];
+          if (stuck.length > 0) {
+            io.out(`Cleanup is incomplete: could not update the delegate list of ${stuck.map((a) => `@${a.handle}`).join(', ')}; it still names @${plan.handle}, which reaches nobody. Edit that list to remove it.`);
+          }
+        }
         return 0;
       }
     }

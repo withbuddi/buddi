@@ -278,6 +278,8 @@ function Block({ block }: { block: TranscriptBlock }): JSX.Element {
       </details>
     );
   }
+  if (block.type === 'thinking_hidden') return <div className="transcript-thinking-hidden">Thinking (hidden)</div>;
+  if (block.ref === undefined && block.type === 'provider_native') return <></>;
   if (block.type === 'tool_use') {
     return (
       <div className="transcript-tool">

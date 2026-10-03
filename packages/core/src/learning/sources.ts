@@ -138,7 +138,9 @@ export function collectUntrusted(
         const fenced = fences(block.text);
         for (const kind of fenced) add({ kind, via: 'prompt' });
         if (fenced.length > 0) texts.push(block.text);
-      } else if (block.type === 'provider_native') {
+      } else if (block.type === 'provider_native' && !isNativeThinking(block)) {
+        // The model's own encrypted thinking is no stranger's words, and its
+        // ciphertext is nothing a later answer could echo.
         add({ kind: 'web', via: 'native-search' });
         texts.push(JSON.stringify(block));
       }
@@ -172,4 +174,10 @@ export function describeUntrustedSource(source: UntrustedSource): string {
     other: 'untrusted output',
   };
   return `${what[source.kind]}${source.ref ? ` ${source.ref}` : ''} (${source.via})`;
+}
+
+/** A `provider_native` block carrying the model's thinking (`redacted_thinking`, signed `thinking`). */
+function isNativeThinking(block: { raw?: unknown }): boolean {
+  const kind = (block.raw as { type?: unknown } | null | undefined)?.type;
+  return kind === 'redacted_thinking' || kind === 'thinking';
 }

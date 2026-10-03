@@ -1574,7 +1574,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/agents/<id>/remove"
 Remove from team: the directory goes to the trash and its missions are paused. The click is the approval.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It decides an approval, or the click is the approval. A token never decides for the owner.
-- **Answer:** `{ approvalId, result: { id, movedTo, pausedMissions?, unusedPlugins? } }`
+- **Answer:** `{ approvalId, result: { id, movedTo, pausedMissions?, unusedPlugins?, delegateListsNotUpdated?: { id, handle }[], message } }`
 - **Errors:** 400
 - **Since:** 0.1.0-pre.32
 

@@ -944,6 +944,7 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .transcript-thinking { margin: 4px 0 8px; }
 .transcript-thinking summary { cursor: pointer; color: var(--text-muted); font-size: var(--text-sm); }
 .transcript-thinking-text { margin-top: 6px; padding: 6px 12px; border-left: 2px solid var(--line); color: var(--text-muted); font-size: var(--text-sm); }
+.transcript-thinking-hidden { margin: var(--space-1) 0 var(--space-2); color: var(--text-muted); font-size: var(--text-sm); }
 .wb-md blockquote {
   margin: 0;
   padding: 2px 12px;

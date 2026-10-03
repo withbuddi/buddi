@@ -169,17 +169,25 @@ function noteDangling(agentId: string, targetId: string): void {
   console.warn(`${agentId}/${DELEGATES_FILE} names "${targetId}", which is not installed; ignoring it.`);
 }
 
+/** One allowlist rewrite, worked out before anything moves. See `stageDelegateStrip`. */
+export interface DelegateEdit {
+  /** The agent whose list it is. */
+  id: string;
+  path: string;
+  content: string;
+}
+
 /**
- * Strip one id from the allowlists in the given agent directories, after that
- * agent was removed. Each changed file is rewritten atomically as a plain JSON
- * array; a missing or unreadable file is left alone (the loader tolerates the
- * dangling id). Returns the agents whose list changed.
+ * The allowlist edits removing one agent needs: every other agent's list that
+ * names it, without that id. Nothing is written, so this runs before the
+ * agent moves and a read that throws costs nothing. A missing or unreadable
+ * file is left out (the loader tolerates the dangling id).
  */
-export function stripDelegate(
+export function stageDelegateStrip(
   removedId: string,
   agents: ReadonlyArray<{ id: string; agentsDir: string }>,
-): string[] {
-  const changed: string[] = [];
+): DelegateEdit[] {
+  const edits: DelegateEdit[] = [];
   for (const { id, agentsDir } of agents) {
     if (id === removedId) continue;
     let stored: string[] | undefined;
@@ -190,10 +198,42 @@ export function stripDelegate(
     }
     if (stored === undefined || !stored.includes(removedId)) continue;
     const next = stored.filter((target) => target !== removedId);
-    writeFilesAtomic([{ path: path.join(agentsDir, id, DELEGATES_FILE), content: `${JSON.stringify(next, null, 2)}\n` }]);
-    changed.push(id);
+    edits.push({ id, path: path.join(agentsDir, id, DELEGATES_FILE), content: `${JSON.stringify(next, null, 2)}\n` });
   }
-  return changed;
+  return edits;
+}
+
+/**
+ * Write staged allowlist edits, each on its own: one that fails (a read-only
+ * folder, a full disk) is named in `failed` and the rest still go through.
+ * It never throws — the agent has already moved by now, and what follows its
+ * move (catalog reload, mission pausing, the recovery path) must still happen.
+ */
+export function applyDelegateEdits(edits: readonly DelegateEdit[]): { changed: string[]; failed: string[] } {
+  const changed: string[] = [];
+  const failed: string[] = [];
+  for (const edit of edits) {
+    try {
+      writeFilesAtomic([{ path: edit.path, content: edit.content }]);
+      changed.push(edit.id);
+    } catch (err) {
+      console.warn(`could not update ${edit.id}/${DELEGATES_FILE}: ${err instanceof Error ? err.message : String(err)}`);
+      failed.push(edit.id);
+    }
+  }
+  return { changed, failed };
+}
+
+/**
+ * Strip one id from the allowlists in the given agent directories, after that
+ * agent was removed: `stageDelegateStrip` then `applyDelegateEdits`. Returns
+ * the agents whose list changed and those whose list could not be written.
+ */
+export function stripDelegate(
+  removedId: string,
+  agents: ReadonlyArray<{ id: string; agentsDir: string }>,
+): { changed: string[]; failed: string[] } {
+  return applyDelegateEdits(stageDelegateStrip(removedId, agents));
 }
 
 /**

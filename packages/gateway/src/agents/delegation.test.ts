@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -286,14 +286,34 @@ describe('stripDelegate', () => {
       'broken/delegates.json': 'not json',
     });
     const agents = ['concierge', 'ledger', 'open', 'broken', 'nofile'].map((id) => ({ id, agentsDir: dir }));
-    expect(stripDelegate('scout', agents)).toEqual(['concierge', 'open']);
+    expect(stripDelegate('scout', agents)).toEqual({ changed: ['concierge', 'open'], failed: [] });
     expect(readFileSync(path.join(dir, 'concierge/delegates.json'), 'utf8')).toBe('[\n  "ledger",\n  "garage"\n]\n');
     expect(readDelegatesFile('open', dir)).toEqual(['*']);
     expect(readFileSync(path.join(dir, 'ledger/delegates.json'), 'utf8')).toBe('["concierge"]');
     expect(readFileSync(path.join(dir, 'broken/delegates.json'), 'utf8')).toBe('not json');
     // The last one out leaves an empty list, not no file: a narrowed front desk stays narrowed.
-    expect(stripDelegate('ledger', agents)).toEqual(['concierge']);
-    expect(stripDelegate('garage', agents)).toEqual(['concierge']);
+    expect(stripDelegate('ledger', agents)).toEqual({ changed: ['concierge'], failed: [] });
+    expect(stripDelegate('garage', agents)).toEqual({ changed: ['concierge'], failed: [] });
     expect(readDelegatesFile('concierge', dir)).toEqual([]);
+  });
+
+  it('names a list it cannot write and still updates the ones after it', () => {
+    const dir = agentsDirWith({
+      'a/delegates.json': '["scout"]',
+      'b/delegates.json': '["scout", "ledger"]',
+      'c/delegates.json': '["scout"]',
+    });
+    chmodSync(path.join(dir, 'b'), 0o555);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const agents = ['a', 'b', 'c'].map((id) => ({ id, agentsDir: dir }));
+      expect(stripDelegate('scout', agents)).toEqual({ changed: ['a', 'c'], failed: ['b'] });
+      expect(readDelegatesFile('a', dir)).toEqual([]);
+      expect(readDelegatesFile('b', dir)).toEqual(['scout', 'ledger']);
+      expect(readDelegatesFile('c', dir)).toEqual([]);
+    } finally {
+      chmodSync(path.join(dir, 'b'), 0o755);
+      warn.mockRestore();
+    }
   });
 });
