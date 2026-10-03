@@ -114,7 +114,7 @@ describe('host API 1.27 on the page', () => {
     expect(button).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
-  it('draws a widget row\'s picture on medium only, and only from buddi', () => {
+  it('draws a widget row\'s picture at both sizes, and only from buddi', () => {
     const body = {
       kind: 'list' as const,
       rows: [
@@ -126,8 +126,24 @@ describe('host API 1.27 on the page', () => {
     expect([...container.querySelectorAll('img')].map((img) => img.getAttribute('src'))).toEqual(['/api/plugin-assets/news/togofirst.com?size=64']);
     expect(container.querySelectorAll('.wg-mark')).toHaveLength(2);
     unmount();
+    // The kit's small Top stories leads each headline with its outlet's logo too.
     const small = render(<WidgetBodyView body={body} size="small" />);
-    expect(small.container.querySelectorAll('.wg-mark')).toHaveLength(0);
+    expect(small.container.querySelectorAll('.wg-mark')).toHaveLength(2);
+  });
+
+  it('draws five denser rows at medium when a list asks, three at small, and two-line titles with wrap', () => {
+    const rows = Array.from({ length: 5 }, (_, i) => ({ title: `Story ${i + 1}`, side: `Outlet · ${i + 1} h` }));
+    const medium = render(<WidgetBodyView body={{ kind: 'list', max: 5, rows }} size="medium" />);
+    expect(medium.container.querySelectorAll('.wg-row')).toHaveLength(5);
+    expect(medium.container.querySelector('.wg-list')).toHaveAttribute('data-dense', 'true');
+    medium.unmount();
+    const small = render(<WidgetBodyView body={{ kind: 'list', max: 5, wrap: true, rows }} size="small" />);
+    expect(small.container.querySelectorAll('.wg-row')).toHaveLength(3);
+    expect(small.container.querySelector('.wg-list')).toHaveAttribute('data-wrap', 'true');
+    expect(small.container.querySelector('.wg-list')).not.toHaveAttribute('data-dense');
+    small.unmount();
+    const plain = render(<WidgetBodyView body={{ kind: 'list', rows }} size="medium" />);
+    expect(plain.container.querySelectorAll('.wg-row')).toHaveLength(3);
   });
 
   it('draws a scheduled report as it was sent: the voice note above the text, the link under it', () => {

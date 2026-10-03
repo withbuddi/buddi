@@ -134,6 +134,13 @@ export interface PageDescriptor {
    * component that fetched something mean anything at all.
    */
   data?: QueryRef;
+  /**
+   * The page head's right (since host API 1.27): up to three links or buttons,
+   * drawn against `data` — the News page's Sources and Latest edition. The
+   * last one carrying `tone: 'accent'` is the primary, rightmost. A rail page
+   * only; a settings tab has no head of its own.
+   */
+  actions?: SectionAction[];
   body: Component[];
 }
 
@@ -254,6 +261,14 @@ export interface RowAction extends ToolRef {
    * sheet with its sentence; success closes it.
    */
   form?: RowActionForm;
+  /**
+   * In the row's ⋯ menu rather than on the row (since host API 1.27): the
+   * ways out of a source — Mute, Remove — that would crowd it as buttons.
+   * `hint` is the quiet line under the item; `group` a small heading above it.
+   */
+  menu?: true;
+  hint?: string;
+  group?: string;
 }
 
 /**
@@ -342,6 +357,19 @@ export interface ListItem {
    * host API 1.27; an older buddi refuses the descriptor.
    */
   images?: ImageRef[] | ImageList;
+  /**
+   * One picture leading the row, larger — an outlet's logo on a source row
+   * (since host API 1.27). A letter tile from `label` when the key is missing.
+   */
+  logo?: ImageRef;
+  /** A short word after the title, in small capitals: a language ("FR"). Since 1.27. */
+  tag?: ValueRef;
+  /**
+   * One sentence under the row, in the tone it names: what is wrong with it
+   * and since when ("Failing since Tue 08:00: …"). Nothing is drawn for an
+   * empty value. Since 1.27.
+   */
+  status?: { text: ValueRef; tone?: Tone | ValueRef };
 }
 
 /**
@@ -423,6 +451,14 @@ export interface TabsPick {
   label: string;
   options?: Array<{ value: string; label: string }>;
   optionsFrom?: OptionsFrom;
+  /**
+   * `chips` (since host API 1.27) draws the choices as a row of chips that
+   * wraps — and scrolls sideways on a phone — instead of a segment: for a
+   * pick with many options, the News page's topics.
+   */
+  look?: 'segment' | 'chips';
+  /** A quiet last chip that goes somewhere: "+ Topic" to the source manager. Chips only. */
+  add?: { label: string; to: RouteRef };
 }
 
 /** Rows the owner may tick, and the ones they may not. */
@@ -437,6 +473,14 @@ export interface Selection {
 export interface GroupBy {
   key: string;
   labels?: Record<string, string>;
+  /**
+   * Path within a row to the group's words, read from its first row, for
+   * groups the descriptor cannot list (an owner's own topics). Since 1.27;
+   * `labels` wins where it names the key.
+   */
+  label?: string;
+  /** Path within a row to a quiet line beside the group's head ("6 sources"). Since 1.27. */
+  aside?: string;
 }
 
 /** One control on a form, a search or an editor. */
@@ -562,6 +606,74 @@ export interface ComponentCommon {
   empty?: string;
 }
 
+/**
+ * One story, as a `stories` component reads it (since host API 1.27). Every
+ * value is text the plugin already formatted in the owner's words and zone;
+ * logos are keys of the plugin's own assets.
+ */
+export interface StoryRow {
+  id: string;
+  title: string;
+  /** Two lines on the card: the update, when the story has one since it was told. */
+  lead?: string;
+  /** The sheet's paragraph; `lead` when left out. */
+  summary?: string;
+  /** What is new since it was told, in the sheet's accent box under `mark.text`. */
+  update?: string;
+  /** The best article, linked out from the sheet's title. */
+  url?: string;
+  /** "4 h ago". */
+  ago?: string;
+  opinion?: boolean;
+  /** "EN · FR", "FR"; nothing for English alone. */
+  languages?: string;
+  /** `told`: a quiet check and the words; `new`: an accent dot and the words. */
+  mark?: { kind: 'told' | 'new'; text: string };
+  /** Told, and nothing since: the card is drawn quieter. */
+  quiet?: boolean;
+  outlets: Array<{ id?: string; name: string; logo?: string }>;
+  group?: { id: string; name: string };
+  /** The sheet's title line: the topic. */
+  kicker?: string;
+  /** The sheet's quiet line: "First seen 06:10 · 4 sources · told you this morning". */
+  meta?: string;
+  sources?: Array<{ title: string; url?: string; outlet: string; logo?: string; meta?: string }>;
+  timeline?: Array<{ at: string; text: string; told?: boolean }>;
+}
+
+/**
+ * One way out of a story (since host API 1.27): an item of its ⋯ menu.
+ * `{ row }` arguments read the story, `{ item }` the element of `each`.
+ */
+export interface StoryWay extends Omit<ToolRef, 'args'> {
+  args: Record<string, ValueRef | { row: string } | { item: string }>;
+  /**
+   * Once per element of this array in the row — "Mute Reuters", "Mute Le
+   * Monde" — with `{field}` in `label` read from the element. Four at most.
+   */
+  each?: string;
+  /** The quiet line under the item: "Back on its own next Saturday". */
+  hint?: string;
+  /** A small heading above the item, once per run of the same group: "Mute an outlet". */
+  group?: string;
+  when?: Visibility;
+  /** It takes the story off the page: the card gives way to `done` and Undo for eight seconds. */
+  hides?: true;
+  /** What Undo calls, with the same arguments' kinds. */
+  undo?: { tool: string; label: string; args: Record<string, ValueRef | { row: string } | { item: string }> };
+}
+
+/** A `stories` empty state: a title, a line, and a way on. */
+export interface StoriesEmpty {
+  when: Visibility;
+  title: string | ValueRef;
+  text?: string | ValueRef;
+  /** The warm ground of a first time, rather than the plain one. */
+  warm?: true;
+  /** Each a link, or a page parameter set (`{ filter: 'all' }` — "Show all"). The last is the primary. */
+  actions?: Array<{ label: string; to?: RouteRef; set?: Record<string, string> }>;
+}
+
 /** What a section may put on the right of its heading: going, or doing. */
 export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' }>;
 
@@ -572,9 +684,25 @@ export type Component =
       actions?: SectionAction[];
       body: Component[];
     })
-  /** A sentence. `text` may be a path, for something the data has to say. */
-  | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
-  | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
+  /**
+   * A sentence. `text` may be a path, for something the data has to say.
+   *
+   * Since host API 1.27: `look: 'quiet'` draws it as one faint line with a
+   * small glyph instead of a box — "Fetched at 10:00 from 31 sources · next
+   * at 10:15" — and `link` ends it with a link ("2 aren't answering" →
+   * Sources); `action` puts one button on its right ("Try now").
+   */
+  | (ComponentCommon & {
+      kind: 'notice';
+      text: string | ValueRef;
+      tone?: Tone;
+      look?: 'box' | 'quiet';
+      icon?: 'globe' | 'clock' | 'alert';
+      link?: { label: string | ValueRef; to: RouteRef; when?: Visibility };
+      action?: ToolRef;
+    })
+  /** `tone: 'accent'` (1.27) draws it as the primary button where it heads a page or a section. */
+  | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef; tone?: 'accent' })
   /**
    * How far something has got: a bar. `value` is a number — a fraction 0–1
    * when there is no `total`, or a count of bytes against `total` (the line
@@ -791,6 +919,39 @@ export type Component =
       tabs: PageTab[];
       default?: string;
       pick?: TabsPick;
+      /**
+       * Keep the chosen tab in this page parameter (since host API 1.27), so a
+       * query below reads it as `{ param }` and an empty state's button can
+       * move it ("Show all"). Without it the choice is the bar's own.
+       */
+      param?: string;
+    })
+  /**
+   * A feed of stories, each from several sources (since host API 1.27): the
+   * News page. Cards in a grid — the sources' logos and "Reuters and 3 more",
+   * the age, a title, two lines, quiet marks (Opinion, EN · FR, "Told you ·
+   * this morning" or "New since this morning") — under one head per group
+   * with See all; a ⋯ menu of the ways out, each of which may hide the card
+   * behind its sentence and Undo; and a sheet per story with its sources
+   * linked out, how it moved, and the ways out again. Rows are `StoryRow`s.
+   */
+  | (ComponentCommon & {
+      kind: 'stories';
+      query: QueryRef;
+      /** Path to the array of `StoryRow`s in the answer. */
+      rows: string;
+      /** Rows carry `group: { id, name }`: one head per group, and See all writes the id into `param`. */
+      groups?: { param: string; label?: string };
+      /** The ⋯ menu, in order; the first one that `hides` is also the sheet's left button. At most eight. */
+      ways?: StoryWay[];
+      /** The sheet's primary button, read against the story: Ask Anchor. */
+      ask?: { label: string; to: RouteRef; when?: Visibility };
+      /** A link at the end of the sheet's quiet line, read against the story: "Read the edition". */
+      edition?: { label: string; to: RouteRef; when?: Visibility };
+      /** The page parameter the open story's id is kept in, so a story can be linked to. `story` when left out. */
+      param?: string;
+      /** What to say when there is no story, the first whose `when` holds of the answer; `empty` otherwise. */
+      emptyStates?: StoriesEmpty[];
     })
   /** A fold. `label` may be a path, so a row's own words are on it. */
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
@@ -916,8 +1077,12 @@ const rowActionSchema = z
     args: z.record(rowArgSchema),
     when: visibilitySchema.optional(),
     form: z.lazy(() => rowFormSchema).optional(),
+    menu: z.literal(true).optional(),
+    hint: label.optional(),
+    group: label.optional(),
   })
   .strict()
+  .refine((action) => (action.hint === undefined && action.group === undefined) || action.menu === true, '`hint` and `group` are for an action in the ⋯ menu (`menu: true`)')
   .refine(
     (action) =>
       Object.values(action.args).every(
@@ -952,8 +1117,43 @@ const listItemSchema = z
         z.object({ from: viewPathSchema, asset: viewPathSchema, label: viewPathSchema }).strict(),
       ])
       .optional(),
+    logo: z.object({ asset: valueRefSchema, label: valueRefSchema }).strict().optional(),
+    tag: valueRefSchema.optional(),
+    status: z.object({ text: valueRefSchema, tone: z.union([toneSchema, valueRefSchema]).optional() }).strict().optional(),
   })
   .strict();
+
+/** A story way's argument: a literal or path, the story's own field, or the `each` element's. */
+const storyArgSchema = z.union([
+  valueRefSchema,
+  z.object({ row: viewPathSchema }).strict(),
+  z.object({ item: viewPathSchema }).strict(),
+]);
+
+const storyWaySchema = z
+  .object({
+    ...toolRefCommon,
+    args: z.record(storyArgSchema),
+    each: viewPathSchema.optional(),
+    hint: label.optional(),
+    group: label.optional(),
+    when: visibilitySchema.optional(),
+    hides: z.literal(true).optional(),
+    undo: z
+      .object({
+        tool: z.string().regex(TOOL_NAME, 'a tool name is `plugin.tool`, lower case'),
+        label,
+        args: z.record(storyArgSchema),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine((way) => way.undo === undefined || way.hides === true, 'an `undo` belongs to a way that `hides` the story')
+  .refine(
+    (way) => way.each !== undefined || Object.values(way.args).every((ref) => !('item' in ref)),
+    'an `{ item }` argument reads the element of `each`, so the way needs one',
+  );
 
 const optionsFromSchema = z
   .object({
@@ -1063,9 +1263,16 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         kind: z.literal('notice'),
         text: z.union([sentence, valueRefSchema]),
         tone: toneSchema.optional(),
+        look: z.enum(['box', 'quiet']).optional(),
+        icon: z.enum(['globe', 'clock', 'alert']).optional(),
+        link: z
+          .object({ label: z.union([label, valueRefSchema]), to: routeRefSchema, when: visibilitySchema.optional() })
+          .strict()
+          .optional(),
+        action: toolRefSchema.optional(),
       })
       .strict(),
-    z.object({ ...common, kind: z.literal('link'), label, to: routeRefSchema }).strict(),
+    z.object({ ...common, kind: z.literal('link'), label, to: routeRefSchema, tone: z.literal('accent').optional() }).strict(),
     z
       .object({
         ...common,
@@ -1127,7 +1334,15 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
           .optional(),
         actions: z.array(rowActionSchema).max(6).optional(),
         bulk: z.array(bulkActionSchema).max(6).optional(),
-        groupBy: z.object({ key: viewPathSchema, labels: z.record(z.string()).optional() }).strict().optional(),
+        groupBy: z
+          .object({
+            key: viewPathSchema,
+            labels: z.record(z.string()).optional(),
+            label: viewPathSchema.optional(),
+            aside: viewPathSchema.optional(),
+          })
+          .strict()
+          .optional(),
         collapsed: z.object({ label, rows: viewPathSchema }).strict().optional(),
       })
       .strict(),
@@ -1321,12 +1536,58 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
             label,
             options: z.array(z.object({ value: z.string().max(200), label }).strict()).min(1).max(12).optional(),
             optionsFrom: optionsFromSchema.optional(),
+            look: z.enum(['segment', 'chips']).optional(),
+            add: z.object({ label, to: routeRefSchema }).strict().optional(),
           })
           .strict()
           .refine(
             (pick) => (pick.options === undefined) !== (pick.optionsFrom === undefined),
             'a pick takes its choices from `options` or from `optionsFrom`, one of the two',
           )
+          .refine((pick) => pick.add === undefined || pick.look === 'chips', 'a pick\'s `add` is the last of its chips: `look: \'chips\'`')
+          .optional(),
+        param: z.string().regex(PAGE_NAME, 'a page parameter is a name').optional(),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('stories'),
+        query: queryRefSchema,
+        rows: viewPathSchema,
+        groups: z
+          .object({ param: z.string().regex(PAGE_NAME, 'a page parameter is a name'), label: label.optional() })
+          .strict()
+          .optional(),
+        ways: z.array(storyWaySchema).max(8).optional(),
+        ask: z.object({ label, to: routeRefSchema, when: visibilitySchema.optional() }).strict().optional(),
+        edition: z.object({ label, to: routeRefSchema, when: visibilitySchema.optional() }).strict().optional(),
+        param: z.string().regex(PAGE_NAME, 'a page parameter is a name').optional(),
+        emptyStates: z
+          .array(
+            z
+              .object({
+                when: visibilitySchema,
+                title: z.union([label, valueRefSchema]),
+                text: z.union([sentence, valueRefSchema]).optional(),
+                warm: z.literal(true).optional(),
+                actions: z
+                  .array(
+                    z
+                      .object({
+                        label,
+                        to: routeRefSchema.optional(),
+                        set: z.record(z.string().regex(PAGE_NAME, 'a page parameter is a name'), z.string().max(200)).optional(),
+                      })
+                      .strict()
+                      .refine((a) => (a.to === undefined) !== (a.set === undefined), 'an empty state\'s action goes somewhere (`to`) or sets a parameter (`set`), one of the two'),
+                  )
+                  .max(3)
+                  .optional(),
+              })
+              .strict(),
+          )
+          .max(6)
           .optional(),
       })
       .strict(),
@@ -1375,9 +1636,18 @@ export const pageDescriptorSchema = z
     icon: z.enum(['mail', 'money', 'calendar', 'people', 'file', 'chart', 'bell', 'plug', 'key', 'globe', 'sun', 'cloud', 'news']).optional(),
     order: z.number().int().min(-999).max(999).optional(),
     data: queryRefSchema.optional(),
+    actions: z
+      .array(componentSchema)
+      .max(3)
+      .refine(
+        (actions) => actions.every((a) => (a as Component).kind === 'link' || (a as Component).kind === 'button'),
+        "a page's head actions are links and buttons, nothing else",
+      )
+      .optional(),
     body: z.array(componentSchema).min(1).max(24),
   })
-  .strict();
+  .strict()
+  .refine((page) => page.actions === undefined || page.place === 'rail', 'head actions are for a rail page: a settings tab has no head of its own');
 
 /* ------------------------------------------------------------------ *
  * The walk

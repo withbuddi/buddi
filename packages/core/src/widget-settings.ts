@@ -50,7 +50,8 @@ interface FieldBase {
   hint?: string;
   /**
    * Name the placement by this field's choice when it is not the default:
-   * "Weather · Work". `select` and `place` only.
+   * "Weather · Work". `select` and `place`; since host API 1.27 a
+   * `multiselect` too, by every option ticked: "Top stories · AI, US politics".
    */
   inTitle?: boolean;
 }
@@ -174,8 +175,8 @@ export function parseWidgetSettings(plugin: string, widget: string, raw: unknown
     if (f.hint !== undefined && text(f.hint, WIDGET_SETTING_HINT_MAX) === undefined) fail(`setting ${key}: hint is 1 to ${WIDGET_SETTING_HINT_MAX} characters`);
     if (!(WIDGET_SETTING_KINDS as readonly unknown[]).includes(f.kind)) fail(`setting ${key}: kind is one of ${WIDGET_SETTING_KINDS.join(', ')}`);
     const kind = f.kind as WidgetSettingKind;
-    if (f.inTitle !== undefined && (typeof f.inTitle !== 'boolean' || (f.inTitle && kind !== 'select' && kind !== 'place'))) {
-      fail(`setting ${key}: inTitle is true or false, on a select or a place`);
+    if (f.inTitle !== undefined && (typeof f.inTitle !== 'boolean' || (f.inTitle && kind !== 'select' && kind !== 'place' && kind !== 'multiselect'))) {
+      fail(`setting ${key}: inTitle is true or false, on a select, a multiselect or a place`);
     }
     const base = { key, label, ...(f.hint !== undefined ? { hint: String(f.hint).trim() } : {}), ...(f.inTitle === true ? { inTitle: true } : {}) };
     switch (kind) {
@@ -394,6 +395,10 @@ export function widgetPlacementLabel(
       const options = Array.isArray(f.options) ? f.options : opts.options?.[f.key];
       const label = options?.find((o) => o.value === v)?.label;
       if (label && v !== f.default) parts.push(label);
+    } else if (f.kind === 'multiselect' && Array.isArray(v) && v.length > 0) {
+      const options = Array.isArray(f.options) ? f.options : opts.options?.[f.key];
+      const labels = (options ?? []).filter((o) => (v as unknown[]).includes(o.value)).map((o) => o.label);
+      if (labels.length > 0) parts.push(labels.join(', '));
     } else if (f.kind === 'place' && !f.multiple) {
       const place = placeOf(v, opts.places);
       if (place) parts.push(place.label);

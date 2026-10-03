@@ -15,6 +15,8 @@ What changes in buddi from one release to the next, newest first.
 - A mission can read a plugin's material before it runs (`context`, host API 1.27), so an edition is written in one model call; it can send a longer report (`reportMax`, up to 6,000 characters, split at paragraphs on Telegram); and its report can carry a dashboard link ("Open edition") and a voice note, which Telegram sends before the text and the chat plays above it.
 - Plugins can name plugins they work better with (`optional`, host API 1.27) and ask whether one is there (`ctx.buddi.plugins.has`), so a setting can say "Needs Speech" instead of failing.
 - A `news` page icon, a folded newspaper, for plugin pages (host API 1.27).
+- Plugin pages can draw a feed of stories as the News kit does (`stories`, host API 1.27): cards with their outlets' logos, quiet marks (Opinion, EN · FR, "Told you · this morning"), a ⋯ of ways out that leave "Hidden · Undo" in the card's place, groups with See all, and a sheet per story with its sources linked out and how it moved. Also: buttons in a page's head, topic chips with an add chip, a tab kept in a page parameter, a quiet one-line notice ending with a link, an intro read from the page's data, and list rows with a logo, a small tag, a status line and a ⋯ menu.
+- Widget lists can ask for five rows at medium and let a headline take two lines (`max`, `wrap`, host API 1.27), and draw a row's logo at small size too; a widget set to several topics names itself after them ("Top stories · AI, US politics").
 
 ### Changed
 

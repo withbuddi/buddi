@@ -329,8 +329,11 @@ export type WidgetSize = 'small' | 'medium';
 /** The vocabulary a plugin fills; already formatted, cut to size by the gateway. */
 export type WidgetBody =
   | { kind: 'stat'; icon?: string; value: string; caption?: string; trend?: { label?: string; points: number[] }; foot?: string }
-  /** A row's `image.src` (1.27) is buddi's own path to the plugin's kept image, drawn on medium. */
-  | { kind: 'list'; rows: Array<{ title: string; sub?: string; side?: string; tone?: 'good' | 'critical'; image?: { src: string } }>; more?: string }
+  /**
+   * A row's `image.src` (1.27) is buddi's own path to the plugin's kept image, drawn at both sizes;
+   * `max: 5` asks for five denser rows at medium, `wrap` lets a title take two lines.
+   */
+  | { kind: 'list'; rows: Array<{ title: string; sub?: string; side?: string; tone?: 'good' | 'critical'; image?: { src: string } }>; more?: string; max?: 3 | 5; wrap?: boolean }
   | { kind: 'strip'; icon?: string; value?: string; caption?: string; items: Array<{ label: string; icon?: string; value: string }> }
   | { kind: 'progress'; value: string; caption?: string; ratio: number; foot?: string; tone?: 'accent' | 'good' | 'warning' | 'critical' }
   | { kind: 'text'; icon?: string; text: string; sub?: string }

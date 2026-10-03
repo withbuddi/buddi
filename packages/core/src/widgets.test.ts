@@ -47,6 +47,11 @@ describe('widgetBodyOf', () => {
     expect(stat).toEqual({ ok: true, body: { kind: 'stat', icon: 'sun', value: '18°C', caption: `${'c'.repeat(39)}…`, trend: { label: 'Next', points: [1, 2, 3] }, foot: 'High 20°' } });
     const list = widgetBodyOf({ kind: 'list', rows: [{ title: 'A', side: '09:30', tone: 'loud' }, { sub: 'no title' }, { title: 'B' }, { title: 'C' }, { title: 'D' }], more: '1 more' });
     expect(list).toEqual({ ok: true, body: { kind: 'list', rows: [{ title: 'A', side: '09:30' }, { title: 'B' }, { title: 'C' }], more: '1 more' } });
+    // 1.27: five rows when asked, titles long enough for a headline, wrap kept; a sixth row and other maxes are not.
+    const five = widgetBodyOf({ kind: 'list', max: 5, wrap: true, rows: Array.from({ length: 7 }, (_, i) => ({ title: `${'H'.repeat(130)}${i}` })) });
+    expect(five.ok && five.body.kind === 'list' ? [five.body.rows.length, five.body.max, five.body.wrap, five.body.rows[0]!.title.length] : null).toEqual([5, 5, true, 120]);
+    const four = widgetBodyOf({ kind: 'list', max: 4, wrap: 'yes', rows: Array.from({ length: 5 }, (_, i) => ({ title: `T${i}` })) });
+    expect(four).toEqual({ ok: true, body: { kind: 'list', rows: [{ title: 'T0' }, { title: 'T1' }, { title: 'T2' }] } });
     const strip = widgetBodyOf({ kind: 'strip', value: '18°', items: Array.from({ length: 10 }, (_, i) => ({ label: `${i}h`, icon: i === 0 ? 'rocket' : 'rain', value: `${i}°` })) });
     expect(strip.ok && strip.body.kind === 'strip' ? strip.body.items.length : 0).toBe(8);
     expect(strip.ok && strip.body.kind === 'strip' ? strip.body.items[0] : null).toEqual({ label: '0h', value: '0°' });

@@ -156,7 +156,19 @@ type Component =
   | { kind: 'approval'; path: string }          // an approval id in the data; draws ApprovalCard
   | { kind: 'artifact'; path: string; label: string }  // an artifact id; draws the download link
   | { kind: 'agent-offer'; agent: string; text: string; label: string }  // one of this plugin's proposed agents: a line and an accept button (the gated platform.accept_plugin_agent, card in place).
-  | { kind: 'editor'; query: QueryRef; fields: Field[]; save: ToolRef; actions?: ToolRef[]; footnote?: string; readOnlyWhen?: Visibility; version: string };
+  | { kind: 'editor'; query: QueryRef; fields: Field[]; save: ToolRef; actions?: ToolRef[]; footnote?: string; readOnlyWhen?: Visibility; version: string }
+  /** 1.27: a feed of stories (the News page): cards, group heads with See all, a ⋯ of ways out with Undo, a sheet per story. Rows are `StoryRow`s. */
+  | { kind: 'stories'; query: QueryRef; rows: string; groups?: { param: string; label?: string }; ways?: StoryWay[]; ask?: { label: string; to: RouteRef; when?: Visibility }; edition?: { label: string; to: RouteRef; when?: Visibility }; param?: string; emptyStates?: StoriesEmpty[] };
+
+// 1.27 additions elsewhere: PageDescriptor.actions (links and buttons in a rail page's head); notice look: 'quiet', icon, link, action;
+// link tone: 'accent'; tabs param (the chosen tab in a page parameter); TabsPick look: 'chips' and add; ListItem logo, tag, status;
+// RowAction menu, hint, group; GroupBy label and aside; a first notice's text read from the page's data is the page's intro.
+interface StoryRow { id: string; title: string; lead?: string; summary?: string; update?: string; url?: string; ago?: string; opinion?: boolean; languages?: string;
+  mark?: { kind: 'told' | 'new'; text: string }; quiet?: boolean; outlets: Array<{ id?: string; name: string; logo?: string }>; group?: { id: string; name: string };
+  kicker?: string; meta?: string; sources?: Array<{ title: string; url?: string; outlet: string; logo?: string; meta?: string }>; timeline?: Array<{ at: string; text: string; told?: boolean }> }
+/** `{ row }` reads the story, `{ item }` the element of `each` ("Mute {name}" once per outlet); `hides` leaves `done` and `undo` in the card's place. */
+interface StoryWay extends Omit<ToolRef, 'args'> { args: Record<string, ValueRef | { row: string } | { item: string }>; each?: string; hint?: string; group?: string; when?: Visibility; hides?: true; undo?: { tool: string; label: string; args: Record<string, ValueRef | { row: string } | { item: string }> } }
+interface StoriesEmpty { when: Visibility; title: string | ValueRef; text?: string | ValueRef; warm?: true; actions?: Array<{ label: string; to?: RouteRef; set?: Record<string, string> }> }
 
 interface Visibility { path: string; equals?: unknown; in?: unknown[]; not?: true }
 /** A word about state; `tone` may itself be a path within the row. */
@@ -341,6 +353,28 @@ item: {
   images: { from: 'outlets', asset: 'logo', label: 'name' },
 }
 ```
+
+**A feed of stories** (`stories`, host API `^1.27`) is the kit's News page.
+Cards in a grid three wide on a desk (one on a phone): the outlets' logos
+stacked with "Reuters and 3 more" and the age on the head, the title in two
+lines (italic for opinion), the lead in two, and quiet marks under it —
+Opinion, `languages`, and `mark` as "✓ Told you · this morning" or an accent
+"• New since this morning"; a `quiet` card is drawn flatter. Rows that carry
+`group` are drawn under one head per group with See all, which writes the
+group's id into page parameter `groups.param`; one group the parameter already
+names has no head. The ⋯ (a bottom sheet on a phone) lists `ways` in order,
+with a hairline and a small heading between groups; an `each` way is drawn
+once per element ("Mute Reuters", "Mute Le Monde"). A way that `hides` gives
+the card's place to its `done` sentence and its `undo` button for eight
+seconds, where the card stood. A card opens the story's sheet (kept in page
+parameter `param`, `story` by default): `kicker` as its title, the title, the
+`summary`, the `update` in an accent box under `mark`, the quiet `meta` line
+ending with `edition`'s link, Sources (logo, the article's title linked out,
+its line), How it moved (`timeline`, the last step marked), and at its foot
+the first hiding way, Less of this… (the other ways) and `ask` as the primary.
+With no row, the first of `emptyStates` whose `when` holds of the answer is
+drawn (warm for a first time), its actions going somewhere or setting page
+parameters ("Show all"). Loading draws the cards' skeleton.
 
 Not in the set, on purpose: free layout, custom styling, embedded HTML,
 client-side logic beyond `when`. A plugin that needs those serves its own app.

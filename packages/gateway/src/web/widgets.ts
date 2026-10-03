@@ -471,7 +471,7 @@ export function createWidgets(deps: WidgetsDeps) {
     const named = async (list: Placement[]): Promise<PlacementView[]> =>
       Promise.all(list.map(async (p) => {
         const producer = byId.get(p.widget)!;
-        const needsOptions = producer.fields?.some((f) => f.inTitle && f.kind === 'select' && !Array.isArray(f.options) && p.settings[f.key] !== undefined);
+        const needsOptions = producer.fields?.some((f) => f.inTitle && (f.kind === 'select' || f.kind === 'multiselect') && !Array.isArray(f.options) && p.settings[f.key] !== undefined);
         const options = needsOptions ? await optionsOf(producer) : undefined;
         return { ...p, label: widgetPlacementLabel(producer.info.title, producer.fields, p.settings, { ...(options ? { options } : {}), places: owner.places }) };
       }));

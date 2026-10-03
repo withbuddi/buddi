@@ -60,6 +60,9 @@ import {
   useAsync,
   EmptyState,
   Icon,
+  ActionMenu,
+  Modal,
+  Tag,
 } from '../ui';
 import { AgentOffer } from '../views/parts/AgentOffer';
 import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
@@ -84,6 +87,8 @@ import type {
   RouteRef,
   PillRef,
   RowAction,
+  StoryRow,
+  StoryWay,
   Tone,
   ToolRef,
   ValueRef,
@@ -432,7 +437,8 @@ interface ActState {
   waiting: string | null;
   /** Decided: apply what the pending action's `then` asked for, or let it go. */
   settle: (outcome?: { decision: 'approve' | 'reject'; state?: string; result?: unknown }) => void;
-  run: (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void) => Promise<void>;
+  /** True when the tool ran and worked; false when it failed or waits on an approval. */
+  run: (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void) => Promise<boolean>;
   /** Forget what the last write said: a sheet cancelled after a refusal. */
   reset: () => void;
 }
@@ -480,7 +486,7 @@ function useAct(): ActState {
     scope.refresh();
   };
 
-  const run = async (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void): Promise<void> => {
+  const run = async (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void): Promise<boolean> => {
     setRunning(ref.tool);
     setError(null);
     setDone(null);
@@ -495,7 +501,7 @@ function useAct(): ActState {
          */
         setApprovalId(out.approvalId);
         setPending({ then: ref.then, ref, ...(onDone ? { onDone } : {}) });
-        return;
+        return false;
       }
       setApprovalId(null);
       setPending(null);
@@ -507,6 +513,7 @@ function useAct(): ActState {
       setDone(saidDone(ref, out.result) ?? (play ? messageOf(out.result) : null));
       if (play) await playSound(play, speaker);
       apply(ref.then, out.result, onDone);
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       /*
@@ -516,6 +523,7 @@ function useAct(): ActState {
        * sentence and, underneath it, what is actually there now.
        */
       scope.refresh();
+      return false;
     } finally {
       setRunning(null);
     }
@@ -1118,11 +1126,7 @@ function Piece({
     case 'section':
       return <SectionPiece component={component} data={data} />;
     case 'notice':
-      return (
-        <Notice tone={noticeTone(component.tone)} title={component.title}>
-          {typeof component.text === 'string' ? component.text : String(readRef(data, component.text) ?? '')}
-        </Notice>
-      );
+      return <NoticePiece component={component} data={data} />;
     case 'link':
       return <LinkPiece component={component} data={data} />;
     case 'progress':
@@ -1174,6 +1178,8 @@ function Piece({
       return <EditorPiece component={component} data={data} />;
     case 'agent-offer':
       return <AgentOfferPiece component={component} />;
+    case 'stories':
+      return <StoriesPiece component={component} data={data} />;
     default:
       // A component this build does not know: the plugin is newer than the
       // page. Say so instead of drawing nothing; the build check reloads soon.
@@ -1245,6 +1251,77 @@ function SectionPiece({ component, data }: { component: Of<'section'>; data: unk
   );
 }
 
+/**
+ * A sentence in a box, or — `look: 'quiet'` (1.27) — one faint line with a
+ * small glyph, ending with a link: "Fetched at 10:00 from 31 sources · next
+ * at 10:15 · 2 aren't answering". `action` is one button on the box's right.
+ */
+function NoticePiece({ component, data }: { component: Of<'notice'>; data: unknown }): JSX.Element | null {
+  const scope = useScope();
+  const act = useAct();
+  const text = typeof component.text === 'string' ? component.text : String(readRef(data, component.text) ?? '');
+  const link = component.link && holds(data, component.link.when) ? component.link : undefined;
+  const linkHref = link ? routeOf(scope, link.to, data) : '';
+  const linkLabel = link ? (typeof link.label === 'string' ? link.label : String(readRef(data, link.label) ?? '')) : '';
+  const linked =
+    link && linkHref !== '' && linkLabel !== '' ? (
+      'href' in link.to ? (
+        <OutsideLink href={linkHref}>{linkLabel}</OutsideLink>
+      ) : (
+        <a
+          href={linkHref}
+          onClick={(e) => {
+            e.preventDefault();
+            scope.navigate(linkHref);
+          }}
+        >
+          {linkLabel}
+        </a>
+      )
+    ) : null;
+  if (component.look === 'quiet') {
+    if (text === '' && !linked) return null;
+    return (
+      <p className="pl-quiet" data-tone={component.tone}>
+        {component.icon ? <Icon name={component.icon} size={14} /> : null}
+        <span>
+          {text}
+          {linked ? (
+            <>
+              {text ? ' · ' : null}
+              {linked}
+            </>
+          ) : null}
+        </span>
+      </p>
+    );
+  }
+  const action = component.action;
+  return (
+    <>
+      <Notice
+        tone={noticeTone(component.tone)}
+        title={component.title}
+        action={
+          action ? (
+            <ActionButton
+              action={action}
+              args={resolveArgs(action.args, { data, scope })}
+              disabled={act.busy}
+              running={act.running === action.tool}
+              onRun={(ref, args) => void act.run(ref, args)}
+            />
+          ) : undefined
+        }
+      >
+        {text}
+        {linked ? <> {linked}</> : null}
+      </Notice>
+      <ActOutcomeQuiet act={act} />
+    </>
+  );
+}
+
 function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }): JSX.Element | null {
   const scope = useScope();
   const href = routeOf(scope, component.to, data);
@@ -1269,6 +1346,7 @@ function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }
     <Toolbar>
       <ButtonLink
         href={href}
+        variant={component.tone === 'accent' ? 'accent' : undefined}
         onClick={(e) => {
           e.preventDefault();
           scope.navigate(href);
@@ -1401,7 +1479,7 @@ function itemRow(
   row: unknown,
   /** When the list chooses in the page rather than in the URL, there is no link. */
   local?: (key: string) => void,
-): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: string; href: string | null; outside: boolean; text: string } {
+): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: string; href: string | null; outside: boolean; text: string; lead: ReactNode } {
   const meta = (item.meta ?? []).map((ref) => String(readRef(row, ref) ?? '')).filter((text) => text !== '');
   const text = String(readRef(row, item.title) ?? '');
   const routed = item.to && !local ? routeOf(scope, item.to, row) : null;
@@ -1435,10 +1513,26 @@ function itemRow(
   ) : (
     text
   );
+  // 1.27: a short word after the title ("FR"), a sentence under the row in its tone, a logo leading it.
+  const tagValue = item.tag ? readRef(row, item.tag) : undefined;
+  const tag = tagValue === undefined || tagValue === null || tagValue === '' ? null : <span className="pl-row-tag">{String(tagValue)}</span>;
+  const statusValue = item.status ? readRef(row, item.status.text) : undefined;
+  const statusTone = item.status ? toneFrom(item.status.tone, row) : undefined;
+  const status =
+    statusValue === undefined || statusValue === null || statusValue === '' ? null : (
+      <span className="pl-row-status" data-tone={statusTone}>
+        {String(statusValue)}
+      </span>
+    );
+  const subText = item.sub ? String(readRef(row, item.sub) ?? '') : '';
+  const lead = item.logo ? (
+    <AssetImage className="pl-logo-lg" src={assetSrc(scope.plugin, readRef(row, item.logo.asset))} label={String(readRef(row, item.logo.label) ?? '')} />
+  ) : null;
   return {
     text,
     href,
     outside,
+    lead,
     pills: <>{drawnPills}</>,
     meta: meta.join(' · '),
     // The pictures sit above the title, as a card's head: logos, then who they are.
@@ -1446,11 +1540,22 @@ function itemRow(
       <>
         {images}
         <span className="pl-row-title">{linked}</span>
+        {tag}
+      </>
+    ) : tag ? (
+      <>
+        {linked}
+        {tag}
       </>
     ) : (
       linked
     ),
-    sub: item.sub ? String(readRef(row, item.sub) ?? '') : null,
+    sub: status ? (
+      <>
+        {subText ? <span className="pl-row-line">{subText}</span> : null}
+        {status}
+      </>
+    ) : item.sub ? subText : null,
     side: (
       <>
         {drawnPills}
@@ -1570,13 +1675,22 @@ function ListPiece({
 
   const groups = useMemo(() => {
     const shown = rows.filter((row) => drawable.has(row));
-    if (!component.groupBy) return [{ label: null as string | null, rows: shown }];
+    if (!component.groupBy) return [{ label: null as string | null, aside: null as string | null, rows: shown }];
     const by = new Map<string, unknown[]>();
     for (const row of shown) {
       const key = String(readPath(row, component.groupBy.key) ?? '');
       by.set(key, [...(by.get(key) ?? []), row]);
     }
-    return [...by].map(([key, group]) => ({ label: component.groupBy?.labels?.[key] ?? key, rows: group }));
+    const words = (key: string, first: unknown): string => {
+      const named = component.groupBy?.labels?.[key];
+      if (named !== undefined) return named;
+      const read = component.groupBy?.label ? readPath(first, component.groupBy.label) : undefined;
+      return read === undefined || read === null || read === '' ? key : String(read);
+    };
+    return [...by].map(([key, group]) => {
+      const aside = component.groupBy?.aside ? readPath(group[0], component.groupBy.aside) : undefined;
+      return { label: words(key, group[0]), aside: aside === undefined || aside === null || aside === '' ? null : String(aside), rows: group };
+    });
   }, [rows, component.groupBy, keyed.length]);
 
   const lines = (group: unknown[]): JSX.Element[] =>
@@ -1598,12 +1712,14 @@ function ListPiece({
         );
       }
       const disabled = component.select?.disabledWhen !== undefined && holds(row, component.select.disabledWhen);
-      const actions = (component.actions ?? []).filter((action) => holds(row, action.when));
+      const offered = (component.actions ?? []).filter((action) => holds(row, action.when));
+      const actions = offered.filter((action) => action.menu !== true);
+      const menu = offered.filter((action) => action.menu === true);
       return (
         <ListRow
           key={key}
           lead={
-            component.select ? (
+            drawn.lead ? drawn.lead : component.select ? (
               <input
                 type="checkbox"
                 aria-label={`Select ${drawn.text}`}
@@ -1641,6 +1757,7 @@ function ListPiece({
               {actions.map((action, i) => (
                 <RowActionButton key={i} action={action} row={row} data={query.data} act={act} onForm={rowForm.show} />
               ))}
+              {menu.length > 0 ? <RowMenu actions={menu} row={row} title={drawn.text} data={query.data} act={act} onForm={rowForm.show} /> : null}
             </>
           }
         />
@@ -1672,7 +1789,12 @@ function ListPiece({
           ) : null}
           {groups.map((group, index) => (
             <div key={index}>
-              {group.label ? <div className="ui-list-group">{group.label}</div> : null}
+              {group.label ? (
+                <div className="ui-list-group" data-aside={group.aside ? 'true' : undefined}>
+                  {group.label}
+                  {group.aside ? <span className="pl-group-aside">{group.aside}</span> : null}
+                </div>
+              ) : null}
               {lines(group.rows)}
             </div>
           ))}
@@ -1809,6 +1931,76 @@ function RowActionButton({
       row={row}
       onRun={(ref, args) => void act.run(ref, args)}
     />
+  );
+}
+
+/**
+ * A row's ⋯ (host API 1.27): the actions marked `menu`, each with its quiet
+ * hint and a heading over its group. One that asks first asks in a small
+ * window — the sentence, Cancel, and the action on the right.
+ */
+function RowMenu({
+  actions,
+  row,
+  title,
+  data,
+  act,
+  onForm,
+}: {
+  actions: RowAction[];
+  row: unknown;
+  title: string;
+  data: unknown;
+  act: ActState;
+  onForm: (action: RowAction, row: unknown) => void;
+}): JSX.Element {
+  const scope = useScope();
+  const [asking, setAsking] = useState<RowAction | null>(null);
+  const run = (action: RowAction): void => void act.run(action, resolveArgs(action.args, { data, row, scope }));
+  const items: Array<{ label: string; hint?: string; tone?: 'critical'; onSelect: () => void } | { heading: string } | 'separator'> = [];
+  let group: string | undefined;
+  actions.forEach((action, index) => {
+    if (action.group !== group) {
+      if (index > 0) items.push('separator');
+      if (action.group) items.push({ heading: action.group });
+      group = action.group;
+    } else if (action.tone === 'danger' && index > 0) {
+      items.push('separator');
+    }
+    items.push({
+      label: fill(action.label, { row }),
+      ...(action.hint ? { hint: fill(action.hint, { row }) } : {}),
+      ...(action.tone === 'danger' ? { tone: 'critical' as const } : {}),
+      onSelect: () => (action.form ? onForm(action, row) : action.confirm ? setAsking(action) : run(action)),
+    });
+  });
+  return (
+    <>
+      <ActionMenu label={`More for ${title}`} items={items} sheet={{ title }} />
+      {asking ? (
+        <Modal
+          title={fill(asking.confirm ?? asking.label, { row })}
+          onClose={() => setAsking(null)}
+          foot={
+            <>
+              <Button variant="ghost" onClick={() => setAsking(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant={asking.tone === 'danger' ? 'danger' : 'accent'}
+                onClick={() => {
+                  const chosen = asking;
+                  setAsking(null);
+                  run(chosen);
+                }}
+              >
+                {fill(asking.label, { row })}
+              </Button>
+            </>
+          }
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -2585,7 +2777,11 @@ function HeroPiece({ component, data }: { component: Of<'hero'>; data: unknown }
  */
 function TabsPiece({ component, data }: { component: Of<'tabs'>; data: unknown }): JSX.Element {
   const scope = useScope();
-  const [tab, setTab] = useState(component.default ?? component.tabs[0]!.id);
+  const [own, setOwn] = useState(component.default ?? component.tabs[0]!.id);
+  // 1.27: the chosen tab may live in a page parameter, so a query reads it and a button moves it.
+  const tabParam = component.param;
+  const tab = tabParam ? scope.params[tabParam] ?? component.default ?? component.tabs[0]!.id : own;
+  const setTab = (id: string): void => (tabParam ? scope.setParams({ [tabParam]: id }) : setOwn(id));
   const pick = component.pick;
   const { options } = useFieldOptions(
     { name: pick?.param ?? '', label: pick?.label ?? '', type: 'select', ...(pick?.options ? { options: pick.options } : {}), ...(pick?.optionsFrom ? { optionsFrom: pick.optionsFrom } : {}) },
@@ -2594,15 +2790,41 @@ function TabsPiece({ component, data }: { component: Of<'tabs'>; data: unknown }
   );
   const current = pick ? (options.some((o) => o.value === scope.params[pick.param]) ? scope.params[pick.param]! : options[0]?.value ?? '') : '';
   const shown = component.tabs.find((t) => t.id === tab) ?? component.tabs[0]!;
+  const chips = pick?.look === 'chips';
+  const addHref = pick?.add ? routeOf(scope, pick.add.to, data) : '';
   return (
     <div className="pg-tabs">
       {/* One tab and a pick (host API 1.22): the bar is the pick alone, a filter over one view, on the left where a pick sits. */}
-      <div className="pg-tabs-bar" data-only={component.tabs.length === 1 ? 'pick' : undefined}>
-        {pick && options.length > 1 ? (
+      <div className="pg-tabs-bar" data-only={component.tabs.length === 1 ? 'pick' : undefined} data-chips={chips ? 'true' : undefined}>
+        {pick && chips && options.length > 0 ? (
+          <div className="pl-chips" role="group" aria-label={pick.label}>
+            {options.map((option) => (
+              <Button key={option.value} size="sm" aria-pressed={option.value === current} onClick={() => scope.setParams({ [pick.param]: option.value })}>
+                {option.label}
+              </Button>
+            ))}
+            {pick.add && addHref !== '' ? (
+              <ButtonLink
+                size="sm"
+                variant="ghost"
+                href={addHref}
+                onClick={(e) => {
+                  e.preventDefault();
+                  scope.navigate(addHref);
+                }}
+              >
+                <Icon name="plus" size={12} />
+                {pick.add.label}
+              </ButtonLink>
+            ) : null}
+          </div>
+        ) : pick && options.length > 1 ? (
           <Segment label={pick.label} options={options} value={current} onChange={(value) => scope.setParams({ [pick.param]: value })} />
         ) : null}
         {component.tabs.length > 1 ? (
-          <Segment label={component.title ?? 'View'} options={component.tabs.map((t) => ({ value: t.id, label: t.label }))} value={shown.id} onChange={setTab} />
+          <span className="pg-tabs-switch">
+            <Segment label={component.title ?? 'View'} options={component.tabs.map((t) => ({ value: t.id, label: t.label }))} value={shown.id} onChange={setTab} />
+          </span>
         ) : null}
       </div>
       {shown.body.map((child, index) => (
@@ -2676,6 +2898,500 @@ function AgentOfferPiece({ component }: { component: Of<'agent-offer'> }): JSX.E
       text={component.text}
       label={component.label}
     />
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Stories (host API 1.27): the News page's feed
+ * ------------------------------------------------------------------ */
+
+/** A row the page can draw as a story: an id, a title, and its outlets. */
+function asStory(raw: unknown): StoryRow | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Partial<StoryRow>;
+  if (typeof row.id !== 'string' || row.id === '' || typeof row.title !== 'string') return null;
+  return { ...row, outlets: Array.isArray(row.outlets) ? row.outlets.filter((o) => o && typeof o.name === 'string') : [] } as StoryRow;
+}
+
+/** "Reuters", or "Reuters and 3 more". */
+function outletWords(outlets: StoryRow['outlets']): string {
+  if (outlets.length === 0) return '';
+  return outlets.length === 1 ? outlets[0]!.name : `${outlets[0]!.name} and ${outlets.length - 1} more`;
+}
+
+/** A way's arguments: literals and paths read against the story, `{ row }` the story, `{ item }` the element. */
+function wayArgs(args: StoryWay['args'], row: unknown, item: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, ref] of Object.entries(args)) {
+    if ('row' in ref) out[key] = readPath(row, ref.row);
+    else if ('item' in ref) out[key] = readPath(item, ref.item);
+    else out[key] = readRef(row, ref);
+  }
+  return out;
+}
+
+/** A card the owner just turned away: its sentence and Undo stand where it was for eight seconds. */
+interface GoneStory {
+  id: string;
+  group: string | null;
+  /** Where it stood in its group, so the sentence keeps its place after the list is read again. */
+  index: number;
+  text: string;
+  undo?: { tool: string; label: string; args: Record<string, unknown> };
+}
+
+/** How long a turned-away card leaves its Undo in place. */
+const UNDO_MS = 8000;
+
+/** One item of a story's ⋯ menu, or of the sheet's Less of this…. */
+type StoryMenuItem = { label: string; hint?: string; onSelect: () => void } | { heading: string } | 'separator';
+
+function storyMenu(
+  ways: StoryWay[],
+  row: StoryRow,
+  onPick: (way: StoryWay, item: unknown) => void,
+): StoryMenuItem[] {
+  const items: StoryMenuItem[] = [];
+  let lastGroup: string | undefined | null = null;
+  ways.forEach((way, index) => {
+    if (!holds(row, way.when)) return;
+    const elements = way.each ? (Array.isArray(readPath(row, way.each)) ? (readPath(row, way.each) as unknown[]).slice(0, 4) : []) : [undefined];
+    if (elements.length === 0) return;
+    // A new group, or the end of one, is a hairline — the kit's Not interested · Mute an outlet · Quiet and Mute.
+    if (index > 0 && items.length > 0 && way.group !== lastGroup) items.push('separator');
+    if (way.group && way.group !== lastGroup) items.push({ heading: way.group });
+    lastGroup = way.group;
+    for (const element of elements) {
+      items.push({
+        label: fill(way.label, { row: element === undefined ? row : element }),
+        ...(way.hint ? { hint: fill(way.hint, { row }) } : {}),
+        onSelect: () => onPick(way, element),
+      });
+    }
+  });
+  return items;
+}
+
+function StoriesPiece({ component, data }: { component: Of<'stories'>; data: unknown }): JSX.Element {
+  const scope = useScope();
+  const query = usePageQuery(component.query, data);
+  const act = useAct();
+  const param = component.param ?? 'story';
+  const [gone, setGone] = useState<GoneStory | null>(null);
+  useEffect(() => {
+    if (!gone) return;
+    const timer = setTimeout(() => setGone(null), UNDO_MS);
+    return () => clearTimeout(timer);
+  }, [gone]);
+
+  const rows = rowsOf(query.data, component.rows)
+    .map(asStory)
+    .filter((row): row is StoryRow => row !== null);
+  const ways = component.ways ?? [];
+  const openId = scope.params[param];
+  const open = openId ? rows.find((row) => row.id === openId) ?? null : null;
+
+  const pick = async (way: StoryWay, row: StoryRow, item: unknown, groupIndex: number): Promise<void> => {
+    const args = wayArgs(way.args, row, item);
+    // A way names its tool and words as a ToolRef does; its arguments were resolved above.
+    const worked = await act.run({ tool: way.tool, label: way.label, ...(way.done !== undefined ? { done: way.done } : {}), ...(way.then ? { then: way.then } : {}) }, args);
+    if (!worked || !way.hides) return;
+    if (openId === row.id) scope.setParams({ [param]: null });
+    const words = typeof way.done === 'string' ? fill(way.done, { row: item === undefined ? row : item }) : 'Hidden.';
+    setGone({
+      id: row.id,
+      group: row.group?.id ?? null,
+      index: groupIndex,
+      text: words,
+      ...(way.undo ? { undo: { tool: way.undo.tool, label: way.undo.label, args: wayArgs(way.undo.args, row, item) } } : {}),
+    });
+  };
+
+  const undo = (): void => {
+    const held = gone;
+    setGone(null);
+    if (held?.undo) void act.run({ tool: held.undo.tool, label: held.undo.label }, held.undo.args);
+  };
+
+  /** The groups, in the order the rows came; one group whose id the pick already names has no head. */
+  const groups: Array<{ id: string | null; name: string | null; rows: StoryRow[] }> = [];
+  for (const row of rows) {
+    if (gone && row.id === gone.id) continue;
+    const id = component.groups && row.group ? row.group.id : null;
+    let group = groups.find((g) => g.id === id);
+    if (!group) {
+      group = { id, name: component.groups && row.group ? row.group.name : null, rows: [] };
+      groups.push(group);
+    }
+    group.rows.push(row);
+  }
+  if (gone && !groups.some((g) => g.id === gone.group)) groups.push({ id: gone.group, name: null, rows: [] });
+  const groupsParam = component.groups?.param;
+  const heads = !(groups.length === 1 && groupsParam !== undefined && scope.params[groupsParam] === groups[0]!.id);
+
+  const card = (row: StoryRow, index: number): JSX.Element => (
+    <StoryCard
+      key={row.id}
+      row={row}
+      plugin={scope.plugin}
+      menu={storyMenu(ways, row, (way, item) => void pick(way, row, item, index))}
+      onOpen={() => scope.setParams({ [param]: row.id })}
+    />
+  );
+  const hiddenCard = (held: GoneStory): JSX.Element => (
+    <div key={`gone-${held.id}`} className="pl-story-gone" role="status">
+      <span>{held.text}</span>
+      {held.undo ? (
+        <>
+          <span className="pl-story-gone-sep" aria-hidden="true">·</span>
+          <Button size="sm" variant="ghost" onClick={undo}>
+            {held.undo.label}
+          </Button>
+        </>
+      ) : null}
+    </div>
+  );
+  const cards = (group: { id: string | null; rows: StoryRow[] }): JSX.Element[] => {
+    const drawn = group.rows.map(card);
+    if (gone && gone.group === group.id) drawn.splice(Math.min(gone.index, drawn.length), 0, hiddenCard(gone));
+    return drawn;
+  };
+
+  let body: ReactNode;
+  if (query.data === undefined && query.loading) {
+    body = (
+      <div className="pl-story-grid" aria-busy="true" aria-label="Fetching stories">
+        {Array.from({ length: 6 }, (_, i) => (
+          <div key={i} className="ui-card pl-story cat-skel pl-story-skel">
+            <span className="pl-story-head">
+              <i className="cat-skel-face pl-story-skel-logo" />
+              <i className="cat-skel-line" data-w="30" />
+            </span>
+            <i className="cat-skel-line" data-w="90" />
+            <i className="cat-skel-line" data-w="70" />
+            <i className="cat-skel-line" data-w="40" />
+          </div>
+        ))}
+      </div>
+    );
+  } else if (rows.length === 0 && !gone) {
+    const state = (component.emptyStates ?? []).find((candidate) => holds(query.data, candidate.when));
+    if (state) {
+      const words = (ref: string | ValueRef | undefined): string =>
+        ref === undefined ? '' : typeof ref === 'string' ? ref : String(readRef(query.data, ref) ?? '');
+      const actions = (state.actions ?? []).map((action, index, all) => {
+        const primary = index === all.length - 1 && all.length > 1;
+        if (action.set) {
+          return (
+            <Button key={index} size="sm" variant={primary ? 'accent' : 'ghost'} onClick={() => scope.setParams(action.set!)}>
+              {action.label}
+            </Button>
+          );
+        }
+        const href = action.to ? routeOf(scope, action.to, query.data) : '';
+        if (href === '') return null;
+        return (
+          <ButtonLink
+            key={index}
+            size="sm"
+            variant={primary ? 'accent' : 'ghost'}
+            href={href}
+            onClick={(e) => {
+              e.preventDefault();
+              scope.navigate(href);
+            }}
+          >
+            {action.label}
+          </ButtonLink>
+        );
+      });
+      body = (
+        <Empty warm={state.warm === true} title={words(state.title)} action={actions.length > 0 ? <Toolbar>{actions}</Toolbar> : undefined}>
+          {words(state.text)}
+        </Empty>
+      );
+    } else {
+      body = <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />;
+    }
+  } else {
+    body = groups.map((group) => (
+      <section key={group.id ?? 'all'} className="pl-story-group" aria-label={group.name ?? component.title ?? 'Stories'}>
+        {heads && group.name ? (
+          <header className="pl-story-group-head">
+            <h2 className="pl-story-group-title">{group.name}</h2>
+            {groupsParam && group.id ? (
+              <a
+                href="#"
+                className="pl-story-group-aside"
+                onClick={(e) => {
+                  e.preventDefault();
+                  scope.setParams({ [groupsParam]: group.id });
+                }}
+              >
+                {component.groups?.label ?? 'See all'}
+                <Icon name="arrow" size={12} />
+              </a>
+            ) : null}
+          </header>
+        ) : null}
+        <div className="pl-story-grid">{cards(group)}</div>
+      </section>
+    ));
+  }
+
+  const hideWay = ways.find((way) => way.hides && !way.each && holds(open, way.when));
+  const lessWays = ways.filter((way) => way !== hideWay);
+  return (
+    <div className="pl-stories">
+      <ErrorBanner message={query.error} />
+      <ActOutcomeQuiet act={act} />
+      {body}
+      {open ? (
+        <Sheet
+          title={open.kicker ?? open.group?.name ?? component.title ?? 'Story'}
+          onClose={() => scope.setParams({ [param]: null })}
+          foot={
+            <Toolbar>
+              {hideWay ? (
+                <Button variant="ghost" disabled={act.busy} onClick={() => void pick(hideWay, open, undefined, 0)}>
+                  {fill(hideWay.label, { row: open })}
+                </Button>
+              ) : null}
+              {lessWays.length > 0 ? (
+                <ActionMenu
+                  label={`Less of this: ${open.title}`}
+                  trigger={
+                    // A plain button: the menu's trigger takes a ref.
+                    <button type="button" className="ui-btn" data-variant="ghost" disabled={act.busy}>
+                      Less of this…
+                    </button>
+                  }
+                  items={storyMenu(lessWays, open, (way, item) => void pick(way, open, item, 0))}
+                />
+              ) : null}
+              <Spacer />
+              {component.ask && holds(open, component.ask.when) ? (
+                <StoryLink to={component.ask.to} row={open} label={component.ask.label} accent />
+              ) : null}
+            </Toolbar>
+          }
+        >
+          <StorySheet row={open} plugin={scope.plugin} edition={component.edition} />
+        </Sheet>
+      ) : null}
+    </div>
+  );
+}
+
+/** A write's refusal or its waiting approval, without the sentence a way's own placeholder says. */
+function ActOutcomeQuiet({ act }: { act: ActState }): JSX.Element | null {
+  if (act.error) return <ErrorBanner message={act.error} />;
+  if (act.approvalId) return <ActOutcome act={act} />;
+  return null;
+}
+
+/** A descriptor's route as a button, read against one story. */
+function StoryLink({ to, row, label, accent }: { to: RouteRef; row: unknown; label: string; accent?: boolean }): JSX.Element | null {
+  const scope = useScope();
+  const href = routeOf(scope, to, row);
+  if (href === '') return null;
+  if ('href' in to) {
+    return (
+      <ButtonLink variant={accent ? 'accent' : 'ghost'} href={href} target="_blank" rel="noopener noreferrer">
+        {label}
+      </ButtonLink>
+    );
+  }
+  return (
+    <ButtonLink
+      variant={accent ? 'accent' : 'ghost'}
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        scope.navigate(href);
+      }}
+    >
+      {label}
+    </ButtonLink>
+  );
+}
+
+/** The quiet marks under a card: Opinion, the languages, told or new since. */
+function StoryMarks({ row }: { row: StoryRow }): JSX.Element | null {
+  const told = row.mark?.kind === 'told';
+  if (!row.opinion && !row.languages && !row.mark) return null;
+  return (
+    <span className="pl-story-marks">
+      {row.opinion ? <Tag>Opinion</Tag> : null}
+      {row.languages ? <span className="pl-story-lang">{row.languages}</span> : null}
+      {row.mark ? (
+        told ? (
+          <span className="pl-story-told">
+            <Icon name="check" size={12} />
+            {row.mark.text}
+          </span>
+        ) : (
+          <span className="pl-story-new">{row.mark.text}</span>
+        )
+      ) : null}
+    </span>
+  );
+}
+
+/** Up to three logos overlapping, then who they are in words. */
+function StoryLogos({ plugin, outlets }: { plugin: string; outlets: StoryRow['outlets'] }): JSX.Element | null {
+  if (outlets.length === 0) return null;
+  return (
+    <span className="pl-stack" aria-label={outletWords(outlets)}>
+      <span className="pl-stack-logos">
+        {outlets.slice(0, 3).map((outlet, index) => (
+          <AssetImage key={index} src={assetSrc(plugin, outlet.logo)} label={outlet.name} />
+        ))}
+      </span>
+      <span className="pl-stack-words">{outletWords(outlets)}</span>
+    </span>
+  );
+}
+
+function StoryCard({
+  row,
+  plugin,
+  menu,
+  onOpen,
+}: {
+  row: StoryRow;
+  plugin: string;
+  menu: StoryMenuItem[];
+  onOpen: () => void;
+}): JSX.Element {
+  const words = outletWords(row.outlets);
+  return (
+    <article
+      className="ui-card pl-story"
+      data-told={row.quiet ? 'true' : undefined}
+      data-opinion={row.opinion ? 'true' : undefined}
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || event.key !== 'Enter') return;
+        event.preventDefault();
+        onOpen();
+      }}
+      aria-label={`${row.opinion ? 'Opinion: ' : ''}${row.title}.${words ? ` ${words}` : ''}${row.ago ? `, ${row.ago}` : ''}.`}
+    >
+      <header className="pl-story-head">
+        <StoryLogos plugin={plugin} outlets={row.outlets} />
+        {row.ago ? <span className="pl-story-time">{row.ago}</span> : null}
+        {menu.length > 0 ? (
+          <span className="pl-story-more" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <ActionMenu
+              label={`Ways out for ${row.title}`}
+              items={menu.map((item) => (typeof item === 'string' || 'heading' in item ? item : { label: item.label, ...(item.hint ? { hint: item.hint } : {}), onSelect: item.onSelect }))}
+              sheet={{ title: row.title, sub: [row.kicker ?? row.group?.name, words].filter(Boolean).join(' · ') }}
+            />
+          </span>
+        ) : null}
+      </header>
+      <h3 className="pl-story-title">{row.title}</h3>
+      {row.lead ? <p className="pl-story-lead">{row.lead}</p> : null}
+      <StoryMarks row={row} />
+    </article>
+  );
+}
+
+/** A story's sheet: what happened, who reported it, how it moved. */
+function StorySheet({ row, plugin, edition }: { row: StoryRow; plugin: string; edition?: Of<'stories'>['edition'] }): JSX.Element {
+  const sources = Array.isArray(row.sources) ? row.sources.filter((s) => s && typeof s.title === 'string') : [];
+  const timeline = Array.isArray(row.timeline) ? row.timeline.filter((t) => t && typeof t.text === 'string') : [];
+  const editionLink = edition && holds(row, edition.when) ? edition : undefined;
+  return (
+    <div className="pl-story-sheet">
+      <div className="pl-story-sheet-lead">
+        {row.opinion ? <Tag>Opinion</Tag> : null}
+        <h3 className="pl-story-sheet-title">{row.title}</h3>
+        {row.summary ?? row.lead ? <p className="pl-story-sheet-summary">{row.summary ?? row.lead}</p> : null}
+        {row.update ? (
+          <p className="pl-story-sheet-update">
+            {row.mark && row.mark.kind === 'new' ? <span className="pl-story-new">{row.mark.text}</span> : null}
+            {row.update}
+          </p>
+        ) : null}
+        {row.meta || editionLink ? (
+          <p className="pl-story-sheet-meta">
+            {row.meta}
+            {editionLink ? (
+              <>
+                {row.meta ? ' · ' : null}
+                <StoryInlineLink to={editionLink.to} row={row} label={editionLink.label} />
+              </>
+            ) : null}
+          </p>
+        ) : null}
+      </div>
+      {sources.length > 0 ? (
+        <section className="pl-story-sheet-block">
+          <h4 className="pl-story-sheet-head">Sources</h4>
+          <ul className="pl-story-sources">
+            {sources.map((source, index) => {
+              const href = outsideHref(source.url);
+              return (
+                <li key={index} className="pl-story-source">
+                  <AssetImage className="pl-logo-md" src={assetSrc(plugin, source.logo)} label={source.outlet} />
+                  <span className="pl-story-source-text">
+                    {href ? (
+                      <OutsideLink href={href} className="wb-src-link pl-story-source-title">
+                        {source.title}
+                      </OutsideLink>
+                    ) : (
+                      <span className="pl-story-source-title">{source.title}</span>
+                    )}
+                    {source.meta ? <span className="pl-story-source-meta">{source.meta}</span> : null}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+      {timeline.length > 0 ? (
+        <section className="pl-story-sheet-block">
+          <h4 className="pl-story-sheet-head">How it moved</h4>
+          <ol className="pl-story-timeline">
+            {timeline.map((step, index) => (
+              <li
+                key={index}
+                className="pl-story-tl"
+                data-told={step.told ? 'true' : undefined}
+                data-last={index === timeline.length - 1 ? 'true' : undefined}
+              >
+                <span className="pl-story-tl-at">{step.at}</span>
+                <span className="pl-story-tl-dot" aria-hidden="true" />
+                <span className="pl-story-tl-what">{step.text}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+/** A descriptor's route as a link in a line of text. */
+function StoryInlineLink({ to, row, label }: { to: RouteRef; row: unknown; label: string }): JSX.Element | null {
+  const scope = useScope();
+  const href = routeOf(scope, to, row);
+  if (href === '') return null;
+  if ('href' in to) return <OutsideLink href={href}>{label}</OutsideLink>;
+  return (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        scope.navigate(href);
+      }}
+    >
+      {label}
+    </a>
   );
 }
 
@@ -2850,10 +3566,13 @@ export function PluginPage({
    * inside a Settings tab — a notice stays a Notice.
    */
   const first = page.body[0];
+  // 1.27: the intro may be read from the page's own data (`{ path }`), a sentence the plugin writes.
   const lede =
     !embedded &&
     first?.kind === 'notice' &&
-    typeof first.text === 'string' &&
+    first.look !== 'quiet' &&
+    first.link === undefined &&
+    first.action === undefined &&
     first.when === undefined &&
     first.title === undefined &&
     (first.tone === undefined || first.tone === 'neutral')
@@ -2862,10 +3581,64 @@ export function PluginPage({
   const shown = lede === undefined ? page : { ...page, body: page.body.slice(1) };
   return (
     <Scope.Provider value={scope}>
-      <PageFrame embedded={embedded} title={page.title} lede={lede}>
-        <PageBody page={shown} boxed={embedded === true} />
-      </PageFrame>
+      <PageWithData page={shown} embedded={embedded === true} lede={lede} />
     </Scope.Provider>
+  );
+}
+
+/**
+ * The page's own read, asked once, and what is drawn against it: the head's
+ * actions (1.27) — Sources, Latest edition — and the body.
+ */
+function PageWithData({ page, embedded, lede: given }: { page: PluginPageDescriptor; embedded: boolean; lede: string | ValueRef | undefined }): JSX.Element {
+  const scope = useScope();
+  // A sensitive read is asked only once the owner shows the page: the gate below asks it then.
+  const gated = page.data !== undefined && scope.sensitive.has(page.data.query);
+  const root = usePageQuery(gated ? undefined : page.data, null);
+  const rootData = root.data ?? null;
+  const read = given === undefined || typeof given === 'string' ? given : readRef(rootData, given);
+  const lede = read === undefined || read === null || read === '' ? undefined : String(read);
+  const actions = !embedded && page.actions && page.actions.length > 0 ? (
+    <>
+      {page.actions.map((action, index) => (
+        <HeadAction key={index} component={action} data={rootData} />
+      ))}
+    </>
+  ) : undefined;
+  return (
+    <PageFrame embedded={embedded} title={page.title} lede={lede} actions={actions}>
+      <PageBody page={page} boxed={embedded} root={gated ? undefined : root} />
+    </PageFrame>
+  );
+}
+
+/** One of the head's actions: a link drawn as a button (ghost, or the accent primary), or a button. */
+function HeadAction({ component, data }: { component: Of<'link'> | Of<'button'>; data: unknown }): JSX.Element | null {
+  const scope = useScope();
+  if (!holds(data, component.when)) return null;
+  if (component.kind === 'button') return <ButtonPiece component={component} data={data} />;
+  const href = routeOf(scope, component.to, data);
+  if (href === '') return null;
+  const variant = component.tone === 'accent' ? 'accent' : 'ghost';
+  if ('href' in component.to) {
+    return (
+      <ButtonLink variant={variant} href={href} target="_blank" rel="noopener noreferrer">
+        {component.label}
+        <span className="wb-src-out" aria-hidden="true">↗</span>
+      </ButtonLink>
+    );
+  }
+  return (
+    <ButtonLink
+      variant={variant}
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        scope.navigate(href);
+      }}
+    >
+      {component.label}
+    </ButtonLink>
   );
 }
 
@@ -2878,7 +3651,7 @@ export function PluginPage({
  * Its own component so the hook is unconditional whether or not the descriptor
  * declares one.
  */
-function PageBody({ page, boxed }: { page: PluginPageDescriptor; boxed: boolean }): JSX.Element {
+function PageBody({ page, boxed, root }: { page: PluginPageDescriptor; boxed: boolean; root: PageRead | undefined }): JSX.Element {
   const scope = useScope();
   // A page whose own read is sensitive is masked whole: every `when` and
   // every notice on it is drawn against that read.
@@ -2889,11 +3662,14 @@ function PageBody({ page, boxed }: { page: PluginPageDescriptor; boxed: boolean 
       </SensitiveGate>
     );
   }
-  return <PageBodyShown page={page} boxed={boxed} />;
+  return <PageBodyShown page={page} boxed={boxed} root={root} />;
 }
 
-function PageBodyShown({ page, boxed }: { page: PluginPageDescriptor; boxed: boolean }): JSX.Element {
-  const root = usePageQuery(page.data, null);
+type PageRead = { data: unknown; error: string | null; loading: boolean };
+
+function PageBodyShown({ page, boxed, root: given }: { page: PluginPageDescriptor; boxed: boolean; root?: PageRead | undefined }): JSX.Element {
+  const asked = usePageQuery(given ? undefined : page.data, null);
+  const root = given ?? asked;
   /*
    * In a Settings tab each piece at the top is a panel under its own head,
    * as every core tab is, so the air between them is the division; on a

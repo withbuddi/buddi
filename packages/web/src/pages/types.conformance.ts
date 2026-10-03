@@ -50,6 +50,9 @@ import type {
   Selection as CoreSelection,
   SeriesPanelSeries as CoreSeriesPanelSeries,
   SeriesPanelTiles as CoreSeriesPanelTiles,
+  StoriesEmpty as CoreStoriesEmpty,
+  StoryRow as CoreStoryRow,
+  StoryWay as CoreStoryWay,
   TabsPick as CoreTabsPick,
   TilesLayout as CoreTilesLayout,
   ToolRef as CoreToolRef,
@@ -87,6 +90,10 @@ import type {
   SeriesPanelComponent,
   SeriesPanelSeries,
   SeriesPanelTiles,
+  StoriesComponent,
+  StoriesEmpty,
+  StoryRow,
+  StoryWay,
   TabsPick,
   TilesComponent,
   TilesLayout,
@@ -158,6 +165,11 @@ interface Conformance {
   seriesPanelComponent: Exact<Extract<CoreComponent, { kind: 'series-panel' }>, SeriesPanelComponent>;
   seriesPanelSeries: Exact<CoreSeriesPanelSeries, SeriesPanelSeries>;
   seriesPanelTiles: Exact<CoreSeriesPanelTiles, SeriesPanelTiles>;
+  /** The web's `StoriesComponent` is core's stories arm (1.27). */
+  storiesComponent: Exact<Extract<CoreComponent, { kind: 'stories' }>, StoriesComponent>;
+  storyRow: Exact<CoreStoryRow, StoryRow>;
+  storyWay: Exact<CoreStoryWay, StoryWay>;
+  storiesEmpty: Exact<CoreStoriesEmpty, StoriesEmpty>;
   chartSeries: Exact<CoreChartSeries, ChartSeries>;
   pageTab: Exact<CorePageTab, PageTab>;
   tabsPick: Exact<CoreTabsPick, TabsPick>;
@@ -202,6 +214,10 @@ export const CONTRACTS_AGREE: Conformance = {
   seriesPanelComponent: true,
   seriesPanelSeries: true,
   seriesPanelTiles: true,
+  storiesComponent: true,
+  storyRow: true,
+  storyWay: true,
+  storiesEmpty: true,
   chartSeries: true,
   pageTab: true,
   tabsPick: true,
@@ -242,6 +258,7 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   artifact: true,
   'agent-offer': true,
   editor: true,
+  stories: true,
 };
 
 /* ------------------------------------------------------------------ *
@@ -279,6 +296,9 @@ export const CHECKED_TYPES = [
   'TilesLayout',
   'SeriesPanelSeries',
   'SeriesPanelTiles',
+  'StoryRow',
+  'StoryWay',
+  'StoriesEmpty',
   'OptionsFrom',
   'Field',
   'FieldAction',
@@ -304,6 +324,7 @@ export const WEB_TYPES: Record<string, string> = {
   CalendarComponent: 'Component',
   TilesComponent: 'Component',
   SeriesPanelComponent: 'Component',
+  StoriesComponent: 'Component',
   PageActResult: 'the act route’s reply, which core does not declare',
   PluginWorkspaceFiles: 'WorkspaceFiles, plus the plugin the route carries',
 };

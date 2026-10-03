@@ -133,5 +133,10 @@ describe('widgetPlacementLabel', () => {
     const select = parse([{ key: 'place', kind: 'select', label: 'Place', inTitle: true, default: '', options: async () => [] }]);
     expect(widgetPlacementLabel('Weather', select, { place: 'profile-work' }, { places, options: { place: [{ value: '', label: 'Home' }, { value: 'profile-work', label: 'Work' }] } })).toBe('Weather · Work');
     expect(widgetPlacementLabel('Weather', select, { place: '' }, { places, options: { place: [{ value: '', label: 'Home' }] } })).toBe('Weather');
+    // 1.27: a multiselect names it by every option ticked; none ticked, by the title alone.
+    const topics = parse([{ key: 'topics', kind: 'multiselect', label: 'Topics', inTitle: true, options: async () => [] }]);
+    const options = { topics: [{ value: 'ai', label: 'AI' }, { value: 'us', label: 'US politics' }, { value: 'tech', label: 'Technology' }] };
+    expect(widgetPlacementLabel('Top stories', topics, { topics: ['us', 'ai'] }, { places, options })).toBe('Top stories · AI, US politics');
+    expect(widgetPlacementLabel('Top stories', topics, { topics: [] }, { places, options })).toBe('Top stories');
   });
 });

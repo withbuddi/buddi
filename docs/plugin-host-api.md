@@ -637,6 +637,30 @@ package that uses any of them asks for `^1.27`:
    kit's `assets/icons/news.svg`). An older buddi refuses a descriptor that
    names it; ask for `^1.27` or use `globe`.
 
+9. **A feed of stories** (`stories`, [plugin-pages.md](plugin-pages.md) §4): the
+   News page as the kit draws it — cards under one head per group with See all,
+   the outlets' logos and "Reuters and 3 more", quiet marks, a ⋯ of ways out
+   (each a tool; one that `hides` leaves its sentence and Undo in the card's
+   place for eight seconds), and a sheet per story with its sources linked out,
+   how it moved, and the ways out again. Rows are `StoryRow`s.
+
+10. **The rest of the News page's grammar.** A rail page's head `actions`
+    (links and buttons, `tone: 'accent'` for the primary); a `tabs` pick drawn
+    as chips (`look: 'chips'`) with an `add` chip, and the chosen tab kept in
+    a page parameter (`param`); a notice drawn as one quiet line (`look:
+    'quiet'`, `icon`) ending with a `link`, or a box with an `action`; an intro
+    notice read from the page's data; and a list row's `logo` (leading it),
+    `tag` (after its title), `status` (a sentence under it, in a tone), ⋯ menu
+    actions (`menu: true`, with `hint` and `group`) and group heads read from
+    the rows (`groupBy.label`, `groupBy.aside`).
+
+11. **Widget lists for headlines.** A `list` body's `max: 5` asks for five
+    denser rows at medium (small and the lock screen still draw three), `wrap`
+    lets a title take two lines, a row's title may be 120 characters (the page
+    cuts it to its line), and a row's `image` leads it at both sizes. A
+    `multiselect` setting may carry `inTitle`: the placement is named by every
+    option ticked ("Top stories · AI, US politics").
+
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or
 changes something, and ships only after one release in which both shapes

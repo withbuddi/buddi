@@ -80,6 +80,10 @@ export interface RowAction extends ToolRef {
   when?: Visibility;
   /** The button opens a small sheet asking for these fields first. */
   form?: RowActionForm;
+  /** 1.27: in the row's ⋯ menu; `hint` the line under it, `group` a heading above. */
+  menu?: true;
+  hint?: string;
+  group?: string;
 }
 
 /** The small form a row action opens; `openWhen` opens it from the page's parameters. */
@@ -127,6 +131,12 @@ export interface ListItem {
   pills?: PillRef[];
   to?: RouteRef;
   images?: ImageRef[] | ImageList;
+  /** 1.27: one larger picture leading the row; a letter tile from `label` when missing. */
+  logo?: ImageRef;
+  /** 1.27: a short word after the title in small capitals ("FR"). */
+  tag?: ValueRef;
+  /** 1.27: one sentence under the row, in its tone. */
+  status?: { text: ValueRef; tone?: Tone | ValueRef };
 }
 
 export interface Selection {
@@ -137,6 +147,10 @@ export interface Selection {
 export interface GroupBy {
   key: string;
   labels?: Record<string, string>;
+  /** 1.27: the group's words, read from its first row. */
+  label?: string;
+  /** 1.27: a quiet line beside the head, read from its first row. */
+  aside?: string;
 }
 
 /** A select's options, read from a query rather than written in the descriptor. */
@@ -227,7 +241,65 @@ export interface TabsPick {
   label: string;
   options?: Array<{ value: string; label: string }>;
   optionsFrom?: OptionsFrom;
+  /** 1.27: chips that wrap (and scroll on a phone) instead of a segment. */
+  look?: 'segment' | 'chips';
+  /** 1.27: a quiet last chip that goes somewhere. */
+  add?: { label: string; to: RouteRef };
 }
+
+/** One story, as a `stories` component reads it (1.27). */
+export interface StoryRow {
+  id: string;
+  title: string;
+  lead?: string;
+  summary?: string;
+  update?: string;
+  url?: string;
+  ago?: string;
+  opinion?: boolean;
+  languages?: string;
+  mark?: { kind: 'told' | 'new'; text: string };
+  quiet?: boolean;
+  outlets: Array<{ id?: string; name: string; logo?: string }>;
+  group?: { id: string; name: string };
+  kicker?: string;
+  meta?: string;
+  sources?: Array<{ title: string; url?: string; outlet: string; logo?: string; meta?: string }>;
+  timeline?: Array<{ at: string; text: string; told?: boolean }>;
+}
+
+/** One way out of a story (1.27): `{ row }` reads the story, `{ item }` the element of `each`. */
+export interface StoryWay extends Omit<ToolRef, 'args'> {
+  args: Record<string, ValueRef | { row: string } | { item: string }>;
+  each?: string;
+  hint?: string;
+  group?: string;
+  when?: Visibility;
+  hides?: true;
+  undo?: { tool: string; label: string; args: Record<string, ValueRef | { row: string } | { item: string }> };
+}
+
+/** A `stories` empty state (1.27). */
+export interface StoriesEmpty {
+  when: Visibility;
+  title: string | ValueRef;
+  text?: string | ValueRef;
+  warm?: true;
+  actions?: Array<{ label: string; to?: RouteRef; set?: Record<string, string> }>;
+}
+
+/** The stories arm (1.27), named so its renderer can take it. */
+export type StoriesComponent = ComponentCommon & {
+  kind: 'stories';
+  query: QueryRef;
+  rows: string;
+  groups?: { param: string; label?: string };
+  ways?: StoryWay[];
+  ask?: { label: string; to: RouteRef; when?: Visibility };
+  edition?: { label: string; to: RouteRef; when?: Visibility };
+  param?: string;
+  emptyStates?: StoriesEmpty[];
+};
 
 /** The tiles arm, named so its renderer can take it. */
 export type TilesComponent = ComponentCommon & {
@@ -300,8 +372,16 @@ export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'butto
 
 export type Component =
   | (ComponentCommon & { kind: 'section'; actions?: SectionAction[]; body: Component[] })
-  | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
-  | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
+  | (ComponentCommon & {
+      kind: 'notice';
+      text: string | ValueRef;
+      tone?: Tone;
+      look?: 'box' | 'quiet';
+      icon?: 'globe' | 'clock' | 'alert';
+      link?: { label: string | ValueRef; to: RouteRef; when?: Visibility };
+      action?: ToolRef;
+    })
+  | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef; tone?: 'accent' })
   | (ComponentCommon & { kind: 'progress'; value: ValueRef; total?: ValueRef; label?: string | ValueRef; done?: string | ValueRef })
   /** A small chart of a query's rows; `rows` is left out when the answer is the array. */
   | (ComponentCommon & {
@@ -380,7 +460,8 @@ export type Component =
       title: string;
       facts: Array<{ label: string; path: string }>;
     })
-  | (ComponentCommon & { kind: 'tabs'; tabs: PageTab[]; default?: string; pick?: TabsPick })
+  | (ComponentCommon & { kind: 'tabs'; tabs: PageTab[]; default?: string; pick?: TabsPick; param?: string })
+  | StoriesComponent
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
   | (ComponentCommon & { kind: 'approval'; path: string })
@@ -412,6 +493,8 @@ export interface PluginPageDescriptor {
   icon?: PageIcon;
   order?: number;
   data?: QueryRef;
+  /** 1.27: the page head's right, links and buttons. */
+  actions?: SectionAction[];
   body: Component[];
 }
 

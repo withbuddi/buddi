@@ -42,8 +42,12 @@ export const WIDGET_TITLE_MAX = 40;
 export const WIDGET_VALUE_MAX = HOME_CARD_VALUE_MAX;
 export const WIDGET_LINE_MAX = HOME_CARD_LINE_MAX;
 export const WIDGET_TEXT_MAX = 160;
+/** A list row's title: long enough for a headline; the page cuts it to its line (or two, with `wrap`). Since 1.27. */
+export const WIDGET_ROW_TITLE_MAX = 120;
 export const WIDGET_TREND_MAX = HOME_CARD_TREND_MAX;
 export const WIDGET_ROWS_MAX = 3;
+/** A list whose rows are one line each may ask for five at medium (`max: 5`, since host API 1.27). */
+export const WIDGET_ROWS_DENSE_MAX = 5;
 export const WIDGET_ITEMS_MAX = 8;
 /** Faces a clocks body keeps: medium draws four, small two. */
 export const WIDGET_CLOCKS_MAX = 4;
@@ -72,17 +76,24 @@ export interface WidgetListRow {
    * A small picture leading the row (since host API 1.27): a plugin answers
    * `{ asset: '<key>' }`, a key of its own `assets`; core turns it into the
    * same-origin path the page draws (`/api/plugin-assets/<plugin>/<key>`).
-   * Drawn on medium and on the lock screen; a key that is not one is left off.
+   * Drawn at both sizes and on the lock screen; a key that is not one is left off.
    */
   image?: { asset?: string; src?: string };
 }
 
-/** Up to `WIDGET_ROWS_MAX` rows (a small widget draws them without `sub`), and a foot. */
+/**
+ * Up to `WIDGET_ROWS_MAX` rows (a small widget draws them without `sub`), and
+ * a foot. Since host API 1.27, `max: 5` asks for five rows at medium — rows
+ * of one line each, drawn denser — and `wrap` lets a title take two lines
+ * (a headline at small). Small and the lock screen still draw three.
+ */
 export interface WidgetList {
   kind: 'list';
   rows: WidgetListRow[];
   /** "2 more tomorrow". */
   more?: string;
+  max?: 3 | 5;
+  wrap?: boolean;
 }
 
 export interface WidgetStripItem {
@@ -346,7 +357,7 @@ export function widgetBodyOf(
         .map((r): WidgetListRow | null => {
           if (!r || typeof r !== 'object') return null;
           const row = r as Record<string, unknown>;
-          const title = cutLine(row.title, WIDGET_LINE_MAX);
+          const title = cutLine(row.title, WIDGET_ROW_TITLE_MAX);
           if (!title) return null;
           return {
             title,
@@ -357,9 +368,18 @@ export function widgetBodyOf(
           };
         })
         .filter((r): r is WidgetListRow => r !== null)
-        .slice(0, WIDGET_ROWS_MAX);
+        .slice(0, b.max === WIDGET_ROWS_DENSE_MAX ? WIDGET_ROWS_DENSE_MAX : WIDGET_ROWS_MAX);
       if (rows.length === 0) return { ok: false, reason: 'a list needs at least one row with a title' };
-      return { ok: true, body: { kind: 'list', rows, ...opt('more', cutLine(b.more, WIDGET_LINE_MAX)) } };
+      return {
+        ok: true,
+        body: {
+          kind: 'list',
+          rows,
+          ...opt('more', cutLine(b.more, WIDGET_LINE_MAX)),
+          ...(b.max === WIDGET_ROWS_DENSE_MAX ? { max: WIDGET_ROWS_DENSE_MAX } : {}),
+          ...(b.wrap === true ? { wrap: true } : {}),
+        },
+      };
     }
     case 'strip': {
       const items = (Array.isArray(b.items) ? b.items : [])

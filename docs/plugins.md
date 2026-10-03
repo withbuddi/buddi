@@ -1366,7 +1366,7 @@ The six bodies, every value already formatted in your units:
 | `kind` | Fields | Drawn as |
 | --- | --- | --- |
 | `stat` | `value`, `icon?`, `caption?`, `trend?: { label?, points }`, `foot?` | a figure with a glyph, a quiet line, a sparkline (2–48 numbers, no axis), a foot — the weather card |
-| `list` | `rows: { title, sub?, side?, tone?, image?: { asset } }[]`, `more?` | up to three rows (a small widget leaves out `sub`), the right-hand figure, a foot; since 1.27 a row's `image.asset`, a key of your `assets`, leads it as a small logo on medium and on the lock screen (anything else is left off) |
+| `list` | `rows: { title, sub?, side?, tone?, image?: { asset } }[]`, `more?`, `max?: 3 \| 5`, `wrap?` | up to three rows (a small widget leaves out `sub`), the right-hand figure, a foot; since 1.27 a row's `image.asset`, a key of your `assets`, leads it as a small logo at both sizes and on the lock screen (anything else is left off), `max: 5` asks for five denser rows at medium (small and the lock screen draw three), `wrap` lets a title take two lines, and a title may be 120 characters |
 | `strip` | `items: { label, icon?, value }[]`, `icon?`, `value?`, `caption?` | a headline and a row of tiles: four on small, six on medium (eight kept) |
 | `progress` | `value`, `ratio` (0–1), `caption?`, `foot?`, `tone?` | a figure and a bar |
 | `text` | `text` (≤ 160), `icon?`, `sub?` | a glyph and a sentence: for "add a place first" as much as for news |
@@ -1387,7 +1387,7 @@ of your plugin:
 | `kind` | Extra fields | Drawn as | `settings[key]` in `produce` |
 | --- | --- | --- | --- |
 | `select` | `options`, `default?`, `inTitle?` | three short choices as a segment, more as radio rows | the chosen value, or the default (the first option when none) |
-| `multiselect` | `options`, `default?` | tick rows | the chosen values; empty means "all" — say so in `hint` |
+| `multiselect` | `options`, `default?`, `inTitle?` (1.27) | tick rows | the chosen values; empty means "all" — say so in `hint`; with `inTitle` the placement is named by every option ticked ("Top stories · AI, US politics") |
 | `toggle` | `default?` | a checkbox | `true` or `false` |
 | `text` | `placeholder?`, `max?` (≤ 120, 60 by default), `default?` | a line | the line |
 | `place` | `multiple?` (up to three), `inTitle?` | the owner's places (Settings → Profile) as rows, or any town found by name | `{ id, label, name, latitude, longitude, timezone }` (`id` null for a town), or a list; one left unset is the owner's Home, or null with no place |
@@ -3502,6 +3502,7 @@ closed when it is absent rather than guess.
 | `icon` | `PageIcon` | no | One of a pinned set the dashboard draws — `mail`, `money`, `calendar`, `people`, `file`, `chart`, `bell`, `plug`, `key`, `globe`. Never an image you supply. Defaults to the plug. |
 | `order` | `number` | no | Where you sit among the *plugin* entries. The core places are fixed. |
 | `data` | `QueryRef` | no | One read for the page itself, resolved once. Its answer is what the top of `body` — and any `when` there — is drawn against. |
+| `actions` | `SectionAction[]` | no | A rail page's head, on the right: up to three links or buttons drawn against `data` (the News page's Sources and Latest edition); `tone: 'accent'` on a link makes it the primary. Not on a settings tab. Host API 1.27. |
 | `body` | `Component[]` | yes | The tree: the fixed component set of §2.5b, each bound to a query for its data and a tool for its writes. |
 
 #### `PageQuery`
