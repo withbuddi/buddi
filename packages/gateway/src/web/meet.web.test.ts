@@ -18,6 +18,7 @@ import { csrfCookieName } from './http.js';
 import { OPENING_TURN_SPEAKER } from '@buddi/core';
 import { claimOpeningTurn, firstAgentPersona, probeOllama, readFirstAgentPersona, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_CLOUD_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
 import { readChatTranscript } from './chat.js';
+import { OLLAMA_LINUX_COMMAND, createOllamaPulls, ollamaMachine } from '../ollama-local.js';
 import { readConversation } from './read.js';
 import { saveTelegramToken, telegramPairing, TelegramWebError } from './telegram.js';
 import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
@@ -57,7 +58,7 @@ function agentsDir(): string {
   return dir;
 }
 
-async function boot(over: { env?: Record<string, string> } = {}) {
+async function boot(over: { env?: Record<string, string>; deps?: Partial<Parameters<typeof startWebServer>[0]> } = {}) {
   const dir = agentsDir();
   const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills'), ...over.env };
   const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir, env }));
@@ -71,6 +72,7 @@ async function boot(over: { env?: Record<string, string> } = {}) {
     config: { enabled: true, host: '127.0.0.1', port: 0 },
     token: 'fixture',
     env,
+    ...over.deps,
   });
   servers.push(app);
   const origin = `http://127.0.0.1:${app.port}`;
@@ -134,6 +136,30 @@ it('gives up on a machine that accepts the connection and then says nothing', as
   const started = Date.now();
   expect(await probeOllama({ baseUrl: `http://127.0.0.1:${port}`, timeoutMs: 200 })).toMatchObject({ running: false });
   expect(Date.now() - started).toBeLessThan(3_000);
+});
+
+it('fetches a model into the local Ollama over the API, and reports how it stands', async () => {
+  const pulls = createOllamaPulls({
+    baseUrl: 'http://ollama.test',
+    transport: async (_url, init) => {
+      const lines = ['{"status":"pulling manifest"}', '{"status":"pulling a","digest":"sha256:a","total":100,"completed":40}', '{"status":"success"}'];
+      for (const line of lines) init.onChunk?.(`${line}\n`, 200);
+      return { ok: true, status: 200, statusText: 'OK', headers: { get: () => null }, text: async () => lines.join('\n'), json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) };
+    },
+  });
+  const machine = ollamaMachine({ platform: 'linux', arch: 'x64', totalmem: () => 16 * 1024 ** 3, exists: () => false, env: { PATH: '' } });
+  const { origin, headers } = await boot({ deps: { ollamaPulls: pulls, ollamaMachine: () => machine } });
+  expect((await json(await fetch(`${origin}/api/onboarding/ollama/pull`, { headers }))).pull).toBeNull();
+  const started = await fetch(`${origin}/api/onboarding/ollama/pull`, { method: 'POST', headers, body: JSON.stringify({ model: 'qwen3:8b' }) });
+  expect(started.status).toBe(202);
+  await pulls.settled();
+  expect((await json(await fetch(`${origin}/api/onboarding/ollama/pull`, { headers }))).pull).toMatchObject({ model: 'qwen3:8b', state: 'done', completed: 100, total: 100 });
+  // The probe carries the machine and the fetch with it.
+  const probe = await json(await fetch(`${origin}/api/onboarding/ollama`, { headers }));
+  expect(probe.machine).toMatchObject({ platform: 'linux', installed: false, recommended: { model: 'qwen3:8b' }, install: { command: OLLAMA_LINUX_COMMAND } });
+  expect(probe.pull).toMatchObject({ state: 'done' });
+  const refused = await fetch(`${origin}/api/onboarding/ollama/pull`, { method: 'POST', headers, body: JSON.stringify({ model: 'x; rm -rf /' }) });
+  expect(refused.status).toBe(400);
 });
 
 it('answers the probe over the API, and never asks the page to do it', async () => {

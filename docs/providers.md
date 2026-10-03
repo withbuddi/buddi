@@ -40,6 +40,8 @@ Supported connections:
   endpoint, offered as its own choice so the address is filled in.
 - [mlxh](#mlxh): local MLX models on this Mac, offered as its own choice so
   the address is filled in and no key is asked.
+- [Ollama on this computer](#ollama-on-this-computer): no key and no account;
+  first run can fetch a model for it.
 
 Both sign-ins are offered by default. `BUDDI_SUBSCRIPTION_SIGNINS=off` hides
 both: the account kinds are refused and the wizard and Settings do not offer
@@ -119,6 +121,33 @@ too, but answer the Images API, not chat. Once one is loaded, mlxh says so and
 the model list flags it ("an image model; pick it in the Image plugin, not
 here"); before that, first run passes over them by name. Using them for
 pictures belongs to the Image plugin, later.
+
+## Ollama on this computer
+
+**What it is.** An OpenAI-compatible account at `http://localhost:11434/v1`,
+`auth = 'none'`, on a model Ollama has fetched. Free, private, no key.
+
+**Set it up.** First run's **Ollama on this computer** card finds Ollama (or
+shows the command that installs it, never running it), fetches the model this
+machine's memory suits with progress (table in
+[install.md §5.1](install.md#51-no-key-at-all-ollama-on-this-computer)),
+creates the account and puts the assistant on it. Settings → Model accounts
+makes the same account by hand: pick OpenAI-compatible, address
+`http://localhost:11434/v1`, no key.
+
+**What to expect.** A small model on a laptop is slower and less able than
+Claude, ChatGPT or a large Ollama Cloud model: fine for chat, notes and
+reminders, weaker at long plans, careful tool use and code, and the first
+answer waits while the model loads. The wizard says so, and Home's tip offers
+a stronger brain for as long as an agent thinks with it. The local account can
+stay as a fallback after you add one.
+
+**Checking it.** `buddi doctor`'s `ollama` row: running (version, models,
+which accounts use it), or a warning when an account uses it and Ollama is not
+running or the account's model is not fetched (`ollama pull <model>`).
+
+**What leaves this computer.** Nothing: prompts go to the Ollama on this
+machine. Fetching a model is Ollama downloading it from ollama.com.
 
 ## Ollama Cloud with a device key
 

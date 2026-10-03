@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { api, chatApi, type BrowserStatus, type OnboardingView, type OwnerView, type ProviderAccountsView, type TakeOnView } from '../api';
+import { api, chatApi, type BrowserStatus, type OllamaProbe, type OnboardingView, type OwnerView, type ProviderAccountsView, type TakeOnView } from '../api';
 import { App } from '../App';
 import { Meet, FIRST_MESSAGE_TIMEOUT_MS, PATIENCE_MS, TAKE_ON_POLL_MS } from './Meet';
 import { BANNED_WORDS, DEFAULT_ASSISTANT_NAME, SCRIPT } from './meet/script';
@@ -49,6 +49,8 @@ vi.mock('../api', async (load) => {
       removeProviderAccount: vi.fn(),
       probeModels: vi.fn(),
       ollama: vi.fn(),
+      ollamaPull: vi.fn(),
+      ollamaPullState: vi.fn(),
       mlxh: vi.fn(),
       telegram: vi.fn(),
       saveTelegramToken: vi.fn(),
@@ -443,6 +445,89 @@ describe('chapter 2: a brain', () => {
     const both = SCRIPT.brain.local.found({ ollama: 2, mlxh: 5 });
     expect(both).toContain('I found Ollama with 2 models and mlxh with 5 models');
     expect(await screen.findByText(both)).toBeInTheDocument();
+  });
+
+  describe('Ollama on this computer, with no key', () => {
+    const machine = (over: Partial<NonNullable<OllamaProbe['machine']>> = {}): NonNullable<OllamaProbe['machine']> => ({
+      platform: 'darwin', memoryGb: 16, gpu: 'apple', installed: false,
+      recommended: { model: 'qwen3:8b', sizeGb: 5.2 }, install: { url: 'ollama.com/download', command: 'brew install ollama' }, cloudSuggested: false,
+      ...over,
+    });
+    const probe = (over: Partial<OllamaProbe> = {}): OllamaProbe => ({
+      running: false, models: [], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1', cloudBaseUrl: 'ollama-cloud/v1', machine: machine(), pull: null, ...over,
+    });
+
+    it('shows the official Linux install command to copy, and never runs or fetches anything', async () => {
+      vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+      vi.mocked(api.ollama).mockResolvedValue(probe({
+        machine: machine({ platform: 'linux', gpu: 'none', cloudSuggested: true, install: { url: 'ollama.com/download', command: 'curl -fsSL https://ollama.com/install.sh | sh' } }),
+      }));
+      render(meet());
+      fireEvent.click(await screen.findByText(SCRIPT.brain.cards.local.title));
+      expect(await screen.findByText(SCRIPT.brain.ollama.missing('this computer'))).toBeInTheDocument();
+      expect(screen.getByText('curl -fsSL https://ollama.com/install.sh | sh')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: SCRIPT.brain.ollama.copy })).toBeInTheDocument();
+      // Slow here: Ollama Cloud is offered, worded for the machine.
+      expect(screen.getByText(SCRIPT.brain.ollama.cloud('gpu', 16), { exact: false })).toBeInTheDocument();
+      expect(api.ollamaPull).not.toHaveBeenCalled();
+      expect(api.saveProviderAccount).not.toHaveBeenCalled();
+    });
+
+    it('offers the download and Homebrew on a Mac, then says when it is installed but not running', async () => {
+      vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+      vi.mocked(api.ollama).mockResolvedValue(probe());
+      const page = render(meet());
+      fireEvent.click(await screen.findByText(SCRIPT.brain.cards.local.title));
+      expect(await screen.findByText('brew install ollama')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: SCRIPT.brain.ollama.download })).toHaveAttribute('href', 'ollama.com/download');
+      expect(screen.getByText(SCRIPT.brain.ollama.cloud(null, 16), { exact: false })).toBeInTheDocument();
+      page.unmount();
+      vi.mocked(api.ollama).mockResolvedValue(probe({ machine: machine({ installed: true }) }));
+      render(meet());
+      fireEvent.click(await screen.findByText(SCRIPT.brain.cards.local.title));
+      expect(await screen.findByText(SCRIPT.brain.ollama.stopped('darwin'))).toBeInTheDocument();
+    });
+
+    it('fetches the model this machine suits with progress, then makes the account once and says what a small model can do', async () => {
+      vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+      vi.mocked(api.ollama).mockResolvedValue(probe({ running: true }));
+      vi.mocked(api.ollamaPull).mockResolvedValue({ pull: { model: 'qwen3:8b', state: 'pulling', completed: 0, total: 0, status: 'pulling manifest' } });
+      const states = [
+        { model: 'qwen3:8b', state: 'pulling' as const, completed: 2.6e9, total: 5.2e9, status: 'pulling a' },
+        { model: 'qwen3:8b', state: 'done' as const, completed: 5.2e9, total: 5.2e9, status: 'success' },
+      ];
+      vi.mocked(api.ollamaPullState).mockImplementation(async () => ({ pull: states.length > 1 ? states.shift()! : states[0]! }));
+      vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'local' } as never);
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+      render(meet());
+      fireEvent.click(await screen.findByText(SCRIPT.brain.cards.local.title));
+      expect(await screen.findByText(SCRIPT.brain.ollama.empty('this Mac', 16, 'qwen3:8b', 5.2))).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.ollama.fetch('qwen3:8b') }));
+      expect(api.ollamaPull).toHaveBeenCalledWith('qwen3:8b');
+      expect(await screen.findByText(SCRIPT.brain.ollama.fetching('qwen3:8b', '2.6', '5.2'), {}, { timeout: 3_000 })).toBeInTheDocument();
+      expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+      await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled(), { timeout: 4_000 });
+      expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toEqual({
+        label: 'Ollama', kind: 'openai-compatible', auth: 'none', baseUrl: 'ollama-on-this-machine/v1', defaultModel: 'qwen3:8b', enabled: true,
+      });
+      expect(await screen.findByText(SCRIPT.brain.works('qwen3:8b'))).toBeInTheDocument();
+      expect(screen.getByText(SCRIPT.brain.ollama.honest)).toBeInTheDocument();
+      expect(api.saveProviderAccount).toHaveBeenCalledTimes(1);
+    }, 15_000);
+
+    it('says why a fetch stopped and tries the same model again', async () => {
+      vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+      vi.mocked(api.ollama).mockResolvedValue(probe({
+        running: true,
+        pull: { model: 'qwen3:4b', state: 'failed', completed: 1, total: 10, status: 'pulling a', error: 'Ollama is not answering: reset.' },
+      }));
+      vi.mocked(api.ollamaPull).mockRejectedValue(new Error('stop here'));
+      render(meet());
+      fireEvent.click(await screen.findByText(SCRIPT.brain.cards.local.title));
+      expect(await screen.findByText(SCRIPT.brain.ollama.failed('Ollama is not answering: reset.'))).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.ollama.again }));
+      expect(api.ollamaPull).toHaveBeenCalledWith('qwen3:4b');
+    });
   });
 
   it('makes an mlxh account from the probe and starts on its first language model, a loaded one first', async () => {

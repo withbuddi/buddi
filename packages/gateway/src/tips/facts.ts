@@ -8,7 +8,7 @@
  * failed read is the quiet answer ("not used", "none"), so a broken query can
  * only ever hold a tip back, never raise one.
  */
-import { readWebSetting, writeWebSetting } from '@buddi/core';
+import { isLocalOllamaUrl, readWebSetting, writeWebSetting } from '@buddi/core';
 import { ROLE_MAKER } from '../agents/roles.js';
 
 /** The `core.web_settings` key the dashboard's page views are kept under. */
@@ -57,6 +57,8 @@ export interface Facts {
   secondDevice: boolean;
   /** The finance plugin holds at least one account. */
   financeConnected: boolean;
+  /** An agent thinks with the Ollama on this machine: a small local model. */
+  localBrain: boolean;
 }
 
 interface Queryable {
@@ -203,5 +205,13 @@ export async function readFacts(deps: FactsDeps): Promise<Facts> {
     pinSet: (await count(pool, `select count(*)::int as n from core.web_settings where key = 'lock.pin'`)) > 0,
     secondDevice,
     financeConnected: plugins.has('finance') && (await count(pool, `select count(*)::int as n from finance.accounts`)) > 0,
+    localBrain: (
+      await rows(
+        pool,
+        `select a.base_url from core.agent_provider_accounts b
+           join core.provider_accounts a on a.id = b.account_id
+          where a.enabled and a.kind = 'openai-compatible'`,
+      )
+    ).some((row) => typeof row.base_url === 'string' && isLocalOllamaUrl(row.base_url)),
   };
 }

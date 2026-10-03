@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-285 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+287 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -4098,7 +4098,9 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | POST | `/api/onboarding/agent` | Write the first agent. | yes |
 | POST | `/api/onboarding/agent/update` | Change the assistant’s name, face or purpose. | yes |
 | POST | `/api/onboarding/brain` | Move the assistant (and the maker following it) to an account and model. | yes |
-| GET | `/api/onboarding/ollama` | Is Ollama running on this computer. | yes |
+| GET | `/api/onboarding/ollama` | Is Ollama running on this computer, is it installed, and which model suits it. | yes |
+| GET | `/api/onboarding/ollama/pull` | How the model fetch into the local Ollama stands. | yes |
+| POST | `/api/onboarding/ollama/pull` | Fetch a model into the local Ollama, with progress. | yes |
 | GET | `/api/onboarding/mlxh` | Is mlxh running on this computer. | yes |
 | GET | `/api/onboarding/take-on` | Chapter 3's progress, per plugin. | yes |
 | POST | `/api/onboarding/take-on` | Record what buddi takes on and start those installs. | no |
@@ -4212,14 +4214,40 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/onboarding/ollama`
 
-Is Ollama running on this computer.
+Is Ollama running on this computer, is it installed, and which model suits it.
 
 - **Auth:** Session or API token.
-- **Answer:** JSON
+- **Answer:** `{ running, models, baseUrl, downloadUrl, cloudBaseUrl, machine: { platform, memoryGb, gpu, installed, recommended, install, cloudSuggested }, pull }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/onboarding/ollama"
+```
+
+#### `GET /api/onboarding/ollama/pull`
+
+How the model fetch into the local Ollama stands.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ pull: { model, state, completed, total, status, error? } | null }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/onboarding/ollama/pull"
+```
+
+#### `POST /api/onboarding/ollama/pull`
+
+Fetch a model into the local Ollama, with progress.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ model: string }`
+- **Answer:** `202 { pull }`
+- **Errors:** 400 not a model name; 409 another fetch is going
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"model":"…"}' "$BUDDI_URL/api/onboarding/ollama/pull"
 ```
 
 #### `GET /api/onboarding/mlxh`

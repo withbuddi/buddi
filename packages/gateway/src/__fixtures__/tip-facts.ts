@@ -22,6 +22,7 @@ export function facts(over: Partial<Facts> = {}): Facts {
     pinSet: true,
     secondDevice: false,
     financeConnected: false,
+    localBrain: false,
     ...over,
   };
 }

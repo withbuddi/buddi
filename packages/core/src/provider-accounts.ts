@@ -46,6 +46,22 @@ export function isMlxhAccount(row: { kind: string; baseUrl: string }, mlxhBaseUr
     return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.port === '1060';
   } catch { return false; }
 }
+/** Where Ollama answers on this machine, by default. */
+export const OLLAMA_LOCAL_PORT = '11434';
+
+/**
+ * Whether an address is the Ollama on this machine: any loopback address on
+ * Ollama's port. Ollama Cloud and an Ollama elsewhere on the network are not.
+ */
+export function isLocalOllamaUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.port === OLLAMA_LOCAL_PORT;
+  } catch {
+    return false;
+  }
+}
+
 export interface ProviderAccount {
   id: string;
   label: string;

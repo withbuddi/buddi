@@ -69,12 +69,14 @@ import { listBrowserProfiles, listInstalledApps } from './apps.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR } from '../agents/catalog.js';
 import { setDelegatesFromWeb } from './write.js';
 import { mlxhBaseUrl, probeMlxh } from '../mlxh.js';
+import { PullRefusal, createOllamaPulls, ollamaMachine, type OllamaMachine, type OllamaPulls } from '../ollama-local.js';
 import {
   OnboardingRefusal,
   WEB_ONBOARDING_STEPS,
   WEB_ONBOARDING_SURFACE,
   claimOpeningTurn,
   createFirstAgent,
+  OLLAMA_BASE_URL,
   probeOllama,
   readOnboarding,
   rebindBrain,
@@ -318,6 +320,9 @@ export interface WebServerDeps {
    * (plugins/requires.ts). Made here when absent.
    */
   requirements?: Requirements;
+  /** The first run's Ollama pull and machine facts, for a test; made here when absent (ollama-local.ts). */
+  ollamaPulls?: OllamaPulls;
+  ollamaMachine?: () => OllamaMachine;
   /** The place finder's road, for a test; Open-Meteo through core's guard otherwise. */
   placesHttp?: HttpArea;
   /** Host controller; test instances can inject a fake. Reads never enable it. */
@@ -607,6 +612,9 @@ export function createWebApp(deps: WebServerDeps): Server {
   const requirements =
     deps.requirements ??
     createRequirements({ registry: deps.registry, ctx: deps.ctx, env: deps.env ?? process.env, pool: deps.pool, now: deps.now, log });
+  // Ollama on this computer: the first run's pull of a small model, one at a time.
+  const ollamaPulls = deps.ollamaPulls ?? createOllamaPulls({ baseUrl: OLLAMA_BASE_URL });
+  const machine = deps.ollamaMachine ?? (() => ollamaMachine());
   // Home's widgets: one cache per server (web/widgets.ts).
   const widgets = createWidgets({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
   /*
@@ -1979,8 +1987,12 @@ export function createWebApp(deps: WebServerDeps): Server {
           const persona = readFirstAgentPersona(onboardingDeps());
           return persona ? sendJson(res, 200, persona) : sendJson(res, 404, { error: 'There is no assistant of your own yet.' });
         }
+        // With what the machine says: installed or not, how to install it, the
+        // model the first run would fetch here, and a fetch already going.
         case '/api/onboarding/ollama':
-          return sendJson(res, 200, await probeOllama());
+          return sendJson(res, 200, { ...(await probeOllama()), machine: machine(), pull: ollamaPulls.read() });
+        case '/api/onboarding/ollama/pull':
+          return sendJson(res, 200, { pull: ollamaPulls.read() });
         // Is mlxh running here? The same question, asked the same way, of port 1060.
         case '/api/onboarding/mlxh':
           return sendJson(res, 200, await probeMlxh({ baseUrl: mlxhBaseUrl(deps.env ?? process.env) }));
@@ -3276,6 +3288,18 @@ export function createWebApp(deps: WebServerDeps): Server {
      * Chapter 3: what buddi takes on. Records the tiles and starts the By-buddi
      * installs in the background; answers at once with a job per plugin.
      */
+    /*
+     * Fetch a model into the local Ollama, for the first run's "on this
+     * computer". Answers at once; GET the same path for the progress.
+     */
+    if (path === '/api/onboarding/ollama/pull') {
+      try {
+        return sendJson(res, 202, { pull: ollamaPulls.start(typeof body.model === 'string' ? body.model : '') });
+      } catch (error) {
+        if (error instanceof PullRefusal) return sendJson(res, error.status, { error: error.message });
+        throw error;
+      }
+    }
     if (path === '/api/onboarding/take-on') {
       try {
         return sendJson(res, 202, await startTakeOn(takeOnDeps(), body.tiles));

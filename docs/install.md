@@ -186,7 +186,8 @@ Behind it are `GET /api/onboarding`, `POST /api/onboarding/step`, `/complete`,
 `/skip`, `/agent` and `/agent/update` (you can change your assistant's name,
 face and purpose, and once it exists that edits its file rather than making a
 second agent), plus `GET /api/onboarding/ollama` (is Ollama running on *this*
-machine; the page never calls `localhost:11434` itself), and
+machine, is it installed, which model suits it; the page never calls
+`localhost:11434` itself) and `/api/onboarding/ollama/pull` (§5.1), and
 `POST /api/telegram/token` and `/api/telegram/pairing`, which set Telegram up
 without a terminal: the token BotFather gave you goes into the vault, the bot
 starts in the running gateway when it can, and the pairing link comes back for
@@ -217,6 +218,48 @@ so your assistant runs on the brain you chose.
 A source checkout's setup ends on the same page (§14).
 
 ---
+
+### 5.1 No key at all: Ollama on this computer
+
+The brain chapter's **Ollama on this computer** card gets a first run to an
+answering assistant with no API key and no account anywhere:
+
+1. **Not installed.** buddi shows the one command that installs Ollama and a
+   Copy button — `brew install ollama` on a Mac (or **Get Ollama** for the app),
+   the official `curl -fsSL https://ollama.com/install.sh | sh` on Linux. It
+   never runs an installer itself. The card keeps asking the machine and moves
+   on the moment Ollama answers.
+2. **Installed but not running.** It says so: open the Ollama app, or
+   `ollama serve` on Linux.
+3. **Running with no model.** It offers the model this machine's memory suits
+   and fetches it with a progress bar (`POST /api/onboarding/ollama/pull`, then
+   `GET` the same path; the fetch keeps going if the page is closed):
+
+   | Memory (as the machine reports it) | Model | Download |
+   | --- | --- | --- |
+   | under 7 GB | `qwen3:1.7b` | about 1.4 GB |
+   | 7 GB to under 15 GB | `qwen3:4b` | about 2.5 GB |
+   | 15 GB to under 30 GB | `qwen3:8b` | about 5.2 GB |
+   | 30 GB and more | `qwen3:14b` | about 9.3 GB |
+
+   All four answer tool calls, which an agent needs.
+4. **Done.** buddi makes an Ollama account at `http://localhost:11434/v1` on
+   that model, tries it with one small call, and your assistant is created on
+   it, so it answers before first run ends. The card then says plainly what a
+   small local model is: private and free, slower and weaker than Claude or
+   ChatGPT at long plans, careful tool use and code.
+
+On a machine with under 7 GB or no graphics chip Ollama can use (a Linux box
+without an NVIDIA or AMD GPU, an Intel Mac), the card says a local model would
+be slow and offers **Use Ollama Cloud instead** — the one-tap device sign-in
+([providers.md](providers.md#ollama-cloud-with-a-device-key)). Pasting a key
+stays one card away, and **Set up later** skips the chapter.
+
+While any agent thinks with the local Ollama, Home's tip shows the upgrade
+path (**Add a stronger brain**, Settings → Model accounts); the local account
+can stay as a fallback. `buddi doctor` has an `ollama` row: running with its
+version and models, which accounts use it, and a warning when one does and
+Ollama is stopped or the account's model is not fetched.
 
 ## 6. Running in the background
 

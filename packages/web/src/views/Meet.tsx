@@ -45,6 +45,7 @@ import {
   keyRefused,
   type MlxhProbe,
   type OllamaProbe,
+  type OllamaPull,
   type OnboardingReach,
   type ProviderAccountsView,
   type TakeOnView,
@@ -54,7 +55,7 @@ import { useAsync } from '../ui/async';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
-import { Blob, Button, ButtonLink, Code, Field, FloatCard, GradientField, Icon, Mark, Notice, Pill, Segment, Sheet, Stack, Toolbar, type IconName } from '../ui';
+import { Blob, Button, ButtonLink, Code, Field, FloatCard, GradientField, Icon, Mark, Notice, Pill, Progress, Segment, Sheet, Spacer, Stack, Toolbar, type IconName } from '../ui';
 import { useMediaQuery } from '../useMediaQuery';
 import type { PluginPageDescriptor } from '../pages/types';
 import { GEMINI_FALLBACK_MODEL, geminiBrains, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
@@ -1170,7 +1171,7 @@ function BrainChapter(props: QuestionProps): JSX.Element {
       </>
     );
   } else if (card === 'local') {
-    flow = <LocalCard busy={busy} problem={problem} probe={ollama} mlxh={mlxh} onBack={leave} onOffer={offer} onUse={adopt} />;
+    flow = <LocalCard busy={busy} problem={problem} probe={ollama} mlxh={mlxh} onBack={leave} onOffer={offer} onUse={adopt} onCloud={() => pick('free')} />;
   } else if (card === 'free') {
     flow = <OllamaCloudCard {...props} busy={busy} consent={consent} onBack={leave} onConnected={bind} />;
   } else if (card === 'chatgpt') {
@@ -1217,6 +1218,11 @@ function BrainChapter(props: QuestionProps): JSX.Element {
             {answers.brain.freeTier ? SCRIPT.brain.worksOnFlash(answers.brain.model) : SCRIPT.brain.works(answers.brain.model)}
           </Said>
           <CloudModels {...props} />
+          {answers.brain.label === SCRIPT.brain.ollama.label || answers.brain.label === SCRIPT.brain.mlxh.label ? (
+            <Notice tone="warm" title={SCRIPT.brain.ollama.honestTitle}>
+              {SCRIPT.brain.ollama.honest}
+            </Notice>
+          ) : null}
         </Buddi>
       ) : null}
       {flow === null ? (
@@ -1579,10 +1585,38 @@ function localFound(ollama: OllamaProbe | null, mlxh: MlxhProbe | null): string 
   });
 }
 
+/** How often a model fetch is asked about while it runs. */
+export const OLLAMA_PULL_POLL_MS = 1_000;
+
+/** "Copy" beside a command the owner runs himself: buddi never runs it. */
+function Command({ command }: { command: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return (
+    <div className="rs-cmd">
+      <code className="rs-cmd-text">{command}</code>
+      <Button size="sm" onClick={() => void navigator.clipboard?.writeText(command).then(() => setCopied(true), () => {})}>
+        {copied ? SCRIPT.brain.ollama.copied : SCRIPT.brain.ollama.copy}
+      </Button>
+    </div>
+  );
+}
+
+const gb = (bytes: number): string => (bytes / 1e9).toFixed(1);
+
 /**
  * On this computer: Ollama, mlxh, or both. Ollama asks which model when it
  * has several; mlxh starts on its first language model (a loaded one when
  * there is one), and "Think with another" offers the rest after.
+ *
+ * When Ollama is not ready, the card walks the owner there with no key at
+ * all: the install command shown (never run), then the model this machine's
+ * memory suits fetched with progress, then the account made and tried. Ollama
+ * Cloud stays one tap away for a machine that would be slow.
  */
 function LocalCard({
   busy,
@@ -1592,6 +1626,7 @@ function LocalCard({
   onBack,
   onOffer,
   onUse,
+  onCloud,
 }: {
   busy: boolean;
   problem: string | null;
@@ -1600,9 +1635,62 @@ function LocalCard({
   onBack: () => void;
   onOffer: Offer;
   onUse: Adopt;
+  onCloud: () => void;
 }): JSX.Element {
   const models = probe?.models ?? [];
   const mlxhModel = firstMlxhModel(mlxh);
+  const machine = probe?.machine;
+  const [pull, setPull] = useState<OllamaPull | null>(null);
+  const [pullProblem, setPullProblem] = useState<string | null>(null);
+  /** The model fetched here, adopted once: a poll that sees "done" twice must not save two accounts. */
+  const adopted = useRef<string | null>(null);
+  const shownPull = pull ?? probe?.pull ?? null;
+  const pulling = shownPull?.state === 'pulling';
+
+  const make = (model: string): Parameters<typeof api.saveProviderAccount>[0] => ({
+    label: SCRIPT.brain.ollama.label,
+    kind: 'openai-compatible',
+    auth: 'none',
+    // The address comes from the probe, not from here: this page names no
+    // host, and the machine Ollama answers on is the gateway's.
+    baseUrl: probe?.baseUrl ?? '',
+    defaultModel: model,
+    enabled: true,
+  });
+
+  // While a fetch runs, ask how it stands; once it is done, make the account.
+  useEffect(() => {
+    if (!pulling) return undefined;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void api.ollamaPullState().then(
+        (answer) => {
+          if (!cancelled && answer.pull) setPull(answer.pull);
+        },
+        () => {},
+      );
+    }, OLLAMA_PULL_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pulling]);
+  useEffect(() => {
+    if (pull?.state !== 'done' || !probe || adopted.current === pull.model) return;
+    adopted.current = pull.model;
+    void onUse(make(pull.model), SCRIPT.brain.ollama.label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pull?.state, pull?.model, probe]);
+
+  const fetchModel = (model: string): void => {
+    setPullProblem(null);
+    adopted.current = null;
+    void api.ollamaPull(model).then(
+      (answer) => setPull(answer.pull),
+      (err: unknown) => setPullProblem(err instanceof ApiError ? err.message : String(err)),
+    );
+  };
+
   const useMlxh = (): void => {
     if (!mlxh?.running || !mlxhModel) return;
     void onUse(
@@ -1624,21 +1712,93 @@ function LocalCard({
     if (!probe) return;
     // Several models pulled and no "the" one: the owner is asked which. One,
     // and there is nothing worth asking.
-    onOffer(
-      models,
-      (model) => ({
-        label: SCRIPT.brain.ollama.label,
-        kind: 'openai-compatible',
-        auth: 'none',
-        // The address comes from the probe, not from here: this page names no
-        // host, and the machine Ollama answers on is the gateway's.
-        baseUrl: probe.baseUrl,
-        defaultModel: model,
-        enabled: true,
-      }),
-      SCRIPT.brain.ollama.label,
-    );
+    onOffer(models, make, SCRIPT.brain.ollama.label);
   };
+
+  const where = machine?.platform === 'darwin' ? 'this Mac' : 'this computer';
+  /** Ollama answered with no model, or is not here: the walk to a first model. */
+  const empty = probe?.running === true && models.length === 0;
+  const walk = machine !== undefined && !mlxh?.running && (empty || nothing || pulling);
+  const why: 'memory' | 'gpu' | null = machine?.cloudSuggested ? (machine.memoryGb < 7 ? 'memory' : 'gpu') : null;
+  const cloud = machine ? (
+    <div className="wiz-foot">
+      {SCRIPT.brain.ollama.cloud(why, machine.memoryGb)}{' '}
+      <button type="button" className="wiz-link" onClick={onCloud}>
+        {SCRIPT.brain.ollama.useCloud}
+      </button>
+    </div>
+  ) : null;
+
+  let steps: ReactNode = null;
+  if (walk && machine) {
+    const failed = shownPull?.state === 'failed' ? shownPull : null;
+    if (pulling && shownPull) {
+      const share = shownPull.total > 0 ? shownPull.completed / shownPull.total : 0;
+      steps = (
+        <div className="wiz-stack">
+          <div className="wiz-busy" data-boxed="true">
+            <span className="wiz-pulse" aria-hidden="true"><i /><i /><i /></span>
+            <span>{SCRIPT.brain.ollama.fetching(shownPull.model, gb(shownPull.completed), shownPull.total > 0 ? gb(shownPull.total) : '')}</span>
+            <span className="wiz-busy-side">{Math.round(share * 100)}%</span>
+          </div>
+          <Progress value={share * 100} label={SCRIPT.brain.ollama.fetch(shownPull.model)} />
+          <div className="wiz-foot">{SCRIPT.brain.ollama.fetchingFoot}</div>
+        </div>
+      );
+    } else if (empty) {
+      const model = failed?.model ?? machine.recommended.model;
+      steps = (
+        <div className="wiz-stack">
+          <Buddi>
+            <Said>
+              {failed
+                ? SCRIPT.brain.ollama.failed(failed.error ?? '')
+                : SCRIPT.brain.ollama.empty(where, machine.memoryGb, machine.recommended.model, machine.recommended.sizeGb)}
+            </Said>
+          </Buddi>
+          {pullProblem ? <Notice tone="critical">{pullProblem}</Notice> : null}
+          <Toolbar>
+            <span className="wiz-foot">{SCRIPT.brain.ollama.emptyFoot(where)}</span>
+            <Spacer />
+            <Button variant="accent" size="lg" disabled={busy} onClick={() => fetchModel(model)}>
+              {failed ? SCRIPT.brain.ollama.again : SCRIPT.brain.ollama.fetch(model)}
+            </Button>
+          </Toolbar>
+          {cloud}
+        </div>
+      );
+    } else if (machine.installed) {
+      steps = (
+        <div className="wiz-stack">
+          <Buddi>
+            <Said>{SCRIPT.brain.ollama.stopped(machine.platform)}</Said>
+          </Buddi>
+          {machine.platform === 'linux' ? <Command command="ollama serve" /> : null}
+          {cloud}
+        </div>
+      );
+    } else {
+      steps = (
+        <div className="wiz-stack">
+          <Buddi>
+            <Said>{SCRIPT.brain.ollama.missing(where)}</Said>
+          </Buddi>
+          {machine.install.command ? <Command command={machine.install.command} /> : null}
+          <Toolbar>
+            <span className="wiz-foot">{SCRIPT.brain.ollama.missingHow(machine.platform, where)}</span>
+            <Spacer />
+            {machine.platform === 'linux' ? null : (
+              <ButtonLink size="lg" href={machine.install.url} target="_blank" rel="noreferrer">
+                {SCRIPT.brain.ollama.download}
+              </ButtonLink>
+            )}
+          </Toolbar>
+          {cloud}
+        </div>
+      );
+    }
+  }
+
   return (
     <>
       {busy ? (
@@ -1650,12 +1810,13 @@ function LocalCard({
           <Said>{problem}</Said>
         </Buddi>
       ) : null}
+      {steps}
       <Ask
         actions={
           <>
             <Back onClick={onBack} disabled={busy} />
-            {probe?.running ? (
-              <Button variant={mlxh?.running ? undefined : 'accent'} size="lg" disabled={busy || models.length === 0} onClick={use}>
+            {probe?.running && models.length > 0 ? (
+              <Button variant={mlxh?.running ? undefined : 'accent'} size="lg" disabled={busy} onClick={use}>
                 {SCRIPT.brain.ollama.connect}
               </Button>
             ) : null}
@@ -1664,7 +1825,7 @@ function LocalCard({
                 {SCRIPT.brain.mlxh.connect}
               </Button>
             ) : null}
-            {nothing && probe ? (
+            {nothing && probe && !machine ? (
               <ButtonLink variant="accent" size="lg" href={probe.downloadUrl} target="_blank" rel="noreferrer">
                 {SCRIPT.brain.ollama.download}
               </ButtonLink>
@@ -1672,11 +1833,13 @@ function LocalCard({
           </>
         }
       >
-        <span className="wiz-foot">
-          {localFound(probe, mlxh)}
-          {mlxh?.running && !mlxhModel ? ` ${SCRIPT.brain.mlxh.noBrain}` : ''}
-          {nothing && mlxh?.baseUrl ? ` ${mlxhNotAnswering(mlxh.baseUrl)}` : ''}
-        </span>
+        {walk ? null : (
+          <span className="wiz-foot">
+            {localFound(probe, mlxh)}
+            {mlxh?.running && !mlxhModel ? ` ${SCRIPT.brain.mlxh.noBrain}` : ''}
+            {nothing && mlxh?.baseUrl ? ` ${mlxhNotAnswering(mlxh.baseUrl)}` : ''}
+          </span>
+        )}
       </Ask>
     </>
   );

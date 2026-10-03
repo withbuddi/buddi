@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DB_UNREACHABLE, DOCKER_DOWN } from './db-cmd.js';
 import {
+  checkOllama,
   checkAgents,
   checkDatabaseExposure,
   checkEmail,
@@ -814,5 +815,32 @@ describe('checkComputerHelper', () => {
     expect(missing.detail).toContain('npm install -g @withbuddi/buddi');
     expect(checkComputerHelper({ path: '/x', present: true, version: '1' })).toEqual({ status: 'ok', detail: 'present, version 1' });
     expect(checkComputerHelper({ path: '/x', present: true, problem: 'Unknown operation' }).detail).toContain('version unknown');
+  });
+});
+
+describe('the ollama row', () => {
+  const base = { running: false, models: [] as string[], installed: false, accounts: [] as Array<{ label: string; model: string; enabled: boolean }> };
+  it('is fine when Ollama is absent and nothing uses it', () => {
+    expect(checkOllama(base)).toEqual({ status: 'ok', detail: 'not installed (optional: a free brain on this computer; the first run offers it)' });
+    expect(checkOllama({ ...base, installed: true }).detail).toBe('installed, not running (no account uses it)');
+  });
+  it('warns when an account thinks with it and it is not running', () => {
+    const row = checkOllama({ ...base, installed: true, accounts: [{ label: 'Ollama', model: 'qwen3:4b', enabled: true }] });
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('Ollama thinks with it');
+    expect(row.detail).toContain('ollama serve');
+    // A disabled account does not count.
+    expect(checkOllama({ ...base, accounts: [{ label: 'Ollama', model: 'qwen3:4b', enabled: false }] }).status).toBe('ok');
+  });
+  it('names the version, the models and who uses it, and warns about a model not fetched', () => {
+    const running = { ...base, running: true, version: '0.12.3', models: ['qwen3:4b', 'llama3.2'], installed: true };
+    expect(checkOllama(running)).toEqual({ status: 'ok', detail: 'running 0.12.3, 2 models; no account uses it' });
+    expect(checkOllama({ ...running, accounts: [{ label: 'Ollama', model: 'llama3.2:latest', enabled: true }] })).toEqual({
+      status: 'ok',
+      detail: 'running 0.12.3, 2 models; used by Ollama',
+    });
+    const missing = checkOllama({ ...running, accounts: [{ label: 'Ollama', model: 'qwen3:8b', enabled: true }] });
+    expect(missing.status).toBe('warn');
+    expect(missing.detail).toContain('`ollama pull qwen3:8b`');
   });
 });

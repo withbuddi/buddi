@@ -141,6 +141,20 @@ suite('tips against Postgres', () => {
     await pool.query(`delete from core.dashboard_sessions; delete from core.web_settings where key = 'tips.secondDevice'`);
   });
 
+  it('knows when an agent thinks with the Ollama on this machine', async () => {
+    expect((await factsNow([{ id: 'concierge' }])).localBrain).toBe(false);
+    await pool.query(
+      `insert into core.provider_accounts (id, label, kind, auth, base_url, default_model) values
+         ('cloud', 'Ollama Cloud', 'openai-compatible', 'device-key', 'https://ollama.com/v1', 'gpt-oss:120b'),
+         ('here', 'Ollama', 'openai-compatible', 'none', 'http://localhost:11434/v1', 'qwen3:4b')`,
+    );
+    await pool.query(`insert into core.agent_provider_accounts (agent_id, account_id, model) values ('concierge', 'cloud', 'gpt-oss:120b')`);
+    expect((await factsNow([{ id: 'concierge' }])).localBrain).toBe(false);
+    await pool.query(`update core.agent_provider_accounts set account_id = 'here', model = 'qwen3:4b' where agent_id = 'concierge'`);
+    expect((await factsNow([{ id: 'concierge' }])).localBrain).toBe(true);
+    await pool.query(`delete from core.agent_provider_accounts; delete from core.provider_accounts where id in ('cloud', 'here')`);
+  });
+
   it('serves the routes over the wire', async () => {
     const res = await fetch(`${base}/?t=${encodeURIComponent(mintTicket(TOKEN))}`, { redirect: 'manual' });
     const jar = new Map<string, string>();

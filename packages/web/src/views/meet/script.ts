@@ -221,7 +221,7 @@ export const SCRIPT = {
         ].filter(Boolean);
         return `Free and private. I found ${names.join(' and ')}; the first answer takes a minute.`;
       },
-      missing: 'Nothing local answered; Ollama or mlxh, once installed, shows here.',
+      missing: 'Free, private, no key. Not here yet: I show you how to install Ollama and fetch a model.',
     },
     /** mlxh, the local MLX model server on a Mac: no key, the gateway's address. */
     mlxh: {
@@ -234,6 +234,39 @@ export const SCRIPT = {
       label: 'Ollama',
       connect: 'Use Ollama',
       download: 'Get Ollama',
+      copy: 'Copy',
+      copied: 'Copied',
+      /** Not on this machine: the command is shown, never run. */
+      missing: (machine: string): string => `Ollama isn’t on ${machine} yet. Install it, open it, and I’ll notice; I never run an installer for you.`,
+      missingHow: (platform: string, machine: string): string =>
+        platform === 'linux'
+          ? `The official script from ollama.com. Paste it into a terminal on ${machine}.`
+          : platform === 'darwin'
+            ? 'In Terminal, with Homebrew. Or download the app.'
+            : 'Download it from ollama.com and open it.',
+      stopped: (platform: string): string =>
+        `Ollama is installed but not running. Open the Ollama app${platform === 'linux' ? ', or start it with the command below' : ''}, and I’ll notice.`,
+      empty: (machine: string, memoryGb: number, model: string, sizeGb: number): string =>
+        `Ollama is running, with no model yet. For ${machine}’s ${Math.round(memoryGb)} GB I’d fetch ${model}: about ${sizeGb} GB, once.`,
+      emptyFoot: (machine: string): string => `Free and private: it runs here, and nothing you say leaves ${machine}.`,
+      fetch: (model: string): string => `Fetch ${model}`,
+      fetching: (model: string, done: string, total: string): string =>
+        total ? `Fetching ${model}: ${done} of ${total} GB.` : `Fetching ${model}…`,
+      fetchingFoot: 'Keep this page open or not: Ollama keeps fetching, and I pick up where it is.',
+      failed: (error: string): string => `The download stopped: ${error} Try again; it picks up where it was.`,
+      again: 'Try again',
+      /** The way out to Ollama Cloud, worded by what the machine is. */
+      cloud: (why: 'memory' | 'gpu' | null, memoryGb: number): string =>
+        why === 'memory'
+          ? `${Math.round(memoryGb)} GB is little for a model of its own: it would be slow. Ollama Cloud runs bigger models for you, free to start.`
+          : why === 'gpu'
+            ? 'No graphics chip Ollama can use here: it would be slow. Ollama Cloud runs bigger models for you, free to start.'
+            : 'Rather not run a model here? Ollama Cloud runs bigger models for you, free to start.',
+      useCloud: 'Use Ollama Cloud instead',
+      /** Said under "That works" for a brain on this computer. */
+      honestTitle: 'A small model, honestly',
+      honest:
+        'Private and free, but slower and less able than Claude or ChatGPT: fine for chat, notes and reminders; weaker at long plans, careful tool use and code. Home shows how to add a stronger brain whenever you like.',
     },
     /** Asked only when the choice is real: several models and no obvious one. */
     model: {

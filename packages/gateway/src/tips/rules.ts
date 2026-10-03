@@ -38,6 +38,16 @@ export const RECOMMENDED_PLUGINS = ['finance', 'image', 'speech', 'weather', 'ca
 
 export const TIPS: readonly TipRule[] = [
   {
+    // The upgrade path for a zero-key first run: first in the list, so it is
+    // the tip Home shows while it holds, and it comes back until it is acted on.
+    id: 'local-brain',
+    when: (f) => f.localBrain,
+    holdsForDays: 0,
+    text: 'Your assistant thinks with a small model on this computer: private, but slower and weaker at long plans. A cloud brain would answer better.',
+    action: { label: 'Add a stronger brain', route: '#/settings/accounts' },
+    cooldownDays: 5,
+  },
+  {
     id: 'second-agent',
     when: (f) => f.agents < 2 && f.daysSinceInstall >= 3,
     holdsForDays: 1,

@@ -108,6 +108,11 @@ export interface DoctorProbes {
    * Optional for the same reason `config` is.
    */
   subscriptionSignIns?(): ProbeResult;
+  /**
+   * Ollama on this machine: running or not, its models, and the accounts that
+   * think with it. Optional for the same reason `config` is.
+   */
+  ollama?(): Promise<ProbeResult>;
   timezone(): ProbeResult | Promise<ProbeResult>;
 }
 
@@ -154,6 +159,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'tailscale', critical: false, probe: 'tailscale' },
   // Never critical: hidden sign-ins are an owner's choice, and API keys still work.
   { name: 'subscription sign-ins', critical: false, probe: 'subscriptionSignIns' },
+  { name: 'ollama', critical: false, probe: 'ollama' },
   { name: 'timezone', critical: false, probe: 'timezone' },
 ];
 
@@ -999,4 +1005,44 @@ export function checkSubscriptionSignIns(facts: SubscriptionSignInFacts): ProbeR
   const names = facts.oldVars.join(' and ');
   const verb = facts.oldVars.length === 1 ? 'is an old variable' : 'are old variables';
   return { status: 'warn', detail: `${state}; ${names} ${verb}, use BUDDI_SUBSCRIPTION_SIGNINS=off instead` };
+}
+
+export interface OllamaFacts {
+  running: boolean;
+  version?: string;
+  /** The models it has fetched, as `ollama list` names them. */
+  models: readonly string[];
+  /** An `ollama` program or the app is on this machine. */
+  installed: boolean;
+  /** Accounts that point at the Ollama on this machine, with the model each thinks with. */
+  accounts: ReadonlyArray<{ label: string; model: string; enabled: boolean }>;
+}
+
+/** `qwen3` and `qwen3:latest` are one model to Ollama. */
+function sameModel(a: string, b: string): boolean {
+  const full = (name: string): string => (name.includes(':') ? name : `${name}:latest`);
+  return full(a) === full(b);
+}
+
+/**
+ * Ollama on this machine. Only a warning when an account thinks with it and
+ * it cannot answer: not running, or the account's model not fetched. Not
+ * installed and unused is fine: it is an option, not a requirement.
+ */
+export function checkOllama(facts: OllamaFacts): ProbeResult {
+  const used = facts.accounts.filter((account) => account.enabled);
+  const labels = used.map((account) => account.label).join(', ');
+  if (!facts.running) {
+    if (used.length > 0) {
+      return { status: 'warn', detail: `not running, but ${labels} ${used.length === 1 ? 'thinks' : 'think'} with it: open the Ollama app or run \`ollama serve\`` };
+    }
+    return { status: 'ok', detail: facts.installed ? 'installed, not running (no account uses it)' : 'not installed (optional: a free brain on this computer; the first run offers it)' };
+  }
+  const head = `running${facts.version ? ` ${facts.version}` : ''}, ${facts.models.length === 1 ? 'one model' : `${facts.models.length} models`}`;
+  const missing = used.filter((account) => !facts.models.some((model) => sameModel(model, account.model)));
+  if (missing.length > 0) {
+    const first = missing[0]!;
+    return { status: 'warn', detail: `${head}; ${first.label} thinks with ${first.model}, which is not fetched: \`ollama pull ${first.model}\`` };
+  }
+  return { status: 'ok', detail: used.length > 0 ? `${head}; used by ${labels}` : `${head}; no account uses it` };
 }

@@ -70,3 +70,5 @@ echo "reboot; run 'loginctl enable-linger $USER' once so it also survives logout
 echo "The dashboard binds 127.0.0.1 only. From another machine, forward the port"
 echo "over SSH (ssh -L 4317:127.0.0.1:4317 <host>) or sign in through Tailscale."
 echo "Another port, now or later: BUDDI_WEB_PORT=4417 buddi"
+echo "No AI key? The wizard can use Ollama on this machine: it shows the install"
+echo "command and fetches a small model for you; it never installs Ollama itself."

@@ -56,6 +56,7 @@ import {
   isLoopback,
   WEB_ENABLED_VAR,
   subscriptionSignIns,
+  ollamaMachine,
   type HttpTransport,
 } from '@buddi/gateway';
 import {
@@ -66,7 +67,7 @@ import {
 } from '@buddi/tool-web';
 import { lastSyncByAccount, listAccounts } from '@buddi/tool-email';
 import type { Pool } from 'pg';
-import { STALE_AFTER_MS, findSecret, listArchives, listPendingPluginData, ownerSecretVaultName, readRecovery, readWebSetting } from '@buddi/core';
+import { STALE_AFTER_MS, isLocalOllamaUrl, findSecret, listArchives, listPendingPluginData, ownerSecretVaultName, readRecovery, readWebSetting } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
 import { BACKUP_DIR } from './paths.js';
 import {
@@ -84,6 +85,7 @@ import {
   checkSubscriptionSignIns,
   checkNodeVersion,
   checkComputerHelper,
+  checkOllama,
   checkPlugins,
   checkVault,
   type AgentEngineFact,
@@ -864,6 +866,42 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
 
     subscriptionSignIns(): ProbeResult {
       return checkSubscriptionSignIns(subscriptionSignIns(env));
+    },
+
+    async ollama(): Promise<ProbeResult> {
+      const base = 'http://127.0.0.1:11434';
+      const ask = async (route: string): Promise<Record<string, unknown> | null> => {
+        try {
+          const res = await http(`${base}${route}`, { method: 'GET', headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(1_500) });
+          return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
+        } catch {
+          return null;
+        }
+      };
+      const tags = await ask('/api/tags');
+      const version = tags ? await ask('/api/version') : null;
+      const models = (Array.isArray(tags?.models) ? (tags.models as Array<{ name?: unknown }>) : [])
+        .map((row) => (typeof row?.name === 'string' ? row.name : ''))
+        .filter((name) => name !== '');
+      let accounts: Array<{ label: string; model: string; enabled: boolean }> = [];
+      const pool = await connected().catch(() => null);
+      if (pool) {
+        try {
+          const { rows } = await pool.query<{ label: string; base_url: string; default_model: string; enabled: boolean }>(
+            `select label, base_url, default_model, enabled from core.provider_accounts where kind = 'openai-compatible'`,
+          );
+          accounts = rows.filter((row) => isLocalOllamaUrl(row.base_url)).map((row) => ({ label: row.label, model: row.default_model, enabled: row.enabled }));
+        } catch {
+          /* an older schema: no accounts to name */
+        }
+      }
+      return checkOllama({
+        running: tags !== null,
+        ...(typeof version?.version === 'string' ? { version: version.version } : {}),
+        models,
+        installed: ollamaMachine({ env }).installed,
+        accounts,
+      });
     },
 
     // Settings → Profile is the owner's zone; BUDDI_TZ only the fallback.

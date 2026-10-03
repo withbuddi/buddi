@@ -1111,6 +1111,33 @@ export interface OllamaProbe {
   baseUrl: string;
   /** Where Ollama's hosted service answers, for the card that offers it. */
   cloudBaseUrl: string;
+  /** The machine: installed or not, how to install it, which model suits it. Absent from an older gateway. */
+  machine?: OllamaMachine;
+  /** A model fetch started from the first run, as it stands. */
+  pull?: OllamaPull | null;
+}
+
+/** What the gateway knows about the machine Ollama would run on. */
+export interface OllamaMachine {
+  platform: string;
+  memoryGb: number;
+  gpu: 'apple' | 'nvidia' | 'amd' | 'none';
+  installed: boolean;
+  recommended: { model: string; sizeGb: number };
+  /** Where to download it, and the one command that installs it here (shown, never run by buddi). */
+  install: { url: string; command?: string };
+  /** Too little memory or no usable graphics chip: Ollama Cloud would be the better first brain. */
+  cloudSuggested: boolean;
+}
+
+/** A model fetch into the local Ollama. */
+export interface OllamaPull {
+  model: string;
+  state: 'pulling' | 'done' | 'failed';
+  completed: number;
+  total: number;
+  status: string;
+  error?: string;
 }
 
 /** What the gateway found when it asked mlxh, here, a moment ago (`GET /api/onboarding/mlxh`). */
@@ -2559,6 +2586,9 @@ export const api = {
    * reaches no host but its own, and the answer is about that machine anyway.
    */
   ollama: () => get<OllamaProbe>('/onboarding/ollama'),
+  /** Fetch a model into the local Ollama; progress through `ollamaPullState`. */
+  ollamaPull: (model: string) => post<{ pull: OllamaPull }>('/onboarding/ollama/pull', { model }),
+  ollamaPullState: () => get<{ pull: OllamaPull | null }>('/onboarding/ollama/pull'),
   /** Is mlxh running on the machine buddi runs on? Asked of the gateway, as Ollama is. */
   mlxh: () => get<MlxhProbe>('/onboarding/mlxh'),
   /**

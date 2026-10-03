@@ -10,6 +10,10 @@ import { viewOf } from './engine.js';
 import { facts } from '../__fixtures__/tip-facts.js';
 
 const RULE_CASES: Record<string, { fires: Partial<Facts>; quiet: Partial<Facts> }> = {
+  'local-brain': {
+    fires: { localBrain: true },
+    quiet: { localBrain: false },
+  },
   'lock-pin': {
     fires: { pinSet: false, secondDevice: true, daysSinceInstall: 1 },
     quiet: { pinSet: true, secondDevice: true, mailboxSet: true },
