@@ -14,6 +14,8 @@
     "release:smoke": "node scripts/release/smoke.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "node scripts/check-boundaries.mjs && pnpm -r build && pnpm -r typecheck && pnpm -r test && pnpm check:generic",
+    "test:db": "node scripts/test-db.mjs",
+    "release": "node scripts/release/release.mjs",
     "check:generic": "pnpm --filter @buddi/gateway exec vitest run src/generic-install.test.ts",
     "docs:cli": "pnpm --filter @buddi/cli build && node scripts/docs/cli.mjs",
     "docs:api": "pnpm --filter @buddi/gateway build && node scripts/docs/api.mjs",

@@ -133,9 +133,27 @@ buddi pause | buddi resume
 
 **Tests.** `pnpm test` runs the boundary checks, build, typecheck and every
 package's tests. Database suites (`*.db.test.ts`, the gateway) need a
-migrated Postgres: point `DATABASE_URL` at a throwaway one, run
-`node scripts/migrate.mjs`, then the suite. Set `BUDDI_VAULT=memory` so no
-test touches the keychain.
+migrated Postgres; `pnpm test:db` brings a throwaway one:
+
+```sh
+pnpm -r build                                   # migration reads the built packages
+pnpm test:db                                    # the whole of pnpm test
+pnpm test:db -- --filter @buddi/gateway         # one package (repeat --filter for more)
+pnpm test:db -- --filter @buddi/gateway --keep  # leave the container up afterwards
+```
+
+It starts `postgres:16` in Docker on a free port, migrates it, runs the
+suite with `DATABASE_URL` pointing at it, `BUDDI_VAULT=memory` (no test
+touches the keychain) and `BUDDI_PLUGINS_FILE` in a scratch folder under
+`node_modules/.cache`, then removes the container, on Ctrl-C too. It refuses
+to run when `DATABASE_URL` already points at the dev database's port 55433.
+
+**Releasing.** `pnpm release pre.N` (or `0.1.0-pre.N`) checks the tree is
+clean, on main and level with origin, stamps new routes into `API_SINCE`,
+moves the `## Unreleased` lines of `CHANGELOG.md` under a dated heading,
+refreshes `docs/api.md` and `docs/cli.md`, commits, tags `v0.1.0-pre.N`,
+pushes both and prints the workflow run to watch. `--dry-run` shows the plan
+and writes nothing.
 
 **The packaged install.** `pnpm release:pack` builds the npm tarball;
 `pnpm release:trial` puts it in a Docker image and starts it on a fresh

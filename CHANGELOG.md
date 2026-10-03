@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Two scripts for working on buddi: `pnpm test:db` runs the suites against a throwaway Postgres in Docker (migrated first, removed afterwards, never the dev database), and `pnpm release pre.N` cuts a release: stamps new API routes, dates the changelog, refreshes the API and CLI pages, commits, tags and pushes.
+
 ## 0.1.0-pre.35 — 2026-10-03
 
 ### Added
