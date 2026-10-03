@@ -73,6 +73,12 @@ describe('host API 1.27', () => {
       expect(widgetBodyOf({ kind: 'list', rows: [{ title: 'S', image: { asset: 'x' } }] })).toEqual({ ok: true, body: { kind: 'list', rows: [{ title: 'S' }] } });
     });
 
+    it('keeps a row\'s outlet and age on its right, up to 24 characters', () => {
+      const side = (text: string) => { const r = widgetBodyOf({ kind: 'list', rows: [{ title: 'S', side: text }] }); return r.ok && r.body.kind === 'list' ? r.body.rows[0]!.side : null; };
+      expect(side('Ars Technica · 1 h')).toBe('Ars Technica · 1 h');
+      expect(side('The Washington Examiner · 12 h')).toBe('The Washington Examiner…');
+    });
+
     it('keeps who a missing picture stands for, so the page draws a letter tile in its place', () => {
       expect(body({ label: 'Reuters' })).toEqual({ ok: true, body: { kind: 'list', rows: [{ title: 'Story', image: { label: 'Reuters' } }] } });
       expect(body({ asset: 'rfi.fr', label: 'RFI' })).toEqual({

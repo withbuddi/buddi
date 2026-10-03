@@ -44,6 +44,8 @@ export const WIDGET_LINE_MAX = HOME_CARD_LINE_MAX;
 export const WIDGET_TEXT_MAX = 160;
 /** A list row's title: long enough for a headline; the page cuts it to its line (or two, with `wrap`). Since 1.27. */
 export const WIDGET_ROW_TITLE_MAX = 120;
+/** A list row's right-hand words: a figure ("€42"), or since 1.27 an outlet and an age ("Ars Technica · 1 h"). */
+export const WIDGET_ROW_SIDE_MAX = 24;
 export const WIDGET_TREND_MAX = HOME_CARD_TREND_MAX;
 export const WIDGET_ROWS_MAX = 3;
 /** A list whose rows are one line each may ask for five at medium (`max: 5`, since host API 1.27). */
@@ -366,7 +368,7 @@ export function widgetBodyOf(
           return {
             title,
             ...opt('sub', cutLine(row.sub, WIDGET_LINE_MAX)),
-            ...opt('side', cutLine(row.side, WIDGET_VALUE_MAX)),
+            ...opt('side', cutLine(row.side, WIDGET_ROW_SIDE_MAX)),
             ...(typeof row.tone === 'string' && TONES_ROW.has(row.tone) ? { tone: row.tone as 'good' | 'critical' } : {}),
             ...imageOf(row.image, opts.plugin),
           };
