@@ -5,7 +5,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
-import { BrowserService, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
+import { BrowserOpenedError, BrowserService, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import WebSocket from 'ws';
 import { ExtensionEndpoint, MIN_EXTENSION_VERSION } from './extension.js';
 import { startWebServer, type WebServer } from './server.js';
@@ -306,6 +306,17 @@ describe('the browser extension endpoint', () => {
       client.send({ type: 'result', id: frame.id, ok: false, error: 'That element is gone.', precondition: true });
     });
     await expect(extension.send({ name: 'click', session: 's1', args: {} })).rejects.toThrow('That element is gone.');
+
+    // A failure after the tab opened carries the page, so the tool can say "opened, then this failed".
+    client.socket.on('message', (data) => {
+      const frame = JSON.parse(String(data)) as Record<string, unknown>;
+      if (frame.type !== 'command' || frame.name !== 'navigate') return;
+      client.send({ type: 'result', id: frame.id, ok: false, error: 'The tab closed while it was loading.', precondition: false,
+        page: { tabId: 'tab-1', url: 'https://example.com/', title: 'Example' } });
+    });
+    const opened = await extension.send({ name: 'navigate', session: 's1', args: { url: 'https://example.com/' } }).catch((error: unknown) => error);
+    expect(opened).toBeInstanceOf(BrowserOpenedError);
+    expect((opened as BrowserOpenedError).page).toEqual({ tabId: 'tab-1', url: 'https://example.com/', title: 'Example' });
 
     // Nothing answers `fill`: the caller waits the timeout, is told so, and the
     // browser is told to abandon the command rather than act on it late.

@@ -86,6 +86,20 @@ export interface CommandResult {
 /** Refused before anything was dispatched, so the gateway can map it to BrowserPreconditionError. */
 export class PreconditionError extends Error {}
 
+/** Where a tab this command opened stands, for a failure that came after it opened. */
+export interface OpenedPage { tabId: string; url: string; title: string }
+
+/**
+ * A step failed after the tab had opened.
+ *
+ * The page is there, in the owner's Chrome, so the answer says so: the agent
+ * hears "opened, then this failed", not "could not open", and does not try to
+ * open the same page again.
+ */
+export class OpenedError extends Error {
+  constructor(message: string, readonly page: OpenedPage) { super(message); }
+}
+
 /** Thrown out of an executor that noticed the gateway had cancelled the command. */
 export class CancelledError extends Error {}
 
@@ -338,7 +352,8 @@ export class Protocol {
       if (error instanceof CancelledError) {
         this.#options.send({ type: 'result', id, ok: false, error: 'cancelled', precondition: !cancel.dispatched });
       } else {
-        this.#options.send({ type: 'result', id, ok: false, error: sentence(error), precondition: error instanceof PreconditionError });
+        this.#options.send({ type: 'result', id, ok: false, error: sentence(error), precondition: error instanceof PreconditionError,
+          ...(error instanceof OpenedError ? { page: error.page } : {}) });
       }
     } finally {
       this.#running.delete(id);

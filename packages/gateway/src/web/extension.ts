@@ -28,7 +28,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionEvent, type ExtensionResult, type HandFrame } from '@buddi/tool-browser';
+import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionEvent, type ExtensionResult, type HandFrame } from '@buddi/tool-browser';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
@@ -384,7 +384,18 @@ export class ExtensionEndpoint implements ExtensionBridge {
       return;
     }
     const message = typeof frame.error === 'string' && frame.error.trim() !== '' ? frame.error.slice(0, 2000) : 'Your browser refused the action without saying why.';
-    waiting.reject(frame.precondition === true ? new BrowserPreconditionError(message) : new Error(message));
+    if (frame.precondition === true) { waiting.reject(new BrowserPreconditionError(message)); return; }
+    // The tab opened before the step that failed: say where it is, so the agent is not told the page never opened.
+    const page = frame.page as { tabId?: unknown; url?: unknown; title?: unknown } | undefined;
+    if (page && typeof page === 'object' && typeof page.url === 'string') {
+      waiting.reject(new BrowserOpenedError(message, {
+        tabId: typeof page.tabId === 'string' ? page.tabId.slice(0, 40) : '',
+        url: page.url.slice(0, 4096),
+        title: typeof page.title === 'string' ? page.title.slice(0, 1000) : '',
+      }));
+      return;
+    }
+    waiting.reject(new Error(message));
   }
 
   /**

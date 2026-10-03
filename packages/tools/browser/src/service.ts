@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core/plugin';
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
-import { APP_BEHIND, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
+import { APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
 import { ownerCard, siteOf, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
 import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
@@ -414,6 +414,8 @@ export class BrowserService {
       controller.signal.throwIfAborted();
       this.#state = 'running';
       await this.driver.perform(run);
+      const note = this.driver.takeNote?.();
+      if (note) this.#message = note;
       if (run.action !== 'observe') this.#targetingFailures = 0;
       controller.signal.throwIfAborted();
       const seen = await this.#look(controller, ctx);
@@ -434,6 +436,19 @@ export class BrowserService {
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof BrowserPreconditionError) return await this.#precondition(controller, error, ctx);
       this.#state = 'running';
+      if (error instanceof BrowserOpenedError) {
+        // The page opened and a later step failed: hand back the page, not just the error.
+        const site = siteOf(error.page.url) ?? 'the page';
+        const failed = message.replace(/\.$/, '');
+        if (error.page.url) this.#lastUrl = error.page.url;
+        const seen = await this.#look(controller, ctx).catch(() => false);
+        if (seen) {
+          return { completed: false, dispatched: true, notice: UNTRUSTED, observation: this.#observation,
+            message: `${observedLine(this.#observation!.observedAt!)} Opened ${site}, then this failed: ${failed}. Carry on from this page; don't open it again.` };
+        }
+        this.#message = `Opened ${site} in a tab, then this failed: ${failed}.`;
+        throw new Error(this.#message);
+      }
       if (['click', 'fill', 'select', 'press'].includes(run.action)) {
         // The input may have landed part-way: the owner looks, or tells the agent to judge from the page.
         this.#stop('uncertain-input', ctx, 'card');

@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChromeLike } from './chrome.js';
-import { Cancellation, CancelledError, PreconditionError, Protocol, proofFor, sentence, type Command, type CommandResult } from './protocol.js';
+import { Cancellation, CancelledError, OpenedError, PreconditionError, Protocol, proofFor, sentence, type Command, type CommandResult } from './protocol.js';
 
 function fakeChrome(initial: Record<string, unknown> = {}) {
   const store = new Map(Object.entries(initial));
@@ -204,6 +204,13 @@ describe('commands', () => {
     const { protocol, sent } = await paired({ execute: async () => { throw new Error('the tab crashed'); } });
     await protocol.receive(JSON.stringify({ type: 'command', id: 'c4', name: 'navigate', session: 's1', args: { url: 'https://example.test/' } }));
     expect(sent[0]).toEqual({ type: 'result', id: 'c4', ok: false, error: 'the tab crashed.', precondition: false });
+  });
+
+  it('carries the page with a failure that came after the tab opened', async () => {
+    const page = { tabId: 'tab-1', url: 'https://amazon.test/', title: 'Amazon' };
+    const { protocol, sent } = await paired({ execute: async () => { throw new OpenedError('The tab closed while it was loading.', page); } });
+    await protocol.receive(JSON.stringify({ type: 'command', id: 'c5', name: 'navigate', session: 's1', args: { url: 'https://amazon.test/' } }));
+    expect(sent[0]).toEqual({ type: 'result', id: 'c5', ok: false, error: 'The tab closed while it was loading.', precondition: false, page });
   });
 
   it('refuses a command it does not know and one with no session, before dispatching anything', async () => {

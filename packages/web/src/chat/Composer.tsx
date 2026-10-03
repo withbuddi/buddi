@@ -905,12 +905,12 @@ export const Composer = forwardRef<ComposerHandle, {
               setupHref ? (
                 <a className="wb-composer-model" href={setupHref} title="The model this agent runs on. Click to change it.">
                   <span className="wb-composer-model-dot" aria-hidden="true" />
-                  {model}
+                  <span className="wb-composer-chip-label">{model}</span>
                 </a>
               ) : (
                 <span className="wb-composer-model" title="The model this agent runs on">
                   <span className="wb-composer-model-dot" aria-hidden="true" />
-                  {model}
+                  <span className="wb-composer-chip-label">{model}</span>
                 </span>
               )
             ) : null}
@@ -940,7 +940,7 @@ export const Composer = forwardRef<ComposerHandle, {
                 onClick={() => onThinking(thinkingOn(thinking) ? 'off' : 'on')}
               >
                 <span className="wb-composer-think-dot" aria-hidden="true" />
-                Thinking
+                <span className="wb-composer-chip-label">Thinking</span>
               </button>
             ) : null}
 
@@ -956,7 +956,9 @@ export const Composer = forwardRef<ComposerHandle, {
                 onClick={() => chrome.onChange(!chrome.on)}
               >
                 <span className="wb-composer-think-dot" aria-hidden="true" />
-                {phone ? 'Chrome' : 'Use my Chrome'}
+                {/* A narrow box (the corner chat, a squeezed column) drops the
+                    lead and says just "Chrome", as the phone does. */}
+                <span className="wb-composer-chip-label">{phone ? null : <span className="wb-composer-chip-lead">Use my </span>}Chrome</span>
               </button>
             ) : null}
 

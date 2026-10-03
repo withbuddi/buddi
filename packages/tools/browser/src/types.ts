@@ -48,6 +48,14 @@ export const commandSchema = z.object({
 export type BrowserCommand = z.infer<typeof commandSchema>;
 /** Refusal before any input was dispatched: safe to observe and reconsider. */
 export class BrowserPreconditionError extends Error {}
+/**
+ * A step failed after the page had opened (the owner's Chrome says which tab
+ * and where): the page is there, so the agent hears "opened, then this
+ * failed", never "could not open".
+ */
+export class BrowserOpenedError extends Error {
+  constructor(message: string, readonly page: { tabId: string; url: string; title: string }) { super(message); }
+}
 export interface ObservedTarget { ref: string; frame: number; role: string; name: string; href?: string; bounds?: { x: number; y: number; width: number; height: number } }
 export interface Observation {
   id: string;
@@ -145,6 +153,12 @@ export interface BrowserDriver {
    */
   interrupt?(): Promise<void>;
   resume?(): void;
+  /**
+   * One plain line about how the last action went that the page will not
+   * show (the owner's Chrome opened a new window instead of a tab), handed
+   * over once.
+   */
+  takeNote?(): string | undefined;
   /** OS apps are user-owned and must not be closed on release. */
   preservesWindows?: boolean;
   /**

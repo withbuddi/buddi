@@ -131,6 +131,9 @@ export class ExtensionDriver implements BrowserDriver {
 
   #invalidate(): void { this.#observation = undefined; this.#picture = undefined; }
 
+  #note?: string;
+  takeNote(): string | undefined { const note = this.#note; this.#note = undefined; return note; }
+
   async #send(name: ExtensionCommandName, args: Record<string, unknown> = {}, owner = false): Promise<ExtensionResult> {
     // A failure left the page in an unknown state and possibly a command still
     // being abandoned. Nothing else goes out until that has settled.
@@ -165,7 +168,11 @@ export class ExtensionDriver implements BrowserDriver {
       const checked = checkUrl(command.url!).url;
       if (this.allowedHosts?.length && !this.allowedHosts.includes(checked.hostname)) throw new BrowserPreconditionError('This website is outside the configured browser hosts.');
       this.#invalidate();
-      await this.#send('navigate', { url: checked.href });
+      this.#note = undefined;
+      const result = await this.#send('navigate', { url: checked.href });
+      // The extension's one line about where the page opened, on the observation passthrough.
+      const note = (result.observation as { note?: unknown } | null | undefined)?.note;
+      if (typeof note === 'string' && note.trim() !== '') this.#note = note.trim().slice(0, 300);
       return;
     }
     if (command.action === 'tab') {

@@ -16,12 +16,17 @@
  */
 
 import type { TabInfo, WorkerChrome } from './chrome.js';
-import { Cancellation, PreconditionError, type Command, type CommandResult, type FieldFacts, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
+import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type CommandResult, type FieldFacts, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
 import { hideBar, readBar, showBar, waitForOwner, type BarChoice, type OwnerEventMessage } from './bar.js';
 
 interface Session {
   groupId: number;
+  /**
+   * Tabs Chrome would not put in the group (a window without a tab strip, or
+   * grouping refused): still this session's, so the group check skips them.
+   */
+  ungrouped: Set<number>;
   tabs: Map<string, number>;
   active: string | null;
   /** Bumped by every observation, so a ref from an older one is recognisable. */
@@ -55,6 +60,10 @@ interface FieldRead {
 }
 
 const GROUP_TITLE = 'buddi';
+/** The window picked for the tab would not take one; a new window, in the background, did. */
+export const NEW_WINDOW_NOTE = "Your Chrome couldn't open a tab in that window; opened a new window instead.";
+/** Chrome had no ordinary window open (only popups or app windows). */
+export const NO_WINDOW_NOTE = 'Your Chrome had no ordinary window open, so the page opened in a new one, in the background.';
 /** The driver reads the main frame plus ten, and caps the whole tree at 32k. */
 const MAX_FRAMES = 11;
 const MAX_TREE = 32_000;
@@ -342,7 +351,7 @@ export class BrowserCommands implements Executor {
   async #session(session: string): Promise<Session> {
     const existing = this.#sessions.get(session);
     if (existing) return existing;
-    const created: Session = { groupId: -1, tabs: new Map(), active: null, generation: 0 };
+    const created: Session = { groupId: -1, ungrouped: new Set(), tabs: new Map(), active: null, generation: 0 };
     this.#sessions.set(session, created);
     return created;
   }
@@ -365,8 +374,14 @@ export class BrowserCommands implements Executor {
     if (tabId === undefined) throw new PreconditionError('This conversation has no browser tab yet. Navigate to open one.');
     const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
     if (!tab) { this.#forget(session, key); throw new PreconditionError('That tab is gone. Observe again to continue in a new one.'); }
-    if (session.groupId >= 0 && tab.groupId !== session.groupId) { this.#forget(session, key); throw new PreconditionError(TAKEN); }
+    if (this.#taken(session, tab)) { this.#forget(session, key); throw new PreconditionError(TAKEN); }
     return tab;
+  }
+
+  /** The owner dragged this tab out of the session's group. A tab that never made it into the group cannot have been. */
+  #taken(session: Session, tab: TabInfo): boolean {
+    if (tab.id !== undefined && session.ungrouped.has(tab.id)) return false;
+    return session.groupId >= 0 && tab.groupId !== session.groupId;
   }
 
   #activeKey(session: Session): string {
@@ -423,25 +438,94 @@ export class BrowserCommands implements Executor {
     return checkUrl(tab.url ?? '');
   }
 
-  async #openTab(session: Session, url: string, cancel: Cancellation): Promise<number> {
+  /**
+   * An ordinary window to open the tab in: the group's own when it has one,
+   * else the one the owner used last, else any. `null` when Chrome has none
+   * (only popups or installed apps' windows), `undefined` when this Chrome
+   * cannot say, in which case Chrome picks as it always did.
+   */
+  async #normalWindow(session: Session): Promise<number | null | undefined> {
+    const windows = this.#chrome.windows;
+    if (!windows.getLastFocused && !windows.getAll) return undefined;
+    const normal = (window: { id?: number; type?: string } | undefined): window is { id: number } =>
+      window?.id !== undefined && (window.type === undefined || window.type === 'normal');
+    if (session.groupId >= 0) {
+      const group = await this.#chrome.tabGroups.get(session.groupId).catch(() => undefined) as { windowId?: number } | undefined;
+      if (group?.windowId !== undefined) {
+        const found = await windows.get(group.windowId).catch(() => undefined);
+        if (normal(found)) return found.id;
+      }
+    }
+    const last = await windows.getLastFocused?.({ windowTypes: ['normal'] }).catch(() => undefined);
+    if (normal(last)) return last.id;
+    const all = await windows.getAll?.({ windowTypes: ['normal'] }).catch(() => undefined);
+    return all?.find(normal)?.id ?? null;
+  }
+
+  /**
+   * One background tab, in an ordinary window, in the session's group.
+   *
+   * The group is cosmetic: Chrome refuses it in a window without a tab strip,
+   * and that refusal must not undo a page that has already opened. No
+   * ordinary window at all, or one that would not take the tab, and the page
+   * opens in a new window that does not take the focus. Nothing here
+   * activates a tab or focuses a window: the owner keeps working.
+   */
+  async #openTab(session: Session, url: string, cancel: Cancellation): Promise<{ tabId: number; key: string; note?: string }> {
+    const windowId = await this.#normalWindow(session);
     cancel.dispatch();
-    const tab = await this.#chrome.tabs.create({ url, active: false });
-    if (tab.id === undefined) throw new Error('Chrome opened a tab without an id.');
-    const groupId = await this.#chrome.tabs.group(session.groupId >= 0
-      ? { tabIds: [tab.id], groupId: session.groupId }
-      : { tabIds: [tab.id] });
-    if (session.groupId !== groupId) {
-      session.groupId = groupId;
-      await this.#chrome.tabGroups.update(groupId, { title: GROUP_TITLE, collapsed: false }).catch(() => undefined);
+    let tab: TabInfo | undefined;
+    let note: string | undefined;
+    let groupable = true;
+    if (windowId === undefined) {
+      tab = await this.#chrome.tabs.create({ url, active: false });
+    } else if (windowId !== null) {
+      tab = await this.#chrome.tabs.create({ url, active: false, windowId }).catch(() => undefined);
+      if (!tab) note = NEW_WINDOW_NOTE;
+    } else {
+      note = NO_WINDOW_NOTE;
+    }
+    if (!tab) {
+      if (!this.#chrome.windows.create) throw new Error('Your Chrome has no ordinary window to open a tab in. Open a Chrome window and try again.');
+      const created = await this.#chrome.windows.create({ url, focused: false, state: 'normal' });
+      tab = created.tabs?.[0];
+      // A window of its own is already apart from the owner's tabs; its tab stays out of any group.
+      groupable = false;
+    }
+    if (tab?.id === undefined) throw new Error('Chrome opened a tab without an id.');
+    const tabId = tab.id;
+    if (groupable) {
+      try {
+        const groupId = await this.#chrome.tabs.group(session.groupId >= 0
+          ? { tabIds: [tabId], groupId: session.groupId }
+          : { tabIds: [tabId] });
+        if (session.groupId !== groupId) {
+          session.groupId = groupId;
+          await this.#chrome.tabGroups.update(groupId, { title: GROUP_TITLE, collapsed: false }).catch(() => undefined);
+        }
+      } catch {
+        // "Grouping is not supported by tabs in this window": the tab is open
+        // and it is this session's all the same.
+        session.ungrouped.add(tabId);
+      }
+    } else {
+      session.ungrouped.add(tabId);
     }
     const key = `tab-${this.#uuid().slice(0, 12)}`;
-    session.tabs.set(key, tab.id);
+    session.tabs.set(key, tabId);
     session.active = key;
-    return tab.id;
+    return { tabId, key, ...(note ? { note } : {}) };
+  }
+
+  /** What a failure after the tab opened carries back: the page is there. */
+  async #openedError(error: unknown, tabId: number, key: string, url: string): Promise<OpenedError> {
+    const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
+    const message = error instanceof Error ? error.message : String(error);
+    return new OpenedError(message, { tabId: key, url: tab?.url ?? url, title: tab?.title ?? '' });
   }
 
   /** The key of this session's current tab, opening one when there is none to reuse. */
-  async #reuseOrOpen(session: Session, url: string, cancel: Cancellation): Promise<void> {
+  async #reuseOrOpen(session: Session, url: string, cancel: Cancellation): Promise<string | undefined> {
     const key = session.active;
     if (key) {
       // Check the group before the URL: a tab the owner adopted gets a new one
@@ -451,11 +535,17 @@ export class BrowserCommands implements Executor {
         cancel.dispatch();
         await this.#chrome.tabs.update(tab.id, { url });
         await this.#waitForLoad(tab.id);
-        return;
+        return undefined;
       }
     }
     const opened = await this.#openTab(session, url, cancel);
-    await this.#waitForLoad(opened);
+    try {
+      await this.#waitForLoad(opened.tabId);
+    } catch (error) {
+      if (error instanceof CancelledError) throw error;
+      throw await this.#openedError(error, opened.tabId, opened.key, url);
+    }
+    return opened.note;
   }
 
   /**
@@ -499,8 +589,9 @@ export class BrowserCommands implements Executor {
     session.observed = undefined;
     this.#refs.delete(command.session);
     cancel.check();
-    await this.#reuseOrOpen(session, url, cancel);
-    return {};
+    const note = await this.#reuseOrOpen(session, url, cancel);
+    // A note rides the observation passthrough, the one field the gateway relays untouched.
+    return note ? { observation: { note } as unknown as Observation } : {};
   }
 
   async #tab(command: Command): Promise<CommandResult> {
@@ -524,7 +615,7 @@ export class BrowserCommands implements Executor {
       const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
       if (!tab) continue;
       // A tab the owner took out of the group is not this session's to close.
-      if (session.groupId >= 0 && tab.groupId !== session.groupId) { this.#forget(session, key); continue; }
+      if (this.#taken(session, tab)) { this.#forget(session, key); continue; }
       ids.push(tabId);
     }
     if (ids.length > 0) {
@@ -542,7 +633,7 @@ export class BrowserCommands implements Executor {
     const live: Array<{ id: string; tab: TabInfo }> = [];
     for (const [key, tabId] of [...session.tabs]) {
       const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
-      if (!tab || (session.groupId >= 0 && tab.groupId !== session.groupId)) { this.#forget(session, key); continue; }
+      if (!tab || this.#taken(session, tab)) { this.#forget(session, key); continue; }
       live.push({ id: key, tab });
     }
     if (!session.active && live[0]) session.active = live[0].id;
@@ -875,7 +966,7 @@ export class BrowserCommands implements Executor {
     const session = await this.#session(command.session);
     const tab = await this.#chrome.tabs.get(cast.tabId).catch(() => undefined);
     if (!tab) { await this.#stopScreencast(command.session); throw new PreconditionError('That tab is gone. Observe again to continue in a new one.'); }
-    if (session.groupId >= 0 && tab.groupId !== session.groupId) { await this.#stopScreencast(command.session); throw new PreconditionError(TAKEN); }
+    if (this.#taken(session, tab)) { await this.#stopScreencast(command.session); throw new PreconditionError(TAKEN); }
     await this.#background(tab, command);
     const event = inputEvent(command.args);
     cancel.check();

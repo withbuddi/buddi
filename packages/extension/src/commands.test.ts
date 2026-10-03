@@ -4,9 +4,9 @@
  * command lands on and what it refuses.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BrowserCommands } from './commands.js';
+import { BrowserCommands, NEW_WINDOW_NOTE, NO_WINDOW_NOTE } from './commands.js';
 import type { WorkerChrome } from './chrome.js';
-import { Cancellation, CancelledError, PreconditionError, type Command, type FrameMessage } from './protocol.js';
+import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type FrameMessage } from './protocol.js';
 import type { CollectedElement } from './tree.js';
 import type { OwnerEventMessage } from './bar.js';
 
@@ -37,8 +37,12 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
   const detaches: DebuggerDetach[] = [];
   const injected: string[] = [];
   const tabs = new Map<number, FakeTab>();
-  const windows = new Map<number, { id: number; focused: boolean }>([[1, { id: 1, focused: true }]]);
-  const failures: { attach?: string } = {};
+  const windows = new Map<number, { id: number; focused: boolean; type: string }>([[1, { id: 1, focused: true, type: 'normal' }]]);
+  const failures: { attach?: string; group?: string; createInWindow?: string } = {};
+  /** Every tab and window this asked Chrome to make, as it asked. */
+  const creates: Array<{ url: string; active?: boolean; windowId?: number }> = [];
+  const windowCreates: Array<{ url?: string; focused?: boolean; state?: string }> = [];
+  const normalWindows = () => [...windows.values()].filter((window) => window.type === 'normal');
   /*
    * What the page side answers when the worker reads a field it is about to act
    * on — `locate` today, `readFieldRef`/`prepareSecretRef` for the secret flow.
@@ -54,8 +58,10 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
   const chrome = {
     storage: { local: { async get() { return {}; }, async set() {}, async remove() {} } },
     tabs: {
-      async create({ url }: { url: string }) {
-        const tab = { id: (nextTabId += 1), url, title: 'Example', status: 'complete', groupId: -1, windowId: 1, active: false };
+      async create(properties: { url: string; active?: boolean; windowId?: number }) {
+        creates.push(properties);
+        if (properties.windowId !== undefined && failures.createInWindow) throw new Error(failures.createInWindow);
+        const tab = { id: (nextTabId += 1), url: properties.url, title: 'Example', status: 'complete', groupId: -1, windowId: properties.windowId ?? 1, active: properties.active ?? true };
         tabs.set(tab.id, tab);
         return tab;
       },
@@ -65,10 +71,26 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
       async query() { return [...tabs.values()]; },
       // Chrome puts the tab in the group; the fake has to as well, because
       // every command now asks whether the tab is still in it.
-      async group({ tabIds }: { tabIds: number[] }) { for (const id of tabIds) tabs.get(id)!.groupId = 7; return 7; },
+      async group({ tabIds }: { tabIds: number[] }) {
+        if (failures.group) throw new Error(failures.group);
+        for (const id of tabIds) tabs.get(id)!.groupId = 7;
+        return 7;
+      },
     },
     tabGroups: { async update() { return {}; }, async get() { return {}; } },
-    windows: { async get(id: number) { const found = windows.get(id); if (!found) throw new Error('no such window'); return found; } },
+    windows: {
+      async get(id: number) { const found = windows.get(id); if (!found) throw new Error('no such window'); return found; },
+      async getLastFocused() { const found = normalWindows().find((window) => window.focused) ?? normalWindows()[0]; if (!found) throw new Error('No last-focused window'); return found; },
+      async getAll() { return normalWindows(); },
+      async create(data: { url?: string; focused?: boolean; state?: string }) {
+        windowCreates.push(data);
+        const window = { id: 50 + windowCreates.length, focused: data.focused ?? true, type: 'normal' };
+        windows.set(window.id, window);
+        const tab = { id: (nextTabId += 1), url: data.url ?? '', title: 'Example', status: 'complete', groupId: -1, windowId: window.id, active: true };
+        tabs.set(tab.id, tab);
+        return { ...window, tabs: [tab] };
+      },
+    },
     scripting: {
       async executeScript(injection: { target: { frameIds?: number[]; allFrames?: boolean }; files?: string[]; func?: { name: string } }) {
         if (injection.files) { injected.push(injection.files.join(',')); return []; }
@@ -97,7 +119,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     alarms: { create() {}, onAlarm: { addListener() {} } },
     runtime: { getManifest: () => ({ version: '0.1.0' }), onMessage: { addListener() {} }, async sendMessage() { return undefined; } },
   } as unknown as WorkerChrome;
-  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar };
+  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar, creates, windowCreates };
 }
 
 const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
@@ -746,5 +768,82 @@ describe('the owner’s secret', () => {
     await commands.run(command('observe'));
     await expect(commands.run(fill({ ref: 'e3', value: SECRET }))).rejects.toThrow(/without the origin/);
     await expect(commands.run(fill({ ref: 'e3', value: '', expectedOrigin: 'https://example.test' }))).rejects.toThrow(/nothing in it/);
+  });
+});
+
+describe('opening a tab in your Chrome', () => {
+  const navigate = command('navigate', { url: 'https://amazon.test/' });
+
+  it('opens it in the background of an ordinary window, in the buddi group', async () => {
+    const fake = fakeChrome();
+    const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value' });
+    await expect(commands.run(navigate)).resolves.toEqual({});
+    expect(fake.creates).toEqual([{ url: 'https://amazon.test/', active: false, windowId: 1 }]);
+    expect([...fake.tabs.values()][0]).toMatchObject({ groupId: 7, active: false });
+  });
+
+  it('skips a popup or app window the owner last used and picks an ordinary one', async () => {
+    const fake = fakeChrome();
+    fake.windows.get(1)!.focused = false;
+    fake.windows.set(9, { id: 9, focused: true, type: 'app' });
+    const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value' });
+    await commands.run(navigate);
+    expect(fake.creates[0]).toEqual({ url: 'https://amazon.test/', active: false, windowId: 1 });
+  });
+
+  it('carries on when the window will not group tabs: the group is cosmetic, the page is open', async () => {
+    const fake = fakeChrome();
+    fake.failures.group = 'Grouping is not supported by tabs in this window.';
+    const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value' });
+    await expect(commands.run(command('navigate', { url: 'https://example.test/' }))).resolves.toEqual({});
+    // Still this conversation's tab: it observes and acts there, and close takes it away.
+    const { observation } = await commands.run(command('observe'));
+    expect(observation!.url).toBe('https://example.test/');
+    await commands.run(command('click', { target: { ref: 'e2' } }));
+    await commands.run(command('close'));
+    expect(fake.tabs.size).toBe(0);
+  });
+
+  it('opens a new background window when Chrome has no ordinary one, and does not group it', async () => {
+    const fake = fakeChrome();
+    fake.windows.clear();
+    fake.windows.set(9, { id: 9, focused: true, type: 'popup' });
+    const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value' });
+    const result = await commands.run(navigate);
+    expect(fake.creates).toEqual([]);
+    expect(fake.windowCreates).toEqual([{ url: 'https://amazon.test/', focused: false, state: 'normal' }]);
+    expect((result.observation as unknown as { note: string }).note).toBe(NO_WINDOW_NOTE);
+    const { observation } = await commands.run(command('observe'));
+    expect(observation!.tabs).toHaveLength(1);
+  });
+
+  it('falls back to a new window when the picked one refuses the tab, and says so', async () => {
+    const fake = fakeChrome();
+    fake.failures.createInWindow = 'No tab strip in this window.';
+    const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value' });
+    const result = await commands.run(navigate);
+    expect(fake.windowCreates).toEqual([{ url: 'https://amazon.test/', focused: false, state: 'normal' }]);
+    expect((result.observation as unknown as { note: string }).note).toBe(NEW_WINDOW_NOTE);
+  });
+
+  it('a failure after the tab opened still says where the page is', async () => {
+    const fake = fakeChrome();
+    // The tab opens, then closes while it is loading.
+    const create = fake.chrome.tabs.create.bind(fake.chrome.tabs);
+    fake.chrome.tabs.create = async (properties) => {
+      const tab = await create(properties);
+      const live = fake.tabs.get(tab.id!)!;
+      live.status = 'loading';
+      live.title = 'Amazon';
+      const get = fake.chrome.tabs.get.bind(fake.chrome.tabs);
+      let reads = 0;
+      fake.chrome.tabs.get = async (id) => { if (id === tab.id && ++reads > 1) throw new Error('no such tab'); return get(id); };
+      return tab;
+    };
+    const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value' });
+    const failure = await commands.run(navigate).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(OpenedError);
+    expect((failure as OpenedError).message).toBe('The tab closed while it was loading.');
+    expect((failure as OpenedError).page).toEqual({ tabId: 'tab-fixed-uuid-v', url: 'https://amazon.test/', title: '' });
   });
 });

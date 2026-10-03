@@ -9,7 +9,7 @@ const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 
 const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 import { HostController } from './controller.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand } from './extension.js';
-import { BrowserPreconditionError, commandSchema } from './types.js';
+import { BrowserOpenedError, BrowserPreconditionError, commandSchema } from './types.js';
 
 /** A bridge that records what was asked of it and answers from a script. */
 function bridge(answers: Partial<Record<string, unknown>> = {}, connected = true) {
@@ -104,6 +104,46 @@ describe('the owner\'s Chrome as a route', () => {
     expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8'))).toMatchObject({ version: 2, yourChrome: true });
     await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('b'))).resolves.toMatchObject({ completed: true, route: 'chrome', routeNote: 'I used your Chrome because Example needs your sign-in.' });
     expect(sent.map((c) => c.name)).toEqual(['navigate', 'observe', 'screenshot']);
+  });
+});
+
+describe('when your Chrome opens the page and then something fails', () => {
+  async function chromeRoute(answers: Partial<Record<string, unknown>>) {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-opened-'));
+    dirs.push(dir);
+    const { fake, sent } = bridge(answers);
+    const controller = new HostController(dir, { extensionBridge: () => fake, platform: 'linux' });
+    controllers.push(controller);
+    await controller.enable();
+    await controller.configure({ yourChrome: true, signInSites: ['example.com'] });
+    return { controller, sent };
+  }
+
+  it('hands back the page that opened, not just the error', async () => {
+    const { controller } = await chromeRoute({
+      navigate: new BrowserOpenedError('The tab closed while it was loading.', { tabId: 'tab-1', url: 'https://example.com/', title: 'Example' }),
+      observe: page, screenshot: shot,
+    });
+    const result = await controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('o'));
+    expect(result).toMatchObject({ completed: false, dispatched: true, route: 'chrome', observation: { url: 'https://example.com/' } });
+    expect((result as { message: string }).message).toContain('Opened example.com, then this failed: The tab closed while it was loading. Carry on from this page');
+  });
+
+  it('says in one line that the page opened in a new window', async () => {
+    const note = "Your Chrome couldn't open a tab in that window; opened a new window instead.";
+    const { controller } = await chromeRoute({ navigate: { observation: { note } }, observe: page, screenshot: shot });
+    const result = await controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('n'));
+    expect(result).toMatchObject({ completed: true, route: 'chrome' });
+    expect((result as { message: string }).message).toContain(note);
+  });
+
+  it('does not let the same failure be tried a third time: the second says so plainly', async () => {
+    const { controller, sent } = await chromeRoute({ navigate: new Error('Grouping is not supported by tabs in this window.') });
+    await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('r'))).rejects.toThrow('Grouping is not supported');
+    const second = await controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('r'));
+    expect(second).toEqual({ completed: false, dispatched: false,
+      message: "Your Chrome failed the same way twice: Grouping is not supported by tabs in this window. Don't try it again; tell the owner that in one sentence." });
+    expect(sent.filter((c) => c.name === 'navigate')).toHaveLength(2);
   });
 });
 

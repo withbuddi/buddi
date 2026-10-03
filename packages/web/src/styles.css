@@ -1748,6 +1748,22 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-composer-think[aria-pressed='true'] .wb-composer-think-dot { background: var(--accent); border-color: var(--accent); }
 .wb-hint[data-tone='critical'] { color: var(--critical); white-space: normal; overflow: visible; text-overflow: clip; }
 
+/* Send is never pushed out of the box. The chips give way first: they shrink
+   and cut their words short, then a narrow box (the corner chat, a squeezed
+   column) drops the model chip and says "Chrome" for "Use my Chrome". Send
+   and Stop keep their size, at the end of the row. */
+.wb-composer-box { container-type: inline-size; }
+.wb-composer-model, .wb-composer-think { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.wb-composer-chip-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wb-composer-row > .wb-send, .wb-composer-row > .ui-btn[data-variant='stop'] { flex: 0 0 auto; }
+.wb-composer-row > .wb-send { margin-left: auto; }
+@container (max-width: 560px) {
+  .wb-composer-row > .wb-composer-model { display: none; }
+}
+@container (max-width: 440px) {
+  .wb-composer-chip-lead { display: none; }
+}
+
 /* ---- talking to buddi: the microphone and the speaker ---- */
 
 .wb-mic { touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -5114,7 +5130,7 @@ button.lk-chip:disabled { cursor: default; }
 .cv[data-phone='true'] .wb-composer-row { gap: var(--space-1); }
 .cv[data-phone='true'] .cv-note { flex-wrap: wrap; }
 
-.cv .wb-composer-model { white-space: nowrap; flex: 0 0 auto; }
+.cv .wb-composer-model { white-space: nowrap; flex: 0 1 auto; min-width: 0; }
 .cv-hint { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity var(--dur-fast) ease; }
 .cv-hint[data-shown='true'] { opacity: 1; }
 .cv:not([data-phone='true']) .cv-pop { right: auto; width: min(100%, calc(var(--space-12) * 10)); }

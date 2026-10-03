@@ -11,6 +11,9 @@
 
 export interface TabInfo { id?: number; url?: string; title?: string; status?: string; groupId?: number; windowId?: number; active?: boolean }
 
+export type WindowType = 'normal' | 'popup' | 'panel' | 'app' | 'devtools';
+export interface WindowInfo { id?: number; focused?: boolean; type?: WindowType }
+
 export interface ChromeLike {
   storage: {
     local: {
@@ -30,9 +33,16 @@ export interface ChromeLike {
     update(groupId: number, properties: { title?: string; collapsed?: boolean }): Promise<unknown>;
     get(groupId: number): Promise<unknown>;
   };
-  /** Only to answer one question: is the owner looking at this tab right now? */
+  /**
+   * Is the owner looking at this tab right now, and which window is an
+   * ordinary one to open a tab in. A popup, an app or an installed web app's
+   * window has no tab strip: Chrome refuses to group a tab there.
+   */
   windows: {
-    get(windowId: number): Promise<{ id?: number; focused?: boolean }>;
+    get(windowId: number): Promise<WindowInfo>;
+    getLastFocused?(options: { windowTypes?: WindowType[] }): Promise<WindowInfo>;
+    getAll?(options: { windowTypes?: WindowType[] }): Promise<WindowInfo[]>;
+    create?(data: { url?: string; focused?: boolean; state?: 'normal' }): Promise<WindowInfo & { tabs?: TabInfo[] }>;
   };
   scripting: {
     executeScript<Args extends unknown[] = [], Result = unknown>(injection: {

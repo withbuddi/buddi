@@ -72,6 +72,8 @@ export class HostController implements BrowserController {
   #current = new Map<string, RouteKind>();
   /** Notes already said, so the chat line comes once per site and route. */
   #noted = new Set<string>();
+  /** The last thing the owner's Chrome failed with, by conversation key, so the same failure is not retried a third time. */
+  #chromeFailed = new Map<string, string>();
   /** Stop cards shown, by conversation, so a Resume tap is understood. */
   #stopCards = new Map<string, OwnerCard>();
   /** Cards already handed to a surface, so one moment is one card. */
@@ -583,8 +585,14 @@ export class HostController implements BrowserController {
     }
     let result: unknown;
     {
-      try { result = await this.#managers[route].execute(run, ctx); }
+      try {
+        result = await this.#managers[route].execute(run, ctx);
+        if (route === 'chrome') this.#chromeFailed.delete(key);
+      }
       catch (error) {
+        // The same failure from the owner's Chrome twice running: one plain line, not a third identical try.
+        const repeated = route === 'chrome' ? this.#chromeRepeat(key, error, ctx) : undefined;
+        if (repeated) return repeated;
         // The owner's Chrome went away: the same page in buddi's own browser, silently.
         if (route !== 'chrome' || !(error instanceof Error) || !error.message.includes(NOT_CONNECTED.slice(0, 30))) throw error;
         this.telemetry.stop('not-connected', { route: 'chrome', agent: ctx.agentId, ...missionMark(ctx), ...(site ? { host: site } : {}) });
@@ -600,6 +608,23 @@ export class HostController implements BrowserController {
       ({ result, route, choice } = await this.#walls(result, route, choice, ctx, unattended));
     }
     return this.#annotate(result, route, choice, ctx, appName);
+  }
+
+  /**
+   * The owner's Chrome failed: remember how. The second identical failure in
+   * a row is answered with one plain line and a stop, rather than letting
+   * the agent try the same step a third time and then tell the owner the
+   * page never opened. A refusal (stale page, owner looking), a stop and a
+   * lost connection are not failures of this kind and are left as they are.
+   */
+  #chromeRepeat(key: string, error: unknown, ctx: ToolContext): { completed: false; dispatched: false; message: string } | undefined {
+    if (!(error instanceof Error) || error instanceof BrowserPreconditionError || error instanceof ToolRefusal || ctx.signal?.aborted) return undefined;
+    if (error.message.includes(NOT_CONNECTED.slice(0, 30))) return undefined;
+    const said = error.message.trim();
+    if (this.#chromeFailed.get(key) !== said) { this.#chromeFailed.set(key, said); return undefined; }
+    this.#chromeFailed.delete(key);
+    return { completed: false, dispatched: false,
+      message: `Your Chrome failed the same way twice: ${said.replace(/\.$/, '')}. Don't try it again; tell the owner that in one sentence.` };
   }
 
   /**

@@ -8,6 +8,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Composer, type ComposerHandle } from './Composer';
+import '@testing-library/jest-dom/vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 afterEach(() => {
   cleanup();
@@ -504,5 +507,63 @@ describe('the tab snap', () => {
     render(<Composer disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
     await act(async () => { screen.getByRole('button', { name: 'Snap a tab' }).click(); });
     await waitFor(() => expect(screen.getByText(snap.SNAP_UNSUPPORTED)).toBeDefined());
+  });
+});
+
+/**
+ * Send at the end of a full row. Once "Use my Chrome" joined the model and
+ * Thinking chips, the row outgrew a normal chat column and the box (overflow
+ * hidden) clipped the round Send button off its right edge. jsdom cannot
+ * measure, so the test carries the real stylesheet and checks what it can:
+ * Send is there and shown, and the rules that keep it there hold.
+ */
+const styles = readFileSync(join(__dirname, '../styles.css'), 'utf8');
+
+describe('the send button beside every chip', () => {
+  it('stays in the row, shown, with the model, Thinking and Use my Chrome all present', () => {
+    const style = document.createElement('style');
+    style.textContent = styles;
+    document.head.appendChild(style);
+    try {
+      render(
+        <Composer
+          disabled={false}
+          running
+          onSend={() => {}}
+          onStop={() => {}}
+          agentName="Ada"
+          model="claude-sonnet-5-with-a-long-name"
+          thinking="on"
+          onThinking={() => {}}
+          chrome={{ on: false, onChange: () => {} }}
+          onReadAloud={() => {}}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Use my Chrome' })).toBeInTheDocument();
+      const send = screen.getByRole('button', { name: 'Send' });
+      expect(send).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible();
+      // Send is the row's last control.
+      const row = send.parentElement as HTMLElement;
+      expect(row.lastElementChild).toBe(send);
+      expect(getComputedStyle(send).flexShrink).toBe('0');
+    } finally {
+      style.remove();
+    }
+  });
+
+  it('keeps the shrink-first rules in the stylesheet', () => {
+    const rule = (selector: string): string => {
+      const at = styles.indexOf(`${selector} {`);
+      expect(at, selector).toBeGreaterThanOrEqual(0);
+      return styles.slice(at, styles.indexOf('}', at));
+    };
+    expect(rule('.wb-composer-model, .wb-composer-think')).toMatch(/flex: 0 1 auto; min-width: 0; overflow: hidden/);
+    expect(rule('.wb-composer-chip-label')).toMatch(/text-overflow: ellipsis/);
+    expect(rule(".wb-composer-row > .wb-send, .wb-composer-row > .ui-btn[data-variant='stop']")).toMatch(/flex: 0 0 auto/);
+    expect(styles).toMatch(/\.wb-composer-box \{ container-type: inline-size; \}/);
+    expect(styles).toMatch(/@container \(max-width: \d+px\) \{\s*\.wb-composer-row > \.wb-composer-model \{ display: none; \}/);
+    expect(styles).toMatch(/@container \(max-width: \d+px\) \{\s*\.wb-composer-chip-lead \{ display: none; \}/);
+    expect(styles).not.toMatch(/\.cv \.wb-composer-model \{[^}]*flex: 0 0 auto/);
   });
 });
