@@ -215,3 +215,51 @@ describe('requests and the untrusted fence', () => {
     expect(section).toContain('## l\nSteps.');
   });
 });
+
+describe('skill bundles (a SKILL.md with files beside it)', () => {
+  const bundleDir = (untrusted = false): string => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'buddi-bundles-'));
+    mkdirSync(path.join(dir, 'cover-art', 'scripts'), { recursive: true });
+    mkdirSync(path.join(dir, 'cover-art', 'assets'), { recursive: true });
+    writeFileSync(path.join(dir, 'cover-art', 'SKILL.md'), skillFile(`name: cover-art\ndescription: When I ask for a cover.${untrusted ? '\nuntrusted: true' : ''}`, '# Cover art\n\nRun scripts/make_cover.py.'));
+    writeFileSync(path.join(dir, 'cover-art', 'scripts', 'make_cover.py'), 'print(1)\n');
+    writeFileSync(path.join(dir, 'cover-art', 'assets', 'palette.json'), '{"ground":"#152642"}\n');
+    writeFileSync(path.join(dir, 'one.md'), skillFile('name: one\ndescription: One file.'));
+    // A hidden folder (a learned skill's versions) and a folder without SKILL.md are not bundles.
+    mkdirSync(path.join(dir, '.versions', 'x'), { recursive: true });
+    mkdirSync(path.join(dir, 'loose'), { recursive: true });
+    writeFileSync(path.join(dir, 'loose', 'notes.md'), 'x');
+    return dir;
+  };
+
+  it('loads a folder with SKILL.md as a skill named by the folder, with its files', () => {
+    const skills = loadSkillsDir(bundleDir(), 'shared');
+    expect(skills.map((s) => s.name)).toEqual(['cover-art', 'one']);
+    const b = skills[0]!.bundle!;
+    expect(skills[0]!.file.endsWith(path.join('cover-art', 'SKILL.md'))).toBe(true);
+    expect(b.files.map((f) => f.path)).toEqual(['assets/palette.json', 'scripts/make_cover.py']);
+    expect(b.scripts).toEqual(['scripts/make_cover.py']);
+    expect(b.texts.map((t) => t.path)).toEqual(['assets/palette.json']);
+    expect(skills[1]!.bundle).toBeUndefined();
+  });
+
+  it('tells an agent where the files are and how a script runs, by what it holds', () => {
+    const [cover] = loadSkillsDir(bundleDir(), 'shared');
+    const runs = skillsSection([cover!], { canRunScripts: true });
+    expect(runs).toContain(`Its files are in ${cover!.bundle!.dir} (read-only): SKILL.md, assets/palette.json, scripts/make_cover.py.`);
+    expect(runs).toContain('call host.exec with skill: { bundle: "cover-art"');
+    expect(runs).toContain('### assets/palette.json\n{"ground":"#152642"}');
+    const reads = skillsSection([cover!]);
+    expect(reads).toContain('you have no tool that runs them');
+    expect(reads).not.toContain('call host.exec');
+  });
+
+  it('keeps an untrusted bundle\'s files inside the fence and says its scripts cannot run', () => {
+    const [cover] = loadSkillsDir(bundleDir(true), 'shared');
+    const section = skillsSection([cover!], { canRunScripts: true });
+    const fenced = section.slice(section.indexOf(UNTRUSTED_SKILL_OPEN), section.indexOf(UNTRUSTED_SKILL_CLOSE));
+    expect(fenced).toContain('{"ground":"#152642"}');
+    expect(section).toContain('cannot run until the owner marks the bundle as theirs');
+    expect(section).not.toContain('call host.exec');
+  });
+});

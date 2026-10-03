@@ -104,7 +104,7 @@ export async function decideApproval(
   if (remember) {
     const action = await getAction(pool, input.actionId);
     const tool = action && input.registry?.lookup(action.tool);
-    if (input.decision !== 'approved' || !action || !tool?.reusableApproval ||
+    if (input.decision !== 'approved' || !action || !tool?.reusableApproval || asksEachTime(action.envelope) ||
         tool.version !== action.toolVersion || !action.conversationId ||
         !['conversation', 'always'].includes(input.permissionScope!)) {
       return { ok: false, reason: 'invalid-permission', message: 'This action does not support that permission scope.' };
@@ -205,4 +205,15 @@ export async function decideApproval(
     state,
     message: `this request is already ${state}`,
   };
+}
+
+/**
+ * An action that is asked about every time, whatever its tool allows: a
+ * skill bundle's script run (`host.exec` with `skill`, its envelope carrying
+ * `skillRun`). No standing permission answers for it and none can be made
+ * from its card — the owner said yes to one script with these arguments.
+ */
+export function asksEachTime(envelope: unknown): boolean {
+  return envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope) &&
+    typeof (envelope as Record<string, unknown>).skillRun === 'object' && (envelope as Record<string, unknown>).skillRun !== null;
 }

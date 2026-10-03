@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-287 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+294 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -1136,9 +1136,16 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/agents/:id/skills` | Every skill the agent loads; learned ones with their versions. | yes |
 | POST | `/api/agents/:id/skills/:skill/remove` | Remove a learned skill (its versions are kept). | yes |
 | GET | `/api/skills` | The Skills page: every skill on this computer, grouped yours / learned / from plugins / from the catalogue, with who holds each. The shipped examples are not listed. | yes |
+| POST | `/api/skills/bundles` | Read a skill bundle (.zip with SKILL.md, scripts/, assets/) before keeping it: streamed to a temporary folder, checked (20 MB unpacked, 500 files, SKILL.md with a description, no absolute paths, .., links or encrypted entries, nothing executable outside scripts/) and unpacked into staging. Nothing in it runs. | no |
+| GET | `/api/skills/bundles/:staged/file` | One file of a staged upload, for the preview's viewer (?path=). | yes |
+| GET | `/api/skills/bundles/:staged/image` | A picture in a staged upload (?path=), served under a CSP that runs nothing. | yes |
+| POST | `/api/skills/bundles/:staged` | Keep a staged bundle: unpacked into the skills folder under its own directory, SKILL.md written in buddi's front matter (untrusted unless mine), the grant written in each agent's file, all checked by a catalog reload. | no |
+| DELETE | `/api/skills/bundles/:staged` | Drop a staged upload nobody kept. | no |
+| GET | `/api/skills/:id/file` | One of a bundle's files, for the sheet's viewer (?path=): its text, or its size when it is not text. | yes |
+| GET | `/api/skills/:id/image` | A picture in a bundle (?path=), served under a CSP that runs nothing. | yes |
 | POST | `/api/skills` | Write a new skill, or save one taken from a single .md (read in the browser): it goes in the owner's skills folder. An upload not marked as theirs is untrusted. | no |
-| GET | `/api/skills/:id` | One skill whole: its row, its text, the file as written, a learned one's versions, and what deleting it does. | yes |
-| GET | `/api/skills/:id/download` | The skill as its .md file, as an attachment. | yes |
+| GET | `/api/skills/:id` | One skill whole: its row, its text, the file as written, a learned one's versions, a bundle's file tree, and what deleting it does. | yes |
+| GET | `/api/skills/:id/download` | The skill as its .md file, or a bundle as a .zip with its files, as an attachment. | yes |
 | POST | `/api/skills/:id/text` | Edit the text. A learned skill is saved as its next version, marked as the owner's correction; a catalogue one counts as an owner edit for its updates; a plugin's reads only. Who holds it and where it came from are not changed here. | no |
 | POST | `/api/skills/:id/grants` | Who uses it: every agent, or the ones named, written in each agent's file (skills:) so the file stays the record. One in an agent's folder is always that agent's, and is given to others one by one. | no |
 | POST | `/api/skills/:id/trust` | Mark as mine: an uploaded skill stops being read as outside text (a learned one loses its untrusted mark). | no |
@@ -1234,11 +1241,106 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/agents/<id>
 The Skills page: every skill on this computer, grouped yours / learned / from plugins / from the catalogue, with who holds each. The shipped examples are not listed.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ skills: SkillRow[], agents: [{ id, handle, name, writable }] } where SkillRow is { id (name, or agent/name for one in an agent's folder), name, title, description, group: mine|learned|plugin|catalogue, file, home: agent id | null, every, holders: [{ agent, how: home|every|filter|granted }], untrusted: upload|page|null, provenance, source, created, updatedAt, learned: { by, version, edited, keptAt } | null, from: { kind: plugin, plugin, version, installed } | { kind: catalogue, package, version, agent } | { kind: upload, filename } | null, editable, deletable, shareable }`
+- **Answer:** `{ skills: SkillRow[], agents: [{ id, handle, name, writable }] } where SkillRow is { id (name, or agent/name for one in an agent's folder), name, title, description, group: mine|learned|plugin|catalogue, file, home: agent id | null, every, holders: [{ agent, how: home|every|filter|granted }], untrusted: upload|page|null, provenance, source, created, updatedAt, learned: { by, version, edited, keptAt } | null, from: { kind: plugin, plugin, version, installed } | { kind: catalogue, package, version, agent } | { kind: upload, filename } | null, editable, deletable, shareable, bundle: { files, scripts: path[], size } | null }; an agent's canRunScripts says it holds host.exec, which a bundle's scripts run through`
 - **Since:** 0.1.0-pre.32
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills"
+```
+
+#### `POST /api/skills/bundles`
+
+Read a skill bundle (.zip with SKILL.md, scripts/, assets/) before keeping it: streamed to a temporary folder, checked (20 MB unpacked, 500 files, SKILL.md with a description, no absolute paths, .., links or encrypted entries, nothing executable outside scripts/) and unpacked into staging. Nothing in it runs.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
+- **Kind:** an upload
+- **Body:** `the .zip bytes; X-Filename header`
+- **Answer:** `{ staged: { id, filename, packed, size, files: [{ path, size, kind: skill|script|font|image|template|data|other, setup? }], scripts, skill: { name, title, description, firstLines }, createdAt } }`
+- **Errors:** 400; 413 too big; 415 not a .zip; 422 refused, with { error, refusal: { kind: notzip|big|count|noskill|paths|frontmatter|executable|damaged, filename, size?, files?, entries?: [{ path, why, target? }], looked? } }
+- **Since:** unreleased
+
+```sh
+curl -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -F "file=@./file" "$BUDDI_URL/api/skills/bundles"
+```
+
+#### `GET /api/skills/bundles/:staged/file`
+
+One file of a staged upload, for the preview's viewer (?path=).
+
+- **Auth:** Session or API token.
+- **Answer:** `{ file: { path, size, kind, setup?, text? | binary: true, image? } }`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/bundles/<staged>/file"
+```
+
+#### `GET /api/skills/bundles/:staged/image`
+
+A picture in a staged upload (?path=), served under a CSP that runs nothing.
+
+- **Auth:** Session or API token.
+- **Kind:** bytes, not JSON
+- **Answer:** `image/*`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/bundles/<staged>/image" -o out
+```
+
+#### `POST /api/skills/bundles/:staged`
+
+Keep a staged bundle: unpacked into the skills folder under its own directory, SKILL.md written in buddi's front matter (untrusted unless mine), the grant written in each agent's file, all checked by a catalog reload.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
+- **Body:** `{ every?: boolean, agents?: agent id[], mine?: boolean }`
+- **Answer:** `201 { skill: SkillRow }`
+- **Errors:** 400; 404 the upload is gone; 409 a shipped agent, or the catalog refused the result (nothing kept)
+- **Since:** unreleased
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/skills/bundles/<staged>"
+```
+
+#### `DELETE /api/skills/bundles/:staged`
+
+Drop a staged upload nobody kept.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
+- **Answer:** `{ discarded }`
+- **Since:** unreleased
+
+```sh
+curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/skills/bundles/<staged>"
+```
+
+#### `GET /api/skills/:id/file`
+
+One of a bundle's files, for the sheet's viewer (?path=): its text, or its size when it is not text.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ file: { path, size, kind, setup?, text? | binary: true, image? } }`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>/file"
+```
+
+#### `GET /api/skills/:id/image`
+
+A picture in a bundle (?path=), served under a CSP that runs nothing.
+
+- **Auth:** Session or API token.
+- **Kind:** bytes, not JSON
+- **Answer:** `image/*`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>/image" -o out
 ```
 
 #### `POST /api/skills`
@@ -1257,10 +1359,10 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 
 #### `GET /api/skills/:id`
 
-One skill whole: its row, its text, the file as written, a learned one's versions, and what deleting it does.
+One skill whole: its row, its text, the file as written, a learned one's versions, a bundle's file tree, and what deleting it does.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ skill: SkillRow, body, text, versions?: number[], onDelete: { stops: agent id[], every, then: trash|versions-kept|catalogue-asks }, agents }`
+- **Answer:** `{ skill: SkillRow, body, text, versions?: number[], bundle?: { files: [{ path, size, kind, setup? }], size, scripts }, onDelete: { stops: agent id[], every, then: trash|versions-kept|catalogue-asks }, agents }`
 - **Errors:** 404
 - **Since:** 0.1.0-pre.32
 
@@ -1270,11 +1372,11 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>"
 
 #### `GET /api/skills/:id/download`
 
-The skill as its .md file, as an attachment.
+The skill as its .md file, or a bundle as a .zip with its files, as an attachment.
 
 - **Auth:** Session or API token.
 - **Kind:** bytes, not JSON
-- **Answer:** `text/markdown`
+- **Answer:** `text/markdown | application/zip`
 - **Errors:** 404
 - **Since:** 0.1.0-pre.32
 

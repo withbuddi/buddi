@@ -64,7 +64,7 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { browserHost } from './browser-host.js';
-import { hostService } from '@buddi/tool-host';
+import { hostService, useSkillBundles } from '@buddi/tool-host';
 import type { ApprovalResume } from '@buddi/runtime';
 import {
   DEFAULT_POLL_TIMEOUT_MS,
@@ -96,7 +96,8 @@ import { ownerFollowingDeclarations } from './missions/zone-provenance.js';
 import { startLoop } from './loop.js';
 import { createRequirements } from './plugins/requires.js';
 import { dashboardRouteUrl, ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
-import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
+import { agentSearchPath, memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
+import { skillBundlesFor } from './web/skills.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
 import { delegateAllowlist } from './agents/delegation.js';
@@ -612,6 +613,13 @@ export async function main(): Promise<void> {
         console.error(`owner secrets: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+
+    /*
+     * host.exec's `skill` form reads the owner's bundles through this: the one
+     * an agent holds, trusted or not, and the folder a plain command may not
+     * reach into (specs/skills-zone.md, part 2).
+     */
+    useSkillBundles(skillBundlesFor({ catalog: wiring.catalog, skillsDir: agentSearchPath(process.env).owner.skillsDir }));
 
     const missionDeps = {
       pool,

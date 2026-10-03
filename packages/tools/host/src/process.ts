@@ -20,12 +20,18 @@ export function commandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export function runCommand(input: {
   command: string; cwd: string; timeoutMs: number; env: NodeJS.ProcessEnv;
   signal?: AbortSignal; onOutput?: (stdout: string, stderr: string) => void;
+  /** A confinement the shell runs inside (`sandbox-exec -p …`, `bwrap …`): argv before /bin/bash. */
+  wrap?: readonly string[];
+  /** Set after the hygiene env (a script's TMPDIR in its working folder). */
+  extraEnv?: NodeJS.ProcessEnv;
 }): Promise<CommandResult> {
   input.signal?.throwIfAborted();
   if (process.platform === 'win32') throw new Error('Host execution currently requires macOS or Linux.');
   return new Promise((resolve, reject) => {
-    const child = spawn('/bin/bash', ['--noprofile', '--norc', '-c', input.command], {
-      cwd: input.cwd, env: commandEnv(input.env), detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+    const shell = ['/bin/bash', '--noprofile', '--norc', '-c', input.command];
+    const argv = input.wrap && input.wrap.length > 0 ? [...input.wrap, ...shell] : shell;
+    const child = spawn(argv[0] as string, argv.slice(1), {
+      cwd: input.cwd, env: { ...commandEnv(input.env), ...(input.extraEnv ?? {}) }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0);
     let state: CommandResult['state'] = 'completed';

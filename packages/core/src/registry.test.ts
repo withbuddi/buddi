@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from './registry.js';
+import { asksEachTime } from './actions/approvals.js';
 import type { PluginManifest, Tier, CoreToolContext } from './tools.js';
 import { ToolRefusal } from './tools.js';
 
@@ -487,6 +488,33 @@ describe('tierFor: a tier decided per call', () => {
     expect(res).toMatchObject({ ok: false, reason: 'approval-required' });
     expect(permissionsAsked).toBe(0);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('never answers a bundle script run from a standing permission (its envelope asks each time)', async () => {
+    const r = new ToolRegistry();
+    const execute = vi.fn(async (i: { n: number }) => i.n * 2);
+    const base = manifest('gated', execute as never);
+    let permissionsAsked = 0;
+    r.register({
+      ...base,
+      tools: [
+        {
+          ...base.tools[0]!,
+          reusableApproval: true,
+          describe: async (input: unknown) => ({ envelope: { input, skillRun: { bundle: 'cover-art', script: 'scripts/make_cover.py' } }, preview: 'run a script' }),
+        },
+      ],
+    });
+    const { db } = recordingDb((sql) => {
+      if (sql.includes('tool_permissions')) permissionsAsked += 1;
+    });
+    const res = await r.invoke('demo.double', { n: 1 }, granted({ db }));
+    expect(res).toMatchObject({ ok: false, reason: 'approval-required' });
+    expect(permissionsAsked).toBe(0);
+    expect(execute).not.toHaveBeenCalled();
+    expect(asksEachTime({ skillRun: { bundle: 'x' } })).toBe(true);
+    expect(asksEachTime({ command: 'ls' })).toBe(false);
+    expect(asksEachTime(null)).toBe(false);
   });
 
   it('is never asked before the arguments are valid', async () => {

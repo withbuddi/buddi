@@ -40,11 +40,15 @@ import {
   Segment,
   Sheet,
   Spacer,
+  Tag,
   Toolbar,
   useAsync,
 } from '../ui';
+import { BundleFiles, BundleLead, BundleTree, BundleViewer, ScriptsPromise, SCRIPT_TOOL, SkillDrop, ZipPreview } from './parts/SkillBundles';
 import {
   SKILL_GROUPS,
+  agentName,
+  andList,
   capitalized,
   currentHolders,
   deleteSentence,
@@ -56,13 +60,17 @@ import {
   nobodyUses,
   originLine,
   pluginTitle,
+  holderIds,
   readSkillFile,
+  scriptsLine,
   shortFile,
+  sizeWords,
   skillsApi,
   untrustedLine,
   type SkillRow,
   type SkillsAgent,
   type SkillsView,
+  type StagedBundle,
 } from './parts/skills-data';
 
 /** The largest file the page reads: the gateway takes 50 KB. */
@@ -91,6 +99,8 @@ export type SkillDialog =
   | { kind: 'delete'; id: string }
   | { kind: 'write' }
   | { kind: 'upload'; file: { name: string; size: number; title: string; description: string; body: string } }
+  | { kind: 'drop' }
+  | { kind: 'zip'; staged: StagedBundle }
   | null;
 
 export function SkillsTab({
@@ -98,6 +108,7 @@ export function SkillsTab({
   navigate,
   command,
   openSkill,
+  openFile,
 }: {
   /** The roster, for the agents' faces. */
   faces: readonly ChatAgent[];
@@ -105,27 +116,31 @@ export function SkillsTab({
   command?: SkillsCommand | null;
   /** A skill to open at once (`#/agents?tab=skills&skill=<id>`). */
   openSkill?: string | null;
+  /** One of its bundle's files to show (`&skfile=scripts/make_cover.py`), as a script's card asks. */
+  openFile?: string | null;
 }): JSX.Element {
   const view = useAsync(() => skillsApi.list(), []);
-  const [open, setOpen] = useState<{ id: string; edit?: boolean } | null>(openSkill ? { id: openSkill } : null);
+  const [open, setOpen] = useState<{ id: string; edit?: boolean; file?: string } | null>(openSkill ? { id: openSkill, ...(openFile ? { file: openFile } : {}) } : null);
   const [dialog, setDialog] = useState<SkillDialog>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { if (openSkill) setOpen({ id: openSkill }); }, [openSkill]);
-  // The page head's Upload a .md and Write a skill.
+  useEffect(() => { if (openSkill) setOpen({ id: openSkill, ...(openFile ? { file: openFile } : {}) }); }, [openSkill, openFile]);
+  // The page head's Upload (a .zip or a .md, through the drop sheet) and Write a skill.
   useEffect(() => {
     if (!command) return;
-    if (command.kind === 'write') setDialog({ kind: 'write' });
-    else fileRef.current?.click();
+    setDialog(command.kind === 'write' ? { kind: 'write' } : { kind: 'drop' });
   }, [command]);
 
   const pickFile = (event: ChangeEvent<HTMLInputElement>): void => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file) return;
+    if (file) readMd(file);
+  };
+  /** A single .md: read here, then the one-file form. */
+  const readMd = (file: File): void => {
     if (!/\.md$/i.test(file.name)) {
       setProblem(`“${file.name}” isn’t a .md file. A skill is one Markdown file.`);
       return;
@@ -152,7 +167,7 @@ export function SkillsTab({
     <>
       <input ref={fileRef} type="file" accept=".md,text/markdown" hidden data-testid="skill-file" onChange={pickFile} />
       {problem ? (
-        <Notice tone="warning" action={<Button size="sm" onClick={() => { setProblem(null); fileRef.current?.click(); }}>Pick another file</Button>}>
+        <Notice tone="warning" action={<Button size="sm" onClick={() => { setProblem(null); setDialog({ kind: 'drop' }); }}>Pick another file</Button>}>
           {problem}
         </Notice>
       ) : null}
@@ -176,6 +191,23 @@ export function SkillsTab({
       />
       {dialog?.kind === 'write' && view.data ? (
         <SkillForm agents={view.data.agents} faces={faces} onClose={() => setDialog(null)} onSaved={(row) => { setDialog(null); changed(`Saved “${row.title}”.`); }} />
+      ) : null}
+      {dialog?.kind === 'drop' ? (
+        <SkillDrop
+          onClose={() => setDialog(null)}
+          onMd={(file) => { setDialog(null); readMd(file); }}
+          onStaged={(staged) => setDialog({ kind: 'zip', staged })}
+        />
+      ) : null}
+      {dialog?.kind === 'zip' && view.data ? (
+        <ZipPreview
+          staged={dialog.staged}
+          agents={view.data.agents}
+          faces={faces}
+          onClose={() => setDialog(null)}
+          onBack={() => setDialog({ kind: 'drop' })}
+          onAdded={(row) => { setDialog(null); changed(`Added “${row.title}”.`); setOpen({ id: row.id }); }}
+        />
       ) : null}
       {dialog?.kind === 'upload' && view.data ? (
         <SkillForm
@@ -261,16 +293,18 @@ function SkillListRow({
 }): JSX.Element {
   const fix: [RowAction, string] | null = row.untrusted ? ['trust', 'Mark as mine'] : nobodyUses(row) ? ['picker', 'Choose agents'] : null;
   const holders = holdersLine(row, agents);
+  const scripts = scriptsLine(row, agents);
   return (
     <ListRow
       onClick={() => onOpen(row)}
       label={`${row.title}: details`}
-      lead={<AppIcon icon="files" />}
-      title={row.title}
+      lead={row.bundle ? <BundleLead /> : <AppIcon icon="files" />}
+      title={row.bundle ? <span className="skb-title">{row.title}<Tag>bundle</Tag></span> : row.title}
       sub={
         <>
           <span className="skills-line">{row.description}</span>
           <span className="skills-line skills-meta">{holders} · {originLine(row, agents, true)}</span>
+          {scripts ? <span className="skills-line skb-scripts">{scripts}</span> : null}
           {row.untrusted ? <span className="skills-status" data-tone="warning">{untrustedLine(row, agents)}</span> : null}
         </>
       }
@@ -282,8 +316,8 @@ function SkillListRow({
             sheet={{ title: row.title, sub: holders }}
             items={[
               { label: 'Choose agents…', hint: 'Give it or take it away', onSelect: () => onAct(row, 'picker') },
-              row.editable ? { label: 'Edit text', onSelect: () => onAct(row, 'edit') } : null,
-              { label: 'Download', hint: '.md file', onSelect: () => onAct(row, 'download') },
+              row.editable ? { label: row.bundle ? 'Edit SKILL.md' : 'Edit text', onSelect: () => onAct(row, 'edit') } : null,
+              { label: 'Download', hint: row.bundle ? '.zip with its files' : '.md file', onSelect: () => onAct(row, 'download') },
               row.from?.kind === 'plugin' ? { label: `Open ${pluginTitle(row.from.plugin)}`, onSelect: () => onAct(row, 'plugin') } : null,
               row.deletable && row.from?.kind !== 'plugin' ? 'separator' : null,
               row.deletable && row.from?.kind !== 'plugin' ? { label: 'Delete…', tone: 'critical', onSelect: () => onAct(row, 'delete') } : null,
@@ -330,8 +364,8 @@ export function SkillOverlays({
 }: {
   view: SkillsView | undefined;
   faces: readonly ChatAgent[];
-  open: { id: string; edit?: boolean } | null;
-  setOpen: (open: { id: string; edit?: boolean } | null) => void;
+  open: { id: string; edit?: boolean; file?: string } | null;
+  setOpen: (open: { id: string; edit?: boolean; file?: string } | null) => void;
   dialog: SkillDialog;
   setDialog: (dialog: SkillDialog) => void;
   navigate: (route: string) => void;
@@ -352,6 +386,7 @@ export function SkillOverlays({
           agents={view.agents}
           faces={faces}
           initialEdit={!!open?.edit}
+          {...(open?.file ? { initialFile: open.file } : {})}
           onClose={() => setOpen(null)}
           onPicker={() => setDialog({ kind: 'picker', id: sheetRow.id })}
           onDelete={() => setDialog({ kind: 'delete', id: sheetRow.id })}
@@ -419,12 +454,18 @@ function SkillText({ file, body, text }: { file: string; body: string; text: str
   );
 }
 
-/** One skill: when it's used, who uses it, the text. Delete, Download, Edit text in the foot. */
+/**
+ * One skill: when it's used, who uses it, the text. Delete, Download, Edit
+ * text in the foot. A bundle (the kit's SkBundleSheet) says who of its
+ * holders can run its scripts, shows its files as a tree with a viewer, and
+ * edits SKILL.md only.
+ */
 export function SkillSheet({
   row,
   agents,
   faces,
   initialEdit,
+  initialFile,
   onClose,
   onPicker,
   onDelete,
@@ -436,6 +477,8 @@ export function SkillSheet({
   agents: readonly SkillsAgent[];
   faces: readonly ChatAgent[];
   initialEdit?: boolean;
+  /** A bundle's file to show first (a script's card asks for its script). */
+  initialFile?: string;
   onClose: () => void;
   onPicker: () => void;
   onDelete: () => void;
@@ -448,11 +491,17 @@ export function SkillSheet({
   const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string>(initialEdit ? 'SKILL.md' : initialFile ?? 'SKILL.md');
   const text = detail.data?.text ?? '';
   const origin = capitalized(originLine(row, agents));
   const note = editNote(row, agents);
   const plugin = row.from?.kind === 'plugin' ? pluginTitle(row.from.plugin) : null;
   const face = (id: string): ChatAgent | undefined => faces.find((f) => f.id === id);
+  const bundle = row.bundle ?? null;
+  const tree = detail.data?.bundle ?? null;
+  const scripts = bundle?.scripts.length ?? 0;
+  const canRun = (id: string): boolean => agents.find((a) => a.id === id)?.canRunScripts === true;
+  const runners = holderIds(row, agents).filter(canRun).map((id) => agentName(agents, id));
 
   const run = async (work: () => Promise<unknown>, after?: () => void): Promise<void> => {
     setBusy(true);
@@ -474,37 +523,68 @@ export function SkillSheet({
   const save = (): void => {
     void run(() => skillsApi.saveText(row.id, draft ?? text), () => { setEditing(false); setDraft(null); });
   };
-  const holderSub = (agent: string, how: string): string | undefined => {
+  const edit = (): void => {
+    setPicked('SKILL.md');
+    setEditing(true);
+  };
+  const holderSub = (agent: string, how: string): ReactNode => {
+    if (bundle) {
+      if (!scripts) return 'Uses the text and its files';
+      return canRun(agent)
+        ? <span className="skb-can">Can run its scripts with <span className="mono">{SCRIPT_TOOL}</span>, asking each time</span>
+        : 'Reads the text only: it has no tool that runs scripts';
+    }
     if (row.learned?.by === agent) return 'Proposed it';
     if (row.from?.kind === 'catalogue' && row.from.agent === agent) return 'Came with it';
     if (how === 'home') return 'In its own folder';
     return undefined;
   };
+  const editor = (
+    <textarea
+      className="skills-editor"
+      value={draft ?? text}
+      onChange={(e) => setDraft(e.target.value)}
+      aria-label={`Text of ${row.title}`}
+      spellCheck={false}
+      autoFocus
+    />
+  );
+  const sub = bundle && tree
+    ? `Bundle · ${tree.files.length} files · ${sizeWords(tree.size)} · ${originLine(row, agents)}`
+    : bundle ? `Bundle · ${bundle.files + 1} files · ${sizeWords(bundle.size)} · ${originLine(row, agents)}` : origin;
+  const current = tree?.files.find((f) => f.path === picked) ?? tree?.files[0];
 
   return (
     <Sheet
       size="wide"
-      title={<SheetTitle title={row.title} sub={origin} />}
+      title={
+        bundle ? (
+          <span className="skills-sheet-title">
+            <BundleLead size="lg" />
+            <span className="skills-sheet-name"><span>{row.title}</span><span className="skills-sheet-by">{sub}</span></span>
+          </span>
+        ) : <SheetTitle title={row.title} sub={origin} />
+      }
       onClose={onClose}
       foot={
         editing ? (
           <Toolbar align="end">
             <Button variant="ghost" disabled={busy} onClick={() => { setEditing(false); setDraft(null); }}>Cancel</Button>
-            <Button variant="accent" disabled={busy || !detail.data} onClick={save}>Save</Button>
+            <Button variant="accent" disabled={busy || !detail.data} onClick={save}>{bundle ? 'Save SKILL.md' : 'Save'}</Button>
           </Toolbar>
         ) : (
           <Toolbar>
             {row.deletable && !plugin ? <Button variant="danger-ghost" onClick={onDelete}>Delete…</Button> : null}
             <Spacer />
-            <Button onClick={() => downloadSkill(row.id)}>Download</Button>
-            {row.editable ? <Button variant={row.untrusted ? undefined : 'accent'} onClick={() => setEditing(true)}>Edit text</Button> : null}
+            <Button onClick={() => downloadSkill(row.id)}>{bundle ? 'Download .zip' : 'Download'}</Button>
+            {row.editable ? <Button variant={row.untrusted ? undefined : 'accent'} onClick={edit}>{bundle ? 'Edit SKILL.md' : 'Edit text'}</Button> : null}
           </Toolbar>
         )
       }
     >
       {row.untrusted ? (
         <Notice tone="warning" action={<Button size="sm" variant="accent" disabled={busy} onClick={() => void run(() => skillsApi.trust(row.id))}>Mark as mine</Button>}>
-          {untrustedLine(row, agents)} Mark it as yours once you’ve read it.
+          {untrustedLine(row, agents)} Mark it as yours once you’ve read it{scripts ? ' and its scripts' : ''}.
         </Notice>
       ) : null}
       <ErrorBanner message={error} />
@@ -513,58 +593,80 @@ export function SkillSheet({
           <p className="skills-desc">{row.description}</p>
         </SheetSection>
         <SheetSection title="Used by" aside={<Button size="sm" onClick={onPicker}>Change…</Button>}>
+          {scripts ? (
+            <ScriptsPromise>
+              {row.untrusted
+                ? 'Its scripts can’t run until you mark it as yours. Then they run only when an agent you allow runs them, and ask first. Nothing ran when it was uploaded.'
+                : 'Scripts run only when an agent you allow runs them, and ask first. Nothing ran when it was uploaded.'}
+            </ScriptsPromise>
+          ) : null}
           {row.every ? (
             <List>
-              <ListRow lead={<AppIcon icon="agents" />} title={everyLine(row, agents)} sub="Now, and any you add later." />
+              <ListRow lead={<AppIcon icon="agents" />} title={everyLine(row, agents)} sub={scripts ? (runners.length ? `Now, and any you add later. ${andList(runners)} can run its scripts, asking each time.` : 'Now, and any you add later. None of them can run its scripts.') : 'Now, and any you add later.'} />
             </List>
           ) : row.holders.length ? (
-            <List>
-              {row.holders.map((h) => {
-                const a = agents.find((x) => x.id === h.agent);
-                return (
-                  <ListRow
-                    key={h.agent}
-                    lead={<Avatar id={h.agent} name={a?.name ?? h.agent} size="sm" face={face(h.agent)} />}
-                    title={<>{a?.name ?? h.agent} <span className="skills-handle">@{a?.handle ?? h.agent}</span></>}
-                    sub={holderSub(h.agent, h.how)}
-                    side={
-                      h.how === 'home' ? undefined : (
-                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => takeAway(h.agent)} aria-label={`Take away from ${a?.name ?? h.agent}`}>
-                          Take away
-                        </Button>
-                      )
-                    }
-                  />
-                );
-              })}
-            </List>
+            <div className={bundle ? 'skb-holders' : undefined}>
+              <List>
+                {row.holders.map((h) => {
+                  const a = agents.find((x) => x.id === h.agent);
+                  return (
+                    <ListRow
+                      key={h.agent}
+                      lead={<Avatar id={h.agent} name={a?.name ?? h.agent} size="sm" face={face(h.agent)} />}
+                      title={<>{a?.name ?? h.agent} <span className="skills-handle">@{a?.handle ?? h.agent}</span></>}
+                      sub={holderSub(h.agent, h.how)}
+                      side={
+                        h.how === 'home' ? undefined : (
+                          <Button size="sm" variant="ghost" disabled={busy} onClick={() => takeAway(h.agent)} aria-label={`Take away from ${a?.name ?? h.agent}`}>
+                            Take away
+                          </Button>
+                        )
+                      }
+                    />
+                  );
+                })}
+              </List>
+            </div>
           ) : (
             <p className="skills-note">No agent uses it yet, so it does nothing. Choose who should.</p>
           )}
         </SheetSection>
-        <SheetSection title="The text">
-          {!detail.data ? (
-            detail.error ? <ErrorBanner message={detail.error} /> : <Empty>Reading the file…</Empty>
-          ) : editing ? (
-            <textarea
-              className="skills-editor"
-              value={draft ?? text}
-              onChange={(e) => setDraft(e.target.value)}
-              aria-label={`Text of ${row.title}`}
-              spellCheck={false}
-              autoFocus
-            />
-          ) : (
-            <SkillText file={shortFile(row)} body={detail.data.body} text={text} />
-          )}
-          {editing && note ? <p className="skills-note">{note}</p> : null}
-          {plugin ? (
-            <p className="skills-note">
-              Comes with {plugin}, so it’s changed there. To stop an agent using it, take it away above.{' '}
-              <a href={settingsRoute('plugins')} onClick={(e) => { e.preventDefault(); navigate(settingsRoute('plugins')); }}>Open Plugins</a>
-            </p>
-          ) : null}
-        </SheetSection>
+        {bundle ? (
+          <SheetSection title="Files" aside={tree ? <span className="skills-note">{tree.files.length} files · {sizeWords(tree.size)}</span> : undefined}>
+            {!detail.data || !tree || !current ? (
+              detail.error ? <ErrorBanner message={detail.error} /> : <Empty>Reading the bundle…</Empty>
+            ) : (
+              <BundleFiles>
+                <BundleTree files={tree.files} selected={current.path} onSelect={editing ? null : setPicked} />
+                <BundleViewer
+                  file={current}
+                  read={(p) => skillsApi.file(row.id, p)}
+                  imageUrl={(p) => skillsApi.imageUrl(row.id, p)}
+                  reach={{ run: runners, held: row.every || row.holders.length > 0, untrusted: row.untrusted !== null }}
+                  skillView={editing ? editor : <SkillText file={shortFile(row)} body={detail.data.body} text={text} />}
+                />
+              </BundleFiles>
+            )}
+            <p className="skills-note">Read only, except SKILL.md. To change any other file, upload the bundle again.</p>
+          </SheetSection>
+        ) : (
+          <SheetSection title="The text">
+            {!detail.data ? (
+              detail.error ? <ErrorBanner message={detail.error} /> : <Empty>Reading the file…</Empty>
+            ) : editing ? (
+              editor
+            ) : (
+              <SkillText file={shortFile(row)} body={detail.data.body} text={text} />
+            )}
+            {editing && note ? <p className="skills-note">{note}</p> : null}
+            {plugin ? (
+              <p className="skills-note">
+                Comes with {plugin}, so it’s changed there. To stop an agent using it, take it away above.{' '}
+                <a href={settingsRoute('plugins')} onClick={(e) => { e.preventDefault(); navigate(settingsRoute('plugins')); }}>Open Plugins</a>
+              </p>
+            ) : null}
+          </SheetSection>
+        )}
       </div>
     </Sheet>
   );
@@ -632,6 +734,11 @@ export function AgentPicker({
   const q = query.trim().toLowerCase();
   const shown = agents.filter((a) => !q || `${a.name} ${a.handle}`.toLowerCase().includes(q));
   const toggle = (id: string, on: boolean): void => setPicked(on ? [...picked, id] : picked.filter((x) => x !== id));
+  // A bundle with scripts: the agents that can run them first, then those that hold the text only.
+  const scripts = row.bundle?.scripts.length ?? 0;
+  const groups: Array<[string | null, SkillsAgent[]]> = scripts
+    ? [['Can run its scripts', shown.filter((a) => a.canRunScripts)], ['Text only', shown.filter((a) => !a.canRunScripts)]]
+    : [[null, shown]];
   const save = async (): Promise<void> => {
     setBusy(true);
     setError(null);
@@ -656,28 +763,44 @@ export function AgentPicker({
       }
     >
       <div className="skills-pick">
+        {scripts ? (
+          <ScriptsPromise>
+            {scripts} script{scripts > 1 ? 's' : ''} come{scripts > 1 ? '' : 's'} with it. Only an agent with a tool that runs commands can run them, and it asks you each time{row.untrusted ? ', once you’ve marked it as yours' : ''}.
+          </ScriptsPromise>
+        ) : null}
         <PickSearch label="Find an agent" value={query} onChange={setQuery} />
         <ErrorBanner message={error} />
         <div className="skills-pick-list">
           {q || !row.shareable ? null : (
-            <CheckRow checked={every} onChange={setEvery} lead={<AppIcon icon="agents" />} title="Every agent" sub="Now, and any you add later." />
+            <CheckRow checked={every} onChange={setEvery} lead={<AppIcon icon="agents" />} title="Every agent" sub={scripts ? 'Now and later. Scripts still ask each time.' : 'Now, and any you add later.'} />
           )}
-          {shown.map((a) => {
-            const home = row.home === a.id;
-            const own = (row.shadowedBy ?? []).includes(a.id);
-            const fixed = home || own || !a.writable;
-            return (
-              <CheckRow
-                key={a.id}
-                checked={!own && (every || home || picked.includes(a.id))}
-                disabled={every || fixed}
-                onChange={(on) => toggle(a.id, on)}
-                lead={<Avatar id={a.id} name={a.name} size="sm" face={faces.find((f) => f.id === a.id)} />}
-                title={<>{a.name} <span className="skills-handle">@{a.handle}</span></>}
-                sub={home ? 'Its own skill, in its folder' : own ? 'Has its own skill of this name, and uses that' : !a.writable ? 'Ships with buddi, so its file doesn’t change' : undefined}
-              />
-            );
-          })}
+          {groups.map(([head, list]) => list.length ? (
+            <div key={head ?? 'all'} className="skills-pick-group" role={head ? 'group' : undefined} aria-label={head ?? undefined}>
+              {head ? <div className="skills-pick-group-title">{head}{head === 'Text only' ? ' · no tool that runs scripts' : ' · asking you each time'}</div> : null}
+              {list.map((a) => {
+                const home = row.home === a.id;
+                const own = (row.shadowedBy ?? []).includes(a.id);
+                const fixed = home || own || !a.writable;
+                return (
+                  <CheckRow
+                    key={a.id}
+                    checked={!own && (every || home || picked.includes(a.id))}
+                    disabled={every || fixed}
+                    onChange={(on) => toggle(a.id, on)}
+                    lead={<Avatar id={a.id} name={a.name} size="sm" face={faces.find((f) => f.id === a.id)} />}
+                    title={<>{a.name} <span className="skills-handle">@{a.handle}</span></>}
+                    sub={
+                      home ? 'Its own skill, in its folder'
+                        : own ? 'Has its own skill of this name, and uses that'
+                          : !a.writable ? 'Ships with buddi, so its file doesn’t change'
+                            : scripts && a.canRunScripts ? <span className="skb-can">With <span className="mono">{SCRIPT_TOOL}</span></span>
+                              : undefined
+                    }
+                  />
+                );
+              })}
+            </div>
+          ) : null)}
           {shown.length ? null : <p className="skills-note skills-pick-none">No agent called “{query.trim()}”.</p>}
         </div>
         <p className="skills-note">Saved in each agent’s file, so the file stays the record.</p>

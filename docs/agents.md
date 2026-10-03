@@ -138,7 +138,45 @@ it answers.
 **Uploads.** A single `.md` is read in the browser and saved like a written
 skill. Unless you tick "Mark as mine", it is untrusted: its text reaches the
 agents fenced as outside text they may learn from but never obey, until you
-mark it as yours. (`.zip` bundles with scripts come later.)
+mark it as yours.
+
+**Bundles.** A skill can also be a folder: `SKILL.md` with `scripts/` and
+`assets/` beside it (the Agent Skills format), uploaded as a `.zip` from
+Upload on the Skills page. Nothing in it runs on upload, ever. buddi streams
+the zip to a temporary folder and checks it before keeping anything — at most
+20 MB unpacked and 500 files, a `SKILL.md` (at the top or inside the one
+folder everything sits in) with a `description` in its front matter, no
+absolute paths, no `..`, no links, nothing encrypted and nothing executable
+outside `scripts/` — then shows what is inside. "Add the skill" unpacks it
+into the shared skills folder under its own directory (`skills/<name>/`) and
+rewrites `SKILL.md`'s front matter in buddi's keys (keys like `license` or
+`allowed-tools` are dropped: a skill never grants a tool). Only `SKILL.md` is
+edited in the browser; Download gives the bundle back as a `.zip`.
+
+An agent holding a bundle gets its text, the folder's path and its file list,
+and small text files (a template, a palette) read whole. **Its scripts run only
+through `host.exec`'s `skill` form** —
+`{ skill: { bundle, script: "scripts/make_cover.py", args: [...] } }`, no
+command — and only for an agent that holds both the bundle and `host.exec`; the
+Skills page and the picker say which agents those are. Each run:
+
+- is refused while the bundle is untrusted: an uploaded bundle's scripts cannot
+  run until you mark it as yours;
+- asks you every time — the card names the script, the bundle, the arguments,
+  the working folder and what it may touch, with Reject · Show the script ·
+  Allow once and no Auto or Always (no standing permission answers for it);
+- works in its own folder (`<data>/host/skill-runs/<bundle>/…`), reads the
+  bundle without changing it and writes only in that folder, confined by
+  `sandbox-exec` on macOS or bubblewrap (`bwrap`) on Linux. With neither, bundle
+  scripts do not run. The network is as host commands have it.
+
+A plain `host.exec` command that names the skills folder is refused. The
+developer plugin's run list does not run bundle scripts.
+
+`examples/skills/letterhead/` is a shipped bundle with no scripts: a letter
+template and a logo, given to no agent (`agents: []`). Copy the folder into
+your skills folder, change the template to your own, and give it to the agents
+that write your letters and invoices.
 
 **Edits.** A learned skill's edit is saved as its next version, marked as
 your correction; the earlier versions stay in `skills/versions/`. Deleting a

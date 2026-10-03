@@ -14,7 +14,7 @@
  *  - Tool threw            -> 'tool-error'; defects never surface as success.
  */
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { decideApproval } from './actions/approvals.js';
+import { asksEachTime, decideApproval } from './actions/approvals.js';
 import { executeApproved } from './actions/execute.js';
 import { findToolPermission } from './actions/permissions.js';
 import { missionExtrasProblem } from './tools.js';
@@ -1224,7 +1224,7 @@ export class ToolRegistry {
        * permission row that could tell them apart, so a call whose tier was
        * decided per call is always put to the owner.
        */
-      const permission = tool.reusableApproval && !decidedPerCall
+      const permission = tool.reusableApproval && !decidedPerCall && !asksEachTime(described.envelope)
         ? await findToolPermission(ctx.db, ctx, tool.name, version) : undefined;
       if (permission) {
         const decision = await decideApproval(ctx.db, { actionId: action.id, decision: 'approved',

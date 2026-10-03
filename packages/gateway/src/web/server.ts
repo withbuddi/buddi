@@ -54,9 +54,15 @@ import {
   listSkillsRoute,
   skillDetailRoute,
   skillDownload,
+  skillFileRoute,
+  skillImage,
+  stagedFileRoute,
+  stagedImage,
+  acceptBundleRoute,
   trustSkillRoute,
   type SkillsDeps,
 } from './skills.js';
+import { discardStaged, incomingDirFor, receiveBundleUpload, stageBundle, uploadLabel } from './skill-bundles.js';
 import { bindMcpRequests, requestThroughMcp } from '../mcp/requests.js';
 import { randomUUID, createHmac, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -110,7 +116,7 @@ import { sayRoute, transcribeRoute, type SpeechRouteDeps } from './speech.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, CoreToolContext, ToolRegistry } from '@buddi/core';
-import { getAction, idleRolloverMs, inRecovery, listMissions, listPendingActions, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, snoozeFindings, unmuteFindings, type ActionRecord } from '@buddi/core';
+import { asksEachTime, getAction, idleRolloverMs, inRecovery, listMissions, listPendingActions, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, snoozeFindings, unmuteFindings, type ActionRecord } from '@buddi/core';
 import { actOnAlerts, askPrompt, findingsForAsk, muteAlert } from './alerts.js';
 import type { Pool } from 'pg';
 import type { BrowserController } from '@buddi/tool-browser';
@@ -728,7 +734,8 @@ export function createWebApp(deps: WebServerDeps): Server {
    */
   void chat?.recoverPendingInput().catch((err) => log(`web chat: recovering queued input failed: ${err instanceof Error ? err.message : String(err)}`));
   const streams = new StreamBudget();
-  const permissionScopes = (tool: string): Record<string, unknown> => deps.registry.lookup(tool)?.reusableApproval
+  // A bundle script's run asks every time: its card offers no standing permission (`asksEachTime`).
+  const permissionScopes = (tool: string, envelope?: unknown): Record<string, unknown> => deps.registry.lookup(tool)?.reusableApproval && !asksEachTime(envelope)
     ? { permissionScopes: ['conversation', 'always'] } : {};
   writeDeps.resumeInteractive = (action, outcome) => chat?.resumeHost(action, outcome);
   /*
@@ -1794,8 +1801,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         case '/api/approvals': {
           const approvals = await readApprovals(deps.pool, now, boundedLimit(q.get('limit'), 50));
-          return sendJson(res, 200, { pending: approvals.pending.map(a => ({ ...a, ...permissionScopes(a.tool) })),
-            recent: approvals.recent.map(a => ({ ...a, ...permissionScopes(a.tool) })) });
+          return sendJson(res, 200, { pending: approvals.pending.map(a => ({ ...a, ...permissionScopes(a.tool, a.envelope) })),
+            recent: approvals.recent.map(a => ({ ...a, ...permissionScopes(a.tool, a.envelope) })) });
         }
         case '/api/offers':
           // The roster goes in so the read can lapse an offer whose agent is
@@ -2158,12 +2165,43 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       // The Skills page: every skill, grouped, who holds each; one whole; one as its file.
       if (path === '/api/skills') return reply(res, listSkillsRoute(skillsDeps()));
+      /*
+       * A bundle's files, for the viewer: one file's text (or its size when
+       * it is not text), and a picture's bytes for an <img>. The same for an
+       * upload still waiting in the preview. A picture is served with a CSP
+       * that runs nothing, so an SVG opened on its own cannot script the page.
+       */
+      const bundleRead = /^\/api\/skills\/(bundles\/)?([^/]+)\/(file|image)$/.exec(path);
+      if (bundleRead) {
+        const id = decodeURIComponent(bundleRead[2] as string);
+        const rel = url.searchParams.get('path') ?? '';
+        if (bundleRead[3] === 'file') {
+          return reply(res, bundleRead[1] ? stagedFileRoute(skillsDeps(), id, rel) : skillFileRoute(skillsDeps(), id, rel));
+        }
+        const picture = bundleRead[1] ? stagedImage(skillsDeps(), id, rel) : skillImage(skillsDeps(), id, rel);
+        if (!picture) return sendJson(res, 404, { error: `There is no picture "${rel}" in this bundle.` });
+        res.statusCode = 200;
+        res.setHeader('Content-Type', picture.type);
+        res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(method === 'HEAD' ? undefined : picture.bytes);
+        return;
+      }
       const skillRead = /^\/api\/skills\/([^/]+)(\/download)?$/.exec(path);
       if (skillRead) {
         const id = decodeURIComponent(skillRead[1] as string);
         if (!skillRead[2]) return reply(res, skillDetailRoute(skillsDeps(), id));
         const file = skillDownload(skillsDeps(), id);
         if (!file) return sendJson(res, 404, { error: `There is no skill "${id}".` });
+        if ('zip' in file) {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/zip');
+          res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(method === 'HEAD' ? undefined : Buffer.from(file.zip));
+          return;
+        }
         res.statusCode = 200;
         res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
         res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
@@ -2210,7 +2248,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (approval) {
         const action = await getAction(deps.pool, decodeURIComponent(approval[1] as string));
         if (!action) return sendJson(res, 404, { error: 'no such action' });
-        return sendJson(res, 200, { action: { ...toApprovalView(action), ...permissionScopes(action.tool) } });
+        return sendJson(res, 200, { action: { ...toApprovalView(action), ...permissionScopes(action.tool, action.envelope) } });
       }
 
       /* ---------------- chat ---------------- */
@@ -2382,6 +2420,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, forgotten.status, forgotten.body);
       }
       // Delete a skill: the agents that asked for it stop, the file goes to the trash.
+      const stagedGone = /^\/api\/skills\/bundles\/([^/]+)$/.exec(path);
+      if (stagedGone) return reply(res, discardStaged(incomingDirFor(skillsDeps().skillsDir), decodeURIComponent(stagedGone[1] as string)));
       const skillGone = /^\/api\/skills\/([^/]+)$/.exec(path);
       if (skillGone) return reply(res, await deleteSkillRoute(skillsDeps(), decodeURIComponent(skillGone[1] as string)));
       // Revoke an API token: the next request carrying it is a 401.
@@ -2635,6 +2675,20 @@ export function createWebApp(deps: WebServerDeps): Server {
      * staged exactly like a `.tgz` path they could have typed, and the upload
      * is deleted once staging has copied it.
      */
+    /*
+     * A skill bundle (.zip), handed over raw like a plugin tarball: streamed
+     * to a temporary file under a cap, checked, unpacked into staging, and
+     * answered with what is inside. Nothing in it runs, and nothing is kept
+     * until the owner accepts it (`POST /api/skills/bundles/:staged`).
+     */
+    if (path === '/api/skills/bundles') {
+      const incoming = incomingDirFor(skillsDeps().skillsDir);
+      const filename = uploadLabel(first(req.headers['x-filename']));
+      const received = await receiveBundleUpload(incoming, req, filename);
+      if ('status' in received) return reply(res, received);
+      return reply(res, stageBundle(incoming, received.path, filename, deps.now()));
+    }
+
     if (path === '/api/plugins/upload') {
       const received = await receivePluginUpload(pluginDeps(), req, first(req.headers['x-filename']));
       if ('status' in received) return reply(res, received);
@@ -3744,6 +3798,8 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     /* The Skills page's writes (skills.ts): each checked by reloading the catalog. */
     if (path === '/api/skills') return reply(res, createSkillRoute(skillsDeps(), body));
+    const bundleAccept = /^\/api\/skills\/bundles\/([^/]+)$/.exec(path);
+    if (bundleAccept) return reply(res, acceptBundleRoute(skillsDeps(), decodeURIComponent(bundleAccept[1] as string), body));
     const skillWrite = /^\/api\/skills\/([^/]+)\/(text|grants|trust)$/.exec(path);
     if (skillWrite) {
       const id = decodeURIComponent(skillWrite[1] as string);

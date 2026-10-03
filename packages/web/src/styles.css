@@ -4637,6 +4637,73 @@ button.lk-chip:disabled { cursor: default; }
   .skills-file { margin-left: 0; flex-basis: 100%; }
 }
 
+/* ---- Skills, part 2: bundles (views/parts/SkillBundles.tsx, chat/SkillRunDock.tsx; the kit's SkillBundles.jsx) ---- */
+.skb-title { display: inline-flex; align-items: center; gap: var(--space-2); }
+.skb-scripts { color: var(--text-muted); }
+.skb-can { color: var(--text-muted); }
+.skb-can .mono { color: var(--text); font-size: var(--text-xs); }
+.skb-holders .ui-list-sub { white-space: normal; }
+.skb-promise { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; padding: var(--space-3); border-radius: var(--radius); background: var(--surface-sunken); font-size: var(--text-sm); line-height: var(--leading); color: var(--text); }
+.skb-promise svg { flex: 0 0 auto; margin-top: var(--space-0); color: var(--good); }
+/* The tree beside the viewer; stacked on a phone. */
+.skb-files { display: grid; grid-template-columns: minmax(calc(var(--space-12) * 5), 2fr) minmax(0, 4fr); gap: var(--space-4); align-items: start; }
+.skb-tree { list-style: none; margin: 0; padding: var(--space-1); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: var(--space-0); }
+.skb-node { display: flex; align-items: center; gap: var(--space-2); min-height: var(--control-h-sm); padding: 0 var(--space-2); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--text-muted); }
+.skb-node[data-depth='1'] { padding-left: calc(var(--space-2) + var(--space-4)); }
+.skb-node[data-depth='2'] { padding-left: calc(var(--space-2) + var(--space-4) * 2); }
+.skb-node[data-depth='3'] { padding-left: calc(var(--space-2) + var(--space-4) * 3); }
+.skb-node[data-depth='4'] { padding-left: calc(var(--space-2) + var(--space-4) * 4); }
+.skb-node[data-depth='5'] { padding-left: calc(var(--space-2) + var(--space-4) * 5); }
+.skb-node[data-depth='6'] { padding-left: calc(var(--space-2) + var(--space-4) * 6); }
+.skb-node svg { flex: 0 0 auto; color: var(--text-faint); }
+.skb-node[role='option'] { cursor: pointer; color: var(--text); transition: background var(--dur-fast) var(--ease); }
+.skb-node[role='option']:hover { background: var(--surface-sunken); }
+.skb-node[role='option']:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.skb-node[data-selected='true'] { background: var(--accent-soft); color: var(--text); }
+.skb-node[data-selected='true'] svg { color: var(--accent); }
+.skb-node[data-dir='true'] .skb-name { color: var(--text-faint); }
+.skb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-xs); }
+.skb-flag { flex: 0 0 auto; padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--warning-soft); color: var(--warning); font-size: var(--text-2xs); font-weight: var(--weight-semibold); white-space: nowrap; }
+.skb-size { flex: 0 0 auto; margin-left: auto; padding-left: var(--space-2); font-size: var(--text-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.skb-view { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.skb-view .ui-code { max-height: calc(var(--space-12) * 9); overflow: auto; }
+.skb-view-kind { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--text-muted); }
+.skb-script-note { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; font-size: var(--text-sm); line-height: var(--leading); color: var(--text-muted); }
+.skb-script-note svg { flex: 0 0 auto; margin-top: var(--space-0); color: var(--good); }
+.skb-blank { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-8) var(--space-5); border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--text-muted); font-size: var(--text-sm); text-align: center; }
+.skb-picture { display: flex; justify-content: center; padding: var(--space-8); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.skb-picture img { max-width: 100%; max-height: calc(var(--space-12) * 5); }
+/* Upload: the drop zone, the shape of a bundle, the refusals. */
+.skb-drop-sheet { gap: var(--space-4); }
+.skb-drop { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding: var(--space-10) var(--space-5); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: var(--surface-sunken); text-align: center; transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); }
+.skb-drop[data-over='true'] { border-color: var(--accent); background: var(--accent-soft); }
+.skb-drop-glyph { display: inline-flex; align-items: center; justify-content: center; width: var(--space-12); height: var(--space-12); border-radius: var(--radius-pill); background: var(--surface); border: 1px solid var(--line); color: var(--accent); }
+.skb-drop-title { font-size: var(--text-base); font-weight: var(--weight-semibold); color: var(--text); }
+.skb-drop-limits { font-size: var(--text-sm); color: var(--text-muted); }
+.skb-shape { padding-bottom: 0; }
+.skb-shape-tree { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-1) var(--space-4); margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius); background: var(--code-bg); font-size: var(--text-xs); line-height: var(--leading); color: var(--text-muted); }
+.skb-shape-tree dt { color: var(--text); }
+.skb-shape-tree dt[data-in='true'] { padding-left: var(--space-4); }
+.skb-shape-tree dd { margin: 0; }
+.skb-refusal .mono { font-size: var(--text-sm); }
+.skb-refused { margin: var(--space-2) 0 0; padding-left: var(--space-5); list-style: disc; }
+.skb-refused li + li { margin-top: var(--space-1); }
+.skb-first { color: var(--text-muted); }
+/* The script-run card in chat. */
+.skb-dock .ui-kv { grid-template-columns: minmax(calc(var(--space-12) * 2), auto) 1fr; font-size: var(--text-sm); }
+.skb-dock .wb-dock-subject { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+.skb-args { display: flex; flex-direction: column; font-size: var(--text-xs); }
+.skb-path { font-size: var(--text-xs); overflow-wrap: anywhere; }
+.skb-dock-note { font-size: var(--text-xs); color: var(--text-muted); }
+@media (max-width: 720px) {
+  .skb-files { grid-template-columns: minmax(0, 1fr); }
+  .skb-drop { padding: var(--space-8) var(--space-4); }
+  .skb-dock .ui-kv { grid-template-columns: minmax(0, 1fr); row-gap: var(--space-0); }
+  .skb-dock .ui-kv dd + dt { margin-top: var(--space-2); }
+  .skb-dock .ui-toolbar { flex-wrap: wrap; }
+  .skb-dock-note { flex-basis: 100%; }
+}
+
 /* Sources: what an agent searched and read in one turn, as one canvas tab.
  * A search is its query and the results, the ones it then read marked; a page
  * is a row — a letter tile from its domain (never a remote favicon), the title

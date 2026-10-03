@@ -40,6 +40,7 @@ import {
   type PermissionScope,
   type OwnerChoice,
   conversationGroup,
+  asksEachTime,
 } from '@buddi/core';
 import {
   MAX_CALLBACK_DATA_BYTES,
@@ -296,7 +297,8 @@ export class TelegramApprovals {
       {
         replyMarkup: approvalKeyboard(
           action.id,
-          action.tool === 'host.exec',
+          // A bundle script's run asks every time: no standing-permission row.
+          action.tool === 'host.exec' && !asksEachTime(action.envelope),
           keyboardChoice(action),
         ),
       },

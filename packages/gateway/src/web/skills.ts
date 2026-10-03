@@ -32,22 +32,26 @@
  * The shipped examples (`examples/agents`, `examples/skills`) belong to the
  * platform and are not listed.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   applyFrontmatterPatch,
   currentSkillFile,
   parseAgentFile,
+  parseSkillBundle,
   parseSkillFile,
   parseYamlSubset,
   selectSkills,
   serializeYamlValue,
   skillRequestable,
+  skillBundleNames,
   skillSlug,
   skillVersions,
   skillVersionsDir,
   splitFrontmatter,
   SKILLS_DIR,
+  SKILL_SCRIPT_TOOL,
+  BUNDLE_SKILL_FILE,
   type AgentCatalog,
   type FrontmatterPatch,
   type Skill,
@@ -56,6 +60,7 @@ import type { Pool } from 'pg';
 import { readProvenance } from '../plugins/provenance.js';
 import { removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
 import { replaceBody, trashStamp, writeFilesAtomic, type FileWrite } from '../agents/platform-files.js';
+import { bundleFileRows, bundleFileView, bundleImage, incomingDirFor, readStaged, zipBundle, type BundleFileRow } from './skill-bundles.js';
 
 export interface RouteReply {
   status: number;
@@ -75,6 +80,8 @@ export interface SkillsDeps {
   now: () => Date;
   /** For a learned skill's delete, which counts its proposal as discarded. */
   pool?: Pool;
+  /** Where an uploaded bundle waits for the owner's yes; `<private>/.incoming/skills` by default. */
+  incomingDir?: string;
 }
 
 export type SkillGroup = 'mine' | 'learned' | 'plugin' | 'catalogue';
@@ -120,6 +127,8 @@ export interface SkillRow {
   deletable: boolean;
   /** It can be given to every agent (a shared skill; one in an agent's folder is granted agent by agent). */
   shareable: boolean;
+  /** A bundle (SKILL.md with files beside it): how many files besides the text, its scripts, its size in bytes. */
+  bundle: { files: number; scripts: string[]; size: number } | null;
 }
 
 export interface SkillsAgent {
@@ -128,6 +137,8 @@ export interface SkillsAgent {
   name: string;
   /** Its file is the owner's, so a grant can be written there (not a shipped example). */
   writable: boolean;
+  /** It holds the tool a bundle's scripts run through (`host.exec`), so it can run them, asking each time. */
+  canRunScripts: boolean;
 }
 
 /** The largest skill text accepted, in characters. */
@@ -160,6 +171,7 @@ interface AgentRecord {
   file: string;
   writable: boolean;
   declared: string[];
+  canRunScripts: boolean;
 }
 
 function readDir(dir: string, scope: 'private' | 'shared'): Skill[] {
@@ -181,7 +193,15 @@ function readDir(dir: string, scope: 'private' | 'shared'): Skill[] {
       // A file the loader refuses is the catalog's to report; it is not a skill anybody holds.
     }
   }
-  return out;
+  // Bundles: `<name>/SKILL.md` with its files beside it.
+  for (const name of skillBundleNames(dir)) {
+    try {
+      out.push(parseSkillBundle(path.join(dir, name), { scope }));
+    } catch {
+      // As above: the catalog reports it.
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function agentRecords(catalog: AgentCatalog): AgentRecord[] {
@@ -196,7 +216,10 @@ function agentRecords(catalog: AgentCatalog): AgentRecord[] {
       } catch {
         declared = [];
       }
-      return { id: agent.id, handle: agent.handle, name: agent.name, file: agent.file, writable: agent.source === 'private', declared };
+      return {
+        id: agent.id, handle: agent.handle, name: agent.name, file: agent.file, writable: agent.source === 'private', declared,
+        canRunScripts: (agent.tools ?? []).includes(SKILL_SCRIPT_TOOL),
+      };
     });
 }
 
@@ -328,6 +351,7 @@ function rowOf(entry: Entry, agents: readonly AgentRecord[], installed: Readonly
     editable: grouped.group !== 'plugin',
     deletable: !(from?.kind === 'plugin' && from.installed),
     shareable: entry.home === null,
+    bundle: skill.bundle ? { files: skill.bundle.files.length, scripts: skill.bundle.scripts, size: skill.bundle.size } : null,
   };
 }
 
@@ -358,7 +382,7 @@ export function listSkillsRoute(deps: SkillsDeps): RouteReply {
 }
 
 function agentsView(agents: readonly AgentRecord[]): SkillsAgent[] {
-  return agents.map(({ id, handle, name, writable }) => ({ id, handle, name, writable }));
+  return agents.map(({ id, handle, name, writable, canRunScripts }) => ({ id, handle, name, writable, canRunScripts }));
 }
 
 function detail(snap: Snapshot, entry: Entry): Record<string, unknown> {
@@ -369,6 +393,7 @@ function detail(snap: Snapshot, entry: Entry): Record<string, unknown> {
     body: entry.skill.body,
     text: readFileSync(entry.skill.file, 'utf8'),
     ...(versions.length > 0 ? { versions } : {}),
+    ...(entry.skill.bundle ? { bundle: { files: bundleFileRows(entry.skill.bundle.dir), size: entry.skill.bundle.size, scripts: entry.skill.bundle.scripts } } : {}),
     /*
      * What a delete does, for the confirmation: who stops using it, and what
      * becomes of the file (the trash; a learned one's versions stay and it is
@@ -392,11 +417,26 @@ export function skillDetailRoute(deps: SkillsDeps, id: string): RouteReply {
   return { status: 200, body: detail(snap, entry) };
 }
 
-/** `GET /api/skills/:id/download`: the file as it is on disk. Null when there is none. */
-export function skillDownload(deps: SkillsDeps, id: string): { filename: string; text: string } | null {
+/** `GET /api/skills/:id/download`: the file as it is on disk, or a bundle as a .zip. Null when there is none. */
+export function skillDownload(deps: SkillsDeps, id: string): { filename: string; text: string } | { filename: string; zip: Uint8Array } | null {
   const entry = find(snapshot(deps), id);
   if (!entry) return null;
+  if (entry.skill.bundle) return { filename: `${entry.skill.name}.zip`, zip: zipBundle(entry.skill.bundle.dir, entry.skill.name) };
   return { filename: `${entry.skill.name}.md`, text: readFileSync(entry.skill.file, 'utf8') };
+}
+
+/** `GET /api/skills/:id/file?path=`: one of a bundle's files, for the sheet's viewer. */
+export function skillFileRoute(deps: SkillsDeps, id: string, rel: string): RouteReply {
+  const entry = find(snapshot(deps), id);
+  if (!entry) return fail(404, `There is no skill "${id}".`);
+  if (!entry.skill.bundle) return fail(404, `"${id}" is one file, not a bundle.`);
+  return bundleFileView(entry.skill.bundle.dir, rel);
+}
+
+/** `GET /api/skills/:id/image?path=`: a bundle's picture. Null when it is not one. */
+export function skillImage(deps: SkillsDeps, id: string, rel: string): { bytes: Buffer; type: string } | null {
+  const entry = find(snapshot(deps), id);
+  return entry?.skill.bundle ? bundleImage(entry.skill.bundle.dir, rel) : null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -589,7 +629,8 @@ function oneLine(value: unknown, field: string, max: number): string | { error: 
 
 /** A free name for a new shared skill: not a shared one, and not any agent's own (that would collide in its prompt). */
 function freeName(snap: Snapshot, wanted: string): string {
-  const taken = new Set(snap.entries.map((e) => e.skill.name));
+  // `bundles` is the upload's own path under /api/skills.
+  const taken = new Set([...snap.entries.map((e) => e.skill.name), 'bundles']);
   // The owner's agents' own skills are in the inventory already; the shipped ones' are not.
   for (const agent of snap.agents) {
     if (agent.writable) continue;
@@ -821,8 +862,139 @@ export async function deleteSkillRoute(deps: SkillsDeps, id: string): Promise<Ro
   }
 
   const stamp = trashStamp(deps.now());
-  const movedTo = path.join(deps.trashRoot, 'skills', `${entry.home === null ? '' : `${entry.home}-`}${entry.skill.name}-${stamp}.md`);
-  const refused = commit(deps, writes, [{ from: entry.skill.file, to: movedTo }]);
+  const bundleDir = entry.skill.bundle?.dir;
+  const movedTo = path.join(deps.trashRoot, 'skills', `${entry.home === null ? '' : `${entry.home}-`}${entry.skill.name}-${stamp}${bundleDir ? '' : '.md'}`);
+  const refused = commit(deps, writes, [{ from: bundleDir ?? entry.skill.file, to: movedTo }]);
   if (refused) return fail(409, refused);
   return { status: 200, body: { deleted: id, stopped, movedTo } };
 }
+
+/* ------------------------------------------------------------------ *
+ * Bundles: taking a staged upload, and what the exec tool asks
+ * ------------------------------------------------------------------ */
+
+/** Where a staged upload waits: beside the skills folder, never inside it. */
+function incomingOf(deps: SkillsDeps): string {
+  return deps.incomingDir ?? incomingDirFor(deps.skillsDir);
+}
+
+/** `GET /api/skills/bundles/:staged/file?path=`: one file of an upload not kept yet, for the preview's viewer. */
+export function stagedFileRoute(deps: SkillsDeps, stagedId: string, rel: string): RouteReply {
+  const found = readStaged(incomingOf(deps), stagedId);
+  if (!found) return fail(404, 'That upload is gone: upload the .zip again.');
+  return bundleFileView(found.dir, rel);
+}
+
+/** `GET /api/skills/bundles/:staged/image?path=`. */
+export function stagedImage(deps: SkillsDeps, stagedId: string, rel: string): { bytes: Buffer; type: string } | null {
+  const found = readStaged(incomingOf(deps), stagedId);
+  return found ? bundleImage(found.dir, rel) : null;
+}
+
+/**
+ * `POST /api/skills/bundles/:staged` `{ every?, agents?, mine? }`: keep a
+ * checked upload. Its files move into the skills folder under their own
+ * directory, its SKILL.md is written in buddi's front matter (the name, the
+ * title, when it's used, where it came from, untrusted unless `mine`), and
+ * the grant is written in each agent's file — all checked by a reload, and
+ * undone, folder included, when the reload refuses.
+ */
+export function acceptBundleRoute(deps: SkillsDeps, stagedId: string, body: Record<string, unknown>): RouteReply {
+  const grant = parseGrant(body);
+  if (typeof grant === 'string') return fail(400, grant);
+  if (body.mine !== undefined && typeof body.mine !== 'boolean') return fail(400, '`mine` must be true or false.');
+  const mine = body.mine === true;
+  const found = readStaged(incomingOf(deps), stagedId);
+  if (!found) return fail(404, 'That upload is gone: upload the .zip again.');
+  const { staged } = found;
+
+  const snap = snapshot(deps);
+  const name = freeName(snap, skillSlug(staged.skill.name || staged.skill.title));
+  const dir = path.join(deps.skillsDir, name);
+  if (existsSync(dir)) return fail(409, `A folder called "${name}" is already in the skills folder.`);
+  const today = deps.now().toISOString().slice(0, 10);
+  const lines = [
+    `name: ${name}`,
+    `title: ${serializeYamlValue(staged.skill.title)}`,
+    `description: ${serializeYamlValue(staged.skill.description.replace(/\s+/g, ' ').trim())}`,
+    `provenance: ${mine ? 'owner' : 'imported'}`,
+    `source: ${serializeYamlValue(`upload/${staged.filename}`)}`,
+    `created: "${today}"`,
+    ...(grant.every ? [] : ['agents: []']),
+    ...(mine ? [] : ['untrusted: true']),
+  ];
+  const skillText = `---\n${lines.join('\n')}\n---\n\n${staged.skill.body.trim()}\n`;
+
+  mkdirSync(deps.skillsDir, { recursive: true });
+  try {
+    renameSync(found.dir, dir);
+  } catch {
+    cpSync(found.dir, dir, { recursive: true });
+  }
+  rmSync(found.root, { recursive: true, force: true });
+  const undo = (): void => rmSync(dir, { recursive: true, force: true });
+  let entry: Entry;
+  try {
+    const file = path.join(dir, BUNDLE_SKILL_FILE);
+    parseSkillFile(skillText, { fileName: name, file, scope: 'shared' });
+    writeFilesAtomic([{ path: file, content: skillText }]);
+    entry = { skill: parseSkillBundle(dir, { scope: 'shared' }), home: null };
+  } catch (err) {
+    undo();
+    return fail(400, err instanceof Error ? err.message : String(err));
+  }
+  const plan = planGrant({ ...snap, entries: [...snap.entries, entry] }, entry, grant.every, grant.agents, skillText);
+  if (plan.error) {
+    undo();
+    return plan.error;
+  }
+  const refused = commit(deps, plan.writes);
+  if (refused) {
+    undo();
+    try {
+      deps.catalog.reload?.();
+    } catch {
+      // The previous catalog is still serving.
+    }
+    return fail(409, refused);
+  }
+  return answer(deps, name, 201);
+}
+
+/**
+ * What `host.exec`'s `skill` form asks (tools/host `SkillBundles`): the
+ * bundle called `name` that this agent loads, read fresh from its SKILL.md so
+ * a mark made a moment ago counts. Only a shared bundle in the owner's skills
+ * folder, and only one the catalog composes into this agent's prompt.
+ */
+export function skillBundlesFor(deps: Pick<SkillsDeps, 'catalog' | 'skillsDir'>): {
+  held(agentId: string, name: string): { name: string; title: string; dir: string; untrusted: boolean; files: string[]; scripts: string[] } | null;
+  root(): string;
+} {
+  return {
+    root: () => deps.skillsDir,
+    held(agentId, name) {
+      const agent = deps.catalog.get(agentId);
+      const dir = path.join(deps.skillsDir, name);
+      const file = path.join(dir, BUNDLE_SKILL_FILE);
+      if (!agent || !agent.skills.some((s) => s.name === name && path.resolve(s.file) === path.resolve(file))) return null;
+      let skill: Skill;
+      try {
+        skill = parseSkillBundle(dir, { scope: 'shared' });
+      } catch {
+        return null;
+      }
+      const bundle = skill.bundle!;
+      return {
+        name,
+        title: titleOf(skill),
+        dir,
+        untrusted: skill.untrusted && !skill.learned,
+        files: [BUNDLE_SKILL_FILE, ...bundle.files.map((f) => f.path)],
+        scripts: bundle.scripts,
+      };
+    },
+  };
+}
+
+export type { BundleFileRow };

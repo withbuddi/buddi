@@ -48,6 +48,7 @@ import {
   skillsSection,
   SkillFileError,
   SKILLS_DIR,
+  SKILL_SCRIPT_TOOL,
   type Skill,
   type SkillProvenance,
 } from './skills.js';
@@ -950,7 +951,7 @@ function buildAgent(
     opts.log ?? ((line: string) => console.warn(line)),
     opts.log ?? ((line: string) => catalogNotice(line)),
   );
-  const section = skillsSection(skills);
+  const section = skillsSection(skills, { canRunScripts: tools.includes(SKILL_SCRIPT_TOOL) });
   const colleagues = roster.filter((entry) => entry.id !== frontmatter.id);
   /*
    * The allowlist as the installation holds it, resolved against the roster.

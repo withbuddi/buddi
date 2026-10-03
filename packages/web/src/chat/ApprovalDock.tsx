@@ -29,6 +29,7 @@ import { labelFor } from '../canvas/renderables';
 import { useOwnerChoices } from '../views/parts/OwnerChoices';
 import { Button, ErrorBanner } from '../ui';
 import { gistFor } from './gist';
+import { SkillRunDock, skillRunOf } from './SkillRunDock';
 
 export interface DockedApproval {
   approvalId: string;
@@ -177,6 +178,13 @@ function DockCard({
         setBusy(null);
       });
   };
+
+  // A skill bundle's script: its own card, asked every time (SkillRunDock).
+  const skillRun = skillRunOf(action);
+  if (action && skillRun) {
+    const name = action.agentId ? action.agentId.charAt(0).toUpperCase() + action.agentId.slice(1) : 'An agent';
+    return <SkillRunDock action={action} run={skillRun} agentName={name} count={count} busy={busy} error={error} onDecide={(d) => decide(d)} />;
+  }
 
   const disabled = busy !== null || action === null || action.state !== 'pending';
   const reusable = action?.permissionScopes?.includes('always') ?? false;

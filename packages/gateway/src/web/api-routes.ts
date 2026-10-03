@@ -352,7 +352,41 @@ export const API_ROUTES: readonly ApiRoute[] = [
       '{ skills: SkillRow[], agents: [{ id, handle, name, writable }] } where SkillRow is { id (name, or agent/name for one in an agent\'s folder), name, title, ' +
       'description, group: mine|learned|plugin|catalogue, file, home: agent id | null, every, holders: [{ agent, how: home|every|filter|granted }], ' +
       'untrusted: upload|page|null, provenance, source, created, updatedAt, learned: { by, version, edited, keptAt } | null, ' +
-      'from: { kind: plugin, plugin, version, installed } | { kind: catalogue, package, version, agent } | { kind: upload, filename } | null, editable, deletable, shareable }',
+      'from: { kind: plugin, plugin, version, installed } | { kind: catalogue, package, version, agent } | { kind: upload, filename } | null, editable, deletable, shareable, ' +
+      'bundle: { files, scripts: path[], size } | null }; an agent\'s canRunScripts says it holds host.exec, which a bundle\'s scripts run through',
+  },
+  {
+    method: 'POST', path: '/api/skills/bundles', area: 'agents', token: 'shapes', kind: 'upload',
+    summary: 'Read a skill bundle (.zip with SKILL.md, scripts/, assets/) before keeping it: streamed to a temporary folder, checked (20 MB unpacked, 500 files, SKILL.md with a description, no absolute paths, .., links or encrypted entries, nothing executable outside scripts/) and unpacked into staging. Nothing in it runs.',
+    body: 'the .zip bytes; X-Filename header',
+    answer: '{ staged: { id, filename, packed, size, files: [{ path, size, kind: skill|script|font|image|template|data|other, setup? }], scripts, skill: { name, title, description, firstLines }, createdAt } }',
+    errors: '400; 413 too big; 415 not a .zip; 422 refused, with { error, refusal: { kind: notzip|big|count|noskill|paths|frontmatter|executable|damaged, filename, size?, files?, entries?: [{ path, why, target? }], looked? } }',
+  },
+  {
+    method: 'GET', path: '/api/skills/bundles/:staged/file', area: 'agents', summary: 'One file of a staged upload, for the preview\'s viewer (?path=).',
+    answer: '{ file: { path, size, kind, setup?, text? | binary: true, image? } }', errors: '404',
+  },
+  {
+    method: 'GET', path: '/api/skills/bundles/:staged/image', area: 'agents', kind: 'bytes', summary: 'A picture in a staged upload (?path=), served under a CSP that runs nothing.',
+    answer: 'image/*', errors: '404',
+  },
+  {
+    method: 'POST', path: '/api/skills/bundles/:staged', area: 'agents', token: 'shapes',
+    summary: 'Keep a staged bundle: unpacked into the skills folder under its own directory, SKILL.md written in buddi\'s front matter (untrusted unless mine), the grant written in each agent\'s file, all checked by a catalog reload.',
+    body: '{ every?: boolean, agents?: agent id[], mine?: boolean }', answer: '201 { skill: SkillRow }',
+    errors: '400; 404 the upload is gone; 409 a shipped agent, or the catalog refused the result (nothing kept)',
+  },
+  {
+    method: 'DELETE', path: '/api/skills/bundles/:staged', area: 'agents', token: 'shapes', summary: 'Drop a staged upload nobody kept.',
+    answer: '{ discarded }',
+  },
+  {
+    method: 'GET', path: '/api/skills/:id/file', area: 'agents', summary: 'One of a bundle\'s files, for the sheet\'s viewer (?path=): its text, or its size when it is not text.',
+    answer: '{ file: { path, size, kind, setup?, text? | binary: true, image? } }', errors: '404',
+  },
+  {
+    method: 'GET', path: '/api/skills/:id/image', area: 'agents', kind: 'bytes', summary: 'A picture in a bundle (?path=), served under a CSP that runs nothing.',
+    answer: 'image/*', errors: '404',
   },
   {
     method: 'POST', path: '/api/skills', area: 'agents', token: 'shapes',
@@ -362,13 +396,13 @@ export const API_ROUTES: readonly ApiRoute[] = [
     errors: '400 a field missing or the loader\'s sentence; 409 an agent that ships with buddi, or the catalog refused the result (nothing written); 413 over 50 KB; 415 not .md',
   },
   {
-    method: 'GET', path: '/api/skills/:id', area: 'agents', summary: 'One skill whole: its row, its text, the file as written, a learned one\'s versions, and what deleting it does.',
-    answer: '{ skill: SkillRow, body, text, versions?: number[], onDelete: { stops: agent id[], every, then: trash|versions-kept|catalogue-asks }, agents }',
+    method: 'GET', path: '/api/skills/:id', area: 'agents', summary: 'One skill whole: its row, its text, the file as written, a learned one\'s versions, a bundle\'s file tree, and what deleting it does.',
+    answer: '{ skill: SkillRow, body, text, versions?: number[], bundle?: { files: [{ path, size, kind, setup? }], size, scripts }, onDelete: { stops: agent id[], every, then: trash|versions-kept|catalogue-asks }, agents }',
     errors: '404',
   },
   {
-    method: 'GET', path: '/api/skills/:id/download', area: 'agents', kind: 'bytes', summary: 'The skill as its .md file, as an attachment.',
-    answer: 'text/markdown', errors: '404',
+    method: 'GET', path: '/api/skills/:id/download', area: 'agents', kind: 'bytes', summary: 'The skill as its .md file, or a bundle as a .zip with its files, as an attachment.',
+    answer: 'text/markdown | application/zip', errors: '404',
   },
   {
     method: 'POST', path: '/api/skills/:id/text', area: 'agents', token: 'shapes',
