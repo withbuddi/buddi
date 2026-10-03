@@ -35,6 +35,10 @@ import type {
   ImageList as CoreImageList,
   ImageRef as CoreImageRef,
   ListItem as CoreListItem,
+  MenuItem as CoreMenuItem,
+  RepeatPoll as CoreRepeatPoll,
+  RowChoice as CoreRowChoice,
+  RowChoiceOption as CoreRowChoiceOption,
   OptionsFrom as CoreOptionsFrom,
   PageDescriptor as CorePageDescriptor,
   PageIcon as CorePageIcon,
@@ -74,6 +78,10 @@ import type {
   ImageRef,
   ListComponent,
   ListItem,
+  MenuItem,
+  RepeatPoll,
+  RowChoice,
+  RowChoiceOption,
   OptionsFrom,
   PageIcon,
   PagePlay,
@@ -153,6 +161,10 @@ interface Conformance {
   imageRef: Exact<CoreImageRef, ImageRef>;
   imageList: Exact<CoreImageList, ImageList>;
   listItem: Exact<CoreListItem, ListItem>;
+  menuItem: Exact<CoreMenuItem, MenuItem>;
+  repeatPoll: Exact<CoreRepeatPoll, RepeatPoll>;
+  rowChoice: Exact<CoreRowChoice, RowChoice>;
+  rowChoiceOption: Exact<CoreRowChoiceOption, RowChoiceOption>;
   selection: Exact<CoreSelection, Selection>;
   groupBy: Exact<CoreGroupBy, GroupBy>;
   calendarMap: Exact<CoreCalendarMap, CalendarMap>;
@@ -205,6 +217,10 @@ export const CONTRACTS_AGREE: Conformance = {
   imageRef: true,
   imageList: true,
   listItem: true,
+  menuItem: true,
+  repeatPoll: true,
+  rowChoice: true,
+  rowChoiceOption: true,
   selection: true,
   groupBy: true,
   calendarMap: true,
@@ -244,6 +260,7 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   table: true,
   detail: true,
   form: true,
+  menu: true,
   search: true,
   'list-detail': true,
   repeat: true,
@@ -282,6 +299,10 @@ export const CHECKED_TYPES = [
   'ToolRef',
   'RowAction',
   'RowActionForm',
+  'RowChoice',
+  'RowChoiceOption',
+  'MenuItem',
+  'RepeatPoll',
   'BulkAction',
   'PillRef',
   'ImageRef',

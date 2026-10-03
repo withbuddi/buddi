@@ -87,6 +87,7 @@ import type {
   RouteRef,
   PillRef,
   RowAction,
+  RowChoice,
   StoryRow,
   StoryWay,
   Tone,
@@ -376,12 +377,15 @@ function resolveArgs(
     /** Field names the form is not asking for: hidden, or greyed. */
     omit?: ReadonlySet<string>;
     selected?: string[];
+    /** The option a row's choice was just moved to (1.28). */
+    choice?: string;
     scope: PageScope;
   },
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, ref] of Object.entries(args ?? {})) {
     if ('row' in ref) out[key] = readPath(source.row, ref.row);
+    else if ('choice' in ref) out[key] = source.choice;
     else if ('field' in ref) {
       // A field the owner cannot see or cannot change is a field they said
       // nothing about: it is left out, and the tool's own default stands.
@@ -1113,6 +1117,8 @@ function Piece({
   const unmasked = useContext(Unmasked);
   // `when` is the only logic a descriptor may carry.
   if (!holds(data, component.when)) return null;
+  // `where` (1.28): this computer's browser, or another one.
+  if (component.where !== undefined && component.where !== (isLocalBrowser() ? 'local' : 'remote')) return null;
   // A section masks itself; anything else that reads a sensitive query, and
   // is not inside a section that has already been shown, gets a gate of its own.
   if (component.kind !== 'section' && !unmasked && readsSensitive(component, scope.sensitive)) {
@@ -1170,6 +1176,8 @@ function Piece({
       return <ExpandPiece component={component} data={data} />;
     case 'button':
       return <ButtonPiece component={component} data={data} />;
+    case 'menu':
+      return <MenuPiece component={component} data={data} />;
     case 'approval':
       return <ApprovalPiece component={component} data={data} />;
     case 'artifact':
@@ -1212,11 +1220,17 @@ function SectionPiece({ component, data }: { component: Of<'section'>; data: unk
    */
   let end = component.body.length;
   const headable = (piece: Component): boolean =>
-    piece.kind === 'button' || piece.kind === 'link' || (piece.kind === 'form' && piece.drawer !== undefined && !piece.title);
+    piece.kind === 'button' ||
+    piece.kind === 'link' ||
+    piece.kind === 'menu' ||
+    (piece.kind === 'form' && piece.drawer?.button !== undefined && !piece.title);
   while (boxed && end > 0 && headable(component.body[end - 1]!)) end -= 1;
   const body = component.body.slice(0, end);
   const actions = [...(component.actions ?? []), ...component.body.slice(end)];
+  // What a menu in the head said (1.28): drawn at the top of the body, not in the head.
+  const [headNote, setHeadNote] = useState<ReactNode>(null);
   return (
+    <HeadNote.Provider value={setHeadNote}>
     <PieceSection
       title={component.title}
       note={component.note}
@@ -1237,17 +1251,76 @@ function SectionPiece({ component, data }: { component: Of<'section'>; data: unk
       }
     >
       <Stack gap="lg" divided={boxed}>
+        {headNote}
         {masked ? (
           <MaskedNote />
         ) : (
           <Unmasked.Provider value={unmasked || gated}>
-            {body.map((child, index) => (
-              <Piece key={index} component={child} data={data} />
-            ))}
+            <HeadNote.Provider value={null}>
+              {body.map((child, index) => (
+                <Piece key={index} component={child} data={data} />
+              ))}
+            </HeadNote.Provider>
           </Unmasked.Provider>
         )}
       </Stack>
     </PieceSection>
+    </HeadNote.Provider>
+  );
+}
+
+/** Where a head's menu puts what its tool said: the section's body, under the head (1.28). */
+const HeadNote = createContext<((note: ReactNode) => void) | null>(null);
+
+/** Is the dashboard open in a browser on the computer buddi runs on? (`where`, 1.28) */
+export function isLocalBrowser(): boolean {
+  const host = typeof location === 'undefined' ? '' : location.hostname;
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+}
+
+/**
+ * One button that opens a short menu (1.28): each item runs a tool, or opens a
+ * drawer form of the page by its id — through the page parameter `open`, so a
+ * link can open it too. Hints sit under the items' words.
+ */
+function MenuPiece({ component, data }: { component: Of<'menu'>; data: unknown }): JSX.Element {
+  const scope = useScope();
+  const act = useAct();
+  const report = useContext(HeadNote);
+  const items = component.items
+    .filter((item) => holds(data, item.when))
+    .map((item) => ({
+      label: item.label,
+      ...(item.hint ? { hint: item.hint } : {}),
+      onSelect: () => {
+        if (item.open !== undefined) scope.setParams({ open: item.open });
+        else if (item.action) void act.run(item.action, resolveArgs(item.action.args, { data, row: data, scope }));
+      },
+    }));
+  const running = component.items.find((item) => item.action?.tool === act.running)?.action;
+  const outcome = act.error || act.done || act.approvalId ? <ActOutcome act={act} /> : null;
+  useEffect(() => {
+    if (report) report(outcome);
+    // Only when what the write said changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [act.error, act.done, act.approvalId, act.waiting]);
+  useEffect(() => () => report?.(null), [report]);
+  return (
+    <>
+      <ActionMenu
+        label={component.label}
+        items={items}
+        stacked={component.items.some((item) => item.hint !== undefined)}
+        trigger={
+          // A plain button: the menu's trigger needs one that takes a ref.
+          <button type="button" className="ui-btn pl-menu-btn" data-variant={component.tone === 'accent' ? 'accent' : undefined} disabled={act.busy}>
+            {running?.busy ?? component.label}
+            <Icon name="chevron-down" size={12} />
+          </button>
+        }
+      />
+      {report ? null : outcome}
+    </>
   );
 }
 
@@ -1334,7 +1407,7 @@ function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }
   if ('href' in component.to) {
     return (
       <Toolbar>
-        <ButtonLink href={href} target="_blank" rel="noopener noreferrer">
+        <ButtonLink href={href} target="_blank" rel="noopener noreferrer" variant={component.tone === 'accent' ? 'accent' : undefined}>
           {component.label}
           <span className="wb-src-out" aria-hidden="true">↗</span>
           <span className="sr-only"> (opens in a new tab)</span>
@@ -1525,8 +1598,16 @@ function itemRow(
       </span>
     );
   const subText = item.sub ? String(readRef(row, item.sub) ?? '') : '';
+  const swatch = item.swatch ? readPath(row, item.swatch) : undefined;
   const lead = item.logo ? (
     <AssetImage className="pl-logo-lg" src={assetSrc(scope.plugin, readRef(row, item.logo.asset))} label={String(readRef(row, item.logo.label) ?? '')} />
+  ) : item.swatch ? (
+    // 1.28: the row's own colour; a hollow dot when it has none, so the names line up.
+    typeof swatch === 'string' && SWATCH.test(swatch) ? (
+      <span className="pl-swatch" aria-hidden="true" style={{ '--swatch': swatch } as CSSProperties} />
+    ) : (
+      <span className="pl-swatch" data-none="true" aria-hidden="true" />
+    )
   ) : null;
   return {
     text,
@@ -1675,7 +1756,7 @@ function ListPiece({
 
   const groups = useMemo(() => {
     const shown = rows.filter((row) => drawable.has(row));
-    if (!component.groupBy) return [{ label: null as string | null, aside: null as string | null, rows: shown }];
+    if (!component.groupBy) return [{ label: null as string | null, aside: null as string | null, asideTone: undefined as string | undefined, rows: shown }];
     const by = new Map<string, unknown[]>();
     for (const row of shown) {
       const key = String(readPath(row, component.groupBy.key) ?? '');
@@ -1689,7 +1770,13 @@ function ListPiece({
     };
     return [...by].map(([key, group]) => {
       const aside = component.groupBy?.aside ? readPath(group[0], component.groupBy.aside) : undefined;
-      return { label: words(key, group[0]), aside: aside === undefined || aside === null || aside === '' ? null : String(aside), rows: group };
+      const tone = component.groupBy?.asideTone ? readPath(group[0], component.groupBy.asideTone) : undefined;
+      return {
+        label: words(key, group[0]),
+        aside: aside === undefined || aside === null || aside === '' ? null : String(aside),
+        asideTone: tone === 'warning' || tone === 'critical' ? (tone as string) : undefined,
+        rows: group,
+      };
     });
   }, [rows, component.groupBy, keyed.length]);
 
@@ -1754,6 +1841,7 @@ function ListPiece({
           side={
             <>
               {drawn.side}
+              {component.item.choice ? <RowChoiceControl choice={component.item.choice} row={row} data={query.data} act={act} /> : null}
               {actions.map((action, i) => (
                 <RowActionButton key={i} action={action} row={row} data={query.data} act={act} onForm={rowForm.show} />
               ))}
@@ -1787,17 +1875,33 @@ function ListPiece({
               title={<span className="muted">{enabled.size} to choose from</span>}
             />
           ) : null}
-          {groups.map((group, index) => (
-            <div key={index}>
-              {group.label ? (
-                <div className="ui-list-group" data-aside={group.aside ? 'true' : undefined}>
-                  {group.label}
-                  {group.aside ? <span className="pl-group-aside">{group.aside}</span> : null}
-                </div>
-              ) : null}
-              {lines(group.rows)}
-            </div>
-          ))}
+          {groups.map((group, index) =>
+            component.groupBy?.actions || component.groupBy?.asideTone ? (
+              // 1.28: a head of its own — the group's words, its aside, and its actions on the right.
+              <section key={index} className="pl-group" aria-label={group.label ?? undefined}>
+                <header className="pl-group-head">
+                  <span className="pl-group-title">{group.label}</span>
+                  {group.aside ? (
+                    <span className="pl-group-aside" data-tone={group.asideTone}>
+                      {group.aside}
+                    </span>
+                  ) : null}
+                  <GroupActions actions={component.groupBy.actions ?? []} row={group.rows[0]} title={group.label ?? ''} data={query.data} act={act} onForm={rowForm.show} />
+                </header>
+                {lines(group.rows)}
+              </section>
+            ) : (
+              <div key={index}>
+                {group.label ? (
+                  <div className="ui-list-group" data-aside={group.aside ? 'true' : undefined}>
+                    {group.label}
+                    {group.aside ? <span className="pl-group-aside">{group.aside}</span> : null}
+                  </div>
+                ) : null}
+                {lines(group.rows)}
+              </div>
+            ),
+          )}
         </List>
       )}
       {component.collapsed && folded.some((row) => drawable.has(row)) ? (
@@ -1838,6 +1942,87 @@ function ListPiece({
         </Toolbar>
       ) : null}
     </PieceSection>
+  );
+}
+
+/** A group head's actions (1.28): read against the group's first row, buttons then the ⋯. */
+function GroupActions({
+  actions,
+  row,
+  title,
+  data,
+  act,
+  onForm,
+}: {
+  actions: RowAction[];
+  row: unknown;
+  title: string;
+  data: unknown;
+  act: ActState;
+  onForm: (action: RowAction, row: unknown) => void;
+}): JSX.Element | null {
+  const offered = actions.filter((action) => holds(row, action.when));
+  if (offered.length === 0) return null;
+  const buttons = offered.filter((action) => action.menu !== true);
+  const menu = offered.filter((action) => action.menu === true);
+  return (
+    <span className="pl-group-act">
+      {buttons.map((action, i) => (
+        <RowActionButton key={i} action={action} row={row} data={data} act={act} onForm={onForm} />
+      ))}
+      {menu.length > 0 ? <RowMenu actions={menu} row={row} title={title} data={data} act={act} onForm={onForm} /> : null}
+    </span>
+  );
+}
+
+/**
+ * A row's segmented choice (1.28): Not linked · Read · Read and change. The
+ * pick shows at once and the tool runs with it; the next answer says what
+ * stands, and a refusal puts the old choice back with its sentence above the
+ * list. An option the row cannot take is greyed, its hint saying why.
+ */
+function RowChoiceControl({ choice, row, data, act }: { choice: RowChoice; row: unknown; data: unknown; act: ActState }): JSX.Element {
+  const scope = useScope();
+  const current = String(readPath(row, choice.value) ?? '');
+  const [picked, setPicked] = useState<string | null>(null);
+  // What the data says wins as soon as it says something new.
+  useEffect(() => setPicked(null), [current]);
+  const shown = picked ?? current;
+  const options = choice.options.filter((option) => holds(row, option.when));
+  return (
+    <span
+      className="ui-segment pl-choice"
+      role="radiogroup"
+      aria-label={fill(choice.label, { row })}
+      aria-busy={picked !== null && act.running === choice.tool ? 'true' : undefined}
+    >
+      {options.map((option) => {
+        const locked = option.disabledWhen !== undefined && holds(row, option.disabledWhen);
+        const why = locked && option.hint ? fill(option.hint, { row }) : undefined;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            className="ui-tab"
+            aria-checked={shown === option.value}
+            disabled={locked || act.busy}
+            title={why}
+            aria-description={why}
+            onClick={() => {
+              if (option.value === shown) return;
+              setPicked(option.value);
+              const args = resolveArgs(choice.args, { data, row, choice: option.value, scope });
+              void act.run(choice, args).then((worked) => {
+                if (!worked) setPicked(null);
+              });
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </span>
   );
 }
 
@@ -2224,7 +2409,14 @@ function FormPiece({ component, data }: { component: Of<'form'>; data: unknown }
   const scope = useScope();
   const initial = usePageQuery(component.initial, data);
   const act = useAct();
-  const [open, setOpen] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  // 1.28: a drawer with an `id` also opens from the page parameter `open` (a menu item, a link).
+  const byId = component.drawer?.id !== undefined && scope.params.open === component.drawer.id;
+  const open = pressed || byId;
+  const setOpen = (next: boolean): void => {
+    setPressed(next);
+    if (!next && byId) scope.setParams({ open: null });
+  };
   // Remounting on the initial data is what makes "Save" show what was saved:
   // the key changes when the query answers again.
   const key = JSON.stringify([initial.data ?? null, scope.version]);
@@ -2246,6 +2438,19 @@ function FormPiece({ component, data }: { component: Of<'form'>; data: unknown }
       </PieceSection>
     );
   }
+  if (component.drawer.button === undefined && !component.title) {
+    // Opened only by a menu or a link (1.28): nothing on the page but what the write said.
+    return (
+      <>
+        <ActOutcome act={act} />
+        {open ? (
+          <Sheet title={component.drawer.title} onClose={() => setOpen(false)}>
+            {body}
+          </Sheet>
+        ) : null}
+      </>
+    );
+  }
   return (
     // No panel: what it holds is a button, and a panel with nothing in it
     // until a write answers is a white box saying nothing.
@@ -2253,9 +2458,11 @@ function FormPiece({ component, data }: { component: Of<'form'>; data: unknown }
       title={component.title}
       aside={component.note}
       actions={
-        <Button variant="accent" onClick={() => setOpen(true)}>
-          {component.drawer.button}
-        </Button>
+        component.drawer.button !== undefined ? (
+          <Button variant="accent" onClick={() => setOpen(true)}>
+            {component.drawer.button}
+          </Button>
+        ) : undefined
       }
     >
       {/*
@@ -2560,10 +2767,36 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
   const shouldPoll = component.poll !== undefined && query.data !== undefined && holds(query.data, component.poll.while);
   useEffect(() => setPolling(shouldPoll), [shouldPoll]);
   const rows = rowsOf(query.data, component.rows);
+  /*
+   * `finish` (1.28): a row that has reached its end — a sign-in whose answer
+   * came back — has its tool run once, by itself. Once per row: a run that
+   * failed is said here and not tried again until the row is another.
+   */
+  const finish = component.poll?.finish;
+  const act = useAct();
+  const [finished, setFinished] = useState<ReadonlySet<string>>(() => new Set());
+  const due = finish ? rows.find((row) => holds(row, finish.when)) : undefined;
+  const dueKey = due === undefined ? null : String(readPath(due, component.key) ?? '');
+  useEffect(() => {
+    if (!finish || due === undefined || dueKey === null || dueKey === '' || finished.has(dueKey) || act.busy) return;
+    setFinished((done) => new Set([...done, dueKey]));
+    void act.run(finish.action, resolveArgs(finish.action.args, { data: due, row: due, scope }));
+    // Only when another row becomes due.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dueKey]);
+  const finishing = finish !== undefined && act.running === finish.action.tool;
   return (
     <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
-      {rows.length === 0 ? (
+      {finishing ? (
+        <p className="pl-wait" role="status">
+          <span className="pl-spin" aria-hidden="true" />
+          {finish.action.busy ?? finish.action.label}
+        </p>
+      ) : (
+        <ActOutcome act={act} />
+      )}
+      {finishing ? null : rows.length === 0 ? (
         query.loading ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />
       ) : (
         <Stack gap="lg" divided>
@@ -3616,10 +3849,11 @@ function PageWithData({ page, embedded, lede: given }: { page: PluginPageDescrip
 }
 
 /** One of the head's actions: a link drawn as a button (ghost, or the accent primary), or a button. */
-function HeadAction({ component, data }: { component: Of<'link'> | Of<'button'>; data: unknown }): JSX.Element | null {
+function HeadAction({ component, data }: { component: Of<'link'> | Of<'button'> | Of<'menu'>; data: unknown }): JSX.Element | null {
   const scope = useScope();
   if (!holds(data, component.when)) return null;
   if (component.kind === 'button') return <ButtonPiece component={component} data={data} />;
+  if (component.kind === 'menu') return <MenuPiece component={component} data={data} />;
   const href = routeOf(scope, component.to, data);
   if (href === '') return null;
   const variant = component.tone === 'accent' ? 'accent' : 'ghost';

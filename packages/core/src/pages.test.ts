@@ -371,7 +371,7 @@ describe('page descriptors', () => {
   it('refuses a section header action that is not a link or a button', () => {
     expect(() =>
       parse([page({ body: [{ kind: 'section', actions: [{ kind: 'notice', text: 'No.' }], body: [] }] })]),
-    ).toThrow(/header actions are links and buttons/);
+    ).toThrow(/header actions are links, buttons and menus/);
   });
 
   it('refuses a list-detail whose list is not a list', () => {

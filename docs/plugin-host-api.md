@@ -701,6 +701,41 @@ declared), `http.request`'s `auth: { as: 'bearer' }` with the core kind
 and treats a bearer auth as a header secret it cannot find, so a plugin that
 uses them asks for `^1.28`.
 
+1.28 also adds to the page grammar what Settings → Calendar's redesign needs
+([plugin-pages.md](plugin-pages.md) §4), each optional, each refused by an
+older buddi's descriptor check — a plugin that uses one asks for `^1.28`:
+
+1. **A row's choice.** A list item's `choice`: two to four options drawn as a
+   segment on the row's right, the row's `value` the chosen one, `{ choice:
+   true }` the picked value in the tool's arguments, an option hidden (`when`)
+   or greyed with why (`disabledWhen`, `hint`). Not linked · Read · Read and
+   change on each calendar:
+
+   ```ts
+   choice: { tool: 'calendar.set_access', label: 'What agents may do with {name}', value: 'access',
+     options: [{ value: 'off', label: 'Not linked', when: { path: 'kind', equals: 'account' } },
+               { value: 'read', label: 'Read' },
+               { value: 'change', label: 'Read and change', disabledWhen: { path: 'canChange', equals: false }, hint: '{why}' }],
+     args: { id: { row: 'id' }, access: { choice: true } } }
+   ```
+
+   (`label` and `hint` take `{field}` placeholders read from the row.)
+2. **A list row's swatch.** `swatch` on a list item, as 1.26's on a table
+   column: the row's own colour as a dot leading it.
+3. **A group's head.** `groupBy.actions` (row actions read against the
+   group's first row: Sign in again, ⋯ Remove account…) and
+   `groupBy.asideTone`.
+4. **A menu.** `{ kind: 'menu', label, tone?, items }`, in a body or a
+   section's or a rail page's head; an item runs a tool (`action`) or opens a
+   drawer form by its id (`open`, matched to `drawer.id`, whose `button` is
+   then optional; the page parameter `open=<id>` opens it from a link).
+5. **A card that finishes by itself.** A `repeat`'s `poll.finish: { when,
+   action }` runs the tool once for the first row where `when` holds — a
+   sign-in whose loopback answer has arrived — with its `busy` line in place
+   of the rows.
+6. **Where the page is opened.** `where: 'local' | 'remote'` on any
+   component: a browser on this computer, or anywhere else.
+
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or
 changes something, and ships only after one release in which both shapes

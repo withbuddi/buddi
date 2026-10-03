@@ -48,7 +48,7 @@ export interface QueryRef {
   params?: Record<string, ParamRef>;
 }
 
-export type ArgRef = ValueRef | { param: string } | { field: string } | { row: string } | { selected: true };
+export type ArgRef = ValueRef | { param: string } | { field: string } | { row: string } | { selected: true } | { choice: true };
 
 /** Another page of the same plugin, or — the one exception — an agent's chat. */
 /** `{ proposals: true }`: the owner's Proposals inbox, filtered to the plugin drawing the page. */
@@ -137,6 +137,42 @@ export interface ListItem {
   tag?: ValueRef;
   /** 1.27: one sentence under the row, in its tone. */
   status?: { text: ValueRef; tone?: Tone | ValueRef };
+  /** 1.28: a path to a `#rrggbb` colour, a dot leading the row. */
+  swatch?: string;
+  /** 1.28: a segmented choice on the row's right. */
+  choice?: RowChoice;
+}
+
+/** A row's segmented choice (1.28): `{ choice: true }` is the picked option's value. */
+export interface RowChoice extends Omit<ToolRef, 'args' | 'confirm'> {
+  value: string;
+  options: RowChoiceOption[];
+  args: Record<string, ValueRef | { row: string } | { choice: true }>;
+}
+
+/** One option of a row's choice. */
+export interface RowChoiceOption {
+  value: string;
+  label: string;
+  when?: Visibility;
+  disabledWhen?: Visibility;
+  hint?: string;
+}
+
+/** One item of a `menu` (1.28): a tool, or a drawer form's `id` to open. */
+export interface MenuItem {
+  label: string;
+  hint?: string;
+  when?: Visibility;
+  action?: ToolRef;
+  open?: string;
+}
+
+/** A repeat's poll; `finish` (1.28) runs a tool once for a row that satisfies `when`. */
+export interface RepeatPoll {
+  seconds: number;
+  while: Visibility;
+  finish?: { when: Visibility; action: Omit<ToolRef, 'args' | 'confirm'> & { args: Record<string, ValueRef | { row: string }> } };
 }
 
 export interface Selection {
@@ -151,6 +187,10 @@ export interface GroupBy {
   label?: string;
   /** 1.27: a quiet line beside the head, read from its first row. */
   aside?: string;
+  /** 1.28: the aside's tone, read from the first row. */
+  asideTone?: string;
+  /** 1.28: actions on the group's head, read against its first row. */
+  actions?: RowAction[];
 }
 
 /** A select's options, read from a query rather than written in the descriptor. */
@@ -203,6 +243,8 @@ export interface ComponentCommon {
   title?: string;
   note?: string;
   empty?: string;
+  /** 1.28: only on this computer's browser (`local`) or anywhere else (`remote`). */
+  where?: 'local' | 'remote';
 }
 
 /** Where a calendar finds each event's parts: paths within one row. */
@@ -368,7 +410,7 @@ export type ListComponent = ComponentCommon & {
 };
 
 /** What a section may put on the right of its heading. */
-export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' }>;
+export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' } | { kind: 'menu' }>;
 
 export type Component =
   | (ComponentCommon & { kind: 'section'; actions?: SectionAction[]; body: Component[] })
@@ -413,7 +455,7 @@ export type Component =
       fields: Field[];
       submit: ToolRef;
       initial?: QueryRef;
-      drawer?: { title: string; button: string };
+      drawer?: { title: string; button?: string; id?: string };
       columns?: 2 | 3;
     })
   | (ComponentCommon & {
@@ -446,7 +488,7 @@ export type Component =
        * and only this query: a download's progress line moves without the
        * page's forms being read again under the owner's hands.
        */
-      poll?: { seconds: number; while: Visibility };
+      poll?: RepeatPoll;
     })
   /** Dated events: week, month and list views; the page adds `from` and `to` to the query. */
   | CalendarComponent
@@ -464,6 +506,8 @@ export type Component =
   | StoriesComponent
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
+  /** 1.28: one button opening a short menu of tools and drawers. */
+  | (ComponentCommon & { kind: 'menu'; label: string; tone?: 'accent'; items: MenuItem[] })
   | (ComponentCommon & { kind: 'approval'; path: string })
   /** One of the plugin's proposed agents: a line, and the gated accept. */
   | (ComponentCommon & { kind: 'agent-offer'; agent: string; text: string; label: string })

@@ -166,14 +166,16 @@ export interface QueryRef {
 /**
  * Where a tool argument comes from. `{ field }` is a form or editor field on
  * the screen; `{ row }` is a field of the row an action sits on; `{ selected }`
- * is the list's current selection, as an array of its `key` values.
+ * is the list's current selection, as an array of its `key` values; `{
+ * choice }` is the option a row's choice was just moved to (1.28).
  */
 export type ArgRef =
   | ValueRef
   | { param: string }
   | { field: string }
   | { row: string }
-  | { selected: true };
+  | { selected: true }
+  | { choice: true };
 
 /**
  * Where a link goes: another page of this same plugin, or one agent's chat.
@@ -370,6 +372,55 @@ export interface ListItem {
    * empty value. Since 1.27.
    */
   status?: { text: ValueRef; tone?: Tone | ValueRef };
+  /**
+   * Path within the row to a `#rrggbb` colour, drawn as a small dot leading
+   * the row — a calendar's own colour beside its name. A row whose value is
+   * empty gets a hollow dot, so the names still line up; anything that is not
+   * a plain hex colour is drawn as empty. Since 1.28.
+   */
+  swatch?: string;
+  /**
+   * One choice of two to four, drawn as a segment on the row's right: what
+   * agents may do with a calendar — Not linked · Read · Read and change.
+   * Since 1.28.
+   */
+  choice?: RowChoice;
+}
+
+/**
+ * A row's segmented choice (since host API 1.28). The row's value at `value`
+ * is the option drawn as chosen; picking another runs the tool with `{
+ * choice: true }` as the picked option's value and `{ row }` reading the row,
+ * then refreshes. The pick shows at once and goes back if the tool refuses.
+ * `label` is the control's name for a screen reader, with `{field}`
+ * placeholders read from the row ("What agents may do with {name}").
+ */
+export interface RowChoice extends Omit<ToolRef, 'args' | 'confirm'> {
+  value: string;
+  options: RowChoiceOption[];
+  args: Record<string, ValueRef | { row: string } | { choice: true }>;
+}
+
+/** One option of a row's choice: left out where `when` does not hold, greyed where `disabledWhen` does, `hint` saying why. */
+export interface RowChoiceOption {
+  value: string;
+  label: string;
+  when?: Visibility;
+  disabledWhen?: Visibility;
+  hint?: string;
+}
+
+/**
+ * One item of a `menu` (since host API 1.28): a tool, or `open`, the `id` of
+ * a drawer form on the same page, which it opens in its sheet. `hint` is the
+ * quiet line under the item's words.
+ */
+export interface MenuItem {
+  label: string;
+  hint?: string;
+  when?: Visibility;
+  action?: ToolRef;
+  open?: string;
 }
 
 /**
@@ -481,6 +532,14 @@ export interface GroupBy {
   label?: string;
   /** Path within a row to a quiet line beside the group's head ("6 sources"). Since 1.27. */
   aside?: string;
+  /** Path within a row to the aside's tone, `warning` or `critical` ("Sign-in ran out"). Since 1.28. */
+  asideTone?: string;
+  /**
+   * Actions on the group's head, at its right, read against the group's first
+   * row: `{ row }` arguments, `when`, `confirm` and `menu` as a row's
+   * (Sign in again; ⋯ Remove account…). Since 1.28.
+   */
+  actions?: RowAction[];
 }
 
 /** One control on a form, a search or an editor. */
@@ -604,6 +663,14 @@ export interface ComponentCommon {
   note?: string;
   /** The sentence shown when there is nothing. */
   empty?: string;
+  /**
+   * Show this only where the dashboard is opened: `local`, a browser on the
+   * computer buddi runs on (its address is 127.0.0.1, localhost or ::1), or
+   * `remote`, anywhere else — over the tailnet, from a phone. What a sign-in's
+   * pasted-address fallback needs: the loopback answer only reaches a browser
+   * on this computer. Since 1.28.
+   */
+  where?: 'local' | 'remote';
 }
 
 /**
@@ -674,8 +741,23 @@ export interface StoriesEmpty {
   actions?: Array<{ label: string; to?: RouteRef; set?: Record<string, string> }>;
 }
 
+/**
+ * A `repeat`'s poll: its query alone is asked again every `seconds` while
+ * `while` holds of the answer. `finish` (since host API 1.28) is what makes a
+ * card complete by itself: once a row of an answer satisfies `finish.when`,
+ * `finish.action` is run once for that row — `{ row }` arguments read it —
+ * its `busy` drawn in the card while it runs and its `done` after; then the
+ * page does what its `then` says (refresh by default). A run that fails says
+ * so in the card and is not tried again for that row.
+ */
+export interface RepeatPoll {
+  seconds: number;
+  while: Visibility;
+  finish?: { when: Visibility; action: Omit<ToolRef, 'args' | 'confirm'> & { args: Record<string, ValueRef | { row: string }> } };
+}
+
 /** What a section may put on the right of its heading: going, or doing. */
-export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' }>;
+export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' } | { kind: 'menu' }>;
 
 export type Component =
   | (ComponentCommon & {
@@ -777,8 +859,13 @@ export type Component =
       fields: Field[];
       submit: ToolRef;
       initial?: QueryRef;
-      /** Behind a button, in a sheet, rather than open on the page. */
-      drawer?: { title: string; button: string };
+      /**
+       * Behind a button, in a sheet, rather than open on the page. Since host
+       * API 1.28 a drawer may have an `id` instead of (or as well as) its own
+       * button: a `menu` item's `open` names it, and the page parameter
+       * `open=<id>` opens it — so a link can too.
+       */
+      drawer?: { title: string; button?: string; id?: string };
       /**
        * Fields to a row on a wide panel: 2 (the default) or 3. The grid still
        * drops to two, then one, as the panel narrows.
@@ -836,7 +923,7 @@ export type Component =
        * and only this query: a download's progress line moves without the
        * page's forms being read again under the owner's hands.
        */
-      poll?: { seconds: number; while: Visibility };
+      poll?: RepeatPoll;
     })
   /**
    * Dated events as a calendar: a week of hours, a month of days, or a list
@@ -953,6 +1040,13 @@ export type Component =
       /** What to say when there is no story, the first whose `when` holds of the answer; `empty` otherwise. */
       emptyStates?: StoriesEmpty[];
     })
+  /**
+   * One button that opens a short menu (since host API 1.28): Add a calendar
+   * → Sign in with Google · Link with an app password · Paste a private
+   * link. Each item runs a tool or opens a drawer form of the same page by
+   * its `id`. It stands where a button does, a section's head included.
+   */
+  | (ComponentCommon & { kind: 'menu'; label: string; tone?: 'accent'; items: MenuItem[] })
   /** A fold. `label` may be a path, so a row's own words are on it. */
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   /**
@@ -1103,6 +1197,43 @@ const pillSchema = z
   })
   .strict();
 
+/** A tool reference that never asks first: a choice or a finish answers a pick, not a press. */
+const { confirm: _confirm, ...toolRefNoConfirm } = toolRefCommon;
+
+const choiceArgSchema = z.union([
+  valueRefSchema,
+  z.object({ row: viewPathSchema }).strict(),
+  z.object({ choice: z.literal(true) }).strict(),
+]);
+
+/** A row's segmented choice (1.28): two to four options, the picked one's value sent as `{ choice: true }`. */
+const rowChoiceSchema = z
+  .object({
+    ...toolRefNoConfirm,
+    value: viewPathSchema,
+    options: z
+      .array(
+        z
+          .object({
+            value: z.string().min(1).max(60),
+            label: z.string().min(1).max(40),
+            when: visibilitySchema.optional(),
+            disabledWhen: visibilitySchema.optional(),
+            hint: label.optional(),
+          })
+          .strict(),
+      )
+      .min(2)
+      .max(4)
+      .refine((options) => new Set(options.map((o) => o.value)).size === options.length, 'each option of a choice has its own value'),
+    args: z.record(choiceArgSchema),
+  })
+  .strict()
+  .refine(
+    (choice) => Object.values(choice.args).some((ref) => 'choice' in ref),
+    'a choice sends what was picked: one of its arguments is `{ choice: true }`',
+  );
+
 const listItemSchema = z
   .object({
     title: valueRefSchema,
@@ -1120,8 +1251,22 @@ const listItemSchema = z
     logo: z.object({ asset: valueRefSchema, label: valueRefSchema }).strict().optional(),
     tag: valueRefSchema.optional(),
     status: z.object({ text: valueRefSchema, tone: z.union([toneSchema, valueRefSchema]).optional() }).strict().optional(),
+    swatch: viewPathSchema.optional(),
+    choice: rowChoiceSchema.optional(),
   })
   .strict();
+
+/** One item of a `menu` (1.28): a tool, or the id of a drawer form on the same page. */
+const menuItemSchema = z
+  .object({
+    label,
+    hint: label.optional(),
+    when: visibilitySchema.optional(),
+    action: toolRefSchema.optional(),
+    open: z.string().regex(PAGE_ID, 'a drawer id is lower-kebab-case').optional(),
+  })
+  .strict()
+  .refine((item) => (item.action === undefined) !== (item.open === undefined), 'a menu item runs a tool (`action`) or opens a drawer (`open`), one of the two');
 
 /** A story way's argument: a literal or path, the story's own field, or the `each` element's. */
 const storyArgSchema = z.union([
@@ -1230,7 +1375,11 @@ const common = {
   title: label.optional(),
   note: sentence.optional(),
   empty: sentence.optional(),
+  where: z.enum(['local', 'remote']).optional(),
 };
+
+/** What may stand at the right of a section's or a page's head. */
+const HEAD_KINDS = new Set(['link', 'button', 'menu']);
 
 /**
  * One component.
@@ -1250,8 +1399,8 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
           .array(componentSchema)
           .max(4)
           .refine(
-            (actions) => actions.every((a) => (a as Component).kind === 'link' || (a as Component).kind === 'button'),
-            "a section's header actions are links and buttons, nothing else",
+            (actions) => actions.every((a) => HEAD_KINDS.has((a as Component).kind)),
+            "a section's header actions are links, buttons and menus, nothing else",
           )
           .optional(),
         body: z.array(componentSchema).max(24),
@@ -1340,6 +1489,8 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
             labels: z.record(z.string()).optional(),
             label: viewPathSchema.optional(),
             aside: viewPathSchema.optional(),
+            asideTone: viewPathSchema.optional(),
+            actions: z.array(rowActionSchema).max(4).optional(),
           })
           .strict()
           .optional(),
@@ -1374,7 +1525,11 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         fields: z.array(fieldSchema).min(1).max(24),
         submit: toolRefSchema,
         initial: queryRefSchema.optional(),
-        drawer: z.object({ title: label, button: label }).strict().optional(),
+        drawer: z
+          .object({ title: label, button: label.optional(), id: z.string().regex(PAGE_ID, 'a drawer id is lower-kebab-case').optional() })
+          .strict()
+          .refine((drawer) => drawer.button !== undefined || drawer.id !== undefined, 'a drawer opens from its own `button`, or from a menu by its `id`')
+          .optional(),
         columns: z.union([z.literal(2), z.literal(3)]).optional(),
       })
       .strict(),
@@ -1416,7 +1571,25 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         rows: viewPathSchema,
         key: viewPathSchema,
         body: z.array(componentSchema).max(24),
-        poll: z.object({ seconds: z.number().int().min(1).max(60), while: visibilitySchema }).strict().optional(),
+        poll: z
+          .object({
+            seconds: z.number().int().min(1).max(60),
+            while: visibilitySchema,
+            finish: z
+              .object({
+                when: visibilitySchema,
+                action: z
+                  .object({
+                    ...toolRefNoConfirm,
+                    args: z.record(z.union([valueRefSchema, z.object({ row: viewPathSchema }).strict()])),
+                  })
+                  .strict(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict(),
     z
@@ -1601,6 +1774,9 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
       })
       .strict(),
     z.object({ ...common, kind: z.literal('button'), action: toolRefSchema }).strict(),
+    z
+      .object({ ...common, kind: z.literal('menu'), label, tone: z.literal('accent').optional(), items: z.array(menuItemSchema).min(1).max(8) })
+      .strict(),
     z.object({ ...common, kind: z.literal('approval'), path: viewPathSchema }).strict(),
     z.object({ ...common, kind: z.literal('artifact'), path: viewPathSchema, label }).strict(),
     z
@@ -1640,8 +1816,8 @@ export const pageDescriptorSchema = z
       .array(componentSchema)
       .max(3)
       .refine(
-        (actions) => actions.every((a) => (a as Component).kind === 'link' || (a as Component).kind === 'button'),
-        "a page's head actions are links and buttons, nothing else",
+        (actions) => actions.every((a) => HEAD_KINDS.has((a as Component).kind)),
+        "a page's head actions are links, buttons and menus, nothing else",
       )
       .optional(),
     body: z.array(componentSchema).min(1).max(24),
@@ -2104,10 +2280,36 @@ export function parsePageContributions(opts: {
     }
   }
 
+  /*
+   * A menu item's `open` names a drawer form of the same page (1.28): one
+   * that names nothing would be an item that does nothing. Two drawers by one
+   * id would open together.
+   */
+  for (const page of pages) {
+    const drawers = new Set<string>();
+    const tree = [page.body, page.actions ?? []];
+    for (const { component, at } of tree.flatMap((root) => componentsIn(root, 'body', 'form'))) {
+      const id = component.drawer?.id;
+      if (id === undefined) continue;
+      if (drawers.has(id)) throw new Error(`plugin ${plugin}: page ${page.id}, ${at}: two drawers are called ${id}`);
+      drawers.add(id);
+    }
+    for (const { component, at } of tree.flatMap((root) => componentsIn(root, 'body', 'menu'))) {
+      for (const item of component.items) {
+        if (item.open !== undefined && !drawers.has(item.open)) {
+          throw new Error(
+            `plugin ${plugin}: page ${page.id}, ${at}: "${item.label}" opens ${item.open}, which is no drawer on this page — ` +
+              `it has ${drawers.size === 0 ? 'none' : [...drawers].join(', ')}`,
+          );
+        }
+      }
+    }
+  }
+
   const contributed = new Set(opts.tools ?? []);
   const named = new Set<string>();
   for (const page of pages) {
-    for (const ref of [...collectRefs(page.data, 'data'), ...collectRefs(page.body, 'body')]) {
+    for (const ref of [...collectRefs(page.data, 'data'), ...collectRefs(page.body, 'body'), ...collectRefs(page.actions ?? [], 'actions')]) {
       if (ref.kind === 'query' && !queryNames.has(ref.name)) {
         throw new Error(
           `plugin ${plugin}: page ${page.id}, ${ref.at}: no query called ${ref.name} — this plugin contributes ${

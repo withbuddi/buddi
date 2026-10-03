@@ -114,7 +114,9 @@ one.
 
 Every component may carry `when` against the page's data to show or hide
 itself, and `title`, `note` (one line under the title) and `empty` (the
-sentence when there is nothing). `when` is a `Visibility`: `{ path, equals }`,
+sentence when there is nothing). Since host API 1.28 it may also carry
+`where: 'local' | 'remote'`: drawn only in a browser on the computer buddi
+runs on (127.0.0.1, localhost, ::1), or only anywhere else. `when` is a `Visibility`: `{ path, equals }`,
 or `{ path, in: [...] }`, with `not: true` to invert — one condition rather
 than one component per value. Paths are view paths (`views.ts`, `VIEW_PATH`).
 
@@ -153,6 +155,8 @@ type Component =
   | { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] }
   /** One button, anywhere; its `ValueRef` args resolve against the row it stands in. */
   | { kind: 'button'; action: ToolRef }
+  /** 1.28: one button opening a short menu; each item runs a tool or opens a drawer form of the page by its id. */
+  | { kind: 'menu'; label: string; tone?: 'accent'; items: MenuItem[] }
   | { kind: 'approval'; path: string }          // an approval id in the data; draws ApprovalCard
   | { kind: 'artifact'; path: string; label: string }  // an artifact id; draws the download link
   | { kind: 'agent-offer'; agent: string; text: string; label: string }  // one of this plugin's proposed agents: a line and an accept button (the gated platform.accept_plugin_agent, card in place).
@@ -163,6 +167,12 @@ type Component =
 // 1.27 additions elsewhere: PageDescriptor.actions (links and buttons in a rail page's head); notice look: 'quiet', icon, link, action;
 // link tone: 'accent'; tabs param (the chosen tab in a page parameter); TabsPick look: 'chips' and add; ListItem logo, tag, status;
 // RowAction menu, hint, group; GroupBy label and aside; a first notice's text read from the page's data is the page's intro.
+// 1.28 additions elsewhere: ListItem swatch and choice; GroupBy asideTone and actions; a form drawer's id (button optional);
+// a repeat's poll.finish; `where` on every component; `menu` in a section's or a page's head; ArgRef { choice: true }.
+interface RowChoice extends Omit<ToolRef, 'args' | 'confirm'> { value: string; options: RowChoiceOption[]; args: Record<string, ValueRef | { row: string } | { choice: true }> }
+interface RowChoiceOption { value: string; label: string; when?: Visibility; disabledWhen?: Visibility; hint?: string }
+interface MenuItem { label: string; hint?: string; when?: Visibility; action?: ToolRef; open?: string }
+interface RepeatPoll { seconds: number; while: Visibility; finish?: { when: Visibility; action: Omit<ToolRef, 'args' | 'confirm'> & { args: Record<string, ValueRef | { row: string }> } } }
 interface StoryRow { id: string; title: string; lead?: string; summary?: string; update?: string; url?: string; ago?: string; opinion?: boolean; languages?: string;
   mark?: { kind: 'told' | 'new'; text: string }; quiet?: boolean; outlets: Array<{ id?: string; name: string; logo?: string }>; group?: { id: string; name: string };
   kicker?: string; meta?: string; sources?: Array<{ title: string; url?: string; outlet: string; logo?: string; meta?: string }>; timeline?: Array<{ at: string; text: string; told?: boolean }> }
@@ -263,6 +273,9 @@ What each one is for, in email's terms:
 | `hero` | (Weather) Now: the sky's glyph, the temperature and its word; feels like, high and low, wind, rain, sunrise and sunset beside |
 | `tiles` | (Weather) The next 24 hours as a strip; the week as a row whose picked day shows its hours below; ten days as a row |
 | `series-panel` | (Weather) Today's next 24 hours, and the picked day's hours in Week: temperature, rain chance and wind as tabs over the hourly strip |
+| `list` with `groupBy.actions`, `swatch` and `choice` | (Calendar) Settings: one list grouped by account, Sign in again and ⋯ Remove account… on each head, each calendar's colour and Not linked · Read · Read and change |
+| `menu` with drawer ids | (Calendar) Add a calendar → Sign in with Google · Link with an app password · Paste a private link |
+| `repeat` with `poll.finish` and `where` | (Calendar) The Google sign-in card: it finishes by itself when Google answers, the pasted address only from another computer |
 
 A `chart` is small on purpose: a trend beside the numbers, drawn inline in
 the dashboard's own colours, with two ticks a side, the first and last x
@@ -375,6 +388,39 @@ the first hiding way, Less of this… (the other ways) and `ask` as the primary.
 With no row, the first of `emptyStates` whose `when` holds of the answer is
 drawn (warm for a first time), its actions going somewhere or setting page
 parameters ("Show all"). Loading draws the cards' skeleton.
+
+**A row's choice, a group's head, a menu, a card that finishes by itself**
+(host API `^1.28`) are Settings → Calendar's. A list item's `choice` draws a
+segment on the row's right — two to four options, the one at `value` in the
+row chosen; an option is left out where its `when` does not hold and greyed
+where its `disabledWhen` does, its `hint` the reason on hover and for a
+screen reader. Picking another runs the tool with `{ choice: true }` as the
+picked value (a choice never asks first: picking is the decision, and a
+gated tool still raises its card); the pick shows at once, the control is
+busy while the tool runs, and a refusal puts the old choice back with its
+sentence above the list. On a phone the segment takes the row's width under
+the name. `swatch` leads the row with its colour (a hollow dot for none).
+`groupBy.actions` are row actions on the group's head, read against its first
+row — buttons on the right, then a ⋯ for the ones marked `menu` — and
+`groupBy.asideTone` paints the aside `warning` or `critical`. A `menu` is one
+button (the accent with `tone`) whose items run a tool or open a drawer form
+of the same page by its `drawer.id`; such a drawer needs no button of its own,
+and the page parameter `open=<id>` opens it too
+(`#/settings/p.calendar?open=paste`). A menu in a section's head says what its
+tool answered under the head. A `repeat`'s `poll.finish` runs its tool once,
+by itself, for the first row of an answer where `finish.when` holds — the
+`busy` line drawn in place of the rows while it runs — then does its `then`;
+a failure is said there and not retried for that row. With `where: 'remote'`
+on the pasted-address form, the sign-in card is one button where the loopback
+can answer and two steps where it cannot:
+
+```ts
+{ kind: 'repeat', title: 'Sign in with Google', query: { query: 'sign_in' }, rows: 'rows', key: 'id',
+  poll: { seconds: 2, while: { path: 'waiting', equals: true },
+          finish: { when: { path: 'state', equals: 'received' },
+                    action: { tool: 'calendar.google_finish', label: 'Finish signing in', busy: 'Reading your calendars…', args: { id: { row: 'id' } } } } },
+  body: [/* the waiting line, Continue to Google ↗, Cancel; a form with `where: 'remote'` */] }
+```
 
 Not in the set, on purpose: free layout, custom styling, embedded HTML,
 client-side logic beyond `when`. A plugin that needs those serves its own app.
