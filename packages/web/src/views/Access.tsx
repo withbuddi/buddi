@@ -441,12 +441,12 @@ function SetupForm({ setup, busy, failed, onCancel, onStart }: {
   return (
     <Stack gap="sm">
       <ErrorBanner message={failed} />
-      <p className="ui-card-meta">In Cloudflare: My Profile &rarr; API Tokens &rarr; Create Token &rarr; Custom token, with these permissions.</p>
+      <p className="ui-card-meta">Open Cloudflare: the token form comes pre-filled with these permissions. Name it, create it, paste it here.</p>
       <ul className="access-perms">
         {(setup?.permissions ?? []).map((line) => <li key={line} className="mono">{line}</li>)}
       </ul>
       <Toolbar>
-        <ButtonLink size="sm" href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">Open Cloudflare &#8599;</ButtonLink>
+        <ButtonLink size="sm" href={setup?.tokenUrl ?? 'https://dash.cloudflare.com/profile/api-tokens'} target="_blank" rel="noreferrer">Open Cloudflare &#8599;</ButtonLink>
       </Toolbar>
       <div className="access-grid">
         <Field label="API token" hint="Kept as an owner secret, used only to set this up and to remove it.">

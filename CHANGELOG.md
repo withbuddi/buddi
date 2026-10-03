@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- Trusted access: the Cloudflare "Open Cloudflare" button opens the token form pre-filled with the four permissions buddi needs (Cloudflare template URL); the owner names and creates the token, then pastes it.
+
 ### Added
 
 - Sign in from your own domain through Cloudflare: Settings → System → Sign in from elsewhere → Cloudflare Access walks you through a Cloudflare Tunnel with Cloudflare Access in front (install cloudflared, create the tunnel, point a hostname at the port the panel prints, add an Access application for your email, paste the team domain and AUD tag), with Test my setup and a status line. buddi verifies Access's signed JWT itself on every request — signature against your team's keys, issuer, audience, expiry, your email — never trusts a plain header, and gives the same remote session as Tailscale (12 hours idle, CSRF, approvals, the lock screen). cloudflared points at a separate loopback port that is always treated as a visit from elsewhere, and failed sign-ins there are counted apart from this computer's and your tailnet's. `buddi doctor` has a `cloudflare access` row.

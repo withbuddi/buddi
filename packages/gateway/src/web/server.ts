@@ -186,7 +186,7 @@ import {
 } from './access/cloudflare.js';
 import { arrivalOf } from './access/arrival.js';
 import type { HttpTransport } from '@buddi/runtime';
-import { createCloudflareApi, CLOUDFLARE_PERMISSION_LINES } from './access/cloudflare-api.js';
+import { createCloudflareApi, CLOUDFLARE_PERMISSION_LINES, CLOUDFLARE_TOKEN_URL } from './access/cloudflare-api.js';
 import {
   CLOUDFLARE_SETUP_KEY,
   checkSetupInput,
@@ -976,6 +976,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       tokenStored: await tokenStore().has().catch(() => false),
       record: record ? { host: record.host, email: record.email, zone: record.zone.name, teamDomain: record.teamDomain } : null,
       permissions: CLOUDFLARE_PERMISSION_LINES,
+      tokenUrl: CLOUDFLARE_TOKEN_URL,
       ingressPort: ingress.port() ?? (askedIngressPort() || null) ?? accessCtx.dashboardPort() + 2,
     };
   };

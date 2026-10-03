@@ -31,6 +31,23 @@ export const CLOUDFLARE_PERMISSION_LINES: readonly string[] = [
   `${CLOUDFLARE_PERMISSIONS.dns} — on the zone of your hostname`,
 ];
 
+/**
+ * Cloudflare's token page, pre-filled with the four permissions (its template
+ * URL: the form opens configured, the owner still names and creates the token).
+ * `zoneId=all` is the only documented value; the owner may narrow it on the form.
+ */
+export const CLOUDFLARE_TOKEN_URL = 'https://dash.cloudflare.com/profile/api-tokens?' + new URLSearchParams({
+  permissionGroupKeys: JSON.stringify([
+    { key: 'argotunnel', type: 'edit' },
+    { key: 'access', type: 'edit' },
+    { key: 'access_acct', type: 'read' },
+    { key: 'dns', type: 'edit' },
+  ]),
+  accountId: '*',
+  zoneId: 'all',
+  name: 'buddi',
+}).toString();
+
 export class CloudflareApiError extends Error {
   constructor(
     message: string,

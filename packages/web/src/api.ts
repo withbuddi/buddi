@@ -1922,6 +1922,8 @@ export interface CloudflareSetupView {
   tokenStored: boolean;
   record: { host: string; email: string; zone: string; teamDomain: string } | null;
   permissions: string[];
+  /** Cloudflare's token page, pre-filled with those permissions. */
+  tokenUrl?: string;
   ingressPort: number;
 }
 

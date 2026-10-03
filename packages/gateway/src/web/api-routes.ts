@@ -187,7 +187,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   {
     method: 'GET', path: '/api/access/cloudflare-access/setup', area: 'session', localOnly: true,
     summary: '"Set it up for me": the run in progress (or the last one), whether a Cloudflare API token is kept, what buddi made last time, the token permissions to ask for and the ingress port. The install line in `progress.install` holds the tunnel\'s connector token.',
-    answer: "{ progress: { state: 'idle'|'running'|'waiting'|'done'|'failed'|'stopped'|'removing'|'removed', host, email, steps: [{ id, state: 'next'|'now'|'done'|'failed', text, why? }], install: { command, note }|null, error, url, removed: string[], uninstall }, tokenStored: boolean, record: { host, email, zone, teamDomain }|null, permissions: string[], ingressPort: number }",
+    answer: "{ progress: { state: 'idle'|'running'|'waiting'|'done'|'failed'|'stopped'|'removing'|'removed', host, email, steps: [{ id, state: 'next'|'now'|'done'|'failed', text, why? }], install: { command, note }|null, error, url, removed: string[], uninstall }, tokenStored: boolean, record: { host, email, zone, teamDomain }|null, permissions: string[], tokenUrl: string, ingressPort: number }",
     errors: '403 not from the computer buddi runs on',
   },
   {
