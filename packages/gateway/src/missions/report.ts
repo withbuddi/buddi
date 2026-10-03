@@ -161,7 +161,8 @@ async function reportAudio(fileId: string, ctx: CoreToolContext): Promise<Report
   if (!row.mime.toLowerCase().startsWith('audio/')) throw new Error(`audio: ${fileId} is ${row.mime}, not a voice note`);
   const made = await ctx.db.query<{ conversation_id: string | null }>(`select conversation_id from core.artifacts where id = $1`, [fileId]);
   const conversation = made.rows[0]?.conversation_id == null ? null : String(made.rows[0].conversation_id);
-  if (ctx.conversationId && conversation !== ctx.conversationId) {
+  // A run always has its conversation; a context without one cannot prove the note is this run's, so it is refused.
+  if (!ctx.conversationId || conversation !== ctx.conversationId) {
     throw new Error(`audio: ${fileId} was not made in this run; give the id speech.say answered here`);
   }
   return { fileId: row.id, mime: row.mime, filename: row.filename ?? null, sizeBytes: row.sizeBytes };
