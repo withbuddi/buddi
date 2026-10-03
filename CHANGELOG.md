@@ -24,6 +24,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- `buddi dashboard --unlock` no longer lands back on the lock screen when an older dashboard tab is open in the same browser: that tab's idle lock is refused for a session someone used more recently, and a tab only tells the others it locked once the server agrees.
+- A plugin's settings link without a tab (`#/settings/p.news`) opens the plugin's first settings tab instead of an empty page.
 - The npm release now ships the macOS computer helper behind "Use my apps" (a universal arm64 + x86_64 binary, signed ad hoc, built by a macOS job in the release workflow); before, a Mac installed from npm had none and Settings said "Computer helper unavailable … ENOENT".
 - Settings → Computer & browser no longer shows a red error when the computer helper is missing: the "Use my apps" choice carries one line saying so and how to fix it, and Check again answers instead of failing. `buddi doctor` prints a "computer helper" row on macOS (present, and its version).
 - Settings no longer asks to update the browser extension just because buddi's version differs from it ("buddi is 0.1.0-pre.35; the extension is 0.1.0"): it asks only when the extension is older than the minimum this buddi needs, which the store's current build meets.

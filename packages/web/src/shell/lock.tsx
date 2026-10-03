@@ -139,8 +139,14 @@ export function LockGate({ children }: { children: ReactNode }): JSX.Element | n
     // Down at once, before the server answers: the point is privacy now.
     setPhase('locked');
     remember(true);
-    channel.current?.postMessage({ type: 'locked' } satisfies Message);
-    api.lockNow(reason).then((next) => show(next, next.locked)).catch(() => check());
+    if (reason === 'owner') channel.current?.postMessage({ type: 'locked' } satisfies Message);
+    api.lockNow(reason).then((next) => {
+      // An idle lock is this tab's view; the server may know of use it never
+      // saw (another tab, a fresh session from `buddi dashboard --unlock`) and
+      // refuse it. Only a lock it took is passed on to the other tabs.
+      if (reason === 'idle' && next.locked) channel.current?.postMessage({ type: 'locked' } satisfies Message);
+      show(next, next.locked);
+    }).catch(() => check());
   }, [state?.pin, show, check]);
 
   // The server said 423 somewhere in the app: up goes the lock screen.

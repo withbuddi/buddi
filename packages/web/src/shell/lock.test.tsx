@@ -122,6 +122,27 @@ describe('the lock gate', () => {
     expect(lockNow).toHaveBeenCalledWith('idle');
   });
 
+  it('stays open, and tells no other tab, when the server refuses its idle lock (the session was opened elsewhere)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    vi.spyOn(api, 'lockState').mockResolvedValue({ ...open, delayMinutes: 1 });
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({ ...open, delayMinutes: 1 }));
+    // `buddi dashboard --unlock` gave the shared cookie a fresh session: the server knows of use this tab never saw.
+    const lockNow = vi.spyOn(api, 'lockNow').mockResolvedValue({ ...open, delayMinutes: 1 });
+    const sent: unknown[] = [];
+    const listener = new BroadcastChannel('buddi-lock');
+    listener.onmessage = (event) => { sent.push(event.data); };
+    onTestFinished(() => listener.close());
+    render(<LockGate><App /></LockGate>);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(65_000); });
+    expect(lockNow).toHaveBeenCalledWith('idle');
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByText('The secret inbox')).toBeInTheDocument();
+    vi.useRealTimers();
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(sent).not.toContainEqual({ type: 'locked' });
+  });
+
   it('knows its shortcut: ⌃⌘L on a Mac, Ctrl+Alt+L elsewhere', () => {
     expect(lockShortcutLabel(true)).toBe('⌃⌘L');
     expect(lockShortcutLabel(false)).toBe('Ctrl+Alt+L');

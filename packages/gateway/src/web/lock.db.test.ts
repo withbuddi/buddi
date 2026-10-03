@@ -297,6 +297,28 @@ suite('the lock screen', () => {
     expect((await b.put('/api/lock/settings', { delayMinutes: 7 })).status).toBe(400);
   });
 
+  it('keeps a session opened by `--unlock` open when an old tab sharing the cookie claims it sat idle', async () => {
+    const owner = await browser();
+    await owner.put('/api/lock/pin', { pin: '2468' });
+    await owner.put('/api/lock/settings', { delayMinutes: 1 });
+    // The old tab has been open, unused, for most of the delay.
+    advance(50_000);
+    // `buddi dashboard --unlock` on 127.0.0.1: the browser now presents the ticket's session for every tab.
+    const exchanged = await hostFetch(`${base()}/?t=${encodeURIComponent(mintTicket(TOKEN, clock))}`, { headers: { Connection: 'close', Cookie: owner.cookie } });
+    expect(exchanged.status).toBe(302);
+    const ticketed = jar(exchanged.headers.getSetCookie().map((c) => c.split(';')[0]!));
+    expect((await ticketed.get('/api/lock')).body).toMatchObject({ locked: false });
+    // Ten seconds on, the old tab's own clock reaches the delay and asks for an idle lock on the shared cookie.
+    advance(10_000);
+    expect((await ticketed.post('/api/lock', { reason: 'idle' })).body).toMatchObject({ locked: false });
+    expect((await ticketed.get('/api/overview')).status).toBe(200);
+    // An honest idle claim still locks, and Lock now always does.
+    advance(60_000);
+    expect((await ticketed.post('/api/lock', { reason: 'idle' })).body).toMatchObject({ locked: true, reason: 'idle' });
+    await ticketed.post('/api/lock/unlock', { pin: '2468' });
+    expect((await ticketed.post('/api/lock', { reason: 'owner' })).body).toMatchObject({ locked: true, reason: 'owner' });
+  });
+
   it('keeps a lock across a restart of the session store', async () => {
     const exchanged = await hostFetch(`${base()}/?t=${encodeURIComponent(mintTicket(TOKEN, clock))}`, { headers: { Connection: 'close' } });
     const b = jar(exchanged.headers.getSetCookie().map((c) => c.split(';')[0]!));

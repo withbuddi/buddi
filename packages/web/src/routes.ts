@@ -190,9 +190,34 @@ export function parsePluginPageRoute(hash: string): { plugin: string; page: stri
  */
 export const PLUGIN_SETTINGS_PREFIX = 'p.';
 
-export function pluginSettingsRoute(plugin: string, page: string, params?: Record<string, string>): string {
+/**
+ * A plugin settings tab's hash. Without a `page` it is the plugin's own
+ * `#/settings/p.<plugin>`, which Settings sends on to the plugin's first
+ * settings tab (`resolvePluginSettingsRoute`) when no tab carries the
+ * plugin's name — so the route resolves either way.
+ */
+export function pluginSettingsRoute(plugin: string, page: string = plugin, params?: Record<string, string>): string {
   const query = params ? new URLSearchParams(params).toString() : '';
   return `${SETTINGS_ROUTE}/${encodeURIComponent(pluginSettingsTab(plugin, page))}${query ? `?${query}` : ''}`;
+}
+
+/**
+ * Where a plugin settings hash that names no tab of that plugin should go:
+ * `#/settings/p.news` (or a tab since removed) opens the plugin's first
+ * settings tab, its parameters kept. Null when the hash is not a plugin
+ * settings route, already names a tab, or the plugin has no settings tab
+ * (yet: the list may still be loading), so the caller leaves it alone.
+ */
+export function resolvePluginSettingsRoute(
+  hash: string,
+  settingsPages: ReadonlyArray<{ plugin: string; id: string }>,
+): string | null {
+  const located = parsePluginSettingsRoute(hash);
+  if (!located) return null;
+  const own = settingsPages.filter((page) => page.plugin === located.plugin);
+  if (own.length === 0 || own.some((page) => page.id === located.page)) return null;
+  const params = pluginRouteParams(hash);
+  return pluginSettingsRoute(located.plugin, own[0]!.id, Object.keys(params).length > 0 ? params : undefined);
 }
 
 /**

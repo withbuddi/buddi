@@ -11,6 +11,7 @@ import {
   pluginSettingsRoute,
   parsePluginSettingsRoute,
   pluginRouteParams,
+  resolvePluginSettingsRoute,
   settingsSectionOf,
   tipsPageOf,
 } from './routes';
@@ -72,5 +73,18 @@ describe('the recovery checklist links', () => {
     expect(settingsSectionOf(route)).toBe('p.email.settings');
     expect(pluginRouteParams(route)).toEqual({ account: 'mb-1', set: 'password' });
     expect(pluginRouteParams('#/settings/p.email.settings')).toEqual({});
+  });
+
+  it('sends a plugin settings hash without a tab to the plugin\'s first tab, so every such route resolves', () => {
+    const pages = [{ plugin: 'news', id: 'sources' }, { plugin: 'news', id: 'digest' }, { plugin: 'email', id: 'email' }];
+    expect(pluginSettingsRoute('news')).toBe('#/settings/p.news');
+    expect(resolvePluginSettingsRoute(pluginSettingsRoute('news'), pages)).toBe('#/settings/p.news.sources');
+    expect(resolvePluginSettingsRoute('#/settings/p.news?feed=1', pages)).toBe('#/settings/p.news.sources?feed=1');
+    expect(resolvePluginSettingsRoute('#/settings/p.news.gone', pages)).toBe('#/settings/p.news.sources');
+    // A tab that exists, a plugin whose page carries its own name, a plugin with no settings, a core section: left alone.
+    expect(resolvePluginSettingsRoute('#/settings/p.news.digest', pages)).toBeNull();
+    expect(resolvePluginSettingsRoute(pluginSettingsRoute('email'), pages)).toBeNull();
+    expect(resolvePluginSettingsRoute('#/settings/p.ghost', pages)).toBeNull();
+    expect(resolvePluginSettingsRoute('#/settings/you', pages)).toBeNull();
   });
 });

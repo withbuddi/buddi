@@ -344,7 +344,23 @@ export function createLock(deps: LockDeps) {
       const state = await current(true);
       if (!state.pin) return { status: 409, body: { error: 'Set a PIN first, in Settings → Lock screen.' } };
       if (session.client !== 'browser') return { status: 409, body: { error: 'This client is not covered by the lock screen.' } };
-      lockSession(session, body.reason === 'idle' ? 'idle' : 'owner', now);
+      const reason: LockReason = body.reason === 'idle' ? 'idle' : 'owner';
+      /*
+       * An idle lock is the page's claim that nobody used this session for
+       * the delay. The server's own record of use only ever lags the page's,
+       * so an honest claim always holds here. When it does not, the claim
+       * came from a tab that never saw the use — typically an old tab left
+       * open while `buddi dashboard --unlock` replaced the cookie both share
+       * with a fresh, open session — and honouring it would lock the session
+       * the ticket just opened. The answer is the state as it stands.
+       */
+      if (reason === 'idle') {
+        const delay = state.settings.delayMinutes;
+        if (delay === null || now.getTime() - session.activeAt.getTime() < delay * 60_000) {
+          return { status: 200, body: stateOf(session, state) };
+        }
+      }
+      lockSession(session, reason, now);
       return { status: 200, body: stateOf(session, state) };
     }
 

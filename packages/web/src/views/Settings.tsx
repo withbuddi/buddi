@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { SECRETS_ADD_ROUTE, SETTINGS_ROUTE, parseAccountRoute, parseConnectionRoute, parseProposalsFilter, parseSecretRoute, parseSecretsAdd, parsePluginSettingsRoute, pluginRouteParams, settingsSectionOf } from '../routes';
+import { SECRETS_ADD_ROUTE, SETTINGS_ROUTE, parseAccountRoute, parseConnectionRoute, parseProposalsFilter, parseSecretRoute, parseSecretsAdd, parsePluginSettingsRoute, pluginRouteParams, resolvePluginSettingsRoute, settingsSectionOf } from '../routes';
 import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
@@ -54,6 +54,11 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
   const plugins = pluginPages ?? own;
   const located = parsePluginSettingsRoute(hash);
   const pluginPage = located ? plugins.find(located.plugin, located.page) : undefined;
+  // A plugin's hash without a tab (`#/settings/p.news`) opens its first tab, replaced so Back skips it.
+  const fallback = pluginPage ? null : resolvePluginSettingsRoute(hash, plugins.settings);
+  useEffect(() => {
+    if (fallback) navigate(fallback, true);
+  }, [fallback, navigate]);
   const narrow = useMediaQuery(NARROW_QUERY);
   const entries = settingsEntries(plugins.settings);
   // The counts the sections already keep: the proposals still open.

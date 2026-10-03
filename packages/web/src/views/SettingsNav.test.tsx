@@ -136,6 +136,19 @@ describe('the settings list', () => {
     expect(screen.queryByRole('heading', { name: 'Appearance' })).toBeNull();
   });
 
+  it('opens a plugin\'s first settings tab when its hash names none, replacing the hash', () => {
+    const navigate = vi.fn();
+    const settings = [...DESCRIPTORS, page('news', 'sources', 'News sources'), page('news', 'digest', 'News digest')];
+    const { unmount } = renderSettings('#/settings/p.news', navigate, settings);
+    expect(navigate).toHaveBeenCalledWith('#/settings/p.news.sources', true);
+    unmount();
+    // A tab that is there is left alone, and so is a plugin with no settings tab at all.
+    navigate.mockClear();
+    renderSettings('#/settings/p.news.digest', navigate, settings);
+    renderSettings('#/settings/p.ghost', navigate, settings);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('goes where an entry points when it is clicked', () => {
     const navigate = vi.fn();
     renderSettings('#/settings/you', navigate);
