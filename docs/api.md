@@ -1872,7 +1872,7 @@ Answer “Still useful?” with Keep or Stop. The first answer from any surface 
 - **Body:** `{ answer: 'keep' | 'stop' }`
 - **Answer:** `{ id, enabled, outcome }`
 - **Errors:** 400; 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.35
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"answer":"keep"}' "$BUDDI_URL/api/missions/<id>/still-useful"
@@ -2395,7 +2395,7 @@ A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV
 - **Kind:** bytes, not JSON
 - **Answer:** JSON
 - **Errors:** 404; 410 contents gone from disk; 413 too large or complex to convert; 415 not offered for this file; 503 another conversion is running (Retry-After); 504 took too long
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.35
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/export/<format>" -o out

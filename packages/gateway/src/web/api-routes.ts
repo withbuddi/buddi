@@ -1132,6 +1132,8 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * release has no entry and reads "unreleased" until the release adds it.
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'POST /api/missions/:id/still-useful': '0.1.0-pre.35',
+  'GET /api/artifacts/:id/export/:format': '0.1.0-pre.35',
   'GET /api/skills': '0.1.0-pre.32',
   'POST /api/skills': '0.1.0-pre.32',
   'GET /api/skills/:id': '0.1.0-pre.32',
