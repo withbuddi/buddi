@@ -25,6 +25,7 @@ import {
   failJob,
   getJob,
   heartbeat,
+  interruptLeases,
   listJobs,
   releaseStaleLeases,
   resumeJob,
@@ -558,9 +559,103 @@ suite('queue (postgres)', () => {
       // for the process that picked the work back up.
       expect(after?.attempts).toBe(2);
       // And recovery is recorded as a fact, once, for the job that was stranded.
-      expect(await events('job.lease_expired')).toEqual([
-        { jobId: job.id, kind: 'mission-run', attempts: 1 },
+      expect(await events('job.interrupted')).toEqual([
+        { jobId: job.id, kind: 'mission-run', holder: 'dead', attempts: 1, requeued: true, acted: [], reason: 'interrupted by a restart' },
       ]);
+    }, 20_000);
+
+    /**
+     * The October 3 incident: a run mid-flight when serve restarted kept a
+     * lease minutes long, start-up recovery released only expired leases, and
+     * the run sat "leased" until a later restart came after it lapsed.
+     */
+    it('settles a live lease held by a previous boot at start, whatever its expiry', async () => {
+      const job = await enqueue(pool, { kind: 'mission-run', runAfter: new Date(Date.now() - 60_000) });
+      const dead = await claimJob(pool, { worker: 'serve:111:oldboot', now: new Date(), leaseMs: 10 * 60_000 });
+      expect(dead?.id).toBe(job.id);
+      // A lease that is not this family's, still live, is someone else's run.
+      const foreign = await enqueue(pool, { kind: 'other', runAfter: new Date(Date.now() - 60_000) });
+      await claimJob(pool, { worker: 'cli:9', kinds: ['other'], now: new Date(), leaseMs: 10 * 60_000 });
+
+      const ran: string[] = [];
+      const worker = runWorker({
+        pool, worker: 'serve:222:newboot', holderPrefix: 'serve:', kinds: ['mission-run'],
+        now: () => new Date(), pollMs: 5, leaseMs: 5_000, sweepMs: 0,
+        handlers: { 'mission-run': async (j) => { ran.push(j.id); return null; } },
+      });
+      await waitFor(async () => (await getJob(pool, job.id))?.state === 'succeeded');
+      await worker.stop();
+
+      expect(ran).toEqual([job.id]);
+      expect((await events('job.interrupted')).map((e) => [e.jobId, e.holder, e.requeued]))
+        .toEqual([[job.id, 'serve:111:oldboot', true]]);
+      expect((await getJob(pool, foreign.id))?.state).toBe('leased');
+    }, 20_000);
+
+    it('fails, visibly, a restart-interrupted run that had already acted', async () => {
+      const job = await enqueue(pool, { kind: 'mission-run', runAfter: new Date(Date.now() - 60_000) });
+      await claimJob(pool, { worker: 'serve:111:oldboot', now: new Date(), leaseMs: 10 * 60_000 });
+      // What the runtime records for each call: a read, and one with an effect.
+      await pool.query(
+        `insert into core.events (kind, payload) values
+           ('tool.called', jsonb_build_object('name', 'web.fetch', 'tier', 'auto', 'jobId', $1::text)),
+           ('tool.called', jsonb_build_object('name', 'mail.send', 'tier', 'gated', 'jobId', $1::text))`,
+        [job.id],
+      );
+
+      const settled = await interruptLeases(pool, { expiredBy: new Date(), self: 'serve:222:newboot', holderPrefix: 'serve:' });
+      expect(settled.map((j) => [j.id, j.requeued, j.acted])).toEqual([[job.id, false, ['mail.send']]]);
+      const after = await getJob(pool, job.id);
+      expect(after?.state).toBe('failed');
+      expect(after?.leaseOwner).toBeNull();
+      expect(after?.lastError).toMatch(/^interrupted by a restart after it had acted \(mail\.send\)/);
+      // It asks for the owner: Activity → Jobs lists it among the open failures.
+      expect((await listJobs(pool, { failed: 'open' })).map((j) => j.id)).toEqual([job.id]);
+      expect((await events('job.failed')).at(-1)).toMatchObject({ jobId: job.id, retrying: false, failureClass: 'interrupted' });
+    });
+
+    it('sweeps a lease whose heartbeat stopped while running, and requeues it only once', async () => {
+      const job = await enqueue(pool, { kind: 'mission-run', runAfter: new Date(Date.now() - 60_000) });
+      await claimJob(pool, { worker: 'serve:111:wedged', now: new Date(), leaseMs: 1 });
+      await new Promise((r) => setTimeout(r, 20));
+
+      // No start-up recovery and no claiming: only the running sweep can find it.
+      const worker = runWorker({
+        pool, worker: 'serve:222:now', kinds: ['nothing'], recoverOnStart: false,
+        now: () => new Date(), pollMs: 5, leaseMs: 5_000, sweepMs: 10, handlers: {},
+      });
+      await waitFor(async () => (await getJob(pool, job.id))?.state === 'pending');
+      await worker.stop();
+      expect((await getJob(pool, job.id))?.lastError).toBe('interrupted by a restart (its lease lapsed without a heartbeat); queued again');
+
+      // Interrupted a second time: not a third run on its own.
+      await claimJob(pool, { worker: 'serve:333:again', now: new Date(), leaseMs: 1 });
+      await new Promise((r) => setTimeout(r, 20));
+      const second = await interruptLeases(pool, { expiredBy: new Date() });
+      expect(second.map((j) => j.requeued)).toEqual([false]);
+      expect((await getJob(pool, job.id))?.state).toBe('failed');
+    }, 20_000);
+
+    it('hands its leases back on shutdown (SIGTERM) instead of leaving them for the next boot', async () => {
+      const job = await enqueue(pool, { kind: 'mission-run', runAfter: new Date(Date.now() - 60_000) });
+      let started!: () => void;
+      const running = new Promise<void>((resolve) => { started = resolve; });
+      const worker = runWorker({
+        pool, worker: 'serve:444:stopping', kinds: ['mission-run'],
+        now: () => new Date(), pollMs: 5, leaseMs: 60_000, sweepMs: 0,
+        handlers: { 'mission-run': (_j, ctx) => new Promise((_resolve, reject) => {
+          started();
+          ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true });
+        }) },
+      });
+      await running;
+      expect((await getJob(pool, job.id))?.state).toBe('leased');
+      await worker.stop();
+
+      const after = await getJob(pool, job.id);
+      expect(after?.state).toBe('pending');
+      expect(after?.leaseOwner).toBeNull();
+      expect(after?.lastError).toBe('interrupted by a restart (buddi was stopping); queued again');
     }, 20_000);
   });
   /**

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { runWorker, type JobContext } from './worker.js';
-import { claimJob, completeJob, failJob, heartbeat } from './jobs.js';
+import { claimJob, completeJob, failJob, heartbeat, interruptLeases } from './jobs.js';
 import type { Job } from './types.js';
 
 vi.mock('./jobs.js', () => ({
   claimJob: vi.fn(), completeJob: vi.fn(), failJob: vi.fn(), heartbeat: vi.fn(),
-  releaseStaleLeases: vi.fn(), suspendJob: vi.fn(),
+  interruptLeases: vi.fn(async () => []), suspendJob: vi.fn(),
 }));
 
 async function runningWorker(leaseMs = 1000) {
@@ -16,7 +16,7 @@ async function runningWorker(leaseMs = 1000) {
   const started = new Promise<JobContext>((resolve) => { entered = resolve; });
   const worker = runWorker({
     pool: {} as Pool, worker: 'test', now: () => new Date(), pollMs: 1000,
-    leaseMs, heartbeatMs: 10000, recoverOnStart: false,
+    leaseMs, heartbeatMs: 10000, recoverOnStart: false, sweepMs: 0,
     handlers: { probe: async (_job, ctx) => {
       entered(ctx);
       return new Promise((_resolve, reject) => {
@@ -49,11 +49,12 @@ describe('worker cancellation', () => {
     expect(failJob).not.toHaveBeenCalled();
   });
 
-  it('aborts active work on shutdown and leaves the lease for recovery', async () => {
+  it('aborts active work on shutdown and hands its own leases back', async () => {
     const { worker, ctx } = await runningWorker();
     await worker.stop();
     expect(ctx.signal.aborted).toBe(true);
     expect(completeJob).not.toHaveBeenCalled();
     expect(failJob).not.toHaveBeenCalled();
+    expect(interruptLeases).toHaveBeenCalledWith(expect.anything(), { heldBy: 'test' }, 'buddi was stopping');
   });
 });

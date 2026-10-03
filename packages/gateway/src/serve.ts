@@ -20,6 +20,7 @@
  * turns stay inline (they are user-facing and already serialized per chat), but
  * they are gated by the same pause flag.
  */
+import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
@@ -41,6 +42,7 @@ import {
   listMissions,
   nextAfter,
   releaseStaleClaims,
+  INTERRUPTED_REASON,
   sweepLapsedOffers,
   sweepOrphanUploads,
   resumeJob,
@@ -939,7 +941,19 @@ export async function main(): Promise<void> {
     // does not take the scheduler pass down with it.
     const worker = recovering ? idle.worker : runWorker({
       pool,
-      worker: `serve:${process.pid}`,
+      // The boot id makes every start a different holder, even when the pid
+      // repeats (pid 1 in a container): start-up recovery settles every
+      // `serve:` lease that is not this boot's, however long it had to run.
+      worker: `serve:${process.pid}:${randomUUID().slice(0, 8)}`,
+      holderPrefix: 'serve:',
+      onInterrupted: (jobs, when) => {
+        for (const job of jobs) {
+          console.error(
+            `worker: job ${job.id} (${job.kind}) ${INTERRUPTED_REASON} at ${when} — ` +
+              (job.requeued ? 'queued again' : `failed${job.acted.length > 0 ? ` (it had called ${job.acted.join(', ')})` : ''}`),
+          );
+        }
+      },
       kinds: JOB_KINDS,
       handlers: {
         [MISSION_JOB_KIND]: createMissionJobHandler({ pool, execute: withLearningDigest(execute, {

@@ -397,6 +397,28 @@ instead, `BUDDI_WEB_HOST` / `BUDDI_WEB_PORT`; binding anywhere but loopback puts
 an Approve button on your network, `buddi doctor` warns about it, and it should
 have an authenticated transport in front of it.
 
+## Runs interrupted by a restart
+
+A mission or agent run holds a lease on its job (ten minutes, renewed every
+few) while it works. A restart settles every run it cuts short, in three places:
+
+- **On stop.** `SIGTERM` (`buddi service restart`, launchd, systemd, Docker)
+  aborts the runs, gives them five seconds to unwind and hands their leases back
+  before the process exits, well inside launchd's 20-second grace.
+- **On start.** Every lease held by an earlier `buddi serve` is settled,
+  however long it still had to run. Each start is its own holder
+  (`serve:<pid>:<boot id>`), so a process killed without warning, or a
+  container where the pid is always 1, cannot leave a run that looks alive.
+- **While running.** Every minute, any lease whose heartbeat stopped longer
+  than the lease ago is settled the same way.
+
+Settling follows what the run had done. One that had not yet called a tool with
+an effect (anything but an `auto` tool) is queued again — once. One that had
+acted, or was already interrupted once, fails with *interrupted by a restart*
+and the tools it had called in Activity → Jobs (and `buddi jobs`); retry it
+there if it should run, so nothing is sent or written twice behind your back.
+The log says `worker: job … interrupted by a restart at start|sweep|stop`.
+
 ## What a backup contains
 
 One timestamped archive per backup, `buddi-backup-YYYYMMDD-HHMMSS.tar.gz`

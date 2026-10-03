@@ -9,8 +9,10 @@
  *    `lease_owner = $worker and state = 'leased'`. That is the fence: a worker
  *    whose lease expired and was reclaimed elsewhere updates nothing and is
  *    told so (`false` / `null`), instead of writing over the new owner's run.
- *  - `releaseStaleLeases` is startup recovery *and* the running sweep — a lease
- *    that outlived its process goes back to `pending` with its attempt spent.
+ *  - `interruptLeases` is startup recovery, the running sweep and the
+ *    shutdown release — a lease that outlived its run is settled: requeued
+ *    once when the run had done nothing yet, failed with the reason otherwise.
+ *    (`releaseStaleLeases` is the older, unconditional put-back.)
  */
 import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
@@ -374,6 +376,143 @@ export async function releaseStaleLeases(pool: Pool, now: Date): Promise<number>
     });
   }
   return rows.length;
+}
+
+/** Why a lease is being taken back from a run that never finished. */
+export const INTERRUPTED_REASON = 'interrupted by a restart';
+
+export type InterruptScope =
+  /** Every lease whose expiry passed: the holder stopped heartbeating. */
+  | { expiredBy: Date }
+  /**
+   * Start-up recovery: every lease that expired, and every lease held by a
+   * previous boot of this worker family (`holderPrefix`), whatever its expiry —
+   * a restart takes seconds, the lease lasts minutes, and the process that
+   * held it is gone either way.
+   */
+  | { expiredBy: Date; self: string; holderPrefix: string }
+  /** Graceful shutdown: the leases this worker holds. */
+  | { heldBy: string };
+
+export type InterruptedJob = Job & {
+  /** True when the job went back on the queue; false when it failed for the owner. */
+  requeued: boolean;
+  /** Non-auto tools this attempt had already called (its side effects). */
+  acted: string[];
+};
+
+/**
+ * Take back the leases of runs that will never report, and settle each one.
+ *
+ * The retry policy is the run's own record: an attempt that had not yet
+ * called a tool with an effect (any tier but `auto`, read from the
+ * `tool.called` events carrying this job's id since its latest claim) goes
+ * back on the queue — once. One that had acted, or that was already requeued
+ * after an interruption, or that has no attempts left, fails with the reason in
+ * `last_error`, where Activity → Jobs shows it; a mission occurrence it was
+ * running is closed as failed with the same reason. Nothing is re-run that
+ * might send, buy or write a second time without the owner deciding.
+ *
+ * Every write is fenced on the holder the candidate query saw, so a lease
+ * reclaimed in between is left alone. The attempt stays spent.
+ */
+export async function interruptLeases(
+  pool: Pool,
+  scope: InterruptScope,
+  detail?: string,
+): Promise<InterruptedJob[]> {
+  const params: unknown[] = [];
+  let where: string;
+  if ('heldBy' in scope) {
+    params.push(scope.heldBy);
+    where = 'j.lease_owner = $1';
+  } else if ('self' in scope) {
+    params.push(scope.expiredBy.toISOString(), scope.self, `${scope.holderPrefix}%`);
+    where = `j.lease_owner is distinct from $2 and (j.lease_until < $1::timestamptz or j.lease_owner like $3)`;
+  } else {
+    params.push(scope.expiredBy.toISOString());
+    where = 'j.lease_until < $1::timestamptz';
+  }
+  const { rows: candidates } = await pool.query<{
+    id: string; lease_owner: string | null; attempts: number; max_attempts: number;
+    acted: string[]; requeues: number;
+  }>(
+    `select j.id, j.lease_owner, j.attempts, j.max_attempts,
+       coalesce((select array_agg(distinct e.payload->>'name' order by e.payload->>'name')
+          from core.events e
+         where e.kind = 'tool.called'
+           and e.payload->>'jobId' = j.id::text
+           and coalesce(e.payload->>'tier', 'gated') <> 'auto'
+           and e.created_at >= coalesce((select max(c.created_at) from core.events c
+                where c.kind = 'job.claimed' and c.payload->>'jobId' = j.id::text), j.created_at)
+       ), '{}'::text[]) as acted,
+       (select count(*)::int from core.events e
+         where e.kind = 'job.interrupted' and e.payload->>'jobId' = j.id::text
+           and e.payload->>'requeued' = 'true') as requeues
+     from core.jobs j
+     where j.state = 'leased' and ${where}`,
+    params,
+  );
+
+  const settled: InterruptedJob[] = [];
+  const why = detail ? `${INTERRUPTED_REASON} (${detail})` : INTERRUPTED_REASON;
+  for (const c of candidates) {
+    const acted = c.acted.filter((name) => typeof name === 'string' && name !== '');
+    const requeue = acted.length === 0 && c.requeues === 0 && c.attempts < c.max_attempts;
+    const message = requeue
+      ? `${why}; queued again`
+      : acted.length > 0
+        ? `${why} after it had acted (${acted.join(', ')}); not run again on its own, so nothing happens twice. Retry it if it should run.`
+        : c.requeues > 0
+          ? `${why} a second time; not run again on its own. Retry it if it should run.`
+          : `${why} on its last attempt.`;
+    const { rows } = await pool.query<JobRow>(
+      `update core.jobs
+       set state = case when $3 then 'pending' else 'failed' end,
+           run_after = case when $3 then now() else run_after end,
+           last_error = $4,
+           lease_owner = null,
+           lease_until = null,
+           acknowledged_at = null,
+           acknowledged_by = null,
+           updated_at = now()
+       where id = $1::uuid and state = 'leased' and lease_owner is not distinct from $2
+       returning ${JOB_COLUMNS}`,
+      [c.id, c.lease_owner, requeue, message],
+    );
+    if (rows.length === 0) continue;
+    const job = toJob(rows[0] as JobRow);
+    await appendEvent(
+      pool,
+      'job.interrupted',
+      { jobId: job.id, kind: job.kind, holder: c.lease_owner, attempts: job.attempts, requeued: requeue, acted, reason: why },
+      job.conversationId ?? undefined,
+    );
+    if (!requeue) {
+      // A mission's occurrence is the run the owner sees on Missions; it closes
+      // with the job rather than staying claimed for a run that will not come.
+      const occurrenceId = (job.payload as { occurrenceId?: unknown } | null)?.occurrenceId;
+      if (typeof occurrenceId === 'string') {
+        await pool.query(
+          `update core.occurrences set state = 'failed', finished_at = now(), error = $2
+            where id::text = $1 and state = 'claimed'`,
+          [occurrenceId, message],
+        );
+      }
+      await appendEvent(
+        pool,
+        'job.failed',
+        {
+          jobId: job.id, kind: job.kind, worker: c.lease_owner, attempts: job.attempts,
+          maxAttempts: job.maxAttempts, error: message, retrying: false,
+          failureClass: 'interrupted', failureReason: why,
+        },
+        job.conversationId ?? undefined,
+      );
+    }
+    settled.push({ ...job, requeued: requeue, acted });
+  }
+  return settled;
 }
 
 /**

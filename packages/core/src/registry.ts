@@ -898,6 +898,16 @@ export class ToolRegistry {
     return this.#tools.get(name)?.tool.waitsForOwner === true;
   }
 
+  /**
+   * The tier a tool always runs at. Undefined for an unknown tool and for one
+   * that decides per call (`tierFor`): a caller that needs certainty, like the
+   * restart recovery deciding whether a run had acted, reads that as "may have".
+   */
+  tierOf(name: string): Tier | undefined {
+    const tool = this.#tools.get(name)?.tool;
+    return tool && tool.tierFor === undefined ? tool.tier : undefined;
+  }
+
   /** What kind of untrusted text this tool's output is, when it declares one. */
   untrustedKind(name: string): UntrustedKind | undefined {
     return this.#tools.get(name)?.tool.untrusted;

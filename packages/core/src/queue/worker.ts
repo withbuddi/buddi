@@ -5,8 +5,16 @@
  * name:
  *
  *  - **Startup recovery is Phase 1.** Before the first claim, every lease that
- *    outlived its process is released. A machine that lost power mid-mission
- *    picks the work back up rather than leaving it leased forever.
+ *    outlived its process is settled (`interruptLeases`): the expired ones,
+ *    and every one held by a previous boot of this worker (`holderPrefix`),
+ *    however long its lease still had to run. A restart takes seconds and a
+ *    lease lasts minutes, so expiry alone would leave the run stranded until
+ *    some later restart happened to come after it lapsed.
+ *  - **Leases are swept while running.** Every `sweepMs` a lease whose
+ *    heartbeat stopped longer than the lease ago is settled the same way.
+ *  - **Shutdown hands its leases back.** `stop()` aborts the runs, gives them
+ *    `stopGraceMs` to unwind, and settles whatever this worker still holds, so
+ *    the next boot finds nothing leased.
  *  - **Leases are heartbeated, and the heartbeat is a fence.** When a heartbeat
  *    says the lease is gone, the run is abandoned *immediately* — another
  *    worker owns the job now, and writing anything further would be writing
@@ -26,8 +34,9 @@ import {
   completeJob,
   failJob,
   heartbeat,
-  releaseStaleLeases,
+  interruptLeases,
   suspendJob,
+  type InterruptedJob,
 } from './jobs.js';
 import { decideRetry } from './retry-policy.js';
 import type { Job } from './types.js';
@@ -84,6 +93,19 @@ export interface RunWorkerOptions {
   heartbeatMs?: number;
   /** Release stale leases before the first claim (default true). */
   recoverOnStart?: boolean;
+  /**
+   * Worker ids of the same family as this one (`serve:` for every boot of
+   * `buddi serve`). At start, a lease held by any other id with this prefix
+   * belongs to a process that is gone, and is settled whatever its expiry.
+   * Omitted: only expired leases are.
+   */
+  holderPrefix?: string;
+  /** Cadence of the running sweep for expired leases (default one minute; 0 turns it off). */
+  sweepMs?: number;
+  /** How long `stop()` lets aborted runs unwind before settling their leases (default 5s). */
+  stopGraceMs?: number;
+  /** Told about every lease settled at start, by the sweep, or at stop. */
+  onInterrupted?: (jobs: InterruptedJob[], when: 'start' | 'sweep' | 'stop') => void;
   onError?: (err: unknown, job?: Job) => void;
 }
 
@@ -108,11 +130,39 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
+  let resolveLoop: () => void = () => {};
+  const loopExited = new Promise<void>((resolve) => {
+    resolveLoop = resolve;
+  });
+  let stopping: Promise<void> | null = null;
   let timer: NodeJS.Timeout | null = null;
   let wake: (() => void) | null = null;
   const active = new Set<AbortController>();
 
-  const recover = async (): Promise<number> => releaseStaleLeases(pool, now());
+  const onInterrupted = opts.onInterrupted ?? ((): void => {});
+  const recover = async (): Promise<number> => {
+    const scope = opts.holderPrefix
+      ? { expiredBy: now(), self: worker, holderPrefix: opts.holderPrefix }
+      : { expiredBy: now() };
+    const jobs = await interruptLeases(pool, scope);
+    if (jobs.length > 0) onInterrupted(jobs, 'start');
+    return jobs.length;
+  };
+
+  // The running sweep: a run whose holder stopped heartbeating (a process that
+  // died without being told, a worker wedged past its lease) is settled within
+  // a minute of its lease lapsing, rather than at whichever restart comes next.
+  let sweeping = false;
+  const sweepMs = opts.sweepMs ?? 60_000;
+  const sweeper = sweepMs > 0 ? setInterval(() => {
+    if (!running || sweeping) return;
+    sweeping = true;
+    void interruptLeases(pool, { expiredBy: now() }, 'its lease lapsed without a heartbeat')
+      .then((jobs) => { if (jobs.length > 0) onInterrupted(jobs, 'sweep'); })
+      .catch(onError)
+      .finally(() => { sweeping = false; });
+  }, sweepMs) : null;
+  sweeper?.unref?.();
 
   const tick = async (): Promise<Job | null> => {
     const claimStartedAt = Date.now();
@@ -254,7 +304,7 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
       });
       wake = null;
     }
-    resolveDone();
+    resolveLoop();
   };
 
   void loop();
@@ -263,12 +313,32 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
     tick,
     recover,
     done,
-    async stop(): Promise<void> {
-      running = false;
-      for (const controller of active) controller.abort(new Error('worker stopped'));
-      if (timer) clearTimeout(timer);
-      wake?.();
-      await done;
+    stop(): Promise<void> {
+      stopping ??= (async () => {
+        running = false;
+        if (sweeper) clearInterval(sweeper);
+        for (const controller of active) controller.abort(new Error('worker stopped'));
+        if (timer) clearTimeout(timer);
+        wake?.();
+        // Bounded: a handler that ignores its signal does not hold the stop
+        // past the service manager's grace (launchd's is 20s).
+        let grace: NodeJS.Timeout | undefined;
+        await Promise.race([
+          loopExited,
+          new Promise<void>((resolve) => { grace = setTimeout(resolve, opts.stopGraceMs ?? 5_000); grace.unref?.(); }),
+        ]);
+        clearTimeout(grace);
+        // The runs this process was in the middle of are settled now, not left
+        // leased for the next boot to find.
+        try {
+          const jobs = await interruptLeases(pool, { heldBy: worker }, 'buddi was stopping');
+          if (jobs.length > 0) onInterrupted(jobs, 'stop');
+        } catch (err) {
+          onError(err);
+        }
+        resolveDone();
+      })();
+      return stopping;
     },
   };
 }

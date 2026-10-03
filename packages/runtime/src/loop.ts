@@ -1226,10 +1226,18 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
         continue;
       }
       opts.onToolCall?.(call.name, call.input);
+      // The job and the tier ride on the record: a run cut short by a restart
+      // is requeued only when none of its calls could have had an effect
+      // (core's `interruptLeases` reads exactly these two fields).
       await appendEvent(
         pool,
         'tool.called',
-        { name: call.name, input: call.input },
+        {
+          name: call.name,
+          input: call.input,
+          tier: registry.tierOf(call.name) ?? 'per-call',
+          ...(ctx.jobId ? { jobId: ctx.jobId } : {}),
+        },
         conversationId,
       );
 
