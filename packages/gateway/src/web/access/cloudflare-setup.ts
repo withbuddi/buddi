@@ -273,6 +273,12 @@ async function setupRun(input: SetupInput, deps: SetupDeps, onProgress: (p: Setu
     const { api } = deps;
     // 1. The token, and the zone and account it reaches.
     at('token');
+    // A record for another hostname is never overwritten: its ids are the
+    // only way Remove finds what buddi made there.
+    const earlier = await deps.readRecord();
+    if (earlier && earlier.host !== host && (earlier.tunnelId || earlier.dnsRecordId || earlier.policyId || earlier.appId)) {
+      throw new SetupError(`buddi already set up ${earlier.host}. Remove what it made first, or set up the same hostname again.`);
+    }
     await api.verifyToken();
     const zones = await api.zones();
     const wanted = input.zone?.trim() ? normalizeHost(input.zone) : null;

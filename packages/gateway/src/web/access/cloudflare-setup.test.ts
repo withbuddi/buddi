@@ -260,6 +260,25 @@ describe('what buddi did not make', () => {
   });
 });
 
+describe('another hostname', () => {
+  it('stops before any Cloudflare call while a record for another hostname holds ids, and keeps that record', async () => {
+    const w = await world();
+    await runCloudflareSetup({ host: HOST, email: EMAIL }, w.deps());
+    const kept = structuredClone(w.record);
+    const calls = w.cf.calls.length;
+    const other = await runCloudflareSetup({ host: 'other.example.com', email: EMAIL }, w.deps());
+    expect(other.state).toBe('failed');
+    expect(other.error).toBe(`buddi already set up ${HOST}. Remove what it made first, or set up the same hostname again.`);
+    expect(other.steps.find((s) => s.id === 'token')?.state).toBe('failed');
+    expect(w.cf.calls.length).toBe(calls);
+    expect(w.record).toEqual(kept);
+    // The same hostname again is fine, and after Remove another one is too.
+    expect((await runCloudflareSetup({ host: HOST, email: EMAIL }, w.deps())).state).toBe('done');
+    await removeCloudflareSetup(w.deps());
+    expect((await runCloudflareSetup({ host: 'other.example.com', email: EMAIL }, w.deps())).state).toBe('done');
+  });
+});
+
 describe('one operation at a time', () => {
   it('refuses a setup or a removal while another holds the lock, touching nothing', async () => {
     const w = await world();

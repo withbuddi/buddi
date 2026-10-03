@@ -441,7 +441,9 @@ touch a DNS record or an Access application for that hostname it did not make.
 A tunnel, policy, application or buddi-tagged DNS record of buddi's name that
 this buddi has no record of making (an older install, someone else's) stops the
 run with *Use it anyway* (`--adopt` on the CLI), which takes it over. One setup
-or removal runs at a time; a second one is refused until the first ends.
+or removal runs at a time; a second one is refused until the first ends. While
+buddi holds what it made for one hostname, a setup for another stops before
+asking Cloudflare anything: remove the first, or set up the same hostname again.
 *Remove what buddi made* (or `buddi access cloudflare remove`) deletes the
 application, the policy, the DNS record and the tunnel, only those whose ids
 buddi recorded making (never anything found by name), turns the setting off when setup filled it in, forgets
