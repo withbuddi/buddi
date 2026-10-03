@@ -51,6 +51,8 @@ export type Suspension = {
    * not, and nothing may be kept in memory across the wait.
    */
   payloadPatch?: Record<string, unknown>;
+  /** Back on the queue at once when the payload already holds this: see `SuspendInput.wakeIf`. */
+  wakeIf?: Record<string, unknown>;
 };
 
 export function isSuspension(value: unknown): value is Suspension {
@@ -247,8 +249,9 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
 
       const suspension = isSuspension(result) ? result.suspended : suspendedBy;
       const patch = (isSuspension(result) ? result.payloadPatch : undefined) ?? suspendPatch;
+      const wakeIf = isSuspension(result) ? result.wakeIf : undefined;
       if (suspension !== null && suspension !== undefined) {
-        await suspendJob(pool, job.id, worker, suspension, patch ? { payloadPatch: patch } : {});
+        await suspendJob(pool, job.id, worker, suspension, { ...(patch ? { payloadPatch: patch } : {}), ...(wakeIf ? { wakeIf } : {}) });
         return job;
       }
       await completeJob(pool, job.id, worker, result ?? null);

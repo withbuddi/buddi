@@ -21,7 +21,7 @@
  * nothing.
  */
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { IncomingMessage, Server } from 'node:http';
@@ -600,13 +600,26 @@ export class ExtensionEndpoint implements ExtensionBridge {
     return () => { list.delete(listener); if (list.size === 0) this.#events.delete(session); };
   }
 
-  /** A pairing record exists on disk, whether or not Chrome is connected now. */
+  /**
+   * A pairing record exists on disk, whether or not Chrome is connected now.
+   * Read on every status poll, so the answer is kept until the file's
+   * modification time or size changes (a stat, not a read and a parse).
+   */
   paired(): boolean {
+    const file = extensionFile(this.#env());
+    let stamp: string;
+    try { const stat = statSync(file); stamp = `${file}|${stat.mtimeMs}|${stat.size}`; }
+    catch { this.#pairedCache = undefined; return false; }
+    if (this.#pairedCache?.stamp === stamp) return this.#pairedCache.paired;
+    let paired = false;
     try {
-      const parsed = JSON.parse(readFileSync(extensionFile(this.#env()), 'utf8')) as { tokenHash?: unknown };
-      return typeof parsed?.tokenHash === 'string' && parsed.tokenHash !== '';
-    } catch { return false; }
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { tokenHash?: unknown };
+      paired = typeof parsed?.tokenHash === 'string' && parsed.tokenHash !== '';
+    } catch { paired = false; }
+    this.#pairedCache = { stamp, paired };
+    return paired;
   }
+  #pairedCache: { stamp: string; paired: boolean } | undefined;
 
   /** One hand per session: a second subscription replaces the first. */
   frames(session: string, onFrame: (frame: HandFrame) => void): () => void {

@@ -223,6 +223,34 @@ describe('fallback without a stop', () => {
     // Next time it goes to Chrome first.
     await expect(controller.execute(navigate('https://www.amazon.com/orders'), ctx('b'))).resolves.toMatchObject({ route: 'chrome' });
   });
+  it.each([
+    ['the conversation', async (controller: HostController) => { await controller.pin('a', 'own'); }, undefined],
+    ['the agent', async () => {}, () => 'own' as const],
+    ['the default', async (controller: HostController) => { await controller.configure({ defaultRoute: 'own' }); }, undefined],
+  ])('a pin to the own browser (%s) holds at a sign-in wall: no move to Chrome, the card offers it instead', async (_who, pin, agentPin) => {
+    const asked: Asked[] = [];
+    const { controller, log } = await routes({ settings: { yourChrome: true }, page: LOGIN, ...(agentPin ? { agentPin } : {}) });
+    await pin(controller);
+    const result = await controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx('a', asked)) as { route: string; needsOwner: { kind: string } };
+    expect(result).toMatchObject({ route: 'own', needsOwner: { kind: 'sign-in' } });
+    expect(log).toEqual(['own https://www.amazon.com/ap/signin']);
+    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', 'Use my Chrome', 'Save a login for next time']);
+  });
+});
+
+describe('sign-in sites buddi learned', () => {
+  it('are one list with the owner\'s in the status, and removing one forgets it in both', async () => {
+    const { controller, dir } = await routes({ settings: { yourChrome: true, signInSites: ['bank.test'] }, page: LOGIN });
+    await controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx());
+    expect(controller.status()).toMatchObject({ settings: { signInSites: ['bank.test'] }, learnedSignInSites: ['amazon.com'] });
+    await controller.configure({ forgetSignInSite: 'amazon.com' });
+    expect(controller.status().learnedSignInSites).toEqual([]);
+    expect(JSON.parse(await readFile(path.join(dir, 'sign-in-sites.json'), 'utf8'))).toEqual([]);
+    await controller.configure({ forgetSignInSite: 'bank.test' });
+    expect(controller.status().settings?.signInSites).toEqual([]);
+    // Forgotten: the next page there opens in the own browser again.
+    await expect(controller.execute(navigate('https://www.amazon.com/orders'), ctx('b'))).resolves.toMatchObject({ route: 'own' });
+  });
 });
 
 describe('the owner cards, through the existing question card', () => {
@@ -272,6 +300,32 @@ describe('the owner cards, through the existing question card', () => {
     await other.controller.configure({ yourChrome: true });
     await expect(other.controller.touch({ conversationId: 'b', text: 'Use my Chrome' })).resolves.toEqual({ answered: 'chrome' });
     expect(other.controller.status({ conversationId: 'b' }).pin).toBe('chrome');
+  });
+  it('take-over answers with the page asked about, never the page that changed last', async () => {
+    const { controller } = await routes();
+    await controller.execute(navigate('https://a.test/'), ctx('a'));
+    await controller.execute(navigate('https://b.test/'), ctx('b'));
+    const a = controller.status({ agentId: 'a', conversationId: 'a' }).session!.id;
+    const taken = await controller.control('takeover', a);
+    expect(taken).toMatchObject({ state: 'paused', session: { id: a, conversationId: 'a' } });
+    const back = await controller.control('resume', a);
+    expect(back.session?.id).toBe(a);
+  });
+  it('giving a page back tells the listeners whose page it was, once, and only for a page the owner held', async () => {
+    const { controller } = await routes();
+    const heard: unknown[] = [];
+    const off = controller.onGiveBack((info) => heard.push(info));
+    await controller.execute(navigate('https://a.test/'), ctx('a'));
+    const id = controller.status({ agentId: 'a', conversationId: 'a' }).session!.id;
+    await controller.control('resume', id);
+    expect(heard).toEqual([]);
+    await controller.control('takeover', id);
+    await controller.control('resume', id);
+    expect(heard).toEqual([{ sessionId: id, agentId: 'a', conversationId: 'a' }]);
+    off();
+    await controller.control('takeover', id);
+    await controller.control('resume', id);
+    expect(heard).toHaveLength(1);
   });
   it('take-over: one page in the owner\'s hands at a time', async () => {
     const { controller } = await routes();

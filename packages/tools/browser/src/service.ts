@@ -108,6 +108,8 @@ export interface BrowserStatus {
   stop?: { at: string; until?: string };
   /** This conversation's pin, when asked for a conversation. */
   pin?: string;
+  /** Sites buddi added to "needs my sign-in" itself, beside the owner's own `settings.signInSites`. */
+  learnedSignInSites?: string[];
 }
 /** What the agents' own browser is here, and what the owner can do about it. */
 export interface BrowserEngineStatus {
@@ -131,6 +133,8 @@ export interface SecretFillInput { name: string; ref: string; observation?: stri
 export interface SecretTypeInput { name: string }
 /** An owner touch: a message or a card tap in a conversation. */
 export interface BrowserTouch { conversationId: string; agentId?: string; text?: string }
+/** The owner gave back a page they held: whose it was. */
+export interface BrowserGiveBack { sessionId: string; agentId: string; conversationId: string }
 export interface BrowserController {
   enable(): Promise<void>;
   shutdown(): Promise<void>;
@@ -154,6 +158,8 @@ export interface BrowserController {
   pin?(conversationId: string, pin: string): Promise<BrowserStatus>;
   /** How long a mission run waits on a card for the owner, in milliseconds (settings `missionWaitMinutes`). */
   missionWaitMs?(): number;
+  /** Hear every give-back of a page the owner held (Give it back, `/browser resume`). Returns the unsubscribe. */
+  onGiveBack?(listener: (info: BrowserGiveBack) => void): () => void;
 }
 
 export interface BrowserServiceOptions {

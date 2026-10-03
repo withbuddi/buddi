@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash, createHmac } from 'node:crypto';
@@ -87,6 +87,24 @@ function connect(url: string, headers: Record<string, string> = { Origin: ORIGIN
   };
   return { socket, seen, open, next, send, hello, handshake };
 }
+
+describe('the pairing on disk', () => {
+  it('is read again only when the file changes, and says so right through a pairing and a forget', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-'));
+    dirs.push(dir);
+    const extension = new ExtensionEndpoint({ env: { BUDDI_DATA_DIR: dir, BUDDI_EXTENSION_DIR: path.join(dir, 'extension') } });
+    const file = path.join(dir, 'extension.json');
+    expect(extension.paired()).toBe(false);
+    await writeFile(file, JSON.stringify({ tokenHash: 'abc' }));
+    expect(extension.paired()).toBe(true);
+    expect(extension.paired()).toBe(true);
+    await writeFile(file, JSON.stringify({ tokenHash: '' }));
+    expect(extension.paired()).toBe(false);
+    await rm(file);
+    expect(extension.paired()).toBe(false);
+    extension.shutdown();
+  });
+});
 
 describe('the browser extension endpoint', () => {
   it('asks for a code, pairs through the route, and stores only a hash', async () => {

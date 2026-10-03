@@ -141,6 +141,15 @@ import { resumeParkedForQuestion } from '../missions/parked.js';
 
 /** The run id an answer hands back when it woke a parked mission run instead of starting a turn: the job carries on. */
 export const PARKED_RUN_ID = 'mission';
+
+/**
+ * What the agent is told when the owner gives back a page they took over from
+ * a card: the turn the take-over held, continued. The thread shows the stamp,
+ * not this sentence.
+ */
+export const GIVE_BACK_TURN = 'I handled the page myself and gave it back. Say "You handled the page; I carry on." in one line, then carry on with the task from the page as I left it.';
+/** How that turn is stamped in the thread. */
+export const GIVE_BACK_LABEL = 'Gave the page back';
 import { type ArtifactStore } from '../telegram/attachments.js';
 import { LiveTurns } from './live.js';
 import { pictureUrl } from '../agents/avatars.js';
@@ -1554,6 +1563,14 @@ export class WebChat {
       const sent = await this.sendToGroup({ groupId, conversationId: settled.question.conversationId, text });
       return sent.ok ? { ok: true, conversationId: sent.conversationId, runId: sent.runId } : sent;
     }
+    // Take over on a browser card: the page is the owner's now, and the turn is
+    // held until they give it back (`continueAfterGiveBack`). A run started now
+    // could only be told the page is not its to touch.
+    const touched = await touchBrowser(this.#deps.browser, { conversationId: settled.question.conversationId, agentId: settled.question.agentId, text }, this.#log);
+    if (touched === 'takeover') {
+      await this.#event(settled.question.conversationId, QUESTION_CLEARED, { agentId: settled.question.agentId });
+      return { ok: true, conversationId: settled.question.conversationId, runId: PARKED_RUN_ID };
+    }
     return this.send({
       agentId: settled.question.agentId,
       conversationId: settled.question.conversationId,
@@ -1574,6 +1591,29 @@ export class WebChat {
     if (!running) return false;
     running.cancel();
     return true;
+  }
+
+  /**
+   * The owner gave back a page in this conversation: the run that waited on
+   * it carries on, as one turn stamped "Gave the page back". Nothing starts
+   * while a run is live there (it carries on by itself), nor for a
+   * conversation another surface owns (Telegram continues its own chats).
+   * Returns the run id, or null when nothing was started.
+   */
+  async continueAfterGiveBack(input: { conversationId: string; agentId: string }): Promise<string | null> {
+    const { conversationId } = input;
+    if (this.#running.has(conversationId)) return null;
+    const elsewhere = await this.#deps.pool.query(`select 1 from core.surface_conversations where conversation_id = $1::uuid limit 1`, [conversationId])
+      .then((result) => (result.rowCount ?? result.rows.length) > 0, () => true);
+    if (elsewhere) return null;
+    if (await conversationGroup(this.#deps.pool, conversationId).catch(() => null)) return null;
+    const agent = this.#resolve(input.agentId);
+    if (!agent) return null;
+    const runId = randomUUID();
+    this.#enqueue(conversationId, async () => {
+      await this.#run({ agent, conversationId, runId, text: GIVE_BACK_TURN, files: [], offer: { id: 'browser-give-back', label: GIVE_BACK_LABEL } });
+    });
+    return runId;
   }
 
   /** Wait for every queued run to finish. Used by tests and by shutdown. */

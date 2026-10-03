@@ -13,6 +13,7 @@
  * Skipped unless DATABASE_URL is set.
  */
 import {
+  askQuestion,
   CORE_MIGRATIONS_DIR,
   CORE_SCHEMA,
   completeOnboarding,
@@ -1376,6 +1377,44 @@ suite('the dashboard chat API', () => {
 
       // Decided is decided: the face goes quiet without anything sweeping it.
       expect((await attention(client)).agents).toEqual([]);
+    });
+
+    it('Take over on a browser card holds the turn; Give it back carries the conversation on', async () => {
+      let giveBack: ((info: { sessionId: string; agentId: string; conversationId: string }) => void) | undefined;
+      const touched: string[] = [];
+      const browser = {
+        enable: async () => {}, shutdown: async () => {}, screenshot: () => undefined, execute: async () => ({}), secretFill: async () => ({}), secretType: async () => ({}),
+        control: async () => ({ state: 'idle' as const, enabled: true, busy: false, hasScreenshot: false }),
+        status: () => ({ state: 'idle' as const, enabled: true, busy: false, hasScreenshot: false }),
+        touch: async (input: { text?: string }) => { touched.push(input.text ?? ''); return input.text === 'Take over' ? { answered: 'takeover' } : {}; },
+        onGiveBack: (listener: typeof giveBack) => { giveBack = listener; return () => { giveBack = undefined; }; },
+      };
+      const own = await startServer({ browser: browser as never });
+      try {
+        const client = new Client(`http://127.0.0.1:${own.port}`);
+        expect((await client.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`)).status).toBe(302);
+        provider.script = [say('Looking.')];
+        const { conversationId } = (await (await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'check my orders' })).json()) as any;
+        await settled(conversationId);
+        const question = await askQuestion(pool, { agentId: AGENT_ID, conversationId, question: 'Amazon needs your sign-in\nSign in on the page and give it back, and I carry on.', options: [{ label: 'Take over', hint: null, recommended: true }], allowOther: true, now: new Date() });
+        const calls = provider.seen.length;
+        const answered = await client.post(`/api/chat/questions/${question.id}/answer`, { answer: 'Take over', optionId: question.options[0]!.id });
+        expect(answered.status).toBeLessThan(300);
+        expect(((await answered.json()) as any).runId).toBe('mission');
+        await own.chat?.drain();
+        // Held: no turn, no model call while the page is the owner's.
+        expect(provider.seen).toHaveLength(calls);
+        expect(touched).toContain('Take over');
+
+        provider.script = [say('You handled the page; I carry on.')];
+        giveBack!({ sessionId: 's1', agentId: AGENT_ID, conversationId });
+        await settled(conversationId, 2);
+        expect(provider.seen.length).toBe(calls + 1);
+        expect(JSON.stringify(provider.seen.at(-1)!.messages)).toContain('I handled the page myself and gave it back.');
+      } finally {
+        await own.chat?.drain();
+        await own.close();
+      }
     });
 
     it('badges an agent holding a question, and clears it on the next message', async () => {

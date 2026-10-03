@@ -270,7 +270,18 @@ describe('Advanced', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ signInSites: ['chase.com', 'amazon.com'] }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove chase.com' }));
-    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ signInSites: [] }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ forgetSignInSite: 'chase.com' }));
+  });
+  it('lists the sites buddi learned beside the owner’s, marked, and removes one from both', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, settings: { ...settings, signInSites: ['chase.com'] }, learnedSignInSites: ['amazon.com'] });
+    render(<Browser />);
+    expect(await screen.findByText('Always for chase.com and amazon.com')).toBeInTheDocument();
+    await open();
+    const learned = screen.getByText('amazon.com', { selector: '.br-site-chip' });
+    expect(learned).toHaveAttribute('data-learned', 'true');
+    expect(screen.getByText('chase.com', { selector: '.br-site-chip' })).not.toHaveAttribute('data-learned');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove amazon.com' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ forgetSignInSite: 'amazon.com' }));
   });
 });
 

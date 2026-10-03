@@ -141,8 +141,9 @@ function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserS
     finally { setBusy(false); reload(); }
   };
   const settings = data.settings;
-  const save = (next: Partial<ControlSettings>) => void run(() => api.browserSettings(next));
+  const save = (next: SettingsChange) => void run(() => api.browserSettings(next));
   const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const learned = data.learnedSignInSites ?? [];
   const appsRoute = data.routes?.find((route) => route.kind === 'apps');
   const showApps = appsProvided(appsRoute);
   const sessions = data.sessions?.length ? data.sessions : data.session ? [data] : [];
@@ -161,7 +162,7 @@ function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserS
       <Panel title="Browsers and apps" flush>
         <div className="ui-list">
           <OwnRow data={data} busy={busy} run={run} />
-          {settings ? <ChromeRow settings={settings} busy={busy || !data.enabled} save={save} zone={zone} /> : null}
+          {settings ? <ChromeRow settings={settings} learned={learned} busy={busy || !data.enabled} save={save} zone={zone} /> : null}
           {showApps && settings ? <AppsRow route={appsRoute!} settings={settings} busy={busy || !data.enabled} save={save} run={run} onSettings={() => go(pluginSettingsRoute(appsRoute!.provider || 'computer'))} /> : null}
         </div>
       </Panel>
@@ -184,7 +185,7 @@ function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserS
         </Panel>
       ) : null}
 
-      {settings ? <Advanced settings={settings} busy={busy} save={save} run={run} showApps={showApps} /> : null}
+      {settings ? <Advanced settings={settings} learned={learned} busy={busy} save={save} run={run} showApps={showApps} /> : null}
     </>
   );
 }
@@ -239,7 +240,10 @@ function OwnRow({ data, busy, run }: { data: BrowserStatus; busy: boolean; run: 
 
 /* ---- your Chrome: the switch once paired; Add to Chrome, the code, Pair again otherwise ---- */
 
-function ChromeRow({ settings, busy, save, zone }: { settings: ControlSettings; busy: boolean; save: (next: Partial<ControlSettings>) => void; zone: string }): JSX.Element {
+/** A settings change, or the removal of one sign-in site from both lists (the owner's and the learned). */
+type SettingsChange = Partial<ControlSettings> & { forgetSignInSite?: string };
+
+function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlSettings; learned: readonly string[]; busy: boolean; save: (next: SettingsChange) => void; zone: string }): JSX.Element {
   const ext = useAsync(() => api.extension(), [], 3_000);
   const probe = useAsync(() => askExtension(), [], 3_000).data ?? null;
   const thisMachine = useThisMachine();
@@ -278,7 +282,7 @@ function ChromeRow({ settings, busy, save, zone }: { settings: ControlSettings; 
       ext.data?.pairedAt ? { label: 'Forget this Chrome…', tone: 'critical', onSelect: () => setForgetting(true) } : null,
     ]} />
   );
-  const sites = settings.signInSites;
+  const sites = [...settings.signInSites, ...learned];
   const sitesLine = sites.length > 0 ? `Always for ${listWords(sites)}` : null;
   let sub: ReactNode;
   let side: ReactNode;
@@ -375,7 +379,7 @@ function AppsRow({ route, settings, busy, save, run, onSettings }: { route: Brow
 
 /* ---- Advanced: the first choice, the agents' own rules, the Stop, the cap, the window ---- */
 
-function Advanced({ settings, busy, save, run, showApps }: { settings: ControlSettings; busy: boolean; save: (next: Partial<ControlSettings>) => void; run: (action: () => Promise<unknown>) => Promise<void>; showApps: boolean }): JSX.Element {
+function Advanced({ settings, learned, busy, save, run, showApps }: { settings: ControlSettings; learned: readonly string[]; busy: boolean; save: (next: SettingsChange) => void; run: (action: () => Promise<unknown>) => Promise<void>; showApps: boolean }): JSX.Element {
   const agents = useAsync(() => api.agents(), []);
   const engines: AgentEngine[] = agents.data?.engines ?? [];
   const ruled = engines.filter((engine) => engine.browser && engine.browser !== 'auto');
@@ -389,7 +393,7 @@ function Advanced({ settings, busy, save, run, showApps }: { settings: ControlSe
   const pages = [1, 3, 5].includes(settings.maxOwnPages) ? [1, 3, 5] : [1, 3, 5, settings.maxOwnPages].sort((a, b) => a - b);
   const addSite = () => {
     const host = site.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
-    if (!host || settings.signInSites.includes(host)) { setSite(''); return; }
+    if (!host || settings.signInSites.includes(host) || learned.includes(host)) { setSite(''); return; }
     save({ signInSites: [...settings.signInSites, host] });
     setSite('');
   };
@@ -432,11 +436,14 @@ function Advanced({ settings, busy, save, run, showApps }: { settings: ControlSe
           )}
         </div>
         <div className="br-adv-block">
-          <span className="br-adv-head"><span className="br-adv-title">Sites that need your sign-in</span><span className="br-adv-hint">Always looked at in your Chrome while it is on and connected. buddi adds a site when it meets its sign-in page.</span></span>
-          {settings.signInSites.length ? (
+          <span className="br-adv-head"><span className="br-adv-title">Sites that need your sign-in</span><span className="br-adv-hint">Always looked at in your Chrome while it is on and connected. buddi adds a site, outlined dashed, when it meets its sign-in page.</span></span>
+          {settings.signInSites.length || learned.length ? (
             <span className="br-sites">
               {settings.signInSites.map((host) => (
-                <span key={host} className="br-site-chip mono">{host}<button type="button" aria-label={`Remove ${host}`} disabled={busy} onClick={() => save({ signInSites: settings.signInSites.filter((s) => s !== host) })}>×</button></span>
+                <span key={host} className="br-site-chip mono">{host}<button type="button" aria-label={`Remove ${host}`} disabled={busy} onClick={() => save({ forgetSignInSite: host })}>×</button></span>
+              ))}
+              {learned.map((host) => (
+                <span key={host} className="br-site-chip mono" data-learned="true" title="buddi added this when it met its sign-in page">{host}<button type="button" aria-label={`Remove ${host}`} disabled={busy} onClick={() => save({ forgetSignInSite: host })}>×</button></span>
               ))}
             </span>
           ) : <p className="br-adv-empty">None yet.</p>}

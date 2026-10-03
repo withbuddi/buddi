@@ -1,4 +1,4 @@
-import { BrowserService, type BrowserServiceOptions, type BrowserHandOffer, type BrowserScope, type BrowserStatus, type BrowserRollover, type SecretFillInput, type SecretTypeInput } from './service.js';
+import { BrowserService, browserStoppedMessage, type BrowserServiceOptions, type BrowserHandOffer, type BrowserScope, type BrowserStatus, type BrowserRollover, type SecretFillInput, type SecretTypeInput } from './service.js';
 import type { BrowserCommand, BrowserDriver } from './types.js';
 import type { ToolContext } from '@buddi/core/plugin';
 import { originOf } from './routes.js';
@@ -41,9 +41,22 @@ export class BrowserManager {
   /** Where each conversation's page last was, so a page let go opens again where it stood. */
   #lastUrls = new Map<string, string>();
   #enabled = false;
+  /**
+   * Bumped by every route-wide Stop. A call that waited for a slot, a lock or
+   * a page still opening checks it before acting, so nothing acts after Stop.
+   */
+  #generation = 0;
   #tail: Promise<unknown> = Promise.resolve();
   constructor(readonly createDriver: () => BrowserDriver, readonly options: BrowserManagerOptions = {}) {}
   get #now(): number { return this.options.now?.() ?? Date.now(); }
+  /** Throws when a Stop came after `generation` was read: the call must not act. */
+  #stillOn(generation: number): void {
+    if (generation !== this.#generation) throw new Error(browserStoppedMessage());
+  }
+  /** Parked on a card for the owner, with nobody acting on it: does not hold one of the route's pages. */
+  #parked(key: string, child: BrowserService): boolean {
+    return child.card !== undefined && !child.busy && !this.#inflight.get(key) && child.status().state !== 'paused';
+  }
   async enable(): Promise<void> { this.#enabled = true; }
   get enabled(): boolean { return this.#enabled; }
   #empty(): BrowserStatus { return { state: !this.#enabled ? 'unavailable' : 'idle', enabled: this.#enabled, busy: false, hasScreenshot: false }; }
@@ -96,14 +109,27 @@ export class BrowserManager {
    * waiting conversation; otherwise it waits, woken by every release. Only a
    * wait of many minutes says anything, and then to the agent.
    */
-  async #slot(signal: AbortSignal | undefined, onWait: () => void): Promise<void> {
+  async #slot(signal: AbortSignal | undefined, onWait: () => void, generation: number): Promise<void> {
     const max = this.options.maxSessions;
     if (max === undefined) return;
     const deadline = this.#now + (this.options.queueTimeoutMs ?? 10 * 60_000);
     let waited = false;
     for (;;) {
+      this.#stillOn(generation);
       this.#sweep();
-      if (this.#children.size + this.#reserved < max) { this.#reserved++; return; }
+      // A page parked on a card waits for the owner, not for the route: it does
+      // not count against the cap. Up to as many again may wait parked; past
+      // that the one parked longest is let go (its address is remembered).
+      const parked = [...this.#children].filter(([key, child]) => this.#parked(key, child));
+      const active = this.#children.size - parked.length;
+      if (active + this.#reserved < max) {
+        if (this.#children.size + this.#reserved < max * 2 || parked.length === 0) { this.#reserved++; return; }
+        const [key, child] = parked[0]!;
+        if (child.lastUrl) this.#lastUrls.set(this.#urlKey(key), child.lastUrl);
+        this.#children.delete(key);
+        await child.control('release').catch(() => undefined);
+        continue;
+      }
       const idleMs = this.options.idleEvictMs ?? 2 * 60_000;
       const idle = [...this.#children].filter(([key, child]) => !this.#inflight.get(key) && child.idleFor() >= idleMs).sort((a, b) => b[1].idleFor() - a[1].idleFor())[0];
       if (idle) {
@@ -121,6 +147,7 @@ export class BrowserManager {
         this.#waiters.push(() => { clearTimeout(timer); resolve(); });
       });
       signal?.throwIfAborted();
+      this.#stillOn(generation);
     }
   }
   /** Serialise actions on one origin, across conversations. */
@@ -142,12 +169,15 @@ export class BrowserManager {
     const key = JSON.stringify([ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId]);
     const existing = this.#children.get(key) ?? await this.#opening.get(key);
     if (existing || !create) return existing;
+    const generation = this.#generation;
     const opening = (async () => {
-      await this.#slot(ctx.signal, () => this.options.telemetry?.stop('slot-limit', { route: this.options.route ?? 'own', ...(ctx.agentId ? { agent: ctx.agentId } : {}), ...missionMark(ctx) }));
+      await this.#slot(ctx.signal, () => this.options.telemetry?.stop('slot-limit', { route: this.options.route ?? 'own', ...(ctx.agentId ? { agent: ctx.agentId } : {}), ...missionMark(ctx) }), generation);
       const reserved = this.options.maxSessions !== undefined;
       try {
         const child = new BrowserService(this.createDriver(), this.options);
         await child.enable();
+        // Stopped while this page was opening: it is let go, never kept.
+        if (generation !== this.#generation) { await child.shutdown().catch(() => undefined); this.#stillOn(generation); }
         const last = this.#lastUrls.get(this.#urlKey(key));
         if (last) child.seed(last);
         this.#children.set(key, child);
@@ -162,13 +192,19 @@ export class BrowserManager {
     if (!ctx.agentId || !ctx.conversationId) throw new Error('A browser action belongs to an agent and a conversation.');
     if (!this.#enabled) throw new Error('Browser driving is available through buddi serve.');
     this.#sweep();
+    const generation = this.#generation;
     const key = JSON.stringify([ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId]);
     this.#inflight.set(key, (this.#inflight.get(key) ?? 0) + 1);
     try {
       if (command.action === 'close' && !(await this.#childFor(ctx, false))) return { closed: true };
       const child = (await this.#childFor(ctx, true))!;
+      if (command.action !== 'close') this.#stillOn(generation);
       const origin = originOf(command.action === 'navigate' ? command.url : child.lastUrl);
-      return await this.#withLock(origin, () => child.execute(command, ctx));
+      return await this.#withLock(origin, () => {
+        // Waited behind another conversation on this site: a Stop in between wins.
+        if (command.action !== 'close') this.#stillOn(generation);
+        return child.execute(command, ctx);
+      });
     } finally {
       const left = (this.#inflight.get(key) ?? 1) - 1;
       if (left > 0) this.#inflight.set(key, left); else this.#inflight.delete(key);
@@ -214,6 +250,8 @@ export class BrowserManager {
     const run = async () => {
       if (!this.#enabled) throw new Error('The host browser service is unavailable.');
       if (action === 'stop' && !sessionId) {
+        // Everything waiting for a slot, a lock or an opening page sees this and does not act.
+        this.#generation++;
         await Promise.all([...this.#children.values()].map((child) => child.control('stop').catch(() => undefined)));
         await this.options.closeHost?.();
         this.#children.clear();

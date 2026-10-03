@@ -454,7 +454,10 @@ export function createMissionJobHandler(deps: {
         log(`mission ${mission.id}: parked on a browser card (question ${result.parked.questionId}) — waiting for the owner until ${result.parked.until}`);
         return {
           suspended: `${PARKED_REASON_PREFIX}${result.parked.questionId}`,
-          payloadPatch: { parked: result.parked, answer: null, awaiting: null, approval: null },
+          // No `answer: null` here: the run cleared it when it tied the job to the card, and
+          // an answer that came back while this suspension was on its way is kept and wakes it.
+          payloadPatch: { parked: result.parked, awaiting: null, approval: null },
+          wakeIf: { answer: { questionId: result.parked.questionId } },
         } satisfies Suspension;
       }
       await finishOccurrence(deps.pool, occurrence.id, {

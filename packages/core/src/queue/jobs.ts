@@ -274,6 +274,14 @@ export type SuspendInput = {
    * the decision carries on without anything having been held in memory.
    */
   payloadPatch?: Record<string, unknown>;
+  /**
+   * Don't park after all when the payload, as it is before the patch, already
+   * contains this (`@>`): what the job would wait for arrived while it was
+   * being suspended (a mission's card answered before its job parked). The
+   * job goes straight back on the queue instead, in the same statement, so
+   * nothing can land between the check and the suspension.
+   */
+  wakeIf?: Record<string, unknown>;
 };
 
 export async function suspendJob(
@@ -284,17 +292,20 @@ export async function suspendJob(
   opts: SuspendInput = {},
 ): Promise<Job | null> {
   const patch = opts.payloadPatch;
+  const wakeIf = opts.wakeIf;
   const { rows } = await pool.query<JobRow>(
     `update core.jobs
-     set state = 'suspended',
-         suspended_reason = $3,
+     set state = case when $5::jsonb is not null and coalesce(payload, '{}'::jsonb) @> $5::jsonb then 'pending' else 'suspended' end,
+         suspended_reason = case when $5::jsonb is not null and coalesce(payload, '{}'::jsonb) @> $5::jsonb then null else $3 end,
+         run_after = case when $5::jsonb is not null and coalesce(payload, '{}'::jsonb) @> $5::jsonb then now() else run_after end,
+         attempts = case when $5::jsonb is not null and coalesce(payload, '{}'::jsonb) @> $5::jsonb and attempts > 0 then attempts - 1 else attempts end,
          payload = case when $4::jsonb is null then payload else coalesce(payload, '{}'::jsonb) || $4::jsonb end,
          lease_owner = null,
          lease_until = null,
          updated_at = now()
      where id = $1::uuid and state = 'leased' and lease_owner = $2
      returning ${JOB_COLUMNS}`,
-    [jobId, worker, reason, patch === undefined ? null : JSON.stringify(patch)],
+    [jobId, worker, reason, patch === undefined ? null : JSON.stringify(patch), wakeIf === undefined ? null : JSON.stringify(wakeIf)],
   );
   if (rows.length === 0) return null;
   const job = toJob(rows[0] as JobRow);
@@ -304,6 +315,9 @@ export async function suspendJob(
     { jobId: job.id, kind: job.kind, worker, reason },
     job.conversationId ?? undefined,
   );
+  if (job.state === 'pending') {
+    await appendEvent(pool, 'job.resumed', { jobId: job.id, kind: job.kind, woken: 'at-suspension' }, job.conversationId ?? undefined);
+  }
   return job;
 }
 

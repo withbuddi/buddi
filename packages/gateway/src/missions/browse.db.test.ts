@@ -40,7 +40,8 @@ import { insertOccurrence } from '../missions-cli.js';
 import { createMissionJobHandler, MISSION_JOB_KIND, queueOccurrence } from '../serve.js';
 import { readAgentAttention } from '../web/attention.js';
 import { createMissionExecutor } from './execute.js';
-import { expireParkedRuns, PARKED_REASON_PREFIX, resumeParkedForQuestion } from './parked.js';
+import { expireParkedRuns, GAVE_BACK_ANSWER, handbackQuestionId, PARKED_REASON_PREFIX, resumeParkedForPage, resumeParkedForQuestion } from './parked.js';
+import type { JobHandler } from '@buddi/core';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -219,7 +220,7 @@ suite('missions that browse (postgres)', () => {
   });
 
   /** Run the occurrence as a queue job until it parks on the sign-in card; hands back what the test needs. */
-  const parkedRun = async (after: Step[]) => {
+  const parkedRun = async (after: Step[], wrap?: (handler: JobHandler) => JobHandler) => {
     const m = await mission('own');
     const occurrence = await insertOccurrence(pool, m.id, 0, new Date(), 'claimed');
     const job = await queueOccurrence(pool, occurrence, m);
@@ -234,8 +235,8 @@ suite('missions that browse (postgres)', () => {
       ], seen, delivered),
       log: () => {},
     });
-    const worker = runWorker({ pool, worker: 'test', kinds: [MISSION_JOB_KIND], handlers: { [MISSION_JOB_KIND]: handler }, now: () => new Date(), pollMs: 5, leaseMs: 5_000 });
-    await waitFor(async () => (await getJob(pool, job.id))?.state === 'suspended');
+    const worker = runWorker({ pool, worker: 'test', kinds: [MISSION_JOB_KIND], handlers: { [MISSION_JOB_KIND]: wrap ? wrap(handler) : handler }, now: () => new Date(), pollMs: 5, leaseMs: 5_000 });
+    if (!wrap) await waitFor(async () => (await getJob(pool, job.id))?.state === 'suspended');
     return { m, occurrence, job, seen, delivered, worker };
   };
 
@@ -273,6 +274,72 @@ suite('missions that browse (postgres)', () => {
     } finally {
       await worker.stop();
     }
+  }, 30_000);
+
+  it('Take over parks the run on the page; Give it back wakes it, and it carries on from the page', async () => {
+    const { occurrence, job, seen, delivered, worker } = await parkedRun([
+      { tool: 'mission.report', input: { urgency: 'normal', text: 'You signed in; two orders arriving Friday.' } },
+      { text: 'done' },
+    ]);
+    const off = controller.onGiveBack((info) => { void resumeParkedForPage(pool, info.conversationId, new Date()); });
+    try {
+      const conversationId = ((await getJob(pool, job.id))?.payload as { parked: { conversationId: string } }).parked.conversationId;
+      const question = await openQuestion(pool, { conversationId, now: new Date() });
+      const option = question!.options.find((o) => o.label === 'Take over')!;
+      const settled = await answerQuestion(pool, { id: question!.id, answer: option.label, optionId: option.id, via: 'web', now: new Date() });
+      if (!settled.ok) throw new Error(`answer refused: ${settled.reason}`);
+      const calls = seen.length;
+      expect(await resumeParkedForQuestion(pool, settled.question)).toBe(true);
+
+      // The run wakes, hands the page to the owner and parks again, on the page: no model call, nothing delivered.
+      await waitFor(async () => (await getJob(pool, job.id))?.suspendedReason === `${PARKED_REASON_PREFIX}${handbackQuestionId(conversationId)}`);
+      expect(seen).toHaveLength(calls);
+      expect(delivered).toEqual([]);
+      const page = controller.status({ agentId: AGENT, conversationId });
+      expect(page.state).toBe('paused');
+
+      // Give it back: the run carries on in its conversation and reports.
+      await controller.control('resume', page.session!.id);
+      await waitFor(async () => (await getJob(pool, job.id))?.state === 'succeeded');
+      expect(delivered).toEqual(['You signed in; two orders arriving Friday.']);
+      expect((await getOccurrence(pool, occurrence.id))?.state).toBe('succeeded');
+      expect(JSON.stringify(seen.map((req) => req.messages))).toContain(GAVE_BACK_ANSWER);
+    } finally {
+      off();
+      await worker.stop();
+    }
+  }, 30_000);
+
+  it('an answer that arrives before the job has parked is kept, and wakes the job as it parks', async () => {
+    const delivered: string[] = [];
+    let answered = false;
+    const { job, worker } = await parkedRun([
+      { tool: 'mission.report', input: { urgency: 'normal', text: 'Answered early; carried on.' } },
+      { text: 'done' },
+    ], (handler) => async (current, jobContext) => {
+      const result = await handler(current, jobContext);
+      if (!answered && typeof result === 'object' && result !== null && 'suspended' in result) {
+        answered = true;
+        // The card is out and the owner answers it now, before the worker lands the suspension.
+        const conversationId = ((await getJob(pool, current.id))?.payload as { parked: { conversationId: string } }).parked.conversationId;
+        expect((await getJob(pool, current.id))?.state).toBe('leased');
+        const question = await openQuestion(pool, { conversationId, now: new Date() });
+        const option = question!.options.find((o) => o.label === 'Save a login for next time')!;
+        const settled = await answerQuestion(pool, { id: question!.id, answer: option.label, optionId: option.id, via: 'web', now: new Date() });
+        if (!settled.ok) throw new Error(`answer refused: ${settled.reason}`);
+        expect(await resumeParkedForQuestion(pool, settled.question)).toBe(true);
+      }
+      return result;
+    });
+    try {
+      await waitFor(async () => (await getJob(pool, job.id))?.state === 'succeeded');
+      expect(answered).toBe(true);
+      const { rows } = await pool.query(`select kind from core.events where kind = 'job.resumed'`);
+      expect(rows.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      await worker.stop();
+    }
+    void delivered;
   }, 30_000);
 
   it('unanswered past the parking time, the run ends as "needed you" with one report line', async () => {

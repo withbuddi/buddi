@@ -8,7 +8,7 @@ import { PlaywrightHost, type DriverOptions, type LaunchProblem } from './host.j
 import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
-import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngineStatus, type BrowserHandOffer, type BrowserScope, type BrowserServiceOptions, type BrowserStatus, type BrowserRollover, type BrowserTouch, type CardResult, type RouteStatus, type SecretFillInput, type SecretTypeInput } from './service.js';
+import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngineStatus, type BrowserHandOffer, type BrowserScope, type BrowserServiceOptions, type BrowserStatus, type BrowserRollover, type BrowserTouch, type BrowserGiveBack, type CardResult, type RouteStatus, type SecretFillInput, type SecretTypeInput } from './service.js';
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
 import { applySettingsChange, migrateSettings, PIN_VALUES, settingsSchema, type ControlSettings, type RouteKind, type RoutePin } from './settings.js';
@@ -76,6 +76,8 @@ export class HostController implements BrowserController {
   #stopCards = new Map<string, OwnerCard>();
   /** Cards already handed to a surface, so one moment is one card. */
   #asked = new WeakSet<OwnerCard>();
+  /** Who hears that the owner gave a page back (the gateway continues the run that waited on it). */
+  #giveBack = new Set<(info: BrowserGiveBack) => void>();
   readonly telemetry: BrowserTelemetry;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
@@ -306,6 +308,8 @@ export class HostController implements BrowserController {
     if (stop && !status.session) status = { ...status, state: 'stopped' };
     const metadata = {
       settings: { ...this.#settings, signInSites: [...this.#settings.signInSites] },
+      // The sites buddi added itself when it met their sign-in page: one list with the owner's in Settings.
+      learnedSignInSites: [...this.#learned].filter((site) => !this.#settings.signInSites.includes(site)).sort(),
       browser: this.#engine(), routes: this.routes(),
       ...(stop ? { stop: { at: new Date(stop.at).toISOString(), ...(stop.until !== undefined ? { until: new Date(stop.until).toISOString() } : {}) } } : {}),
       ...(scope?.conversationId && this.#pins.has(scope.conversationId) ? { pin: this.#pins.get(scope.conversationId)! } : {}),
@@ -465,7 +469,14 @@ export class HostController implements BrowserController {
   #learn(site: string | undefined): void {
     if (!site || this.#learned.has(site)) return;
     this.#learned.add(site);
-    this.#later(this.#writeJson('sign-in-sites.json', [...this.#learned].slice(-500)));
+    this.#later(this.#saveLearned());
+  }
+  #learnedWrite: Promise<unknown> = Promise.resolve();
+  /** One write at a time, each of the list as it is then: a late write never brings back a forgotten site. */
+  #saveLearned(): Promise<void> {
+    const next = this.#learnedWrite.catch(() => undefined).then(() => this.#writeJson('sign-in-sites.json', [...this.#learned].slice(-500)));
+    this.#learnedWrite = next;
+    return next;
   }
   async #storedLogin(ctx: ToolContext, url: string | undefined): Promise<boolean> {
     const origin = canonicalOrigin(url);
@@ -616,7 +627,11 @@ export class HostController implements BrowserController {
     this.#learn(site);
     const { allowed, available } = this.#usable();
     const chromeUsable = allowed.chrome && available.chrome && !unattended;
-    if (route === 'own' && chromeUsable) {
+    // A pin to another route (the conversation's, the agent's, the default) holds here too:
+    // the move to the owner's Chrome is then his choice on the card, never automatic.
+    const pins = this.#pinFor(ctx);
+    const pin = [pins.conversation, pins.agent, pins.global].find((value) => value !== undefined && value !== 'auto');
+    if (route === 'own' && chromeUsable && (pin === undefined || pin === 'chrome')) {
       // The owner is signed in there: the same address, in a background tab of his Chrome.
       await this.#managers.own.release(ctx.conversationId!, ctx.agentId!);
       const key = this.#key(ctx.buddi!.owner.id, ctx.agentId!, ctx.conversationId!);
@@ -753,8 +768,21 @@ export class HostController implements BrowserController {
       const held = ROUTES.flatMap((route) => this.#managers[route].pages()).find((page) => page.status().state === 'paused' && page.status().session?.id !== sessionId);
       if (held) throw new Error('You already have a page in your hands. Give it back first.');
     }
+    const before = found.manager.status({ sessionId });
     await found.manager.control(action, sessionId);
-    return this.status();
+    // Given back: the run that waited on the owner carries on (a parked mission, a held conversation).
+    if (action === 'resume' && before.state === 'paused' && before.session) {
+      const info: BrowserGiveBack = { sessionId, agentId: before.session.agentId, conversationId: before.session.conversationId };
+      for (const listener of this.#giveBack) { try { listener(info); } catch { /* a listener never fails the give-back */ } }
+    }
+    // The page asked about, not whichever page changed last.
+    return this.status({ sessionId });
+  }
+
+  /** Hear every give-back of a page the owner held. Returns the unsubscribe. */
+  onGiveBack(listener: (info: BrowserGiveBack) => void): () => void {
+    this.#giveBack.add(listener);
+    return () => { this.#giveBack.delete(listener); };
   }
 
   /**
@@ -763,7 +791,17 @@ export class HostController implements BrowserController {
    */
   async configure(input: unknown): Promise<BrowserStatus> {
     if (!this.#enabled) throw new Error('Host control is unavailable. Start buddi serve.');
-    const next = applySettingsChange(this.#settings, input);
+    // Removing a sign-in site removes it wherever it is kept: the owner's list and the sites buddi learned.
+    let change = input;
+    if (change && typeof change === 'object' && !Array.isArray(change) && 'forgetSignInSite' in change) {
+      const { forgetSignInSite, ...rest } = change as Record<string, unknown>;
+      if (typeof forgetSignInSite !== 'string' || forgetSignInSite.trim() === '') throw new Error('forgetSignInSite is a site, like amazon.com.');
+      const site = forgetSignInSite.trim().toLowerCase();
+      if (this.#learned.delete(site)) await this.#saveLearned();
+      const listed = Array.isArray(rest.signInSites) ? rest.signInSites as unknown[] : this.#settings.signInSites;
+      change = { ...rest, signInSites: listed.filter((entry) => entry !== site) };
+    }
+    const next = applySettingsChange(this.#settings, change);
     if (next.yourApps !== 'off' && this.#settings.yourApps === 'off' && !this.#pluginApps() && !this.options.drivers?.apps) throw new Error('Your apps need the Computer plugin. Install it from Settings → Plugins first.');
     const chromeOff = this.#settings.yourChrome && !next.yourChrome;
     const appsOff = this.#settings.yourApps !== 'off' && next.yourApps === 'off';

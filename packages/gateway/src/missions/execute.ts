@@ -60,7 +60,7 @@ import { findingsOf, renderFindings, type FindingPayload } from './sentinel-wake
 import { missionOwnerAgent } from './reminders.js';
 import { askInto } from '../surfaces/browser-cards.js';
 import type { AskSink } from '../surfaces/pending-question.js';
-import { DEFAULT_MISSION_WAIT_MS, neededYouLine, parkMissionRun, type ParkedRun } from './parked.js';
+import { DEFAULT_MISSION_WAIT_MS, isCardQuestion, neededYouLine, parkForHandback, parkMissionRun, type ParkedRun } from './parked.js';
 
 /** The tools an opted-in mission (`browser: own`) may call with nobody there (docs/browser.md, "Missions"). */
 export const UNATTENDED_BROWSER_TOOLS: readonly string[] = ['browser.act'];
@@ -473,8 +473,8 @@ export function createMissionExecutor(
     if (control?.answer?.timedOut) {
       const parked = control.answer.parked;
       const conversationId = parked.conversationId;
-      const text = neededYouLine({ missionName: mission.name, question: parked.question, waitedMs: parked.waitMs });
-      await closeQuestion(deps.pool, { id: parked.questionId, via: 'timeout', now: deps.now() }).catch(() => false);
+      const text = neededYouLine({ missionName: mission.name, question: parked.question, waitedMs: parked.waitMs, ...(parked.handback ? { handback: true } : {}) });
+      if (isCardQuestion(parked.questionId)) await closeQuestion(deps.pool, { id: parked.questionId, via: 'timeout', now: deps.now() }).catch(() => false);
       await appendEvent(deps.pool, 'mission.needed_you', { missionId: mission.id, occurrenceId: occurrence.id, conversationId, questionId: parked.questionId }, conversationId);
       log(`mission ${mission.id}: occurrence ${occurrence.id} needed the owner and nobody answered — ending with the report line`);
       let chatId: string | undefined;
@@ -528,9 +528,26 @@ export function createMissionExecutor(
     const browses = mission.browser === 'own';
     const asked: AskSink = {};
     // The owner's answer is a touch on the page: the card is answered (Take over, Keep going) and the budget renews.
+    let touched: string | undefined;
     if (control?.answer && browses && deps.browser?.touch) {
-      try { await deps.browser.touch({ conversationId, agentId, text: control.answer.text ?? '' }); }
-      catch (err) { log(`mission ${mission.id}: touching the page with the owner's answer failed: ${err instanceof Error ? err.message : String(err)}`); }
+      try {
+        const result = await deps.browser.touch({ conversationId, agentId, text: control.answer.text ?? '' });
+        touched = typeof result === 'object' && result !== null && typeof (result as { answered?: unknown }).answered === 'string' ? (result as { answered: string }).answered : undefined;
+      } catch (err) { log(`mission ${mission.id}: touching the page with the owner's answer failed: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+    // Take over: the page is in the owner's hands. The run waits for it to come
+    // back rather than acting on a page it may not touch; Give it back wakes it.
+    if (control?.answer && touched === 'takeover') {
+      const parked = await parkForHandback({ pool: deps.pool, now: deps.now, timezone: deps.ctx.timezone, log }, {
+        missionId: mission.id,
+        agentId,
+        conversationId,
+        question: control.answer.parked.question,
+        waitMs: deps.browser?.missionWaitMs?.() ?? DEFAULT_MISSION_WAIT_MS,
+        ...(control.jobId ? { jobId: control.jobId } : {}),
+      });
+      log(`mission ${mission.id}: the owner took the page over; waiting for it to be given back (until ${parked.until})`);
+      return { conversationId, text: '', delivered: false, decision: 'no-decision', parked };
     }
 
     // The job rides on the tool context: a gated call records it on the action,
@@ -632,6 +649,7 @@ export function createMissionExecutor(
         conversationId,
         asked: asked.asked,
         waitMs: deps.browser?.missionWaitMs?.() ?? DEFAULT_MISSION_WAIT_MS,
+        ...(control?.jobId ? { jobId: control.jobId } : {}),
       });
       log(`mission ${mission.id}: parked on the owner's card (question ${parked.questionId}, until ${parked.until})`);
       return { conversationId, text: result.text.trim(), delivered: false, decision: 'no-decision', parked };

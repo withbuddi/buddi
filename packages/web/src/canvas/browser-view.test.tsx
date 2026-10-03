@@ -205,6 +205,27 @@ describe('the Page tab', () => {
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume', 's1'));
   });
 
+  it('a page already in the owner’s hands (taken from a chat card, or after a reload) still offers Give it back', async () => {
+    vi.mocked(api.browserControl).mockResolvedValue(status);
+    render(<BrowserView status={{ ...status, state: 'paused' }} error={null} reload={() => {}} live agentName="Home Manager" />);
+    expect(screen.getByText(/^You have the page/)).toBeInTheDocument();
+    expect(screen.getByText('Home Manager waits. It carries on when you give the page back.')).toBeInTheDocument();
+    expect(screen.queryByTestId('remote-hand')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Drive it here' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Give it back' }));
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume', 's1'));
+  });
+
+  it('keeps the page it asked to take over, never another page the answer names', async () => {
+    vi.mocked(api.browserControl).mockResolvedValue({ ...status, state: 'paused', session: { ...status.session!, id: 's2' }, hand: true });
+    const view = render(<BrowserView status={status} error={null} reload={() => {}} live />);
+    fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('takeover', 's1'));
+    view.rerender(<BrowserView status={{ ...status, state: 'paused' }} error={null} reload={() => {}} live />);
+    expect(screen.queryByTestId('remote-hand')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Give it back' })).toBeInTheDocument();
+  });
+
   it('offers buddi’s browser when your Chrome is not there to take over', async () => {
     vi.mocked(api.browserControl).mockResolvedValue({ ...status, hand: false, handReason: 'browser-offline' });
     vi.mocked(api.browserPin).mockResolvedValue(status);

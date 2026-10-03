@@ -94,6 +94,48 @@ describe('several agents look at once', () => {
   });
 });
 
+describe('Stop wins over everything still waiting', () => {
+  it('a conversation waiting for a page is turned away by Stop and opens nothing', async () => {
+    const { manager, drivers } = await setup({ maxSessions: 1, idleEvictMs: 60 * 60_000 });
+    await manager.execute(navigate(), context('a'));
+    const waiting = manager.execute(navigate('https://example.com/later'), context('b'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await manager.control('stop');
+    await expect(waiting).rejects.toThrow(/stopped agents' browsing/);
+    expect(drivers).toHaveLength(1);
+    expect(manager.pages()).toHaveLength(0);
+  });
+  it('a conversation waiting behind another on the same site does not act after Stop', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { manager, drivers } = await setup({ siteLocks: true }, async (command, i) => { if (i === 0 && command.action === 'navigate') await gate; });
+    const first = manager.execute(navigate('https://shop.test/a'), context('a')).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(drivers).toHaveLength(1));
+    const second = manager.execute(navigate('https://shop.test/b'), context('b'));
+    await vi.waitFor(() => expect(drivers).toHaveLength(2));
+    await manager.control('stop');
+    release();
+    await first;
+    await expect(second).rejects.toThrow(/stopped agents' browsing/);
+    expect(vi.mocked(drivers[1]!.perform)).not.toHaveBeenCalled();
+  });
+});
+
+describe('pages parked on a card', () => {
+  it('do not hold the route\'s pages: a new conversation gets one at once, and past twice the cap the oldest parked page is let go', async () => {
+    const { manager, drivers } = await setup({ maxSessions: 1, idleEvictMs: 60 * 60_000, queueTimeoutMs: 50 });
+    await manager.execute(navigate('https://example.com/a'), context('a'));
+    manager.child({ agentId: 'a', conversationId: 'a' })!.park('sign-in');
+    await expect(manager.execute(navigate(), context('b'))).resolves.toMatchObject({ completed: true });
+    manager.child({ agentId: 'b', conversationId: 'b' })!.park('human');
+    await expect(manager.execute(navigate(), context('c'))).resolves.toMatchObject({ completed: true });
+    // a parked longest: let go, its address kept for next time; b still waits on its card.
+    expect(drivers[0]!.close).toHaveBeenCalled();
+    expect(manager.child({ agentId: 'a', conversationId: 'a' })).toBeUndefined();
+    expect(manager.child({ agentId: 'b', conversationId: 'b' })?.card?.kind).toBe('human');
+  });
+});
+
 describe('pages and their conversations', () => {
   it('continues a task into a new transcript without reusing evidence', async () => {
     const { manager, drivers } = await setup({ maxSessions: 1 });

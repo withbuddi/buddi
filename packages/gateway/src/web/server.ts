@@ -303,6 +303,7 @@ import { createRequirements, type Requirements } from '../plugins/requires.js';
 import { placesList, placesRoute } from './places.js';
 import { peopleRoute } from './people.js';
 import { syncDateMissions } from '../missions/dates.js';
+import { resumeParkedForPage } from '../missions/parked.js';
 import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS, validDayMonth, type HttpArea } from '@buddi/core';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
@@ -803,6 +804,17 @@ export function createWebApp(deps: WebServerDeps): Server {
    * Failures are the recovery's own business and land in the log.
    */
   void chat?.recoverPendingInput().catch((err) => log(`web chat: recovering queued input failed: ${err instanceof Error ? err.message : String(err)}`));
+  /*
+   * Give it back: the run that waited on the page carries on. A mission parked
+   * on it wakes (missions/parked.ts); otherwise the conversation the take-over
+   * held gets its turn. Either way with no message from the owner.
+   */
+  const offGiveBack = (deps.browser ?? browserHost(deps.env ?? process.env)).onGiveBack?.((info) => {
+    void (async () => {
+      if (await resumeParkedForPage(deps.pool, info.conversationId, deps.now())) return;
+      await chat?.continueAfterGiveBack({ conversationId: info.conversationId, agentId: info.agentId });
+    })().catch((err: unknown) => log(`browser: carrying on after the page was given back failed: ${err instanceof Error ? err.message : String(err)}`));
+  });
   const streams = new StreamBudget();
   // A bundle script's run asks every time: its card offers no standing permission (`asksEachTime`).
   const permissionScopes = (tool: string, envelope?: unknown): Record<string, unknown> => deps.registry.lookup(tool)?.reusableApproval && !asksEachTime(envelope)
@@ -1204,6 +1216,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   extension.attach(server);
   extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
   server.once('close', () => { extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); clearInterval(ingressResync); setupRun?.abort.abort(); void ingress.close(); });
+  server.once('close', () => offGiveBack?.());
   return server;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

@@ -17,7 +17,9 @@
  *
  * Take over is the remote hand in this same frame: "You have the page",
  * nothing typed is kept, Keyboard · Give it back; the agent carries on with no
- * new message.
+ * new message. Who holds the page is the server's word (a paused page is the
+ * owner's), not this tab's: a take-over from a chat card, a reload, or a route
+ * with no remote hand still shows Give it back.
  */
 import { useEffect, useRef, useState } from 'react';
 import { api, csrfToken, type BrowserStatus } from '../../api';
@@ -137,8 +139,10 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   };
   const takeOver = () => void act(async () => {
     setNote(null); setOffline(false);
-    const next = await api.browserControl('takeover', session?.id);
-    if (next.hand && next.session) setDriving(next.session.id);
+    const asked = session?.id;
+    const next = await api.browserControl('takeover', asked);
+    // The answer is the page asked about; with several open, never another one.
+    if (next.hand && next.session && (!asked || next.session.id === asked)) setDriving(next.session.id);
     else if (next.handReason === 'browser-offline') setOffline(true);
     else setNote(next.handMessage ?? null);
   });
@@ -152,10 +156,12 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
     setOffline(false);
     setNote('This conversation uses buddi’s browser now. Send the agent a message and it opens the page there.');
   });
-  const hand = driving && status?.session?.id === driving && status.state === 'paused' ? driving : null;
+  // The owner holds this page when the server says it is paused, however it got there.
+  const owned = live && !!status?.session && status.state === 'paused';
+  const hand = owned && driving && status?.session?.id === driving ? driving : null;
 
   /* ---- what the header says ---- */
-  const taking = !!hand;
+  const taking = owned;
   const waiting = live && !!shown?.needsOwner;
   const done = !live && !paused;
   const site = siteOfUrl(shown?.page?.url) ?? (shown?.page?.appId ? appWord(shown.page.appId) : 'the page');
@@ -177,7 +183,8 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
         </span>
         {taking ? (
           <Toolbar align="end">
-            <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Keyboard</Button>
+            {hand ? <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Keyboard</Button>
+              : <Button size="sm" variant="ghost" disabled={busy} onClick={takeOver}>Drive it here</Button>}
             <Button size="sm" variant="accent" disabled={busy} onClick={giveBack}>Give it back</Button>
           </Toolbar>
         ) : paused ? (
@@ -189,7 +196,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
           </Toolbar>
         )}
       </header>
-      {taking ? <p className="br-hand-said" role="status">{`Nothing you type here is kept. ${agentName} carries on when you give it back.`}</p> : null}
+      {taking ? <p className="br-hand-said" role="status">{hand ? `Nothing you type here is kept. ${agentName} carries on when you give it back.` : `${agentName} waits. It carries on when you give the page back.`}</p> : null}
       {failure || error ? <Notice tone="critical" role="alert">{failure ?? error}</Notice> : null}
       {note ? <Notice tone="warning" role="status">{note}</Notice> : null}
       {offline ? (

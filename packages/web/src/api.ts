@@ -2551,7 +2551,8 @@ export const api = {
   testProvider: (kind: string) => post<{ state: string; message: string }>(`/providers/${encodeURIComponent(kind)}/test`),
   browser: (scope?: { agentId: string; conversationId: string }) => get<BrowserStatus>(`/browser${scope ? `?agentId=${encodeURIComponent(scope.agentId)}&conversationId=${encodeURIComponent(scope.conversationId)}` : ''}`),
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string, options?: { forever?: boolean }) => post<BrowserStatus>(`/browser/${action}`, { ...(sessionId === undefined ? {} : { sessionId }), ...(options?.forever ? { forever: true } : {}) }),
-  browserSettings: (settings: Partial<ControlSettings>) => post<BrowserStatus>('/browser/settings', settings),
+  /** `forgetSignInSite` removes one site from the owner's list and the learned one alike. */
+  browserSettings: (settings: Partial<ControlSettings> & { forgetSignInSite?: string }) => post<BrowserStatus>('/browser/settings', settings),
   browserPin: (conversationId: string, route: 'auto' | BrowserRoute) => post<BrowserStatus>('/browser/pin', { conversationId, route }),
   browserCard: (conversationId: string, answer: string) => post<{ answered?: string; status: BrowserStatus }>('/browser/card', { conversationId, answer }),
   browserInstall: () => post<BrowserStatus>('/browser/install', {}),
@@ -3199,6 +3200,8 @@ export interface BrowserStatus {
   /** A global Stop that holds. */
   stop?: { at: string; until?: string };
   pin?: string;
+  /** Sites buddi added to "needs your sign-in" itself, beside `settings.signInSites`. */
+  learnedSignInSites?: string[];
   settings?: ControlSettings;
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
   enabled: boolean;

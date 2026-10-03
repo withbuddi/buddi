@@ -22,6 +22,14 @@
  * parking time (an hour by default, `missionWaitMinutes` in the browser's
  * settings) and the run ends as "needed you" with one report line — never
  * silently.
+ *
+ * The job is tied to its question before the card goes out, and an answer is
+ * written onto the job in the same statement that wakes it: an answer that
+ * lands while the worker is still suspending the job is kept there, and the
+ * suspension wakes the job when it finds one (`wakeIf`).
+ *
+ * Take over is a wait of its own: the run parks again, on the page rather
+ * than a card (`page:<conversation>`), until the owner gives the page back.
  */
 import {
   askQuestion,
@@ -51,6 +59,8 @@ export interface ParkedRun {
   until: string;
   /** How long it waits, for the report line. */
   waitMs: number;
+  /** Parked on the page the owner took over, until they give it back (no card of its own). */
+  handback?: boolean;
 }
 
 /** What the owner's answer, or the clock, merges into the payload. */
@@ -72,8 +82,22 @@ export function parkedRunOf(value: unknown): ParkedRun | null {
     question: typeof p.question === 'string' ? p.question : '',
     until: p.until,
     waitMs: typeof p.waitMs === 'number' && p.waitMs > 0 ? p.waitMs : DEFAULT_MISSION_WAIT_MS,
+    ...(p.handback === true ? { handback: true } : {}),
   };
 }
+
+/** The question id a run parked on a taken-over page waits under: the page, not a card. */
+export function handbackQuestionId(conversationId: string): string {
+  return `page:${conversationId}`;
+}
+
+/** A real question card's id (a run parked on a page has no card to close). */
+export function isCardQuestion(questionId: string): boolean {
+  return !questionId.startsWith('page:');
+}
+
+/** What the run is told when the owner took the page themselves and gave it back. */
+export const GAVE_BACK_ANSWER = 'I took over the page myself and gave it back.';
 
 export function parkedAnswerOf(value: unknown): ParkedAnswer | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -97,10 +121,13 @@ export function waitWords(ms: number): string {
 }
 
 /** The one line a run that waited in vain delivers. */
-export function neededYouLine(input: { missionName: string; question: string; waitedMs: number }): string {
+export function neededYouLine(input: { missionName: string; question: string; waitedMs: number; handback?: boolean }): string {
   // A browser card is its title, a newline and a line of why: the title is what was asked.
   const title = (input.question.trim().split('\n')[0] ?? '').trim().replace(/\s+/g, ' ');
   const asked = /[.?!]$/.test(title) ? title : `${title}.`;
+  if (input.handback) {
+    return `${input.missionName} waited for you to give the page back and stopped: "${asked}" The page was not given back within ${waitWords(input.waitedMs)}, so it ended there. Run it again from Missions when you are done with it.`;
+  }
   return `${input.missionName} needed you and stopped: "${asked}" No answer came within ${waitWords(input.waitedMs)}, so it ended there. Run it again from Missions when you can take a look.`;
 }
 
@@ -124,6 +151,8 @@ export async function parkMissionRun(
     conversationId: string;
     asked: { question: string; options: Array<Omit<QuestionOption, 'id'>>; allowOther: boolean };
     waitMs: number;
+    /** The queue job this run is: tied to the question before the card goes out. */
+    jobId?: string;
   },
 ): Promise<ParkedRun> {
   const now = deps.now();
@@ -145,6 +174,9 @@ export async function parkMissionRun(
     { agentId: input.agentId, questionId: question.id, missionId: input.missionId, until: until.toISOString() },
     input.conversationId,
   );
+  const parked: ParkedRun = { questionId: question.id, conversationId: input.conversationId, question: question.question, until: until.toISOString(), waitMs: input.waitMs };
+  // Before anyone can see the card: an answer that comes back at once finds this job.
+  if (input.jobId) await tieJob(deps.pool, input.jobId, parked);
   try {
     await notifyOwner(deps.pool, { now: deps.now, ...(deps.timezone ? { timezone: deps.timezone } : {}), ...(deps.log ? { log: deps.log } : {}) }, {
       kind: 'question',
@@ -161,16 +193,64 @@ export async function parkMissionRun(
     deps.log?.(`mission ${input.missionId}: could not send the card as a notification: ${err instanceof Error ? err.message : String(err)}`);
   }
   await appendEvent(deps.pool, 'mission.parked', { missionId: input.missionId, agentId: input.agentId, questionId: question.id, until: until.toISOString() }, input.conversationId);
-  return { questionId: question.id, conversationId: input.conversationId, question: question.question, until: until.toISOString(), waitMs: input.waitMs };
+  return parked;
 }
 
-/** The suspended job a question parks, if one does. */
-async function parkedJobOf(pool: Pool, questionId: string): Promise<string | null> {
-  const { rows } = await pool.query<{ id: string }>(
-    `select id from core.jobs where state = 'suspended' and suspended_reason = $1 limit 1`,
-    [`${PARKED_REASON_PREFIX}${questionId}`],
+/**
+ * Park on the page the owner just took over: no card and no notification (the
+ * owner is at the page already). The run waits until the page is given back
+ * (`resumeParkedForPage`), or until the parking time runs out.
+ */
+export async function parkForHandback(
+  deps: ParkDeps,
+  input: { missionId: string; agentId: string; conversationId: string; question: string; waitMs: number; jobId?: string },
+): Promise<ParkedRun> {
+  const until = new Date(deps.now().getTime() + input.waitMs);
+  const parked: ParkedRun = { questionId: handbackQuestionId(input.conversationId), conversationId: input.conversationId, question: input.question, until: until.toISOString(), waitMs: input.waitMs, handback: true };
+  if (input.jobId) await tieJob(deps.pool, input.jobId, parked);
+  await appendEvent(deps.pool, 'mission.parked', { missionId: input.missionId, agentId: input.agentId, questionId: parked.questionId, until: parked.until, handback: true }, input.conversationId);
+  return parked;
+}
+
+/** Write what the run waits on onto its (still leased) job, with no answer yet. */
+async function tieJob(pool: Pool, jobId: string, parked: ParkedRun): Promise<void> {
+  await pool.query(
+    `update core.jobs
+        set payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object('parked', $2::jsonb, 'answer', null),
+            updated_at = now()
+      where id = $1::uuid and state = 'leased'`,
+    [jobId, JSON.stringify(parked)],
   );
-  return rows[0]?.id ?? null;
+}
+
+/**
+ * Hand an answer to the job parked on `questionId`, in one statement: a job
+ * already suspended is woken with it; a job still being suspended (its worker
+ * has not landed the suspension yet) keeps it in its payload, and the
+ * suspension wakes it (`wakeIf`). An answer already given is never replaced.
+ * Returns the job's id, or null when no run waits on this question.
+ */
+async function answerParkedJob(pool: Pool, questionId: string, answer: ParkedAnswer): Promise<string | null> {
+  const { rows } = await pool.query<{ id: string; state: string; kind: string; conversation_id: string | null }>(
+    `update core.jobs
+        set payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object('answer', $2::jsonb),
+            state = case when state = 'suspended' then 'pending' else state end,
+            suspended_reason = case when state = 'suspended' then null else suspended_reason end,
+            run_after = case when state = 'suspended' then now() else run_after end,
+            attempts = case when state = 'suspended' and attempts > 0 then attempts - 1 else attempts end,
+            updated_at = now()
+      where payload->'parked'->>'questionId' = $1
+        and ((state = 'suspended' and suspended_reason = $3) or state = 'leased')
+        and coalesce(payload->'answer'->>'questionId', '') <> $1
+      returning id, state, kind, conversation_id`,
+    [questionId, JSON.stringify(answer), `${PARKED_REASON_PREFIX}${questionId}`],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  if (row.state === 'pending') {
+    await appendEvent(pool, 'job.resumed', { jobId: row.id, kind: row.kind, patched: ['answer'] }, row.conversation_id ?? undefined).catch(() => undefined);
+  }
+  return row.id;
 }
 
 /**
@@ -183,13 +263,42 @@ export async function resumeParkedForQuestion(
   question: Pick<Question, 'id' | 'answer' | 'agentId' | 'conversationId'>,
   answerText?: string,
 ): Promise<boolean> {
-  const jobId = await parkedJobOf(pool, question.id);
-  if (!jobId) return false;
   const answer: ParkedAnswer = { questionId: question.id, text: question.answer ?? answerText ?? '' };
-  const resumed = await resumeJob(pool, jobId, { payloadPatch: { answer } });
-  if (resumed === null) return false;
+  if (!(await answerParkedJob(pool, question.id, answer))) return false;
   // The face and Home stop saying "Asked you a question".
   await appendEvent(pool, QUESTION_CLEARED, { agentId: question.agentId }, question.conversationId).catch(() => undefined);
+  return true;
+}
+
+/**
+ * The owner gave back a page in this conversation. A mission run waiting on
+ * it carries on: one parked on the page after Take over, or one still parked
+ * on its card (the owner took the page from the Canvas rather than the card;
+ * that card is closed). `true` when a run was woken.
+ */
+export async function resumeParkedForPage(pool: Pool, conversationId: string, now: Date): Promise<boolean> {
+  const handback = handbackQuestionId(conversationId);
+  if (await answerParkedJob(pool, handback, { questionId: handback, text: GAVE_BACK_ANSWER })) return true;
+  const { rows } = await pool.query<{ question_id: string }>(
+    `select payload->'parked'->>'questionId' as question_id
+       from core.jobs
+      where payload->'parked'->>'conversationId' = $1
+        and ((state = 'suspended' and suspended_reason like $2) or state = 'leased')
+        and coalesce(payload->'answer'->>'questionId', '') <> coalesce(payload->'parked'->>'questionId', '')
+      order by updated_at desc limit 1`,
+    [conversationId, `${PARKED_REASON_PREFIX}%`],
+  );
+  const questionId = rows[0]?.question_id;
+  if (!questionId) return false;
+  if (!(await answerParkedJob(pool, questionId, { questionId, text: GAVE_BACK_ANSWER }))) return false;
+  if (isCardQuestion(questionId)) {
+    const closed = await pool.query<{ agent_id: string }>(
+      `update core.questions set answered_at = $2, answered_via = 'browser', answer = $3
+        where id = $1::uuid and answered_at is null returning agent_id`,
+      [questionId, now, GAVE_BACK_ANSWER],
+    ).catch(() => ({ rows: [] as Array<{ agent_id: string }> }));
+    if (closed.rows[0]) await appendEvent(pool, QUESTION_CLEARED, { agentId: closed.rows[0].agent_id }, conversationId).catch(() => undefined);
+  }
   return true;
 }
 
@@ -210,7 +319,7 @@ export async function expireParkedRuns(pool: Pool, now: Date): Promise<number> {
   );
   let woken = 0;
   for (const row of rows) {
-    if (row.question_id) await closeQuestion(pool, { id: row.question_id, via: 'timeout', now }).catch(() => false);
+    if (row.question_id && isCardQuestion(row.question_id)) await closeQuestion(pool, { id: row.question_id, via: 'timeout', now }).catch(() => false);
     const answer: ParkedAnswer = { questionId: row.question_id, timedOut: true };
     if (await resumeJob(pool, row.id, { payloadPatch: { answer } })) woken++;
   }
