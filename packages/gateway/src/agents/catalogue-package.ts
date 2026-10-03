@@ -6,7 +6,7 @@
  * tool grant, missions that arrive off, the picks the install sheet asks, and
  * three example asks. Nothing in it runs. So the reading here is strict on
  * purpose: an unknown field is refused, a field v1 does not allow (`model`,
- * `provider`, `account`, `delegates`, `bundles`, roles) is refused by name, and
+ * `provider`, `account`, `bundles`) is refused by name, and
  * the integrity the market wrote is recomputed and must match before anything
  * is planned from it.
  *
@@ -67,11 +67,12 @@ export const MAX_SKILLS = 8;
  */
 export const CATALOGUE_DENIED: readonly string[] = [
   'host.*',
-  'secret.*',
+  // secret.list and secret.fill are grantable (since pre.37): fill only puts a
+  // value on a page the owner bound it to, and asks for anything else.
+  'secret.type',
   'secrets.*',
   'developer.*',
   'mcp.*',
-  'agent.delegate',
   'owner.set_profile',
   'owner.finish_onboarding',
   'owner.rename_me',
@@ -82,7 +83,7 @@ export const CATALOGUE_DENIED: readonly string[] = [
 ];
 
 /** Fields a v1 package may not carry, refused by name rather than as "unknown". */
-const NOT_IN_V1 = ['model', 'provider', 'account', 'delegates', 'bundles'] as const;
+const NOT_IN_V1 = ['model', 'provider', 'account', 'bundles'] as const;
 
 const semverLike = z.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$/, 'a semver version, like 1.0.0');
 const kebab = z.string().regex(KEBAB, 'kebab-case');
@@ -150,6 +151,12 @@ export const agentManifestSchema = z
     /** By-buddi packages may answer for roles (CFO: overview, recap, credit), so role missions and watchers reach them. */
     roles: z.array(z.string().regex(/^[a-z][a-z0-9-]{1,31}$/)).max(6).optional(),
     replaces: z.array(z.string().regex(/^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/, '<source>/<agent id>')).max(4),
+    /**
+     * Colleagues it hands work to, by catalogue package name (`cfo`). Resolved
+     * at install to the agents installed here (a package's own or one it
+     * replaces); an agent installed later joins the list then. Needs `agent.delegate`.
+     */
+    delegates: z.array(ident).max(12).optional(),
     changes: z.string().min(1).max(200),
     integrity: z.string().regex(/^sha256-[A-Za-z0-9+/]{43}=$/, 'sha256-<base64>'),
     claims: z.record(z.string(), z.unknown()).optional(),

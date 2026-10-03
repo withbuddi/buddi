@@ -54,6 +54,22 @@ front desk, the first assistant and most catalogue agents hold it; give it to
 another agent on its Tools tab. See [notifications.md](notifications.md),
 "Messages from your agents".
 
+## Before saying no
+
+Every agent is told to use what it can reach before it declines, worded for
+the tools it holds. A question about a website you use (an account page, a
+cart, a statement): an agent with `browser.act` reads `browser.status` and
+looks, with your approval for the session. In your own browser ("Your
+browser" mode) you are usually signed in already; in buddi's own browser it
+signs in with a login you stored in Settings → Keys and secrets (`secret.list`,
+then `secret.fill`, which keeps its own approval rules), and when a code or a
+challenge appears that no stored TOTP secret answers, it asks you to press
+Take over and carries on after. A question that belongs to a colleague it can
+delegate to is handed over and the answer relayed, rather than sending you to
+ask. Only then does it say exactly what it lacks, with one next step (grant a
+tool, pair a browser, link an account). An agent without the browser says it
+could look if you gave it browser control and paired a browser.
+
 ## What every agent is told about you
 
 Beside the clock (docs/system-context.md), every agent is told what you set on
@@ -162,8 +178,7 @@ add `platform.catalogue` to its tools and the handoff section to its persona
 An agent from the catalogue is configuration, never code: a persona, a few
 text skills, the tools it asks for, missions, the picks it asks you, and
 three example asks. Nothing in it runs. buddi reads each listing strictly (an
-unknown field is refused, and so is a model, a provider, an account or a
-delegate) and recomputes its integrity before using it: a listing that does
+unknown field is refused, and so is a model, a provider or an account) and recomputes its integrity before using it: a listing that does
 not hash to what withbuddi.com published is left out. Only listings made by
 buddi are offered for now.
 
@@ -272,10 +287,24 @@ every lineup package from a copy of the index kept in
 `packages/gateway/src/__fixtures__/catalogue-lineup.json`.
 
 What a package may not ask for, whatever it says: the tools that write agents
-(`platform.*` writes), `host.*`, `secret.*`, `developer.*`, connection tools
-(`mcp.*`), `agent.delegate`, `owner.set_profile`, `email.send` and the
-mailbox account tools, and anything owner-only. You can give any of them to an
-agent by hand afterwards.
+(`platform.*` writes), `host.*`, `secret.type` and `secrets.*`, `developer.*`,
+connection tools (`mcp.*`), `owner.set_profile`, `email.send` and the mailbox
+account tools, and anything owner-only. You can give any of them to an agent
+by hand afterwards. `secret.list` and `secret.fill` may be asked for (since
+pre.37): a fill only puts a value on a page you bound it to, and asks you for
+anything else.
+
+**Delegation from the catalogue.** A package may name colleagues in
+`delegates`, by catalogue package name (`"delegates": ["cfo"]`), with
+`agent.delegate` in its tools. At install they resolve to the agents
+installed here — the package's own, or an agent it replaces (`cfo` finds an
+older @ledger) — and become its `delegates.json`; a name with nothing
+installed is skipped. Installing an agent later adds it to the list of every
+installed agent whose package names it, and to the front desk's list when the
+front desk has an explicit one (with none, it already asks everyone). An
+update adds newly resolved colleagues and removes none. The approval card says
+both: "It may hand work to: …" and "@buddi may hand work to it." Removing an
+agent strips it from every list, as before.
 
 The integrity is `sha256-<base64>` of one canonical JSON document (keys sorted
 at every depth, no whitespace): `{ "agent.json": <agent.json without integrity

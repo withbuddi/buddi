@@ -802,6 +802,39 @@ suite('the agent catalogue', () => {
     expect(existsSync(path.join(agentsDir, 'tidy', 'agent.md'))).toBe(true);
   });
 
+  it('wires delegation: the package\'s delegates resolved to agents here, the front desk and named colleagues joining later installs', async () => {
+    const butler = agentEntry('butler', { manifest: { tools: ['memory.*', 'agent.delegate'], delegates: ['steward', 'copyist', 'nobody-here'] } });
+    publish([agentEntry('steward'), butler, agentEntry('copyist')]);
+    // A private front desk with an explicit list, which only grows by install.
+    const desk = path.join(agentsDir, 'concierge');
+    mkdirSync(desk, { recursive: true });
+    writeFileSync(path.join(desk, 'agent.md'), readFileSync(path.join(EXAMPLES_AGENTS_DIR, 'concierge', 'agent.md'), 'utf8'));
+    writeFileSync(path.join(desk, 'delegates.json'), '[]\n');
+    catalog.reload();
+    const lists = (id: string): unknown => JSON.parse(readFileSync(path.join(agentsDir, id, 'delegates.json'), 'utf8'));
+    try {
+      expect((await catalogueJobSettled(((await install('steward')).body as { jobId: string }).jobId))?.state).toBe('done');
+      expect(lists('concierge')).toEqual(['steward']);
+      const plan = await planRoute(deps, 'butler', {});
+      const preview = String((plan.body as { preview?: string }).preview);
+      expect(preview).toContain('It may hand work to: @steward.');
+      expect(preview).toMatch(/@\S+ may hand work to it\./);
+      expect((await catalogueJobSettled(((await install('butler')).body as { jobId: string }).jobId))?.state).toBe('done');
+      // Its own list: what is installed of what it names; copyist is not here yet.
+      expect(lists('butler')).toEqual(['steward']);
+      expect(lists('concierge')).toEqual(['steward', 'butler']);
+      // Copyist, installed later, joins butler's list (its package names it) and the desk's.
+      expect((await catalogueJobSettled(((await install('copyist')).body as { jobId: string }).jobId))?.state).toBe('done');
+      expect(lists('butler')).toEqual(['steward', 'copyist']);
+      expect(lists('concierge')).toEqual(['steward', 'butler', 'copyist']);
+      // Steward names nobody and holds no agent.delegate: no list of its own.
+      expect(existsSync(path.join(agentsDir, 'steward', 'delegates.json'))).toBe(false);
+    } finally {
+      rmSync(desk, { recursive: true, force: true });
+      catalog.reload();
+    }
+  });
+
   // Last: it leaves an image plugin registered.
   it('counts a drawing account only once one is chosen in Settings → Image', async () => {
     publish([agentEntry('painter', { manifest: { needs: ['image-account'] } })]);

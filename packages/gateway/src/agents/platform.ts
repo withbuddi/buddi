@@ -1995,6 +1995,16 @@ const CATALOGUE_HELPERS: CatalogueHelpers = {
   reload: (r) => reloadResult(resolved(r)),
   assignAccount: (r, agentId, account) => assignAccount(resolved(r), agentId, account),
   proposals: (r) => pluginAgentProposals(r),
+  delegatable: (r, ids, selfId) => {
+    const { catalog } = resolved(r);
+    return ids.filter((id) => {
+      try {
+        return checkDelegates([id], catalog, selfId) !== undefined;
+      } catch {
+        return false;
+      }
+    });
+  },
 };
 /**
  * What adding (or updating) a package would do, writing nothing: the envelope

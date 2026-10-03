@@ -5,6 +5,7 @@ import {
   GOLDEN_CASES,
   OPENAI_AGENT,
   parseEvalArgs,
+  stubbed,
 } from './golden.js';
 
 describe('parseEvalArgs', () => {
@@ -56,5 +57,28 @@ describe('selecting cases per provider', () => {
 
   it('gives every case a unique id', () => {
     expect(new Set(GOLDEN_CASES.map((c) => c.id)).size).toBe(GOLDEN_CASES.length);
+  });
+});
+
+describe('the browser cases', () => {
+  it('pin the paired and unpaired browser, and answer stubbed tools without running them', async () => {
+    const paired = GOLDEN_CASES.find((c) => c.id === 'website-question-tries-the-browser');
+    const unpaired = GOLDEN_CASES.find((c) => c.id === 'website-question-without-a-browser-offers-pairing');
+    expect(paired?.stubs?.['browser.status']).toMatchObject({ mode: 'extension', enabled: true });
+    expect(unpaired?.stubs?.['browser.status']).toMatchObject({ enabled: false });
+    expect(paired?.tools?.(['finance.list_accounts', 'agent.delegate'])).toEqual(['agent.delegate', 'browser.status', 'browser.act']);
+    const real = { invoke: async (name: string) => `ran ${name}`, list: () => ['x'] };
+    const wrapped = stubbed(real, { 'browser.status': { enabled: true } });
+    await expect(wrapped.invoke('browser.status')).resolves.toEqual({ enabled: true });
+    await expect(wrapped.invoke('memory.recall')).resolves.toBe('ran memory.recall');
+    expect(wrapped.list()).toEqual(['x']);
+  });
+
+  it('fail "no access" and pass a browser look or a delegation', () => {
+    const paired = GOLDEN_CASES.find((c) => c.id === 'website-question-tries-the-browser')!;
+    const turn = (text: string, calls: Array<{ name: string; input: unknown }>) => [{ question: 'q', text, calls, inputTokens: 0, outputTokens: 0 }];
+    expect(paired.check(turn('I have no access to your Amazon account. Open the Amazon app yourself.', [{ name: 'email.search', input: {} }]))).toHaveLength(3);
+    expect(paired.check(turn('Approve the browser card and I will look.', [{ name: 'browser.act', input: {} }]))).toEqual([]);
+    expect(paired.check(turn('@ledger says…', [{ name: 'agent.delegate', input: {} }]))).toEqual([]);
   });
 });

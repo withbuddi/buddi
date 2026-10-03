@@ -70,6 +70,7 @@ import { normaliseAvatar } from './avatar-image.js';
 import { ownerText, type ToolWords } from './owner-text.js';
 import { readAvatar, writeAvatar } from './avatars.js';
 import type { AccountChoice, CreateAgentEnvelope } from './platform.js';
+import { DELEGATES_FILE, applyDelegateEdits, readDelegatesFile, type DelegateEdit } from './delegation.js';
 
 /* ------------------------------------------------------------------ *
  * The service the gateway binds
@@ -404,6 +405,8 @@ export interface CatalogueHelpers {
   reload(registry: ToolRegistry): { reloaded: boolean; message: string; error?: string };
   assignAccount(registry: ToolRegistry, agentId: string, account: AccountChoice | null): Promise<string>;
   proposals(registry: ToolRegistry): Array<{ plugin: string; pluginVersion: string; agent: SuggestedAgent }>;
+  /** The ids `selfId` may name in its allowlist: installed, not itself, not a writer. */
+  delegatable(registry: ToolRegistry, ids: readonly string[], selfId: string): string[];
 }
 
 export class CatalogueRefusal extends Error {
@@ -463,6 +466,20 @@ export interface InstallAgentEnvelope {
   avatar: { url: string; sha256: string } | null;
   /** The create preview's own envelope, for an install. */
   created?: CreateAgentEnvelope;
+  /**
+   * Delegation the package brings (its `delegates`, resolved to agents
+   * installed here) and the other lists this install joins: a front desk with
+   * an explicit list, and any installed agent whose package names this one.
+   * Absent when nothing changes.
+   */
+  delegation?: {
+    file: string;
+    before: string[];
+    after: string[];
+    /** Handles of the ids in `after`, for the card. */
+    handles: Record<string, string>;
+    joins: Array<DelegateEdit & { handle: string }>;
+  };
   update?: {
     fromVersion: string;
     /** `buddi/planner` when the agent is an older one this package replaces. */
@@ -837,6 +854,83 @@ function checkDenied(pkg: AgentPackage, resolvedTools: readonly string[]): void 
   }
 }
 
+const holdsDelegate = (tools: readonly string[]): boolean => tools.some((t) => t === 'agent.delegate' || t === 'agent.*');
+
+/**
+ * Who the agent hands work to, from its package's `delegates` (catalogue
+ * package names), and the lists it joins (docs/agents.md, "Delegation from
+ * the catalogue"). Install: its own list is the names resolved to agents
+ * installed here (by package, or an agent a package replaces); a front desk
+ * with an explicit list gains it, and so does any installed agent whose
+ * package names this one. Update: the resolved names are added to the list
+ * it has, nothing removed. A front desk or maker with no list already asks
+ * everyone and is left alone. Nothing is written here.
+ */
+async function planDelegation(
+  pkg: AgentPackage,
+  agent: { id: string; tools: readonly string[]; dir: string },
+  mode: 'install' | 'update',
+  deps: BuildDeps,
+  binding: CatalogueBinding,
+): Promise<InstallAgentEnvelope['delegation']> {
+  const { registry, helpers } = deps;
+  const loaded = await helpers.service(registry)?.load({ cachedOnly: true }).catch(() => undefined);
+  const packages = loaded && 'packages' in loaded ? loaded.packages : [pkg];
+  const added = addedAgents(binding.agentsDir);
+  const installedId = (name: string): string | undefined => {
+    const listed = packages.find((p) => p.manifest.name === name);
+    const hit = listed ? installedAsFor(listed, added, (id) => id) : undefined;
+    return hit?.agentId ?? binding.catalog.get(name)?.id;
+  };
+  const wanted = holdsDelegate(agent.tools)
+    ? (pkg.manifest.delegates ?? []).map(installedId).filter((id): id is string => id !== undefined)
+    : [];
+  const resolved = helpers.delegatable(registry, [...new Set(wanted)], agent.id);
+  let before: string[] = [];
+  if (mode === 'update') {
+    try {
+      before = readDelegatesFile(agent.id, path.dirname(agent.dir)) ?? [];
+    } catch {
+      before = [];
+    }
+  }
+  const after = [...before, ...resolved.filter((id) => !before.includes(id))];
+
+  const joins: Array<DelegateEdit & { handle: string }> = [];
+  if (mode === 'install') {
+    for (const summary of binding.catalog.list()) {
+      // An example's list is the repo's, never written at runtime.
+      if (summary.id === agent.id || summary.source === 'example') continue;
+      const other = binding.catalog.get(summary.id);
+      if (!other) continue;
+      const otherDir = path.dirname(path.dirname(other.file));
+      let stored: string[] | undefined;
+      try {
+        stored = readDelegatesFile(other.id, otherDir);
+      } catch {
+        continue;
+      }
+      if (stored?.includes('*') || stored?.includes(agent.id)) continue;
+      const open = summary.roles.includes('front-desk') || summary.roles.includes('maker');
+      if (stored === undefined && open) continue;
+      const frontDesk = summary.roles.includes('front-desk') && stored !== undefined;
+      const from = added.find((a) => a.agentId === other.id);
+      const otherPkg = from ? packages.find((p) => matchesPackage(p, from) !== null) : undefined;
+      const named = holdsDelegate(other.tools) && (otherPkg?.manifest.delegates ?? []).includes(pkg.manifest.name);
+      if (!frontDesk && !named) continue;
+      joins.push({
+        id: other.id,
+        handle: other.handle,
+        path: path.join(otherDir, other.id, DELEGATES_FILE),
+        content: `${JSON.stringify([...(stored ?? []), agent.id], null, 2)}\n`,
+      });
+    }
+  }
+  if (after.join(',') === before.join(',') && joins.length === 0) return undefined;
+  const handles = Object.fromEntries(after.map((id) => [id, binding.catalog.get(id)?.handle ?? id]));
+  return { file: path.join(agent.dir, DELEGATES_FILE), before, after, handles, joins };
+}
+
 /**
  * The plan the owner was shown, as one fingerprint: the whole envelope but who
  * proposed it — the package's integrity, the resolved grant, the file's and
@@ -951,6 +1045,7 @@ async function composeInstallEnvelope(input: InstallAgentInput, deps: BuildDeps)
   );
   checkDenied(pkg, created.tools);
   const agentDir = path.dirname(created.file);
+  const delegation = await planDelegation(pkg, { id: created.id, tools: created.tools, dir: agentDir }, 'install', deps, binding);
   return {
     tool: 'platform.install_agent',
     mode: 'install',
@@ -971,6 +1066,7 @@ async function composeInstallEnvelope(input: InstallAgentInput, deps: BuildDeps)
     picks,
     avatar,
     created,
+    ...(delegation ? { delegation } : {}),
   };
 }
 
@@ -1088,9 +1184,11 @@ async function buildUpdate(
     }
   }
   const missions = plans.filter((plan) => !existing.has(plan.slug));
+  const delegation = await planDelegation(pkg, { id: agent.id, tools, dir }, 'update', deps, binding);
   return {
     tool: 'platform.install_agent',
     mode: 'update',
+    ...(delegation ? { delegation } : {}),
     proposedBy: deps.proposedBy,
     package: packageInfo,
     id: agent.id,
@@ -1143,6 +1241,19 @@ function missionLines(missions: readonly PackageMissionPlan[], specs: readonly T
   );
 }
 
+/** What the approval card says about delegation: whom it asks, who may ask it. */
+function delegationLines(envelope: InstallAgentEnvelope): string[] {
+  const d = envelope.delegation;
+  if (!d) return [];
+  const handleOf = (id: string): string => d.handles[id] ?? id;
+  const added = d.after.filter((id) => !d.before.includes(id));
+  return [
+    ...(added.length === 0 ? [] : [`It may hand work to: ${added.map((id) => `@${handleOf(id)}`).join(', ')}.`]),
+    ...(d.joins.length === 0 ? [] : [`${d.joins.map((j) => `@${j.handle}`).join(', ')} may hand work to it.`]),
+    '',
+  ];
+}
+
 export function renderInstallPreview(
   envelope: InstallAgentEnvelope,
   specs: readonly ToolSpec[],
@@ -1177,6 +1288,7 @@ export function renderInstallPreview(
       ...grantChangeBlock(envelope.handle, { ...diffGrant(u.toolsBefore, envelope.tools) }, specs),
       '',
       ...personaBlock(u.personaDiff),
+      ...delegationLines(envelope),
       ...(envelope.missions.length === 0
         ? []
         : ['', 'New missions it suggests, each off until you turn it on:', ...missionLines(envelope.missions, specs)]),
@@ -1200,6 +1312,7 @@ export function renderInstallPreview(
     '',
     renderCreate(envelope.created as CreateAgentEnvelope, specs),
     '',
+    ...delegationLines(envelope),
     ...(envelope.account === null
       ? []
       : [
@@ -1506,6 +1619,16 @@ export function createCatalogueTools(
             `nothing was changed: the agents would not load with it (${reload.error ?? reload.message}).`,
         );
       }
+      // Who it hands work to, and the lists it joins: each on its own, after the agent loads (never undone by a failed list).
+      const lists = envelope.delegation
+        ? applyDelegateEdits([
+            ...(envelope.delegation.after.join(',') === envelope.delegation.before.join(',')
+              ? []
+              : [{ id: envelope.id, path: envelope.delegation.file, content: `${JSON.stringify(envelope.delegation.after, null, 2)}\n` }]),
+            ...envelope.delegation.joins,
+          ])
+        : { changed: [], failed: [] };
+      if (lists.changed.length > 0) helpers.reload(registry);
       const assigned = envelope.mode === 'install' ? await helpers.assignAccount(registry, envelope.id, envelope.account) : '';
       let pictured = false;
       // The package's picture is kept in the database at install, so every page draws it without asking
@@ -1573,6 +1696,7 @@ export function createCatalogueTools(
         missions: created,
         ...(pictured ? { picture: true } : {}),
         ...(trashed ? { previousFile: trashed } : {}),
+        ...(lists.failed.length > 0 ? { delegatesNotWritten: lists.failed } : {}),
         live: reload.reloaded,
         message:
           (envelope.mode === 'install'

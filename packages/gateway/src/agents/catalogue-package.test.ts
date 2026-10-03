@@ -120,6 +120,8 @@ describe('the denylist', () => {
   it('covers resolved names and declared globs alike', () => {
     expect(deniedTools(['email.*'], ['email.read', 'email.send'])).toEqual(expect.arrayContaining(['email.send', 'email.*']));
     expect(deniedTools(['secret.*?'], [])).toEqual(['secret.*']);
+    expect(deniedTools(['secret.list', 'secret.fill', 'agent.delegate'], ['secret.list', 'secret.fill', 'agent.delegate'])).toEqual([]);
+    expect(deniedTools(['secret.type'], ['secret.type'])).toEqual(['secret.type']);
     expect(deniedTools(['memory.*', 'web.read'], ['memory.note', 'web.read'])).toEqual([]);
   });
 });

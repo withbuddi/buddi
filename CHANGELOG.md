@@ -6,6 +6,9 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Agents try before they decline: every agent is told to look with the browser when it has one (your own browser where you are signed in, or buddi's with a login you stored in Keys and secrets, asking you to take over at a code it cannot answer), to hand a colleague's question to that colleague and relay the answer, and only then to say exactly what it lacks with one next step. An agent without the browser says it could look if you gave it browser control.
+- Catalogue agents can be given the browser's stored logins (`secret.list`, `secret.fill`) and colleagues to hand work to: a package's `delegates` resolve at install to the agents you have, an agent added later joins the lists that name it and the front desk's, and the approval card says who may ask whom.
+
 - A news edition in chat is drawn as an edition card: its name and time, the voice note as a waveform, its first sentence, each topic with its stories (the outlet's logo, the headline with Update or Opinion, Anchor's line, the outlet linked out and "and N more"), and the next edition's time. The text as sent is one tap away under "Show as text", and is what shows when News cannot read the edition back.
 
 ### Changed

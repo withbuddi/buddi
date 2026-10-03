@@ -48,6 +48,7 @@ import {
 } from '../agents/catalog.js';
 import { bindDelegation } from '../agents/delegation.js';
 import { bindOwnerTools } from '../agents/owner-tools.js';
+import { systemContext } from '../system-context.js';
 
 /** The instant every case runs at. A Sunday; "today" for every expectation. */
 export const EVAL_NOW = new Date('2026-09-13T12:00:00Z');
@@ -118,6 +119,14 @@ export interface GoldenCase {
    */
   providers?: readonly ProviderKind[];
   turns: { question: string; plainText?: boolean }[];
+  /**
+   * Canned answers for tools whose real answer depends on this machine (a
+   * paired browser), so the case reads the same everywhere. The call is still
+   * recorded; the tool itself never runs.
+   */
+  stubs?: Record<string, unknown>;
+  /** The grant the case runs with, from the agent's own (a case about an agent shaped like Home Manager). */
+  tools?: (granted: readonly string[]) => string[];
   /** Every failure, as a plain sentence. An empty array is a pass. */
   check(turns: TurnRecord[]): string[];
 }
@@ -164,6 +173,25 @@ const digits = (text: string): string => text.replace(/[\s,.]/g, '');
 /* ------------------------------------------------------------------ *
  * The cases
  * ------------------------------------------------------------------ */
+
+/** "Your browser" mode, the extension connected and idle. */
+const PAIRED_BROWSER = {
+  mode: 'extension',
+  settings: { mode: 'extension', browserApp: 'Google Chrome', allowedApps: [] },
+  state: 'idle',
+  enabled: true,
+  busy: false,
+  hasScreenshot: false,
+};
+/** "Your browser" mode with the extension not connected. */
+const UNPAIRED_BROWSER = {
+  ...PAIRED_BROWSER,
+  state: 'unavailable',
+  enabled: false,
+  message: 'Your browser is not connected: pair the buddi extension in Settings → Browser.',
+};
+const NO_ACCESS = /(?:no|don't have|do not have|cannot get) access to your amazon/i;
+const OPEN_IT_YOURSELF = /open the amazon (?:app|site|website) (?:yourself|and)/i;
 
 export const GOLDEN_CASES: GoldenCase[] = [
   {
@@ -373,7 +401,44 @@ export const GOLDEN_CASES: GoldenCase[] = [
       return fails;
     },
   },
+  {
+    id: 'website-question-tries-the-browser',
+    guards:
+      'With a browser paired, a question about a website account (an Amazon cart) is looked up with the browser, or handed to a colleague, never answered with "no access".',
+    agent: 'finance-advisor',
+    tools: (granted) => [...granted.filter((t) => !t.startsWith('finance.')), 'browser.status', 'browser.act'],
+    stubs: {
+      'browser.status': PAIRED_BROWSER,
+      'browser.act': { pending: true, message: 'The owner has a card to approve this browser session; wait for it.' },
+    },
+    turns: [{ question: 'Can you check my Amazon cart?' }],
+    check([turn]) {
+      const fails: string[] = [];
+      if (called(turn, 'browser.act').length === 0 && called(turn, 'agent.delegate').length === 0) {
+        fails.push('neither looked with the browser nor delegated');
+      }
+      if (NO_ACCESS.test(turn?.text ?? '')) fails.push('told the owner it has no access while a browser is paired');
+      if (OPEN_IT_YOURSELF.test(turn?.text ?? '')) fails.push('told the owner to open the app or site themselves');
+      return fails;
+    },
+  },
+  {
+    id: 'website-question-without-a-browser-offers-pairing',
+    guards: 'With no browser paired, the same question says what is missing and offers pairing, in one concrete step.',
+    agent: 'finance-advisor',
+    tools: (granted) => [...granted.filter((t) => !t.startsWith('finance.')), 'browser.status', 'browser.act'],
+    stubs: { 'browser.status': UNPAIRED_BROWSER },
+    turns: [{ question: 'Can you check my Amazon cart?' }],
+    check([turn]) {
+      const text = turn?.text ?? '';
+      const fails: string[] = [];
+      if (called(turn, 'browser.status').length === 0) fails.push('never checked whether a browser is available');
+      if (!/pair|connect|extension|settings/i.test(text)) fails.push('does not offer pairing a browser as the next step');
+      return fails;
+    },
+  },
 ];
+
 
 /* ------------------------------------------------------------------ *
  * The runner
@@ -512,7 +577,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     await runMigrations(pool, installedManifests());
 
     const now = (): Date => EVAL_NOW;
-    const ctx: CoreToolContext = { db: pool, ownerId: OWNER_ID, now, timezone: EVAL_TIMEZONE };
+    const base: CoreToolContext = { db: pool, ownerId: OWNER_ID, now, timezone: EVAL_TIMEZONE };
+    // The shared context every agent gets in production, rules included.
+    const ctx: CoreToolContext = { ...base, systemContext: (run) => systemContext(base, run) };
     const memoryPreamble = memoryPreambleFor(pool);
 
     console.log(
@@ -549,10 +616,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         const turns: TurnRecord[] = [];
         for (const turn of testCase.turns) {
           const calls: ToolCall[] = [];
+          const definition = selected.definition(now(), EVAL_TIMEZONE);
           const run = await runAgent({
-            agent: selected.definition(now(), EVAL_TIMEZONE),
+            agent: testCase.tools ? { ...definition, tools: testCase.tools(definition.tools) } : definition,
             provider: providerFor(selected),
-            registry,
+            registry: testCase.stubs ? stubbed(registry, testCase.stubs) : registry,
             ctx,
             pool,
             conversationId,
@@ -613,6 +681,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     dim(`tokens: ${inputTokens} in, ${outputTokens} out, ${inputTokens + outputTokens} total`),
   );
   if (passed !== results.length) process.exit(1);
+}
+
+/** The registry with some tools answering from the case instead of this machine. */
+export function stubbed<R extends { invoke: (...args: any[]) => Promise<unknown> }>(registry: R, stubs: Record<string, unknown>): R {
+  return new Proxy(registry, {
+    get(target, prop, receiver) {
+      if (prop === 'invoke') {
+        return async (name: string, ...rest: unknown[]) =>
+          Object.prototype.hasOwnProperty.call(stubs, name) ? stubs[name] : target.invoke(name, ...rest);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 /** Back to the same nine rows, whatever the last case wrote. */

@@ -78,7 +78,42 @@ export async function systemContext(
   return { timezone: info.time.timezone, prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
     (owner === '' ? '' : `\n\n${owner}`) + (places === '' ? '' : `\n\n${places}`) + (learning === '' ? '' : `\n\n${learning}`) +
-    (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') };
+    (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') +
+    (run ? `\n\n${resourcefulLines(run.tools)}` : '') };
+}
+
+/**
+ * Try everything before declining (docs/agents.md, "Before saying no"). In
+ * every agent's prompt, so short, and worded for the tools this agent holds:
+ * an agent without the browser is told what it could do if granted, never
+ * told to use a tool it does not have.
+ */
+export function resourcefulLines(tools: readonly string[]): string {
+  const has = (name: string): boolean => tools.includes(name);
+  const lines = ['Before you say you cannot do something, use what you can reach:'];
+  if (has('browser.act')) {
+    const login = has('secret.fill') && has('secret.list')
+      ? "In buddi's own browser, sign in with a login the owner stored: secret.list for one bound to that site, then secret.fill. " +
+        'If a code or challenge appears and no TOTP secret is stored, ask the owner to press Take over, then carry on.'
+      : "In buddi's own browser, ask the owner to sign in with Take over, then carry on.";
+    lines.push(
+      '- A website the owner uses (an account page, a cart, an order, a statement): read browser.status, then look with browser.act; ' +
+        "the owner approves the session. In the owner's own browser they are usually signed in already. " + login,
+    );
+  } else {
+    lines.push(
+      "- A website the owner uses: you cannot open a browser. Say you could look if the owner gives you browser control " +
+        "(your agent page, Tools) and pairs a browser in Settings → Browser.",
+    );
+  }
+  if (has('agent.delegate')) {
+    lines.push('- A question that belongs to a colleague you can hand work to: delegate it and relay the answer, credited by handle. Never tell the owner to go ask them.');
+  }
+  lines.push(
+    '- Only then say exactly what you lack, with one concrete next step (grant a tool, pair a browser, link an account). ' +
+      (has('browser.act') ? 'Never tell the owner to open the app or site themselves while a browser is available.' : ''),
+  );
+  return lines.join('\n').trimEnd();
 }
 
 /** For an agent that holds `owner.notify`: when to use it, and when not. */

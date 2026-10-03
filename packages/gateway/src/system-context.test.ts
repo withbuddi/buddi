@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
-import { createSystemManifest, formatLine, hostFacts, NOTIFY_LINE, systemContext, systemTime } from './system-context.js';
+import { createSystemManifest, formatLine, hostFacts, NOTIFY_LINE, resourcefulLines, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
@@ -21,6 +21,30 @@ describe('shared platform context', () => {
     const { ctx } = fixture();
     expect((await systemContext(ctx, { agentId: 'scout', tools: ['owner.notify'] })).prompt).toContain(NOTIFY_LINE);
     expect((await systemContext(ctx, { agentId: 'scout', tools: ['memory.remember'] })).prompt).not.toContain('owner.notify');
+  });
+  it('tells every agent to try what it can reach before declining, worded for the tools it holds', async () => {
+    const { ctx } = fixture();
+    const full = resourcefulLines(['browser.status', 'browser.act', 'secret.list', 'secret.fill', 'agent.delegate']);
+    expect(full).toMatch(/^Before you say you cannot do something/);
+    expect(full).toContain('look with browser.act');
+    expect(full).toContain('secret.list for one bound to that site, then secret.fill');
+    expect(full).toContain('Take over');
+    expect(full).toContain('delegate it and relay the answer');
+    expect(full).toContain('Never tell the owner to open the app or site themselves');
+    // No secrets: the owner signs in with Take over instead.
+    const noSecrets = resourcefulLines(['browser.status', 'browser.act']);
+    expect(noSecrets).not.toContain('secret.');
+    expect(noSecrets).toContain('sign in with Take over');
+    expect(noSecrets).not.toContain('delegate');
+    // No browser.act: never told to use it, told what to ask for instead.
+    const bare = resourcefulLines(['browser.status', 'memory.recall']);
+    expect(bare).not.toContain('browser.act');
+    expect(bare).toContain('you cannot open a browser');
+    expect(bare).toContain('Settings → Browser');
+    expect(bare).toContain('one concrete next step');
+    expect(bare).not.toContain('open the app or site themselves');
+    expect((await systemContext(ctx, { agentId: 'home', tools: ['browser.act'] })).prompt).toContain('look with browser.act');
+    expect((await systemContext(ctx)).prompt).not.toContain('Before you say you cannot');
   });
   it('tells only the front desk the owner\'s places, with address, town and zone', async () => {
     const query = vi.fn(async (sql: string) =>
