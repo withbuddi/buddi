@@ -116,19 +116,19 @@ suite('tips against Postgres', () => {
 
   it('reads the lock tip facts: no PIN, a second device remembered once seen, money connected', async () => {
     const session = (id: string, scope: string, via: string, address: string | null) => pool.query(
-      `insert into core.dashboard_sessions (id_hash, scope, via, tailscale_address, ttl_ms, created_at, expires_at, last_seen_at)
-       values ($1, $2, $3, $4, 3600000, now(), now() + interval '1 hour', now())`,
-      [id.repeat(64).slice(0, 64), scope, via, address],
+      `insert into core.dashboard_sessions (id_hash, scope, via, provider_id, provider_subject, provider_detail, ttl_ms, created_at, expires_at, last_seen_at)
+       values ($1, $2, $3, $4, $5, $6, 3600000, now(), now() + interval '1 hour', now())`,
+      [id.repeat(64).slice(0, 64), scope, via, address ? 'tailscale' : null, address ? 'owner@example.com' : null, address ? JSON.stringify({ address }) : null],
     );
     await session('a', 'local', 'local', null);
     expect(await factsNow([{ id: 'concierge' }])).toMatchObject({ pinSet: false, secondDevice: false, financeConnected: false });
     // The same Mac again is not a second device; a phone on the tailnet is.
     await session('b', 'local', 'local', null);
     expect((await factsNow([{ id: 'concierge' }])).secondDevice).toBe(false);
-    await session('c', 'remote', 'tailscale', '100.64.0.7');
+    await session('c', 'remote', 'provider', '100.64.0.7');
     expect((await factsNow([{ id: 'concierge' }])).secondDevice).toBe(true);
     // Remembered after the phone's session is gone.
-    await pool.query(`delete from core.dashboard_sessions where tailscale_address is not null`);
+    await pool.query(`delete from core.dashboard_sessions where provider_id is not null`);
     expect((await factsNow([{ id: 'concierge' }])).secondDevice).toBe(true);
     await pool.query(`insert into core.web_settings (key, value) values ('lock.pin', '{}'::jsonb) on conflict (key) do nothing`);
     expect((await factsNow([{ id: 'concierge' }])).pinSet).toBe(true);

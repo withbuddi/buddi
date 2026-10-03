@@ -1853,6 +1853,54 @@ export interface TailscaleView {
   serveCommand: string;
 }
 
+/** "Sign in from elsewhere": a provider's row (specs/trusted-access.md §6.6). */
+export type AccessState = 'off' | 'needs-setup' | 'waiting' | 'ready' | 'unanswered';
+export interface AccessProviderRow {
+  id: 'tailscale' | 'cloudflare-access' | 'withbuddi';
+  title: string;
+  identity: 'login' | 'device';
+  proxy: 'this-machine' | 'elsewhere';
+  enabled: boolean;
+  status: { state: AccessState; sentence: string };
+}
+export interface AccessView {
+  /** Did this very request come through a provider? Then the whole block is read-only. */
+  proxied: boolean;
+  providers: AccessProviderRow[];
+}
+/** Signing in through Cloudflare Access, as its row draws it. */
+export interface CloudflareAccessView {
+  enabled: boolean;
+  teamDomain: string;
+  aud: string;
+  email: string;
+  publicOrigin: string;
+  status: { state: AccessState; sentence: string };
+  /** Where cloudflared must point: the ingress listener, never the dashboard's port. */
+  ingressPort: number;
+  listening: boolean;
+  lastVisit: { at: string; email: string } | null;
+  setup: { steps: Array<{ text: string; command?: string }>; fields: Array<{ key: string; label: string; hint?: string; placeholder?: string }> };
+  proxied: boolean;
+  /** On Save, what fetching the team's signing keys said. */
+  test?: { ok: boolean; keys: number; error?: string };
+}
+export interface CloudflareAccessChange {
+  enabled: boolean;
+  teamDomain: string;
+  aud: string;
+  email: string;
+  publicOrigin: string;
+}
+export interface CloudflareAccessTest {
+  ok: boolean;
+  keys: number;
+  teamDomain: string;
+  sentence: string;
+  listening: boolean;
+  ingressPort: number | null;
+}
+
 export interface VersionView {
   current: string;
   latest?: string;
@@ -2497,7 +2545,7 @@ export const api = {
   extension: () => get<ExtensionState>('/extension'),
   pairExtension: (code: string) => post<ExtensionState>('/extension/pair', { code }),
   forgetExtension: () => del<ExtensionState>('/extension/pair'),
-  session: () => get<{ csrf: string; timezone: string; timeFormat?: '12h' | '24h' | null; dateFormat?: 'short' | 'long' | 'iso' | null; host: string; port: number; platform?: string; version?: string; signedInThrough?: 'ticket' | 'local' | 'tailscale'; tailscaleName?: string; tailscaleLogin?: string }>('/session'),
+  session: () => get<{ csrf: string; timezone: string; timeFormat?: '12h' | '24h' | null; dateFormat?: 'short' | 'long' | 'iso' | null; host: string; port: number; platform?: string; version?: string; signedInThrough?: 'ticket' | 'local' | 'tailscale' | 'cloudflare-access' | 'withbuddi'; provider?: string; providerSubject?: string; tailscaleName?: string; tailscaleLogin?: string }>('/session'),
   overview: () => get<Overview>('/overview'),
   events: (q: Record<string, string | number | undefined>) => get<EventPage>('/events', q),
   eventKinds: () => get<{ kinds: Array<{ kind: string; count: number }> }>('/events/kinds'),
@@ -2867,8 +2915,13 @@ export const api = {
   checkVersion: () => post<VersionView>('/version/check'),
   setVersionCheck: (enabled: boolean) => put<VersionView>('/version/check', { enabled }),
   /* ---- signing in through Tailscale ---- */
-  tailscale: () => get<TailscaleView>('/tailscale'),
-  setTailscale: (change: { enabled: boolean; login: string }) => put<TailscaleView>('/tailscale', change),
+  tailscale: () => get<TailscaleView>('/access/tailscale'),
+  setTailscale: (change: { enabled: boolean; login: string }) => put<TailscaleView>('/access/tailscale', change),
+  /* ---- signing in from elsewhere ---- */
+  access: () => get<AccessView>('/access'),
+  cloudflareAccess: () => get<CloudflareAccessView>('/access/cloudflare-access'),
+  setCloudflareAccess: (change: CloudflareAccessChange) => put<CloudflareAccessView>('/access/cloudflare-access', change),
+  testCloudflareAccess: (change: { teamDomain: string }) => post<CloudflareAccessTest>('/access/cloudflare-access/test', change),
   /* ---- owner API tokens (docs/api.md, "Authentication") ---- */
   apiTokens: () => get<{ tokens: ApiTokenView[] }>('/api-tokens'),
   /** The answer's `token` is the only time the token itself exists outside the program that will use it. */

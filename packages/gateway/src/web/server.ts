@@ -165,20 +165,29 @@ import { allowedOrigins, isLoopback, webAssetsDir, webUrl, type WebConfig } from
 import {
   TAILSCALE_SETTING_KEY,
   daemonWhois,
-  isLoginRefusal,
-  isUnansweredRefusal,
   plausibleLogin,
   proxiedThroughTailscale,
-  sameLogin,
-  tailscaleIdentity,
-  tailscaleRefusalReason,
+  tailscaleProvider,
   tailscaleSelf,
+  tailscaleServeCommand,
   toTailscaleSetting,
-  type TailscaleIdentity,
-  type TailscaleRefusal,
   type TailscaleProfile,
   type TailscaleWhois,
-} from './tailscale.js';
+} from './access/tailscale.js';
+import {
+  CLOUDFLARE_SETTING_KEY,
+  cloudflareProvider,
+  createJwks,
+  normalizeTeamDomain,
+  plausibleTeamDomain,
+  validateCloudflareInput,
+  type CloudflareAccessSetting,
+  type Jwks,
+} from './access/cloudflare.js';
+import { arrivalOf } from './access/arrival.js';
+import { createAccessRegistry } from './access/registry.js';
+import { createIngress, type Ingress } from './access/ingress.js';
+import type { AccessContext, AccessProviderId, AccessRefusal } from './access/provider.js';
 import { clientKey } from './client-key.js';
 import { retryHref, sendSignedOut, wantsSignedOutPage, type SignedOutOptions } from './signed-out.js';
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
@@ -417,6 +426,11 @@ export interface WebServerDeps {
     whois?: TailscaleWhois;
     self?: () => Promise<{ available: boolean; self: TailscaleProfile | null }>;
   } | undefined;
+  /**
+   * Cloudflare Access's signing keys, injected. A test passes a JWKS of its
+   * own; a running gateway fetches the team's through the transport.
+   */
+  cloudflare?: { jwks?: Jwks } | undefined;
 }
 
 export interface WebServer {
@@ -430,6 +444,11 @@ export interface WebServer {
    * dashboard's. Null when it could not be bound.
    */
   previewPort: number | null;
+  /**
+   * The ingress listener for cloudflared (web/access/ingress.ts): bound only
+   * while Cloudflare Access is on. `port()` is null while it is not.
+   */
+  ingress: Ingress;
   /** The chat surface, when this process wired one. */
   chat?: WebChat | undefined;
   close(): Promise<void>;
@@ -462,6 +481,24 @@ const PREVIEW_APPS = new WeakMap<Server, PreviewApp>();
  * reloads once the next process answers `/_buddi/ready` with a new `boot`.
  */
 const CLOSING_SAYS = new WeakMap<Server, () => Promise<void>>();
+
+/** Each server's ingress listener (web/access/ingress.ts). */
+const INGRESS_OF = new WeakMap<Server, Ingress>();
+/** Each server's request handler, for a listener without a socket of its own (the relay, provider 3). */
+const DISPATCH_OF = new WeakMap<Server, (req: IncomingMessage, res: ServerResponse) => void>();
+
+/** The ingress listener belonging to a server built by `createWebApp`. */
+export function ingressOf(server: Server): Ingress | undefined {
+  return INGRESS_OF.get(server);
+}
+
+/**
+ * The request handler of a server built by `createWebApp`: what an in-process
+ * listener hands a request to after tagging its arrival (`markRequestArrival`).
+ */
+export function dispatchOf(server: Server): ((req: IncomingMessage, res: ServerResponse) => void) | undefined {
+  return DISPATCH_OF.get(server);
+}
 
 /** How long a closing frame may take to reach the pages before the sockets go. */
 const CLOSING_FLUSH_MS = 250;
@@ -574,12 +611,12 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (!session) return null;
       // A locked dashboard drives nothing (docs/dashboard.md, "Lock screen").
       if (await lock.locked(session)) return null;
-      if (session.via === 'tailscale') {
-        let refusal: TailscaleRefusal | undefined;
-        const confirmed = await identityOf(req, now, (reason) => { refusal = reason; });
-        if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
-          // "Could not ask" is not an answer: no socket now, but the session stays.
-          if (!confirmed && isUnansweredRefusal(refusal)) return null;
+      if (session.via === 'provider') {
+        const confirmed = await access.confirm(session, req, now);
+        // "Could not ask", or a stray request without the provider's proof:
+        // no socket now, but the session stays.
+        if (confirmed.answer === 'unanswered' || confirmed.answer === 'refuse') return null;
+        if (confirmed.answer === 'end') {
           await sessions.destroy(session.id).catch(() => {});
           return null;
         }
@@ -786,57 +823,129 @@ export function createWebApp(deps: WebServerDeps): Server {
   const openAccess = deps.openAccess ?? (deps.env?.BUDDI_WEB_REQUIRE_AUTH !== '1' && isLoopback(deps.config.host));
 
   /*
-   * Signing in through Tailscale: the daemon this process asks.
+   * Trusted access providers (web/access/): something in front of buddi
+   * proves who is knocking, buddi checks the proof itself, and its own
+   * `remote` session rules apply. Tailscale (provider 1) asks the local
+   * daemon; Cloudflare Access (provider 2) verifies the JWT Access signs.
    *
    * Which sessions were established that way is a field on the session itself
-   * (`via`), not a map beside it — provenance that can drift out of step with
-   * the session it describes is provenance that eventually lies. It is what
-   * keeps a tailnet session from widening its own access (`PUT /api/tailscale`
+   * (`via: 'provider'` and `provider`), not a map beside it. It is what keeps
+   * a provider session from widening its own access (changing a provider
    * wants a session from this machine) and what lets `/api/session` say how
    * the browser got in.
    */
   const whois = deps.tailscale?.whois ?? daemonWhois();
   const tailscaleSelfOf = deps.tailscale?.self ?? (() => tailscaleSelf());
-  /**
-   * The command that publishes this dashboard on the tailnet, with this
-   * installation's own numbers in it: the HTTPS port of the configured public
-   * origin, and the port the gateway is actually listening on.
-   */
-  const serveCommand = (): string => {
-    const bound = (server.address() as AddressInfo | null)?.port ?? deps.config.port;
-    let https = 443;
-    if (deps.config.publicOrigin) {
-      const port = new URL(deps.config.publicOrigin).port;
-      if (port !== '') https = Number(port);
-    }
-    return `tailscale serve --bg --https=${https} http://127.0.0.1:${bound}`;
+  const jwks = deps.cloudflare?.jwks ?? createJwks({ log });
+  const boundPort = (): number => (server.address() as AddressInfo | null)?.port ?? deps.config.port;
+  const accessCtx: AccessContext = {
+    dashboardPort: boundPort,
+    ingressPort: () => ingress.port(),
+    publicOrigin: () => deps.config.publicOrigin,
   };
-  const readTailscaleSetting = async (): Promise<ReturnType<typeof toTailscaleSetting>> =>
-    toTailscaleSetting(await readWebSetting(deps.pool, TAILSCALE_SETTING_KEY).catch(() => null));
-  /**
-   * Who the daemon says this request is, with the sign-in budget in front of
-   * the daemon. Used to mint a session and, on every later request, to confirm
-   * the one the browser is holding.
+  const tailscale = tailscaleProvider({ whois, self: tailscaleSelfOf, log });
+  const cloudflare = cloudflareProvider({ jwks, log, ingressProblem: () => ingress.problem() });
+  const access = createAccessRegistry({
+    providers: [tailscale, cloudflare],
+    readSetting: (key) => readWebSetting(deps.pool, key),
+  });
+  /** The command that publishes this dashboard on the tailnet, with this installation's own ports. */
+  const serveCommand = (): string => tailscaleServeCommand(boundPort(), deps.config.publicOrigin);
+  const readTailscaleSetting = async (): Promise<ReturnType<typeof toTailscaleSetting>> => access.settingOf(tailscale);
+  /*
+   * The Cloudflare setting as last read, so the synchronous Origin check can
+   * honour the public address the panel stored. Refreshed on every read.
    */
-  const identityOf = (req: IncomingMessage, now: Date, onRefusal?: (reason: TailscaleRefusal) => void): Promise<TailscaleIdentity | null> =>
-    tailscaleIdentity(req, {
-      setting: readTailscaleSetting,
-      whois,
-      log,
-      now: () => now,
-      onRefusal,
-    });
+  let cloudflareSeen: CloudflareAccessSetting | null = null;
+  const readCloudflareSetting = async (): Promise<CloudflareAccessSetting> => {
+    cloudflareSeen = await access.settingOf(cloudflare);
+    return cloudflareSeen;
+  };
+
+  /** Did this request come through a provider, or does it hold a session one minted? Then the block is read-only. */
+  const throughProvider = (req: IncomingMessage, session: Session): boolean =>
+    session.via === 'provider' || arrivalOf(req) !== 'main' || proxiedThroughTailscale(req);
+  /** The Tailscale panel's whole payload (unchanged by the move behind the provider interface). */
+  const tailscaleView = async (req: IncomingMessage, session: Session) => {
+    const stored = await readTailscaleSetting();
+    const daemon = await tailscaleSelfOf();
+    return {
+      enabled: stored.enabled,
+      login: stored.login,
+      available: daemon.available,
+      self: daemon.self,
+      proxied: throughProvider(req, session),
+      // What the owner has to run on this machine, with this installation's own two ports in it.
+      serveCommand: serveCommand(),
+    };
+  };
+  /** The Cloudflare panel's payload: the stored fields, the status, the setup copy with the real ingress port. */
+  const cloudflareView = async (req: IncomingMessage, session: Session) => {
+    const stored = await readCloudflareSetting();
+    const status = await cloudflare.status(stored, accessCtx);
+    const visit = cloudflare.lastVisit();
+    return {
+      enabled: stored.enabled,
+      teamDomain: stored.teamDomain,
+      aud: stored.aud,
+      email: stored.email,
+      publicOrigin: stored.publicOrigin,
+      status,
+      ingressPort: ingress.port() ?? accessCtx.dashboardPort() + 2,
+      listening: ingress.port() !== null,
+      lastVisit: visit ? { at: visit.at.toISOString(), email: visit.email } : null,
+      setup: cloudflare.setup(stored, accessCtx),
+      proxied: throughProvider(req, session),
+    };
+  };
+  /** Every provider's row, for "Sign in from elsewhere". */
+  const accessView = async (req: IncomingMessage, session: Session) => ({
+    proxied: throughProvider(req, session),
+    providers: await Promise.all(access.providers.map(async (p) => {
+      const setting = await access.settingOf(p);
+      return { id: p.id, title: p.title, identity: p.identity, proxy: p.proxy, enabled: p.enabled(setting), status: await p.status(setting, accessCtx) };
+    })),
+  });
+
+  /*
+   * The ingress listener (specs/trusted-access.md §3.3): a second loopback
+   * listener, the dashboard's port + 2 (or `BUDDI_INGRESS_PORT`), bound only
+   * while a this-machine provider other than Tailscale is on. Every request
+   * on it is remote, whatever its headers or Host say, and it never passes a
+   * loopback-only check. cloudflared points here, never at the dashboard's
+   * own port, so a tunnel arrival can never be mistaken for this machine.
+   */
+  const ingress = createIngress({
+    onRequest: (req, res) => onRequest(req, res),
+    onUpgrade: (req, socket, head) => { server.emit('upgrade', req, socket, head); },
+    port: () => {
+      const raw = (deps.env ?? process.env).BUDDI_INGRESS_PORT?.trim();
+      const asked = raw ? Number(raw) : NaN;
+      if (Number.isInteger(asked) && asked >= 0 && asked <= 65535) return asked;
+      return deps.config.port === 0 ? 0 : boundPort() + 2;
+    },
+    wanted: async () => (await readCloudflareSetting()).enabled,
+    log,
+  });
 
   /**
    * The pair a browser holds: the HttpOnly session and the readable CSRF value
    * the page has to echo back in a header. Both carry the same `Max-Age`, which
    * is the lifetime this session's scope earned it.
    */
+  /*
+   * Secure cookies for a remote session behind an HTTPS proxy: the configured
+   * public origin, or anything on the ingress listener (Cloudflare's edge
+   * always speaks HTTPS to the browser).
+   */
+  const secureCookies = (req: IncomingMessage, scope: SessionScope): boolean =>
+    scope === 'remote' && (!!deps.config.publicOrigin || arrivalOf(req) === 'ingress');
+
   const sessionCookies = (req: IncomingMessage, session: Session): string[] => {
     const maxAgeSeconds = SessionStore.maxAgeSeconds(session);
     return [
-      cookieHeader(sessionCookieName(cookiePort(req)), session.id, { httpOnly: true, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
-      cookieHeader(csrfCookieName(cookiePort(req)), session.csrf, { httpOnly: false, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
+      cookieHeader(sessionCookieName(cookiePort(req)), session.id, { httpOnly: true, maxAgeSeconds, secure: secureCookies(req, session.scope) }),
+      cookieHeader(csrfCookieName(cookiePort(req)), session.csrf, { httpOnly: false, maxAgeSeconds, secure: secureCookies(req, session.scope) }),
     ];
   };
 
@@ -846,7 +955,7 @@ export function createWebApp(deps: WebServerDeps): Server {
    * polling page then sends no credential at all, which counts as nothing.
    */
   const expiredCookies = (req: IncomingMessage): string[] => {
-    const secure = requestScope(req) === 'remote' && !!deps.config.publicOrigin;
+    const secure = secureCookies(req, requestScope(req));
     return [
       cookieHeader(sessionCookieName(cookiePort(req)), '', { httpOnly: true, maxAgeSeconds: 0, secure }),
       cookieHeader(csrfCookieName(cookiePort(req)), '', { httpOnly: false, maxAgeSeconds: 0, secure }),
@@ -855,15 +964,30 @@ export function createWebApp(deps: WebServerDeps): Server {
 
   /**
    * What the signed-out page should offer this request: how it arrived,
-   * whether Tailscale can sign it in, and whether a lockout is running.
+   * which provider can sign it in, why it could not, and whether a lockout is
+   * running.
    */
   const signedOutFor = async (
     req: IncomingMessage,
     pathname: string,
     search: string,
     now: Date,
-    refusal: TailscaleRefusal | undefined,
+    refused: { provider: AccessProviderId; refusal: AccessRefusal } | undefined,
+    key: string,
   ): Promise<SignedOutOptions> => {
+    const lockedForMs = limiter.retryAfterMs(key, now);
+    const locked = lockedForMs > 0 ? { lockedForMs } : {};
+    if (arrivalOf(req) === 'ingress') {
+      return {
+        retry: retryHref(pathname, search),
+        arrived: 'remote',
+        provider: {
+          title: cloudflare.title,
+          ...(refused?.provider === 'cloudflare-access' ? { refusal: refused.refusal.refusal, kind: refused.refusal.kind } : { refusal: 'no-assertion', kind: 'other' as const }),
+        },
+        ...locked,
+      };
+    }
     const proxied = proxiedThroughTailscale(req);
     let publicHost: string | undefined;
     try { publicHost = deps.config.publicOrigin ? new URL(deps.config.publicOrigin).hostname : undefined; } catch { publicHost = undefined; }
@@ -873,14 +997,14 @@ export function createWebApp(deps: WebServerDeps): Server {
     const arrived: SignedOutOptions['arrived'] =
       proxied || (publicHost !== undefined && host === publicHost) ? 'tailnet' : scope === 'local' ? 'local' : 'remote';
     const setting = arrived === 'tailnet' ? await readTailscaleSetting() : null;
-    const lockedForMs = limiter.retryAfterMs(clientKey(req), now);
+    const tailscaleRefusal = refused?.provider === 'tailscale' ? refused.refusal : undefined;
     return {
       retry: retryHref(pathname, search),
       arrived,
-      tailscaleSignIn: !!setting?.enabled && !isLoginRefusal(refusal),
-      ...(isLoginRefusal(refusal) ? { tailscaleRefusal: tailscaleRefusalReason(refusal as TailscaleRefusal) } : {}),
-      ...(isUnansweredRefusal(refusal) ? { tailscaleUnanswered: true } : {}),
-      ...(lockedForMs > 0 ? { lockedForMs } : {}),
+      tailscaleSignIn: !!setting?.enabled && tailscaleRefusal?.kind !== 'login',
+      ...(tailscaleRefusal?.kind === 'login' ? { tailscaleRefusal: tailscaleRefusal.sentence } : {}),
+      ...(tailscaleRefusal?.kind === 'unanswered' ? { tailscaleUnanswered: true } : {}),
+      ...locked,
     };
   };
 
@@ -890,8 +1014,15 @@ export function createWebApp(deps: WebServerDeps): Server {
    * loopback page and the tailnet page each keep their own pair. Set, read and
    * checked through this one function.
    */
-  const cookiePort = (req: IncomingMessage): number =>
-    requestPort(req, (server.address() as AddressInfo | null)?.port ?? deps.config.port, deps.config.publicOrigin);
+  const cookiePort = (req: IncomingMessage): number => {
+    // Cloudflare's edge serves the page on HTTPS's own port, whatever
+    // cloudflared says on the way in; the page names its cookie by it.
+    if (arrivalOf(req) === 'ingress') {
+      const host = req.headers.host ?? '';
+      if (!/:\d+$/.test(host.replace(/^\[[^\]]*\]/, ''))) return 443;
+    }
+    return requestPort(req, (server.address() as AddressInfo | null)?.port ?? deps.config.port, deps.config.publicOrigin);
+  };
 
   /**
    * The origins a write may claim, resolved against the port actually bound.
@@ -900,11 +1031,15 @@ export function createWebApp(deps: WebServerDeps): Server {
    * and an origin set computed from the *requested* port would then reject
    * every write the page itself makes.
    */
-  let originCache: { port: number; set: Set<string> } | undefined;
+  let originCache: { port: number; extra: string; set: Set<string> } | undefined;
   const allowed = (): Set<string> => {
     const bound = (server.address() as AddressInfo | null)?.port ?? deps.config.port;
-    if (originCache?.port !== bound) {
-      originCache = { port: bound, set: new Set(allowedOrigins({ ...deps.config, port: bound })) };
+    // The public address the Cloudflare panel stored, while that provider is on.
+    const extra = cloudflareSeen?.enabled ? cloudflareSeen.publicOrigin : '';
+    if (originCache?.port !== bound || originCache.extra !== extra) {
+      const set = new Set(allowedOrigins({ ...deps.config, port: bound }));
+      if (extra) set.add(extra);
+      originCache = { port: bound, extra, set };
     }
     return originCache.set;
   };
@@ -913,7 +1048,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   // caller that needs to drain it on shutdown (or in a test) can, without
   // `createWebApp` growing a second return value every existing caller would
   // have to unpack.
-  const server: Server = createServer((req, res) => {
+  function onRequest(req: IncomingMessage, res: ServerResponse): void {
     handle(req, res).catch((err) => {
       // The lock could not say whether this request may pass: refused, never let in (web/lock.ts).
       if (err instanceof LockUnavailable) {
@@ -927,9 +1062,14 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (!res.headersSent) sendEmpty(res, 500);
       else res.end();
     });
-  });
+  }
+  const server: Server = createServer(onRequest);
 
   if (chat) WEB_CHATS.set(server, chat);
+  INGRESS_OF.set(server, ingress);
+  // The seam the relay (provider 3) hands its in-process requests to,
+  // tagged `markRequestArrival(req, 'relay')` first. Never replayed as HTTP to 127.0.0.1.
+  DISPATCH_OF.set(server, onRequest);
   PREVIEW_APPS.set(server, previews);
   CLOSING_SAYS.set(server, async () => {
     const said = frame('closing', goingAway === undefined ? {} : { for: goingAway });
@@ -953,14 +1093,24 @@ export function createWebApp(deps: WebServerDeps): Server {
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
   extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
-  server.once('close', () => { extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); });
+  server.once('close', () => { extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); void ingress.close(); });
   return server;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const now = deps.now();
     const method = (req.method ?? 'GET').toUpperCase();
     const url = parseUrl(req);
-    const key = clientKey(req);
+    /*
+     * The bucket failed sign-ins count against (client-key.ts, §7.5): by the
+     * arrival path, so a stranger behind a tunnel can never lock out this
+     * machine or the tailnet. A request on the ingress listener is asked of
+     * its provider at once — a JWT check against cached keys — because its
+     * bucket depends on it: `cf:unverified` until it verifies, then the
+     * client's own address.
+     */
+    let key = access.bucketOf(req) ?? clientKey(req);
+    const early = arrivalOf(req) === 'main' ? null : await access.identify(req, now);
+    if (early?.result.ok && early.result.identity.bucket) key = early.result.identity.bucket;
 
     // No CORS, and therefore no preflight.
     if (method === 'OPTIONS') return sendEmpty(res, 405);
@@ -1068,12 +1218,13 @@ export function createWebApp(deps: WebServerDeps): Server {
     const presentedSession = cookies[sessionCookieName(cookiePort(req))];
     let session = await sessions.resolve(presentedSession, scope, now);
     /*
-     * Why Tailscale gave this request no identity, when it was asked. Only
-     * "this login is not the one allowed" changes what the signed-out page
-     * says; every other reason is the ordinary "you're signed out".
+     * Why a provider gave this request no identity, when it was asked. Only
+     * "this person is not the one allowed" and "could not ask" change what
+     * the signed-out page says; every other reason is the ordinary "you're
+     * signed out".
      */
-    let refusal: TailscaleRefusal | undefined;
-    const noteRefusal = (reason: TailscaleRefusal): void => { refusal = reason; };
+    let refused: { provider: AccessProviderId; refusal: AccessRefusal } | undefined =
+      early && !early.result.ok ? { provider: early.provider.id, refusal: early.result } : undefined;
     /*
      * Set when the browser presented a session that is gone: the refusal then
      * expires its cookies, so it stops presenting them (and stops counting).
@@ -1082,7 +1233,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     /*
      * The answer to a refused request: the signed-out page for a person
      * opening a page, the empty status for everything else (docs/web.md).
-     * 401 is "signed out", 429 "too many tries from here", 503 "Tailscale
+     * 401 is "signed out", 429 "too many tries from here", 503 "the provider
      * could not be asked; the session is still good, try again".
      */
     const refuse = async (status: 401 | 429 | 503 = 401): Promise<void> => {
@@ -1090,33 +1241,38 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (status === 429) headers['Retry-After'] = String(Math.max(1, Math.ceil(limiter.retryAfterMs(key, now) / 1000)));
       if (status === 503) headers['Retry-After'] = '5';
       if (!wantsSignedOutPage(req, method, url.pathname)) return sendEmpty(res, status, headers);
-      return sendSignedOut(res, await signedOutFor(req, url.pathname, url.search, now, refusal), headers, status);
+      return sendSignedOut(res, await signedOutFor(req, url.pathname, url.search, now, refused, key), headers, status);
     };
-    /* A Tailscale session this request ended: not a guess, so never a failed sign-in. */
+    /* A provider session this request ended: not a guess, so never a failed sign-in. */
     let revoked = false;
 
     /*
-     * A Tailscale session is re-confirmed on every single request.
+     * A provider session is re-confirmed on every single request.
      *
-     * A cookie on its own would be a bearer token the tailnet identity is only
-     * loosely related to: it would outlive the setting being turned off, the
-     * allowed login being changed, and the device being handed to somebody
-     * else. So the daemon is asked again — cheap, because a whois answer is
-     * reused for a minute — and the login it names now must be the login this
-     * session was minted for. Anything else and the session is gone, not
-     * merely ignored: the browser is 401 and has to sign in again, which it
-     * can only do if it is still the person the owner allowed.
+     * A cookie on its own would be a bearer token the provider's identity is
+     * only loosely related to: it would outlive the setting being turned off,
+     * the allowed login being changed, and the device being handed to somebody
+     * else. So the provider is asked again — Tailscale's daemon (a whois
+     * answer is reused for a minute), Cloudflare's JWT on this very request —
+     * and the person it names now must be the one this session was minted
+     * for. Anything else and the session is gone, not merely ignored.
      */
-    if (session?.via === 'tailscale') {
-      const confirmed = await identityOf(req, now, noteRefusal);
-      if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
-        /*
-         * The daemon could not be asked (busy, starting, timed out). That is
-         * not an answer about anyone, so the session is not ended for it —
-         * a restart's first burst of requests used to end every tailnet
-         * session this way — and nothing is counted. This request waits.
-         */
-        if (!confirmed && isUnansweredRefusal(refusal)) return refuse(503);
+    if (session?.via === 'provider') {
+      const confirmed = await access.confirm(session, req, now);
+      if (confirmed.refusal) refused = { provider: session.provider as AccessProviderId, refusal: confirmed.refusal };
+      /*
+       * The provider could not be asked (a daemon busy or starting, keys that
+       * could not be fetched). That is not an answer about anyone, so the
+       * session is not ended for it and nothing is counted. This request waits.
+       */
+      if (confirmed.answer === 'unanswered') return refuse(503);
+      /*
+       * This request lacks the provider's proof (Cloudflare's header), but
+       * the session is not ended for it: a stray request without the header
+       * must not sign the owner out. Nothing is counted either.
+       */
+      if (confirmed.answer === 'refuse') return refuse(401);
+      if (confirmed.answer === 'end') {
         const ended = session.id;
         // A hand this session was holding does not outlive the session.
         hand.revoke((lease) => lease === ended);
@@ -1125,7 +1281,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         revoked = true;
         forgetCookies = true;
         // The identity on this very request may still earn a new session below.
-        refusal = undefined;
+        refused = undefined;
       }
     }
 
@@ -1152,26 +1308,34 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     /*
-     * Signed in through Tailscale.
+     * Signed in through a trusted access provider.
      *
-     * The proxy runs on this machine and the daemon on this machine confirms
-     * who is behind the forwarded address; when that agrees with the login the
-     * owner allowed, this is the owner's own tailnet identity arriving and the
-     * request gets a `remote` session exactly as the ticket exchange would
-     * have minted one — same cookies, same 12 hours, same CSRF on every write.
-     * Anything less returns null and the request falls through to the 401
-     * below, which is what it would have got before this existed.
+     * Tailscale: the proxy runs on this machine and the daemon confirms who
+     * is behind the forwarded address. Cloudflare Access: the JWT Access
+     * signed verifies against the team's keys, for this application, naming
+     * the allowed email, and it arrived on the ingress listener. When that
+     * agrees with the person the owner allowed, the request gets a `remote`
+     * session exactly as the ticket exchange would have minted one — same
+     * cookies, same 12 hours, same CSRF on every write. Anything less falls
+     * through to the 401 below. A provider identity signs in during a lockout.
      */
     if (!session) {
-      const identity = await identityOf(req, now, noteRefusal);
-      if (identity) {
+      const asked = early ?? await access.identify(req, now);
+      if (asked && !asked.result.ok) refused = { provider: asked.provider.id, refusal: asked.result };
+      if (asked?.result.ok) {
+        const identity = asked.result.identity;
         limiter.reset(key);
         const locked = await lock.startLocked('browser');
+        const capMs = Math.min(
+          asked.provider.absoluteCapMs,
+          identity.expiresAt ? Math.max(0, identity.expiresAt.getTime() - now.getTime()) : asked.provider.absoluteCapMs,
+        );
         session = sessions.create('remote', now, {
-          via: 'tailscale',
-          tailscaleLogin: identity.login,
-          tailscaleAddress: identity.address,
-          tailscaleName: identity.name,
+          via: 'provider',
+          provider: identity.provider,
+          providerSubject: identity.subject,
+          ...(identity.detail ? { providerDetail: identity.detail } : {}),
+          absoluteCapMs: capMs,
         }, locked ? { locked } : {});
         res.setHeader('Set-Cookie', sessionCookies(req, session));
       }
@@ -1724,10 +1888,14 @@ export function createWebApp(deps: WebServerDeps): Server {
             // from the page rather than implied by a number in a source file.
             scope: session.scope,
             // How this browser got in. `local` is the open loopback mint,
-            // `ticket` the five-minute ticket exchange, `tailscale` an identity the
-            // local daemon confirmed — and then the name to greet.
-            signedInThrough: session.via,
-            ...(session.via === 'tailscale' ? { tailscaleName: session.tailscaleName, tailscaleLogin: session.tailscaleLogin } : {}),
+            // `ticket` the five-minute ticket exchange, or the provider that
+            // verified it (`tailscale`, `cloudflare-access`) — and then the
+            // name to greet.
+            signedInThrough: session.via === 'provider' ? session.provider : session.via,
+            ...(session.via === 'provider' ? { provider: session.provider, providerSubject: session.providerSubject } : {}),
+            ...(session.via === 'provider' && session.provider === 'tailscale'
+              ? { tailscaleName: session.providerDetail?.name ?? session.providerSubject, tailscaleLogin: session.providerSubject }
+              : {}),
             expiresAt: session.expiresAt.toISOString(),
             // What this gateway is running. The page keeps it across an
             // upgrade so that "it came back" can be told from "it is still
@@ -1742,20 +1910,19 @@ export function createWebApp(deps: WebServerDeps): Server {
          * memory), and whether this very request came through the proxy —
          * which is what disables the switch on a tailnet browser.
          */
-        case '/api/tailscale': {
-          const stored = await readTailscaleSetting();
-          const daemon = await tailscaleSelfOf();
-          return sendJson(res, 200, {
-            enabled: stored.enabled,
-            login: stored.login,
-            available: daemon.available,
-            self: daemon.self,
-            proxied: session.via === 'tailscale' || proxiedThroughTailscale(req),
-            // What the owner has to run on this machine, with this
-            // installation's own two ports in it.
-            serveCommand: serveCommand(),
-          });
-        }
+        // `/api/tailscale` stays one release as an alias (docs/api.md).
+        case '/api/tailscale':
+        case '/api/access/tailscale':
+          return sendJson(res, 200, await tailscaleView(req, session));
+        /*
+         * "Sign in from elsewhere": every provider's row — its status in one
+         * line — and whether this very request came through one, which makes
+         * the whole block read-only.
+         */
+        case '/api/access':
+          return sendJson(res, 200, await accessView(req, session));
+        case '/api/access/cloudflare-access':
+          return sendJson(res, 200, await cloudflareView(req, session));
         case '/api/overview':
           return sendJson(
             res,
@@ -2515,7 +2682,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      * everything else.
      */
     if (method === 'PUT') {
-      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/notifications/settings', '/api/notifications/focus'];
+      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/access/tailscale', '/api/access/cloudflare-access', '/api/notifications/settings', '/api/notifications/focus'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);
       let put: Record<string, unknown>;
       try {
@@ -2523,7 +2690,35 @@ export function createWebApp(deps: WebServerDeps): Server {
       } catch {
         return sendJson(res, 400, { error: 'request body must be JSON' });
       }
-      if (path === '/api/tailscale') {
+      if (path === '/api/access/cloudflare-access') {
+        // Who may widen access: only a browser on this machine, as for Tailscale below.
+        if (session.via !== 'local') {
+          return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+        }
+        const checked = validateCloudflareInput(put);
+        if (!checked.ok) return sendJson(res, 400, { error: checked.error });
+        const before = await readCloudflareSetting();
+        await writeWebSetting(deps.pool, CLOUDFLARE_SETTING_KEY, checked.value);
+        await readCloudflareSetting();
+        /*
+         * The sessions this setting admitted go when it goes off or names
+         * another person, team or application; saving the same thing again
+         * keeps them.
+         */
+        const same = before.enabled && checked.value.enabled && before.email.toLowerCase() === checked.value.email.toLowerCase()
+          && before.teamDomain === checked.value.teamDomain && before.aud === checked.value.aud;
+        if (!same) {
+          const forgotten = new Set<string>();
+          await sessions.forget((s) => { const drop = s.via === 'provider' && s.provider === 'cloudflare-access'; if (drop && s.id) forgotten.add(s.id); return drop; });
+          hand.revoke((lease) => forgotten.has(lease), 'Cloudflare access changed. Sign in again.');
+        }
+        // Bind the ingress listener now, or close it.
+        await ingress.sync();
+        // On Save buddi fetches the team's keys once and says whether it worked.
+        const test = checked.value.enabled ? await jwks.refresh(checked.value.teamDomain) : null;
+        return sendJson(res, 200, { ...(await cloudflareView(req, session)), ...(test ? { test } : {}) });
+      }
+      if (path === '/api/tailscale' || path === '/api/access/tailscale') {
         /*
          * Who may widen access: only a browser that is already on this
          * machine.
@@ -2559,19 +2754,10 @@ export function createWebApp(deps: WebServerDeps): Server {
          * in a browser on the far side of the tailnet.
          */
         const forgotten = new Set<string>();
-        await sessions.forget((s) => { const drop = s.via === 'tailscale'; if (drop && s.id) forgotten.add(s.id); return drop; });
+        await sessions.forget((s) => { const drop = s.via === 'provider' && s.provider === 'tailscale'; if (drop && s.id) forgotten.add(s.id); return drop; });
         // Including whichever of them had a hand on the owner's browser.
         hand.revoke((lease) => forgotten.has(lease), 'Tailscale access changed. Sign in again.');
-        const daemon = await tailscaleSelfOf();
-        const stored = toTailscaleSetting({ enabled, login });
-        return sendJson(res, 200, {
-          enabled: stored.enabled,
-          login: stored.login,
-          available: daemon.available,
-          self: daemon.self,
-          proxied: false,
-          serveCommand: serveCommand(),
-        });
+        return sendJson(res, 200, await tailscaleView(req, session));
       }
       if (path === '/api/version/check') return reply(res, await versionCheckRoute(versionDeps(), 'PUT', put));
       if (path === '/api/notifications/settings') return reply(res, await notificationSettingsRoute(deps.pool, 'PUT', put));
@@ -2582,6 +2768,28 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (method !== 'POST') return sendEmpty(res, 405);
+    /*
+     * "Test my setup": fetch the team's signing keys for the domain in the
+     * form (saved or not) and say what came back. Nothing is stored. From
+     * this machine only, like the setting itself: it makes this computer
+     * fetch a URL the caller names part of.
+     */
+    if (path === '/api/access/cloudflare-access/test') {
+      if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+      const body = await readJsonBody(req).catch(() => ({} as Record<string, unknown>));
+      const team = normalizeTeamDomain(typeof body.teamDomain === 'string' ? body.teamDomain : (await readCloudflareSetting()).teamDomain);
+      if (!plausibleTeamDomain(team)) {
+        return sendJson(res, 400, { error: 'That is not a Cloudflare team domain. It looks like yourteam.cloudflareaccess.com, under Zero Trust → Settings.' });
+      }
+      const result = await jwks.refresh(team);
+      return sendJson(res, 200, {
+        ...result,
+        teamDomain: team,
+        sentence: result.ok ? `${team} answered with ${result.keys} signing key${result.keys === 1 ? '' : 's'}.` : result.error,
+        listening: ingress.port() !== null,
+        ingressPort: ingress.port(),
+      });
+    }
     if (path === '/api/extension/pair') {
       // A six-digit code is worth guessing at scale, so a wrong one costs a
       // budget — this session's pairing budget, not the shared sign-in one.
@@ -4031,6 +4239,10 @@ export async function startWebServer(
    * and `CoreToolContext.previewPort` reads the same value.
    */
   if (previewPort !== null) publishPreviewPort(deps.env ?? process.env, previewPort);
+  // The ingress listener, after the previews have taken their port: bound
+  // now when Cloudflare Access is on, and from then on as the setting changes.
+  const ingress = ingressOf(server) as Ingress;
+  await ingress.sync();
   /*
    * An approval nobody decides expires, and a delegation waiting on one is
    * handed the expiry as its failure: the approval's own lifetime is the
@@ -4048,6 +4260,7 @@ export async function startWebServer(
     server,
     port,
     previewPort,
+    ingress,
     url: webUrl({ host: deps.config.host, port }),
     chat: webChatOf(server),
     close: async () => {
@@ -4058,6 +4271,7 @@ export async function startWebServer(
       // still held, and the next thing to want it — the next test, the
       // gateway coming back up — finds it taken.
       await Promise.all([
+        ingress.close(),
         new Promise<void>((resolve) => {
           if (!previews || previewPort === null) return resolve();
           previews.server.closeAllConnections?.();

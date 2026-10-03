@@ -239,9 +239,12 @@ you out. The table holds a SHA-256 hash of each session id, never the id itself,
 so a copy of it cannot be used as a cookie; the CSRF value is derived from the
 id and not stored at all. The sliding expiry is written back at most every five
 minutes per session, so a restart can shorten a session's idle window by that
-much and never lengthen it; the Tailscale seven-day cap is stored and holds
-across restarts. Expired rows are swept every ten minutes. Turning Tailscale
-access off or changing its login deletes those sessions' rows at once. Sessions
+much and never lengthen it; a sign-in provider's cap (seven days for
+Tailscale; for Cloudflare Access the assertion's own lifetime, at most seven
+days) is stored and holds across restarts. Expired rows are swept every ten
+minutes. A session a provider verified records which provider and whom
+(`via = 'provider'`, `provider_id`, `provider_subject`); turning a provider off
+or changing whom it allows deletes those sessions' rows at once. Sessions
 are not included in a backup: a restored buddi starts signed out. (The open
 loopback dashboard of a source checkout mints a fresh session on every visit, so
 it stores none.)
@@ -260,14 +263,17 @@ away. API calls, event streams and script fetches still get an empty status.
 **What counts toward the lockout** (10 failed sign-ins a minute per bucket,
 counted per arrival path: a direct loopback request with no proxy headers, each
 tailnet address Tailscale Serve forwards for, every other forwarded request as
-one bucket, and any non-loopback address on its own, so failures through a
-tunnel never lock out the Mac itself or the tailnet): only a presented credential that
+one bucket, and any non-loopback address on its own; on the ingress listener
+for Cloudflare, one `cf:unverified` bucket until Access's JWT verifies, then
+each visitor's own `Cf-Connecting-Ip` — so failures through a tunnel never lock
+out the Mac itself or the tailnet): only a presented credential that
 is wrong — a ticket that does not verify, or a session cookie the gateway does
 not know, each distinct value once a minute. A refusal of a cookie also expires
 it in the browser, so a forgotten tab stops presenting it. A request with no
 cookie, the signed-out page and its Try again, a Tailscale session that ends,
-and a Tailscale question the daemon could not answer never count. A valid
-ticket and a Tailscale identity always sign in, lockout or not.
+and a provider question that could not be answered never count. A valid
+ticket and a provider identity (Tailscale, Cloudflare Access) always sign in,
+lockout or not.
 
 **The lock screen.** With a PIN set (Settings → Lock screen; see [The
 dashboard](dashboard.md#lock-screen)), a session row also carries when it
@@ -336,7 +342,8 @@ offers the process's own `localhost:<port>` link, for when you are at the
 machine.
 
 **Signing in through Tailscale.** With Serve in front of the dashboard, you can
-skip the ticket entirely: Settings → System → *Sign in through Tailscale*, turn
+skip the ticket entirely: Settings → System → *Sign in from elsewhere* →
+*Tailscale*, turn
 it on and name the Tailscale login that may sign in (the field is prefilled with
 the login this machine is signed in as). Anyone signed in to Tailscale as that
 login, on any device in your tailnet, is then signed in to buddi; everyone else
@@ -375,6 +382,76 @@ directory.
 `buddi doctor`'s `tailscale` row says whether the daemon is there, who may sign
 in, whether the public origin is a `.ts.net` one and whether `tailscale serve
 status` forwards anything to the gateway's port.
+
+**Signing in through Cloudflare (your own domain).** For an owner with a domain
+on Cloudflare: a Cloudflare Tunnel carries the traffic to this machine and
+Cloudflare Access puts its sign-in in front of it — free on Cloudflare's side
+(Access is free up to 50 users). Settings → System → *Sign in from elsewhere* →
+*Cloudflare Access* walks through it, one step per line with Copy beside each
+command:
+
+1. Install cloudflared (`brew install cloudflared`; on Linux the `.deb` or
+   Cloudflare's package repository).
+2. In the Cloudflare dashboard, Zero Trust → Networks → Tunnels → Create a
+   tunnel, and run the `cloudflared service install <token>` line it shows.
+3. Add a public hostname, for example `buddi.example.com`, with service
+   `http://127.0.0.1:<ingress port>`. The panel prints the real port: the
+   dashboard's port + 2 (4319 for a dashboard on 4317), or `BUDDI_INGRESS_PORT`.
+   **Not the dashboard's own port**: see "The ingress listener" below.
+4. Zero Trust → Access → Applications → Add a self-hosted application for that
+   hostname. Policy: Allow, Include → Emails → your email.
+5. Copy the team domain (`<team>.cloudflareaccess.com`) and the application's
+   AUD tag (its Overview tab) into the panel with your email and the public
+   address (`https://buddi.example.com`), tick *Let this email sign in through
+   Cloudflare*, and Save.
+
+On Save buddi binds the ingress listener and fetches the team's signing keys
+once, and says whether that worked; *Test my setup* does the same fetch without
+saving. The row then says "Waiting for a first visit through Cloudflare" until
+one verified request has arrived, and "Ready" after. The public address you
+store is added to the origins a write may come from, so you do not need
+`BUDDI_WEB_PUBLIC_ORIGIN` for it. Tunnels carry WebSockets and server-sent
+events, so chat streams work; the upload limit is Cloudflare's (100 MB per
+request on the free plan).
+
+What buddi checks, on every request: that it arrived on the ingress listener;
+that it carries one `Cf-Access-Jwt-Assertion` header (the `CF_Authorization`
+cookie is ignored — the header is what Access adds at the edge); that the JWT
+is RS256 and its signature verifies against the team's keys from
+`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` (cached by `kid` for
+an hour, fetched again on an unknown `kid` at most once a minute); that `iss` is
+the team, `aud` contains the AUD tag, and `exp`/`nbf` hold with 60 seconds of
+skew; and that the `email` claim is the allowed email (a service token, which
+has no email, is refused). `Cf-Access-Authenticated-User-Email`,
+`Cf-Connecting-Ip` and every other header are never identity; `Cf-Connecting-Ip`
+is only a lockout bucket, and only once the JWT verified. A JWT is a bearer
+credential for its life — that is Access's model — so buddi adds the arrival
+check: the same JWT presented on the dashboard's own port (a local process
+replaying it) earns nothing.
+
+The session is an ordinary **remote** session, as through Tailscale: 12 hours
+idle, `Secure` cookies, CSRF and the exact Origin on every write, approvals and
+the lock screen; at the outside, the assertion's own lifetime, at most seven
+days. The JWT is checked again on every request: a request without it is
+refused (`401`) but does not end the session, so a stray request cannot sign
+you out; a JWT naming another email, or the setting going off, ends it; keys
+that cannot be fetched answer `503` and keep it. The setting can only be
+changed from a session established on this machine.
+
+**The ingress listener.** Every tunnel on this machine reaches the gateway from
+127.0.0.1, and the dashboard's own port treats a loopback request with no proxy
+headers as the owner at the Mac. cloudflared happens to add such headers, but a
+tunnel's configuration can change them. So cloudflared points at a second
+loopback listener, bound only while Cloudflare Access is on: every request on
+it is remote whatever its headers or `Host` say, it never gets the open
+loopback session of a source checkout, it fails every loopback-only check
+(extension pairing, changing how buddi is reached), and its failed sign-ins
+are counted apart from the machine's and the tailnet's. If its port is taken
+the row says so; free it or set `BUDDI_INGRESS_PORT` and restart.
+`buddi doctor`'s `cloudflare access` row says who may sign in, whether the
+ingress listener answers (a TCP connect, never an HTTP request), whether the
+team's keys answer, whether cloudflared is installed, and whether a public
+address is set.
 
 **Opening it without a terminal.** Optional, and alongside `buddi service
 install` rather than part of it:

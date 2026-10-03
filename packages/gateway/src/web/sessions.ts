@@ -9,6 +9,7 @@
  * Nothing here is ever written to a log.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { isAccessProviderId, type AccessProviderId } from './access/provider.js';
 
 /**
  * How long a session is honoured **without any activity**, by where it was
@@ -43,6 +44,13 @@ export const REMOTE_SESSION_TTL_MS = 12 * 60 * 60_000;
  */
 export const TAILSCALE_SESSION_MAX_MS = 7 * 24 * 60 * 60_000;
 
+/**
+ * The outer edge for a session any trusted access provider minted
+ * (specs/trusted-access.md §3.1, `absoluteCapMs`): a provider may ask for less
+ * (a Cloudflare JWT's own lifetime), never more.
+ */
+export const PROVIDER_SESSION_MAX_MS = TAILSCALE_SESSION_MAX_MS;
+
 /** Where a session was established from. Decided from the socket, never a header. */
 export type SessionScope = 'local' | 'remote';
 
@@ -52,13 +60,14 @@ export type SessionScope = 'local' | 'remote';
  *
  * `local` is a request that arrived on loopback with no proxy metadata on it —
  * the open mint, or a ticket exchanged from this machine. `ticket` is a ticket
- * exchanged from anywhere else. `tailscale` is an identity the local daemon
- * confirmed. `token` is an owner API token (`api-tokens.ts`); such a session is
+ * exchanged from anywhere else. `provider` is an identity a trusted access
+ * provider verified (`provider` names which: Tailscale's daemon, Cloudflare
+ * Access's JWT). `token` is an owner API token (`api-tokens.ts`); such a session is
  * never stored. This lives on the session rather than in a second map beside it,
  * so provenance cannot drift out of step with the session it describes, and so
  * a route that must refuse everything but "this machine" can simply say so.
  */
-export type SessionVia = 'local' | 'ticket' | 'tailscale' | 'token';
+export type SessionVia = 'local' | 'ticket' | 'provider' | 'token';
 
 /**
  * Who holds the session: a person's browser, or one of buddi's own
@@ -77,12 +86,14 @@ export interface SessionProvenance {
   via: SessionVia;
   /** Who holds it; a browser unless buddi's own client said otherwise. */
   client?: SessionClient;
-  /** The daemon-confirmed login, when `via` is `tailscale`. */
-  tailscaleLogin?: string;
-  /** The tailnet address it was confirmed at. */
-  tailscaleAddress?: string;
-  /** The display name, kept only so the page can greet the person by it. */
-  tailscaleName?: string;
+  /** Which provider verified it, when `via` is `provider`. */
+  provider?: AccessProviderId;
+  /** Who it verified: the login or email `confirm` checks again on every request. */
+  providerSubject?: string;
+  /** What else the provider keeps (a tailnet address, a display name). Shown, never trusted. */
+  providerDetail?: Record<string, string>;
+  /** The provider's cap on this session, when shorter than `PROVIDER_SESSION_MAX_MS`. */
+  absoluteCapMs?: number;
 }
 
 export const SESSION_TTL_MS: Readonly<Record<SessionScope, number>> = {
@@ -114,11 +125,11 @@ export interface Session {
   csrf: string;
   /** Loopback or not, fixed at the ticket exchange and never re-decided. */
   scope: SessionScope;
-  /** What established it, and — through Tailscale — whose identity did. */
+  /** What established it, and — through a provider — whose identity did. */
   via: SessionVia;
-  tailscaleLogin?: string;
-  tailscaleAddress?: string;
-  tailscaleName?: string;
+  provider?: AccessProviderId;
+  providerSubject?: string;
+  providerDetail?: Record<string, string>;
   /** The idle lifetime this session runs on, in ms. `SESSION_TTL_MS[scope]`. */
   ttlMs: number;
   createdAt: Date;
@@ -204,9 +215,9 @@ interface Row {
   id_hash: string;
   scope: SessionScope;
   via: SessionVia;
-  tailscale_login: string | null;
-  tailscale_address: string | null;
-  tailscale_name: string | null;
+  provider_id: string | null;
+  provider_subject: string | null;
+  provider_detail: Record<string, unknown> | string | null;
   ttl_ms: string | number;
   created_at: Date | string;
   expires_at: Date | string;
@@ -217,8 +228,20 @@ interface Row {
   client?: SessionClient | null;
 }
 
-const COLUMNS = `id_hash, scope, via, tailscale_login, tailscale_address, tailscale_name, ttl_ms,
+const COLUMNS = `id_hash, scope, via, provider_id, provider_subject, provider_detail, ttl_ms,
   created_at, expires_at, absolute_expires_at, locked_at, lock_reason, active_at, client`;
+
+/** A stored `provider_detail`, as strings only; anything else is dropped. */
+function detailOf(value: Record<string, unknown> | string | null): Record<string, string> | undefined {
+  let raw: unknown = value;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { return undefined; }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (typeof v === 'string') out[k] = v;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 /** How often a session's `active_at` is written back, at most. */
 export const ACTIVE_WRITE_EVERY_MS = 60_000;
@@ -228,7 +251,7 @@ function isRow(value: unknown): value is Row {
   const row = value as Partial<Row> | null;
   return !!row && typeof row.id_hash === 'string'
     && (row.scope === 'local' || row.scope === 'remote')
-    && (row.via === 'local' || row.via === 'ticket' || row.via === 'tailscale')
+    && (row.via === 'local' || row.via === 'ticket' || (row.via === 'provider' && isAccessProviderId(row.provider_id) && typeof row.provider_subject === 'string'))
     && row.created_at !== undefined && row.expires_at !== undefined && row.ttl_ms !== undefined;
 }
 
@@ -242,7 +265,7 @@ export class SessionStore {
   /** Destroyed while a read of the table may still be in flight. */
   readonly #revoked = new Set<string>();
   readonly #ttl: Record<SessionScope, number>;
-  readonly #tailscaleMaxMs: number;
+  readonly #providerMaxMs: number;
   readonly #db: SessionDb | undefined;
   readonly #log: (line: string) => void;
   /** Every table operation, in order: a revoke can never be overtaken by a read. */
@@ -251,11 +274,11 @@ export class SessionStore {
 
   constructor(
     ttlMs: Partial<Record<SessionScope, number>> = {},
-    tailscaleMaxMs: number = TAILSCALE_SESSION_MAX_MS,
+    providerMaxMs: number = PROVIDER_SESSION_MAX_MS,
     options: SessionStoreOptions = {},
   ) {
     this.#ttl = { ...SESSION_TTL_MS, ...ttlMs };
-    this.#tailscaleMaxMs = tailscaleMaxMs;
+    this.#providerMaxMs = providerMaxMs;
     this.#db = options.db;
     this.#log = options.log ?? ((line: string) => console.error(line));
   }
@@ -285,13 +308,15 @@ export class SessionStore {
       csrf: csrfFor(sessionId),
       scope,
       via: provenance.via,
-      ...(provenance.tailscaleLogin !== undefined ? { tailscaleLogin: provenance.tailscaleLogin } : {}),
-      ...(provenance.tailscaleAddress !== undefined ? { tailscaleAddress: provenance.tailscaleAddress } : {}),
-      ...(provenance.tailscaleName !== undefined ? { tailscaleName: provenance.tailscaleName } : {}),
+      ...(provenance.provider !== undefined ? { provider: provenance.provider } : {}),
+      ...(provenance.providerSubject !== undefined ? { providerSubject: provenance.providerSubject } : {}),
+      ...(provenance.providerDetail !== undefined ? { providerDetail: { ...provenance.providerDetail } } : {}),
       ttlMs,
       createdAt: now,
       expiresAt: new Date(now.getTime() + ttlMs),
-      ...(provenance.via === 'tailscale' ? { absoluteExpiresAt: new Date(now.getTime() + this.#tailscaleMaxMs) } : {}),
+      ...(provenance.via === 'provider'
+        ? { absoluteExpiresAt: new Date(now.getTime() + Math.min(this.#providerMaxMs, provenance.absoluteCapMs ?? this.#providerMaxMs)) }
+        : {}),
       cookieIssuedAt: now,
       client: provenance.client ?? 'browser',
       activeAt: now,
@@ -306,8 +331,8 @@ export class SessionStore {
         `insert into core.dashboard_sessions (${COLUMNS}, last_seen_at)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $8)
          on conflict (id_hash) do nothing`,
-        [key, session.scope, session.via, session.tailscaleLogin ?? null, session.tailscaleAddress ?? null,
-          session.tailscaleName ?? null, ttlMs, session.createdAt, session.expiresAt, session.absoluteExpiresAt ?? null,
+        [key, session.scope, session.via, session.provider ?? null, session.providerSubject ?? null,
+          session.providerDetail ? JSON.stringify(session.providerDetail) : null, ttlMs, session.createdAt, session.expiresAt, session.absoluteExpiresAt ?? null,
           session.lockedAt ?? null, session.lockReason ?? null, session.activeAt, session.client],
       ));
       this.#maybeSweep(now);
@@ -560,9 +585,9 @@ export class SessionStore {
       csrf: sessionId ? csrfFor(sessionId) : '',
       scope: row.scope,
       via: row.via,
-      ...(row.tailscale_login !== null ? { tailscaleLogin: row.tailscale_login } : {}),
-      ...(row.tailscale_address !== null ? { tailscaleAddress: row.tailscale_address } : {}),
-      ...(row.tailscale_name !== null ? { tailscaleName: row.tailscale_name } : {}),
+      ...(row.via === 'provider' && isAccessProviderId(row.provider_id) ? { provider: row.provider_id } : {}),
+      ...(row.provider_subject !== null ? { providerSubject: row.provider_subject } : {}),
+      ...(detailOf(row.provider_detail) ? { providerDetail: detailOf(row.provider_detail) } : {}),
       ttlMs: Number(row.ttl_ms),
       createdAt,
       expiresAt: new Date(row.expires_at),

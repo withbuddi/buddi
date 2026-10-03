@@ -5,6 +5,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { SessionScope } from './sessions.js';
+import { arrivalOf } from './access/arrival.js';
 
 /**
  * The cookie names carry the port, because a browser scopes a cookie to a
@@ -210,6 +211,16 @@ export function isLoopbackAddress(address: string | undefined): boolean {
 }
 
 /**
+ * Is this request this machine itself: the main listener, a loopback socket,
+ * and nothing about it saying it was forwarded? What a loopback-only feature
+ * (extension pairing, changing how buddi is reached) asks — never the
+ * socket's address alone, which an ingress request shares.
+ */
+export function onThisMachine(req: IncomingMessage): boolean {
+  return requestScope(req) === 'local';
+}
+
+/**
  * Where a request came from, for the session lifetime it earns.
  *
  * The socket can prove a request is remote, never a forwarded header. Proxy
@@ -218,7 +229,10 @@ export function isLoopbackAddress(address: string | undefined): boolean {
  * loopback reverse proxy (e.g. Tailscale Serve) inheriting local auto-login.
  */
 export function requestScope(req: IncomingMessage): SessionScope {
-  if (!isLoopbackAddress(req.socket.remoteAddress)) return 'remote';
+  // The ingress listener and the relay are remote by construction, whatever
+  // the socket or the headers say (specs/trusted-access.md §3.3).
+  if (arrivalOf(req) !== 'main') return 'remote';
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) return 'remote';
   if (Object.keys(req.headers).some((key) => key === 'forwarded' || key === 'x-real-ip' || key.startsWith('x-forwarded-') || key.startsWith('tailscale-'))) return 'remote';
   if (req.headers.host) {
     try {

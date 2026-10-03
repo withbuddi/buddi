@@ -134,13 +134,14 @@ suite('dashboard sessions in the database', () => {
 
   it('holds a Tailscale session to its absolute edge across a restart', async () => {
     const before = new SessionStore({ remote: 3_000 }, 5_000, { db: pool, ...quiet });
-    const session = before.create('remote', T0, { via: 'tailscale', tailscaleLogin: 'owner@example.com', tailscaleAddress: '100.101.102.103', tailscaleName: 'The Owner' });
+    const session = before.create('remote', T0, { via: 'provider', provider: 'tailscale', providerSubject: 'owner@example.com', providerDetail: { address: '100.101.102.103', name: 'The Owner' } });
     for (let t = 400; t <= 4_800; t += 400) expect(before.get(session.id, 'remote', at(t))).toBeDefined();
     await before.flush();
     const after = new SessionStore({ remote: 3_000 }, 5_000, { db: pool, ...quiet });
     const back = await after.resolve(session.id, 'remote', at(4_900));
-    expect(back?.tailscaleLogin).toBe('owner@example.com');
-    expect(back?.tailscaleAddress).toBe('100.101.102.103');
+    expect(back?.provider).toBe('tailscale');
+    expect(back?.providerSubject).toBe('owner@example.com');
+    expect(back?.providerDetail).toEqual({ address: '100.101.102.103', name: 'The Owner' });
     expect(back?.absoluteExpiresAt?.getTime()).toBe(at(5_000).getTime());
     const capped = new SessionStore({ remote: 3_000 }, 5_000, { db: pool, ...quiet });
     expect(await capped.resolve(session.id, 'remote', at(5_000))).toBeUndefined();
@@ -150,7 +151,7 @@ suite('dashboard sessions in the database', () => {
     const store = new SessionStore({}, undefined, { db: pool, ...quiet });
     const doomed = store.create('local', T0);
     const ticket = store.create('remote', T0, { via: 'ticket' });
-    const tailnet = store.create('remote', T0, { via: 'tailscale', tailscaleLogin: 'owner@example.com' });
+    const tailnet = store.create('remote', T0, { via: 'provider', provider: 'tailscale', providerSubject: 'owner@example.com' });
     await store.flush();
 
     await store.destroy(doomed.id);
@@ -160,12 +161,12 @@ suite('dashboard sessions in the database', () => {
     // A fresh process (nothing cached) turning Tailscale access off.
     const fresh = new SessionStore({}, undefined, { db: pool, ...quiet });
     const offered: Array<string | undefined> = [];
-    expect(await fresh.forget((s) => { offered.push(s.id); return s.via === 'tailscale'; })).toBe(1);
+    expect(await fresh.forget((s) => { offered.push(s.id); return s.via === 'provider' && s.provider === 'tailscale'; })).toBe(1);
     expect(offered.every((id) => id === undefined)).toBe(true);
     const left = (await rows()).map((r) => r.id_hash);
     expect(left).toEqual([sessionIdHash(ticket.id)]);
     // The process that did have it cached cannot keep using it either.
-    await store.forget((s) => s.via === 'tailscale');
+    await store.forget((s) => s.via === 'provider' && s.provider === 'tailscale');
     expect(store.get(tailnet.id, 'remote', at(1))).toBeUndefined();
   });
 

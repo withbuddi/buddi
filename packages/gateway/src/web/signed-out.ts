@@ -72,6 +72,12 @@ export interface SignedOutOptions {
   tailscaleUnanswered?: boolean | undefined;
   /** A sign-in lockout is running for this address, and how long is left. */
   lockedForMs?: number | undefined;
+  /**
+   * The request came through a provider other than Tailscale (Cloudflare
+   * Access, on the ingress listener) and earned no identity: its title and
+   * the refusal's fixed name, never anything the request supplied.
+   */
+  provider?: { title: string; refusal: string; kind: 'unanswered' | 'login' | 'other' } | undefined;
 }
 
 /** The command the page offers, and copies. */
@@ -95,6 +101,7 @@ interface Copy {
 
 /** What the page says, by case. Kept in step with the kit's `SignedOut.jsx`. */
 function copyFor(options: SignedOutOptions): Copy {
+  if (options.provider !== undefined) return providerCopy(options.provider);
   if (options.tailscaleRefusal !== undefined) {
     return {
       title: 'This Tailscale login isn’t allowed here',
@@ -133,6 +140,52 @@ function copyFor(options: SignedOutOptions): Copy {
       ...(options.arrived === 'tailnet' ? ['Signing in through Tailscale can be turned on under Settings → Dashboard.'] : []),
     ],
     how: 'On the computer buddi runs on, run this, then open the link here within five minutes:',
+    primary: 'Try again',
+  };
+}
+
+/**
+ * Through Cloudflare Access there is no "Sign in with" button to press: Access
+ * is in front, and a person it let through is signed in on arrival. So the
+ * page says why this visit was not, by case. Kept in step with the kit.
+ */
+function providerCopy(provider: NonNullable<SignedOutOptions['provider']>): Copy {
+  const title = escapeHtml(provider.title);
+  if (provider.kind === 'login') {
+    return {
+      title: 'This Cloudflare login isn’t allowed here',
+      lines: ['Signing in through Cloudflare is on for this buddi, but for a different email than the one Cloudflare signed you in with.'],
+      how: 'On the computer buddi runs on, check the email under Settings → System, or run this there for a sign-in link:',
+      primary: 'Try again',
+    };
+  }
+  if (provider.kind === 'unanswered') {
+    return {
+      title: 'Cloudflare’s keys didn’t answer',
+      lines: ['buddi checks Cloudflare’s signature on every visit, and couldn’t fetch the keys to check it just now. Your sign-in is still good.'],
+      primary: 'Try again',
+    };
+  }
+  if (provider.refusal === 'setting-off') {
+    return {
+      title: 'Signing in through Cloudflare is off',
+      lines: [`This buddi was reached through ${title}, but signing in that way is turned off.`],
+      how: 'On the computer buddi runs on, turn it on under Settings → System, or run this there for a sign-in link:',
+      primary: 'Try again',
+    };
+  }
+  if (provider.refusal === 'no-assertion') {
+    return {
+      title: 'Cloudflare Access isn’t in front of this address',
+      lines: ['This visit came through the tunnel without Cloudflare Access’s signature, so buddi can’t tell who you are. Add an Access application with a policy for this hostname.'],
+      how: 'Or, on the computer buddi runs on, run this for a sign-in link:',
+      primary: 'Try again',
+    };
+  }
+  return {
+    title: 'Cloudflare’s sign-in didn’t check out',
+    lines: ['buddi checks Cloudflare’s signature on every visit, and this one didn’t match the team domain and application set up under Settings → System.'],
+    how: 'On the computer buddi runs on, run this for a sign-in link:',
     primary: 'Try again',
   };
 }

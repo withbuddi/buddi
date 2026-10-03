@@ -20,7 +20,10 @@ The API is served by the gateway, on the dashboard's own address, under
 - **This computer:** `http://127.0.0.1:4317` by default (`BUDDI_WEB_PORT`
   changes the port; `buddi status` prints the address).
 - **Your tailnet:** the HTTPS address `tailscale serve` gives the dashboard
-  (Settings → System → Tailscale prints the command).
+  (Settings → System → Sign in from elsewhere → Tailscale prints the command).
+- **Your own domain through Cloudflare:** the public hostname of a Cloudflare
+  Tunnel with Cloudflare Access in front (Settings → System → Sign in from
+  elsewhere → Cloudflare Access walks through it).
 
 Requests and answers are JSON (`Content-Type: application/json`), except
 where a route says *bytes*, *upload*, *server-sent events* or *WebSocket*. A
@@ -71,7 +74,9 @@ request.
 
 **A dashboard session** — what the browser holds. It comes from a sign-in
 link (`buddi dashboard`: a five-minute ticket, `?t=…`, exchanged at a
-page URL and never under `/api`) or a Tailscale identity the owner allowed;
+page URL and never under `/api`) or an identity a trusted access provider
+verified for the person the owner allowed (Tailscale's daemon, Cloudflare
+Access's signed JWT);
 a source checkout bound to loopback also mints one for any request from this
 computer. The session is a cookie
 (`buddi_session_<port>`, HttpOnly, SameSite=Strict). Every request that is
@@ -113,7 +118,7 @@ route, with an empty body:
 | 405 | A method the path does not take. |
 | 423 | `{ "locked": true, … }`: the dashboard session is locked (Settings → Lock screen). Tokens are not covered. |
 | 429 | Too many failed sign-ins from this address; `Retry-After` says when to try again. |
-| 503 | Tailscale could not be asked, or a part of buddi is not running in this process. |
+| 503 | A sign-in provider could not be asked (Tailscale's daemon, Cloudflare's signing keys), or a part of buddi is not running in this process. |
 
 ## Rate limits and lockout
 
@@ -150,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-300 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+306 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -193,15 +198,21 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 | GET | `/api/lock/background` | The lock screen's own picture, as JPEG. | yes |
 | POST | `/api/lock/background` | Upload the lock screen picture. | no |
 | DELETE | `/api/lock/background` | Remove the lock screen picture (the background goes back to a built-in one). | no |
-| GET | `/api/tailscale` | Tailscale sign-in: the stored setting, the daemon, and the command that serves this dashboard on the tailnet. | yes |
-| PUT | `/api/tailscale` | Turn Tailscale sign-in on or off, for one login. Every Tailscale session ends. | no |
+| GET | `/api/access` | Sign in from elsewhere: every trusted access provider (Tailscale, Cloudflare Access) with its status in one line, and whether this request came through one (the block is then read-only). | yes |
+| GET | `/api/access/tailscale` | Tailscale sign-in: the stored setting, the daemon, and the command that serves this dashboard on the tailnet. | yes |
+| PUT | `/api/access/tailscale` | Turn Tailscale sign-in on or off, for one login. Every Tailscale session ends. | no |
+| GET | `/api/access/cloudflare-access` | Cloudflare Access sign-in: the stored fields, the status, the setup steps with the ingress port cloudflared must point at, and the last verified visit. | yes |
+| PUT | `/api/access/cloudflare-access` | Save Cloudflare Access sign-in: the team domain, the application AUD tag, the one allowed email and the public address. Binds or closes the ingress listener and fetches the team's signing keys once; sessions it admitted end unless the same person, team and application stay on. | no |
+| POST | `/api/access/cloudflare-access/test` | "Test my setup": fetch the signing keys of the team domain given (or the stored one) and say what came back. Nothing is stored. | no |
+| GET | `/api/tailscale` | Alias of GET /api/access/tailscale, kept for one release. | yes |
+| PUT | `/api/tailscale` | Alias of PUT /api/access/tailscale, kept for one release. | no |
 
 #### `GET /api/session`
 
 Who is signed in, the CSRF value writes must echo, and facts every page formats with.
 
 - **Auth:** Session or API token; answered while locked.
-- **Answer:** `{ csrf: string, timezone: string, timeFormat: '12h'|'24h'|null, dateFormat: 'short'|'long'|'iso'|null, host: string, port: number, platform: string, recovery: boolean, scope: 'local'|'remote', signedInThrough: 'local'|'ticket'|'tailscale'|'token', tailscaleName?: string, tailscaleLogin?: string, expiresAt: string, version: string }`
+- **Answer:** `{ csrf: string, timezone: string, timeFormat: '12h'|'24h'|null, dateFormat: 'short'|'long'|'iso'|null, host: string, port: number, platform: string, recovery: boolean, scope: 'local'|'remote', signedInThrough: 'local'|'ticket'|'tailscale'|'cloudflare-access'|'token', provider?: 'tailscale'|'cloudflare-access', providerSubject?: string, tailscaleName?: string, tailscaleLogin?: string, expiresAt: string, version: string }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
@@ -356,9 +367,87 @@ Remove the lock screen picture (the background goes back to a built-in one).
 curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/lock/background"
 ```
 
-#### `GET /api/tailscale`
+#### `GET /api/access`
+
+Sign in from elsewhere: every trusted access provider (Tailscale, Cloudflare Access) with its status in one line, and whether this request came through one (the block is then read-only).
+
+- **Auth:** Session or API token.
+- **Answer:** `{ proxied: boolean, providers: [{ id: 'tailscale'|'cloudflare-access', title, identity: 'login'|'device', proxy: 'this-machine'|'elsewhere', enabled: boolean, status: { state: 'off'|'needs-setup'|'waiting'|'ready'|'unanswered', sentence } }] }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/access"
+```
+
+#### `GET /api/access/tailscale`
 
 Tailscale sign-in: the stored setting, the daemon, and the command that serves this dashboard on the tailnet.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ enabled: boolean, login: string, available: boolean, self: { login, name }|null, proxied: boolean, serveCommand: string }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/access/tailscale"
+```
+
+#### `PUT /api/access/tailscale`
+
+Turn Tailscale sign-in on or off, for one login. Every Tailscale session ends.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Body:** `{ enabled: boolean, login?: string }`
+- **Answer:** `as GET`
+- **Errors:** 400 not a Tailscale login; 403 not from the computer buddi runs on
+- **Since:** unreleased
+
+```sh
+curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"enabled":true}' "$BUDDI_URL/api/access/tailscale"
+```
+
+#### `GET /api/access/cloudflare-access`
+
+Cloudflare Access sign-in: the stored fields, the status, the setup steps with the ingress port cloudflared must point at, and the last verified visit.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ enabled, teamDomain, aud, email, publicOrigin, status: { state, sentence }, ingressPort: number, listening: boolean, lastVisit: { at, email }|null, setup: { steps: [{ text, command? }], fields: [{ key, label, hint?, placeholder? }] }, proxied: boolean }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/access/cloudflare-access"
+```
+
+#### `PUT /api/access/cloudflare-access`
+
+Save Cloudflare Access sign-in: the team domain, the application AUD tag, the one allowed email and the public address. Binds or closes the ingress listener and fetches the team's signing keys once; sessions it admitted end unless the same person, team and application stay on.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Body:** `{ enabled: boolean, teamDomain: string, aud: string, email: string, publicOrigin: string }`
+- **Answer:** `as GET, plus test: { ok, keys, error? } when on`
+- **Errors:** 400 a field that is not what it should be, or a field missing to turn it on; 403 not from the computer buddi runs on
+- **Since:** unreleased
+
+```sh
+curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"enabled":true,"teamDomain":"…","aud":"…","email":"…","publicOrigin":"…"}' "$BUDDI_URL/api/access/cloudflare-access"
+```
+
+#### `POST /api/access/cloudflare-access/test`
+
+"Test my setup": fetch the signing keys of the team domain given (or the stored one) and say what came back. Nothing is stored.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Body:** `{ teamDomain?: string }`
+- **Answer:** `{ ok: boolean, keys: number, teamDomain, sentence, listening: boolean, ingressPort: number|null }`
+- **Errors:** 400 not a Cloudflare team domain; 403 not from the computer buddi runs on
+- **Since:** unreleased
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/access/cloudflare-access/test"
+```
+
+#### `GET /api/tailscale`
+
+Alias of GET /api/access/tailscale, kept for one release.
 
 - **Auth:** Session or API token.
 - **Answer:** `{ enabled: boolean, login: string, available: boolean, self: { login, name }|null, proxied: boolean, serveCommand: string }`
@@ -370,7 +459,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tailscale"
 
 #### `PUT /api/tailscale`
 
-Turn Tailscale sign-in on or off, for one login. Every Tailscale session ends.
+Alias of PUT /api/access/tailscale, kept for one release.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Body:** `{ enabled: boolean, login?: string }`

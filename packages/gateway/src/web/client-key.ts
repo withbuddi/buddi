@@ -14,6 +14,9 @@
  *   Tailscale Serve hop looks like): that tailnet address;
  * - loopback with any other proxy metadata: one `forwarded` bucket.
  *
+ * - the ingress listener (cloudflared) or the relay: never any of the above;
+ *   `cf:unverified` until the Access JWT verifies, then `cf:<Cf-Connecting-Ip>`.
+ *
  * Headers can only move a request *out* of the loopback bucket, never into
  * it, so nothing arriving through a proxy can spend the direct local budget.
  * Proxy headers a local process makes up only ever earn it a bucket of its
@@ -21,7 +24,8 @@
  */
 import type { IncomingMessage } from 'node:http';
 import { isLoopbackAddress } from './http.js';
-import { forwardedAddress, isTailnetAddress } from './tailscale.js';
+import { arrivalOf } from './access/arrival.js';
+import { forwardedAddress, isTailnetAddress } from './access/tailscale.js';
 
 function proxyMetadata(req: IncomingMessage): boolean {
   return Object.keys(req.headers).some(
@@ -30,6 +34,11 @@ function proxyMetadata(req: IncomingMessage): boolean {
 }
 
 export function clientKey(req: IncomingMessage): string {
+  // The ingress listener and the relay never share a bucket with the main
+  // listener, loopback socket or not. Their provider names the bucket once
+  // the request verifies (`AccessRegistry.bucketOf`, `AccessIdentity.bucket`).
+  const arrival = arrivalOf(req);
+  if (arrival !== 'main') return `${arrival}:unverified`;
   const address = req.socket.remoteAddress;
   if (!isLoopbackAddress(address)) return `addr:${address ?? 'unknown'}`;
   if (!proxyMetadata(req)) return 'loopback';

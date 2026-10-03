@@ -167,14 +167,14 @@ export async function readFacts(deps: FactsDeps): Promise<Facts> {
     `select count(*)::int as n from core.artifacts where kind = 'audio' and created_by = 'owner' and deleted_at is null`,
   );
 
-  // Devices signed in, by where they came from: this Mac, a tailnet address,
+  // Devices signed in, by where they came from: this Mac, a provider (a tailnet address, a Cloudflare login),
   // or a sign-in ticket (a phone that scanned the code). Two is a second device.
   const settings = webSettingsStore(pool);
   let secondDevice = (await settings.read<boolean>(TIPS_SECOND_DEVICE_KEY).catch(() => null)) === true;
   if (!secondDevice) {
     const devices = await count(
       pool,
-      `select count(distinct case when tailscale_address is not null then 'tailnet:' || tailscale_address
+      `select count(distinct case when provider_id is not null then provider_id || ':' || coalesce(provider_detail->>'address', provider_subject)
                                   when scope = 'local' then 'local' else 'via:' || via end)::int as n
          from core.dashboard_sessions where client = 'browser'`,
     );

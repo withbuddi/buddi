@@ -5175,3 +5175,21 @@ button.lk-chip:disabled { cursor: default; }
 .bd-faces { display: inline-flex; }
 .bd-faces > * + * { margin-left: calc(var(--space-2) * -1); }
 .bd-faces .ui-avatar { box-shadow: 0 0 0 2px var(--surface); }
+
+/* ---- Settings → System: Sign in from elsewhere (views/Access.tsx) ----
+   A row per provider, opening in place; kit: ui_kits/dashboard/Access.jsx. */
+.access-glyph { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: var(--space-8); height: var(--space-8); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-sunken); color: var(--text-muted); }
+.access-glyph svg { width: var(--space-5); height: var(--space-5); }
+.access-side { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-faint); }
+.access-chevron { display: inline-flex; transition: transform var(--dur-fast) ease; }
+.access-chevron[data-open='true'] { transform: rotate(90deg); }
+.access-body { padding: var(--space-4) var(--space-5) var(--space-5) calc(var(--space-5) + var(--space-8) + var(--space-3)); border-bottom: 1px solid var(--line); }
+.access-body .ui-card-meta { margin: 0; }
+.access-locked { padding: var(--space-4) var(--space-5) 0; }
+.access-steps { margin: 0; padding: 0; list-style: none; counter-reset: access-step; display: flex; flex-direction: column; gap: var(--space-3); font-size: var(--text-sm); color: var(--text-muted); }
+.access-steps li { counter-increment: access-step; display: grid; grid-template-columns: var(--space-5) minmax(0, 1fr); column-gap: var(--space-2); row-gap: var(--space-2); }
+.access-steps li::before { content: counter(access-step) "."; grid-row: 1; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.access-steps li > * { grid-column: 2; }
+.access-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3) var(--space-4); }
+.access-foot { margin: 0; padding: var(--space-3) var(--space-5); border-top: 1px solid var(--line); font-size: var(--text-sm); color: var(--text-faint); }
+@media (max-width: 720px) { .access-body { padding: var(--space-4); } }

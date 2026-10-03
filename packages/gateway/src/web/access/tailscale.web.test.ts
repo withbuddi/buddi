@@ -10,11 +10,11 @@
  */
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { startWebServer, type WebServer } from './server.js';
-import { SessionStore, TAILSCALE_SESSION_MAX_MS } from './sessions.js';
-import { mintTicket } from './token.js';
-import { csrfCookieName, portOf, sessionCookieName } from './http.js';
-import { hostFetch } from '../__fixtures__/host-fetch.js';
+import { startWebServer, type WebServer } from '../server.js';
+import { SessionStore, TAILSCALE_SESSION_MAX_MS } from '../sessions.js';
+import { mintTicket } from '../token.js';
+import { csrfCookieName, portOf, sessionCookieName } from '../http.js';
+import { hostFetch } from '../../__fixtures__/host-fetch.js';
 import {
   TAILSCALED_SOCKET,
   daemonWhois,
@@ -31,7 +31,7 @@ import {
   tailscaleLogSize,
   toTailscaleSetting,
 } from './tailscale.js';
-import { clientKey } from './client-key.js';
+import { clientKey } from '../client-key.js';
 
 const servers: WebServer[] = [];
 afterEach(async () => {
@@ -555,7 +555,7 @@ it('ends a tailnet session after seven days, however much it is used', async () 
 it('holds a Tailscale session to an absolute lifetime the sliding one cannot extend', () => {
   const store = new SessionStore();
   const start = new Date('2026-03-01T00:00:00Z');
-  const session = store.create('remote', start, { via: 'tailscale', tailscaleLogin: OWNER, tailscaleAddress: TAILNET_IP });
+  const session = store.create('remote', start, { via: 'provider', provider: 'tailscale', providerSubject: OWNER, providerDetail: { address: TAILNET_IP } });
   expect(session.absoluteExpiresAt?.getTime()).toBe(start.getTime() + TAILSCALE_SESSION_MAX_MS);
   // Used every six hours for a week: alive, because the idle clock keeps being
   // pushed out — and then not, because the other one was never touched.

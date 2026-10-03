@@ -11,7 +11,8 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PlaceProps } from '../App';
-import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
+import { ApiError, api, type UpgradeAttempt, type UpgradeJob } from '../api';
+import { AccessSettings } from './Access';
 import { fmtRelative, fmtTime } from '../format';
 import { SECRETS_ADD_ROUTE, SETTINGS_ROUTE, parseAccountRoute, parseConnectionRoute, parseProposalsFilter, parseSecretRoute, parseSecretsAdd, parsePluginSettingsRoute, pluginRouteParams, resolvePluginSettingsRoute, settingsSectionOf } from '../routes';
 import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
@@ -328,7 +329,7 @@ function System({ timezone }: { timezone: string }): JSX.Element {
       </Section>
       <Service />
       <AppInstallSection />
-      <Tailscale />
+      <AccessSettings />
       <Section title="Mail and sources" panel>
         {!data ? (
           <Empty>Loading…</Empty>
@@ -352,120 +353,9 @@ function System({ timezone }: { timezone: string }): JSX.Element {
   );
 }
 
-/**
- * Settings → System: signing in through Tailscale.
- *
- * The switch is the whole feature, and the sentence under it is the part that
- * matters: turning this on means anyone signed in to Tailscale as that login,
- * on any device in the tailnet, is signed in to buddi. The command is printed
- * with this installation's own ports in it, because the proxy has to run on
- * the machine buddi runs on and nowhere else.
- *
- * Seen through Tailscale, everything here is read-only: the setting that let
- * this browser in cannot be widened from the far end of it.
- */
-export function Tailscale(): JSX.Element {
-  const view = useAsync(() => api.tailscale(), []);
-  const [login, setLogin] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const data: TailscaleView | undefined = view.data;
-  // A stored login wins; with none, the machine's own is the obvious guess.
-  const value = login ?? (data?.login || data?.self?.login || '');
-  const locked = data?.proxied === true;
-  const save = (enabled: boolean): void => {
-    setBusy(true);
-    setFailed(null);
-    setSaved(false);
-    api
-      .setTailscale({ enabled, login: value.trim() })
-      .then(() => { setSaved(true); })
-      .catch((error: unknown) => setFailed(error instanceof ApiError ? error.message : String(error)))
-      .finally(() => { setBusy(false); view.reload(); });
-  };
-  return (
-    <Section
-      title="Sign in through Tailscale"
-      panel
-      foot={
-        <Button variant="accent" disabled={busy || !data || locked} onClick={() => save(data?.enabled ?? false)}>
-          Save
-        </Button>
-      }
-    >
-      <Stack divided>
-        <Section>
-          <Stack gap="sm">
-            <ErrorBanner message={view.error ?? failed} />
-            <p className="ui-card-meta">
-              {!data
-                ? '…'
-                : data.available && data.self
-                  ? `Tailscale is running on this machine as ${data.self.login}.`
-                  : data.available
-                    ? 'Tailscale is running on this machine.'
-                    : 'Tailscale is not running here.'}
-            </p>
-            {locked ? (
-              <>
-                <Notice tone="warning">Change this from the computer buddi runs on.</Notice>
-                {/* Locked controls are greyed, and greyed controls are read by
-                    squinting. The setting says itself in a sentence instead. */}
-                <p className="ui-card-meta">{data?.enabled ? `On, for ${value}` : 'Off'}</p>
-              </>
-            ) : null}
-            <label className="backup-check">
-              <input
-                type="checkbox"
-                checked={data?.enabled ?? false}
-                disabled={busy || !data || locked}
-                onChange={(event) => save(event.target.checked)}
-              />
-              <span>Let this Tailscale login sign in</span>
-            </label>
-            <Field label="Tailscale login">
-              <input
-                type="text"
-                value={value}
-                placeholder="you@example.com"
-                disabled={busy || !data || locked}
-                onChange={(event) => setLogin(event.target.value)}
-              />
-            </Field>
-            <p className="ui-card-meta">
-              Anyone signed in to Tailscale as this login, on any device in your tailnet, is signed in to buddi.
-              The proxy must run on this machine:
-            </p>
-            {/* The command is a thing to copy, not a phrase to read: its own
-                line, with the button that takes it beside it. */}
-            <div className="tailscale-command">
-              <code className="mono">{data?.serveCommand ?? 'tailscale serve'}</code>
-              <Button size="sm" disabled={busy || !data} onClick={() => { void copyText(data?.serveCommand ?? ''); }}>
-                Copy
-              </Button>
-            </div>
-            <p className="ui-card-meta">
-              This gives your tailnet the trust this machine already has: buddi cannot tell the Tailscale proxy from
-              another program running here, and any program that can reach the dashboard on this machine can already
-              read buddi&rsquo;s files.
-            </p>
-            {saved ? <Notice tone="good" role="status">Saved.</Notice> : null}
-          </Stack>
-        </Section>
-      </Stack>
-    </Section>
-  );
-}
-
-/** Put a command on the clipboard, where there is one. */
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard?.writeText(text);
-  } catch {
-    /* A browser that refuses the clipboard leaves the command on screen to select. */
-  }
-}
+// Sign in from elsewhere lives in its own file; the Tailscale row is exported
+// from here too, as it always was.
+export { Tailscale } from './Access';
 
 /**
  * The supervisor's switches, when there is a supervisor.

@@ -97,7 +97,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   {
     method: 'GET', path: '/api/session', area: 'session', whileLocked: true,
     summary: 'Who is signed in, the CSRF value writes must echo, and facts every page formats with.',
-    answer: "{ csrf: string, timezone: string, timeFormat: '12h'|'24h'|null, dateFormat: 'short'|'long'|'iso'|null, host: string, port: number, platform: string, recovery: boolean, scope: 'local'|'remote', signedInThrough: 'local'|'ticket'|'tailscale'|'token', tailscaleName?: string, tailscaleLogin?: string, expiresAt: string, version: string }",
+    answer: "{ csrf: string, timezone: string, timeFormat: '12h'|'24h'|null, dateFormat: 'short'|'long'|'iso'|null, host: string, port: number, platform: string, recovery: boolean, scope: 'local'|'remote', signedInThrough: 'local'|'ticket'|'tailscale'|'cloudflare-access'|'token', provider?: 'tailscale'|'cloudflare-access', providerSubject?: string, tailscaleName?: string, tailscaleLogin?: string, expiresAt: string, version: string }",
   },
   {
     method: 'GET', path: '/api/lock', area: 'session', whileLocked: true,
@@ -152,13 +152,46 @@ export const API_ROUTES: readonly ApiRoute[] = [
     summary: 'Remove the lock screen picture (the background goes back to a built-in one).', answer: 'the lock state',
   },
   {
-    method: 'GET', path: '/api/tailscale', area: 'session',
+    method: 'GET', path: '/api/access', area: 'session',
+    summary: 'Sign in from elsewhere: every trusted access provider (Tailscale, Cloudflare Access) with its status in one line, and whether this request came through one (the block is then read-only).',
+    answer: "{ proxied: boolean, providers: [{ id: 'tailscale'|'cloudflare-access', title, identity: 'login'|'device', proxy: 'this-machine'|'elsewhere', enabled: boolean, status: { state: 'off'|'needs-setup'|'waiting'|'ready'|'unanswered', sentence } }] }",
+  },
+  {
+    method: 'GET', path: '/api/access/tailscale', area: 'session',
     summary: 'Tailscale sign-in: the stored setting, the daemon, and the command that serves this dashboard on the tailnet.',
     answer: '{ enabled: boolean, login: string, available: boolean, self: { login, name }|null, proxied: boolean, serveCommand: string }',
   },
   {
-    method: 'PUT', path: '/api/tailscale', area: 'session', localOnly: true, token: 'access',
+    method: 'PUT', path: '/api/access/tailscale', area: 'session', localOnly: true, token: 'access',
     summary: 'Turn Tailscale sign-in on or off, for one login. Every Tailscale session ends.',
+    body: '{ enabled: boolean, login?: string }', answer: 'as GET',
+    errors: '400 not a Tailscale login; 403 not from the computer buddi runs on',
+  },
+  {
+    method: 'GET', path: '/api/access/cloudflare-access', area: 'session',
+    summary: 'Cloudflare Access sign-in: the stored fields, the status, the setup steps with the ingress port cloudflared must point at, and the last verified visit.',
+    answer: '{ enabled, teamDomain, aud, email, publicOrigin, status: { state, sentence }, ingressPort: number, listening: boolean, lastVisit: { at, email }|null, setup: { steps: [{ text, command? }], fields: [{ key, label, hint?, placeholder? }] }, proxied: boolean }',
+  },
+  {
+    method: 'PUT', path: '/api/access/cloudflare-access', area: 'session', localOnly: true, token: 'access',
+    summary: 'Save Cloudflare Access sign-in: the team domain, the application AUD tag, the one allowed email and the public address. Binds or closes the ingress listener and fetches the team\'s signing keys once; sessions it admitted end unless the same person, team and application stay on.',
+    body: '{ enabled: boolean, teamDomain: string, aud: string, email: string, publicOrigin: string }', answer: 'as GET, plus test: { ok, keys, error? } when on',
+    errors: '400 a field that is not what it should be, or a field missing to turn it on; 403 not from the computer buddi runs on',
+  },
+  {
+    method: 'POST', path: '/api/access/cloudflare-access/test', area: 'session', localOnly: true, token: 'access',
+    summary: '"Test my setup": fetch the signing keys of the team domain given (or the stored one) and say what came back. Nothing is stored.',
+    body: '{ teamDomain?: string }', answer: '{ ok: boolean, keys: number, teamDomain, sentence, listening: boolean, ingressPort: number|null }',
+    errors: '400 not a Cloudflare team domain; 403 not from the computer buddi runs on',
+  },
+  {
+    method: 'GET', path: '/api/tailscale', area: 'session',
+    summary: 'Alias of GET /api/access/tailscale, kept for one release.',
+    answer: '{ enabled: boolean, login: string, available: boolean, self: { login, name }|null, proxied: boolean, serveCommand: string }',
+  },
+  {
+    method: 'PUT', path: '/api/tailscale', area: 'session', localOnly: true, token: 'access',
+    summary: 'Alias of PUT /api/access/tailscale, kept for one release.',
     body: '{ enabled: boolean, login?: string }', answer: 'as GET',
     errors: '400 not a Tailscale login; 403 not from the computer buddi runs on',
   },
@@ -1050,7 +1083,10 @@ The API is served by the gateway, on the dashboard's own address, under
 - **This computer:** \`http://127.0.0.1:4317\` by default (\`BUDDI_WEB_PORT\`
   changes the port; \`buddi status\` prints the address).
 - **Your tailnet:** the HTTPS address \`tailscale serve\` gives the dashboard
-  (Settings → System → Tailscale prints the command).
+  (Settings → System → Sign in from elsewhere → Tailscale prints the command).
+- **Your own domain through Cloudflare:** the public hostname of a Cloudflare
+  Tunnel with Cloudflare Access in front (Settings → System → Sign in from
+  elsewhere → Cloudflare Access walks through it).
 
 Requests and answers are JSON (\`Content-Type: application/json\`), except
 where a route says *bytes*, *upload*, *server-sent events* or *WebSocket*. A
@@ -1101,7 +1137,9 @@ request.
 
 **A dashboard session** — what the browser holds. It comes from a sign-in
 link (\`buddi dashboard\`: a five-minute ticket, \`?t=…\`, exchanged at a
-page URL and never under \`/api\`) or a Tailscale identity the owner allowed;
+page URL and never under \`/api\`) or an identity a trusted access provider
+verified for the person the owner allowed (Tailscale's daemon, Cloudflare
+Access's signed JWT);
 a source checkout bound to loopback also mints one for any request from this
 computer. The session is a cookie
 (\`buddi_session_<port>\`, HttpOnly, SameSite=Strict). Every request that is
@@ -1143,7 +1181,7 @@ route, with an empty body:
 | 405 | A method the path does not take. |
 | 423 | \`{ "locked": true, … }\`: the dashboard session is locked (Settings → Lock screen). Tokens are not covered. |
 | 429 | Too many failed sign-ins from this address; \`Retry-After\` says when to try again. |
-| 503 | Tailscale could not be asked, or a part of buddi is not running in this process. |
+| 503 | A sign-in provider could not be asked (Tailscale's daemon, Cloudflare's signing keys), or a part of buddi is not running in this process. |
 
 ## Rate limits and lockout
 

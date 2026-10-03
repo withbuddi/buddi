@@ -4,6 +4,14 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Sign in from your own domain through Cloudflare: Settings → System → Sign in from elsewhere → Cloudflare Access walks you through a Cloudflare Tunnel with Cloudflare Access in front (install cloudflared, create the tunnel, point a hostname at the port the panel prints, add an Access application for your email, paste the team domain and AUD tag), with Test my setup and a status line. buddi verifies Access's signed JWT itself on every request — signature against your team's keys, issuer, audience, expiry, your email — never trusts a plain header, and gives the same remote session as Tailscale (12 hours idle, CSRF, approvals, the lock screen). cloudflared points at a separate loopback port that is always treated as a visit from elsewhere, and failed sign-ins there are counted apart from this computer's and your tailnet's. `buddi doctor` has a `cloudflare access` row.
+
+### Changed
+
+- Tailscale sign-in is now one row of Settings → System → Sign in from elsewhere, beside Cloudflare Access; the panel, its `tailscale serve` line and how it checks you are unchanged, and existing Tailscale sessions carry over. `GET/PUT /api/tailscale` stay for one release as aliases of `/api/access/tailscale`.
+
 ## 0.1.0-pre.37 — 2026-10-03
 
 ### Added

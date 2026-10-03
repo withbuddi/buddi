@@ -31,6 +31,7 @@ import { BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type Ext
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
+import { arrivalOf } from './access/arrival.js';
 import { currentVersion } from './version.js';
 
 /** The one path this gateway ever upgrades. */
@@ -224,7 +225,9 @@ export class ExtensionEndpoint implements ExtensionBridge {
     if (pathname !== EXTENSION_SOCKET_PATH) return this.#refuse(socket, 404, 'Not Found');
     // Loopback by the socket, never by a header: a proxy in front of this is
     // not this machine, whatever it says about itself.
-    if (!isLoopbackAddress(req.socket.remoteAddress)) return this.#refuse(socket, 403, 'Forbidden');
+    // And by the listener: the ingress listener's sockets are loopback too,
+    // and a relay frame has none (specs/trusted-access.md §7.5).
+    if (arrivalOf(req) !== 'main' || !isLoopbackAddress(req.socket?.remoteAddress)) return this.#refuse(socket, 403, 'Forbidden');
     if (Object.keys(req.headers).some((key) => key === 'forwarded' || key === 'x-real-ip' || key.startsWith('x-forwarded-') || key.startsWith('tailscale-'))) return this.#refuse(socket, 403, 'Forbidden');
     const origin = req.headers.origin;
     if (typeof origin !== 'string' || !EXTENSION_ORIGIN.test(origin)) return this.#refuse(socket, 403, 'Forbidden');

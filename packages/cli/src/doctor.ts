@@ -104,6 +104,11 @@ export interface DoctorProbes {
    */
   tailscale?(): Promise<ProbeResult>;
   /**
+   * Signing in through Cloudflare Access: the setting, the ingress listener
+   * cloudflared points at, the team's signing keys, cloudflared itself.
+   */
+  cloudflareAccess?(): Promise<ProbeResult>;
+  /**
    * Whether signing in with a Claude or ChatGPT subscription is offered.
    * Optional for the same reason `config` is.
    */
@@ -157,6 +162,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   // Never critical: with this off, or its proxy down, buddi is a dashboard on
   // loopback, which is what it is by default.
   { name: 'tailscale', critical: false, probe: 'tailscale' },
+  { name: 'cloudflare access', critical: false, probe: 'cloudflareAccess' },
   // Never critical: hidden sign-ins are an owner's choice, and API keys still work.
   { name: 'subscription sign-ins', critical: false, probe: 'subscriptionSignIns' },
   { name: 'ollama', critical: false, probe: 'ollama' },
@@ -469,6 +475,47 @@ export function checkTailscale(facts: TailscaleFacts): ProbeResult {
   } else {
     problems.push(`serve forwards nothing to 127.0.0.1:${facts.gatewayPort} — \`tailscale serve --bg --https=<port> http://127.0.0.1:${facts.gatewayPort}\``);
   }
+  const detail = [...parts, ...problems].join('; ');
+  return problems.length > 0 ? { status: 'warn', detail } : { status: 'ok', detail };
+}
+
+/* ------------------------------------------------------------------ *
+ * The cloudflare access row
+ * ------------------------------------------------------------------ */
+
+/** What the doctor can learn about signing in through Cloudflare Access. */
+export interface CloudflareAccessFacts {
+  /** The stored setting, or null when it has never been set or cannot be read. */
+  setting: { enabled: boolean; teamDomain: string; email: string; publicOrigin: string } | null;
+  /** `BUDDI_WEB_PUBLIC_ORIGIN`, when one is configured. */
+  publicOrigin?: string | undefined;
+  /** Where cloudflared should point, and whether anything answers there. */
+  ingress: { port: number; listening: boolean };
+  /** What the team's key endpoint answered; null when it was not asked. */
+  keys: { ok: boolean; keys: number; error?: string | undefined } | null;
+  /** Is a `cloudflared` binary on this machine? */
+  cloudflared: boolean;
+}
+
+/**
+ * One line about signing in through Cloudflare Access. Off is `ok`; on, the
+ * row says who may sign in and warns about each piece that would make the
+ * setting quietly do nothing.
+ */
+export function checkCloudflareAccess(facts: CloudflareAccessFacts): ProbeResult {
+  const setting = facts.setting;
+  if (!setting?.enabled) return { status: 'ok', detail: 'off — nothing signs in through Cloudflare' };
+  const parts = [`on for ${setting.email} at ${setting.teamDomain}`];
+  const problems: string[] = [];
+  if (facts.ingress.listening) parts.push(`the ingress listener answers on 127.0.0.1:${facts.ingress.port}`);
+  else problems.push(`nothing listens on 127.0.0.1:${facts.ingress.port}, where cloudflared should point — is buddi running?`);
+  if (facts.keys?.ok) parts.push(`the team's signing keys answer (${facts.keys.keys})`);
+  else if (facts.keys) problems.push(facts.keys.error ?? 'the team\'s signing keys could not be fetched');
+  if (facts.cloudflared) parts.push('cloudflared is installed');
+  else problems.push('cloudflared is not installed on this machine (brew install cloudflared, or the .deb on Linux)');
+  const origin = setting.publicOrigin || facts.publicOrigin;
+  if (origin) parts.push(`published at ${origin}`);
+  else problems.push('no public address is set, so the browser\'s writes from the Cloudflare hostname are refused — set it in Settings → System');
   const detail = [...parts, ...problems].join('; ');
   return problems.length > 0 ? { status: 'warn', detail } : { status: 'ok', detail };
 }

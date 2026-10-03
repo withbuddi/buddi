@@ -53,7 +53,9 @@ import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import { delimiter, isAbsolute, join } from 'node:path';
-import { isLoopbackAddress } from './http.js';
+import { isLoopbackAddress } from '../http.js';
+import { arrivalOf } from './arrival.js';
+import type { AccessContext, AccessIdentifyResult, AccessProvider, AccessSetup, AccessStatus } from './provider.js';
 
 /** The key this setting is stored under in `core.web_settings`. */
 export const TAILSCALE_SETTING_KEY = 'tailscale';
@@ -181,7 +183,8 @@ function header(req: IncomingMessage, name: string): string | undefined {
 export function proxiedThroughTailscale(req: IncomingMessage): boolean {
   return (
     header(req, 'tailscale-user-login') !== undefined &&
-    isLoopbackAddress(req.socket.remoteAddress) &&
+    arrivalOf(req) === 'main' &&
+    isLoopbackAddress(req.socket?.remoteAddress) &&
     isTailnetAddress(forwardedAddress(req))
   );
 }
@@ -310,7 +313,9 @@ export async function tailscaleIdentity(
   if (!setting?.enabled || !setting.login.trim()) return complain(deps, 'setting-off', at);
   // The proxy is a process on this machine. A request that arrives from
   // anywhere else and spells these headers is a stranger, not Serve.
-  if (!isLoopbackAddress(req.socket.remoteAddress)) return complain(deps, 'not-this-machine', at);
+  // Serve points at the main listener. The same headers on the ingress
+  // listener or a relay frame are not Serve's, loopback socket or not.
+  if (!isLoopbackAddress(req.socket?.remoteAddress) || arrivalOf(req) !== 'main') return complain(deps, 'not-this-machine', at);
   // A list, or a second header line, means a proxy that appends — not Serve,
   // which overwrites. See `forwardedAddress`.
   if (req.headers['x-forwarded-for'] !== undefined && forwardedAddress(req) === undefined) {
@@ -691,4 +696,119 @@ export function toTailscaleSetting(value: unknown): TailscaleSetting {
   const row = (value ?? {}) as { enabled?: unknown; login?: unknown };
   const login = typeof row.login === 'string' ? row.login.trim() : '';
   return { enabled: row.enabled === true && login !== '', login };
+}
+
+/* ------------------------------------------------------------------ *
+ * Provider 1 (specs/trusted-access.md §4)
+ * ------------------------------------------------------------------ */
+
+/**
+ * How long a session established through Tailscale may live however much it
+ * is used: seven days, as before the provider interface.
+ */
+export const TAILSCALE_ABSOLUTE_CAP_MS = 7 * 24 * 60 * 60_000;
+
+export interface TailscaleProviderDeps {
+  whois: TailscaleWhois;
+  self: () => Promise<{ available: boolean; self: TailscaleProfile | null }>;
+  log?: ((line: string) => void) | undefined;
+}
+
+/**
+ * The command that publishes this dashboard on the tailnet, with this
+ * installation's own numbers in it: the HTTPS port of the configured public
+ * origin, and the port the gateway is actually listening on.
+ */
+export function tailscaleServeCommand(dashboardPort: number, publicOrigin: string | undefined): string {
+  let https = 443;
+  if (publicOrigin) {
+    try {
+      const port = new URL(publicOrigin).port;
+      if (port !== '') https = Number(port);
+    } catch { /* a bad public origin names no port */ }
+  }
+  return `tailscale serve --bg --https=${https} http://127.0.0.1:${dashboardPort}`;
+}
+
+/**
+ * Tailscale behind the provider interface. A move, not a change: the five
+ * checks of `tailscaleIdentity` are its `identify`, the per-request whois is
+ * its `confirm`, and its requests arrive on the main listener, where
+ * `tailscale serve` has always pointed.
+ */
+export function tailscaleProvider(deps: TailscaleProviderDeps): AccessProvider<TailscaleSetting> {
+  const identify = async (req: IncomingMessage, setting: TailscaleSetting, now: Date): Promise<AccessIdentifyResult | null> => {
+    let refusal: TailscaleRefusal | undefined;
+    const identity = await tailscaleIdentity(req, {
+      setting: async () => setting,
+      whois: deps.whois,
+      log: deps.log,
+      now: () => now,
+      onRefusal: (reason) => { refusal = reason; },
+    });
+    if (identity) {
+      return {
+        ok: true,
+        identity: {
+          provider: 'tailscale',
+          subject: identity.login,
+          name: identity.name,
+          detail: { address: identity.address, name: identity.name },
+          bucket: `tailnet:${identity.address}`,
+        },
+      };
+    }
+    // No `Tailscale-User-Login` at all: the request claimed nothing.
+    if (refusal === undefined) return null;
+    return {
+      ok: false,
+      refusal,
+      sentence: tailscaleRefusalReason(refusal),
+      kind: isUnansweredRefusal(refusal) ? 'unanswered' : isLoginRefusal(refusal) ? 'login' : 'other',
+    };
+  };
+  return {
+    id: 'tailscale',
+    title: 'Tailscale',
+    identity: 'login',
+    proxy: 'this-machine',
+    arrival: 'main',
+    settingKey: TAILSCALE_SETTING_KEY,
+    absoluteCapMs: TAILSCALE_ABSOLUTE_CAP_MS,
+    parseSetting: toTailscaleSetting,
+    enabled: (setting) => setting.enabled,
+    allowed: (setting) => setting.login,
+    async status(setting): Promise<AccessStatus> {
+      if (!setting.enabled) return { state: 'off', sentence: 'Off. Sign in from your tailnet, with the login you use for Tailscale.' };
+      const daemon = await deps.self().catch(() => ({ available: false, self: null }));
+      if (!daemon.available) {
+        return { state: 'unanswered', sentence: `On for ${setting.login}, but Tailscale is not running on this machine, so nobody can sign in this way.` };
+      }
+      return { state: 'ready', sentence: `On for ${setting.login}` };
+    },
+    setup(_setting, ctx: AccessContext): AccessSetup {
+      return {
+        steps: [{
+          text: 'Anyone signed in to Tailscale as this login, on any device in your tailnet, is signed in to buddi. The proxy must run on this machine:',
+          command: tailscaleServeCommand(ctx.dashboardPort(), ctx.publicOrigin()),
+        }],
+        fields: [{ key: 'login', label: 'Tailscale login', placeholder: 'you@example.com' }],
+      };
+    },
+    // Serve points at the main listener and says so with its own header;
+    // the header only narrows which provider is asked, never grants.
+    matches: (req) => arrivalOf(req) === 'main' && req.headers['tailscale-user-login'] !== undefined,
+    identify,
+    async confirm(session, req, setting, now) {
+      const result = await identify(req, setting, now);
+      if (result?.ok && sameLogin(result.identity.subject, session.providerSubject)) return { answer: 'keep' };
+      // "Could not ask" is not an answer: the session stays, this request waits.
+      if (result && !result.ok && result.kind === 'unanswered') return { answer: 'unanswered', refusal: result };
+      return { answer: 'end', refusal: result && !result.ok ? result : undefined };
+    },
+    clientKey(req) {
+      const tailnet = forwardedAddress(req);
+      return tailnet !== undefined && isTailnetAddress(tailnet) ? `tailnet:${tailnet}` : 'forwarded';
+    },
+  };
 }

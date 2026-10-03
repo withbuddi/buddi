@@ -7,6 +7,8 @@
  */
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { accessSync, constants as fsConstants } from 'node:fs';
+import { connect as netConnect } from 'node:net';
 import {
   CORE_MIGRATIONS_DIR,
   CORE_SCHEMA,
@@ -47,6 +49,9 @@ import {
   TelegramApi,
   telegramFetchOn,
   TAILSCALE_SETTING_KEY,
+  CLOUDFLARE_SETTING_KEY,
+  createJwks,
+  toCloudflareSetting,
   resolveTailscaleBinary,
   tailscaleSelf,
   toTailscaleSetting,
@@ -82,6 +87,7 @@ import {
   checkTimezone,
   systemTimezone,
   checkTailscale,
+  checkCloudflareAccess,
   checkSubscriptionSignIns,
   checkNodeVersion,
   checkComputerHelper,
@@ -834,6 +840,29 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       });
     },
 
+    /**
+     * Signing in through Cloudflare Access: the setting, whether the ingress
+     * listener answers (a TCP connect, never an HTTP request — an
+     * unauthenticated request would count as a failed sign-in), the team's
+     * signing keys (fetched once), and whether cloudflared is installed.
+     */
+    async cloudflareAccess(): Promise<ProbeResult> {
+      const config = webConfig(env);
+      const pool = await connected();
+      const stored = pool === null ? null : toCloudflareSetting(await readWebSetting(pool, CLOUDFLARE_SETTING_KEY).catch(() => null));
+      const raw = env.BUDDI_INGRESS_PORT?.trim();
+      const asked = raw ? Number(raw) : NaN;
+      const port = Number.isInteger(asked) && asked > 0 && asked <= 65535 ? asked : config.port + 2;
+      const enabled = stored?.enabled === true;
+      return checkCloudflareAccess({
+        setting: stored,
+        ...(config.publicOrigin !== undefined ? { publicOrigin: config.publicOrigin } : {}),
+        ingress: { port, listening: enabled ? await tcpAnswers(port) : false },
+        keys: enabled && stored ? await createJwks().refresh(stored.teamDomain) : null,
+        cloudflared: enabled ? binaryOnPath('cloudflared', ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared', '/usr/bin/cloudflared']) : false,
+      });
+    },
+
     async recovery(): Promise<ProbeResult> {
       const pool = await connected();
       if (pool === null) return checkRecovery({ active: false, unknown: true });
@@ -951,4 +980,27 @@ export function redactUrl(url: string): string {
   } catch {
     return url.replace(/:\/\/[^@]*@/, '://***@');
   }
+}
+
+/** Does anything accept a TCP connection on 127.0.0.1:port? No bytes are sent. */
+function tcpAnswers(port: number, timeoutMs = 1_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = netConnect({ host: '127.0.0.1', port });
+    const done = (answer: boolean): void => { socket.destroy(); resolve(answer); };
+    socket.setTimeout(timeoutMs, () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+  });
+}
+
+/** Is there an executable called `name` on the PATH, or at one of the usual places? */
+function binaryOnPath(name: string, fallbacks: string[]): boolean {
+  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter((d) => d !== '' && path.isAbsolute(d));
+  for (const candidate of [...dirs.map((d) => path.join(d, name)), ...fallbacks]) {
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      return true;
+    } catch { /* not this one */ }
+  }
+  return false;
 }

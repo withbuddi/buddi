@@ -166,7 +166,7 @@ const HTTP_EXEMPT = [
   // The local Tailscale daemon's API, for the same reason: it lives on a Unix
   // socket in /var/run, there is no origin and so no pool to wedge, and one
   // request per whois is all it ever sends.
-  /^packages\/gateway\/src\/web\/tailscale\.ts$/,
+  /^packages\/gateway\/src\/web\/access\/tailscale\.ts$/,
   // The preview reverse proxy. It is not a client of anything: it forwards one
   // request the owner's browser made to a loopback port on this machine, and
   // must stream both ways and carry a websocket upgrade — neither of which
