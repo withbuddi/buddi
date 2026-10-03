@@ -420,6 +420,7 @@ export function CloudflareRow({ enabled, locked, onSaved }: { enabled: boolean; 
       failed={failed}
       onStop={() => act(() => api.stopCloudflareSetup())}
       onRetry={() => setMode('form')}
+      onAdopt={() => { const p = setup?.progress; if (p) act(() => api.startCloudflareSetup({ host: p.host, email: p.email, adopt: true }), 'run'); }}
       onRemove={remove}
       onAgain={() => setMode('form')}
     />
@@ -467,12 +468,13 @@ function SetupForm({ setup, busy, failed, onCancel, onStart }: {
   );
 }
 
-function SetupRun({ progress, busy, failed, onStop, onRetry, onRemove, onAgain }: {
+function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, onAgain }: {
   progress: CloudflareSetupProgress | null;
   busy: boolean;
   failed: string | null;
   onStop: () => void;
   onRetry: () => void;
+  onAdopt: () => void;
   onRemove: () => void;
   onAgain: () => void;
 }): JSX.Element {
@@ -530,7 +532,9 @@ function SetupRun({ progress, busy, failed, onStop, onRetry, onRemove, onAgain }
       <Toolbar align="end">
         {live ? <Button disabled={busy} onClick={onStop}>Stop waiting</Button> : null}
         {progress.state === 'failed' || progress.state === 'done' || progress.state === 'stopped' ? <Button disabled={busy} onClick={onRemove}>Remove what buddi made</Button> : null}
-        {progress.state === 'failed' || progress.state === 'stopped' ? <Button variant="accent" disabled={busy} onClick={onRetry}>Try again</Button> : null}
+        {progress.state === 'failed' && progress.adoptable ? <Button disabled={busy} onClick={onRetry}>Try again</Button> : null}
+        {progress.state === 'failed' && progress.adoptable ? <Button variant="accent" disabled={busy} onClick={onAdopt}>Use it anyway</Button> : null}
+        {(progress.state === 'failed' && !progress.adoptable) || progress.state === 'stopped' ? <Button variant="accent" disabled={busy} onClick={onRetry}>Try again</Button> : null}
       </Toolbar>
     </Stack>
   );

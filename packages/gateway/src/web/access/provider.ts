@@ -70,6 +70,13 @@ export interface AccessRefusal {
    * `other`: anything else; the request is simply unauthenticated.
    */
   kind: 'unanswered' | 'login' | 'other';
+  /**
+   * A credential was presented and failed (a Cloudflare Access assertion that
+   * does not verify): the rate-limit bucket it counts against, and a digest
+   * of it so the same one counts once. Absent for a credential-free probe and
+   * for "could not ask", which are never failed sign-ins.
+   */
+  attempt?: { bucket: string; credential: string } | undefined;
 }
 
 export type AccessIdentifyResult = { ok: true; identity: AccessIdentity } | ({ ok: false } & AccessRefusal);

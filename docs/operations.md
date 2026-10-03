@@ -406,7 +406,7 @@ command:
    Cloudflare*, and Save.
 
 **Set it up for me.** The panel (and `buddi access cloudflare setup --host
-buddi.example.com [--zone example.com] [--email you@example.com]`) does steps
+buddi.example.com [--zone example.com] [--email you@example.com] [--adopt]`) does steps
 2–5 through Cloudflare's API instead. Create a token under My Profile → API
 Tokens → Create Token → Custom token with:
 
@@ -420,7 +420,7 @@ Paste it with the hostname and your email (the CLI reads
 `CLOUDFLARE_API_TOKEN`, or asks with the input hidden). buddi keeps it as the
 owner secret `CLOUDFLARE_API_TOKEN` (Settings → Keys and secrets; the scrubber
 masks it in every log line), finds the zone the hostname is on, and then
-creates or reuses, each found by its tag first: the tunnel `buddi-<host>`, its
+creates (or, on a later run, reuses by the id it recorded): the tunnel `buddi-<host>`, its
 ingress (`<host>` → `http://127.0.0.1:<ingress port>`, everything else 404), a
 proxied CNAME commented "Made by buddi…", a reusable Allow policy `buddi —
 <host>` for your email (24-hour sessions) and a self-hosted Access application
@@ -438,9 +438,13 @@ to 30 minutes for the tunnel to report healthy and runs Test my setup. A step
 that fails says why — a missing token permission is named — and nothing made
 so far is lost: running it again picks up where it stopped. It refuses to
 touch a DNS record or an Access application for that hostname it did not make.
+A tunnel, policy, application or buddi-tagged DNS record of buddi's name that
+this buddi has no record of making (an older install, someone else's) stops the
+run with *Use it anyway* (`--adopt` on the CLI), which takes it over. One setup
+or removal runs at a time; a second one is refused until the first ends.
 *Remove what buddi made* (or `buddi access cloudflare remove`) deletes the
-application, the policy, the DNS record and the tunnel, each only when it
-carries buddi's tag, turns the setting off when setup filled it in, forgets
+application, the policy, the DNS record and the tunnel, only those whose ids
+buddi recorded making (never anything found by name), turns the setting off when setup filled it in, forgets
 the token once everything went, and shows `sudo cloudflared service uninstall`
 for the connector. The CLI writes the database directly; the running service
 binds its ingress listener within 15 seconds.

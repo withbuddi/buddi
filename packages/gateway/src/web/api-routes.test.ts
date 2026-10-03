@@ -60,9 +60,12 @@ describe('the route table', () => {
     }
   });
 
-  it('says since when for every route but those added since the last release', () => {
+  it('says since when for every route, and names no route that is not a row', () => {
     for (const key of Object.keys(API_SINCE)) {
       expect(API_ROUTES.some((r) => `${r.method} ${r.path}` === key), `API_SINCE names ${key}, which is not a row`).toBe(true);
+    }
+    for (const r of API_ROUTES) {
+      expect(API_SINCE[`${r.method} ${r.path}`], `${r.method} ${r.path} has no API_SINCE entry (add the coming release)`).toMatch(/^\d+\.\d+\.\d+(-pre\.\d+)?$/);
     }
   });
 

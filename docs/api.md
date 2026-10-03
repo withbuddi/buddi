@@ -205,9 +205,9 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 | PUT | `/api/access/cloudflare-access` | Save Cloudflare Access sign-in: the team domain, the application AUD tag, the one allowed email and the public address. Binds or closes the ingress listener and fetches the team's signing keys once; sessions it admitted end unless the same person, team and application stay on. | no |
 | POST | `/api/access/cloudflare-access/test` | "Test my setup": fetch the signing keys of the team domain given (or the stored one) and say what came back. Nothing is stored. | no |
 | GET | `/api/access/cloudflare-access/setup` | "Set it up for me": the run in progress (or the last one), whether a Cloudflare API token is kept, what buddi made last time, the token permissions to ask for and the ingress port. The install line in `progress.install` holds the tunnel's connector token. | yes |
-| POST | `/api/access/cloudflare-access/setup` | Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLARE_API_TOKEN; omit it to use the kept one), buddi finds the zone, creates or reuses the tunnel buddi-<host>, its ingress, the DNS record, the Access policy and application, fills in Cloudflare Access sign-in, shows the service install line, waits for the tunnel and runs the test. Poll GET for progress. | no |
+| POST | `/api/access/cloudflare-access/setup` | Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLARE_API_TOKEN; omit it to use the kept one), buddi finds the zone, creates (or reuses what it made before) the tunnel buddi-<host>, its ingress, the DNS record, the Access policy and application, fills in Cloudflare Access sign-in, shows the service install line, waits for the tunnel and runs the test. Poll GET for progress. An object of buddi's name that buddi did not make stops the run with `progress.adoptable`; `adopt: true` uses it anyway. | no |
 | POST | `/api/access/cloudflare-access/setup/stop` | Stop waiting for the tunnel. What buddi made stays; a new run picks it up. | no |
-| POST | `/api/access/cloudflare-access/setup/remove` | Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, each only when it carries buddi's tag — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went. | no |
+| POST | `/api/access/cloudflare-access/setup/remove` | Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went. | no |
 | GET | `/api/tailscale` | Alias of GET /api/access/tailscale, kept for one release. | yes |
 | PUT | `/api/tailscale` | Alias of PUT /api/access/tailscale, kept for one release. | no |
 
@@ -377,7 +377,7 @@ Sign in from elsewhere: every trusted access provider (Tailscale, Cloudflare Acc
 
 - **Auth:** Session or API token.
 - **Answer:** `{ proxied: boolean, providers: [{ id: 'tailscale'|'cloudflare-access', title, identity: 'login'|'device', proxy: 'this-machine'|'elsewhere', enabled: boolean, status: { state: 'off'|'needs-setup'|'waiting'|'ready'|'unanswered', sentence } }] }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/access"
@@ -389,7 +389,7 @@ Tailscale sign-in: the stored setting, the daemon, and the command that serves t
 
 - **Auth:** Session or API token.
 - **Answer:** `{ enabled: boolean, login: string, available: boolean, self: { login, name }|null, proxied: boolean, serveCommand: string }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/access/tailscale"
@@ -403,7 +403,7 @@ Turn Tailscale sign-in on or off, for one login. Every Tailscale session ends.
 - **Body:** `{ enabled: boolean, login?: string }`
 - **Answer:** `as GET`
 - **Errors:** 400 not a Tailscale login; 403 not from the computer buddi runs on
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"enabled":true}' "$BUDDI_URL/api/access/tailscale"
@@ -415,7 +415,7 @@ Cloudflare Access sign-in: the stored fields, the status, the setup steps with t
 
 - **Auth:** Session or API token.
 - **Answer:** `{ enabled, teamDomain, aud, email, publicOrigin, status: { state, sentence }, ingressPort: number, listening: boolean, lastVisit: { at, email }|null, setup: { steps: [{ text, command? }], fields: [{ key, label, hint?, placeholder? }] }, proxied: boolean }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/access/cloudflare-access"
@@ -429,7 +429,7 @@ Save Cloudflare Access sign-in: the team domain, the application AUD tag, the on
 - **Body:** `{ enabled: boolean, teamDomain: string, aud: string, email: string, publicOrigin: string }`
 - **Answer:** `as GET, plus test: { ok, keys, error? } when on`
 - **Errors:** 400 a field that is not what it should be, or a field missing to turn it on; 403 not from the computer buddi runs on
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"enabled":true,"teamDomain":"…","aud":"…","email":"…","publicOrigin":"…"}' "$BUDDI_URL/api/access/cloudflare-access"
@@ -443,7 +443,7 @@ curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "
 - **Body:** `{ teamDomain?: string }`
 - **Answer:** `{ ok: boolean, keys: number, teamDomain, sentence, listening: boolean, ingressPort: number|null }`
 - **Errors:** 400 not a Cloudflare team domain; 403 not from the computer buddi runs on
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/access/cloudflare-access/test"
@@ -454,9 +454,9 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 "Set it up for me": the run in progress (or the last one), whether a Cloudflare API token is kept, what buddi made last time, the token permissions to ask for and the ingress port. The install line in `progress.install` holds the tunnel's connector token.
 
 - **Auth:** Session or API token; from the computer buddi runs on.
-- **Answer:** `{ progress: { state: 'idle'|'running'|'waiting'|'done'|'failed'|'stopped'|'removing'|'removed', host, email, steps: [{ id, state: 'next'|'now'|'done'|'failed', text, why? }], install: { command, note }|null, error, url, removed: string[], uninstall }, tokenStored: boolean, record: { host, email, zone, teamDomain }|null, permissions: string[], ingressPort: number }`
+- **Answer:** `{ progress: { state: 'idle'|'running'|'waiting'|'done'|'failed'|'stopped'|'removing'|'removed', host, email, steps: [{ id, state: 'next'|'now'|'done'|'failed', text, why? }], install: { command, note }|null, error, url, removed: string[], uninstall, adoptable: boolean }, tokenStored: boolean, record: { host, email, zone, teamDomain }|null, permissions: string[], tokenUrl: string, ingressPort: number }`
 - **Errors:** 403 not from the computer buddi runs on
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/access/cloudflare-access/setup"
@@ -464,13 +464,13 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/access/cloudflare-a
 
 #### `POST /api/access/cloudflare-access/setup`
 
-Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLARE_API_TOKEN; omit it to use the kept one), buddi finds the zone, creates or reuses the tunnel buddi-<host>, its ingress, the DNS record, the Access policy and application, fills in Cloudflare Access sign-in, shows the service install line, waits for the tunnel and runs the test. Poll GET for progress.
+Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLARE_API_TOKEN; omit it to use the kept one), buddi finds the zone, creates (or reuses what it made before) the tunnel buddi-<host>, its ingress, the DNS record, the Access policy and application, fills in Cloudflare Access sign-in, shows the service install line, waits for the tunnel and runs the test. Poll GET for progress. An object of buddi's name that buddi did not make stops the run with `progress.adoptable`; `adopt: true` uses it anyway.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
-- **Body:** `{ token?: string, host: string, email: string, zone?: string }`
+- **Body:** `{ token?: string, host: string, email: string, zone?: string, adopt?: boolean }`
 - **Answer:** `202, as GET`
-- **Errors:** 400 a hostname, email or token that is not one, or no token kept; 403 not from the computer buddi runs on; 409 a run already going, or the vault refused the token
-- **Since:** unreleased
+- **Errors:** 400 a hostname, email or token that is not one, or no token kept; 403 not from the computer buddi runs on; 409 a setup or removal already going, or the vault refused the token
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"host":"…","email":"…"}' "$BUDDI_URL/api/access/cloudflare-access/setup"
@@ -482,8 +482,8 @@ Stop waiting for the tunnel. What buddi made stays; a new run picks it up.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Answer:** `as GET`
-- **Errors:** 403 not from the computer buddi runs on
-- **Since:** unreleased
+- **Errors:** 403 not from the computer buddi runs on; 409 a removal going
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/access/cloudflare-access/setup/stop"
@@ -491,13 +491,13 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$B
 
 #### `POST /api/access/cloudflare-access/setup/remove`
 
-Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, each only when it carries buddi's tag — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went.
+Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Body:** `{ token?: string, host?: string }`
 - **Answer:** `as GET; progress.removed lists what went, progress.error what did not`
-- **Errors:** 400 no token kept or given; 403 not from the computer buddi runs on; 409 a run going
-- **Since:** unreleased
+- **Errors:** 400 no token kept or given; 403 not from the computer buddi runs on; 409 a setup or removal going
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/access/cloudflare-access/setup/remove"
@@ -3906,7 +3906,7 @@ Pin one conversation to a route, or clear it.
 - **Body:** `{ conversationId: string, route: auto|own|chrome|apps }`
 - **Answer:** JSON
 - **Errors:** 400; 409
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"conversationId":"…","route":"…"}' "$BUDDI_URL/api/browser/pin"
@@ -3920,7 +3920,7 @@ Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) witho
 - **Body:** `{ conversationId: string, answer: string }`
 - **Answer:** `{ answered?, status }`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"conversationId":"…","answer":"…"}' "$BUDDI_URL/api/browser/card"
@@ -3933,7 +3933,7 @@ Browser stops by cause, cards and routes over the last days.
 - **Auth:** Session or API token.
 - **Query:** `days?: number`
 - **Answer:** `{ days, tasks, stops, cards, byCause, routes, stopsPerTask }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/telemetry"

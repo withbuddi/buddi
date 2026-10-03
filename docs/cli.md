@@ -1470,7 +1470,7 @@ buddi telegram unpair 12
 Set up signing in through Cloudflare Access on your own domain: tunnel, DNS, Access application and policy, from one API token.
 
 ```sh
-buddi access cloudflare setup --host <hostname> [--zone <zone>] [--email <email>]
+buddi access cloudflare setup --host <hostname> [--zone <zone>] [--email <email>] [--adopt]
 ```
 
 **Flags**
@@ -1478,6 +1478,7 @@ buddi access cloudflare setup --host <hostname> [--zone <zone>] [--email <email>
 - `--host <hostname>`: The address to reach buddi at, on a domain in your Cloudflare account.
 - `--zone <zone>`: The Cloudflare zone, when the hostname alone does not say which.
 - `--email <email>`: The one email Cloudflare lets in. Asked for when not given or already set.
+- `--adopt`: Use it anyway: take over a tunnel, DNS record, policy or application of buddi's name that this buddi did not make.
 
 **Example**
 
@@ -1504,7 +1505,7 @@ buddi access cloudflare remove [--host <hostname>]
 
 **Flags**
 
-- `--host <hostname>`: Which setup, when buddi has no record of it.
+- `--host <hostname>`: Which hostname, for the message when buddi has no record of a setup (only what buddi recorded making is removed).
 
 **Example**
 

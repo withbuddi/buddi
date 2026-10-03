@@ -1,5 +1,5 @@
 /**
- * `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>]` and
+ * `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt]` and
  * `buddi access cloudflare remove [--host <h>]`: Settings → Sign in from
  * elsewhere → Cloudflare Access → "Set it up for me", from the terminal.
  *
@@ -77,7 +77,7 @@ function printer(): (p: SetupProgress) => void {
 }
 
 export async function runAccess(
-  command: { action: 'cloudflare-setup' | 'cloudflare-remove'; host?: string; zone?: string; email?: string },
+  command: { action: 'cloudflare-setup' | 'cloudflare-remove'; host?: string; zone?: string; email?: string; adopt?: boolean },
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const databaseUrl = env.DATABASE_URL;
@@ -130,7 +130,7 @@ export async function runAccess(
     process.once('SIGINT', onSigint);
     const jwks = createJwks();
     const done = await runCloudflareSetup(
-      { host: command.host ?? '', email, zone: command.zone },
+      { host: command.host ?? '', email, zone: command.zone, adopt: command.adopt === true },
       {
         api,
         ingressPort: ingressPortOf(env),
@@ -153,6 +153,7 @@ export async function runAccess(
     if (done.state === 'stopped') { console.log(done.error ?? 'Stopped.'); return 0; }
     console.error('');
     console.error(done.error ?? 'The setup did not finish.');
+    if (done.adoptable) console.error(dim('To use it anyway, run the same command again with --adopt.'));
     console.error(dim('Run it again to pick up where it stopped, or `buddi access cloudflare remove` to undo what buddi made.'));
     return 1;
   } finally {

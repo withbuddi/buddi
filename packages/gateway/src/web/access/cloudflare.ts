@@ -29,7 +29,7 @@
  * the arrival check (it must come through the tunnel), the `exp` with a small
  * skew, and on a session the JWT must keep naming the same email.
  */
-import { createPublicKey, verify as verifySignature, type KeyObject } from 'node:crypto';
+import { createHash, createPublicKey, verify as verifySignature, type KeyObject } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { defaultHttpTransport, type HttpTransport } from '@buddi/runtime';
 import { arrivalOf } from './arrival.js';
@@ -427,7 +427,7 @@ function connectingIp(req: IncomingMessage): string {
 export function cloudflareProvider(deps: CloudflareProviderDeps): CloudflareProvider {
   const lastLogged = new Map<CloudflareRefusal, number>();
   let visit: { at: Date; email: string } | null = null;
-  const complain = (reason: CloudflareRefusal, now: Date): AccessIdentifyResult => {
+  const complain = (reason: CloudflareRefusal, now: Date): { ok: false } & AccessRefusal => {
     const last = lastLogged.get(reason) ?? 0;
     if (now.getTime() - last >= LOG_EVERY_MS) {
       lastLogged.set(reason, now.getTime());
@@ -444,9 +444,18 @@ export function cloudflareProvider(deps: CloudflareProviderDeps): CloudflareProv
     }
     if (!setting.enabled) return complain('setting-off', now);
     if (token === undefined) return complain('no-assertion', now);
-    if (token === null) return complain('malformed', now);
+    // An assertion presented that does not verify is a failed sign-in, counted
+    // per Cf-Connecting-Ip; keys that could not be fetched are not an answer.
+    const attempt = (raw: string) => ({ bucket: `cf:${connectingIp(req)}`, credential: createHash('sha256').update(`cf-assertion:${raw}`).digest('base64url') });
+    if (token === null) {
+      const raw = req.headers[CF_ASSERTION_HEADER];
+      return { ...complain('malformed', now), attempt: attempt(Array.isArray(raw) ? raw.join('\n') : String(raw)) };
+    }
     const verified = await verifyAccessJwt(token, setting, { jwks: deps.jwks, now });
-    if (!verified.ok) return complain(verified.reason, now);
+    if (!verified.ok) {
+      const refused = complain(verified.reason, now);
+      return verified.reason === 'keys-unreachable' ? refused : { ...refused, attempt: attempt(token) };
+    }
     visit = { at: now, email: verified.assertion.email };
     return {
       ok: true,

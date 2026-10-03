@@ -187,25 +187,25 @@ export const API_ROUTES: readonly ApiRoute[] = [
   {
     method: 'GET', path: '/api/access/cloudflare-access/setup', area: 'session', localOnly: true,
     summary: '"Set it up for me": the run in progress (or the last one), whether a Cloudflare API token is kept, what buddi made last time, the token permissions to ask for and the ingress port. The install line in `progress.install` holds the tunnel\'s connector token.',
-    answer: "{ progress: { state: 'idle'|'running'|'waiting'|'done'|'failed'|'stopped'|'removing'|'removed', host, email, steps: [{ id, state: 'next'|'now'|'done'|'failed', text, why? }], install: { command, note }|null, error, url, removed: string[], uninstall }, tokenStored: boolean, record: { host, email, zone, teamDomain }|null, permissions: string[], tokenUrl: string, ingressPort: number }",
+    answer: "{ progress: { state: 'idle'|'running'|'waiting'|'done'|'failed'|'stopped'|'removing'|'removed', host, email, steps: [{ id, state: 'next'|'now'|'done'|'failed', text, why? }], install: { command, note }|null, error, url, removed: string[], uninstall, adoptable: boolean }, tokenStored: boolean, record: { host, email, zone, teamDomain }|null, permissions: string[], tokenUrl: string, ingressPort: number }",
     errors: '403 not from the computer buddi runs on',
   },
   {
     method: 'POST', path: '/api/access/cloudflare-access/setup', area: 'session', localOnly: true, token: 'access',
-    summary: 'Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLARE_API_TOKEN; omit it to use the kept one), buddi finds the zone, creates or reuses the tunnel buddi-<host>, its ingress, the DNS record, the Access policy and application, fills in Cloudflare Access sign-in, shows the service install line, waits for the tunnel and runs the test. Poll GET for progress.',
-    body: '{ token?: string, host: string, email: string, zone?: string }', answer: '202, as GET',
-    errors: '400 a hostname, email or token that is not one, or no token kept; 403 not from the computer buddi runs on; 409 a run already going, or the vault refused the token',
+    summary: 'Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLARE_API_TOKEN; omit it to use the kept one), buddi finds the zone, creates (or reuses what it made before) the tunnel buddi-<host>, its ingress, the DNS record, the Access policy and application, fills in Cloudflare Access sign-in, shows the service install line, waits for the tunnel and runs the test. Poll GET for progress. An object of buddi\'s name that buddi did not make stops the run with `progress.adoptable`; `adopt: true` uses it anyway.',
+    body: '{ token?: string, host: string, email: string, zone?: string, adopt?: boolean }', answer: '202, as GET',
+    errors: '400 a hostname, email or token that is not one, or no token kept; 403 not from the computer buddi runs on; 409 a setup or removal already going, or the vault refused the token',
   },
   {
     method: 'POST', path: '/api/access/cloudflare-access/setup/stop', area: 'session', localOnly: true, token: 'access',
     summary: 'Stop waiting for the tunnel. What buddi made stays; a new run picks it up.',
-    answer: 'as GET', errors: '403 not from the computer buddi runs on',
+    answer: 'as GET', errors: '403 not from the computer buddi runs on; 409 a removal going',
   },
   {
     method: 'POST', path: '/api/access/cloudflare-access/setup/remove', area: 'session', localOnly: true, token: 'access',
-    summary: 'Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, each only when it carries buddi\'s tag — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went.',
+    summary: 'Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went.',
     body: '{ token?: string, host?: string }', answer: 'as GET; progress.removed lists what went, progress.error what did not',
-    errors: '400 no token kept or given; 403 not from the computer buddi runs on; 409 a run going',
+    errors: '400 no token kept or given; 403 not from the computer buddi runs on; 409 a setup or removal going',
   },
   {
     method: 'GET', path: '/api/tailscale', area: 'session',
@@ -1242,10 +1242,24 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 /**
  * The release each route first shipped in, from the history (the earliest
- * tag whose gateway source dispatched it). A route added since the last
- * release has no entry and reads "unreleased" until the release adds it.
+ * tag whose gateway source dispatched it). Every row has an entry: a route
+ * added for the coming release takes that release's version when it lands
+ * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'GET /api/access': '0.1.0-pre.38',
+  'GET /api/access/tailscale': '0.1.0-pre.38',
+  'PUT /api/access/tailscale': '0.1.0-pre.38',
+  'GET /api/access/cloudflare-access': '0.1.0-pre.38',
+  'PUT /api/access/cloudflare-access': '0.1.0-pre.38',
+  'POST /api/access/cloudflare-access/test': '0.1.0-pre.38',
+  'GET /api/access/cloudflare-access/setup': '0.1.0-pre.38',
+  'POST /api/access/cloudflare-access/setup': '0.1.0-pre.38',
+  'POST /api/access/cloudflare-access/setup/stop': '0.1.0-pre.38',
+  'POST /api/access/cloudflare-access/setup/remove': '0.1.0-pre.38',
+  'POST /api/browser/pin': '0.1.0-pre.38',
+  'POST /api/browser/card': '0.1.0-pre.38',
+  'GET /api/browser/telemetry': '0.1.0-pre.38',
   'POST /api/quiet': '0.1.0-pre.37',
   'POST /api/skills/bundles': '0.1.0-pre.37',
   'GET /api/skills/bundles/:staged/file': '0.1.0-pre.37',

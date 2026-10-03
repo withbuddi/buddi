@@ -52,6 +52,9 @@ export function createIngress(opts: {
       next.once('error', onError);
       next.listen(port, '127.0.0.1', () => {
         next.removeListener('error', onError);
+        // A later server-level error (EMFILE on accept) is logged, never an
+        // unhandled 'error' event that would take the whole gateway down.
+        next.on('error', (err: NodeJS.ErrnoException) => opts.log(`access: the ingress listener on 127.0.0.1:${port}: ${err.code ?? err.message}`));
         server = next;
         bound = (next.address() as AddressInfo | null)?.port ?? port;
         problem = null;

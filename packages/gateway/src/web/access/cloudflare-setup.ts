@@ -10,18 +10,23 @@
  * never runs itself (`sudo cloudflared service install <token>`), waits for
  * the tunnel to report healthy and runs Test my setup.
  *
- * Idempotent: every object is found by its tag first (the tunnel's and the
- * application's name, the policy's name, the DNS record's comment) and reused,
- * so a second run after a failure picks up where the first stopped. Remove
- * deletes only what carries buddi's tag, whatever the record says, and keeps
- * going past a failure so one stuck object does not strand the others.
+ * Idempotent: the ids of what buddi made are kept in the setup record, so a
+ * second run after a failure picks up where the first stopped. An object of
+ * buddi's name that the record doesn't hold (someone else's, or a lost
+ * record's) is never taken silently: the run stops with `adoptable` and the
+ * owner may say "Use it anyway" (`adopt: true`, `--adopt`). Remove deletes
+ * only the ids the record holds, and keeps going past a failure so one stuck
+ * object does not strand the others.
+ *
+ * One operation at a time in a process (`claimSetupOperation`): a setup, its
+ * stop and a removal never overlap, from the panel or the CLI.
  *
  * The same engine runs behind the panel (server.ts) and `buddi access
  * cloudflare setup` (the CLI): only the token store and the progress sink
  * differ.
  */
 import type { CloudflareApi, CfAccessApp, CfDnsRecord } from './cloudflare-api.js';
-import { CloudflareApiError } from './cloudflare-api.js';
+import { CloudflareApiError, CONNECTOR_TOKEN } from './cloudflare-api.js';
 import { plausibleEmail, validateCloudflareInput, type CloudflareAccessSetting } from './cloudflare.js';
 
 /** Where the record of what buddi made lives (a web setting). Ids only, never a token. */
@@ -73,6 +78,8 @@ export interface SetupProgress {
   removed: string[];
   /** The line that removes the connector from this computer. */
   uninstall: string | null;
+  /** It stopped at an object of buddi's name that buddi didn't make: "Use it anyway" runs again with adopt. */
+  adoptable: boolean;
 }
 
 export interface SetupRecord {
@@ -81,7 +88,11 @@ export interface SetupRecord {
   zone: { id: string; name: string };
   accountId: string;
   teamDomain: string;
+  /** The ids of what buddi made (or was told to use anyway). Remove deletes these and nothing else. */
   tunnelId?: string | undefined;
+  dnsRecordId?: string | undefined;
+  policyId?: string | undefined;
+  appId?: string | undefined;
   aud?: string | undefined;
   at: string;
 }
@@ -90,6 +101,8 @@ export interface SetupInput {
   host: string;
   email: string;
   zone?: string | undefined;
+  /** "Use it anyway": take over an object of buddi's name that buddi didn't make. */
+  adopt?: boolean | undefined;
 }
 
 export interface SetupDeps {
@@ -108,6 +121,35 @@ export interface SetupDeps {
   pollMs?: number | undefined;
   waitMs?: number | undefined;
   signal?: AbortSignal | undefined;
+  /**
+   * The operation lock the caller already holds (the server claims it before
+   * its first await). Without one, the run claims its own and lets it go.
+   */
+  lease?: SetupLease | undefined;
+}
+
+export type SetupOperation = 'setup' | 'remove';
+export interface SetupLease { readonly kind: SetupOperation; release(): void }
+
+/** In this process, the one setup or removal going, or null. */
+let operation: { kind: SetupOperation } | null = null;
+
+/** Claim the one operation slot, synchronously; null when another holds it. */
+export function claimSetupOperation(kind: SetupOperation): SetupLease | null {
+  if (operation) return null;
+  const mine = { kind };
+  operation = mine;
+  return { kind, release: () => { if (operation === mine) operation = null; } };
+}
+
+/** What holds the slot, or null. */
+export const setupOperation = (): SetupOperation | null => operation?.kind ?? null;
+
+/** The sentence for a second caller, by what is going. */
+export function setupBusySentence(kind: SetupOperation | null): string {
+  return kind === 'remove'
+    ? 'buddi is removing what it made in Cloudflare. Wait for it to finish, then try again.'
+    : 'A Cloudflare setup is already running. Wait for it, or stop it, then try again.';
 }
 
 /** A hostname, lower case, or null. */
@@ -127,6 +169,8 @@ export function checkSetupInput(input: SetupInput): string | null {
 
 /** The line to run, for this platform. */
 export function installFor(token: string, platform: NodeJS.Platform): SetupInstall {
+  // The line goes into an owner's sudo: never anything but a token in it.
+  if (!CONNECTOR_TOKEN.test(token)) throw new CloudflareApiError('Cloudflare answered without the tunnel’s connector token.', 200, []);
   if (platform === 'win32') {
     return { command: `cloudflared.exe service install ${token}`, note: 'Run it in a terminal opened as administrator, after installing cloudflared from Cloudflare’s downloads page.' };
   }
@@ -163,7 +207,7 @@ export function freshProgress(host = '', email = ''): SetupProgress {
   return {
     state: 'idle', host, email,
     steps: ORDER.map((id) => ({ id, state: 'next', text: LABELS[id] })),
-    install: null, error: null, url: null, removed: [], uninstall: null,
+    install: null, error: null, url: null, removed: [], uninstall: null, adoptable: false,
   };
 }
 
@@ -185,6 +229,22 @@ const realSleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promi
  * `onProgress` gets a copy at every change.
  */
 export async function runCloudflareSetup(input: SetupInput, deps: SetupDeps, onProgress: (p: SetupProgress) => void = () => {}): Promise<SetupProgress> {
+  const lease = deps.lease ?? claimSetupOperation('setup');
+  if (!lease) {
+    const p = freshProgress(input.host.trim(), input.email.trim());
+    p.state = 'failed';
+    p.error = setupBusySentence(setupOperation());
+    onProgress(structuredClone(p));
+    return p;
+  }
+  try {
+    return await setupRun(input, deps, onProgress);
+  } finally {
+    if (!deps.lease) lease.release();
+  }
+}
+
+async function setupRun(input: SetupInput, deps: SetupDeps, onProgress: (p: SetupProgress) => void): Promise<SetupProgress> {
   const host = normalizeHost(input.host) ?? input.host.trim();
   const email = input.email.trim();
   const p = freshProgress(host, email);
@@ -240,14 +300,23 @@ export async function runCloudflareSetup(input: SetupInput, deps: SetupDeps, onP
     }
     const record: SetupRecord = { host, email, zone: { id: zone.id, name: zone.name }, accountId, teamDomain, at: now().toISOString() };
     const previous = await deps.readRecord();
-    if (previous && previous.host === host) Object.assign(record, { tunnelId: previous.tunnelId, aud: previous.aud });
+    if (previous && previous.host === host) {
+      Object.assign(record, { tunnelId: previous.tunnelId, dnsRecordId: previous.dnsRecordId, policyId: previous.policyId, appId: previous.appId, aud: previous.aud });
+    }
     await deps.saveRecord(record);
+    const adopt = input.adopt === true;
+    /** Stop at an object buddi didn't make, offering "Use it anyway". */
+    const notOurs = (what: string): never => {
+      p.adoptable = true;
+      throw new SetupError(`${what} buddi didn’t make it. Use it anyway to let buddi take it over, or delete it in Cloudflare first.`);
+    };
     finish('token', `Token checked · ${zone.name} · team ${teamDomain}`);
 
     // 2. The tunnel.
     at('tunnel');
     const name = tunnelNameFor(host);
     let tunnel = await api.findTunnel(accountId, name);
+    if (tunnel && tunnel.id !== record.tunnelId && !adopt) notOurs(`There is already a tunnel named ${name} in this Cloudflare account, and`);
     const reusedTunnel = tunnel !== null;
     tunnel ??= await api.createTunnel(accountId, name);
     record.tunnelId = tunnel.id;
@@ -265,39 +334,55 @@ export async function runCloudflareSetup(input: SetupInput, deps: SetupDeps, onP
     const target = `${tunnel.id}.cfargotunnel.com`;
     const records = (await api.dnsRecords(zone.id, host)).filter((r) => r.name.toLowerCase() === host);
     let dnsWords = `DNS record ${host} added`;
-    const mine = records.find((r) => r.type === 'CNAME' && r.content.toLowerCase() === target);
-    if (mine) {
+    const pointing = records.find((r) => r.type === 'CNAME' && r.content.toLowerCase() === target);
+    if (pointing) {
+      if (pointing.id !== record.dnsRecordId && !adopt) notOurs(`${host} already has a DNS record to this tunnel, and`);
+      record.dnsRecordId = pointing.id;
       dnsWords = `DNS record ${host} found`;
     } else {
-      const foreign = records.find((r) => !ownsRecord(r));
+      const others = records.filter((r) => r.id !== record.dnsRecordId);
+      const foreign = others.find((r) => !ownsRecord(r));
       if (foreign) {
         throw new SetupError(`${host} already has a DNS record (${foreign.type} to ${foreign.content}). Pick another hostname, or delete that record in Cloudflare first.`);
       }
+      if (others.length > 0 && !adopt) notOurs(`${host} already has a DNS record tagged as buddi’s, but`);
       // buddi's own record for an older tunnel goes; the new one replaces it.
       for (const old of records) await api.deleteDnsRecord(zone.id, old.id);
-      await api.createCname(zone.id, host, target, DNS_COMMENT);
+      record.dnsRecordId = (await api.createCname(zone.id, host, target, DNS_COMMENT)).id;
     }
+    await deps.saveRecord(record);
     finish('dns', dnsWords);
 
     // 5. The Allow policy and the Access application.
     at('access');
     const policyName = policyNameFor(host);
-    const existingPolicy = (await api.policies(accountId)).find((x) => x.name === policyName);
+    const allPolicies = await api.policies(accountId);
+    const namedPolicy = allPolicies.find((x) => x.name === policyName);
+    const ourPolicy = allPolicies.find((x) => x.id === record.policyId);
+    if (namedPolicy && !ourPolicy && !adopt) notOurs(`There is already an Access policy named “${policyName}”, and`);
+    const existingPolicy = ourPolicy ?? namedPolicy;
     const policy = existingPolicy
       ? await api.updatePolicy(accountId, existingPolicy.id, policyName, email)
       : await api.createPolicy(accountId, policyName, email);
+    record.policyId = policy.id;
+    await deps.saveRecord(record);
     const appName = appNameFor(host);
     const apps = await api.apps(accountId);
     const sameHost = apps.filter((a) => (a.domain ?? '').toLowerCase().replace(/\/.*$/, '') === host);
-    const foreignApp = sameHost.find((a) => a.name !== appName);
+    const foreignApp = sameHost.find((a) => a.name !== appName && a.id !== record.appId);
     if (foreignApp) {
       throw new SetupError(`There is already an Access application for ${host} (“${foreignApp.name}”). buddi won’t change it: delete it in Cloudflare, or use “I’ll do it myself” with its AUD tag.`);
     }
-    const existingApp = sameHost.find((a) => a.name === appName);
+    const existingApp = sameHost.find((a) => a.id === record.appId) ?? sameHost.find((a) => a.name === appName);
+    if (existingApp && existingApp.id !== record.appId && !adopt) notOurs(`There is already an Access application named “${appName}” for ${host}, and`);
     const app: CfAccessApp = existingApp
       ? await api.updateApp(accountId, existingApp.id, { name: appName, domain: host, policyId: policy.id })
       : await api.createApp(accountId, { name: appName, domain: host, policyId: policy.id });
-    if (!app.aud) throw new SetupError('Cloudflare made the Access application but gave no AUD tag. Try again.');
+    record.appId = app.id;
+    if (!app.aud) {
+      await deps.saveRecord(record);
+      throw new SetupError('Cloudflare made the Access application but gave no AUD tag. Try again.');
+    }
     record.aud = app.aud;
     await deps.saveRecord(record);
     finish('access', `Access application · allows ${email} · 24 h sessions`);
@@ -365,13 +450,33 @@ export async function runCloudflareSetup(input: SetupInput, deps: SetupDeps, onP
 
 /**
  * Remove what buddi made: the Access application and policy, the DNS record
- * and the tunnel, each only when it carries buddi's tag. Turns signing in
- * through Cloudflare off when the setting is the one setup filled in, and
- * forgets the record. Never throws.
+ * and the tunnel whose ids the setup record holds, and nothing found by name.
+ * Each id leaves the record as its object goes, so Remove again retries only
+ * what is left. Turns signing in through Cloudflare off when the setting is
+ * the one setup filled in, and forgets the record. Never throws.
  */
 export async function removeCloudflareSetup(
-  deps: Pick<SetupDeps, 'api' | 'platform' | 'readSetting' | 'saveSetting' | 'readRecord' | 'saveRecord'> & { host?: string | undefined },
+  deps: Pick<SetupDeps, 'api' | 'platform' | 'readSetting' | 'saveSetting' | 'readRecord' | 'saveRecord' | 'lease'> & { host?: string | undefined },
   onProgress: (p: SetupProgress) => void = () => {},
+): Promise<SetupProgress> {
+  const lease = deps.lease ?? claimSetupOperation('remove');
+  if (!lease) {
+    const p = freshProgress();
+    p.state = 'failed';
+    p.error = setupBusySentence(setupOperation());
+    onProgress(structuredClone(p));
+    return p;
+  }
+  try {
+    return await removeRun(deps, onProgress);
+  } finally {
+    if (!deps.lease) lease.release();
+  }
+}
+
+async function removeRun(
+  deps: Pick<SetupDeps, 'api' | 'platform' | 'readSetting' | 'saveSetting' | 'readRecord' | 'saveRecord'> & { host?: string | undefined },
+  onProgress: (p: SetupProgress) => void,
 ): Promise<SetupProgress> {
   const record = await deps.readRecord();
   const host = record?.host ?? (deps.host ? normalizeHost(deps.host) : null) ?? '';
@@ -380,68 +485,43 @@ export async function removeCloudflareSetup(
   p.steps = [];
   const emit = (): void => onProgress(structuredClone(p));
   emit();
-  if (!host) {
+  if (!record) {
     p.state = 'removed';
-    p.error = 'buddi has made nothing in Cloudflare to remove.';
+    p.error = host
+      ? `buddi has no record of making anything in Cloudflare for ${host}, so it removes nothing. Delete what is there in Cloudflare by hand.`
+      : 'buddi has made nothing in Cloudflare to remove.';
     emit();
     return p;
   }
   const { api } = deps;
   const failures: string[] = [];
-  const attempt = async (what: string, run: () => Promise<boolean>): Promise<void> => {
+  const gone = (error: unknown): boolean => error instanceof CloudflareApiError && error.status === 404;
+  const attempt = async (what: string, key: 'appId' | 'policyId' | 'dnsRecordId' | 'tunnelId', run: (id: string) => Promise<void>): Promise<void> => {
+    const id = record[key];
+    if (!id) return;
     try {
-      if (await run()) { p.removed.push(what); emit(); }
+      await run(id);
+      p.removed.push(what);
+      emit();
     } catch (error) {
-      failures.push(`${what}: ${sentence(error)}`);
+      // Already deleted in Cloudflare: nothing left to remove.
+      if (!gone(error)) { failures.push(`${what}: ${sentence(error)}`); return; }
     }
+    record[key] = undefined;
+    await deps.saveRecord(record).catch(() => undefined);
   };
 
-  let zoneId = record?.zone.id;
-  let accountId = record?.accountId;
-  if (!zoneId || !accountId) {
-    try {
-      const zone = (await api.zones()).filter((z) => host === z.name || host.endsWith(`.${z.name}`)).sort((a, b) => b.name.length - a.name.length)[0];
-      zoneId = zone?.id;
-      accountId = zone?.account.id;
-    } catch (error) {
-      failures.push(sentence(error));
-    }
-  }
-  if (accountId) {
-    const account = accountId;
-    await attempt('the Access application', async () => {
-      const apps = (await api.apps(account)).filter((a) => a.name === appNameFor(host));
-      for (const app of apps) await api.deleteApp(account, app.id);
-      return apps.length > 0;
-    });
-    await attempt('its policy', async () => {
-      const policies = (await api.policies(account)).filter((x) => x.name === policyNameFor(host));
-      for (const policy of policies) await api.deletePolicy(account, policy.id);
-      return policies.length > 0;
-    });
-  }
-  if (zoneId) {
-    const zone = zoneId;
-    await attempt('the DNS record', async () => {
-      const records = (await api.dnsRecords(zone, host)).filter((r) => r.name.toLowerCase() === host && ownsRecord(r));
-      for (const r of records) await api.deleteDnsRecord(zone, r.id);
-      return records.length > 0;
-    });
-  }
-  if (accountId) {
-    const account = accountId;
-    await attempt('the tunnel', async () => {
-      const tunnel = await api.findTunnel(account, tunnelNameFor(host));
-      if (!tunnel) return false;
-      await api.deleteTunnel(account, tunnel.id);
-      return true;
-    });
-  }
+  const account = record.accountId;
+  const zone = record.zone.id;
+  await attempt('the Access application', 'appId', (id) => api.deleteApp(account, id));
+  await attempt('its policy', 'policyId', (id) => api.deletePolicy(account, id));
+  await attempt('the DNS record', 'dnsRecordId', (id) => api.deleteDnsRecord(zone, id));
+  await attempt('the tunnel', 'tunnelId', (id) => api.deleteTunnel(account, id));
 
   // buddi's setting goes off when it is the one setup filled in.
   try {
     const setting = await deps.readSetting();
-    if (setting.enabled && (!record?.aud || setting.aud === record.aud) && setting.publicOrigin === `https://${host}`) {
+    if (setting.enabled && (!record.aud || setting.aud === record.aud) && setting.publicOrigin === `https://${host}`) {
       await deps.saveSetting({ ...setting, enabled: false, aud: '', teamDomain: '', publicOrigin: '' });
     }
   } catch {

@@ -250,6 +250,46 @@ describe('the lockout, per arrival path', () => {
     expect((await fetch(`${app.edge()}/?t=wrong`, { headers: edgeHeaders(app.team, { 'Cf-Connecting-Ip': '198.51.100.8' }), redirect: 'manual' })).status).toBe(401);
     expect((await fetch(`${app.main}/?t=wrong`, { redirect: 'manual' })).status).toBe(401);
   });
+
+  it('counts invalid assertions presented without a cookie against their own address', async () => {
+    const app = await dashboard({ 'access.cloudflare': ON }, false);
+    const forged = (i: number, ip = '198.51.100.7') => ({ ...edgeHeaders(app.team, { 'Cf-Connecting-Ip': ip }, { aud: `not-this-app-${i}` }) });
+    let status = 0;
+    let tries = 0;
+    for (; tries < 30 && status !== 429; tries++) {
+      status = (await fetch(`${app.edge()}/api/session`, { headers: forged(tries) })).status;
+    }
+    expect(status).toBe(429);
+    expect(tries).toBeLessThan(30);
+    // Another address behind the same tunnel is not locked out with it.
+    expect((await fetch(`${app.edge()}/api/session`, { headers: forged(99, '198.51.100.8') })).status).toBe(401);
+    // Nor is this machine, nor the owner Access verified, from that very address.
+    expect((await fetch(`${app.main}/?t=wrong`, { redirect: 'manual' })).status).toBe(401);
+    expect((await fetch(`${app.edge()}/api/session`, { headers: edgeHeaders(app.team, { 'Cf-Connecting-Ip': '198.51.100.7' }) })).status).toBe(200);
+  });
+
+  it('the same bad assertion again counts once, and a probe with no assertion never counts', async () => {
+    const app = await dashboard({ 'access.cloudflare': ON }, false);
+    const same = edgeHeaders(app.team, { 'Cf-Connecting-Ip': '198.51.100.7' }, { aud: 'not-this-app' });
+    const probe = { Host: 'buddi.example.com', 'X-Forwarded-Proto': 'https', 'Cf-Connecting-Ip': '198.51.100.7' };
+    for (let i = 0; i < 30; i++) {
+      expect((await fetch(`${app.edge()}/api/session`, { headers: same })).status).toBe(401);
+      expect((await fetch(`${app.edge()}/api/session`, { headers: probe })).status).toBe(401);
+    }
+  });
+
+  it('keys that could not be fetched are not failed sign-ins', async () => {
+    const app = await dashboard({ 'access.cloudflare': ON }, false);
+    app.team.fail('network');
+    const statuses: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      statuses.push((await fetch(`${app.edge()}/api/session`, { headers: edgeHeaders(app.team, { 'Cf-Connecting-Ip': '198.51.100.7' }, { jti: `visit-${i}` }) })).status);
+    }
+    // Every visit was refused for want of keys (the claims are good), and none counted.
+    expect(new Set(statuses)).toEqual(new Set([401]));
+    expect(app.team.fetches()).toBeGreaterThan(0);
+    app.team.fail(null);
+  });
 });
 
 describe('the panel', () => {

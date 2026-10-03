@@ -201,4 +201,15 @@ describe('Set it up for me', () => {
     expect(await screen.findByText('Removed the DNS record and the tunnel. Signing in through Cloudflare is off.')).toBeInTheDocument();
     expect(screen.getByText('sudo cloudflared service uninstall')).toBeInTheDocument();
   });
+
+  it('offers Use it anyway when it stopped at something buddi didn’t make, and runs again with adopt', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    const failed = progress('failed', 1, { error: 'There is already a tunnel named buddi-buddi.example.com in this Cloudflare account, and buddi didn’t make it.', adoptable: true });
+    vi.mocked(api.cloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: failed });
+    vi.mocked(api.startCloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: progress('running', 2) });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Use it anyway' }));
+    await waitFor(() => expect(api.startCloudflareSetup).toHaveBeenCalledWith({ host: 'buddi.example.com', email: 'owner@example.com', adopt: true }));
+  });
 });

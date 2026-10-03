@@ -228,6 +228,8 @@ describe('buddi speech', () => {
   it('parses buddi access cloudflare setup and remove', () => {
     expect(parseArgs(['access', 'cloudflare', 'setup', '--host', 'buddi.example.com', '--email=sam@example.com'])).toEqual({ kind: 'access', action: 'cloudflare-setup', host: 'buddi.example.com', email: 'sam@example.com' });
     expect(parseArgs(['access', 'cloudflare', 'remove'])).toEqual({ kind: 'access', action: 'cloudflare-remove' });
+    expect(parseArgs(['access', 'cloudflare', 'setup', '--host', 'buddi.example.com', '--adopt'])).toEqual({ kind: 'access', action: 'cloudflare-setup', host: 'buddi.example.com', adopt: true });
+    expect(() => parseArgs(['access', 'cloudflare', 'remove', '--adopt'])).toThrow('unexpected argument: --adopt');
     expect(() => parseArgs(['access', 'cloudflare', 'setup'])).toThrow(/needs --host/);
     expect(() => parseArgs(['access', 'cloudflare', 'setup', '--host'])).toThrow(/needs a value/);
     expect(() => parseArgs(['access', 'cloudflare', 'remove', '--zone', 'x.com'])).toThrow(/unexpected argument/);

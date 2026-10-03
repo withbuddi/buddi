@@ -28,6 +28,8 @@ export interface FakeCloudflare {
   failNext(method: string, path: RegExp, status?: number): void;
   /** How many health reads answer `inactive` before `healthy`. */
   healthyAfter: number;
+  /** What the tunnel token call answers instead of a well-formed connector token. */
+  connectorToken: string | undefined;
   /** Every call, as "METHOD /path". */
   calls: string[];
   close(): Promise<void>;
@@ -51,7 +53,7 @@ export async function fakeCloudflare(opts: { zones?: string[]; team?: string | n
   const calls: string[] = [];
   const failures: Array<{ method: string; path: RegExp; status: number }> = [];
   const health = new Map<string, number>();
-  const fake = { healthyAfter: 1 } as { healthyAfter: number };
+  const fake = { healthyAfter: 1, connectorToken: undefined } as { healthyAfter: number; connectorToken: string | undefined };
 
   const server: Server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
@@ -98,7 +100,7 @@ export async function fakeCloudflare(opts: { zones?: string[]; team?: string | n
       const t = state.tunnels.find((x) => x.id === m![1] && !x.deleted_at);
       if (!t) return send(404, null, [{ code: 1003, message: 'not found' }]);
       const tail = m[2] ?? '';
-      if (tail === '/token') return send(200, `eyJ-connector-token-for-${t.id}`);
+      if (tail === '/token') return send(200, fake.connectorToken ?? `eyJ-connector-token-for-${t.id}`);
       if (tail === '/configurations') { t.config = input?.config; return send(200, { config: t.config }); }
       if (tail === '/connections') return send(200, null);
       if (method === 'DELETE') { t.deleted_at = new Date().toISOString(); return send(200, t); }

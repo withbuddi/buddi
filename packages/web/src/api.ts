@@ -1916,6 +1916,8 @@ export interface CloudflareSetupProgress {
   url: string | null;
   removed: string[];
   uninstall: string | null;
+  /** It stopped at something of buddi's name that buddi didn't make: "Use it anyway" runs again with adopt. */
+  adoptable?: boolean;
 }
 export interface CloudflareSetupView {
   progress: CloudflareSetupProgress;
@@ -2950,7 +2952,7 @@ export const api = {
   setCloudflareAccess: (change: CloudflareAccessChange) => put<CloudflareAccessView>('/access/cloudflare-access', change),
   testCloudflareAccess: (change: { teamDomain: string }) => post<CloudflareAccessTest>('/access/cloudflare-access/test', change),
   cloudflareSetup: () => get<CloudflareSetupView>('/access/cloudflare-access/setup'),
-  startCloudflareSetup: (input: { token?: string; host: string; email: string }) => post<CloudflareSetupView>('/access/cloudflare-access/setup', input),
+  startCloudflareSetup: (input: { token?: string; host: string; email: string; adopt?: boolean }) => post<CloudflareSetupView>('/access/cloudflare-access/setup', input),
   stopCloudflareSetup: () => post<CloudflareSetupView>('/access/cloudflare-access/setup/stop'),
   removeCloudflareSetup: (input: { token?: string } = {}) => post<CloudflareSetupView>('/access/cloudflare-access/setup/remove', input),
   /* ---- owner API tokens (docs/api.md, "Authentication") ---- */

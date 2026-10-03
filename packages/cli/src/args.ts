@@ -103,8 +103,8 @@ export type Command =
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
-  /** `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>]` and `… remove [--host <h>]`. */
-  | { kind: 'access'; action: 'cloudflare-setup' | 'cloudflare-remove'; host?: string; zone?: string; email?: string }
+  /** `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt]` and `… remove [--host <h>]`. */
+  | { kind: 'access'; action: 'cloudflare-setup' | 'cloudflare-remove'; host?: string; zone?: string; email?: string; adopt?: true }
   /** The local dashboard over the event log. */
   | { kind: 'dashboard'; action: DashboardAction }
   /** The agents' own browser: `status` says which one is here, `install` downloads Chromium. */
@@ -522,13 +522,15 @@ export function parseArgs(argv: string[]): Command {
 
   if (head === 'access') {
     if (rest[0] !== 'cloudflare' || (rest[1] !== 'setup' && rest[1] !== 'remove')) {
-      throw new UsageError('buddi access needs: cloudflare setup --host <hostname> [--zone <zone>] [--email <email>], or cloudflare remove');
+      throw new UsageError('buddi access needs: cloudflare setup --host <hostname> [--zone <zone>] [--email <email>] [--adopt], or cloudflare remove');
     }
     const action = rest[1] === 'setup' ? 'cloudflare-setup' as const : 'cloudflare-remove' as const;
     const allowed = action === 'cloudflare-setup' ? ['--host', '--zone', '--email'] : ['--host'];
     const values: Record<string, string> = {};
+    let adopt = false;
     for (let i = 2; i < rest.length; i++) {
       const arg = rest[i]!;
+      if (arg === '--adopt' && action === 'cloudflare-setup') { adopt = true; continue; }
       const [flag, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
       if (!allowed.includes(flag!)) throw new UsageError(`unexpected argument: ${arg}`);
       const value = inline ?? rest[++i];
@@ -536,7 +538,7 @@ export function parseArgs(argv: string[]): Command {
       values[flag!.slice(2)] = value;
     }
     if (action === 'cloudflare-setup' && !values.host) throw new UsageError('buddi access cloudflare setup needs --host <hostname>, like --host buddi.example.com');
-    return { kind: 'access', action, ...values };
+    return { kind: 'access', action, ...values, ...(adopt ? { adopt: true as const } : {}) };
   }
 
   throw new UsageError(`buddi ${head} is not a command.`);

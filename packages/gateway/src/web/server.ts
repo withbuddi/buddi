@@ -190,7 +190,11 @@ import { createCloudflareApi, CLOUDFLARE_PERMISSION_LINES, CLOUDFLARE_TOKEN_URL 
 import {
   CLOUDFLARE_SETUP_KEY,
   checkSetupInput,
+  claimSetupOperation,
   freshProgress,
+  setupBusySentence,
+  setupOperation,
+  type SetupLease,
   removeCloudflareSetup,
   runCloudflareSetup,
   type SetupDeps,
@@ -952,12 +956,11 @@ export function createWebApp(deps: WebServerDeps): Server {
   let cfTokens: CloudflareTokenStore | null = deps.cloudflare?.tokens ?? null;
   const tokenStore = (): CloudflareTokenStore => (cfTokens ??= ownerSecretTokenStore(deps.pool as never, createVault({ env: deps.env ?? process.env })));
   let setupRun: { progress: SetupProgress; abort: AbortController; done: Promise<void> } | null = null;
-  const setupBusy = (): boolean => setupRun !== null && ['running', 'waiting', 'removing'].includes(setupRun.progress.state);
   const readSetupRecord = async (): Promise<SetupRecord | null> => {
     const row = await readWebSetting<SetupRecord>(deps.pool, CLOUDFLARE_SETUP_KEY);
     return row && typeof row === 'object' && typeof row.host === 'string' ? row : null;
   };
-  const setupDepsFor = (token: string, signal?: AbortSignal): SetupDeps => ({
+  const setupDepsFor = (token: string, lease: SetupLease, signal?: AbortSignal): SetupDeps => ({
     api: createCloudflareApi({ token, transport: deps.cloudflare?.api?.transport, baseUrl: deps.cloudflare?.api?.baseUrl }),
     ingressPort: ingress.port() ?? (askedIngressPort() || null) ?? accessCtx.dashboardPort() + 2,
     platform: deps.cloudflare?.platform ?? process.platform,
@@ -968,6 +971,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     test: (team) => jwks.refresh(team),
     ...(deps.cloudflare?.setup ?? {}),
     signal,
+    lease,
   });
   const setupView = async () => {
     const record = await readSetupRecord();
@@ -980,13 +984,15 @@ export function createWebApp(deps: WebServerDeps): Server {
       ingressPort: ingress.port() ?? (askedIngressPort() || null) ?? accessCtx.dashboardPort() + 2,
     };
   };
-  const startSetup = (job: (onProgress: (p: SetupProgress) => void, signal: AbortSignal) => Promise<SetupProgress>, first: SetupProgress): void => {
+  /** Run in the background; the lease (claimed by the caller) goes when the run ends. */
+  const startSetup = (lease: SetupLease, job: (onProgress: (p: SetupProgress) => void, signal: AbortSignal) => Promise<SetupProgress>, first: SetupProgress): void => {
     const abort = new AbortController();
     const run: { progress: SetupProgress; abort: AbortController; done: Promise<void> } = { progress: first, abort, done: Promise.resolve() };
     setupRun = run;
     run.done = job((p) => { run.progress = p; }, abort.signal)
       .then((p) => { run.progress = p; })
-      .catch(() => { run.progress = { ...run.progress, state: 'failed', error: 'The setup stopped unexpectedly. Try again.' }; });
+      .catch(() => { run.progress = { ...run.progress, state: 'failed', error: 'The setup stopped unexpectedly. Try again.' }; })
+      .finally(() => lease.release());
   };
   /*
    * A setting written elsewhere (`buddi access cloudflare setup` writes the
@@ -1455,11 +1461,19 @@ export function createWebApp(deps: WebServerDeps): Server {
       // the same stale cookie counts once however often it is sent: all tailnet
       // and tunnel traffic shares 127.0.0.1, so a forgotten tab must not be
       // able to lock the owner out of every way in.
-      if (!presentedSession) return refuse();
-      forgetCookies = true;
+      //
+      // A provider's credential that failed (a Cloudflare assertion that does
+      // not verify) is an attempt too, cookie or not, in the bucket the
+      // provider names (per Cf-Connecting-Ip). No assertion at all, or keys
+      // that could not be fetched, carry no attempt.
+      const tried = refused?.refusal.attempt;
+      if (!presentedSession && !tried) return refuse();
+      if (tried) key = tried.bucket;
+      if (presentedSession) forgetCookies = true;
       if (revoked) return refuse();
       if (limiter.blocked(key, now)) return refuse(429);
-      limiter.failCredential(key, presentedSession, now);
+      if (tried) limiter.failCredential(key, tried.credential, now);
+      if (presentedSession) limiter.failCredential(key, presentedSession, now);
       return refuse();
     }
 
@@ -2878,40 +2892,63 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     if (path === '/api/access/cloudflare-access/setup' || path === '/api/access/cloudflare-access/setup/stop' || path === '/api/access/cloudflare-access/setup/remove') {
       if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+      /*
+       * One operation at a time (cloudflare-setup's lock, claimed before the
+       * first await and held to the end): a second setup or a removal while
+       * one runs is a 409, and so is Stop while a removal runs.
+       */
       if (path.endsWith('/stop')) {
-        setupRun?.abort.abort();
-        await setupRun?.done;
-        return sendJson(res, 200, await setupView());
-      }
-      if (setupBusy()) return sendJson(res, 409, { error: 'A Cloudflare setup is already running.' });
-      const body = await readJsonBody(req).catch(() => ({} as Record<string, unknown>));
-      const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
-      const tokens = tokenStore();
-      const pasted = str(body.token);
-      if (path.endsWith('/remove')) {
-        const token = pasted || await tokens.use().catch(() => null);
-        if (!token) return sendJson(res, 400, { error: 'Paste the Cloudflare API token again: buddi needs it to remove what it made.' });
-        const progress = await removeCloudflareSetup({ ...setupDepsFor(token), host: str(body.host) || undefined });
-        setupRun = { progress, abort: new AbortController(), done: Promise.resolve() };
-        if (!progress.error) await tokens.remove().catch(() => undefined);
-        return sendJson(res, 200, await setupView());
-      }
-      const input = { host: str(body.host), email: str(body.email), zone: str(body.zone) || undefined };
-      const invalid = checkSetupInput(input);
-      if (invalid) return sendJson(res, 400, { error: invalid });
-      if (pasted) {
-        if (/\s/.test(pasted) || pasted.length < 20 || pasted.length > 400) return sendJson(res, 400, { error: 'That doesn’t look like a Cloudflare API token.' });
+        const going = setupOperation();
+        if (going === 'remove') return sendJson(res, 409, { error: setupBusySentence(going) });
+        const lease = going === null ? claimSetupOperation('setup') : null;
         try {
-          await tokens.put(pasted);
-        } catch {
-          return sendJson(res, 409, { error: 'The token could not be kept in the vault. Check that the vault is unlocked, then try again.' });
+          setupRun?.abort.abort();
+          await setupRun?.done;
+          return sendJson(res, 200, await setupView());
+        } finally {
+          lease?.release();
         }
       }
-      const token = pasted || await tokens.use().catch(() => null);
-      if (!token) return sendJson(res, 400, { error: 'Paste a Cloudflare API token.' });
-      const first = { ...freshProgress(input.host, input.email), state: 'running' as const };
-      startSetup((onProgress, signal) => runCloudflareSetup(input, setupDepsFor(token, signal), onProgress), first);
-      return sendJson(res, 202, await setupView());
+      const lease = claimSetupOperation(path.endsWith('/remove') ? 'remove' : 'setup');
+      if (!lease) return sendJson(res, 409, { error: setupBusySentence(setupOperation()) });
+      let handedOff = false;
+      try {
+        const body = await readJsonBody(req).catch(() => ({} as Record<string, unknown>));
+        const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+        const tokens = tokenStore();
+        const pasted = str(body.token);
+        if (path.endsWith('/remove')) {
+          const token = pasted || await tokens.use().catch(() => null);
+          if (!token) return sendJson(res, 400, { error: 'Paste the Cloudflare API token again: buddi needs it to remove what it made.' });
+          const run: { progress: SetupProgress; abort: AbortController; done: Promise<void> } = {
+            progress: { ...freshProgress(), state: 'removing', steps: [] }, abort: new AbortController(), done: Promise.resolve(),
+          };
+          setupRun = run;
+          const progress = await removeCloudflareSetup({ ...setupDepsFor(token, lease), host: str(body.host) || undefined }, (p) => { run.progress = p; });
+          run.progress = progress;
+          if (!progress.error) await tokens.remove().catch(() => undefined);
+          return sendJson(res, 200, await setupView());
+        }
+        const input = { host: str(body.host), email: str(body.email), zone: str(body.zone) || undefined, adopt: body.adopt === true };
+        const invalid = checkSetupInput(input);
+        if (invalid) return sendJson(res, 400, { error: invalid });
+        if (pasted) {
+          if (/\s/.test(pasted) || pasted.length < 20 || pasted.length > 400) return sendJson(res, 400, { error: 'That doesn’t look like a Cloudflare API token.' });
+          try {
+            await tokens.put(pasted);
+          } catch {
+            return sendJson(res, 409, { error: 'The token could not be kept in the vault. Check that the vault is unlocked, then try again.' });
+          }
+        }
+        const token = pasted || await tokens.use().catch(() => null);
+        if (!token) return sendJson(res, 400, { error: 'Paste a Cloudflare API token.' });
+        const first = { ...freshProgress(input.host, input.email), state: 'running' as const };
+        startSetup(lease, (onProgress, signal) => runCloudflareSetup(input, setupDepsFor(token, lease, signal), onProgress), first);
+        handedOff = true;
+        return sendJson(res, 202, await setupView());
+      } finally {
+        if (!handedOff) lease.release();
+      }
     }
     if (path === '/api/access/cloudflare-access/test') {
       if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });

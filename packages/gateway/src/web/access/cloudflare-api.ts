@@ -48,6 +48,13 @@ export const CLOUDFLARE_TOKEN_URL = 'https://dash.cloudflare.com/profile/api-tok
   name: 'buddi',
 }).toString();
 
+/**
+ * What a tunnel connector token looks like (base64url-ish, long): the token
+ * goes into the `sudo cloudflared service install <token>` line the owner
+ * copies, so nothing a shell would read as more ever gets there.
+ */
+export const CONNECTOR_TOKEN = /^[A-Za-z0-9+/=_-]{20,}$/;
+
 export class CloudflareApiError extends Error {
   constructor(
     message: string,
@@ -199,7 +206,7 @@ export function createCloudflareApi(deps: {
       call<CfTunnel>('GET', `/accounts/${q(accountId)}/cfd_tunnel/${q(id)}`, { doing: 'read the tunnel', permission: 'tunnel' }),
     async tunnelToken(accountId, id) {
       const token = await call<unknown>('GET', `/accounts/${q(accountId)}/cfd_tunnel/${q(id)}/token`, { doing: 'read the tunnel’s connector token', permission: 'tunnel' });
-      if (typeof token !== 'string' || token === '') throw new CloudflareApiError('Cloudflare answered without the tunnel’s connector token.', 200, []);
+      if (typeof token !== 'string' || !CONNECTOR_TOKEN.test(token)) throw new CloudflareApiError('Cloudflare answered without the tunnel’s connector token.', 200, []);
       return token;
     },
     async putTunnelConfig(accountId, id, hostname, service) {
