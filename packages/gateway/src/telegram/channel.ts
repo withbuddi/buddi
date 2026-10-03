@@ -11,12 +11,16 @@
  */
 import {
   getAction,
+  getArtifact,
+  readArtifactBytes,
   missionIdOfStillUsefulKey,
   proposalIdOfKey,
   type ActionRecord,
   type OwnerChannel,
   type Queryable,
 } from '@buddi/core';
+import type { Pool } from 'pg';
+import { TelegramApi } from './api.js';
 import { notifyOwner, ownerChatId, OwnerNotPairedError } from './notify.js';
 import { stillUsefulKeyboard } from './still-useful.js';
 
@@ -65,6 +69,45 @@ export interface TelegramChannelOptions {
   proposals?: () => { request(chatId: string, id: string): Promise<boolean> } | undefined;
   /** Injected in tests; otherwise the text path is `notifyOwner` over the Bot API. */
   sendText?: typeof notifyOwner;
+  /** A voice note out of Files (a report's `audio`, 1.27). Injected in tests; otherwise core's store. */
+  loadAudio?: (id: string) => Promise<{ bytes: Buffer; mime: string } | null>;
+  /** Send a voice note to the owner's chat. Injected in tests; otherwise the Bot API. */
+  sendVoice?: (chatId: string, bytes: Buffer, opts: { contentType: string; filename: string }) => Promise<unknown>;
+  /** Where a voice note that could not go is said. */
+  log?: (line: string) => void;
+}
+
+/**
+ * The voice note before the text (host API 1.27): a report that carries
+ * `audio` is heard first and read after, as the owner listens to an edition
+ * on the way out. One that cannot be read or sent leaves the text to go
+ * alone; nothing is retried and nothing is thrown.
+ */
+async function sendReportVoice(opts: TelegramChannelOptions, chatId: string, fileId: string): Promise<boolean> {
+  const env = opts.env ?? process.env;
+  const log = opts.log ?? ((line: string) => console.error(line));
+  try {
+    const load = opts.loadAudio ?? (async (id: string) => {
+      const row = await getArtifact(opts.pool as unknown as Pool, id);
+      return row ? { bytes: await readArtifactBytes(env, row), mime: row.mime } : null;
+    });
+    const audio = await load(fileId);
+    if (!audio || !audio.mime.toLowerCase().startsWith('audio/')) {
+      log(`telegram: the report's voice note ${fileId} is not in Files; the text goes alone`);
+      return false;
+    }
+    const send = opts.sendVoice ?? (async (chat: string, bytes: Buffer, o: { contentType: string; filename: string }) => {
+      const token = env.TELEGRAM_BOT_TOKEN?.trim();
+      if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not set');
+      return new TelegramApi({ token }).sendVoice(chat, bytes, o);
+    });
+    const mime = audio.mime.toLowerCase().split(';')[0]!.trim();
+    await send(chatId, audio.bytes, { contentType: mime, filename: mime === 'audio/mpeg' ? 'voice.mp3' : 'voice.ogg' });
+    return true;
+  } catch (err) {
+    log(`telegram: the report's voice note could not be sent (${err instanceof Error ? err.message : String(err)}); the text goes alone`);
+    return false;
+  }
 }
 
 export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChannel {
@@ -105,6 +148,12 @@ export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChanne
       // spelled-out action line goes.
       const stillUseful = message.kind !== 'agent' && UUID.test(message.id) && missionIdOfStillUsefulKey(message.dedupeKey) !== undefined;
       const { action: _asked, ...withoutAction } = message;
+      // A report's voice note goes first, then its text (1.27).
+      if (message.audio) {
+        const voiceChat = await ownerChatId(opts.pool);
+        if (!voiceChat) throw new OwnerNotPairedError();
+        await sendReportVoice(opts, voiceChat, message.audio);
+      }
       const chatId = await sendText(unlinkSignatures(ownerMessageText(stillUseful ? withoutAction : message)), {
         pool: opts.pool,
         env: opts.env ?? process.env,

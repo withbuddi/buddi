@@ -329,7 +329,8 @@ export type WidgetSize = 'small' | 'medium';
 /** The vocabulary a plugin fills; already formatted, cut to size by the gateway. */
 export type WidgetBody =
   | { kind: 'stat'; icon?: string; value: string; caption?: string; trend?: { label?: string; points: number[] }; foot?: string }
-  | { kind: 'list'; rows: Array<{ title: string; sub?: string; side?: string; tone?: 'good' | 'critical' }>; more?: string }
+  /** A row's `image.src` (1.27) is buddi's own path to the plugin's kept image, drawn on medium. */
+  | { kind: 'list'; rows: Array<{ title: string; sub?: string; side?: string; tone?: 'good' | 'critical'; image?: { src: string } }>; more?: string }
   | { kind: 'strip'; icon?: string; value?: string; caption?: string; items: Array<{ label: string; icon?: string; value: string }> }
   | { kind: 'progress'; value: string; caption?: string; ratio: number; foot?: string; tone?: 'accent' | 'good' | 'warning' | 'critical' }
   | { kind: 'text'; icon?: string; text: string; sub?: string }

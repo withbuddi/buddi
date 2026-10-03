@@ -18,7 +18,9 @@ import { createDelegationManifest } from '../agents/delegation.js';
 import { createReminderManifest, createScheduleManifest } from './reminders.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
 import { SCHEDULED_SURFACE, surfaceSection } from '@buddi/core';
-import { createMissionExecutor, SCHEDULED_RUN_SUFFIX, UnknownAgentError } from './execute.js';
+import { createMissionExecutor, SCHEDULED_RUN_SUFFIX, UnknownAgentError, type DeliverContext } from './execute.js';
+import { createMissionManifest, reportMaxOf, type DecisionSink } from './report.js';
+import { z } from 'zod';
 
 /* ---------------- in-memory fake DB (only `query`) ---------------- */
 
@@ -812,3 +814,118 @@ describe('missions that stop themselves', () => {
   });
 });
 
+
+describe('host API 1.27: a mission\'s context, its reportMax, and the report\'s link and audio', () => {
+  const capturing = (seen: string[], report: unknown): RuntimeProvider => {
+    let turn = 0;
+    return {
+      async complete(req): Promise<CompletionResponse> {
+        turn += 1;
+        if (turn === 1) {
+          seen.push(JSON.stringify(req.messages[0]?.content));
+          return { content: [{ type: 'tool_use', id: 'c1', name: 'mission.report', input: report }], stopReason: 'tool_use', usage: { input: 1, output: 1 }, model: 'claude-test' };
+        }
+        return { content: [{ type: 'text', text: 'done' }], stopReason: 'end_turn', usage: { input: 1, output: 1 }, model: 'claude-test' };
+      },
+    };
+  };
+  const newsManifest = {
+    name: 'news', version: '0.1.0', schema: 'news', migrationsDir: '', tools: [],
+    exports: {
+      edition_material: {
+        params: z.object({ edition: z.enum(['morning', 'evening']) }).strict(),
+        produce: async (params: { edition: string }) => ({ edition: params.edition, stories: [{ id: 's1', title: 'Lomé port traffic rose 9%' }] }),
+      },
+    },
+  };
+  const edition: Mission = {
+    ...checkMission,
+    id: 'agent:mission-agent:morning',
+    name: 'Morning edition',
+    prompt: 'Write the morning edition.',
+    context: { plugin: 'news', export: 'edition_material', args: { edition: 'morning' } },
+    reportMax: 3800,
+  };
+
+  it('opens the run with the export\'s JSON, read once by core, and passes the link to the delivery', async () => {
+    const seen: string[] = [];
+    let context: DeliverContext | undefined;
+    const { deps: d } = deps({
+      provider: capturing(seen, { urgency: 'normal', text: 'Morning edition\n\nSix stories.', link: '#/p/news/stories', linkLabel: 'Open edition' }),
+      deliver: async (_text, _offers, c) => { context = c; return 'chat-42'; },
+    });
+    d.registry.register(newsManifest as never);
+    const result = await createMissionExecutor(d)(occurrence, edition);
+    expect(seen[0]).toContain('The material this mission reads first, from news.edition_material');
+    expect(seen[0]).toContain('Lomé port traffic rose 9%');
+    expect(result.delivered).toBe(true);
+    expect(context).toMatchObject({ link: '#/p/news/stories', origin: 'mission' });
+    expect(context?.audio).toBeUndefined();
+  });
+
+  it('says so in the message when the context cannot be read, and the run goes on', async () => {
+    const seen: string[] = [];
+    const { deps: d } = deps({ provider: capturing(seen, { urgency: 'normal', text: 'A quiet morning.' }) });
+    const result = await createMissionExecutor(d)(occurrence, edition);
+    expect(seen[0]).toContain('(news.edition_material) could not be read: news is not loaded');
+    expect(result.delivered).toBe(true);
+  });
+
+  it('takes a report up to its mission\'s reportMax, and refuses one past the default without it', async () => {
+    const long = `Morning edition\n\n${'A story, told in a sentence or two. '.repeat(60)}`.trim();
+    expect(long.length).toBeGreaterThan(1500);
+    const delivered: string[] = [];
+    const ok = deps({ provider: capturing([], { urgency: 'normal', text: long }), deliver: async (t) => { delivered.push(t); return 'chat-42'; } });
+    ok.deps.registry.register(newsManifest as never);
+    expect((await createMissionExecutor(ok.deps)(occurrence, edition)).delivered).toBe(true);
+    expect(delivered).toEqual([long]);
+    const refused = deps({ provider: capturing([], { urgency: 'normal', text: long }) });
+    const result = await createMissionExecutor(refused.deps)(occurrence, { ...checkMission, reportMax: null });
+    expect(result).toMatchObject({ delivered: false, decision: 'no-decision' });
+  });
+
+  it('refuses a link that is not a dashboard route and a voice note that is not in Files', async () => {
+    for (const report of [
+      { urgency: 'normal', text: 'x', link: 'https://example.com/story' },
+      { urgency: 'normal', text: 'x', audio: '7c1b0a52-6f0e-4b8e-9d55-1e0f2a3b4c5d' },
+    ]) {
+      const { deps: d } = deps({ provider: capturing([], report) });
+      expect(await createMissionExecutor(d)(occurrence, checkMission)).toMatchObject({ delivered: false, decision: 'no-decision' });
+    }
+  });
+});
+
+describe('mission.report audio', () => {
+  const FILE = '7c1b0a52-6f0e-4b8e-9d55-1e0f2a3b4c5d';
+  const db = (row: Record<string, unknown> | null, conversation: string | null) => ({
+    async query(sql: string) {
+      if (sql.includes('select conversation_id')) return { rows: row ? [{ conversation_id: conversation }] : [] };
+      return { rows: row ? [row] : [] };
+    },
+  });
+  const voice = { id: FILE, kind: 'audio', mime: 'audio/ogg', filename: 'edition.ogg', size_bytes: 4096, sha256: 'x', storage_path: 'p', caption: null, created_at: null };
+  const report = (pool: unknown, conversationId = 'conv-1') => {
+    const sink: DecisionSink = {};
+    const tool = createMissionManifest(sink, { reportMax: 3800 }).tools.find((t) => t.name === 'mission.report')!;
+    return { sink, run: () => tool.execute({ urgency: 'normal', text: 'Morning edition', audio: FILE } as never, { db: pool, conversationId } as never) };
+  };
+
+  it('carries a voice note this run made, with its type and size for the chat\'s player', async () => {
+    const { sink, run } = report(db(voice, 'conv-1'));
+    expect(await run()).toMatchObject({ audio: { fileId: FILE, mime: 'audio/ogg', filename: 'edition.ogg', sizeBytes: 4096 } });
+    expect(sink.decision).toMatchObject({ kind: 'report', audio: { fileId: FILE } });
+  });
+
+  it('refuses one made elsewhere, one that is not audio, and one that is not there', async () => {
+    await expect(report(db(voice, 'conv-2')).run()).rejects.toThrow(/was not made in this run/);
+    await expect(report(db({ ...voice, mime: 'image/png' }, 'conv-1')).run()).rejects.toThrow(/not a voice note/);
+    await expect(report(db(null, null)).run()).rejects.toThrow(/no file/);
+  });
+
+  it('bounds reportMax at the limit and keeps the default without one', () => {
+    expect(reportMaxOf(undefined)).toBe(1500);
+    expect(reportMaxOf(3800)).toBe(3800);
+    expect(reportMaxOf(99_999)).toBe(6000);
+    expect(reportMaxOf(10)).toBe(1500);
+  });
+});

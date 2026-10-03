@@ -67,6 +67,7 @@ import { messageOf, playOf, playSound, stopSound, usePlaying } from './play';
 import { todayIn, toEvents } from './calendar';
 import { CalendarView, useCalendarState } from './CalendarPiece';
 import { SeriesPanel } from './SeriesPanel';
+import { AssetImage, assetSrc } from './AssetImage';
 import type {
   ArgRef,
   ColumnMap,
@@ -74,6 +75,8 @@ import type {
   Field,
   FieldAction,
   ListComponent,
+  ImageList,
+  ImageRef,
   ListItem,
   ParamRef,
   PluginPageDescriptor,
@@ -232,7 +235,66 @@ export function holds(data: unknown, condition: Visibility | undefined): boolean
  * back to the rest of the settings. So the descriptor says `{ page }` and the
  * engine works out which hash that is.
  */
+/**
+ * An address a page may link out to (`{ href }`, host API 1.27): absolute,
+ * `https:`, with a host. Anything else — a relative path, `javascript:`,
+ * plain `http:` — is no link. It is only ever followed by the owner, in a new
+ * tab; the page never fetches it.
+ */
+export function outsideHref(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 2048) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname !== '' && url.username === '' && url.password === '' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A row's pictures (host API 1.27), as the News kit draws a card's head: up
+ * to three logos overlapping, then who they are in words — "Reuters and 3
+ * more". Fixed slots or an array in the row; a slot with no label is left out.
+ */
+function RowImages({ plugin, images, row }: { plugin: string; images: ImageRef[] | ImageList; row: unknown }): JSX.Element | null {
+  const items: Array<{ asset: unknown; label: string }> = Array.isArray(images)
+    ? images.map((slot) => ({ asset: readRef(row, slot.asset), label: String(readRef(row, slot.label) ?? '').trim() }))
+    : (() => {
+        const list = readPath(row, images.from);
+        return (Array.isArray(list) ? list : []).map((entry) => ({
+          asset: readPath(entry, images.asset),
+          label: String(readPath(entry, images.label) ?? '').trim(),
+        }));
+      })();
+  const shown = items.filter((item) => item.label !== '');
+  if (shown.length === 0) return null;
+  const words = shown.length === 1 ? shown[0]!.label : `${shown[0]!.label} and ${shown.length - 1} more`;
+  return (
+    <span className="pl-stack" data-testid="row-images">
+      <span className="pl-stack-logos">
+        {shown.slice(0, 3).map((item, index) => (
+          <AssetImage key={index} src={assetSrc(plugin, item.asset)} label={item.label} />
+        ))}
+      </span>
+      <span className="pl-stack-words">{words}</span>
+    </span>
+  );
+}
+
+/** A link that leaves buddi: a new tab, no opener, no referrer, and the mark that says so. */
+function OutsideLink({ href, children, className }: { href: string; children: ReactNode; className?: string }): JSX.Element {
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className={className} onClick={(e) => e.stopPropagation()}>
+      {children}
+      <span className="wb-src-out" aria-hidden="true">↗</span>
+      <span className="sr-only"> (opens in a new tab)</span>
+    </a>
+  );
+}
+
 function routeOf(scope: PageScope, to: RouteRef, data: unknown): string {
+  // The one road out (1.27): an https address read from the data, or nothing.
+  if ('href' in to) return outsideHref(readRef(data, to.href)) ?? '';
   /*
    * The one link that leaves the plugin: an agent's chat. `chat` is a value
    * read out of the data — an agent id a query answered — so what a descriptor
@@ -407,8 +469,9 @@ function useAct(): ActState {
     const what = then ?? 'refresh';
     if (typeof what === 'object') {
       // A route the data could not answer — `{ chat }` over a null id — is no
-      // route: refreshing where the owner is beats navigating to nowhere.
-      const to = routeOf(scope, what.route, result);
+      // route: refreshing where the owner is beats navigating to nowhere. A
+      // link out is never followed by itself: the owner follows it.
+      const to = 'href' in what.route ? '' : routeOf(scope, what.route, result);
       if (to === '') scope.refresh();
       else scope.navigate(to);
       return;
@@ -1191,6 +1254,17 @@ function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }
    * button that navigates to the empty hash is worse than no button.
    */
   if (href === '') return null;
+  if ('href' in component.to) {
+    return (
+      <Toolbar>
+        <ButtonLink href={href} target="_blank" rel="noopener noreferrer">
+          {component.label}
+          <span className="wb-src-out" aria-hidden="true">↗</span>
+          <span className="sr-only"> (opens in a new tab)</span>
+        </ButtonLink>
+      </Toolbar>
+    );
+  }
   return (
     <Toolbar>
       <ButtonLink
@@ -1327,10 +1401,14 @@ function itemRow(
   row: unknown,
   /** When the list chooses in the page rather than in the URL, there is no link. */
   local?: (key: string) => void,
-): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: string; href: string | null; text: string } {
+): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: string; href: string | null; outside: boolean; text: string } {
   const meta = (item.meta ?? []).map((ref) => String(readRef(row, ref) ?? '')).filter((text) => text !== '');
   const text = String(readRef(row, item.title) ?? '');
-  const href = item.to && !local ? routeOf(scope, item.to, row) : null;
+  const routed = item.to && !local ? routeOf(scope, item.to, row) : null;
+  // `{ href }` over a value that is not an https address is no link at all.
+  const href = routed === '' ? null : routed;
+  const outside = href !== null && item.to !== undefined && 'href' in item.to;
+  const images = item.images ? <RowImages plugin={scope.plugin} images={item.images} row={row} /> : null;
   const pills: PillRef[] = [...(item.pill ? [item.pill] : []), ...(item.pills ?? [])];
   const drawnPills = pills.map((pill, index) => {
     const value = readRef(row, pill.value);
@@ -1342,23 +1420,35 @@ function itemRow(
       </Pill>
     );
   });
+  const linked = href && outside ? (
+    <OutsideLink href={href}>{text}</OutsideLink>
+  ) : href ? (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        scope.navigate(href);
+      }}
+    >
+      {text}
+    </a>
+  ) : (
+    text
+  );
   return {
     text,
     href,
+    outside,
     pills: <>{drawnPills}</>,
     meta: meta.join(' · '),
-    title: href ? (
-      <a
-        href={href}
-        onClick={(e) => {
-          e.preventDefault();
-          scope.navigate(href);
-        }}
-      >
-        {text}
-      </a>
+    // The pictures sit above the title, as a card's head: logos, then who they are.
+    title: images ? (
+      <>
+        {images}
+        <span className="pl-row-title">{linked}</span>
+      </>
     ) : (
-      text
+      linked
     ),
     sub: item.sub ? String(readRef(row, item.sub) ?? '') : null,
     side: (
@@ -1493,7 +1583,7 @@ function ListPiece({
     group.map((row) => {
       const drawn = itemRow(scope, component.item, row, onChoose);
       const key = keyByRow.get(row) as string;
-      if (pick && (onChoose || drawn.href)) {
+      if (pick && (onChoose || (drawn.href && !drawn.outside))) {
         return (
           <PickRow
             key={key}

@@ -44,6 +44,7 @@ import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
 import { PluginCallRefusal, parsePluginRequires } from '../plugin/requires.js';
 import { listOwnerPlaces } from '../places.js';
+import { deletePluginAsset, listPluginAssets, putPluginAsset, type AssetImageCodec } from '../plugin-assets.js';
 import { localDateString, ownerTimezone } from '../time.js';
 import {
   createHttpArea,
@@ -112,6 +113,13 @@ export interface HostBinding {
   runtimeNetwork: Map<string, string>;
   /** The plugins it requires, by name, with their ranges (1.18). */
   requires: Readonly<Record<string, string>>;
+  /** The plugins it can use when they are there, by name, with their ranges (1.27). */
+  optional: Readonly<Record<string, string>>;
+  /**
+   * Whether a plugin it names in `requires` or `optional` is loaded now, in
+   * range: wired by the registry that bound this plugin (1.27).
+   */
+  hasPlugin?: (target: string) => boolean;
   /**
    * `ctx.buddi.plugins.call`, wired by the registry that bound this plugin:
    * it alone knows the other plugins and their exports.
@@ -145,8 +153,13 @@ export function hostBindingOf(manifest: PluginManifest): HostBinding {
   if (!parsed.ok) throw new Error(parsed.message);
   const requires = parsePluginRequires(manifest.requires, `plugin ${manifest.name}'s manifest requires`, manifest.name);
   if (!requires.ok) throw new Error(requires.message);
+  const optional = parsePluginRequires(manifest.optional, `plugin ${manifest.name}'s manifest optional`, manifest.name);
+  if (!optional.ok) throw new Error(optional.message);
+  const both = Object.keys(optional.requires).find((name) => name in requires.requires);
+  if (both !== undefined) throw new Error(`plugin ${manifest.name} names ${both} in both requires and optional`);
   return {
     requires: requires.requires,
+    optional: optional.requires,
     plugin: manifest.name,
     version: manifest.version,
     schema: manifest.schema,
@@ -189,6 +202,12 @@ export interface PluginHostServices {
   timezone?: string;
   /** The dashboard's public origin, when there is one: a channel's links become URLs on it. */
   publicOrigin?: string;
+  /**
+   * What decodes an image a plugin keeps as an asset and draws it again as
+   * PNG (1.27): the gateway's pure-JavaScript codec. Without it, `assets.put`
+   * is refused in a sentence.
+   */
+  images?: AssetImageCodec;
 }
 
 let services: PluginHostServices = {};
@@ -548,12 +567,23 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       }
     };
   }
-  if (Object.keys(binding.requires).length > 0) {
+  if (Object.keys(binding.requires).length > 0 || Object.keys(binding.optional).length > 0) {
     host.plugins = {
       async call<T>(target: string, name: string, args?: unknown): Promise<T> {
         if (binding.callExport === undefined) throw new PluginCallRefusal('This process cannot call another plugin.');
         return (await binding.callExport(target, name, args ?? {}, facts)) as T;
       },
+      // Only for a name the manifest declared: any other is simply not there.
+      has: (target: string): boolean =>
+        (target in binding.requires || target in binding.optional) && binding.hasPlugin?.(target) === true,
+    };
+  }
+  if (declared.has('assets')) {
+    // Core's directory, not the plugin's: only PNGs core drew are ever served.
+    host.assets = {
+      put: (key, bytes, mime) => putPluginAsset(plugin, key, bytes, mime, services.images, env()),
+      delete: (key) => deletePluginAsset(plugin, key, env()),
+      list: () => listPluginAssets(plugin, env()),
     };
   }
   if (declared.has('owner:notify')) {
@@ -1169,6 +1199,8 @@ export function readOnlyHostOf(host: BuddiHost, what: string): BuddiHost {
   if (host.proposals) view.proposals = only('proposals', host.proposals, []);
   if (host.schedule) view.schedule = only('schedule', host.schedule, []);
   if (host.channels) view.channels = only('channels', host.channels, []);
+  // An export reads its own assets; it never writes them for its caller.
+  if (host.assets) view.assets = only('assets', host.assets, ['list']);
   // Another export, under the same rules: it is read-only in its turn.
   if (host.plugins) view.plugins = host.plugins;
   return view;

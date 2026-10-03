@@ -18,6 +18,11 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 import pngjs from 'pngjs';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { putPluginAsset } from '@buddi/core';
+import { assetImageCodec } from '../plugins/asset-image.js';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName, portOf } from './http.js';
 import { PROFILE_PHOTO_SETTING, syncProfilePhoto } from '../telegram/profile-photo.js';
@@ -97,6 +102,7 @@ suite('agent pictures', () => {
   let web: WebServer;
   let closed: WebServer;
   let base: string;
+  let dataDir: string;
   const changed: string[] = [];
 
   beforeAll(async () => {
@@ -109,7 +115,9 @@ suite('agent pictures', () => {
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
     await ensureOwner(pool, 'owner');
     const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
-    const common = { pool, registry: new ToolRegistry(), catalog, ctx, timezone: 'UTC', now, token: TOKEN, log: () => {} };
+    dataDir = mkdtempSync(path.join(tmpdir(), 'buddi-avatars-data-'));
+    const env = { ...process.env, BUDDI_DATA_DIR: dataDir };
+    const common = { pool, registry: new ToolRegistry(), catalog, ctx, timezone: 'UTC', now, token: TOKEN, log: () => {}, env };
     web = await startWebServer({
       ...common,
       config: { enabled: true, host: '127.0.0.1', port: 0 },
@@ -122,6 +130,7 @@ suite('agent pictures', () => {
   afterAll(async () => {
     await web?.close();
     await closed?.close();
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
     await pool?.end();
     if (admin) {
       await admin.query(`drop database if exists ${TEST_DB}`);
@@ -176,6 +185,27 @@ suite('agent pictures', () => {
     const form = new FormData();
     form.append('file', new Blob([png(4, 4)], { type: 'image/png' }), 'x.png');
     expect((await outsider.fetch('/api/agents/scout/avatar', { method: 'POST', body: form })).status).toBe(401);
+  });
+
+  it('serves a plugin\'s kept image (1.27) as a PNG core drew, at 128 or 64 px, behind the same session', async () => {
+    await putPluginAsset('news', 'lemonde.fr', png(48, 24), 'image/png', assetImageCodec, { BUDDI_DATA_DIR: dataDir });
+    const client = new Client(base);
+    const res = await client.fetch('/api/plugin-assets/news/lemonde.fr');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+    expect(res.headers.get('cache-control')).toBe('private, max-age=86400');
+    expect(pngjs.PNG.sync.read(Buffer.from(await res.arrayBuffer())).width).toBe(128);
+    const small = await client.fetch('/api/plugin-assets/news/lemonde.fr?size=64');
+    expect(pngjs.PNG.sync.read(Buffer.from(await small.arrayBuffer())).width).toBe(64);
+    const etag = res.headers.get('etag')!;
+    expect((await client.fetch('/api/plugin-assets/news/lemonde.fr', { headers: { 'if-none-match': etag } })).status).toBe(304);
+    expect((await client.fetch('/api/plugin-assets/news/missing')).status).toBe(404);
+    expect((await client.fetch('/api/plugin-assets/news/..%2F..%2Fsecret')).status).toBe(404);
+    expect((await client.fetch('/api/plugin-assets/weather/lemonde.fr')).status).toBe(404);
+    const outsider = new Client(`http://127.0.0.1:${closed.port}`);
+    expect((await outsider.fetch('/api/plugin-assets/news/lemonde.fr')).status).toBe(401);
   });
 
   it('refuses a write without the CSRF header', async () => {

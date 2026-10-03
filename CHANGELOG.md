@@ -9,6 +9,12 @@ What changes in buddi from one release to the next, newest first.
 - Two scripts for working on buddi: `pnpm test:db` runs the suites against a throwaway Postgres in Docker (migrated first, removed afterwards, never the dev database), and `pnpm release pre.N` cuts a release: stamps new API routes, dates the changelog, refreshes the API and CLI pages, commits, tags and pushes.
 - Plugins can sign in to a CalDAV or WebDAV account without holding its password (host API 1.26): the password is an owner secret bound to the plugin and the account's host, and buddi itself adds the sign-in to the plugin's requests, for the calendar verbs only, with small bodies, capped answers and at most 120 requests a minute. Settings → Secrets shows such a password under its plugin, as "A plugin’s sign-in".
 - A plugin page's table can show a row's own colour as a dot before a cell (`swatch`, host API 1.26): Settings → Calendar draws each account calendar's colour beside its name.
+- Plugins can keep small images they fetched, like an outlet's logo (host API 1.27, `assets`): buddi re-draws them as 64 and 128 px PNGs (SVG refused), serves them only to the signed-in dashboard, keeps at most 20 MB per plugin, and removes them with the plugin. The install card says "keeps small images it fetched, like logos".
+- Plugin pages can show logos on a list row (up to three overlapping, then "Reuters and 3 more", a letter when there is none) and on a widget's rows at medium size and on the lock screen, always from buddi and never from the outlet (host API 1.27).
+- A plugin page can link out to an article: the link opens in a new tab, with no referrer, and an outside-link mark (`href`, host API 1.27). The dashboard still loads nothing from outside buddi.
+- A mission can read a plugin's material before it runs (`context`, host API 1.27), so an edition is written in one model call; it can send a longer report (`reportMax`, up to 6,000 characters, split at paragraphs on Telegram); and its report can carry a dashboard link ("Open edition") and a voice note, which Telegram sends before the text and the chat plays above it.
+- Plugins can name plugins they work better with (`optional`, host API 1.27) and ask whether one is there (`ctx.buddi.plugins.has`), so a setting can say "Needs Speech" instead of failing.
+- A `news` page icon, a folded newspaper, for plugin pages (host API 1.27).
 
 ### Changed
 

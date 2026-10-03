@@ -7,6 +7,7 @@
  * problem: a process that cannot reach a credential never starts and never
  * guesses one.
  */
+import { assetImageCodec } from './plugins/asset-image.js';
 import path from 'node:path';
 import { systemContext } from './system-context.js';
 import {
@@ -375,6 +376,8 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     // whether to offer the agent, and one held back is not one to offer again.
     hasAgent: (id) => catalog.get(id) !== undefined,
     env,
+    // Plugin assets (1.27): decoded and drawn again as PNG here, never served as given.
+    images: assetImageCodec,
   });
 
   const now = (): Date => new Date();

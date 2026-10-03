@@ -47,7 +47,7 @@ const iso = (v: unknown): string | null =>
 
 export const NOTIFICATION_COLUMNS =
   'id, kind, urgency, title, text, link, offers, dedupe_key, agent_id, plugin_id, action_id, state, due_at, ' +
-  'channel, fired_count, lowered, topic, also_from, held_for, created_at, sent_at, seen_at, acted_at, error, action';
+  'channel, fired_count, lowered, topic, also_from, held_for, created_at, sent_at, seen_at, acted_at, error, action, audio';
 
 export function toNotification(row: Record<string, any>): OwnerNotification {
   return {
@@ -63,6 +63,7 @@ export function toNotification(row: Record<string, any>): OwnerNotification {
     pluginId: row.plugin_id ?? null,
     actionId: row.action_id === null || row.action_id === undefined ? null : String(row.action_id),
     action: typeof row.action === 'string' && row.action.trim() !== '' ? row.action : null,
+    audio: row.audio === null || row.audio === undefined ? null : String(row.audio),
     state: row.state,
     dueAt: iso(row.due_at),
     channel: row.channel ?? null,

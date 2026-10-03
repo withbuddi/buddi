@@ -239,6 +239,18 @@ Telegram page while it is not.
 
 `buddi telegram pair | devices | unpair <id>` does the same from a terminal.
 
+**A long, linked or spoken report** (host API 1.27). A mission may declare
+`reportMax` (up to 6,000 characters; 1,500 by default), and its
+`mission.report` may carry a `link` — a dashboard route the notification and
+the chat's button open ("Open edition") — and `audio`, a voice note in Files
+made in the same run. On Telegram the voice note goes first, then the text,
+split at its paragraphs when it is longer than one message, links as full
+URLs with previews off. A voice note that cannot be read or sent leaves the
+text to go alone. In the run's conversation on the dashboard the report is
+drawn as it was sent: the player above the text, the button under it. A
+channel with no audio leaves the voice note out. This is independent of the
+`/voice` chat setting.
+
 ## Channels
 
 | Channel | Kind | What it sends | What leaves the machine |

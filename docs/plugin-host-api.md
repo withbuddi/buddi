@@ -1,7 +1,7 @@
 ---
 title: The plugin host API
 status: reference
-updated: 2026-10-01
+updated: 2026-10-03
 ---
 
 # The plugin host API
@@ -81,7 +81,7 @@ the host gave them a directory.
 ## 4. The areas
 
 Seven are always present because they reach nothing beyond the plugin
-itself. Eight must be declared (§5), and one member of an always-present
+itself. Nine must be declared (§5), and one member of an always-present
 area, `owner.notify`, must be declared too.
 
 ### 4.1 Always present
@@ -97,7 +97,8 @@ interface BuddiHost {
   http?: HttpArea; accounts?: AccountsArea; files?: FilesArea;
   memory?: MemoryArea; proposals?: ProposalsArea; schedule?: ScheduleArea;
   secrets?: SecretsArea; channels?: ChannelsArea;
-  plugins?: PluginsArea;               // 1.18, with `requires`
+  plugins?: PluginsArea;               // 1.18, with `requires`; 1.27, or `optional`
+  assets?: AssetsArea;                 // 1.27
 }
 ```
 
@@ -176,6 +177,25 @@ were moved into core once, at the first start of 1.18 (the one time core
 reads a plugin's table, recorded in `core.owner_place_imports` so it never
 runs again).
 
+**assets.** (1.27) `put(key, bytes, mime): Promise<{ key, bytes, updatedAt }>`,
+`delete(key): Promise<boolean>`, `list()`. Small images the plugin fetched —
+an outlet's logo — kept by core and served by buddi, so a page or a widget
+draws them without the dashboard ever reaching the host they came from. `put`
+takes PNG, JPEG, GIF (its first frame) or ICO, at most 256 KB; SVG is refused
+because it can carry script, and WebP for now because no pure-JavaScript
+decoder here reads it. Core decodes the bytes and writes PNGs it drew itself,
+64 and 128 pixels square with the picture fitted and centred, under
+`<data>/plugin-assets/<plugin>/` — core's directory, not the plugin's `dir`.
+Only those files are served, at `/api/plugin-assets/<plugin>/<key>`
+(`?size=64` for the small one), behind the dashboard session like every
+other read, as `image/png` with `nosniff`, `default-src 'none'; sandbox` and a
+day's private cache. A key is lower case, digits, `.`, `_` and `-`, at most
+96 characters. 20 MB per plugin; everything is removed with the plugin. The
+decoding is the gateway's (pngjs, jpeg-js, omggif, an ICO reader), handed to
+core as `configurePluginHost({ images })` the way the HTTP transport is; a
+process without it refuses `put` in a sentence. An export's read-only host
+keeps only `list`. The card says "keeps small images it fetched, like logos".
+
 **plugins** (with `requires`, not a `uses` area). `ctx.buddi.plugins.call(name,
 exportName, args)` (1.18) calls a named read-only export of a plugin this one
 requires. Core enforces every edge of it: the target must be in the
@@ -191,6 +211,15 @@ or a host, a POST — throws a `PluginCallRefusal`. It runs within five seconds,
 and is open alike from a tool, a page, a widget and the background: a source,
 a watcher and a sentinel run under the same binding the registry made. A refusal is a `PluginCallRefusal` naming why. No
 tool is ever reachable this way, and no schema but the target's own.
+
+Since 1.27 a manifest may also name plugins it uses only when they are there,
+as `optional: { speech: '^0.1.3' }` (and `buddi.optional` in `package.json`,
+compared at load like `requires`). Nothing is held back without one; the
+`plugins` area exists, `plugins.has(name)` answers whether a plugin named in
+`requires` or `optional` is loaded now at a version in the range (false for any
+other name), and `plugins.call` reaches its exports while it is. Core has one
+call of its own on the same road: a mission's `context` (§7, 1.27), read
+before the run with the target's read-only host.
 
 **owner:notify.** `ctx.buddi.owner.notify({ urgency, title, text?, link?,
 dedupeKey?, agentId?, action? }): Promise<{ id }>` tells the owner something
@@ -345,7 +374,7 @@ password), the one stated exception to "never held". The product is
 
 The manifest carries `uses: ('http' | 'accounts' | 'files' | 'files:library'
 | 'memory' | 'proposals' | 'schedule' | 'secrets' | 'owner:notify' | 'owner:channel'
-| 'owner:places')[]`. Because the staged
+| 'owner:places' | 'assets')[]`. Because the staged
 install screen may not import anything, the same list goes in
 `package.json` as `buddi.uses`; at load the two must match or the plugin
 does not register, as `network` is compared with `buddi.md`.
@@ -356,7 +385,8 @@ model account you pick", "reads every file in your Files library",
 "reads and writes memory as the agent that calls it", "proposes rules",
 "starts agent runs by itself", "fills secrets you bind to it", "can send
 you messages when you are away", "adds a way for buddi to reach you", "reads
-your places (Home, Work…) and their addresses". An area
+your places (Home, Work…) and their addresses", "keeps small images it
+fetched, like logos". An area
 not declared is absent from `ctx.buddi`, so a call to it is a type error
 and, at runtime, `undefined`. Adding an area in an upgrade is shown as a
 change on the upgrade card.
@@ -412,7 +442,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.26`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.27`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -527,6 +557,85 @@ refuses the binding, so a plugin that uses it asks for `^1.26`. It also adds
 `swatch` on a page table's column: a path within the row to a `#rrggbb`
 colour, drawn as a small dot before the cell's text (a calendar's own colour
 beside its name); an older buddi refuses a descriptor that carries it.
+
+1.27 is what the News plugin and Anchor need (buddi-planning
+`specs/news-and-anchor.md` §6). Eight additions, each optional; a plugin or a
+package that uses any of them asks for `^1.27`:
+
+1. **`assets`**, a declared area (§4.2): `put`, `delete`, `list`. A logo
+   fetched once is kept as PNGs core drew and served by buddi:
+
+   ```ts
+   uses: ['http', 'assets'],
+   // when an outlet is added
+   const icon = await ctx.buddi!.http!.request({ url: `https://${domain}/apple-touch-icon.png`, maxBytes: 256 * 1024 });
+   if (icon.ok) {
+     const bytes = Buffer.from(await icon.arrayBuffer());
+     await ctx.buddi!.assets!.put(domain, bytes, icon.headers.get('content-type') ?? '');
+   } // an SVG or a WebP is refused: try the next candidate
+   ```
+
+2. **Pictures in the page grammar.** A list item's `images` — up to four
+   fixed slots `{ asset, label }`, or `{ from, asset, label }` over an array in
+   the row — draws the first three logos overlapping and the rest in words
+   ("Reuters and 3 more"), a letter tile for a key that is missing. A widget
+   `list` row's `image: { asset }` leads it as a small logo on medium and on
+   the lock screen. Each is a key of the plugin's own assets; the page builds
+   buddi's own path from it and never draws anything else
+   ([plugin-pages.md](plugin-pages.md) §4, [plugins.md](plugins.md) §2.5d):
+
+   ```ts
+   item: { title: { path: 'title' }, images: { from: 'outlets', asset: 'logo', label: 'name' } },
+   // a widget row
+   { title: story.title, sub: story.outlet, side: '2 h', image: { asset: story.logo } }
+   ```
+
+3. **Links out.** `RouteRef` gains `{ href: ValueRef }`: an absolute `https:`
+   address read from the data, opened in a new tab with `noopener noreferrer`
+   and the outside-link mark. Anything else is no link, and a tool's `then`
+   never follows one. The dashboard still makes no request outside buddi: a
+   link is followed by the owner, never fetched. `to: { href: { path: 'url' } }`.
+
+4. **Mission context.** A mission (`SuggestedMission`, a proposed agent's
+   missions, an agent package's `missions[]`) may carry `context: { plugin,
+   export, args? }`. Core calls that export before each fresh run, with the
+   target's read-only host and its own `params`, and puts its JSON in the
+   run's first message under a line naming where it came from (at most 48,000
+   characters); a call that fails is said in the message and the run goes on.
+   The plugin must be the declaring plugin or one it requires — for an agent
+   package, one in its `requires` — checked at register and at install:
+
+   ```json
+   { "id": "morning", "cron": "0 7 * * *", "reportMax": 3800,
+     "context": { "plugin": "news", "export": "edition_material", "args": { "edition": "morning" } } }
+   ```
+
+5. **A longer report.** A mission's `reportMax` (200 to 6,000 characters)
+   replaces the 1,500 cap on its `mission.report`; Telegram splits a long one
+   at its paragraphs, links as full URLs with previews off. An agent
+   package's update changes a mission's `context` and `reportMax` and leaves
+   the owner's prompt and hour.
+
+6. **A linked, spoken report.** `mission.report` takes `link` (a dashboard
+   route, `#/…`), `linkLabel` (its button's words, "Open edition") and
+   `audio` (the Files id of a voice note made in the same run, checked to be
+   audio from that conversation). The notification opens the link; Telegram
+   sends the voice note first, then the text; the run's conversation on the
+   dashboard draws the player above the text and the button under it; a
+   channel without audio leaves it ([notifications.md](notifications.md)).
+
+   ```ts
+   const voice = await call('speech.say', { text: spoken });
+   await call('mission.report', { urgency: 'normal', text, link: '#/p/news/stories', linkLabel: 'Open edition', audio: voice.id });
+   ```
+
+7. **Optional plugins.** `optional` in the manifest (and `buddi.optional`),
+   `ctx.buddi.plugins.has(name)`, and `plugins.call` open while the plugin is
+   there (§4.2, plugins).
+
+8. **The `news` page icon**, a folded newspaper, in the pinned set (and the
+   kit's `assets/icons/news.svg`). An older buddi refuses a descriptor that
+   names it; ask for `^1.27` or use `globe`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

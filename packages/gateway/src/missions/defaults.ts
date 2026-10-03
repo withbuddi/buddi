@@ -182,6 +182,8 @@ export function planDefaultMissions(
         prompt: suggestion.prompt,
         enabled: suggestion.enabledByDefault ?? true,
         alwaysDeliver: suggestion.alwaysDeliver ?? false,
+        ...(suggestion.context ? { context: suggestion.context } : {}),
+        ...(suggestion.reportMax ? { reportMax: suggestion.reportMax } : {}),
       },
       cron: suggestion.cron,
       ...(suggestion.timezone ? { timezone: suggestion.timezone } : {}),

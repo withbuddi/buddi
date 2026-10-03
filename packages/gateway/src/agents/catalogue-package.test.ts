@@ -100,6 +100,22 @@ describe('reading a package', () => {
   });
 });
 
+describe('host API 1.27 missions', () => {
+  const edition = { id: 'morning', name: 'Morning edition', cron: '0 7 * * *', prompt: 'p' };
+  it('takes a context from a plugin the package requires, and a reportMax up to 6,000', () => {
+    const pkg = parseAgentPackage(
+      agentEntry('n1', { manifest: { requires: { news: '^0.1.0' }, missions: [{ ...edition, reportMax: 3800, context: { plugin: 'news', export: 'edition_material', args: { edition: 'morning' } } }] } }),
+    );
+    expect(pkg.manifest.missions[0]).toMatchObject({ reportMax: 3800, context: { plugin: 'news', export: 'edition_material' } });
+  });
+  it('refuses a context from a plugin it does not require, and a reportMax past the limit', () => {
+    expect(refusal(agentEntry('n2', { manifest: { missions: [{ ...edition, context: { plugin: 'news', export: 'edition_material' } }] } }))).toMatch(
+      /reads its context from news, which it does not require/,
+    );
+    expect(refusal(agentEntry('n3', { manifest: { missions: [{ ...edition, reportMax: 9000 }] } }))).toMatch(/reportMax|6000/);
+  });
+});
+
 describe('the denylist', () => {
   it('covers resolved names and declared globs alike', () => {
     expect(deniedTools(['email.*'], ['email.read', 'email.send'])).toEqual(expect.arrayContaining(['email.send', 'email.*']));

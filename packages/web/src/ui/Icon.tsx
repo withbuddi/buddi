@@ -36,6 +36,8 @@ const GLYPHS = {
   plug: [20, 1.6, <><path d="M7.4 2.8v3.4M12.6 2.8v3.4" /><path d="M5 6.2h10v3.1a5 5 0 0 1-10 0Z" /><path d="M10 14.3v3" /></>],
   key: [20, 1.6, <><circle cx="6.6" cy="10" r="3.2" /><path d="M9.8 10h7.2M14.4 10v2.6M16.6 10v1.8" /></>],
   globe: [20, 1.6, <><circle cx="10" cy="10" r="7.1" /><path d="M2.9 10h14.2M10 2.9c3.4 3.7 3.4 10.5 0 14.2-3.4-3.7-3.4-10.5 0-14.2Z" /></>],
+  // A folded newspaper: the page, its back fold, three lines of print (host API 1.27).
+  news: [20, 1.6, <><path d="M4 3.6h9.2a.8.8 0 0 1 .8.8v11.2a.8.8 0 0 0 .8.8H5.2A1.6 1.6 0 0 1 3.6 14.8V4a.4.4 0 0 1 .4-.4Z" /><path d="M14 7h1.6a.8.8 0 0 1 .8.8v7.2a1.4 1.4 0 0 1-1.4 1.4" /><path d="M6.4 6.8h4.4M6.4 9.8h4.4M6.4 12.8h2.8" /></>],
   // A screen with a prompt: a program on this computer.
   terminal: [20, 1.6, <><rect x="2.8" y="3.6" width="14.4" height="12.8" rx="1.6" /><path d="M6.2 8l2.6 2.4-2.6 2.4M10.6 12.8h3.4" /></>],
 

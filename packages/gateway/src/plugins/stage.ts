@@ -141,7 +141,12 @@ export interface StagedPlugin {
    */
   coreAsDependency?: boolean;
   /** The `buddi` field of package.json, if any. */
-  buddi?: { manifest?: string; core?: string; uses?: unknown; hostApi?: string; requires?: unknown };
+  buddi?: { manifest?: string; core?: string; uses?: unknown; hostApi?: string; requires?: unknown; optional?: unknown };
+  /**
+   * The plugins it can use when they are there — `buddi.optional` (host API
+   * 1.27) — by name, with a semver range. Nothing is held back without one.
+   */
+  optional?: Record<string, string>;
   /**
    * The plugins it needs — `buddi.requires` in its package.json — by name,
    * with a semver range. The card lists each with where it stands here.
@@ -715,6 +720,8 @@ export async function stagePlugin(
     if (!uses.ok) throw new StageRefusal('bad-uses', `${uses.message}. Nothing of it is kept.`);
     const requires = parsePluginRequires(pkg.buddi?.requires, `${String(pkg.name)}'s package.json buddi.requires`, declaredName);
     if (!requires.ok) throw new StageRefusal('bad-requires', `${requires.message}. Nothing of it is kept.`);
+    const optional = parsePluginRequires(pkg.buddi?.optional, `${String(pkg.name)}'s package.json buddi.optional`, declaredName);
+    if (!optional.ok) throw new StageRefusal('bad-requires', `${optional.message}. Nothing of it is kept.`);
     if (pkg.buddi?.hostApi !== undefined) {
       const problem =
         typeof pkg.buddi.hostApi === 'string'
@@ -781,10 +788,12 @@ export async function stagePlugin(
               ...(pkg.buddi.uses === undefined ? {} : { uses: pkg.buddi.uses }),
               ...(typeof pkg.buddi.hostApi === 'string' ? { hostApi: pkg.buddi.hostApi } : {}),
               ...(pkg.buddi.requires === undefined ? {} : { requires: pkg.buddi.requires }),
+              ...(pkg.buddi.optional === undefined ? {} : { optional: pkg.buddi.optional }),
             },
           }),
       uses: uses.uses,
       ...(Object.keys(requires.requires).length === 0 ? {} : { requires: requires.requires }),
+      ...(Object.keys(optional.requires).length === 0 ? {} : { optional: optional.requires }),
       ...(author === undefined ? {} : { author }),
       ...(opts.previousUses === undefined ? {} : { previousUses: opts.previousUses }),
       ...(typeof pkg.peerDependencies?.['@buddi/core'] === 'string'

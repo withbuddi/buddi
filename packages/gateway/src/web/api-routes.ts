@@ -715,6 +715,11 @@ export const API_ROUTES: readonly ApiRoute[] = [
 
   /* ---------------- plugins and pages ---------------- */
   { method: 'GET', path: '/api/plugins', area: 'plugins', summary: 'Installed plugins, staged ones waiting to be read, and the trust sentence.' },
+  {
+    method: 'GET', path: '/api/plugin-assets/:plugin/:key', area: 'plugins', kind: 'bytes',
+    summary: "A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin fetched, 128 px square, or 64 with ?size=64.",
+    answer: 'image/png, with an ETag', errors: '404 no such asset',
+  },
   { method: 'POST', path: '/api/plugins/stage', area: 'plugins', token: 'code', summary: 'Fetch a plugin to read before installing (npm name, tarball path or folder).', body: '{ spec: string }', answer: '202 { job }', errors: '400' },
   {
     method: 'POST', path: '/api/plugins/upload', area: 'plugins', token: 'code', kind: 'upload', summary: 'Stage a plugin tarball sent as the body.',

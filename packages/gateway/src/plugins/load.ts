@@ -271,12 +271,12 @@ export function packageRequires(entry: string): { ok: true; requires: Record<str
 }
 
 /** The `buddi` field of the nearest package.json above an entry point. */
-function packageBuddi(entry: string): { ok: true; buddi: { uses?: unknown; requires?: unknown } | undefined } | { ok: false; message: string } {
+function packageBuddi(entry: string): { ok: true; buddi: { uses?: unknown; requires?: unknown; optional?: unknown } | undefined } | { ok: false; message: string } {
   let dir = path.dirname(entry);
   for (let i = 0; i < 8; i += 1) {
     const file = path.join(dir, 'package.json');
     if (existsSync(file)) {
-      let pkg: { buddi?: { uses?: unknown; requires?: unknown } };
+      let pkg: { buddi?: { uses?: unknown; requires?: unknown; optional?: unknown } };
       try {
         pkg = JSON.parse(readFileSync(file, 'utf8')) as typeof pkg;
       } catch (err) {
@@ -301,7 +301,16 @@ export function requiresProblem(manifest: PluginManifest, entry: string): string
   if (!declared.ok) return declared.message;
   const shown = packageRequires(entry);
   if (!shown.ok) return shown.message;
-  return pluginRequiresMismatch(manifest.name, declared.requires, shown.requires);
+  const requires = pluginRequiresMismatch(manifest.name, declared.requires, shown.requires);
+  if (requires !== undefined) return requires;
+  // `optional` (1.27), declared twice the same way: the card says "works better with".
+  const optional = parsePluginRequires(manifest.optional, `plugin "${manifest.name}"'s manifest optional`, manifest.name);
+  if (!optional.ok) return optional.message;
+  const pkg = packageBuddi(entry);
+  if (!pkg.ok) return pkg.message;
+  const shownOptional = parsePluginRequires(pkg.buddi?.optional, "its package.json's buddi.optional");
+  if (!shownOptional.ok) return shownOptional.message;
+  return pluginRequiresMismatch(manifest.name, optional.requires, shownOptional.requires, 'optional');
 }
 
 /**

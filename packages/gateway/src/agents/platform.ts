@@ -1550,6 +1550,9 @@ export interface AcceptedMission {
   prompt: string;
   alwaysDeliver?: boolean;
   misfirePolicy?: MisfirePolicy;
+  /** Host API 1.27: an export read before each run, and the longest report. */
+  context?: { plugin: string; export: string; args?: Record<string, unknown> };
+  reportMax?: number;
 }
 
 /** Every mission an accept creates. */
@@ -1700,6 +1703,8 @@ function buildAcceptAgentEnvelope(
       prompt: m.prompt,
       ...(m.alwaysDeliver === undefined ? {} : { alwaysDeliver: m.alwaysDeliver }),
       ...(m.misfirePolicy === undefined ? {} : { misfirePolicy: m.misfirePolicy }),
+      ...(m.context === undefined ? {} : { context: m.context }),
+      ...(m.reportMax === undefined ? {} : { reportMax: m.reportMax }),
     };
   });
   return {
@@ -2703,6 +2708,8 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
           prompt: mission.prompt,
           enabled: true,
           alwaysDeliver: mission.alwaysDeliver ?? false,
+          ...(mission.context ? { context: mission.context } : {}),
+          ...(mission.reportMax ? { reportMax: mission.reportMax } : {}),
         });
         await setSchedule(ctx.db!, mission.id, {
           cron: mission.cron,

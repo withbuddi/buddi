@@ -525,6 +525,64 @@ export interface SuggestedMission {
   alwaysDeliver?: boolean;
   /** Registered enabled. Default true; false ships a placeholder switched off. */
   enabledByDefault?: boolean;
+  /**
+   * A plugin export core calls before each run, its JSON answer placed in the
+   * run's first message (since host API 1.27): the material an edition is
+   * written from, so the run is one model call rather than two. The plugin
+   * must be this manifest's own or one it requires; for an agent package, one
+   * in its `requires`. A call that fails says so in the message instead.
+   */
+  context?: MissionContext;
+  /**
+   * The longest report this mission's `mission.report` takes, in characters
+   * (since host API 1.27): at most `REPORT_MAX_LIMIT`; `REPORT_MAX_DEFAULT`
+   * when absent. Telegram splits a long one at paragraphs.
+   */
+  reportMax?: number;
+}
+
+/** `SuggestedMission.context`: which export, with which arguments. */
+export interface MissionContext {
+  plugin: string;
+  export: string;
+  args?: Record<string, unknown>;
+}
+
+/** The longest report an unattended run sends, unless its mission says more. */
+export const REPORT_MAX_DEFAULT = 1500;
+/** The most a mission may ask for with `reportMax`. */
+export const REPORT_MAX_LIMIT = 6000;
+
+/**
+ * Why a mission's `context` or `reportMax` cannot be kept, or undefined.
+ * `allowed` names the plugins its context may call (the declaring plugin and
+ * its requirements, or an agent package's `requires`).
+ */
+export function missionExtrasProblem(
+  mission: { id: string; context?: unknown; reportMax?: unknown },
+  allowed: readonly string[],
+): string | undefined {
+  if (mission.reportMax !== undefined) {
+    const n = mission.reportMax;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 200 || n > REPORT_MAX_LIMIT) {
+      return `mission "${mission.id}" asks for reportMax ${JSON.stringify(n)}; a whole number from 200 to ${REPORT_MAX_LIMIT}`;
+    }
+  }
+  if (mission.context === undefined) return undefined;
+  const c = mission.context as Partial<MissionContext> | null;
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return `mission "${mission.id}": context is { plugin, export, args? }`;
+  const keys = Object.keys(c).filter((k) => k !== 'plugin' && k !== 'export' && k !== 'args');
+  if (keys.length > 0) return `mission "${mission.id}": context takes plugin, export and args, not ${keys.join(', ')}`;
+  if (typeof c.plugin !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(c.plugin)) return `mission "${mission.id}": context.plugin is a plugin name`;
+  if (typeof c.export !== 'string' || !/^[a-z][a-zA-Z0-9_]{0,63}$/.test(c.export)) return `mission "${mission.id}": context.export is an export name`;
+  if (c.args !== undefined && (typeof c.args !== 'object' || c.args === null || Array.isArray(c.args))) {
+    return `mission "${mission.id}": context.args is an object`;
+  }
+  if (c.args !== undefined && JSON.stringify(c.args).length > 2000) return `mission "${mission.id}": context.args is at most 2,000 characters of JSON`;
+  if (!allowed.includes(c.plugin)) {
+    return `mission "${mission.id}" reads its context from ${c.plugin}, which it does not require (${allowed.length === 0 ? 'it requires nothing' : `it may use ${allowed.join(', ')}`})`;
+  }
+  return undefined;
 }
 
 /**
@@ -623,7 +681,7 @@ export interface SuggestedAgent {
  */
 export type SuggestedAgentMission = Pick<
   SuggestedMission,
-  'id' | 'name' | 'cron' | 'prompt' | 'misfirePolicy' | 'alwaysDeliver'
+  'id' | 'name' | 'cron' | 'prompt' | 'misfirePolicy' | 'alwaysDeliver' | 'context' | 'reportMax'
 >;
 
 /** The mascots the dashboard ships, by file name (`mascot/<name>.png`). */
@@ -858,6 +916,14 @@ export interface PluginManifest {
    * do not load. Declaring any gives `ctx.buddi.plugins`.
    */
   requires?: Record<string, string>;
+  /**
+   * Plugins this one uses when they are there, by name, with a semver range
+   * (host API 1.27). Repeated in `package.json` as `buddi.optional`; the two
+   * must match. Nothing is held back without one: `ctx.buddi.plugins.has`
+   * says whether it is loaded and in range, and `plugins.call` reaches its
+   * exports while it is.
+   */
+  optional?: Record<string, string>;
   /**
    * Named read-only queries a plugin that requires this one may call through
    * `ctx.buddi.plugins.call` (host API 1.18). Nothing else of this plugin is

@@ -384,7 +384,7 @@ export function createWidgets(deps: WidgetsDeps) {
         if (raw === null || raw === undefined) {
           e.body = null;
         } else {
-          const checked = widgetBodyOf(raw);
+          const checked = widgetBodyOf(raw, { plugin: p.info.plugin });
           if (!checked.ok) throw new Error(checked.reason);
           e.body = checked.body;
         }

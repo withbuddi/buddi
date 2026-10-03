@@ -33,6 +33,7 @@
  */
 import path from 'node:path';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { listPluginAssets, removePluginAssets } from '@buddi/core';
 import {
   cancelJob,
   decideApproval,
@@ -309,6 +310,14 @@ export async function applyUninstall(
     }
   } else {
     notes.push(`its source directory ${plan.record.source.path} was left where it is; buddi did not put it there`);
+  }
+
+  // Its assets (host API 1.27): images it fetched and core re-drew. A cache
+  // of what lives elsewhere, not the owner's data, so they go with it.
+  const assets = await listPluginAssets(plan.record.name, env).catch(() => []);
+  if (assets.length > 0) {
+    await removePluginAssets(plan.record.name, env);
+    notes.push(`its ${assets.length === 1 ? 'kept image was' : `${assets.length} kept images were`} removed`);
   }
 
   let purged = false;

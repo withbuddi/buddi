@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-284 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+285 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -3090,6 +3090,7 @@ curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
 | GET | `/api/plugins` | Installed plugins, staged ones waiting to be read, and the trust sentence. | yes |
+| GET | `/api/plugin-assets/:plugin/:key` | A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin fetched, 128 px square, or 64 with ?size=64. | yes |
 | POST | `/api/plugins/stage` | Fetch a plugin to read before installing (npm name, tarball path or folder). | no |
 | POST | `/api/plugins/upload` | Stage a plugin tarball sent as the body. | no |
 | GET | `/api/plugins/jobs/:id` | A staging, install or update job. | yes |
@@ -3120,6 +3121,20 @@ Installed plugins, staged ones waiting to be read, and the trust sentence.
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/plugins"
+```
+
+#### `GET /api/plugin-assets/:plugin/:key`
+
+A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin fetched, 128 px square, or 64 with ?size=64.
+
+- **Auth:** Session or API token.
+- **Kind:** bytes, not JSON
+- **Answer:** `image/png, with an ETag`
+- **Errors:** 404 no such asset
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/plugin-assets/<plugin>/<key>" -o out
 ```
 
 #### `POST /api/plugins/stage`

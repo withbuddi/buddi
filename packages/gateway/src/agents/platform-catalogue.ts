@@ -30,6 +30,7 @@ import {
   applyFrontmatterPatch,
   assertApprovedEffect,
   getMission,
+  setMissionExtras,
   HANDLE_MAX,
   hashEnvelope,
   parseAgentFile,
@@ -434,6 +435,9 @@ export interface PackageMissionPlan {
   enabled: boolean;
   alwaysDeliver?: boolean;
   misfirePolicy?: MisfirePolicy;
+  /** Host API 1.27: an export read before each run, and the longest report. */
+  context?: { plugin: string; export: string; args?: Record<string, unknown> };
+  reportMax?: number;
 }
 
 export interface InstallAgentEnvelope {
@@ -767,6 +771,8 @@ function missionPlans(
       enabled: on.has(m.id),
       ...(m.alwaysDeliver === undefined ? {} : { alwaysDeliver: m.alwaysDeliver }),
       ...(m.misfirePolicy === undefined ? {} : { misfirePolicy: m.misfirePolicy }),
+      ...(m.context === undefined ? {} : { context: m.context }),
+      ...(m.reportMax === undefined ? {} : { reportMax: m.reportMax }),
     };
   });
 }
@@ -1474,7 +1480,11 @@ export function createCatalogueTools(
       const created: string[] = [];
       if (ctx.db) {
         for (const mission of envelope.missions) {
-          if (envelope.mode === 'update' && (await getMission(ctx.db as never, mission.id).catch(() => null))) continue;
+          if (envelope.mode === 'update' && (await getMission(ctx.db as never, mission.id).catch(() => null))) {
+            // The owner's prompt and hour stay; what the package says it reads and how long it reports follow it.
+            await setMissionExtras(ctx.db as never, mission.id, { context: mission.context ?? null, reportMax: mission.reportMax ?? null });
+            continue;
+          }
           await upsertMission(ctx.db as never, {
             id: mission.id,
             name: mission.name,
@@ -1482,6 +1492,8 @@ export function createCatalogueTools(
             prompt: mission.prompt,
             enabled: mission.enabled,
             alwaysDeliver: mission.alwaysDeliver ?? false,
+            ...(mission.context ? { context: mission.context } : {}),
+            ...(mission.reportMax ? { reportMax: mission.reportMax } : {}),
           });
           await setSchedule(ctx.db as never, mission.id, {
             cron: mission.cron,

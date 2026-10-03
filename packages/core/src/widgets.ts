@@ -22,6 +22,7 @@ import type { CoreToolContext, ToolContext } from './tools.js';
 import { parseWidgetSettings, type WidgetSettingField, type WidgetSettingOption, type WidgetSettings } from './widget-settings.js';
 import { TILE_ICONS, type TileIcon } from './views.js';
 import { HOME_CARD_LINE_MAX, HOME_CARD_TREND_MAX, HOME_CARD_VALUE_MAX, type HomeGlanceCard } from './home.js';
+import { assetPath } from './plugin/assets.js';
 
 /** Small takes one column of Home's grid, medium two. One row height for both. */
 export const WIDGET_SIZES = ['small', 'medium'] as const;
@@ -67,6 +68,13 @@ export interface WidgetListRow {
   /** The right-hand figure, already formatted: "20:00", "€42". */
   side?: string;
   tone?: 'good' | 'critical';
+  /**
+   * A small picture leading the row (since host API 1.27): a plugin answers
+   * `{ asset: '<key>' }`, a key of its own `assets`; core turns it into the
+   * same-origin path the page draws (`/api/plugin-assets/<plugin>/<key>`).
+   * Drawn on medium and on the lock screen; a key that is not one is left off.
+   */
+  image?: { asset?: string; src?: string };
 }
 
 /** Up to `WIDGET_ROWS_MAX` rows (a small widget draws them without `sub`), and a foot. */
@@ -268,6 +276,17 @@ export function cutLine(value: unknown, max: number): string | undefined {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
+/**
+ * A row's picture as the page may draw it: only a key of the answering
+ * plugin's assets, made into buddi's own path. Anything else — a URL, a key
+ * that is not one, no plugin to bind it to — is left off.
+ */
+function imageOf(value: unknown, plugin: string | undefined): { image?: { src: string } } {
+  if (!plugin || !value || typeof value !== 'object') return {};
+  const src = assetPath(plugin, (value as { asset?: unknown }).asset, 64);
+  return src ? { image: { src } } : {};
+}
+
 /** A glyph from the pinned set; one outside it is left off rather than guessed at. */
 function iconOf(value: unknown): { icon?: TileIcon } {
   return typeof value === 'string' && ICONS.has(value) ? { icon: value as TileIcon } : {};
@@ -296,7 +315,11 @@ const TONES_BAR = new Set(['accent', 'good', 'warning', 'critical']);
  * Lines are cut to size, lists to their count, numbers checked; a body with
  * no figure, no rows or an unknown kind is refused rather than drawn wrong.
  */
-export function widgetBodyOf(raw: unknown): { ok: true; body: WidgetBody } | { ok: false; reason: string } {
+export function widgetBodyOf(
+  raw: unknown,
+  /** The plugin answering, so a row's `image.asset` becomes the path buddi serves it on. */
+  opts: { plugin?: string } = {},
+): { ok: true; body: WidgetBody } | { ok: false; reason: string } {
   if (!raw || typeof raw !== 'object') return { ok: false, reason: 'the widget answered something that is not a body' };
   const b = raw as Record<string, unknown>;
   switch (b.kind) {
@@ -330,6 +353,7 @@ export function widgetBodyOf(raw: unknown): { ok: true; body: WidgetBody } | { o
             ...opt('sub', cutLine(row.sub, WIDGET_LINE_MAX)),
             ...opt('side', cutLine(row.side, WIDGET_VALUE_MAX)),
             ...(typeof row.tone === 'string' && TONES_ROW.has(row.tone) ? { tone: row.tone as 'good' | 'critical' } : {}),
+            ...imageOf(row.image, opts.plugin),
           };
         })
         .filter((r): r is WidgetListRow => r !== null)

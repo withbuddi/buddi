@@ -54,6 +54,13 @@ export type Mission = {
    * run (`enqueueOccurrence`). Null or absent: one run per occurrence.
    */
   coalesce?: { windowSeconds: number; maxWaitSeconds: number } | null;
+  /**
+   * A plugin export core calls before each run (host API 1.27), its JSON
+   * answer opening the run's first message. Null: the run reads nothing first.
+   */
+  context?: { plugin: string; export: string; args?: Record<string, unknown> } | null;
+  /** The longest report its `mission.report` takes; null is `REPORT_MAX_DEFAULT`. */
+  reportMax?: number | null;
   createdAt: Date;
 };
 
@@ -107,6 +114,8 @@ export type MissionRow = {
   still_useful_asked_at?: Date | null;
   coalesce_window_seconds?: number | null;
   coalesce_max_wait_seconds?: number | null;
+  context?: unknown;
+  report_max?: number | null;
   created_at: Date;
 };
 
@@ -153,7 +162,20 @@ export function toMission(row: MissionRow): Mission {
     coalesce: row.coalesce_window_seconds && row.coalesce_max_wait_seconds
       ? { windowSeconds: row.coalesce_window_seconds, maxWaitSeconds: row.coalesce_max_wait_seconds }
       : null,
+    context: contextOf(row.context),
+    reportMax: typeof row.report_max === 'number' ? row.report_max : null,
     createdAt: row.created_at,
+  };
+}
+
+function contextOf(value: unknown): Mission['context'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const c = value as Record<string, unknown>;
+  if (typeof c.plugin !== 'string' || typeof c.export !== 'string') return null;
+  return {
+    plugin: c.plugin,
+    export: c.export,
+    ...(c.args && typeof c.args === 'object' && !Array.isArray(c.args) ? { args: c.args as Record<string, unknown> } : {}),
   };
 }
 

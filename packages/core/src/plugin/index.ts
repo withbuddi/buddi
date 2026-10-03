@@ -25,10 +25,23 @@ export {
   checkUrl,
   isBlockedHostname,
 } from './url.js';
-export { AGENT_ONLY_FIELD, ToolRefusal, isToolRefusal } from '../tools.js';
+export { AGENT_ONLY_FIELD, REPORT_MAX_DEFAULT, REPORT_MAX_LIMIT, ToolRefusal, isToolRefusal } from '../tools.js';
 export { HOST_API_VERSION, hostApiProblem } from './version.js';
 export { NATIVE_BACKEND_ID, SEARCH_BACKEND_VAR, parseSearchBackend } from './search.js';
 export { AUTHOR_NAME_MAX, authorOfPackageJson, parsePluginAuthor, pluginAuthorMismatch } from './author.js';
+export {
+  ASSET_INPUT_MAX,
+  ASSET_INPUT_TYPES,
+  ASSET_KEY,
+  ASSET_QUOTA_BYTES,
+  ASSET_ROUTE,
+  ASSET_SIZES,
+  AssetRefusal,
+  assetInputProblem,
+  assetPath,
+  isAssetKey,
+} from './assets.js';
+export type { AssetImageCodec, AssetSize, PluginAsset } from './assets.js';
 export {
   PLUGIN_USES,
   PLUGIN_USE_WORDS,
@@ -51,6 +64,7 @@ export type {
   CarryOverRequest,
   EffectDescription,
   GroupContext,
+  MissionContext,
   NetworkUse,
   OwnerChoice,
   PluginManifest,
@@ -87,7 +101,11 @@ export type {
   Component,
   Field,
   FieldAction,
+  ImageList,
+  ImageRef,
+  ListItem,
   OptionsFrom,
+  RouteRef,
   PageDescriptor,
   PagePlay,
   PageIcon,
@@ -157,6 +175,7 @@ export type { MisfirePolicy } from '../scheduler/types.js';
 export type {
   AccountsArea,
   ApprovalsArea,
+  AssetsArea,
   ConversationDecision,
   BuddiHost,
   ChannelsArea,

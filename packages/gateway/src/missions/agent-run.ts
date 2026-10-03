@@ -288,6 +288,8 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
             : 'source',
         ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
         ...(job.dedupKey?.startsWith('reminder:') ? { dedupeKey: job.dedupKey } : {}),
+        ...(decision?.kind === 'report' && decision.link ? { link: decision.link } : {}),
+        ...(decision?.kind === 'report' && decision.audio ? { audio: decision.audio.fileId } : {}),
       });
     } catch (err) {
       // Nobody to tell is not a reason to retry the model. The run happened,

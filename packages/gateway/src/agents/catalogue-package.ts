@@ -29,6 +29,8 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
+  REPORT_MAX_LIMIT,
+  missionExtrasProblem,
   HANDLE,
   HANDLE_MIN,
   IDLE_ROLLOVERS,
@@ -95,6 +97,17 @@ const missionSchema = z
     prompt: z.string().min(1).max(4000),
     misfirePolicy: z.enum(['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline']).optional(),
     alwaysDeliver: z.boolean().optional(),
+    /** Host API 1.27: the longest report it takes, 200–6,000 characters. */
+    reportMax: z.number().int().min(200).max(REPORT_MAX_LIMIT).optional(),
+    /** Host API 1.27: an export of a required plugin, read before each run. */
+    context: z
+      .object({
+        plugin: kebab,
+        export: z.string().regex(/^[a-z][a-zA-Z0-9_]{0,63}$/, 'an export name'),
+        args: z.record(z.string(), z.unknown()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -290,6 +303,11 @@ export function parseAgentPackage(raw: unknown): AgentPackage {
     } catch (err) {
       throw new PackageRefusal(`${name}: mission "${mission.id}" has a schedule that does not parse: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+  for (const mission of m.missions) {
+    // A mission's context reads a plugin the package requires: it must be there when the run starts.
+    const problem = missionExtrasProblem(mission, Object.keys(m.requires));
+    if (problem !== undefined) throw new PackageRefusal(`${name}: ${problem}`);
   }
   const missionIds = new Set(m.missions.map((mission) => mission.id));
   if (missionIds.size !== m.missions.length) throw new PackageRefusal(`${name}: two missions share an id`);

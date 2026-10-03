@@ -55,6 +55,12 @@ export interface OwnerMessage {
    * Falls back to `agentId`.
    */
   agentHandle?: string;
+  /**
+   * A voice note in Files (its id) that goes with the text: a mission
+   * report's `audio` (host API 1.27). A channel that plays audio (Telegram)
+   * sends it first, then the text; any other channel leaves it.
+   */
+  audio?: string;
 }
 
 /** Where a row is in its life. See migration 043. */
@@ -75,6 +81,8 @@ export interface OwnerNotification {
   actionId: string | null;
   /** What it asks the owner to do; null for information (`OwnerMessage.action`). */
   action: string | null;
+  /** The voice note in Files that goes with it (`OwnerMessage.audio`); null for none. */
+  audio: string | null;
   state: NotificationState;
   dueAt: string | null;
   channel: string | null;

@@ -24,6 +24,7 @@ export const PLUGIN_USES = [
   'owner:notify',
   'owner:channel',
   'owner:places',
+  'assets',
 ] as const;
 
 export type PluginUse = (typeof PLUGIN_USES)[number];
@@ -45,6 +46,7 @@ export const PLUGIN_USE_WORDS: Readonly<Record<PluginUse, string>> = {
   'owner:notify': 'can send you messages when you are away',
   'owner:channel': 'adds a way for buddi to reach you',
   'owner:places': 'reads your places (Home, Work…) and their addresses',
+  assets: 'keeps small images it fetched, like logos',
 };
 
 export function isPluginUse(value: unknown): value is PluginUse {

@@ -32,6 +32,8 @@ import type {
   Field as CoreField,
   FieldAction as CoreFieldAction,
   GroupBy as CoreGroupBy,
+  ImageList as CoreImageList,
+  ImageRef as CoreImageRef,
   ListItem as CoreListItem,
   OptionsFrom as CoreOptionsFrom,
   PageDescriptor as CorePageDescriptor,
@@ -65,6 +67,8 @@ import type {
   Field,
   FieldAction,
   GroupBy,
+  ImageList,
+  ImageRef,
   ListComponent,
   ListItem,
   OptionsFrom,
@@ -139,6 +143,8 @@ interface Conformance {
   rowActionForm: Exact<CoreRowActionForm, RowActionForm>;
   bulkAction: Exact<CoreBulkAction, BulkAction>;
   pillRef: Exact<CorePillRef, PillRef>;
+  imageRef: Exact<CoreImageRef, ImageRef>;
+  imageList: Exact<CoreImageList, ImageList>;
   listItem: Exact<CoreListItem, ListItem>;
   selection: Exact<CoreSelection, Selection>;
   groupBy: Exact<CoreGroupBy, GroupBy>;
@@ -184,6 +190,8 @@ export const CONTRACTS_AGREE: Conformance = {
   rowActionForm: true,
   bulkAction: true,
   pillRef: true,
+  imageRef: true,
+  imageList: true,
   listItem: true,
   selection: true,
   groupBy: true,
@@ -259,6 +267,8 @@ export const CHECKED_TYPES = [
   'RowActionForm',
   'BulkAction',
   'PillRef',
+  'ImageRef',
+  'ImageList',
   'ListItem',
   'Selection',
   'GroupBy',

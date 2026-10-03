@@ -128,6 +128,8 @@ function checkMessage(message: OwnerMessage): void {
   }
 }
 
+const UUID_AUDIO = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function toDeliverable(row: OwnerNotification): DeliverableMessage {
   return {
     id: row.id,
@@ -142,6 +144,7 @@ function toDeliverable(row: OwnerNotification): DeliverableMessage {
     ...(row.pluginId ? { pluginId: row.pluginId } : {}),
     ...(row.actionId ? { actionId: row.actionId } : {}),
     ...(row.action ? { action: row.action } : {}),
+    ...(row.audio ? { audio: row.audio } : {}),
   };
 }
 
@@ -224,7 +227,9 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
   // Approvals and questions carry their own action and are never folded.
   const topic = always || message.kind === 'agent' ? null : notificationTopic({ title: baseTitle, text, agentId: message.agentId ?? null }) || null;
   // An agent's own message is never folded: it says it is from that agent.
-  if (!existing && topic && message.kind !== 'agent' && action === null) {
+  // A message carrying a voice note is its own: folding would lose the recording.
+  const audio = typeof message.audio === 'string' && UUID_AUDIO.test(message.audio) ? message.audio : null;
+  if (!existing && topic && message.kind !== 'agent' && action === null && audio === null) {
     const folded = await foldIntoTopic(db, { ...message, title: baseTitle, text, dedupeKey, topic }, now);
     if (folded) return folded;
   }
@@ -265,7 +270,7 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
               topic = coalesce($15, topic), plugin_id = coalesce($8, plugin_id), action_id = coalesce($9::uuid, action_id), state = $10, due_at = $11,
               channel = $12, fired_count = fired_count + 1, lowered = $13,
               seen_at = case when $17 then null else seen_at end, error = null, updated_at = $14,
-              held_for = $16, action = $18
+              held_for = $16, action = $18, audio = $19::uuid
         where id = $1 and sent_at is null and state in ('shown', 'held', 'stored', 'failed') and answer is null
         returning ${NOTIFICATION_COLUMNS}`,
       [existing.id, urgency, title, text, message.link?.route ?? null, offers, message.agentId ?? null,
@@ -275,7 +280,7 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
         // owner has not seen yet is not settled by having read an earlier
         // one. A quiet line (today, digest) that says more, or a retry with
         // the same action, is updated where it is: reading it again is not news.
-        urgency === 'now' || (action !== null && action !== (existing.action ?? null)), action],
+        urgency === 'now' || (action !== null && action !== (existing.action ?? null)), action, audio],
     );
     if (rows[0]) row = toNotification(rows[0]);
     else existing = null; // Sent between the read and the write: this is a new message after all.
@@ -284,11 +289,11 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
     const { rows } = await db.query(
       `insert into core.owner_notifications
          (kind, urgency, title, text, link, offers, dedupe_key, agent_id, plugin_id, action_id, state, due_at, channel,
-          lowered, created_at, updated_at, topic, held_for, action)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15, $15, $16, $17, $18)
+          lowered, created_at, updated_at, topic, held_for, action, audio)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15, $15, $16, $17, $18, $19::uuid)
        returning ${NOTIFICATION_COLUMNS}`,
       [message.kind, urgency, title, text, message.link?.route ?? null, offers, dedupeKey, message.agentId ?? null,
-        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor, action],
+        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor, action, audio],
     );
     row = toNotification(rows[0]);
   }

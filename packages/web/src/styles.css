@@ -3926,6 +3926,17 @@ a.wg-body:focus-visible { outline: none; border-radius: var(--radius); box-shado
 .wg-row { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-1) 0; min-width: 0; }
 .wg-row + .wg-row { border-top: 1px solid var(--line); }
 .wg-row-text { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+/* A plugin's kept image (host API 1.27): a logo as a small tile, or its letter when there is none. */
+.pl-logo { --pl-logo-s: var(--space-5); flex: 0 0 auto; display: inline-grid; place-items: center; width: var(--pl-logo-s); height: var(--pl-logo-s); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); font-size: calc(var(--pl-logo-s) * 0.5); font-weight: var(--weight-semibold); line-height: 1; }
+.pl-logo[data-letter='true'] { background: var(--agent-research-soft); color: var(--agent-research); box-shadow: none; }
+.pl-logo img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.pl-stack { display: flex; align-items: center; gap: var(--space-2); min-width: 0; margin-bottom: var(--space-1); }
+.pl-stack-logos { display: inline-flex; flex: 0 0 auto; }
+.pl-stack-logos .pl-logo + .pl-logo { margin-left: calc(var(--space-1) * -1); box-shadow: inset 0 0 0 1px var(--line), 0 0 0 var(--space-0) var(--surface); }
+.pl-stack-words { font-size: var(--text-sm); font-weight: var(--weight-normal); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-row-title { display: block; }
+.wg-row[data-marked='true'] { align-items: center; }
+.wg-mark { --pl-logo-s: var(--space-4); border-radius: var(--space-1); }
 .wg-row-title { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wg-row-sub { font-size: var(--text-xs); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wg-row-side { flex: none; font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -4693,3 +4704,7 @@ button.lk-chip:disabled { cursor: default; }
   .wb-src-result { grid-template-columns: minmax(0, 1fr); }
   .wb-src-result-side { grid-column: 1; grid-row: auto; justify-self: start; }
 }
+
+/* A scheduled run's report in its conversation (host API 1.27): the voice note above the text, the link under it. */
+.wb-report { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin-top: var(--space-1); }
+.wb-report-link { align-self: flex-start; }

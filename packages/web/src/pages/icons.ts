@@ -23,6 +23,7 @@ export const PAGE_ICONS: Record<PageIcon, IconName> = {
   globe: 'globe',
   sun: 'sun',
   cloud: 'cloud',
+  news: 'news',
 };
 
 /** The glyph a descriptor's icon is drawn with; the plug when it names none. */

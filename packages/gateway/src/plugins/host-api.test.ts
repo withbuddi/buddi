@@ -31,7 +31,7 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 /** A built plugin directory: a package.json and an entry exporting a manifest. */
-function pluginDir(opts: { buddi?: Record<string, unknown>; uses?: string[] }): string {
+function pluginDir(opts: { buddi?: Record<string, unknown>; uses?: string[]; optional?: Record<string, string> }): string {
   const dir = path.join(root, `pkg-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
@@ -53,6 +53,7 @@ function pluginDir(opts: { buddi?: Record<string, unknown>; uses?: string[] }): 
       migrationsDir: '',
       tools: [],
       ...(opts.uses === undefined ? {} : { uses: opts.uses }),
+      ...(opts.optional === undefined ? {} : { optional: opts.optional }),
     })};\n`,
   );
   return dir;
@@ -76,10 +77,10 @@ describe('staging', () => {
   });
 
   it('refuses a plugin built for a newer host, with both numbers', async () => {
-    const staging = stagePlugin(pluginDir({ buddi: { hostApi: '^1.27' } }), { env });
+    const staging = stagePlugin(pluginDir({ buddi: { hostApi: '^1.28' } }), { env });
     await expect(staging).rejects.toBeInstanceOf(StageRefusal);
-    await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.27' } }), { env })).rejects.toThrow(
-      /it was built for host API \^1\.27, and this buddi has 1\.26/,
+    await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.28' } }), { env })).rejects.toThrow(
+      /it was built for host API \^1\.28, and this buddi has 1\.27/,
     );
     await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.0' } }), { env })).resolves.toMatchObject({
       buddi: { hostApi: '^1.0' },
@@ -127,6 +128,30 @@ describe('loading', () => {
       message:
         'plugin "hostapi-fixture" declares that it uses http, files:library in its manifest, and http in ' +
         "package.json's buddi.uses; the install card was drawn from the second, so the two must match",
+    });
+  });
+});
+
+describe('host API 1.27', () => {
+  it('stages the assets area in the owner\'s words, and what a package can use when it is there', async () => {
+    const staged = await stagePlugin(pluginDir({ buddi: { uses: ['http', 'assets'], optional: { speech: '^0.1.3' } } }), { env });
+    expect(staged.uses).toEqual(['http', 'assets']);
+    expect(staged.optional).toEqual({ speech: '^0.1.3' });
+    expect(renderStagedUses(staged)).toContain('  It keeps small images it fetched, like logos.');
+    await expect(stagePlugin(pluginDir({ buddi: { optional: { speech: 'latest' } } }), { env })).rejects.toThrow(
+      /buddi\.optional asks for speech "latest", which is not a version range/,
+    );
+  });
+
+  it('loads a plugin whose optional plugins match its card, and refuses one whose do not', async () => {
+    const same = pluginDir({ buddi: { optional: { speech: '^0.1.3' } }, optional: { speech: '^0.1.3' } });
+    expect((await loadManifest(path.join(same, 'index.js'), undefined, env)).ok).toBe(true);
+    const differs = pluginDir({ buddi: {}, optional: { speech: '^0.1.3' } });
+    expect(await loadManifest(path.join(differs, 'index.js'), undefined, env)).toEqual({
+      ok: false,
+      message:
+        'plugin "hostapi-fixture" can use speech ^0.1.3 in its manifest, and nothing in package.json\'s buddi.optional; ' +
+        'the install card was drawn from the second, so the two must match',
     });
   });
 });

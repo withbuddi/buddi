@@ -14,6 +14,7 @@
  * `@buddi/core/plugin`.
  */
 import type { OwnerPlace } from '../places.js';
+import type { PluginAsset } from '../plugin/assets.js';
 import type { ToolPermission } from '../actions/permissions.js';
 import type { ArtifactKind, ArtifactRow, ArtifactSource } from '../artifacts/store.js';
 import type { ProposePolicyInput } from '../learning/policies.js';
@@ -65,8 +66,10 @@ export interface BuddiHost {
   secrets?: SecretsArea;
   /** Declared as `owner:channel`. Since 1.3. */
   channels?: ChannelsArea;
-  /** Present when the manifest declares `requires`. Since 1.18. */
+  /** Present when the manifest declares `requires` (1.18) or `optional` (1.27). */
   plugins?: PluginsArea;
+  /** Declared as `assets`. Since 1.27. */
+  assets?: AssetsArea;
 }
 
 /* ------------------------------------------------------------------ *
@@ -124,10 +127,38 @@ export interface PluginsArea {
   /**
    * Call `plugin`'s export `name` with `args`, validated by the export's own
    * parameters. Refused — a `PluginCallRefusal` naming why — when `plugin` is
-   * not in this manifest's `requires`, is not loaded, is outside the range,
-   * or exports no such name. A write inside it fails as a page query's does.
+   * not in this manifest's `requires` or `optional`, is not loaded, is outside
+   * the range, or exports no such name. A write inside it fails as a page
+   * query's does.
    */
   call<T = unknown>(plugin: string, name: string, args?: unknown): Promise<T>;
+  /**
+   * Whether `plugin` — one this manifest names in `requires` or `optional` —
+   * is loaded now, at a version in the range. False for any other name. For a
+   * plugin that adapts to another being there ("Needs Speech"). Since 1.27;
+   * absent before.
+   */
+  has?(plugin: string): boolean;
+}
+
+/**
+ * Small images this plugin fetched — an outlet's logo — kept by core and
+ * served by buddi (since 1.27), so a page or a widget draws them without the
+ * dashboard reaching the host they came from. Declared as `assets`.
+ *
+ * `put` takes PNG, JPEG, GIF (its first frame) or ICO, at most 256 KB, and
+ * refuses SVG; core decodes it and keeps PNGs it drew itself, 64 and 128
+ * pixels square, served session-gated at `/api/plugin-assets/<plugin>/<key>`.
+ * 20 MB per plugin; everything is removed with the plugin. Refusals are
+ * thrown with the sentence why.
+ */
+export interface AssetsArea {
+  /** Keep `bytes` under `key` (lower case, digits, `.`, `_`, `-`), replacing what was there. */
+  put(key: string, bytes: Buffer, mime: string): Promise<PluginAsset>;
+  /** Delete one. False when there was none. */
+  delete(key: string): Promise<boolean>;
+  /** Every asset this plugin keeps. */
+  list(): Promise<PluginAsset[]>;
 }
 
 /**

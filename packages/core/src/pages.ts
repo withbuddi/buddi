@@ -113,7 +113,9 @@ export type PageIcon =
   | 'key'
   | 'globe'
   | 'sun'
-  | 'cloud';
+  | 'cloud'
+  // Since host API 1.27: a folded newspaper.
+  | 'news';
 
 /** One screen: where it lives, and what is on it. */
 export interface PageDescriptor {
@@ -183,8 +185,15 @@ export type ArgRef =
  * proposes policies through core has its proposals there, not on its own
  * page, and the only useful thing its page can say about them is where they
  * are. It names no plugin: the dashboard fills in the one drawing the page.
+ *
+ * `{ href }` (since host API 1.27) is the one road out of buddi: an `https:`
+ * address **read out of the data** — the article a story card is about —
+ * opened in a new tab with `noopener noreferrer` and an outside-link mark.
+ * A value that is not an absolute `https:` URL is no link at all. It is a
+ * link the owner follows, never a request the dashboard makes: nothing is
+ * fetched, previewed or embedded from it.
  */
-export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true };
+export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true } | { href: ValueRef };
 
 /** A write: a tool of this plugin, invoked as the owner. */
 export interface ToolRef {
@@ -291,6 +300,33 @@ export interface PillRef {
   tones?: Record<string, Tone>;
 }
 
+/**
+ * One small picture on a list row (since host API 1.27): a key of the
+ * plugin's own `assets` (`ctx.buddi.assets.put`), read out of the row, and
+ * the words it stands for. The dashboard draws the stored PNG from buddi,
+ * never from anywhere else, and a letter tile from `label` when the key is
+ * missing or the asset is gone.
+ */
+export interface ImageRef {
+  asset: ValueRef;
+  label: ValueRef;
+}
+
+/**
+ * Pictures read from an array in the row (since host API 1.27): `from` is
+ * the path to the array, `asset` and `label` paths within one element. The
+ * first three are drawn overlapping, and the rest are counted in words
+ * ("Reuters and 3 more").
+ */
+export interface ImageList {
+  from: string;
+  asset: string;
+  label: string;
+}
+
+/** Up to this many fixed image slots on a list row. */
+export const LIST_IMAGES_MAX = 4;
+
 /** One line of a list: what it says, and where it goes. */
 export interface ListItem {
   title: ValueRef;
@@ -300,6 +336,12 @@ export interface ListItem {
   /** Several, when one word is not the whole state of a row. */
   pills?: PillRef[];
   to?: RouteRef;
+  /**
+   * Small pictures before the title, from the plugin's assets: up to four
+   * fixed slots, or `{ from, asset, label }` over an array in the row. Since
+   * host API 1.27; an older buddi refuses the descriptor.
+   */
+  images?: ImageRef[] | ImageList;
 }
 
 /**
@@ -822,6 +864,8 @@ const routeRefSchema = z.union([
   z.object({ chat: valueRefSchema }).strict(),
   // The owner's Proposals inbox, filtered to this plugin. Names nothing.
   z.object({ proposals: z.literal(true) }).strict(),
+  // An https address read out of the data (1.27): a link out, opened in a new tab.
+  z.object({ href: valueRefSchema }).strict(),
 ]);
 
 const TOOL_NAME = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
@@ -902,6 +946,12 @@ const listItemSchema = z
     pill: pillSchema.optional(),
     pills: z.array(pillSchema).max(4).optional(),
     to: routeRefSchema.optional(),
+    images: z
+      .union([
+        z.array(z.object({ asset: valueRefSchema, label: valueRefSchema }).strict()).min(1).max(LIST_IMAGES_MAX),
+        z.object({ from: viewPathSchema, asset: viewPathSchema, label: viewPathSchema }).strict(),
+      ])
+      .optional(),
   })
   .strict();
 
@@ -1322,7 +1372,7 @@ export const pageDescriptorSchema = z
     id: z.string().regex(PAGE_ID, 'a page id is lower-kebab-case'),
     title: label,
     place: z.enum(['rail', 'settings']),
-    icon: z.enum(['mail', 'money', 'calendar', 'people', 'file', 'chart', 'bell', 'plug', 'key', 'globe', 'sun', 'cloud']).optional(),
+    icon: z.enum(['mail', 'money', 'calendar', 'people', 'file', 'chart', 'bell', 'plug', 'key', 'globe', 'sun', 'cloud', 'news']).optional(),
     order: z.number().int().min(-999).max(999).optional(),
     data: queryRefSchema.optional(),
     body: z.array(componentSchema).min(1).max(24),

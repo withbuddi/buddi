@@ -72,7 +72,7 @@ export interface PageDescriptor {
   /** Where it lives. `rail` gives it a rail entry; `settings` a settings tab. */
   place: 'rail' | 'settings';
   /** One of a pinned set the dashboard draws; never an arbitrary image. */
-  icon?: 'mail' | 'money' | 'calendar' | 'people' | 'file' | 'chart' | 'bell' | 'plug' | 'key' | 'globe' | 'sun' | 'cloud';
+  icon?: 'mail' | 'money' | 'calendar' | 'people' | 'file' | 'chart' | 'bell' | 'plug' | 'key' | 'globe' | 'sun' | 'cloud' | 'news'; // news: host API 1.27
   /** Rail order among plugin entries; core places are fixed. */
   order?: number;
   body: Component[];
@@ -167,8 +167,12 @@ interface OptionsFrom { query: QueryRef; rows: string; value: string; label: str
 interface QueryRef { query: string; params?: Record<string, ValueRef | { param: string } | { route: string }> }
 interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }>; tone?: 'accent' | 'danger'; confirm?: string; busy?: string; done?: string | ValueRef; pending?: string; placement?: 'leading'; then?: 'refresh' | 'close' | { route: RouteRef } }
 /** Within the same plugin — or, the one exception, one agent's chat. */
-type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef }
-interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: PillRef; pills?: PillRef[]; to?: RouteRef }
+type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true } | { href: ValueRef } // href: 1.27
+interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: PillRef; pills?: PillRef[]; to?: RouteRef; images?: ImageRef[] | ImageList }
+/** 1.27: a key of the plugin's own assets and the words it stands for; up to four slots. */
+interface ImageRef { asset: ValueRef; label: ValueRef }
+/** 1.27: the same, read from an array in the row (paths within one element). */
+interface ImageList { from: string; asset: string; label: string }
 interface Selection { key: string; disabledWhen?: Visibility }
 /** Paths within an event row. `start`/`end`: ISO instants, or YYYY-MM-DD for all-day (`end` the day after); `tone`: a number, the calendar's index. */
 interface CalendarMap { id: string; title: string; start: string; end: string; allDay?: string; calendar?: string; tone?: string; location?: string }
@@ -317,6 +321,26 @@ written — and a click pins it; from the strip, ←/→ move the pin and Home/E
 go to the ends. The strip scrolls to keep the marked hour in view. A point
 that draws no tile keeps its place, so a tile and its point never drift.
 Series ids are the panel's own; one to four series, `labelEvery` 1–12.
+
+**Pictures on a row and links out** (host API `^1.27`). A list item's
+`images` draws small logos before its title, as the News page's story card
+does: the first three overlapping, then who they are in words ("Reuters and
+3 more"). Each picture is a key of the plugin's own assets
+(`ctx.buddi.assets`, docs/plugin-host-api.md), drawn from buddi's
+`/api/plugin-assets/<plugin>/<key>`, never from the outlet; a missing key or a
+value that is not a key is a letter tile from its label. `{ href }` is the one
+route out of buddi: an absolute `https:` address read from the data, opened in
+a new tab with `noopener noreferrer` and an outside-link mark (↗); a value
+that is not one is no link, and a tool's `then` never follows one by itself.
+The page fetches nothing from it.
+
+```ts
+item: {
+  title: { path: 'title' },
+  to: { href: { path: 'url' } },
+  images: { from: 'outlets', asset: 'logo', label: 'name' },
+}
+```
 
 Not in the set, on purpose: free layout, custom styling, embedded HTML,
 client-side logic beyond `when`. A plugin that needs those serves its own app.

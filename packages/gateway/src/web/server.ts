@@ -58,7 +58,7 @@ import {
   type SkillsDeps,
 } from './skills.js';
 import { bindMcpRequests, requestThroughMcp } from '../mcp/requests.js';
-import { randomUUID, createHmac } from 'node:crypto';
+import { randomUUID, createHmac, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { carryOverDeps } from '../surfaces/carry-over.js';
@@ -119,7 +119,7 @@ import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
-import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting } from '@buddi/core';
+import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
 import {
@@ -2062,6 +2062,37 @@ export function createWebApp(deps: WebServerDeps): Server {
        * skills, its delegates. A read and only ever a read — a change to any of
        * it goes through the maker agent, where it becomes an approval.
        */
+      /*
+       * A plugin's asset (host API 1.27): a PNG core drew itself from what the
+       * plugin fetched, at 64 or 128 px. Only behind a session, like every
+       * other read here; never a file the plugin wrote byte for byte. Kept a
+       * day by the browser — a logo changes once a month — and revalidated
+       * by its bytes.
+       */
+      const asset = /^\/api\/plugin-assets\/([a-z][a-z0-9_-]{0,63})\/([^/]+)$/.exec(path);
+      if (asset) {
+        const key = decodeURIComponent(asset[2]!);
+        const size = url.searchParams.get('size') === '64' ? 64 : 128;
+        const png = isAssetKey(key) ? await readPluginAsset(asset[1]!, key, size, deps.env ?? process.env).catch(() => null) : null;
+        if (!png) return sendEmpty(res, 404);
+        const etag = `"${createHash('sha256').update(png).digest('hex').slice(0, 32)}"`;
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('ETag', etag);
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+        const presented = first(req.headers['if-none-match']);
+        if (presented !== undefined && presented.split(',').some((tag) => tag.trim() === etag)) {
+          res.statusCode = 304;
+          res.end();
+          return;
+        }
+        res.setHeader('Content-Length', String(png.length));
+        res.statusCode = 200;
+        res.end(method === 'HEAD' ? undefined : png);
+        return;
+      }
       const avatar = /^\/api\/agents\/([^/]+)\/avatar$/.exec(path);
       if (avatar) {
         const agent = deps.catalog.get(decodeURIComponent(avatar[1]!));

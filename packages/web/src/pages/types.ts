@@ -30,7 +30,8 @@ export type PageIcon =
   | 'key'
   | 'globe'
   | 'sun'
-  | 'cloud';
+  | 'cloud'
+  | 'news';
 
 /** A condition over the data: `equals` one value, or `in` a set, optionally `not`. */
 export interface Visibility {
@@ -51,7 +52,8 @@ export type ArgRef = ValueRef | { param: string } | { field: string } | { row: s
 
 /** Another page of the same plugin, or — the one exception — an agent's chat. */
 /** `{ proposals: true }`: the owner's Proposals inbox, filtered to the plugin drawing the page. */
-export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true };
+/** `{ href }` (1.27): an https address read from the data, opened in a new tab. */
+export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true } | { href: ValueRef };
 
 export interface ToolRef {
   tool: string;
@@ -104,6 +106,19 @@ export interface PillRef {
   tones?: Record<string, Tone>;
 }
 
+/** A picture on a row (1.27): a key of the plugin's assets, and its words. */
+export interface ImageRef {
+  asset: ValueRef;
+  label: ValueRef;
+}
+
+/** Pictures from an array in the row (1.27): paths within one element. */
+export interface ImageList {
+  from: string;
+  asset: string;
+  label: string;
+}
+
 export interface ListItem {
   title: ValueRef;
   sub?: ValueRef;
@@ -111,6 +126,7 @@ export interface ListItem {
   pill?: PillRef;
   pills?: PillRef[];
   to?: RouteRef;
+  images?: ImageRef[] | ImageList;
 }
 
 export interface Selection {

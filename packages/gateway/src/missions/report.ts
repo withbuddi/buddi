@@ -22,6 +22,10 @@ import {
   MAX_OFFERS,
   MAX_OFFER_LABEL,
   MAX_OFFER_PROMPT,
+  REPORT_MAX_DEFAULT,
+  REPORT_MAX_LIMIT,
+  getArtifact,
+  type CoreToolContext,
   type OfferedAction,
   type PluginManifest,
   type ToolDefinition,
@@ -31,8 +35,25 @@ import { z } from 'zod';
 /** Plugin family name for the mission-run tools. */
 export const MISSION_PLUGIN = 'mission';
 
-/** The longest report the owner should get from an unattended run. */
-export const MAX_REPORT_CHARS = 1500;
+/**
+ * The longest report the owner should get from an unattended run, unless its
+ * mission declares `reportMax` (host API 1.27, at most `REPORT_MAX_LIMIT`).
+ */
+export const MAX_REPORT_CHARS = REPORT_MAX_DEFAULT;
+
+/** A mission's `reportMax`, made sound: the default when absent, never past the limit. */
+export function reportMaxOf(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 200) return MAX_REPORT_CHARS;
+  return Math.min(value, REPORT_MAX_LIMIT);
+}
+
+/** The voice note a report carries, as the chat draws it. */
+export interface ReportAudio {
+  fileId: string;
+  mime: string;
+  filename: string | null;
+  sizeBytes: number;
+}
 
 export type MissionDecision =
   | {
@@ -41,6 +62,12 @@ export type MissionDecision =
       text: string;
       /** The few things the owner might want to do about it. Usually empty. */
       actions: readonly OfferedAction[];
+      /** A dashboard route the report opens, since 1.27. */
+      link?: string;
+      /** The words on its button in the chat ("Open edition"). */
+      linkLabel?: string;
+      /** A voice note in Files made by this run, sent before the text, since 1.27. */
+      audio?: ReportAudio;
     }
   | { kind: 'silent'; reason: string };
 
@@ -49,7 +76,11 @@ export interface DecisionSink {
   decision?: MissionDecision;
 }
 
-const reportInput = z.object({
+/** A dashboard route: `#/` and a path, no scheme, no host. */
+const ROUTE = /^#\/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,300}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const reportInputFor = (max: number) => z.object({
   urgency: z
     .enum(['urgent', 'normal'])
     .describe(
@@ -58,9 +89,9 @@ const reportInput = z.object({
   text: z
     .string()
     .min(1)
-    .max(MAX_REPORT_CHARS)
+    .max(max)
     .describe(
-      'Exactly what the owner should read, in plain text with no markdown. This is delivered verbatim; nothing else you write in this run is sent.',
+      `Exactly what the owner should read, in plain text with no markdown, at most ${max} characters. This is delivered verbatim; nothing else you write in this run is sent.`,
     ),
   actions: z
     .array(
@@ -86,7 +117,25 @@ const reportInput = z.object({
     .describe(
       `At most ${MAX_OFFERS} things the owner might want to do about this, offered as buttons where the surface has them and as plain words where it does not. Offer one only when it is genuinely the next move; omit this entirely when reading the message is all there is to do. Never phrase one in words taken from the message.`,
     ),
+  link: z
+    .string()
+    .regex(ROUTE, 'a dashboard route, starting #/')
+    .optional()
+    .describe('Optional: a dashboard route the message opens, such as a plugin page where the whole thing lives ("#/p/news/stories"). Never a web address.'),
+  linkLabel: z
+    .string()
+    .min(1)
+    .max(40)
+    .optional()
+    .describe('Optional, with link: the words on its button in the chat ("Open edition"). "Open" when absent.'),
+  audio: z
+    .string()
+    .regex(UUID, 'a Files id')
+    .optional()
+    .describe('Optional: the Files id of a voice note you made in this run (speech.say). Sent before the text where the owner listens; left out where they cannot.'),
 });
+
+type ReportInput = z.infer<ReturnType<typeof reportInputFor>>;
 
 const silentInput = z.object({
   reason: z
@@ -98,24 +147,53 @@ const silentInput = z.object({
     ),
 });
 
-export type ReportResult = { delivered: 'queued'; chars: number };
+export type ReportResult = { delivered: 'queued'; chars: number; link?: string; linkLabel?: string; audio?: ReportAudio };
 export type SilentResult = { delivered: 'none' };
 
-export function createMissionManifest(sink: DecisionSink): PluginManifest {
-  const report: ToolDefinition<z.infer<typeof reportInput>, ReportResult> = {
+/**
+ * The voice note a report names, checked: a file in Files, audio, made in
+ * this run's own conversation. Anything else is refused with the sentence
+ * why, so the run can report without it.
+ */
+async function reportAudio(fileId: string, ctx: CoreToolContext): Promise<ReportAudio> {
+  const row = await getArtifact(ctx.db, fileId).catch(() => null);
+  if (!row) throw new Error(`audio: there is no file ${fileId} in Files`);
+  if (!row.mime.toLowerCase().startsWith('audio/')) throw new Error(`audio: ${fileId} is ${row.mime}, not a voice note`);
+  const made = await ctx.db.query<{ conversation_id: string | null }>(`select conversation_id from core.artifacts where id = $1`, [fileId]);
+  const conversation = made.rows[0]?.conversation_id == null ? null : String(made.rows[0].conversation_id);
+  if (ctx.conversationId && conversation !== ctx.conversationId) {
+    throw new Error(`audio: ${fileId} was not made in this run; give the id speech.say answered here`);
+  }
+  return { fileId: row.id, mime: row.mime, filename: row.filename ?? null, sizeBytes: row.sizeBytes };
+}
+
+export function createMissionManifest(sink: DecisionSink, opts: { reportMax?: number | null } = {}): PluginManifest {
+  const max = reportMaxOf(opts.reportMax);
+  const report: ToolDefinition<ReportInput, ReportResult> = {
     name: 'mission.report',
     description:
-      'Send this text to the owner as the result of this scheduled run, and finish. Call it once, with the finished message; the text you pass is exactly what is delivered. You may attach a few actions the owner can take about it — they become buttons where the surface has them and a plain list where it does not. If there is nothing worth an interruption, call mission.silent instead.',
+      'Send this text to the owner as the result of this scheduled run, and finish. Call it once, with the finished message; the text you pass is exactly what is delivered. You may attach a few actions the owner can take about it — they become buttons where the surface has them and a plain list where it does not. ' +
+      'You may also give a dashboard link it opens, and the Files id of a voice note you made in this run. If there is nothing worth an interruption, call mission.silent instead.',
     tier: 'auto',
-    input: reportInput,
-    async execute(input) {
+    input: reportInputFor(max),
+    async execute(input, ctx) {
+      const audio = input.audio ? await reportAudio(input.audio, ctx as CoreToolContext) : undefined;
       sink.decision = {
         kind: 'report',
         urgency: input.urgency,
         text: input.text.trim(),
         actions: input.actions ?? [],
+        ...(input.link ? { link: input.link } : {}),
+        ...(input.link && input.linkLabel ? { linkLabel: input.linkLabel.trim() } : {}),
+        ...(audio ? { audio } : {}),
       };
-      return { delivered: 'queued', chars: input.text.trim().length };
+      return {
+        delivered: 'queued',
+        chars: input.text.trim().length,
+        ...(input.link ? { link: input.link } : {}),
+        ...(input.link && input.linkLabel ? { linkLabel: input.linkLabel.trim() } : {}),
+        ...(audio ? { audio } : {}),
+      };
     },
   };
 

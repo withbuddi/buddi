@@ -17,6 +17,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { decideApproval } from './actions/approvals.js';
 import { executeApproved } from './actions/execute.js';
 import { findToolPermission } from './actions/permissions.js';
+import { missionExtrasProblem } from './tools.js';
 import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
 import type { CarryOverRequest, EffectDescription, PluginManifest, PreviewProvider, Tier, CoreToolContext, ToolDefinition } from './tools.js';
@@ -389,6 +390,12 @@ export class ToolRegistry {
           });
     const exported = exportsProblem(manifest.name, manifest.exports);
     if (exported !== undefined) throw new Error(exported);
+    // A mission's context reads this plugin or one it requires (1.27); its reportMax is bounded.
+    const reachable = [manifest.name, ...Object.keys(binding.requires)];
+    for (const mission of [...(manifest.missions ?? []), ...(manifest.agents ?? []).flatMap((a) => a.missions ?? [])]) {
+      const problem = missionExtrasProblem(mission, reachable);
+      if (problem !== undefined) throw new Error(`plugin ${manifest.name}: ${problem}`);
+    }
     if (manifest.setup !== undefined && typeof manifest.setup?.produce !== 'function') {
       throw new Error(`plugin ${manifest.name}: setup needs a \`produce(ctx)\` answering { ready, note?, page? }`);
     }
@@ -414,6 +421,11 @@ export class ToolRegistry {
         [...this.#tools.values()].filter((e) => e.plugin === manifest.name && e.runtime).map((e) => e.tool.name),
     };
     binding.callExport = (target, name, args, facts) => this.#callExport(manifest.name, target, name, args, facts);
+    binding.hasPlugin = (target) => {
+      const range = binding.requires[target] ?? binding.optional[target];
+      const loaded = this.#manifests.get(target);
+      return range !== undefined && loaded !== undefined && satisfiesRange(loaded.version, range) === true;
+    };
     this.#bindings.set(manifest.name, binding);
     if (metrics) {
       this.#metrics.set(
@@ -788,15 +800,34 @@ export class ToolRegistry {
    * own host over the read-only pool, within the timeout. Never a tool.
    */
   async #callExport(caller: string, target: string, name: string, args: unknown, facts: HostFacts): Promise<unknown> {
-    const range = this.#bindings.get(caller)?.requires[target];
+    const binding = this.#bindings.get(caller);
+    // `optional` (1.27) opens the same road while the plugin is there.
+    const range = binding?.requires[target] ?? binding?.optional[target];
     if (range === undefined) {
-      throw new PluginCallRefusal(`${caller} may call only the plugins it requires, and ${target} is not one of them.`);
+      throw new PluginCallRefusal(`${caller} may call only the plugins it requires or names as optional, and ${target} is not one of them.`);
     }
     const manifest = this.#manifests.get(target);
     if (manifest === undefined) throw new PluginCallRefusal(`${target} is not loaded, so ${caller} cannot call it.`);
     if (satisfiesRange(manifest.version, range) !== true) {
       throw new PluginCallRefusal(`${caller} needs ${target} ${range}, and ${manifest.version} is installed.`);
     }
+    return this.#runExport(target, name, args, facts);
+  }
+
+  /**
+   * Core's own call to a plugin's export: a mission's `context` (1.27), read
+   * before the run so its answer opens the run's first message. The same road
+   * as `ctx.buddi.plugins.call` — loaded, exported, the export's own params,
+   * the target's read-only host, the timeout — with no caller plugin to check:
+   * the agent package that declared the mission was checked at install.
+   */
+  async callExportAsCore(target: string, name: string, args: unknown, facts: HostFacts): Promise<unknown> {
+    if (!this.#manifests.has(target)) throw new PluginCallRefusal(`${target} is not loaded.`);
+    return this.#runExport(target, name, args, facts);
+  }
+
+  async #runExport(target: string, name: string, args: unknown, facts: HostFacts): Promise<unknown> {
+    const manifest = this.#manifests.get(target)!;
     const exported = Object.prototype.hasOwnProperty.call(manifest.exports ?? {}, name) ? manifest.exports![name] : undefined;
     if (exported === undefined) {
       const names = Object.keys(manifest.exports ?? {});

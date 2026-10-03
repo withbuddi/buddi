@@ -430,6 +430,7 @@ the timers and the hosts:
 | `owner:notify` | can send you messages when you are away |
 | `owner:channel` | adds a way for buddi to reach you |
 | `owner:places` | reads your places (Home, Work…) and their addresses |
+| `assets` | keeps small images it fetched, like logos |
 
 `files` sees what you saved and what was handed into your conversation;
 `files:library` is the whole library, and the card says so in those words —
@@ -1365,7 +1366,7 @@ The six bodies, every value already formatted in your units:
 | `kind` | Fields | Drawn as |
 | --- | --- | --- |
 | `stat` | `value`, `icon?`, `caption?`, `trend?: { label?, points }`, `foot?` | a figure with a glyph, a quiet line, a sparkline (2–48 numbers, no axis), a foot — the weather card |
-| `list` | `rows: { title, sub?, side?, tone? }[]`, `more?` | up to three rows (a small widget leaves out `sub`), the right-hand figure, a foot |
+| `list` | `rows: { title, sub?, side?, tone?, image?: { asset } }[]`, `more?` | up to three rows (a small widget leaves out `sub`), the right-hand figure, a foot; since 1.27 a row's `image.asset`, a key of your `assets`, leads it as a small logo on medium and on the lock screen (anything else is left off) |
 | `strip` | `items: { label, icon?, value }[]`, `icon?`, `value?`, `caption?` | a headline and a row of tiles: four on small, six on medium (eight kept) |
 | `progress` | `value`, `ratio` (0–1), `caption?`, `foot?`, `tone?` | a figure and a bar |
 | `text` | `text` (≤ 160), `icon?`, `sub?` | a glyph and a sentence: for "add a place first" as much as for news |
@@ -1940,7 +1941,26 @@ arguments its `params` refuse, and anything taking more than five seconds. The
 export runs as the plugin that owns it — its schema, its host — on the
 read-only pool, so a write inside it fails as a page query's does. Never a
 tool, never another schema. `ctx.buddi.plugins` exists only when you declare
-`requires`. Host API 1.18.
+`requires` (or `optional`, below). Host API 1.18.
+
+A plugin that only *works better* with another names it as **optional**
+instead (host API 1.27), the same way twice:
+
+```ts
+optional: { speech: '^0.1.3' },
+```
+```json
+"buddi": { "name": "news", "optional": { "speech": "^0.1.3" } }
+```
+
+Nothing is held back without it. `ctx.buddi.plugins.has('speech')` says
+whether it is loaded now and in range, and `plugins.call` reaches its exports
+while it is, under the same refusals:
+
+```ts
+const voice = ctx.buddi!.plugins!.has?.('speech') ?? false;
+return { readAloud: voice ? settings.voiceEditions : [], readAloudNote: voice ? '' : 'Needs the Speech plugin and a voice.' };
+```
 
 ---
 
@@ -3239,10 +3259,11 @@ version each arrived in — is §9b.
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `author` | `PluginAuthor` | no | Who made you: `{ name, url? }`, the name at most 80 characters, the URL `https:`. The install card and the Plugins page show "by <name>", linked to the URL. Checked at `register()`. Without it the card reads `author` from your `package.json` (a string or `{ name, url }`); with both, the names must match or approval is refused. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
-| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`, `owner:channel`, `owner:places`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
+| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`, `owner:channel`, `owner:places`, `assets` (1.27). Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
 | `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/owner-secrets.md §3. |
 | `setup` | `PluginSetup` | no | Whether you can do anything yet: `{ produce(ctx) }` answering `{ ready, note?, page? }`, read-only, five seconds. Not ready, the Plugins row says "needs setup" and opens `page`. Host API 1.18. See §2.9. |
 | `requires` | `Record<string, string>` | no | Plugins you need, by name, with a semver range. Repeated as `buddi.requires` in `package.json`; the two must match. Until each is installed, enabled, in range and set up, nothing of yours loads; declaring any gives `ctx.buddi.plugins`. Host API 1.18. See §2.10. |
+| `optional` | `Record<string, string>` | no | Plugins you use when they are there, by name, with a semver range. Repeated as `buddi.optional` in `package.json`; the two must match. Nothing of yours is held back without one: `ctx.buddi.plugins.has(name)` says whether it is loaded and in range, and `plugins.call` reaches its exports while it is ("Needs Speech" beside a setting). A name may not be both required and optional. Host API 1.27. See §2.10. |
 | `exports` | `Record<string, PluginExport>` | no | Named read-only queries (`{ description?, params, produce(params, ctx) }`) a plugin that requires you may call through `ctx.buddi.plugins.call`. Nothing else of yours is reachable from another plugin. Host API 1.18. See §2.10. |
 | `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. See §1.4. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with `ctx.buddi.proposals.proposePolicy(ctx, { matcher, action, params, verdicts, why, sources })`, your name and the clock filled in (declare `proposals`); `adopt` is handed your host as `buddi`. Keeping one for a plugin with no `apply` is refused and the card stays open. |
@@ -3415,6 +3436,8 @@ closed when it is absent rather than guess.
 | `misfirePolicy` | `MisfirePolicy` | no | What a closed laptop owes the owner: `coalesce` (default), `latest-only`, `skip-after-deadline`. |
 | `alwaysDeliver` | `boolean` | no | The owner asked for this message whatever it says. Default false. |
 | `enabledByDefault` | `boolean` | no | Default true; false registers a placeholder switched off. |
+| `context` | `MissionContext` | no | `{ plugin, export, args? }`: an export core calls before each run, its JSON answer placed in the run's first message, so a run that writes from material needs one model call, not two. The plugin is yours or one you require (checked at `register()`); a call that fails is said in the message instead, and the run goes on. Host API 1.27. |
+| `reportMax` | `number` | no | The longest report its `mission.report` takes, 200 to 6,000 characters; 1,500 when absent. Telegram splits a long one at its paragraphs. Host API 1.27. |
 
 #### `SuggestedAgent`
 
@@ -3544,7 +3567,7 @@ you did not declare is absent: `ctx.buddi.http` is `undefined`, not a refusal.
 The types are exported from `@buddi/core/plugin`.
 
 "Since" is the host version that introduced each member (§1.7). The host is
-`1.18`; most members are from `1.0`, and the later minors' additions are the rows
+`1.27`; most members are from `1.0`, and the later minors' additions are the rows
 that say otherwise.
 
 #### `BuddiHost`
@@ -3571,7 +3594,8 @@ that say otherwise.
 | `schedule` | `ScheduleArea` | no | 1.0 | Declared as `schedule`. |
 | `secrets` | `SecretsArea` | no | 1.0 | Declared as `secrets`. The owner's secrets, used and never read (§6). |
 | `channels` | `ChannelsArea` | no | 1.3 | Declared as `owner:channel`. A way to reach the owner that you carry, listed in Settings → Notifications. Also on the `register` hook's host. |
-| `plugins` | `PluginsArea` | no | 1.18 | Present when your manifest declares `requires`: the named read-only exports of the plugins you require (§2.10). |
+| `plugins` | `PluginsArea` | no | 1.18 | Present when your manifest declares `requires`, or `optional` (1.27): the named read-only exports of those plugins (§2.10). |
+| `assets` | `AssetsArea` | no | 1.27 | Declared as `assets`. Small images you fetched, kept and served by buddi. |
 
 #### `OwnerArea`
 
@@ -3718,4 +3742,13 @@ checks a request against, exactly like a manifest host.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `call` | `(plugin, name, args?) => Promise<T>` | yes | 1.18 | Call a named read-only export of a plugin you require, with arguments its `params` check. It runs as that plugin, on the read-only pool, within five seconds. Refused — a `PluginCallRefusal` — for a plugin not in your `requires`, one not loaded or out of range, or a name it does not export. See §2.10. |
+| `call` | `(plugin, name, args?) => Promise<T>` | yes | 1.18 | Call a named read-only export of a plugin you require (or name as `optional`, 1.27), with arguments its `params` check. It runs as that plugin, on the read-only pool, within five seconds. Refused — a `PluginCallRefusal` — for a plugin not in your `requires` or `optional`, one not loaded or out of range, or a name it does not export. See §2.10. |
+| `has` | `(plugin) => boolean` | no | 1.27 | Whether a plugin you name in `requires` or `optional` is loaded now, at a version in the range. False for any other name. For a plugin that adapts: "Read editions aloud" says "Needs Speech" while it is false. |
+
+#### `AssetsArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `put` | `(key, bytes, mime) => Promise<PluginAsset>` | yes | 1.27 | Keep an image under `key` (lower case, digits, `.`, `_`, `-`, at most 96), replacing what was there. PNG, JPEG, GIF (its first frame) or ICO, at most 256 KB; SVG is refused (it can carry script), and WebP too for now. Core decodes it and keeps PNGs it drew itself, 64 and 128 px square, the picture fitted and centred; served session-gated at `/api/plugin-assets/<plugin>/<key>` (`?size=64`). 20 MB per plugin. Answers `{ key, bytes, updatedAt }`; a refusal is thrown with the sentence why. |
+| `delete` | `(key) => Promise<boolean>` | yes | 1.27 | Delete one. False when there was none. |
+| `list` | `() => Promise<PluginAsset[]>` | yes | 1.27 | Every asset you keep. An export's read-only host keeps only this. |

@@ -93,13 +93,15 @@ export function pluginRequiresMismatch(
   plugin: string,
   manifest: Readonly<Record<string, string>>,
   pkg: Readonly<Record<string, string>>,
+  /** `optional` (1.27) is compared the same way. */
+  field: 'requires' | 'optional' = 'requires',
 ): string | undefined {
   const words = (r: Readonly<Record<string, string>>): string =>
     Object.keys(r).length === 0 ? 'nothing' : Object.entries(r).map(([n, v]) => `${n} ${v}`).join(', ');
   if (words(manifest) === words(pkg)) return undefined;
   return (
-    `plugin "${plugin}" requires ${words(manifest)} in its manifest, and ${words(pkg)} in package.json's ` +
-    'buddi.requires; the install card was drawn from the second, so the two must match'
+    `plugin "${plugin}" ${field === 'requires' ? 'requires' : 'can use'} ${words(manifest)} in its manifest, and ${words(pkg)} in package.json's ` +
+    `buddi.${field}; the install card was drawn from the second, so the two must match`
   );
 }
 

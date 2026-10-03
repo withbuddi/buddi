@@ -25,6 +25,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  listPluginAssets,
+  putPluginAsset,
   createPool,
   listMissions,
   listPendingPluginData,
@@ -301,6 +303,17 @@ suite('uninstall leaves nothing dangling', () => {
     expect(mission).toBeDefined();
     expect(mission?.enabled).toBe(false);
     await pool.query('delete from core.missions where id = $1', [(suggestion as { id: string }).id]);
+  });
+
+  it('removes the images the plugin kept (1.27), and says so', async () => {
+    await install();
+    const codec = { normalise: async () => ({ 64: Buffer.from('a'), 128: Buffer.from('b') }) };
+    // The data directory of this test's own, never the owner's.
+    const local = { ...env, BUDDI_DATA_DIR: path.join(root, 'data') };
+    await putPluginAsset(PLUGIN, 'logo', Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png', codec, local);
+    const outcome = await applyUninstall(await planUninstall(PLUGIN, { pool, env: local }), { env: local, pool });
+    expect(outcome.notes).toContain('its kept image was removed');
+    expect(await listPluginAssets(PLUGIN, local)).toEqual([]);
   });
 
   it('knows which declared grant entries name the plugin', () => {

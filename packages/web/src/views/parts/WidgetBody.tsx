@@ -8,6 +8,7 @@ import type { WidgetBody, WidgetSize } from '../../api';
 import { Icon } from '../../ui';
 import { Spark } from './HomeGlances';
 import { ClocksView } from './WidgetClocks';
+import { AssetImage, isAssetSrc } from '../../pages/AssetImage';
 
 /** Rows a list draws, and tiles a strip draws, by size. */
 const ROWS = 3;
@@ -39,7 +40,9 @@ export function WidgetBodyView({ body, size }: { body: WidgetBody; size: WidgetS
         <>
           <ul className="wg-list">
             {body.rows.slice(0, ROWS).map((row, i) => (
-              <li key={`${row.title}-${i}`} className="wg-row">
+              <li key={`${row.title}-${i}`} className="wg-row" data-marked={row.image && size === 'medium' ? 'true' : undefined}>
+                {/* A plugin's kept image leads the row on medium (1.27): buddi's own path, never a host. */}
+                {row.image && size === 'medium' ? <AssetImage className="wg-mark" src={isAssetSrc(row.image.src) ? row.image.src : null} label={row.title} /> : null}
                 <span className="wg-row-text">
                   <span className="wg-row-title">{row.title}</span>
                   {row.sub && size === 'medium' ? <span className="wg-row-sub">{row.sub}</span> : null}

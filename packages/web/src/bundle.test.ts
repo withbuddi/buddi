@@ -167,6 +167,9 @@ describe('the canvas knows no domain', () => {
     // core provides it on every install, and the canvas draws it as the
     // message it sent rather than as a domain's result.
     "'owner.notify'",
+    // A scheduled run's report is the platform's own tool too (host API
+    // 1.27): the chat draws it as the message it sent, voice note and link.
+    "'mission.report'",
     "'canvas.clear'",
     "'run.started'",
     "'run.finished'",
