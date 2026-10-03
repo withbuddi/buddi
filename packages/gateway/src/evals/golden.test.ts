@@ -3,6 +3,8 @@ import {
   agentFor,
   casesFor,
   GOLDEN_CASES,
+  minutesOf,
+  oneCalendarManifest,
   OPENAI_AGENT,
   parseEvalArgs,
   stubbed,
@@ -80,5 +82,27 @@ describe('the browser cases', () => {
     expect(paired.check(turn('I have no access to your Amazon account. Open the Amazon app yourself.', [{ name: 'email.search', input: {} }]))).toHaveLength(3);
     expect(paired.check(turn('Approve the browser card and I will look.', [{ name: 'browser.act', input: {} }]))).toEqual([]);
     expect(paired.check(turn('@ledger says…', [{ name: 'agent.delegate', input: {} }]))).toEqual([]);
+  });
+});
+
+describe('the one-writable-calendar case', () => {
+  const theCase = GOLDEN_CASES.find((c) => c.id === 'one-writable-calendar-is-taken')!;
+  const turn = (text: string, calls: Array<{ name: string; input: unknown }>) => [{ question: 'q', text, calls, inputTokens: 0, outputTokens: 0 }];
+
+  it('passes the approval card on Home with 2 hours stated, and fails asking which calendar', () => {
+    const create = { name: 'calendar.create_event', input: { calendar: 'Home', title: 'Dinner with Marion', start: '2026-09-13T19:30', duration: 120, location: 'Chez Léon' } };
+    expect(theCase.check(turn('Dinner with Marion at Chez Léon, 19:30 for 2 hours, on your Home calendar — approve the card to add it.', [create]))).toEqual([]);
+    expect(theCase.check(turn('Which calendar should I use: Home or Holidays?', []))).toHaveLength(3);
+    const hour = { ...create, input: { ...create.input, duration: 60 } };
+    expect(theCase.check(turn('Added for an hour on Home.', [hour]))).toHaveLength(2);
+  });
+
+  it('reads a duration from either form, and its stand-in refuses a calendar that is not Home', async () => {
+    expect(minutesOf({ start: '2026-09-13T19:30', end: '2026-09-13T21:30' })).toBe(120);
+    expect(minutesOf({ duration: 90 })).toBe(90);
+    expect(minutesOf(undefined)).toBeNull();
+    const create = oneCalendarManifest().tools.find((t) => t.name === 'calendar.create_event')!;
+    await expect(create.execute({ calendar: 'Holidays' } as never, {} as never)).resolves.toMatchObject({ refused: expect.stringContaining('Agents may change: Home') });
+    await expect(create.execute({ calendar: 'home' } as never, {} as never)).resolves.toMatchObject({ pending: true });
   });
 });

@@ -243,6 +243,7 @@ function WeekGrid({
     const el = scroller.current;
     if (el) el.scrollTop = (el.scrollHeight / 24) * hours[0];
   }, [hours[0]]);
+  const scrollbar = useScrollbarWidth(scroller);
   const per = dates.map((date) => ({ date, items: eventsOn(events, date) }));
   const isToday = (date: string): 'true' | undefined => (date === today ? 'true' : undefined);
   return (
@@ -251,7 +252,7 @@ function WeekGrid({
         className="cal-week"
         role="grid"
         aria-label={`Week of ${dayLabel(dates[0] as string)}`}
-        style={{ ['--cal-span' as string]: hours[1] - hours[0] }}
+        style={{ ['--cal-span' as string]: hours[1] - hours[0], ['--cal-scrollbar' as string]: `${scrollbar}px` }}
       >
         <div className="cal-row" role="row">
           <span className="cal-gutter" aria-hidden="true" />
@@ -410,3 +411,27 @@ function MonthGrid({
     </Panel>
   );
 }
+
+/**
+ * How wide the hour grid's scrollbar is: the header and all-day rows above it
+ * do not scroll, so they are padded by the same width or every day column
+ * drifts left of its grid (Sat and Sun worst). Zero for overlay scrollbars
+ * (macOS by default, phones); about 15 with classic ones (Windows, Linux,
+ * macOS set to always show them). Measured, not guessed: `scrollbar-gutter`
+ * on a row that does not scroll is not honoured by every WebKit yet.
+ */
+export function useScrollbarWidth(ref: { current: HTMLElement | null }): number {
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const measure = (): void => setWidth(Math.max(0, el.offsetWidth - el.clientWidth));
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+}
+

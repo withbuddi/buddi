@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
-import { createSystemManifest, formatLine, hostFacts, NOTIFY_LINE, resourcefulLines, systemContext, systemTime } from './system-context.js';
+import { createSystemManifest, DECISION_LINES, formatLine, hostFacts, NOTIFY_LINE, resourcefulLines, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
@@ -45,6 +45,15 @@ describe('shared platform context', () => {
     expect(bare).not.toContain('open the app or site themselves');
     expect((await systemContext(ctx, { agentId: 'home', tools: ['browser.act'] })).prompt).toContain('look with browser.act');
     expect((await systemContext(ctx)).prompt).not.toContain('Before you say you cannot');
+  });
+  it('tells every run to take a single option, ask a few as choices, and state its defaults', async () => {
+    const { ctx } = fixture();
+    expect(DECISION_LINES).toContain('Exactly one valid option');
+    expect(DECISION_LINES).toContain('ask with conversation.ask and those options');
+    expect(DECISION_LINES).toContain('2–6');
+    expect(DECISION_LINES).toContain('an evening dinner lasts 2 hours');
+    expect((await systemContext(ctx, { agentId: 'scout', tools: [] })).prompt).toContain(DECISION_LINES);
+    expect((await systemContext(ctx)).prompt).not.toContain('Exactly one valid option');
   });
   it('tells only the front desk the owner\'s places, with address, town and zone', async () => {
     const query = vi.fn(async (sql: string) =>

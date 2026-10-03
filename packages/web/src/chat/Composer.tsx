@@ -669,7 +669,7 @@ export const Composer = forwardRef<ComposerHandle, {
       take(files);
       return;
     }
-    const pasted = event.clipboardData?.getData('text/plain') ?? '';
+    const pasted = typeof event.clipboardData?.getData === 'function' ? event.clipboardData.getData('text/plain') : '';
     if (pasted === '') return;
     const node = event.currentTarget;
     const from = node.selectionStart ?? caret;

@@ -35,9 +35,11 @@ import {
   type CatalogAgent,
   type ProviderKind,
   type CoreToolContext,
+  type PluginManifest,
 } from '@buddi/core';
 import { createConversation, createProvider, runAgent, type RuntimeProvider } from '@buddi/runtime';
 import { config as loadDotenv } from 'dotenv';
+import { z } from 'zod';
 import type { Pool } from 'pg';
 import {
   createToolRegistry,
@@ -127,6 +129,12 @@ export interface GoldenCase {
   stubs?: Record<string, unknown>;
   /** The grant the case runs with, from the agent's own (a case about an agent shaped like Home Manager). */
   tools?: (granted: readonly string[]) => string[];
+  /**
+   * Stand-in plugins registered for this case only, for a plugin this build
+   * does not compile in (the calendar lives in buddi-plugins). Each answers
+   * the way the real one does for the situation the case pins.
+   */
+  manifests?: () => PluginManifest[];
   /** Every failure, as a plain sentence. An empty array is a pass. */
   check(turns: TurnRecord[]): string[];
 }
@@ -192,6 +200,65 @@ const UNPAIRED_BROWSER = {
 };
 const NO_ACCESS = /(?:no|don't have|do not have|cannot get) access to your amazon/i;
 const OPEN_IT_YOURSELF = /open the amazon (?:app|site|website) (?:yourself|and)/i;
+
+/**
+ * The calendar plugin as an owner with one calendar agents may change sees
+ * it: "Home" (Google) writable, "Holidays" read through a private link. The
+ * create answers as the real tool does — a refusal naming the calendars agents
+ * may change, or the approval card waiting — without writing anywhere.
+ */
+export const ONE_WRITABLE_CALENDAR = 'Home';
+export function oneCalendarManifest(): PluginManifest {
+  const create = {
+    name: 'calendar.create_event',
+    description:
+      'Add an event to one of the owner’s calendars that allows changes. The owner approves it on a card first. Times are the ' +
+      'owner’s unless a timezone is given; an end or a duration in minutes (an hour when neither).',
+    tier: 'auto' as const,
+    input: z.object({
+      calendar: z.string().describe('The calendar’s name (or id), one the owner allows changes on.'),
+      title: z.string(),
+      start: z.string().describe('YYYY-MM-DDTHH:MM in the owner’s time.'),
+      end: z.string().optional(),
+      duration: z.number().int().optional().describe('Minutes, when no end is given.'),
+      location: z.string().optional(),
+      notes: z.string().optional(),
+    }),
+    async execute(input: { calendar: string }) {
+      if (input.calendar.trim().toLowerCase() !== ONE_WRITABLE_CALENDAR.toLowerCase()) {
+        return { refused: `There is no calendar called ${input.calendar} that allows changes. Agents may change: ${ONE_WRITABLE_CALENDAR}.` };
+      }
+      return { pending: true, message: 'The owner has an approval card for this event; it is added when they approve.' };
+    },
+  };
+  const today = {
+    name: 'calendar.today',
+    description: "Today's events from the owner's linked calendars, in their time.",
+    tier: 'auto' as const,
+    input: z.object({}),
+    async execute() {
+      return { date: 'Sunday (2026-09-13)', events: ['No events today.'], calendars: [
+        { name: ONE_WRITABLE_CALENDAR, account: 'Google', changesAllowed: true },
+        { name: 'Holidays', account: 'private link', changesAllowed: false },
+      ] };
+    },
+  };
+  return { name: 'calendar', version: '0.0.0-eval', schema: 'core', migrationsDir: '', tools: [create, today] } as unknown as PluginManifest;
+}
+
+/** The minutes an event the agent asked for lasts, from `duration` or `start`/`end`. */
+export function minutesOf(input: { start?: string; end?: string; duration?: number } | undefined): number | null {
+  if (!input) return null;
+  if (typeof input.duration === 'number') return input.duration;
+  if (input.start && input.end) {
+    const ms = Date.parse(`${input.end.slice(0, 16)}:00Z`) - Date.parse(`${input.start.slice(0, 16)}:00Z`);
+    return Number.isFinite(ms) ? Math.round(ms / 60_000) : null;
+  }
+  return null;
+}
+
+const ASKS_WHICH_CALENDAR = /which calendar|what calendar|which of your calendars/i;
+const STATES_TWO_HOURS = /\b(?:2|two)[ -]?(?:hours?|h)\b|2-hour|two-hour/i;
 
 export const GOLDEN_CASES: GoldenCase[] = [
   {
@@ -437,6 +504,27 @@ export const GOLDEN_CASES: GoldenCase[] = [
       return fails;
     },
   },
+  {
+    id: 'one-writable-calendar-is-taken',
+    guards:
+      'With exactly one calendar agents may change, "add dinner with X at Y tonight" goes straight to the approval card on it, ' +
+      'never asks which calendar, and states the 2-hour default it chose.',
+    agent: 'finance-advisor',
+    tools: (granted) => [...granted.filter((t) => !t.startsWith('finance.')), 'calendar.today', 'calendar.create_event'],
+    manifests: () => [oneCalendarManifest()],
+    turns: [{ question: 'Add dinner with Marion at Chez Léon tonight at 19:30.' }],
+    check([turn]) {
+      const text = turn?.text ?? '';
+      const fails: string[] = [];
+      const creates = called(turn, 'calendar.create_event');
+      const landed = creates.find((c) => String(c.input?.calendar ?? '').toLowerCase() === ONE_WRITABLE_CALENDAR.toLowerCase());
+      if (!landed) fails.push(`never asked to add the event to ${ONE_WRITABLE_CALENDAR}, the one calendar agents may change`);
+      if (ASKS_WHICH_CALENDAR.test(text)) fails.push('asked which calendar when only one allows changes');
+      if (landed && minutesOf(landed.input) !== 120) fails.push(`gave the dinner ${minutesOf(landed.input) ?? 'no'} minutes, not the 2-hour default`);
+      if (!STATES_TWO_HOURS.test(text) && !/21[:.]30|9[:.]30\s*pm/i.test(text)) fails.push('did not state the 2-hour default (or the end time) it chose');
+      return fails;
+    },
+  },
 ];
 
 
@@ -599,6 +687,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
     console.log('');
 
+    /** Stand-in plugins the case in hand registered, taken out after it. */
+    const standIns: string[] = [];
     for (const testCase of cases) {
       await reseed(pool);
       const started = Date.now();
@@ -613,6 +703,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       try {
         const selected: CatalogAgent = catalog.resolve(agentFor(testCase, providerKind));
         const conversationId = await createConversation(pool, selected.id);
+        for (const manifest of testCase.manifests?.() ?? []) {
+          registry.register(manifest);
+          standIns.push(manifest.name);
+        }
         const turns: TurnRecord[] = [];
         for (const turn of testCase.turns) {
           const calls: ToolCall[] = [];
@@ -643,6 +737,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       } catch (err) {
         result.error = err instanceof Error ? err.message : String(err);
         result.failures = [`threw: ${result.error}`];
+      } finally {
+        for (const name of standIns.splice(0)) registry.unregister(name);
       }
       result.ms = Date.now() - started;
       results.push(result);

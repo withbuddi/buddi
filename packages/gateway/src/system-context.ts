@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
-import { getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateTimeString, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
+import { ASK_TOOL } from './surfaces/pending-question.js';
+import { MAX_QUESTION_OPTIONS, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateTimeString, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
 const clean = (value: string): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 120);
@@ -79,7 +80,8 @@ export async function systemContext(
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
     (owner === '' ? '' : `\n\n${owner}`) + (places === '' ? '' : `\n\n${places}`) + (learning === '' ? '' : `\n\n${learning}`) +
     (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') +
-    (run ? `\n\n${resourcefulLines(run.tools)}` : '') };
+    (run ? `\n\n${resourcefulLines(run.tools)}` : '') +
+    (run ? `\n\n${DECISION_LINES}` : '') };
 }
 
 /**
@@ -115,6 +117,22 @@ export function resourcefulLines(tools: readonly string[]): string {
   );
   return lines.join('\n').trimEnd();
 }
+
+/**
+ * Decide when there is one option; ask with choices when there are a few
+ * (docs/agents.md, "One option, a few, many"). Beside the try-first rule in
+ * every agent's prompt. An owner adding a dinner from the Calendar page's
+ * corner chat was asked which calendar (only one was writable) in prose; this
+ * is the rule that stops both.
+ */
+export const DECISION_LINES = [
+  'When a step needs a choice (a calendar, a mailbox, an account, a card, a contact):',
+  '- Exactly one valid option (one writable calendar, one linked mailbox, one account): take it without asking and name it in your reply ("on your Home calendar").',
+  `- A few (2–${MAX_QUESTION_OPTIONS}): ask with ${ASK_TOOL} and those options, recommended first, so the owner taps one. Never list them as prose for the owner to type back.`,
+  '- Many, or open-ended: ask in one short line.',
+  '- Do not ask about details with a sensible default: use it and state it in the confirmation or the approval preview — an evening dinner lasts 2 hours, a meeting 1 hour, the place is where they said.',
+  'Ask only what you cannot read or reasonably assume; a name you can look up in contacts or past mail is not a question.',
+].join('\n');
 
 /** For an agent that holds `owner.notify`: when to use it, and when not. */
 export const NOTIFY_LINE =

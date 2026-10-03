@@ -3870,6 +3870,8 @@ a.home-glance-text:hover { color: var(--text); text-decoration: underline; text-
 .cal-allday{border-bottom:1px solid var(--line)}
 .cal-allday-cell{display:flex;flex-direction:column;gap:var(--space-0);min-width:0;min-height:var(--space-8);padding:var(--space-1);border-left:1px solid var(--line)}
 .cal-scroll{max-height:calc(var(--cal-hour) * var(--cal-span));overflow-y:auto;overscroll-behavior:contain}
+/* The head and all-day rows sit above the scrolling grid: padded by its measured scrollbar so the columns line up. */
+.cal-week>.cal-row{padding-right:var(--cal-scrollbar,0)}
 .cal-times{height:calc(var(--cal-hour) * 24)}
 .cal-hours{position:relative}
 .cal-hour-label{position:absolute;right:var(--space-2);margin-top:var(--space-1);font-size:var(--text-2xs);color:var(--text-faint);font-variant-numeric:tabular-nums;line-height:1}

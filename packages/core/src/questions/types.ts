@@ -1,5 +1,5 @@
 export const QUESTION_TTL_MS = 30 * 60_000;
-export const MAX_QUESTION_OPTIONS = 5;
+export const MAX_QUESTION_OPTIONS = 6;
 export const MAX_QUESTION_LABEL = 48;
 
 export interface QuestionOption {

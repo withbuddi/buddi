@@ -10,12 +10,21 @@
  * the session, so closing and reopening it shows the same conversation; New
  * starts another.
  *
+ * What the thread hands the owner to decide is drawn here exactly as the full
+ * chat draws it, with the same components: the approval in the composer's
+ * place (Approve, Reject), the agent's question as tappable choices, offer and
+ * hand-off chips under the turn, and the edition card in the transcript. Open
+ * in Chat is for a long thread, never for a button the dock could not press.
+ *
  * The shell hides it on Home (which has its own composer), on the chat, and
  * during first run.
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, chatApi } from '../api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ApiError, api, chatApi } from '../api';
+import { ApprovalDock } from '../chat/ApprovalDock';
+import { QuestionPicker } from '../chat/QuestionPicker';
+import { OfferButtons, pendingApprovals, useThreadActions } from '../chat/thread-actions';
 import { speakReply } from '../chat/ChatPage';
 import { Composer, type ComposerDraft, type ComposerHandle } from '../chat/Composer';
 import { MessageList, type LiveCall, type LiveTurnView } from '../chat/MessageList';
@@ -50,9 +59,12 @@ export function AskDock({
   open,
   onOpenChange,
   navigate,
+  timezone,
 }: {
   agent: ChatAgent;
   agents: ChatAgent[];
+  /** The owner's zone, for the times an approval card shows. */
+  timezone: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   navigate: (route: string) => void;
@@ -94,7 +106,7 @@ export function AskDock({
   }, [open]);
 
   if (open) {
-    return <DockThread agent={agent} agents={agents} navigate={navigate} onClose={() => onOpenChange(false)} onBusy={setBusy} />;
+    return <DockThread agent={agent} agents={agents} timezone={timezone} navigate={navigate} onClose={() => onOpenChange(false)} onBusy={setBusy} />;
   }
 
   return (
@@ -123,12 +135,14 @@ function FrontDeskFace({ busy }: { busy: boolean }): JSX.Element {
 function DockThread({
   agent,
   agents,
+  timezone,
   navigate,
   onClose,
   onBusy,
 }: {
   agent: ChatAgent;
   agents: ChatAgent[];
+  timezone: string;
   navigate: (route: string) => void;
   onClose: () => void;
   onBusy: (busy: boolean) => void;
@@ -150,6 +164,8 @@ function DockThread({
   const readAloudOn = useRef(readAloud);
   readAloudOn.current = readAloud;
   const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  /** Gated calls the stream announced before the transcript says so: tool-use id → approval id. */
+  const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
   /** The text of the turn being written, for reading it aloud when it ends. */
   const lastTurn = useRef<{ runId: string; turn: number; text: string } | null>(null);
 
@@ -228,8 +244,15 @@ function DockThread({
             void refresh(conversationId);
             break;
           }
+          case 'awaiting-approval': {
+            const approvalId = str(event.data['approvalId']) ?? str(event.data['actionId']);
+            const toolUseId = str(event.data['toolUseId']);
+            if (approvalId && toolUseId) setAwaiting((current) => new Map(current).set(toolUseId, approvalId));
+            if (toolUseId) setLive((current) => current.filter((call) => call.toolUseId !== toolUseId));
+            void refresh(conversationId).then(() => setPartial((current) => (current?.settled ? null : current)));
+            break;
+          }
           case 'message.appended':
-          case 'awaiting-approval':
             void refresh(conversationId).then(() => setPartial((current) => (current?.settled ? null : current)));
             break;
           case 'run.finished': {
@@ -317,6 +340,7 @@ function DockThread({
     setPartial(null);
     setRunning(false);
     setError(null);
+    setAwaiting(new Map());
     composer.current?.focus();
   };
 
@@ -328,6 +352,25 @@ function DockThread({
 
   const route = conversationId ? chatRoute(agent.id, conversationId) : chatRoute(agent.id);
   const messages = [...(conversation?.messages ?? []), ...optimistic];
+
+  /* The same decisions the full chat offers, through the same calls. */
+  const { openOffers, takingOffer, takeOffer, answeringQuestion, answerQuestion, skipQuestion } = useThreadActions({
+    conversation,
+    conversationId,
+    agentId: agent.id,
+    now,
+    refresh,
+    onRunStarted: () => setRunning(true),
+    onError: (failed, endedRun) => { setError(failed); if (endedRun) setRunning(false); },
+    navigate,
+  });
+  const approvals = useMemo(() => pendingApprovals(conversation, agents, awaiting), [conversation, agents, awaiting]);
+  const question = approvals.length === 0 ? conversation?.question ?? null : null;
+  const onDecided = (action: { id: string; state: string }): void => {
+    if (conversationId) void refresh(conversationId);
+    void api.overview().catch(() => {});
+    if (action.state !== 'pending') setAwaiting((current) => new Map([...current].filter(([, id]) => id !== action.id)));
+  };
 
   return (
     <Dock
@@ -363,6 +406,27 @@ function DockThread({
       </div>
       <div className="wb-ask-compose">
         {error ? <ErrorBanner message={error} /> : null}
+        <OfferButtons offers={openOffers} disabled={takingOffer !== null} onTake={takeOffer} />
+        {approvals.length > 0 ? (
+          <ApprovalDock
+            approvals={approvals}
+            timezone={timezone}
+            now={now}
+            version={conversation}
+            onDecided={onDecided}
+            onSay={(text) => send(text, [])}
+            onOpenFull={() => navigate(route)}
+          />
+        ) : question ? (
+          <QuestionPicker
+            key={question.id}
+            question={question}
+            disabled={answeringQuestion || running}
+            onAnswer={answerQuestion}
+            onSkip={skipQuestion}
+          />
+        ) : null}
+        <div hidden={approvals.length > 0 || question !== null} data-testid="composer-slot">
         <Composer
           ref={composer}
           disabled={sending || !agent.available}
@@ -378,6 +442,7 @@ function DockThread({
           onReadAloud={switchReadAloud}
         />
         {voiceNote ? <p className="wb-voice-note" role="status">{voiceNote}</p> : null}
+        </div>
       </div>
     </Dock>
   );

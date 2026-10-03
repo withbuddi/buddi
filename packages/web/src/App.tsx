@@ -582,7 +582,7 @@ export function App(): JSX.Element {
         {phone ? null : <StatusBar status={status} onNavigate={navigate} />}
         </div>
         {askShown && frontDesk ? (
-          <AskDock agent={frontDesk} agents={agents} open={askOpen} onOpenChange={setAskOpen} navigate={navigate} />
+          <AskDock agent={frontDesk} agents={agents} timezone={timezone} open={askOpen} onOpenChange={setAskOpen} navigate={navigate} />
         ) : null}
         <ToastStack placement={toastPlacement(askShown, askOpen)}>
           <NotificationToasts queue={toasts.queue} agents={agents} navigate={navigate} onDismiss={toasts.dismiss} />

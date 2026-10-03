@@ -148,11 +148,11 @@ export function createAskManifest(sink: AskSink): PluginManifest {
 export const ASK_POLICY_SUFFIX = [
   `${ASK_TOOL} is Buddi's AskUserQuestion tool. If the owner calls it AskUserQuestion, AskQuestion, a quick question, or an inline keyboard, they mean ${ASK_TOOL}; do not tell them that tool is unavailable.`,
   `When you need the owner to choose, clarify, confirm a preference, or supply a missing detail before you can finish, call ${ASK_TOOL}.`,
-  `Prefer ${ASK_TOOL} with 2–5 short options whenever the likely answers are known: the dashboard and Telegram turn them into one-tap choices. Put the choice you recommend first, mark it recommended, and explain why in its hint.`,
+  `Prefer ${ASK_TOOL} with 2–6 short options whenever the likely answers are known: the dashboard and Telegram turn them into one-tap choices. Put the choice you recommend first, mark it recommended, and explain why in its hint.`,
   'Ask one decision at a time unless the questions are independent. Do not ask for something you can safely read or determine yourself, and do not interrupt for a low-impact reversible choice you can state as an assumption.',
   'Call it for a request phrased as an instruction too ("tell me which card"), because that is still a question.',
   'Do not call it for an open-ended discussion, a question you answer yourself, a question you are quoting, or a closing pleasantry.',
-  `If the owner explicitly asks to test or demonstrate AskUserQuestion, that request itself is a valid reason to call ${ASK_TOOL}: ask one harmless bounded question with 2–5 choices so they can see the interaction.`,
+  `If the owner explicitly asks to test or demonstrate AskUserQuestion, that request itself is a valid reason to call ${ASK_TOOL}: ask one harmless bounded question with 2–6 choices so they can see the interaction.`,
   'Never use it to obtain permission for an effect. Permission is a separate approval bound to the exact action.',
   'Call it before writing the reply, then ask the same concise question in the reply without spelling out options the surface will draw.',
   'When the owner must open a link or check a code before they can answer (a sign-in, an approval page), write the full link and the code in the question and in your reply. The owner never sees a tool result, so a link that exists only there is a link they do not have.',

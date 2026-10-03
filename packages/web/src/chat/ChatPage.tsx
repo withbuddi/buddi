@@ -33,7 +33,7 @@ import { BROWSER_TOOLS, browserSteps, conversationBrowser, endedBrowser, stepFor
 import { WEB_SOURCE_TOOLS } from './sources';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
-import { agentRoute, catalogueInstallRoute, chatRoute, settingsRoute } from '../routes';
+import { agentRoute, chatRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import { AgentAvatar, FaceMark, GradientField, Icon } from '../ui';
@@ -42,6 +42,7 @@ import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
 import { QuestionPicker } from './QuestionPicker';
 import { ApprovalDock, type DockedApproval } from './ApprovalDock';
+import { OfferButtons, askedByLine, delegatedApprovals, useThreadActions } from './thread-actions';
 import { conversationLine } from './lifetime';
 import { CarryOverNote } from './CarryOver';
 import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
@@ -164,7 +165,6 @@ export function ChatPage({
    * in flight the grey "Carried over" note in the transcript says so.
    */
   const [notice, setNotice] = useState<string | null>(null);
-  const [takingOffer, setTakingOffer] = useState<string | null>(null);
   /**
    * Chips the owner has clicked, gone from the page before the server answers.
    *
@@ -173,8 +173,6 @@ export function ChatPage({
    * comes back if the take fails — with the reason in the banner — because a
    * chip that vanished and did nothing is the worse half of the same bug.
    */
-  const [takenOffers, setTakenOffers] = useState<string[]>([]);
-  const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [width, setWidth] = useState<number | null>(readWidth);
   const columnRef = useRef<HTMLElement>(null);
@@ -609,11 +607,7 @@ export function ChatPage({
       ...inlineApprovals.map((item) => ({ approvalId: (item.props as { approvalId: string }).approvalId, toolUseId: item.id })),
       // A colleague's approval under one of this thread's delegations is
       // decided here as well: the owner is here, not in the colleague's thread.
-      ...(conversation?.delegatedApprovals ?? []).map((item) => ({
-        approvalId: item.approvalId,
-        toolUseId: item.toolUseId ?? '',
-        askedBy: askedByLine(item.chain, everyone),
-      })),
+      ...delegatedApprovals(conversation, everyone),
     ],
     // `everyone` is only read for handles; the roster is stable for a render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -765,18 +759,6 @@ export function ChatPage({
   // Model accounts otherwise.
   const blockedFix = cannotRunFix(group ? null : agent);
 
-  /**
-   * The chips that are still on the table: not clicked, not expired.
-   *
-   * An offer has a life — the server stops listing it once it is past — and a
-   * page that has been open all afternoon is holding an older answer than the
-   * server's. Drawing a chip that can only be refused is worse than drawing
-   * none, so the expiry it was sent with is honoured here too.
-   */
-  const openOffers = (conversation?.offers ?? []).filter(
-    (offer) => !takenOffers.includes(offer.id) && Date.parse(offer.expiresAt) > now,
-  );
-
   const thinking = agent && switchedFor === agent.id ? thinkingNow : (agent?.thinking ?? null);
   /**
    * Switch thinking from the composer.
@@ -873,69 +855,16 @@ export function ChatPage({
       });
   };
 
-  /**
-   * The owner clicked one of the things this turn offered.
-   *
-   * It is the Telegram tap, in a browser: the request names an **id**, the
-   * server claims that row once and runs the prompt the agent wrote. Nothing
-   * here can carry a prompt of its own, and nothing about the run it starts is
-   * shortened — an effect still comes back as the approval it always was.
-   */
-  const takeOffer = (id: string): void => {
-    const offer = openOffers.find((o) => o.id === id);
-    // The front desk's "Add Chef": the catalogue's install sheet, where adding is its own approval.
-    if (offer?.handoff?.kind === 'install') {
-      window.location.hash = catalogueInstallRoute(offer.handoff.package);
-      return;
-    }
-    setError(null);
-    setTakingOffer(id);
-    setTakenOffers((taken) => [...taken, id]);
-    api
-      .takeOffer(id, conversationId ?? undefined)
-      .then((result) => {
-        // "Continue with Agent Father": the request went to the maker as the
-        // owner's turn in a new conversation, so the page follows it there.
-        if (result.agentId && result.agentId !== agent?.id) {
-          window.location.hash = chatRoute(result.agentId, result.conversationId ?? null);
-          return;
-        }
-        // Taken in this thread: it is a turn like any other, so the page waits
-        // for it the way it waits for something typed — the label appears as
-        // the owner's message and the answer streams in under it.
-        if (result.runId) {
-          setNotice(null);
-          setRunning(true);
-        }
-        if (conversationId) void refresh(conversationId);
-      })
-      .catch((err: unknown) => {
-        setTakenOffers((taken) => taken.filter((other) => other !== id));
-        setError(message(err));
-        if (conversationId) void refresh(conversationId);
-      })
-      .finally(() => setTakingOffer(null));
-  };
-
-  const answerQuestion = (answer: string, optionId?: string): void => settleQuestion({ answer, ...(optionId ? { optionId } : {}) });
-  const skipQuestion = (): void => settleQuestion({ answer: '', skipped: true });
-  const settleQuestion = (body: { answer: string; optionId?: string; skipped?: boolean }): void => {
-    const question = conversation?.question;
-    if (!question) return;
-    setError(null);
-    setAnsweringQuestion(true);
-    setRunning(true);
-    chatApi
-      .answerQuestion(question.id, body)
-      .then(() => {
-        if (conversationId) return refresh(conversationId);
-      })
-      .catch((err: unknown) => {
-        setError(message(err));
-        setRunning(false);
-      })
-      .finally(() => setAnsweringQuestion(false));
-  };
+  const { openOffers, takingOffer, takeOffer, answeringQuestion, answerQuestion, skipQuestion } = useThreadActions({
+    conversation,
+    conversationId: conversationId ?? null,
+    agentId: agent?.id ?? null,
+    now,
+    refresh,
+    onRunStarted: () => { setNotice(null); setRunning(true); },
+    onError: (failed, endedRun) => { setError(failed); if (endedRun) setRunning(false); },
+    navigate: (route) => { window.location.hash = route; },
+  });
 
   /**
    * The three dots: open what this agent actually is, or put it away.
@@ -1423,22 +1352,7 @@ export function ChatPage({
 
         </MessageList>
 
-        {openOffers.length > 0 ? (
-          <div className="wb-offers" data-testid="chat-offers">
-            {openOffers.map((offer) => (
-              <button
-                key={offer.id}
-                className="ui-btn"
-                disabled={takingOffer !== null}
-                title={offer.handoff?.kind === 'install' ? `Opens ${offer.handoff.title}'s install sheet` : offer.prompt}
-                data-handoff={offer.handoff?.kind}
-                onClick={() => takeOffer(offer.id)}
-              >
-                {offer.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        <OfferButtons offers={openOffers} disabled={takingOffer !== null} onTake={takeOffer} />
 
         {roomProblem ? (
           <div className="wb-composer-blocked" data-testid="group-problem" data-kind={roomProblem.kind}>
@@ -1731,13 +1645,7 @@ function HeadMenu({ items, disabled, label, title, sub, face }: {
   );
 }
 
-/** "@art, asked by @playground" — the chain, from the agent that raised it up. */
-export function askedByLine(chain: readonly string[], agents: readonly ChatAgent[]): string {
-  const handle = (id: string): string => `@${agents.find((agent) => agent.id === id)?.handle ?? id}`;
-  const [raised, ...askers] = chain;
-  if (raised === undefined) return '';
-  return [handle(raised), ...askers.map((id) => `asked by ${handle(id)}`)].join(', ');
-}
+export { askedByLine };
 
 /** Said once per page load: why replies are not read aloud. */
 let voiceNoted = false;

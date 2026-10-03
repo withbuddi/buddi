@@ -70,6 +70,21 @@ ask. Only then does it say exactly what it lacks, with one next step (grant a
 tool, pair a browser, link an account). An agent without the browser says it
 could look if you gave it browser control and paired a browser.
 
+## One option, a few, many
+
+Every agent is told how to handle a choice it meets on the way (a calendar, a
+mailbox, an account, a card, a contact). With exactly one valid option — one
+calendar agents may change, one linked mailbox — it takes it without asking
+and names it in its reply ("on your Home calendar"). With a few (two to six)
+it asks with `conversation.ask` and those options, the one it recommends
+first, so you tap one: buttons in the chat and the corner chat, an inline
+keyboard on Telegram — never a list in prose to type back. With many, or an
+open answer, it asks in one short line. Details with a sensible default are
+not asked: it uses the default and says so in the confirmation or on the
+approval card (an evening dinner lasts two hours, a meeting one, the place is
+where you said). A name it can look up in your contacts or past mail is not a
+question. The golden set's `one-writable-calendar-is-taken` case holds this.
+
 ## What every agent is told about you
 
 Beside the clock (docs/system-context.md), every agent is told what you set on

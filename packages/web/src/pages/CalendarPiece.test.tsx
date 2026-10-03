@@ -6,6 +6,8 @@
  * "Now" is pinned to Monday 28 September 2026, 10:00 in Paris, and the page is
  * drawn in Paris: an event the query gives as 07:30Z is a 09:30 event.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -85,6 +87,29 @@ describe('the calendar component', () => {
     expect(screen.getByRole('columnheader', { name: 'Mon 28 Sep' })).toHaveAttribute('data-today', 'true');
     expect(screen.getByRole('heading', { name: '28 Sep – 4 Oct 2026' })).toBeInTheDocument();
     expect(within(screen.getByRole('gridcell', { name: 'Tue 29 Sep' })).getByRole('button', { name: /^15:30–16:15, Dentist/ })).toHaveAttribute('data-tone', '1');
+  });
+
+  it('pads the header and all-day rows by the hour grid’s scrollbar, so the day columns line up', async () => {
+    // jsdom has no layout: give the scroller a classic 15px scrollbar.
+    const offset = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('cal-scroll') ? 815 : 0;
+    });
+    const client = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('cal-scroll') ? 800 : 0;
+    });
+    try {
+      await drawn();
+      const week = document.querySelector<HTMLElement>('.cal-week')!;
+      expect(week.style.getPropertyValue('--cal-scrollbar')).toBe('15px');
+      // The rule that spends it: the rows above the scroller, not the grid inside it.
+      const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8');
+      expect(css).toContain('.cal-week>.cal-row{padding-right:var(--cal-scrollbar,0)}');
+      expect([...week.children].filter((el) => el.matches('.cal-row'))).toHaveLength(2);
+      expect(week.querySelector('.cal-scroll > .cal-row')).not.toBeNull();
+    } finally {
+      offset.mockRestore();
+      client.mockRestore();
+    }
   });
 
   it('draws an all-day event as a chip at the top of its day', async () => {
