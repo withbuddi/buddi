@@ -239,7 +239,11 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'POST', path: '/api/pause', area: 'home', summary: 'Pause or resume the installation: nothing new is claimed while paused.', body: '{ paused: boolean }' },
 
   /* ---------------- chat ---------------- */
-  { method: 'GET', path: '/api/chat/agents', area: 'chat', summary: 'The agents a chat can be with, with their pictures.', answer: '{ agents: Array<{ id, name, handle, avatar, … }>, default: string }' },
+  { method: 'GET', path: '/api/chat/agents', area: 'chat', summary: 'The agents a chat can be with, with their pictures, and the commands plugins add to the composer.', answer: '{ agents: Array<{ id, name, handle, avatar, … }>, default: string, commands: Array<{ plugin, name, description, args? }> }' },
+  {
+    method: 'POST', path: '/api/quiet', area: 'chat', summary: '`/quiet` from the composer: no proactive messages for a while (7 days by default), or `off`.',
+    body: '{ arg?: "" | "1d" | "1w" | "off" }', answer: '{ text }  // the sentence to show, the same one Telegram and the terminal say',
+  },
   { method: 'GET', path: '/api/chat/attention', area: 'chat', summary: 'Which agents are waiting on the owner, and why.' },
   {
     method: 'GET', path: '/api/chat/attention/stream', area: 'chat', kind: 'stream',

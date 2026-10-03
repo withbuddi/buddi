@@ -19,23 +19,60 @@
  * honest states — uploading, ready, failed. Nothing is sent with an attachment
  * that has not finished uploading, and a failure says so rather than sending
  * a message that quietly refers to nothing.
+ *
+ * Composer v2 (docs/dashboard.md, The composer): the textarea stays the thing
+ * typed into, with its text transparent, and a paint layer in the same grid
+ * cell draws the same characters with live Markdown styling (ComposerPaint).
+ * What is sent is the plain Markdown. `@` opens the mention popup (Agent
+ * Father and the team in a one-to-one chat, the members in a room), `/` at the
+ * start of the message opens the commands, lists carry on with Enter and
+ * indent with Tab, pasted code is fenced (Undo), and a paste over 4,000
+ * characters becomes a file at once (Put it in the message).
  */
 import {
   forwardRef,
   useEffect,
+  useId,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type ClipboardEvent,
   type KeyboardEvent,
+  type RefObject,
 } from 'react';
 import { chatApi, ApiError } from '../api';
-import { Icon } from '../ui';
+import { Button, Icon } from '../ui';
+import { accentAttrs, accentOf } from '../shell/accent';
+import { ROLE_MAKER } from '../shell/roster';
+import { useMediaQuery } from '../useMediaQuery';
 import { FileTile } from './FileTile';
 import type { AttachmentBlock } from './attachments';
+import { chatCommands, isChatCommand, needsWords, pluginRows, usePluginCommands, type ChatCommandName, type CommandRow } from './commands';
+import {
+  LONG_PASTE,
+  completeMention,
+  continueList,
+  fencePaste,
+  guessLang,
+  inFence,
+  indentItem,
+  langName,
+  leadingMention,
+  listItem,
+  looksLikeCode,
+  mentionAt,
+  mentionedHandles,
+  parseCommand,
+  slashAt,
+  useAt,
+  type Edit,
+} from './composer-text';
+import { ZWSP, paint } from './ComposerPaint';
+import { CommandMenu, MentionPopup, optionId, type Mentionable } from './ComposerPopups';
 import { ListeningPanel, MicButton, useVoice } from './MicButton';
 import { snapTab } from './snap';
-import type { UploadedAttachment } from './types';
+import type { ChatAgent, UploadedAttachment } from './types';
 
 /**
  * The one thing that waits for the answer. A run's attachments are hydrated
@@ -60,6 +97,8 @@ export interface PendingAttachment {
   state: 'uploading' | 'ready' | 'failed';
   uploaded?: UploadedAttachment;
   error?: string;
+  /** The tile's second line instead of family and size: a long paste says how many lines. */
+  detail?: string;
 }
 
 /**
@@ -79,6 +118,55 @@ export interface ComposerDraft {
 export interface ComposerHandle {
   addFiles: (files: FileList | File[] | null) => void;
   focus: () => void;
+}
+
+/** Who `@` offers in a one-to-one chat: the roster, and which agent the box talks to. */
+export interface ComposerTeam {
+  agents: readonly ChatAgent[];
+  selfId: string;
+}
+
+/** What the last paste did, with its way out. */
+type PasteNote =
+  | { kind: 'fenced'; lang: string; block: string; text: string }
+  | { kind: 'long'; key: string; text: string; caret: number };
+
+/** The phone width the kit draws the composer's popups for: finger-tall rows, no key hints. */
+const PHONE_QUERY = '(max-width: 720px)';
+/** The popups' own list heights (kit.css): six rows on a desk, five on a phone. */
+const LIST_MAX = { desk: 288, phone: 240 };
+
+/**
+ * How tall a popup may be: the room between the top of what is visible and the
+ * box. On a phone the visible part is what the keyboard leaves
+ * (`visualViewport`), so the popup stays above the keyboard and never runs off
+ * the top of the screen.
+ */
+function usePopupRoom(anchor: RefObject<HTMLElement>, open: boolean, phone: boolean): number | undefined {
+  const [room, setRoom] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (!open) return undefined;
+    const view = window.visualViewport ?? null;
+    const measure = (): void => {
+      const box = anchor.current;
+      if (!box || typeof box.getBoundingClientRect !== 'function') return;
+      const top = box.getBoundingClientRect().top - (view ? view.offsetTop : 0);
+      // The foot (key hints) and the gap take about 56px on a desk; a phone has no foot.
+      const free = Math.floor(top - (phone ? 16 : 64));
+      const max = phone ? LIST_MAX.phone : LIST_MAX.desk;
+      setRoom(free > 0 && free < max ? Math.max(free, 96) : undefined);
+    };
+    measure();
+    view?.addEventListener('resize', measure);
+    view?.addEventListener('scroll', measure);
+    window.addEventListener('resize', measure);
+    return () => {
+      view?.removeEventListener('resize', measure);
+      view?.removeEventListener('scroll', measure);
+      window.removeEventListener('resize', measure);
+    };
+  }, [open, phone, anchor]);
+  return room;
 }
 
 export const Composer = forwardRef<ComposerHandle, {
@@ -106,7 +194,18 @@ export const Composer = forwardRef<ComposerHandle, {
   /** A file in the tray was clicked. It is stored already, so it can be looked at. */
   onOpenFile?: (attachment: AttachmentBlock) => void;
   /** In a room: who can be addressed with `@`. Typing `@` offers them. */
-  mentions?: Array<{ handle: string; name: string }>;
+  mentions?: Array<{ handle: string; name: string; id?: string }>;
+  /**
+   * In a one-to-one chat: the roster, so `@` offers Agent Father (borrowed for
+   * one message) and every teammate (the agent asks them). Ignored in a room.
+   */
+  team?: ComposerTeam | null;
+  /**
+   * The chat's own commands, run by the page: `/use <handle>`, `/new [words]`,
+   * `/stop`, `/quiet [1d|1w|off]`. Given, `/` at the start of the message
+   * opens the menu, with the plugins' commands under them.
+   */
+  onCommand?: (name: ChatCommandName, arg: string) => void;
   /**
    * What the owner said in this conversation, newest first. Up walks back
    * through it, the way a shell does. The page reads it off the transcript it
@@ -136,7 +235,7 @@ export const Composer = forwardRef<ComposerHandle, {
   placeholder?: string;
   /** One line that grows as it is typed into, the controls on its right (Home's box). */
   slim?: boolean;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history, threadKey, conversationId, readAloud, onReadAloud, placeholder, slim }, ref) {
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, team, onCommand, history, threadKey, conversationId, readAloud, onReadAloud, placeholder, slim }, ref) {
   /*
    * Where this thread's draft is kept, and the function that reads it.
    *
@@ -156,44 +255,67 @@ export const Composer = forwardRef<ComposerHandle, {
   };
 
   const [text, setText] = useState(() => readDraft(storageKey));
+  const [caret, setCaret] = useState(() => text.length);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [snapping, setSnapping] = useState(false);
   /** Why the last tab snap or recording gave nothing, in the browser's words made plain. */
   const [snapNote, setSnapNote] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
+  const [note, setNote] = useState<PasteNote | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const phone = useMediaQuery(PHONE_QUERY);
+  const listId = `cv-pop-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const pluginCommands = usePluginCommands();
 
-  /** The `@word` the caret is inside, when there is one and there are people to offer. */
-  const [mentionAt, setMentionAt] = useState<{ start: number; query: string } | null>(null);
-  const [mentionIndex, setMentionIndex] = useState(0);
-  const offered = mentionAt && mentions
-    ? mentions.filter((m) => m.handle.toLowerCase().startsWith(mentionAt.query.toLowerCase()) || m.name.toLowerCase().startsWith(mentionAt.query.toLowerCase())).slice(0, 6)
+  /*
+   * Who `@` can name, and what naming them does. In a room, the members: the
+   * room asks them. In a one-to-one chat, Agent Father first — borrowed for
+   * this one message — then every teammate, whom the agent here asks.
+   */
+  const people = useMemo<Mentionable[]>(() => {
+    const face = (id: string): ChatAgent | undefined => team?.agents.find((a) => a.id === id);
+    const accent = (agent: ChatAgent | undefined, id: string) => accentAttrs(accentOf(agent ?? { id }));
+    if (mentions) {
+      return mentions.map((m) => {
+        const id = m.id ?? m.handle;
+        const agent = face(id);
+        return { id, handle: m.handle, name: m.name, effect: `Asks @${m.handle} in this room`, group: 'In this room', accent: accent(agent, id), ...(agent ? { face: agent } : {}) };
+      });
+    }
+    if (!team) return [];
+    const maker = team.agents.find((a) => a.roles.includes(ROLE_MAKER) && a.id !== team.selfId);
+    const rest = team.agents.filter((a) => a.id !== team.selfId && a !== maker);
+    return [
+      ...(maker ? [{ id: maker.id, handle: maker.handle, name: maker.name, effect: `Borrows ${maker.name} for this message`, group: 'Borrow', accent: accentAttrs({ key: 'buddi' }), face: maker }] : []),
+      ...rest.map((a) => ({ id: a.id, handle: a.handle, name: a.name, effect: `${agentName} asks @${a.handle}`, group: 'Ask a teammate', accent: accent(a, a.id), face: a })),
+    ];
+  }, [mentions, team, agentName]);
+  const makerHandle = !mentions && team ? team.agents.find((a) => a.roles.includes(ROLE_MAKER) && a.id !== team.selfId)?.handle ?? null : null;
+
+  /** Closed by Escape until the text changes again. */
+  const [closed, setClosed] = useState(false);
+  const [active, setActive] = useState(0);
+
+  // What the caret is in decides the popup and the hint.
+  const commandsOn = Boolean(onCommand);
+  const useMode = commandsOn && useAt(text, caret);
+  const mention = !closed && people.length > 0 ? mentionAt(text, caret) : null;
+  const slash = !closed && commandsOn && !mention ? slashAt(text, caret) : null;
+  const mentionItems: Mentionable[] = mention
+    ? people
+      .filter((m) => !useMode || m.group !== 'Borrow')
+      .filter((m) => m.handle.toLowerCase().startsWith(mention.query.toLowerCase()) || m.name.toLowerCase().startsWith(mention.query.toLowerCase()))
+      .map((m) => (useMode ? { ...m, group: 'Talk to', effect: `Talk to ${m.name} from here on` } : m))
+      .slice(0, 8)
     : [];
-  const trackMention = (value: string, caret: number): void => {
-    if (!mentions || mentions.length === 0) { setMentionAt(null); return; }
-    const before = value.slice(0, caret);
-    const match = /(^|\s)@([\w-]*)$/.exec(before);
-    if (!match) { setMentionAt(null); return; }
-    setMentionAt({ start: caret - match[2]!.length - 1, query: match[2]! });
-    setMentionIndex(0);
-  };
-  const completeMention = (handle: string): void => {
-    if (!mentionAt) return;
-    const node = area.current;
-    const caret = node ? node.selectionStart : text.length;
-    const next = `${text.slice(0, mentionAt.start)}@${handle} ${text.slice(caret)}`;
-    setText(next);
-    if (recalled < 0) remember(next);
-    setMentionAt(null);
-    window.requestAnimationFrame(() => {
-      if (!node) return;
-      const at = mentionAt.start + handle.length + 2;
-      node.focus();
-      node.setSelectionRange(at, at);
-      resize();
-    });
-  };
+  const allCommands: CommandRow[] = useMemo(() => [...chatCommands(agentName, running), ...pluginRows(pluginCommands)], [agentName, running, pluginCommands]);
+  const commandItems = slash ? allCommands.filter((c) => c.name.startsWith(slash.query.toLowerCase())) : [];
+  const popup: 'mention' | 'slash' | null = mention && mentionItems.length > 0 ? 'mention' : slash ? 'slash' : null;
+  const items: ReadonlyArray<Mentionable | CommandRow> = popup === 'mention' ? mentionItems : popup === 'slash' ? commandItems : [];
+  const activeIndex = items.length > 0 ? Math.min(active, items.length - 1) : -1;
+  const room = usePopupRoom(box, popup !== null, phone);
 
   /*
    * Walking back through what the owner already said.
@@ -225,8 +347,9 @@ export const Composer = forwardRef<ComposerHandle, {
     stashed.current = saved;
     if (saved !== text) {
       setText(saved);
+      setCaret(saved.length);
       setRecalled(-1);
-      setMentionAt(null);
+      setNote(null);
     }
   }
 
@@ -247,16 +370,34 @@ export const Composer = forwardRef<ComposerHandle, {
     }
   };
 
+  /** Put an edit in the box: the text, the caret, the draft, and the popups opened afresh. */
+  const apply = (edit: Edit): void => {
+    setText(edit.value);
+    setCaret(edit.caret);
+    setClosed(false);
+    setActive(0);
+    if (recalled < 0) remember(edit.value);
+    const node = area.current;
+    if (node) {
+      node.value = edit.value;
+      node.setSelectionRange(edit.caret, edit.caret);
+      window.requestAnimationFrame(() => {
+        node.focus();
+        node.setSelectionRange(edit.caret, edit.caret);
+      });
+    }
+  };
+
   /** Replace what is in the box and leave the caret at the end of it. */
   const put = (next: string): void => {
     setText(next);
-    setMentionAt(null);
+    setCaret(next.length);
+    setClosed(false);
     const node = area.current;
     if (node) {
       node.value = next;
       node.setSelectionRange(next.length, next.length);
     }
-    window.requestAnimationFrame(resize);
   };
 
   /** Up only recalls from the first line; otherwise it is a caret key. */
@@ -291,9 +432,12 @@ export const Composer = forwardRef<ComposerHandle, {
    */
   const canSend = !disabled && !uploading && !filesWait && text.trim() !== '';
 
-  const take = (files: FileList | File[] | null): void => {
+  /** Upload files as they arrive; answers each one's tray key. */
+  const take = (files: FileList | File[] | null): string[] => {
+    const keys: string[] = [];
     for (const file of Array.from(files ?? [])) {
       const key = `${file.name}:${file.size}:${Math.random().toString(36).slice(2, 8)}`;
+      keys.push(key);
       const thumbnail = file.type.startsWith('image/') && typeof URL.createObjectURL === 'function'
         ? URL.createObjectURL(file)
         : null;
@@ -320,6 +464,7 @@ export const Composer = forwardRef<ComposerHandle, {
           ),
         );
     }
+    return keys;
   };
 
   const release = (attachment: PendingAttachment): void => {
@@ -338,6 +483,7 @@ export const Composer = forwardRef<ComposerHandle, {
       if (gone.state === 'ready' && gone.uploaded) void chatApi.discardAttachment(gone.uploaded.artifactId).catch(() => undefined);
     }
     setAttachments((current) => current.filter((attachment) => attachment.key !== key));
+    if (note?.kind === 'long' && note.key === key) setNote(null);
   };
 
   useImperativeHandle(ref, () => ({
@@ -362,52 +508,94 @@ export const Composer = forwardRef<ComposerHandle, {
   useEffect(() => {
     if (!draft || draft.at === lastDraft.current) return;
     lastDraft.current = draft.at;
+    const taken = text.trim() === '';
     setText((current) => (current.trim() === '' ? draft.text : current));
     // An offered line the box accepted is now this thread's draft too.
-    if (recalled < 0 && text.trim() === '') remember(draft.text);
+    if (recalled < 0 && taken) remember(draft.text);
     const node = area.current;
     if (node) {
       node.focus();
       window.requestAnimationFrame(() => {
-        node.style.height = 'auto';
-        node.style.height = `${Math.min(node.scrollHeight, 200)}px`;
         node.setSelectionRange(node.value.length, node.value.length);
+        setCaret(node.value.length);
       });
     }
   }, [draft]);
 
-  /** The field is as tall as what is in it, up to a point. */
-  const resize = (): void => {
-    const node = area.current;
-    if (!node) return;
-    node.style.height = 'auto';
-    node.style.height = `${Math.min(node.scrollHeight, 200)}px`;
+  const clearAfterSend = (): void => {
+    setRecalled(-1);
+    // Sent is not drafted: the thread's draft is dropped, here and on disk.
+    remember('');
+    setText('');
+    setCaret(0);
+    setNote(null);
+    setClosed(false);
+  };
+
+  /** One of the chat's own commands, typed whole or picked: the page runs it and the box empties. */
+  const runChatCommand = (name: ChatCommandName, arg: string): void => {
+    if (!onCommand) return;
+    if (name === 'stop' && !running) { clearAfterSend(); return; }
+    clearAfterSend();
+    onCommand(name, arg);
   };
 
   const send = (spoken?: string): void => {
     const outgoing = (spoken ?? text).trim();
     if (spoken === undefined ? !canSend : disabled || uploading || filesWait || outgoing === '') return;
+    // `/quiet 1d`, typed whole: the page runs it, nothing is sent to the agent.
+    const command = spoken === undefined && onCommand ? parseCommand(outgoing) : null;
+    if (command && isChatCommand(command.name) && attachments.length === 0) {
+      if (command.name === 'use' && command.arg === '') { apply({ value: '/use @', caret: 6 }); return; }
+      runChatCommand(command.name, command.arg.replace(/^@/, ''));
+      return;
+    }
     const ready = attachments
       .filter((attachment) => attachment.state === 'ready' && attachment.uploaded)
       .map((attachment) => attachment.uploaded as UploadedAttachment);
     onSend(outgoing, ready);
     attachments.forEach(release);
-    setRecalled(-1);
-    // Sent is not drafted: the thread's draft is dropped, here and on disk.
-    remember('');
-    setText('');
+    clearAfterSend();
     setAttachments([]);
-    window.requestAnimationFrame(resize);
+  };
+
+  const pickMention = (item: Mentionable): void => {
+    if (!mention) return;
+    if (useMode && onCommand) { runChatCommand('use', item.handle); return; }
+    apply(completeMention(text, caret, mention.start, item.handle));
+  };
+
+  /** A command picked: run it, or — when it needs words, or Tab asked for them — put it in the box to finish. */
+  const pickCommand = (row: CommandRow, forWords: boolean): void => {
+    if (row.off) return;
+    const rest = text.slice(caret);
+    if (forWords || needsWords(row)) {
+      const lead = `/${row.name} ${row.name === 'use' ? '@' : ''}`;
+      apply({ value: lead + rest.replace(/^\S*/, '').replace(/^ /, ''), caret: lead.length });
+      return;
+    }
+    if (row.source === 'chat' && isChatCommand(row.name)) { runChatCommand(row.name, ''); return; }
+    // A plugin's command is the owner's words to the agent: sent as typed.
+    const words = `/${row.name}`;
+    if (disabled || uploading || filesWait) { apply({ value: `${words} `, caret: words.length + 1 }); return; }
+    send(words);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    // With people on offer, the keys pick one before they do anything else.
-    if (mentionAt && offered.length > 0) {
-      if (event.key === 'ArrowDown') { event.preventDefault(); setMentionIndex((i) => (i + 1) % offered.length); return; }
-      if (event.key === 'ArrowUp') { event.preventDefault(); setMentionIndex((i) => (i - 1 + offered.length) % offered.length); return; }
-      if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); completeMention(offered[mentionIndex]!.handle); return; }
-      if (event.key === 'Escape') { event.preventDefault(); setMentionAt(null); return; }
+    if (event.nativeEvent.isComposing) return;
+    // With something on offer, the keys pick before they do anything else.
+    if (popup && items.length > 0) {
+      if (event.key === 'ArrowDown') { event.preventDefault(); setActive((activeIndex + 1) % items.length); return; }
+      if (event.key === 'ArrowUp') { event.preventDefault(); setActive((activeIndex - 1 + items.length) % items.length); return; }
+      if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+        event.preventDefault();
+        const item = items[activeIndex]!;
+        if (popup === 'mention') pickMention(item as Mentionable);
+        else pickCommand(item as CommandRow, event.key === 'Tab');
+        return;
+      }
     }
+    if (popup && event.key === 'Escape') { event.preventDefault(); setClosed(true); return; }
     /*
      * The shell's bargain: Up walks back through what was said, Down comes
      * forward again, and past the newest the owner gets their draft back.
@@ -438,22 +626,87 @@ export const Composer = forwardRef<ComposerHandle, {
       stopRecalling();
       return;
     }
-    // Enter sends; Shift+Enter is a newline. The usual bargain.
-    if (event.key === 'Enter' && !event.shiftKey) {
+    // Esc stops the run, as the menu's /stop row says — only from the box, and only with nothing else to close.
+    if (event.key === 'Escape' && running && onCommand) {
+      event.preventDefault();
+      onStop();
+      return;
+    }
+    const node = event.currentTarget;
+    const at = node.selectionStart ?? caret;
+    const collapsed = node.selectionStart === node.selectionEnd;
+    // Tab and Shift+Tab move a list item in and out; anywhere else Tab leaves the box, as it should.
+    if (event.key === 'Tab' && collapsed && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      const edit = indentItem(text, at, event.shiftKey);
+      if (edit) { event.preventDefault(); apply(edit); return; }
+    }
+    if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      // A list carries on; an empty item ends it.
+      const edit = collapsed ? continueList(text, at) : null;
+      if (edit) { event.preventDefault(); apply(edit); return; }
+      // Inside an open code block Enter is a new line; ⌘Enter sends.
+      if (inFence(text, at)) return;
+      event.preventDefault();
+      send();
+      return;
+    }
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       send();
     }
   };
 
   /*
-   * A pasted screenshot is a file, and the commonest one. Text pastes are left
-   * to the textarea: only a clipboard that carries files is taken here.
+   * A paste. A pasted screenshot is a file, and the commonest one. Text over
+   * 4,000 characters becomes a file at once — a log, a whole email — with
+   * "Put it in the message" to undo it. Several lines that read as code are
+   * fenced, with Undo. Anything else is left to the textarea.
    */
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
     const files = Array.from(event.clipboardData?.files ?? []);
-    if (files.length === 0) return;
-    event.preventDefault();
-    take(files);
+    if (files.length > 0) {
+      event.preventDefault();
+      take(files);
+      return;
+    }
+    const pasted = event.clipboardData?.getData('text/plain') ?? '';
+    if (pasted === '') return;
+    const node = event.currentTarget;
+    const from = node.selectionStart ?? caret;
+    const to = node.selectionEnd ?? from;
+    const base = text.slice(0, from) + text.slice(to);
+    if (pasted.length > LONG_PASTE) {
+      event.preventDefault();
+      const file = new File([pasted], 'pasted-text.txt', { type: 'text/plain' });
+      const [key] = take([file]);
+      const lines = pasted.replace(/\n$/, '').split('\n').length;
+      const detail = `${lines} ${lines === 1 ? 'line' : 'lines'} · ${Math.ceil(pasted.length / 1024)} KB`;
+      setAttachments((current) => current.map((a) => (a.key === key ? { ...a, detail } : a)));
+      if (base !== text) apply({ value: base, caret: from });
+      setNote({ kind: 'long', key: key!, text: pasted, caret: from });
+      return;
+    }
+    if (looksLikeCode(pasted) && !inFence(base, from)) {
+      event.preventDefault();
+      const lang = guessLang(pasted);
+      const edit = fencePaste(base, from, pasted, lang);
+      setNote({ kind: 'fenced', lang, block: edit.value.slice(from, edit.caret), text: pasted });
+      apply(edit);
+    }
+  };
+
+  /** The note's way out: the paste as it was. */
+  const undoNote = (): void => {
+    if (!note) return;
+    if (note.kind === 'fenced') {
+      const at = text.indexOf(note.block);
+      if (at >= 0) apply({ value: text.slice(0, at) + note.text + text.slice(at + note.block.length), caret: at + note.text.length });
+    } else {
+      remove(note.key);
+      const at = Math.min(note.caret, text.length);
+      apply({ value: text.slice(0, at) + note.text + text.slice(at), caret: at + note.text.length });
+    }
+    setNote(null);
   };
 
   const failures = attachments.filter((attachment) => attachment.state === 'failed');
@@ -478,225 +731,267 @@ export const Composer = forwardRef<ComposerHandle, {
   // The panel takes the focus when it opens (its ✓); the box gets it back when it closes.
   const wasListening = useRef(false);
   useEffect(() => {
-    if (wasListening.current && !listening) {
-      area.current?.focus();
-      window.requestAnimationFrame(resize);
-    }
+    if (wasListening.current && !listening) area.current?.focus();
     wasListening.current = listening;
   }, [listening]);
 
+  const showPopup = popup !== null && !listening && !disabled;
+
+  /*
+   * The hint line: one sentence about what the caret is in. A failed upload,
+   * a refused snap and a held file take it over; a popup has its own foot.
+   */
+  const item = listItem(text, caret);
+  const fenced = inFence(text, caret);
+  const named = mentionedHandles(text)
+    .map((handle) => people.find((p) => p.handle.toLowerCase() === handle))
+    .filter((p): p is Mentionable => Boolean(p));
+  const borrowing = makerHandle !== null && leadingMention(text)?.handle === makerHandle.toLowerCase();
+  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const effectOf = (p: Mentionable): string =>
+    p.group === 'Borrow' ? (borrowing ? `borrows ${p.name} for this message` : `${agentName} asks them`)
+      : p.group === 'In this room' ? 'is asked in this room' : `${agentName} asks them`;
+  const problem = failed > 0
+    ? (failed === 1 && failures[0]?.error ? failures[0].error : `${failed} files failed to upload and will not be sent`)
+    : snapNote ?? (filesWait ? FILES_DURING_RUN : null);
+  const hint = problem
+    ?? (running || showPopup ? null
+      : item ? 'Enter continues the list · Enter on an empty item ends it · Tab indents'
+      : fenced ? `In a code block Enter adds a line · ${mac ? '⌘' : 'Ctrl+'}Enter sends`
+      : named.length > 0 ? (
+        <>
+          <span className="cv-chip" {...named[0]!.accent}>@{named[0]!.handle}</span> {effectOf(named[0]!)}{named.length > 1 ? ` · and ${named.length - 1} more` : ''}
+        </>
+      )
+      : text !== '' ? 'Enter sends, Shift+Enter for a new line' : null);
+
+  const words = placeholder ?? (running
+    ? `${agentName} is working…`
+    : mentions ? 'Message the room · @ to ask someone'
+    : team && commandsOn ? `Message ${agentName} · @ to mention, / for commands`
+    : `Message ${agentName}`);
+  const paintPeople = useMemo(() => people.map((p) => ({ handle: p.handle, accent: p.accent })), [people]);
+  const trackCaret = (node: HTMLTextAreaElement): void => setCaret(node.selectionStart ?? node.value.length);
+
   return (
     // `data-busy`: something here a reload would lose (the shell's auto-reload waits, `shell/freshness.ts`).
-    <div className="wb-composer" data-testid="composer" data-slim={slim || undefined} data-busy={text.trim() !== '' || holdingFiles || listening ? 'true' : undefined}>
-      <div className="wb-composer-box" data-focused={focused || listening} data-disabled={disabled} data-listening={listening || undefined}>
-        {attachments.length > 0 ? (
-          <div className="wb-composer-files" role="list" aria-label="Files to send">
-            {attachments.map((attachment) => (
-              <span role="listitem" key={attachment.key}>
-                <FileTile
-                  name={attachment.filename}
-                  mime={attachment.mime}
-                  sizeBytes={attachment.sizeBytes}
-                  thumbnail={attachment.thumbnail}
-                  state={attachment.state}
-                  error={attachment.error}
-                  onRemove={() => remove(attachment.key)}
-                  {...(onOpenFile && attachment.state === 'ready' && attachment.uploaded
-                    ? { onOpen: () => onOpenFile(asBlock(attachment.uploaded as UploadedAttachment)) }
-                    : {})}
-                  size="sm"
-                />
-              </span>
-            ))}
-          </div>
+    <div className="wb-composer cv" data-testid="composer" data-slim={slim || undefined} data-phone={phone ? 'true' : undefined} data-busy={text.trim() !== '' || holdingFiles || listening ? 'true' : undefined}>
+      <div className="cv-anchor">
+        {showPopup && popup === 'mention' ? (
+          <MentionPopup id={listId} items={mentionItems} active={activeIndex} onPick={pickMention} phone={phone} maxHeight={room} />
         ) : null}
+        {showPopup && popup === 'slash' ? (
+          <CommandMenu id={listId} items={commandItems} active={activeIndex} onPick={(row) => pickCommand(row, false)} phone={phone} query={slash?.query ?? ''} maxHeight={room} />
+        ) : null}
+        <div ref={box} className="wb-composer-box cv-box" data-focused={focused || listening} data-disabled={disabled} data-listening={listening || undefined}>
+          {attachments.length > 0 ? (
+            <div className="wb-composer-files" role="list" aria-label="Files to send">
+              {attachments.map((attachment) => (
+                <span role="listitem" key={attachment.key}>
+                  <FileTile
+                    name={attachment.filename}
+                    mime={attachment.mime}
+                    sizeBytes={attachment.sizeBytes}
+                    thumbnail={attachment.thumbnail}
+                    state={attachment.state}
+                    error={attachment.error}
+                    onRemove={() => remove(attachment.key)}
+                    {...(onOpenFile && attachment.state === 'ready' && attachment.uploaded
+                      ? { onOpen: () => onOpenFile(asBlock(attachment.uploaded as UploadedAttachment)) }
+                      : {})}
+                    size="sm"
+                    detail={attachment.detail}
+                  />
+                </span>
+              ))}
+            </div>
+          ) : null}
 
-        <label className="sr-only" htmlFor={COMPOSER_INPUT_ID}>
-          Message {agentName}
-        </label>
-        <textarea
-          id={COMPOSER_INPUT_ID}
-          ref={area}
-          value={text}
-          rows={slim ? 1 : 2}
-          placeholder={running ? `${agentName} is working…` : placeholder ?? `Message ${agentName}`}
-          onChange={(event) => {
-            setText(event.target.value);
-            // While walking back through what was said, what is in the box is
-            // not the draft — the draft is what the walk stashed.
-            if (recalled < 0) remember(event.target.value);
-            trackMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
-            resize();
-          }}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          disabled={disabled}
-          hidden={listening}
-        />
+          <label className="sr-only" htmlFor={COMPOSER_INPUT_ID}>
+            Message {agentName}
+          </label>
+          <div className="cv-field" hidden={listening}>
+            <div className="cv-paint" aria-hidden="true" data-testid="composer-paint">
+              {paint(text, paintPeople)}
+              <span className="cv-tail">{ZWSP}</span>
+            </div>
+            <textarea
+              id={COMPOSER_INPUT_ID}
+              ref={area}
+              value={text}
+              rows={1}
+              spellCheck={false}
+              placeholder={words}
+              aria-controls={showPopup ? listId : undefined}
+              aria-expanded={showPopup ? true : undefined}
+              aria-autocomplete={people.length > 0 || commandsOn ? 'list' : undefined}
+              aria-activedescendant={showPopup && activeIndex >= 0 ? optionId(listId, activeIndex) : undefined}
+              onChange={(event) => {
+                setText(event.target.value);
+                trackCaret(event.target);
+                setClosed(false);
+                setActive(0);
+                // While walking back through what was said, what is in the box is
+                // not the draft — the draft is what the walk stashed.
+                if (recalled < 0) remember(event.target.value);
+              }}
+              onSelect={(event) => trackCaret(event.currentTarget)}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              disabled={disabled}
+              hidden={listening}
+            />
+          </div>
 
-        {listening ? <ListeningPanel voice={voice} /> : null}
+          {listening ? <ListeningPanel voice={voice} /> : null}
 
-        {!listening && mentionAt && offered.length > 0 ? (
-          <div className="wb-mentions" role="listbox" aria-label="Members">
-            {offered.map((m, i) => (
+          {note && !listening ? (
+            <div className="cv-note" role="status">
+              <span className="cv-note-icon"><Icon name={note.kind === 'long' ? 'pasted-doc' : 'code'} /></span>
+              <span className="cv-note-text">{note.kind === 'fenced' ? <>Pasted as code · {langName(note.lang)}</> : <>Long paste, attached as a file</>}</span>
+              <Button size="sm" variant="ghost" onClick={undoNote}>{note.kind === 'fenced' ? 'Undo' : 'Put it in the message'}</Button>
+            </div>
+          ) : null}
+
+          <div className="wb-composer-row" hidden={listening}>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              data-testid="file-input"
+              onChange={(event) => {
+                take(event.target.files);
+                event.target.value = '';
+              }}
+            />
+            <button
+              className="ui-icon-btn" data-size="sm"
+              aria-label="Attach a file"
+              title="Attach a file — or paste one, or drop it anywhere on the chat"
+              onClick={() => fileInput.current?.click()}
+              disabled={disabled}
+            >
+              <Icon name="clip" />
+            </button>
+            <MicButton disabled={disabled} voice={voice} />
+            {/* A phone has no other tabs to snap, and no room for the model: the kit draws neither there. */}
+            {phone ? null : <button
+              className="ui-icon-btn" data-size="sm"
+              aria-label="Snap a tab"
+              title="Snap a tab — one picture of another tab in this browser, attached here"
+              onClick={() => {
+                setSnapNote(null);
+                setSnapping(true);
+                snapTab()
+                  .then((file) => { if (file) { take([file]); area.current?.focus(); } })
+                  .catch((err: unknown) => setSnapNote(err instanceof Error ? err.message : String(err)))
+                  .finally(() => setSnapping(false));
+              }}
+              disabled={disabled || snapping}
+            >
+              <Icon name="camera" />
+            </button>}
+
+            {model && !phone ? (
+              setupHref ? (
+                <a className="wb-composer-model" href={setupHref} title="The model this agent runs on. Click to change it.">
+                  <span className="wb-composer-model-dot" aria-hidden="true" />
+                  {model}
+                </a>
+              ) : (
+                <span className="wb-composer-model" title="The model this agent runs on">
+                  <span className="wb-composer-model-dot" aria-hidden="true" />
+                  {model}
+                </span>
+              )
+            ) : null}
+
+            {/*
+              Thinking, switched where the owner talks rather than three clicks
+              away on a settings page. It writes the agent file through the same
+              endpoint the Agents page uses, so the two can never disagree.
+
+              A run already under way was started with the old setting, and
+              changing the file mid-flight would say something that is not true
+              of the answer being written — so it waits, and says why.
+            */}
+            {onThinking ? (
               <button
                 type="button"
-                key={m.handle}
-                role="option"
-                aria-selected={i === mentionIndex}
-                className="wb-mention"
-                data-active={i === mentionIndex || undefined}
-                onMouseDown={(event) => { event.preventDefault(); completeMention(m.handle); }}
+                className="wb-composer-think"
+                aria-pressed={thinkingOn(thinking)}
+                disabled={disabled || running}
+                title={
+                  running
+                    ? `Wait for ${agentName} to finish — this run started with thinking ${thinkingOn(thinking) ? 'on' : 'off'}`
+                    : thinkingOn(thinking)
+                      ? 'Reasoning before the answer is on. Click to turn it off — answers come back faster.'
+                      : 'Reasoning before the answer is off. Click to turn it on.'
+                }
+                onClick={() => onThinking(thinkingOn(thinking) ? 'off' : 'on')}
               >
-                <span className="wb-mention-handle">@{m.handle}</span>
-                <span className="wb-mention-name">{m.name}</span>
+                <span className="wb-composer-think-dot" aria-hidden="true" />
+                Thinking
               </button>
-            ))}
-          </div>
-        ) : null}
+            ) : null}
 
-        <div className="wb-composer-row" hidden={listening}>
-          <input
-            ref={fileInput}
-            type="file"
-            multiple
-            hidden
-            data-testid="file-input"
-            onChange={(event) => {
-              take(event.target.files);
-              event.target.value = '';
-            }}
-          />
-          <button
-            className="ui-icon-btn" data-size="sm"
-            aria-label="Attach a file"
-            title="Attach a file — or paste one, or drop it anywhere on the chat"
-            onClick={() => fileInput.current?.click()}
-            disabled={disabled}
-          >
-            <Icon name="clip" />
-          </button>
-          <MicButton disabled={disabled} voice={voice} />
-          <button
-            className="ui-icon-btn" data-size="sm"
-            aria-label="Snap a tab"
-            title="Snap a tab — one picture of another tab in this browser, attached here"
-            onClick={() => {
-              setSnapNote(null);
-              setSnapping(true);
-              snapTab()
-                .then((file) => { if (file) { take([file]); area.current?.focus(); } })
-                .catch((err: unknown) => setSnapNote(err instanceof Error ? err.message : String(err)))
-                .finally(() => setSnapping(false));
-            }}
-            disabled={disabled || snapping}
-          >
-            <Icon name="camera" />
-          </button>
+            {onReadAloud ? (
+              <button
+                type="button"
+                className="ui-icon-btn wb-read-aloud"
+                data-size="sm"
+                aria-label="Read replies aloud"
+                aria-pressed={Boolean(readAloud)}
+                title={readAloud ? 'Replies are read aloud. Click to stop.' : 'Read replies aloud, through the voice chosen in Settings → Speech'}
+                onClick={() => onReadAloud(!readAloud)}
+              >
+                <Icon name="speaker" />
+              </button>
+            ) : null}
 
-          {model ? (
-            setupHref ? (
-              <a className="wb-composer-model" href={setupHref} title="The model this agent runs on. Click to change it.">
-                <span className="wb-composer-model-dot" aria-hidden="true" />
-                {model}
-              </a>
-            ) : (
-              <span className="wb-composer-model" title="The model this agent runs on">
-                <span className="wb-composer-model-dot" aria-hidden="true" />
-                {model}
-              </span>
-            )
-          ) : null}
+            {/* The hint waits its turn: it appears only once the placeholder is
+                gone, so the two never occupy the same line. A failed upload
+                takes the line over. What the agent is doing is said in the
+                thread, where the reply will land, not here. On a phone only a
+                problem is said: the line is too short for advice. */}
+            <span
+              className="wb-hint cv-hint"
+              data-shown={Boolean(hint) && (!phone || problem !== null)}
+              data-tone={failed > 0 || snapNote !== null ? 'critical' : undefined}
+            >
+              {phone && problem === null ? null : hint}
+            </span>
 
-          {/*
-            Thinking, switched where the owner talks rather than three clicks
-            away on a settings page. It writes the agent file through the same
-            endpoint the Agents page uses, so the two can never disagree.
-
-            A run already under way was started with the old setting, and
-            changing the file mid-flight would say something that is not true
-            of the answer being written — so it waits, and says why.
-          */}
-          {onThinking ? (
+            {/* Stop keeps its meaning — it ends the run — and the send button
+                stays beside it, on the right where the primary action lives:
+                what the owner types now joins the run rather than waiting for
+                it. */}
+            {running ? (
+              <button className="ui-btn" data-variant="stop" onClick={onStop}>
+                Stop
+              </button>
+            ) : null}
             <button
-              type="button"
-              className="wb-composer-think"
-              aria-pressed={thinkingOn(thinking)}
-              disabled={disabled || running}
+              className="wb-send"
+              aria-label="Send"
               title={
-                running
-                  ? `Wait for ${agentName} to finish — this run started with thinking ${thinkingOn(thinking) ? 'on' : 'off'}`
-                  : thinkingOn(thinking)
-                    ? 'Reasoning before the answer is on. Click to turn it off — answers come back faster.'
-                    : 'Reasoning before the answer is off. Click to turn it on.'
+                filesWait
+                  ? FILES_DURING_RUN
+                  : uploading
+                    ? 'Waiting for the upload to finish'
+                    : running
+                      ? `Send — ${agentName} picks it up between steps`
+                      : 'Send'
               }
-              onClick={() => onThinking(thinkingOn(thinking) ? 'off' : 'on')}
+              onClick={() => send()}
+              disabled={!canSend}
             >
-              <span className="wb-composer-think-dot" aria-hidden="true" />
-              Thinking
+              <Icon name="send" />
             </button>
-          ) : null}
-
-          {onReadAloud ? (
-            <button
-              type="button"
-              className="ui-icon-btn wb-read-aloud"
-              data-size="sm"
-              aria-label="Read replies aloud"
-              aria-pressed={Boolean(readAloud)}
-              title={readAloud ? 'Replies are read aloud. Click to stop.' : 'Read replies aloud, through the voice chosen in Settings → Speech'}
-              onClick={() => onReadAloud(!readAloud)}
-            >
-              <Icon name="speaker" />
-            </button>
-          ) : null}
-
-          {/* The hint waits its turn: it appears only once the placeholder is
-              gone, so the two never occupy the same line. A failed upload
-              takes the line over. What the agent is doing is said in the
-              thread, where the reply will land, not here. */}
-          <span
-            className="wb-hint"
-            data-shown={(text !== '' && !running) || failed > 0 || filesWait || snapNote !== null}
-            data-tone={failed > 0 || snapNote !== null ? 'critical' : undefined}
-          >
-            {failed > 0
-              ? (failed === 1 && failures[0]?.error ? failures[0].error : `${failed} files failed to upload and will not be sent`)
-              : snapNote !== null
-                ? snapNote
-              : filesWait
-                ? FILES_DURING_RUN
-                : 'Enter sends, Shift+Enter for a new line'}
-          </span>
-
-          {/* Stop keeps its meaning — it ends the run — and the send button
-              stays beside it, on the right where the primary action lives:
-              what the owner types now joins the run rather than waiting for
-              it. */}
-          {running ? (
-            <button className="ui-btn" data-variant="stop" onClick={onStop}>
-              Stop
-            </button>
-          ) : null}
-          <button
-            className="wb-send"
-            aria-label="Send"
-            title={
-              filesWait
-                ? FILES_DURING_RUN
-                : uploading
-                  ? 'Waiting for the upload to finish'
-                  : running
-                    ? `Send — ${agentName} picks it up between steps`
-                    : 'Send'
-            }
-            onClick={() => send()}
-            disabled={!canSend}
-          >
-            <Icon name="send" />
-          </button>
+          </div>
         </div>
       </div>
     </div>
@@ -711,4 +1006,3 @@ function thinkingOn(thinking: 'on' | 'off' | null | undefined): boolean {
 function asBlock(uploaded: UploadedAttachment): AttachmentBlock {
   return { type: 'attachment', artifactId: uploaded.artifactId, filename: uploaded.filename, mime: uploaded.mime, kind: uploaded.kind, sizeBytes: uploaded.sizeBytes };
 }
-

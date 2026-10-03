@@ -220,6 +220,41 @@ the agent works: what you send joins the run (see
   setup to change it;
 - **Thinking** turns the agent's reasoning before the answer on or off.
 
+**Writing in the composer.** What you type is plain Markdown, and it is what
+is sent; the box styles it as you type without changing a letter's place:
+`inline code` and fenced blocks are tinted in the code colour (a block names
+its language on the right), **bold** and *italic* are drawn as such, headings
+are darker, links are underlined, list markers are coloured. Monospace and
+heading sizes appear in the sent message, where the Markdown is rendered.
+
+- **@** opens a list of who you can name, with their faces, filtered as you
+  type; **↑ ↓** choose, **Enter** or **Tab** completes, **Escape** closes. A
+  completed name is drawn as a chip and the line under the box says what it
+  does. In a one-to-one chat, `@father` at the start borrows Agent Father for
+  that message (his answer is in his own chat, which opens); any other
+  teammate you name is asked by the agent you are talking to, when it may
+  hand work to colleagues, or it tells you it cannot and suggests `/use`. In
+  a group, `@` offers the members.
+- **/** at the very start of the message opens the commands: **/use** `@agent`
+  switches to another agent, **/new** opens Agent Father with what the new
+  agent is for, **/stop** stops the run (so does **Escape** in the box),
+  **/quiet** `1d`, `1w` or `off` pauses messages from agents (seven days by
+  default). Under them are the commands your plugins add (a plugin manifest's
+  `commands`: name, description, words); choosing one sends it to the agent,
+  which is told what it is for. **Enter** runs the chosen command, **Tab** puts
+  it in the box for you to add words; a name nothing matches is sent as text.
+- **Lists** carry on: **Enter** after `- `, `* ` or `1. ` starts the next item
+  (numbered on), **Enter** on an empty item ends the list, **Tab** and
+  **Shift+Tab** indent and outdent.
+- **Code blocks**: inside an open ` ``` ` block **Enter** adds a line and
+  **⌘Enter** (**Ctrl+Enter**) sends.
+- **Pasting**: several lines that read as code are fenced for you, with
+  **Undo**; anything over 4,000 characters becomes a file at once
+  (`pasted-text.txt`, with its line count), with **Put it in the message**.
+
+On a phone the lists rise above the box, and so above the keyboard; rows are a
+finger tall and the key hints are left out.
+
 **Talking to buddi.** With the speech plugin set up on Settings → Speech,
 the **microphone** beside the paperclip turns what you say into text: hold it
 and let go, or click once to start and again to stop; a red dot follows your
@@ -630,7 +665,7 @@ Notifications → Recent. See [Notifications](notifications.md).
   corner chat from anywhere, and **Escape** closes it.
 - **Up** in an empty composer brings back what you sent before; **Down** and
   **Escape** go back to your draft.
-- In a group chat, `@` offers the members; **Enter** or **Tab** picks one.
+- In the composer, `@` offers who you can name and `/` at the start the commands; **Enter** or **Tab** picks one, **Escape** closes (see [Writing in the composer](#chat)).
 - **Delete** closes the selected canvas tab.
 - In the Settings list, the arrow keys, **Home** and **End** move between
   sections.

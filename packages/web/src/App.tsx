@@ -10,6 +10,7 @@
  * Routing is the URL hash, so there are no server routes and a reload lands
  * where the owner was.
  */
+import { setPluginCommands } from './chat/commands';
 import * as Toast from '@radix-ui/react-toast';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -275,6 +276,7 @@ export function App(): JSX.Element {
         .then((list) => {
           if (cancelled) return;
           setAgents(list.agents);
+          setPluginCommands(list.commands);
           rememberDefaultAgent(list.defaultAgentId ?? null);
           setDefaultAgentId(list.defaultAgentId ?? null);
           setAgentId((current) => current ?? list.defaultAgentId ?? list.agents[0]?.id ?? null);

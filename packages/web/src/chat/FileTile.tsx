@@ -18,6 +18,7 @@ export function FileTile({
   onOpen,
   onRemove,
   size = 'md',
+  detail,
 }: {
   name: string;
   mime: string;
@@ -29,9 +30,11 @@ export function FileTile({
   onOpen?: () => void;
   onRemove?: () => void;
   size?: 'sm' | 'md';
+  /** What the second line says instead of the family and size ("312 lines · 14 KB" for a long paste). */
+  detail?: string | undefined;
 }): JSX.Element {
   const family = familyOf(mime, name);
-  const meta = [FAMILY_LABEL[family], formatBytes(sizeBytes)].filter(Boolean).join(' · ');
+  const meta = detail ?? [FAMILY_LABEL[family], formatBytes(sizeBytes)].filter(Boolean).join(' · ');
   const body = (
     <>
       <span className="wb-file-visual" data-family={family}>

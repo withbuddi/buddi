@@ -106,6 +106,7 @@ import { approvalResumeContext, ownerRequestContext, type ApprovalResumption } f
 import type { Pool } from 'pg';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 import { ROLE_FRONT_DESK, ROLE_MAKER } from '../agents/roles.js';
+import { composerTurnNote, pluginCommands } from './composer.js';
 import { listRecentConversations } from '../chat/conversations.js';
 import {
   OFFER_POLICY_SUFFIX,
@@ -2091,6 +2092,13 @@ export class WebChat {
       if (await shouldStartFirstRun(deps.pool, WEB_CHAT_SURFACE)) systemSuffix = FIRST_RUN_SUFFIX;
     } catch (err) {
       this.#log(`web chat: onboarding state unavailable: ${message(err)}`);
+    }
+    // The composer's words (docs/dashboard.md, The composer): a teammate named
+    // with `@handle`, a plugin's `/command`. Told, never routed — the agent
+    // decides, with the tools it holds.
+    if (!turn.group && !turn.delegated && !turn.opening && !turn.offer && !turn.resume) {
+      const note = composerTurnNote({ agent, text: turn.text, catalog: deps.catalog, commands: pluginCommands(deps.registry) });
+      if (note) systemSuffix = systemSuffix ? `${systemSuffix}\n\n${note}` : note;
     }
 
     // Files ride with exactly one message, the way a Telegram caption rides

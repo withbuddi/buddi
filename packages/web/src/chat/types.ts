@@ -61,6 +61,16 @@ export interface ChatAgent {
 export interface AgentsResponse {
   agents: ChatAgent[];
   defaultAgentId: string;
+  /** What the installed plugins add to the composer's `/` menu. Absent from an older gateway. */
+  commands?: PluginCommandView[];
+}
+
+/** One plugin's command in the composer's `/` menu. */
+export interface PluginCommandView {
+  plugin: string;
+  name: string;
+  description: string;
+  args?: string;
 }
 
 export type ChatBlock =

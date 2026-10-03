@@ -763,6 +763,22 @@ export interface CarryOverContributor {
   lines(request: CarryOverRequest, ctx: ToolContext): Promise<string[]>;
 }
 
+/**
+ * A slash command a plugin adds to the dashboard composer's `/` menu
+ * (docs/dashboard.md, The composer). Data only: choosing it sends the owner's
+ * `/name words` to the agent they are talking to, and that run is told which
+ * plugin the command is from and what it is for. Nothing of the plugin runs
+ * in the page.
+ */
+export interface PluginCommand {
+  /** Lower-case, as typed after the slash: `edition`. At most 32 characters. */
+  name: string;
+  /** One line for the menu: "Today's edition, now". At most 120 characters. */
+  description: string;
+  /** The words it takes, shown after the name: `<who>` (required) or `[when]`. */
+  args?: string;
+}
+
 export interface PluginManifest {
   /** Plugin family name, e.g. 'finance'. */
   name: string;
@@ -936,4 +952,10 @@ export interface PluginManifest {
    * learn its directory before any context exists. Nothing is awaited.
    */
   register?(host: RegisterHost): void;
+  /**
+   * Commands this plugin adds to the dashboard composer's `/` menu (optional).
+   * Read off the manifest when the page asks; a name clashing with one of the
+   * chat's own (`use`, `new`, `stop`, `quiet`) or malformed is left out.
+   */
+  commands?: PluginCommand[];
 }

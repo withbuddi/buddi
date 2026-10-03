@@ -2956,6 +2956,8 @@ export const api = {
    * taken in its own conversation runs there, as a turn they can watch, and
    * anything else goes on the queue exactly as it did.
    */
+  /** `/quiet` from the composer; answers the sentence to show. */
+  quiet: (arg: string) => post<{ text: string }>('/quiet', { arg }),
   takeOffer: (id: string, conversationId?: string) =>
     post<{ id: string; label: string; jobId: string | null; conversationId?: string; runId?: string; agentId?: string }>(
       `/offers/${encodeURIComponent(id)}/take`,

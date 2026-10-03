@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-294 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+295 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -748,7 +748,8 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
-| GET | `/api/chat/agents` | The agents a chat can be with, with their pictures. | yes |
+| GET | `/api/chat/agents` | The agents a chat can be with, with their pictures, and the commands plugins add to the composer. | yes |
+| POST | `/api/quiet` | `/quiet` from the composer: no proactive messages for a while (7 days by default), or `off`. | yes |
 | GET | `/api/chat/attention` | Which agents are waiting on the owner, and why. | yes |
 | GET | `/api/chat/attention/stream` | Server-sent events: one empty frame whenever /api/chat/attention would answer differently. | yes |
 | GET | `/api/chat/views` | How installed plugins want their tool output drawn. | yes |
@@ -766,14 +767,27 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/chat/agents`
 
-The agents a chat can be with, with their pictures.
+The agents a chat can be with, with their pictures, and the commands plugins add to the composer.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ agents: Array<{ id, name, handle, avatar, … }>, default: string }`
+- **Answer:** `{ agents: Array<{ id, name, handle, avatar, … }>, default: string, commands: Array<{ plugin, name, description, args? }> }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/agents"
+```
+
+#### `POST /api/quiet`
+
+`/quiet` from the composer: no proactive messages for a while (7 days by default), or `off`.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ arg?: "" | "1d" | "1w" | "off" }`
+- **Answer:** `{ text }  // the sentence to show, the same one Telegram and the terminal say`
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/quiet"
 ```
 
 #### `GET /api/chat/attention`

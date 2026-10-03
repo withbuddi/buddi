@@ -14,7 +14,9 @@
  * knowing a canvas exists. Properties and the live host-browser session are
  * trusted platform panels beside those results, not agent-authored views.
  */
-import { takeDraft } from './draft';
+import { leaveDraft, takeDraft } from './draft';
+import type { ChatCommandName } from './commands';
+import { leadingMention } from './composer-text';
 import { effectiveProviderKind, thinkingIsHonoured } from '../shell/thinking';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
@@ -35,7 +37,7 @@ import { agentRoute, catalogueInstallRoute, chatRoute, settingsRoute } from '../
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import { AgentAvatar, FaceMark, GradientField, Icon } from '../ui';
-import { cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
+import { ROLE_MAKER, cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
 import { QuestionPicker } from './QuestionPicker';
@@ -797,6 +799,20 @@ export function ChatPage({
 
   const send = (text: string, attachments: UploadedAttachment[]): void => {
     if (!agentId) return;
+    /*
+     * `@father …` at the start of a one-to-one message: Agent Father is
+     * borrowed for this one message, the way the terminal and Telegram do it —
+     * his own turn in his own thread, which the page follows so his answer and
+     * any approval it asks for are in front of the owner.
+     */
+    const borrowed = group ? null : borrowedMaker(text, everyone, agentId);
+    if (borrowed) {
+      setError(null);
+      chatApi.send(borrowed.agent.id, { text: borrowed.rest, attachmentIds: attachments.map((file) => file.artifactId) })
+        .then((result) => { window.location.hash = chatRoute(borrowed.agent.id, result.conversationId); })
+        .catch((err: unknown) => setError(message(err)));
+      return;
+    }
     const attachmentIds = attachments.map((file) => file.artifactId);
     /*
      * Said while the agent is working: it goes into the run that is going,
@@ -970,6 +986,34 @@ export function ChatPage({
         setRunning(false);
         setLive([]);
       });
+  };
+
+  /*
+   * The composer's own commands (docs/dashboard.md, The composer). Each is a
+   * thing the page already does: switch agent, open Agent Father with the
+   * words, stop the run, or `/quiet` — answered in the words Telegram uses.
+   */
+  const runCommand = (name: ChatCommandName, arg: string): void => {
+    setError(null);
+    if (name === 'stop') { stop(); return; }
+    if (name === 'use') {
+      const wanted = arg.replace(/^@/, '').toLowerCase();
+      const target = everyone.find((a) => a.handle.toLowerCase() === wanted || a.id === wanted);
+      if (!target) { setNotice(wanted ? `No agent called @${wanted}.` : 'Say who: /use @handle.'); return; }
+      setNotice(null);
+      onSelectAgent(target.id);
+      return;
+    }
+    if (name === 'new') {
+      const maker = everyone.find((a) => a.roles.includes(ROLE_MAKER));
+      if (!maker) { setNotice('There is no agent here that makes agents.'); return; }
+      if (arg.trim()) leaveDraft(maker.id, `I'd like a teammate for this: ${arg.trim()}`);
+      onSelectAgent(maker.id);
+      return;
+    }
+    api.quiet(arg)
+      .then((answer) => setNotice(answer.text))
+      .catch((err: unknown) => setError(message(err)));
   };
 
   const startNew = useCallback(() => {
@@ -1461,7 +1505,10 @@ export function ChatPage({
             setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup', 'brain') : null)}
             thinking={thinking}
             {...(!group && agent && thinkingIsHonoured(effectiveProviderKind(agent, providerAccounts.data)) ? { onThinking: switchThinking } : {})}
-            {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}
+            {...(group
+              ? { mentions: members.map((m) => ({ id: m.id, handle: m.handle, name: m.name })), team: { agents: everyone, selfId: '' } }
+              : agentId ? { team: { agents: everyone, selfId: agentId } } : {})}
+            onCommand={runCommand}
             onOpenFile={openFile}
             conversationId={conversationId ?? null}
             readAloud={readAloud}
@@ -1729,4 +1776,16 @@ export async function speakReply(
 /** For tests: forget that the note was said. */
 export function resetVoiceNote(): void {
   voiceNoted = false;
+}
+
+/**
+ * `@father …` leading a one-to-one message, when the agent here is not the
+ * maker: who is borrowed and what they are asked. Null for any other message.
+ */
+export function borrowedMaker(text: string, agents: readonly ChatAgent[], selfId: string): { agent: ChatAgent; rest: string } | null {
+  const lead = leadingMention(text);
+  if (!lead || lead.rest === '') return null;
+  const maker = agents.find((a) => a.roles.includes(ROLE_MAKER));
+  if (!maker || maker.id === selfId || maker.handle.toLowerCase() !== lead.handle) return null;
+  return { agent: maker, rest: lead.rest };
 }

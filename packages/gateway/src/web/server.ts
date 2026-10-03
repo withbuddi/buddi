@@ -295,6 +295,8 @@ import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
 import { LOCKED_BODY, LockUnavailable, allowedWhileLocked, clientOf, createLock } from './lock.js';
 import { matchApiRoute, TOKEN_REFUSALS } from './api-routes.js';
+import { QUIET_UNAVAILABLE_TEXT, pluginCommands } from './composer.js';
+import { createEngagementHooks } from '../missions/engagement.js';
 import { apiTokensRoute, bearerOf, verifyApiToken, type ApiTokenView } from './api-tokens.js';
 import { LockImageRefusal, MAX_LOCK_IMAGE_BYTES, normaliseLockImage } from './lock-image.js';
 import {
@@ -1468,6 +1470,20 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, answer.status, answer.body);
     }
 
+    // `/quiet` typed into the composer: the verb Telegram and the terminal answer, in their words (missions/engagement.ts).
+    if (path === '/api/quiet' && method === 'POST') {
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, { error: 'request body must be JSON' });
+      }
+      const raw = (body as { arg?: unknown } | null)?.arg;
+      const arg = typeof raw === 'string' ? raw.trim().slice(0, 40) : '';
+      const text = await createEngagementHooks({ pool: deps.pool, now: deps.now, timezone: deps.timezone, unavailableText: QUIET_UNAVAILABLE_TEXT }).quiet(arg);
+      return sendJson(res, 200, { text });
+    }
+
     // Home's widgets: the gallery, the owner's layout, each placed one's body (web/widgets.ts).
     if (path === '/api/widgets' || path.startsWith('/api/widgets/')) {
       let body: unknown = {};
@@ -1840,7 +1856,8 @@ export function createWebApp(deps: WebServerDeps): Server {
             await readSentinels(deps.pool, deps.registry, deps.now()),
           );
         case '/api/chat/agents':
-          return sendJson(res, 200, readChatAgents(deps.catalog, await avatarVersions(deps.pool)));
+          // With the commands the plugins add to the composer's `/` menu (web/composer.ts).
+          return sendJson(res, 200, { ...readChatAgents(deps.catalog, await avatarVersions(deps.pool)), commands: pluginCommands(deps.registry) });
         // Which agents are waiting on the owner. One small query, and the only
         // definition of "waiting" in the installation — see attention.ts.
         case '/api/chat/attention':

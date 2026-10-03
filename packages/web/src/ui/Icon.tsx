@@ -152,6 +152,9 @@ const GLYPHS = {
   'shape-envelope': [16, 1.4, <path d="M2.2 4h11.6v8H2.2zM2.2 4.4 8 8.8l5.8-4.4" />],
   // A crescent: a focus is on (the owner's face on the rail).
   moon: [16, 1.5, <path d="M12.9 9.7A5.3 5.3 0 0 1 6.3 3.1a5.3 5.3 0 1 0 6.6 6.6z" />],
+  // The composer's paste note: code fenced, or a long paste made a file.
+  code: [16, 1.6, <path d="M5.8 4.6L2.4 8l3.4 3.4M10.2 4.6L13.6 8l-3.4 3.4" />],
+  'pasted-doc': [16, 1.5, <><path d="M4 2.5h5.2L12 5.3v8.2H4z" /><path d="M9 2.5v3h3M6 8.5h4M6 10.8h4" /></>],
   'shape-structured': [16, 1.4, <path d="M4 2.6h8v10.8H4zM6.2 5.6h3.6M6.2 8h3.6M6.2 10.4h2.2" />],
 } satisfies Record<string, Glyph>;
 
