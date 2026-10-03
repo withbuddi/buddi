@@ -96,7 +96,7 @@ ignored and `buddi doctor` warns until you delete them.
 The menu shows these to paired chats only; `/use` names the active agent.
 
 Asking for a web page from the phone works best when the agents have a
-browser of their own (Settings → Computer & browser, "the agents' own
+browser of their own (Settings → Where agents may look, "buddi's own
 browser"): it never hands a page back to you. In your own Chrome through the
 extension, a slow page makes the agent wait and look again; control pauses
 only when the tab closes or the page fails to answer three times in a row,

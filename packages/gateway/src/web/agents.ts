@@ -66,6 +66,8 @@ export interface AgentEngineView {
   thinking: 'on' | 'off' | null;
   /** Idle time before a fresh conversation, as the file says it; `3h` when absent. */
   idleRollover: IdleRollover;
+  /** Where it may look (`browser:` in agent.md); `auto` when the file leaves it to the runtime. */
+  browser: 'auto' | 'own' | 'chrome' | 'apps';
   credentialKind: string;
   credentialEnv: string;
   available: boolean;
@@ -122,6 +124,15 @@ function idleRolloverOnDisk(agent: CatalogAgent): IdleRollover {
   }
 }
 
+/** The agent's browser pin on disk, the file winning over the loaded catalog. */
+function browserOnDisk(agent: CatalogAgent): AgentEngineView['browser'] {
+  try {
+    return parseAgentFile(readFileSync(agent.file, 'utf8'), { file: agent.file }).frontmatter.browser ?? 'auto';
+  } catch {
+    return agent.browserRoute ?? 'auto';
+  }
+}
+
 /** Whether the file leaves `maxTurns` to the built-in default. */
 function maxTurnsUnsetOnDisk(agent: CatalogAgent): boolean {
   try {
@@ -138,6 +149,7 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
     maxTurnsIsDefault: maxTurnsUnsetOnDisk(agent), defaultMaxTurns: DEFAULT_MAX_TURNS,
     thinking: thinkingOnDisk(agent),
     idleRollover: idleRolloverOnDisk(agent),
+    browser: browserOnDisk(agent),
     credentialKind: agent.provider.credential.kind, credentialEnv: agent.provider.accountId || 'No account selected',
     available: agent.available, unavailableReason: agent.unavailableReason,
     ...(agent.heldBack === undefined ? {} : { heldBack: agent.heldBack }),
@@ -190,6 +202,7 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
     language,
     thinking: thinkingOnDisk(agent),
     idleRollover: idleRolloverOnDisk(agent),
+    browser: browserOnDisk(agent),
     credentialKind,
     credentialEnv,
     /*
@@ -252,8 +265,16 @@ export function engineChangeFromBody(body: Record<string, unknown>): EnginePatch
     change.idleRollover = body.idleRollover;
   }
 
+  // Where it may look: `auto` (or null) removes the key, and the runtime chooses.
+  if (body.browser !== undefined) {
+    if (body.browser !== null && !['auto', 'own', 'chrome', 'apps'].includes(body.browser as string)) {
+      return '`browser` must be one of: auto, own, chrome, apps, or null';
+    }
+    change.browser = body.browser === null || body.browser === 'auto' ? null : body.browser as 'own' | 'chrome' | 'apps';
+  }
+
   if (Object.keys(change).length === 0) {
-    return 'nothing to change (send provider, model, maxTurns, language, thinking or idleRollover)';
+    return 'nothing to change (send provider, model, maxTurns, language, thinking, idleRollover or browser)';
   }
   return change;
 }

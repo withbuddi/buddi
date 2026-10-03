@@ -28,7 +28,7 @@ import type { InlineKeyboardMarkup, TelegramApi } from './api.js';
 export const BROWSER_ACT = 'browser.act';
 
 /** The button under the photo, and the one thing it is for. */
-export const TAKE_OVER_LABEL = 'Take over';
+export const TAKE_OVER_LABEL = 'Take over \u2197';
 
 /**
  * The line that saves a tap on a dead link.
@@ -140,6 +140,12 @@ export function stepCaption(input: {
   ].filter(Boolean).join('\n');
 }
 
+/** The words under the one photo: the card's title and line, and where the link opens when it is loopback. */
+export function cardCaption(card: NonNullable<BrowserStatus['needsOwner']>, loopback: boolean): string {
+  const words = card.title !== undefined && card.line !== undefined ? `${card.title}\n${card.line}` : card.question;
+  return [words, loopback ? LOOPBACK_CAPTION : ''].filter(Boolean).join('\n');
+}
+
 export function takeOverKeyboard(url: string): InlineKeyboardMarkup {
   return { inline_keyboard: [[{ text: TAKE_OVER_LABEL, url }]] };
 }
@@ -221,16 +227,9 @@ export class BrowserPhotos {
     // is worse than a step the owner has to read about in words.
     this.#sent.set(conversationId, page.id);
     await this.deps.api.sendPhoto(input.chatId, bytes, {
-      caption: [
-        status.needsOwner.question,
-        stepCaption({
-          ...(page.title ? { title: page.title } : {}),
-          url: page.url,
-          call: this.#calls.get(conversationId) ?? { ...(status.lastAction ? { action: status.lastAction } : {}) },
-          ...(input.error ? { error: input.error } : {}),
-          loopback: link.loopback,
-        }),
-      ].join('\n'),
+      // The card's own words, as the kit draws the photo: its title, then
+      // why and what happens next. No page title, no step, no count.
+      caption: cardCaption(status.needsOwner, link.loopback),
       // The extension captures PNG through the debugger; the other two encode JPEG.
       ...(status.route === 'chrome'
         ? { contentType: 'image/png', filename: 'screen.png' }
@@ -270,7 +269,7 @@ export function browserStatusText(status: BrowserStatus): string {
   lines.push(status.session
     ? `${status.session.agentId} is looking at a page${where}${status.state === 'paused' ? ' (you have it)' : ''}, for “${status.session.task.slice(0, 200)}”.`
     : 'No agent is looking at a page. Ask an agent granted browser.* to look at a website.');
-  if (status.needsOwner) lines.push(`Waiting for you: ${status.needsOwner.question}`);
+  if (status.needsOwner) lines.push(`Waiting for you: ${status.needsOwner.title ?? status.needsOwner.question}`);
   if (status.page?.url) lines.push(`Last seen: ${status.page.url}`);
   if (status.message) lines.push(status.message);
   lines.push(BROWSER_COMMAND_HELP);

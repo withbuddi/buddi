@@ -50,6 +50,8 @@ const ALLOWED_LITERALS = [
   'https://unsplash.com/@actionvance', 'https://unsplash.com/photos/outer-space-photography-of-earth-',
   // The extension's Chrome Web Store page: a link the owner follows, never fetched.
   'https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah',
+  // Cloudflare's API-token page, from Sign in from elsewhere: a link the owner follows, never fetched.
+  'https://dash.cloudflare.com/profile/api-tokens',
 ];
 
 function externalUrls(text: string): string[] {

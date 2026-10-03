@@ -54,7 +54,8 @@ export function conversationBrowser(
   if (!session || !agentId || !conversationId || session.agentId !== agentId || session.conversationId !== conversationId) return null;
   return {
     id: `host-browser:${session.id}`,
-    title: status.mode === 'computer' ? 'Computer' : 'Browser', tool: 'Host browser', renderer: 'browser', source: 'browser',
+    // One tab, called Page, whichever route the agent looks through (docs/browser.md).
+    title: 'Page', tool: 'Page', renderer: 'browser', source: 'browser',
     // A session being driven right now holds the strip: it is the one thing
     // on this canvas that is still moving.
     pinned: true,
@@ -71,8 +72,18 @@ export function conversationBrowser(
  * gateway has said which mode this is, and a computer session that ended must
  * not be remembered as a browser.
  */
-export function endedBrowser(tab: Renderable, mode: BrowserStatus['mode']): Renderable {
-  return { ...tab, title: `${mode === 'computer' ? 'Computer' : 'Browser'} (ended)`, pinned: false };
+export function endedBrowser(tab: Renderable, _mode?: BrowserStatus['mode']): Renderable {
+  return { ...tab, title: 'Page', pinned: false };
+}
+
+/**
+ * The Page tab while agents' browsing is paused and this conversation asked
+ * for a page: no session, but the tab says so with Resume (the kit's paused
+ * Canvas). Only while the conversation holds the Stop's card.
+ */
+export function pausedBrowser(status: BrowserStatus | undefined, conversationId: string | null, asking: boolean): Renderable | null {
+  if (!status?.stop || !conversationId || !asking) return null;
+  return { id: `host-browser:paused:${conversationId}`, title: 'Page', tool: 'Page', renderer: 'browser', source: 'browser', pinned: true, props: {}, at: null, substantial: false };
 }
 
 /** Every step this conversation took on the screen, oldest first. */

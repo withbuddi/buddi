@@ -74,6 +74,7 @@ export function Canvas({
   agentName,
   maxTabs,
   browserPanel,
+  browserMenu,
   agents,
   onClose,
   loading = false,
@@ -100,6 +101,8 @@ export function Canvas({
   maxTabs?: number;
   /** Live host state supplied by the page, never by tool-result props. */
   browserPanel?: ReactNode;
+  /** The Page tab's overflow (Stop agents' browsing, Show the window, the full page view), at the strip's end while it is in front. */
+  browserMenu?: ReactNode;
   /**
    * The roster, for the one panel that draws another agent: a delegation.
    * Supplied by the page — a name and a face are the page's to give, never a
@@ -159,6 +162,7 @@ export function Canvas({
             ))}
           </Tabs.List>
           <MoreTabs items={hidden} onActivate={onActivate} timezone={timezone} />
+          {browserMenu && renderables.find((item) => item.id === active)?.source === 'browser' ? <span className="wb-canvas-menu">{browserMenu}</span> : null}
         </div>
         {renderables.map((item) => (
           <Tabs.Content
@@ -167,9 +171,11 @@ export function Canvas({
             className="wb-canvas-body"
             data-renderer={item.source === 'descriptor' && item.renderer === 'preview' ? 'preview' : undefined}
             data-dense={DENSE.has(item.renderer) ? 'true' : undefined}
+            data-page={item.source === 'browser' ? 'true' : undefined}
           >
-            <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
-              {item.source !== 'browser' && item.source !== 'files' && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
+            {/* The Page tab draws on the canvas's ground, as the kit does: no panel around it. */}
+            {item.source === 'browser' ? browserPanel : <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
+              {item.source !== 'files' && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
                 <h2 className="ui-panel-title">{item.title}</h2>
                 <span className="ui-panel-tool mono">{item.source === 'sources' ? sourcesSummary(item.props as SourcesPanelProps) : item.tool}</span>
               </header> : null}
@@ -181,7 +187,7 @@ export function Canvas({
                 not be able to ask for it and fill it with whatever it likes.
                 Its source is set here, in the page, and nowhere else.
               */}
-              {item.source === 'browser' ? browserPanel : item.source === 'profile' ? (
+              {item.source === 'profile' ? (
                 <Profile
                   {...(item.props as ProfileProps)}
                   {...(onChangeAgent ? { onChange: onChangeAgent } : {})}
@@ -204,7 +210,7 @@ export function Canvas({
                   onDecided={onDecided}
                 />
               )}
-            </section>
+            </section>}
           </Tabs.Content>
         ))}
       </Tabs.Root>

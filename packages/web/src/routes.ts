@@ -298,6 +298,10 @@ export function parseConnectionRoute(hash: string): string | null {
   return settingsParam(hash, 'connections', 'connection');
 }
 
+/** Settings → Where agents may look. `#/browser`, the full page view, lands here too. */
+export const LOOKING_ROUTE = settingsRoute('computer');
+
+
 /**
  * Settings → Keys and secrets with one secret's Replace value open:
  * `#/settings/secrets?secret=<name>`. Where a secret's value is given
@@ -427,7 +431,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'memory', label: 'Memory', group: 'you' },
   { id: 'proposals', label: 'Proposals', group: 'you' },
   { id: 'accounts', label: 'Model accounts', group: 'access' },
-  { id: 'computer', label: 'Computer & browser', group: 'access' },
+  { id: 'computer', label: 'Where agents may look', group: 'access' },
   { id: 'secrets', label: 'Keys and secrets', group: 'access' },
   { id: 'connections', label: 'Connections', group: 'access' },
   { id: 'lock', label: 'Lock screen', group: 'access' },

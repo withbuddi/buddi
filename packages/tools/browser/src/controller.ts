@@ -12,7 +12,7 @@ import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngi
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
 import { applySettingsChange, migrateSettings, PIN_VALUES, settingsSchema, type ControlSettings, type RouteKind, type RoutePin } from './settings.js';
-import { agoText, cardAnswer, chooseRoute, detectWall, ownerCard, RouteProviderDriver, routeNote, siteListed, siteOf, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
+import { agoText, cardAnswer, ownerClock, chooseRoute, detectWall, ownerCard, RouteProviderDriver, routeNote, siteListed, siteOf, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
 import { BrowserTelemetry, missionMark, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
 import { canonicalOrigin, fieldBoundTo } from './secrets.js';
 
@@ -502,7 +502,10 @@ export class HostController implements BrowserController {
     const stop = this.#activeStop();
     if (stop && command.action !== 'close') {
       this.telemetry.stop('owner-stop', { route: 'own', agent: ctx.agentId, ...missionMark(ctx), ...(ctx.surface?.id ? { surface: ctx.surface.id } : {}) });
-      const card = ownerCard('stopped', { stoppedAgo: agoText(this.#now() - stop.at), ...(stop.until !== undefined ? { until: new Date(stop.until).toISOString().slice(11, 16) + ' UTC' } : {}) });
+      // The core context carries the owner's zone; the plugin type does not name it.
+      const clock = (at: number) => ownerClock(at, (ctx as { timezone?: string }).timezone);
+      const wanted = command.action === 'navigate' ? siteOf(command.url) : undefined;
+      const card = ownerCard('stopped', { since: clock(stop.at), stoppedAgo: agoText(this.#now() - stop.at), ...(stop.until !== undefined ? { until: clock(stop.until) } : {}), ...(wanted ? { site: wanted } : {}) });
       this.#stopCards.set(ctx.conversationId, card);
       // The owner's own Stop is not a moment to park a mission on: it says so and ends.
       if (!unattended) this.#ask(ctx, card);
@@ -628,7 +631,7 @@ export class HostController implements BrowserController {
     // A mission's sign-in is one of the four moments too: the card parks the run until the owner answers (Take over, or a saved login).
     this.telemetry.stop('sign-in', { route, agent: ctx.agentId!, ...missionMark(ctx), ...(site ? { host: site } : {}) });
     const card = child.park(wall === 'code' ? 'code' : 'sign-in', { chrome: route === 'chrome' ? 'none' : chromeUsable ? 'usable' : allowed.chrome && !available.chrome ? 'offline' : 'none', storedLogin: false });
-    return { result: { ...observation, completed: false, needsOwner: card, message: `${card.question} Say that in one sentence and stop; the card has Take over. You continue when the owner gives the page back.` }, route, choice };
+    return { result: { ...observation, completed: false, needsOwner: card, message: `${card.title}. Say that in one sentence and stop; the card has Take over. You continue when the owner gives the page back.` }, route, choice };
   }
 
   #annotate(result: unknown, route: RouteKind, choice: RouteChoice, ctx: ToolContext, appName?: string): unknown {

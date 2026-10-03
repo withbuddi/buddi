@@ -300,8 +300,9 @@ menu rises from the bottom as a sheet, with Cancel under it.
 
 **The canvas** holds the last few things the conversation produced, as tabs:
 tables, charts, diffs, terminal output, pictures, documents and previews, the
-agent's workspace files, and a **Browser** tab while an agent drives a browser
-(see [Computer and browser control](browser.md)). A decision waiting to be made
+agent's workspace files, and a **Page** tab while an agent looks at a page
+(see [the browser](browser.md#on-the-dashboard)): who looks where in one quiet
+line, the live picture, Stop and Take over. A decision waiting to be made
 stays on the tab strip. On a small screen, the **Canvas** button opens it.
 
 Every web page an agent reads and every web search it runs in one turn share a
@@ -512,8 +513,13 @@ A list of sections in four groups.
   [memory.md](memory.md#people)), then Preferences and Notes.
 - **Proposals**: what the agents learned, to keep or discard.
 - **Model accounts**: the credentials the agents run on.
-- **Computer & browser**: whether agents may act on this Mac, which apps, and
-  which browser.
+- **Where agents may look**: one row per route — buddi's own browser (its
+  health and the one fix), your Chrome (a switch once paired; Add to Chrome,
+  the pairing code, Pair again; the sites that need your sign-in), your apps
+  when something provides them (Settings › for the helper, macOS permissions
+  and the allowed apps) — and Advanced: the first choice for every agent, the
+  agents with their own rule, how long Stop lasts, pages at once, the window.
+  See [the browser](browser.md#on-the-dashboard).
 - **Keys and secrets**: your vault, in groups — your own secrets, mailbox
   passwords, each plugin's (calendar links), model accounts and connections
   (those two read-only, linked to where they are managed). Each row says in

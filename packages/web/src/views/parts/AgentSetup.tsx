@@ -21,10 +21,11 @@
  */
 import { THINKING_UP_TO_MODEL, effectiveProviderKind, thinkingIsHonoured } from '../../shell/thinking';
 import { useEffect, useRef, useState } from 'react';
+import { PinSelect } from '../Browser';
 import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type IdleRollover, type ProviderModels, type ProviderAccountsView, type RememberedApproval } from '../../api';
 import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Row, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../../ui';
 import { ModelPicker } from '../../ModelPicker';
-import { agentRoute } from '../../routes';
+import { agentRoute, LOOKING_ROUTE } from '../../routes';
 import { grantFrom, sameTools, ToolPicker } from './ToolPicker';
 import { AgentConnections } from './AgentConnections';
 import { Avatar, type Face } from './Avatar';
@@ -329,6 +330,17 @@ function Agent({
       <div hidden={shown !== 'tools'}>
         <Stack gap="lg">
           <Access agent={agent} all={all} onSaved={onSaved} />
+          {engine && agent.tools.some((tool) => tool === 'browser.*' || tool.startsWith('browser.')) ? (
+            <Section title="Where it may look" aside="saved as you change it" panel>
+              <div className="br-adv-row">
+                <span className="br-adv-head">
+                  <span className="br-adv-title">Pages for {agent.name}</span>
+                  <span className="br-adv-hint">A conversation’s Use my Chrome comes first, then this, then <a href={LOOKING_ROUTE}>Where agents may look</a>. A rule never allows what is off there.</span>
+                </span>
+                <PinSelect value={engine.browser ?? 'auto'} label={`Where ${agent.name} may look`} apps={false} onChange={(browser) => set({ browser })} />
+              </div>
+            </Section>
+          ) : null}
           <AgentConnections agentId={agent.id} agentName={agent.name} readOnly={agent.isExample === true} version={agent.tools.join(',')} onSaved={onSaved} />
         </Stack>
       </div>

@@ -503,7 +503,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
     summary: 'Which agents this one may hand work to.', body: '{ delegates: agent id[] }', errors: '400; 404',
   },
   {
-    method: 'POST', path: '/api/agents/:id/engine', area: 'agents', summary: 'Change engine settings (effort, context, idle rollover…).',
+    method: 'POST', path: '/api/agents/:id/engine', area: 'agents', summary: 'Change engine settings (effort, context, idle rollover, where it may look: browser auto/own/chrome/apps…).',
     body: 'engine fields; the account and model go through /account', errors: '400',
   },
   {

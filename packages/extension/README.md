@@ -26,7 +26,7 @@ for. The dashboard's **Add to Chrome** opens the same listing.
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
 3. Press **Load unpacked** and pick the `extension` folder inside your buddi
-   installation. Settings, under Computer & browser, prints the exact path.
+   installation. Settings, under Where agents may look, prints the exact path.
 
 Every GitHub release also carries `buddi-extension-<version>.zip`, the store
 upload: the same files, without the manifest's `key`
@@ -52,7 +52,7 @@ One of four states, never two at once:
    in red and **Try again**.
 2. **Connecting**: the address greyed out while your buddi mints a code.
 3. **Pairing**: the six-digit code, large, with **Copy**, the line saying where
-   to type it, **Open buddi settings** (Computer & browser, in a new tab) and
+   to type it, **Open buddi settings** (Where agents may look, in a new tab) and
    **Not this buddi** to go back to the address.
 4. **Connected**: which buddi, how many tabs it is working in, **Open buddi**
    and **Forget this buddi**.
@@ -62,7 +62,7 @@ One of four states, never two at once:
 1. Click the buddi icon in Chrome's toolbar and press **Connect**.
 2. Your buddi answers with a six-digit code, which the popup shows, with a
    **Copy** button beside it.
-3. In buddi, open Settings, Computer & browser (**Open buddi settings** in the
+3. In buddi, open Settings, Where agents may look (**Open buddi settings** in the
    popup goes there). If you are reading the dashboard in the same Chrome, the
    code is already in **Pair your browser**; otherwise type it. The code is
    good for five minutes.

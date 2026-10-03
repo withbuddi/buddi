@@ -121,7 +121,7 @@ describe('the route, chosen per task', () => {
   });
   it('is the owner\'s Chrome for a site on his sign-in list, said once in the chat', async () => {
     const { controller } = await routes({ settings: { yourChrome: true, signInSites: ['amazon.com'] } });
-    await expect(controller.execute(navigate('https://www.amazon.com/cart'), ctx())).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome for amazon.com (sign-in).' });
+    await expect(controller.execute(navigate('https://www.amazon.com/cart'), ctx())).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome because Amazon needs your sign-in.' });
     const again = await controller.execute(observe, ctx()) as { route: string; routeNote?: string };
     expect(again).toMatchObject({ route: 'chrome' });
     expect(again.routeNote).toBeUndefined();
@@ -129,7 +129,7 @@ describe('the route, chosen per task', () => {
   it('follows the agent\'s ask (prefer: yours) and the pins: conversation over agent over global', async () => {
     const { controller } = await routes({ settings: { yourChrome: true }, agentPin: (id) => id === 'pinned' ? 'chrome' : undefined });
     await expect(controller.execute(navigate('https://shop.test/', { prefer: 'yours' }), ctx('a'))).resolves.toMatchObject({ route: 'chrome' });
-    await expect(controller.execute(navigate('https://shop.test/'), ctx('pinned'))).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome for shop.test (pinned).' });
+    await expect(controller.execute(navigate('https://shop.test/'), ctx('pinned'))).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome for shop.test, as you set it.' });
     await controller.pin('pinned', 'own');
     await expect(controller.execute(navigate('https://shop.test/'), ctx('pinned'))).resolves.toMatchObject({ route: 'own' });
     expect(controller.status({ conversationId: 'pinned' }).pin).toBe('own');
@@ -153,7 +153,7 @@ describe('the route, chosen per task', () => {
     const off = await routes();
     await expect(off.controller.execute(open, ctx())).rejects.toThrow(APPS_UNAVAILABLE);
     const on = await routes({ settings: { yourApps: 'on' } });
-    await expect(on.controller.execute(open, ctx())).resolves.toMatchObject({ route: 'apps', routeNote: 'I used com.apple.Safari on your computer.' });
+    await expect(on.controller.execute(open, ctx())).resolves.toMatchObject({ route: 'apps', routeNote: 'I opened com.apple.Safari because the task needs it.' });
     expect(on.log).toEqual(['apps open']);
     // A web page still goes to the own browser, and the conversation moves with it.
     await expect(on.controller.execute(navigate('https://news.test/'), ctx())).resolves.toMatchObject({ route: 'own' });
@@ -217,7 +217,7 @@ describe('fallback without a stop', () => {
   });
   it('a sign-in wall in the own browser moves to the owner\'s Chrome, and the site is remembered', async () => {
     const { controller, log, dir } = await routes({ settings: { yourChrome: true }, page: LOGIN });
-    await expect(controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx())).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome for amazon.com (sign-in).' });
+    await expect(controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx())).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome because Amazon needs your sign-in.' });
     expect(log.slice(0, 2)).toEqual(['own https://www.amazon.com/ap/signin', 'chrome https://www.amazon.com/ap/signin']);
     await vi.waitFor(async () => expect(JSON.parse(await readFile(path.join(dir, 'sign-in-sites.json'), 'utf8'))).toEqual(['amazon.com']));
     // Next time it goes to Chrome first.
@@ -232,7 +232,7 @@ describe('the owner cards, through the existing question card', () => {
     const result = await controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx('a', asked)) as { needsOwner: { kind: string } };
     expect(result.needsOwner.kind).toBe('sign-in');
     expect(asked).toHaveLength(1);
-    expect(asked[0]!.question).toBe('www.amazon.com needs your sign-in.'.replace('www.', ''));
+    expect(asked[0]!.question).toBe('Amazon needs your sign-in\nSign in on the page and give it back, and I carry on.');
     expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', 'Save a login for next time']);
     await controller.execute(observe, ctx('a', asked));
     expect(asked).toHaveLength(1);
@@ -241,7 +241,7 @@ describe('the owner cards, through the existing question card', () => {
     const asked: Asked[] = [];
     const { controller } = await routes({ settings: { yourChrome: true }, connected: false, page: LOGIN });
     await controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx('a', asked));
-    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', "Open Chrome and I'll use it there", 'Save a login for next time']);
+    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', 'Use Chrome when it\u2019s open', 'Save a login for next time']);
   });
   it('sign-in: a stored login for the site is pointed at instead of a card', async () => {
     const asked: Asked[] = [];
@@ -257,7 +257,7 @@ describe('the owner cards, through the existing question card', () => {
     const asked: Asked[] = [];
     const { controller } = await routes({ page: LOGIN });
     await expect(controller.execute(navigate('https://shop.test/captcha'), ctx('a', asked))).resolves.toMatchObject({ needsOwner: { kind: 'human' } });
-    expect(asked.map((card) => card.question)).toEqual(['shop.test asks for a human.']);
+    expect(asked.map((card) => card.question.split('\n')[0])).toEqual(['This page asks for a human']);
   });
   it('answering Look takes the page over; Use my Chrome pins the conversation; Keep going renews the budget', async () => {
     const { controller } = await routes({ settings: { yourChrome: true }, connected: true, page: LOGIN });
@@ -291,8 +291,8 @@ describe('Stop agents\' browsing', () => {
     expect(JSON.parse(await readFile(path.join(dir, 'control.json'), 'utf8'))).toMatchObject({ stopped: true, at: now, until: now + 60 * 60_000 });
     now += 2 * 60_000;
     const result = await controller.execute(navigate('https://news.test/'), ctx('a', asked)) as { needsOwner: { kind: string; question: string } };
-    expect(result.needsOwner).toMatchObject({ kind: 'stopped', question: 'Browsing is stopped (by you, 2 minutes ago, until 11:00 UTC). Resume?' });
-    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Resume', 'Leave it stopped']);
+    expect(result.needsOwner).toMatchObject({ kind: 'stopped', title: 'Browsing is paused since 10:00', line: 'You paused agents\u2019 browsing from the Canvas, until 11:00. I need one page: news.test.' });
+    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Resume', 'Keep paused']);
     await expect(controller.touch({ conversationId: 'a', text: 'Resume' })).resolves.toEqual({ answered: 'resume' });
     await expect(controller.execute(navigate('https://news.test/'), ctx())).resolves.toMatchObject({ completed: true });
     // And by itself, an hour later.

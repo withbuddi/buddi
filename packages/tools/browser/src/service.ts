@@ -288,7 +288,7 @@ export class BrowserService {
   }
   #cardResult(card: OwnerCard, dispatched: boolean, message?: string): CardResult {
     return { completed: false, dispatched, needsOwner: card, notice: UNTRUSTED,
-      message: message ?? `Waiting for the owner: "${card.question}" Say that in one sentence and stop; the card in the chat has the buttons. The page stays open; you continue when they answer.`,
+      message: message ?? `Waiting for the owner: "${card.title}" Say that in one sentence and stop; the card in the chat has the buttons. The page stays open; you continue when they answer.`,
       ...(this.#observation ? { observation: this.#observation } : {}) };
   }
 

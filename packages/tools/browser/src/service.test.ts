@@ -210,7 +210,7 @@ describe('the paths retried inside the tool', () => {
     const result = await service.execute(navigate, ctx) as { needsOwner: { kind: string; question: string } };
     expect(driver.observe).toHaveBeenCalledTimes(RETRY_DELAYS_MS.length + 1);
     expect(slept).toEqual([...RETRY_DELAYS_MS]);
-    expect(result.needsOwner).toMatchObject({ kind: 'uncertain', question: "I'm not sure that went through. Look?" });
+    expect(result.needsOwner).toMatchObject({ kind: 'uncertain', title: 'I\u2019m not sure that went through. Look?' });
     expect(service.status().state).toBe('running');
     expect(causes(telemetry)).toEqual(['page-not-answered', 'observation-failures']);
   });
@@ -285,7 +285,7 @@ describe('the four owner cards', () => {
     await small.service.execute(navigate, small.ctx);
     await small.service.execute(observe, small.ctx);
     const result = await small.service.execute(observe, small.ctx) as { needsOwner: { kind: string; question: string; options: Array<{ label: string }> } };
-    expect(result.needsOwner).toMatchObject({ kind: 'budget', question: "I've used this task's steps and time. Keep going?" });
+    expect(result.needsOwner).toMatchObject({ kind: 'budget', title: 'Keep going?' });
     expect(result.needsOwner.options.map((option) => option.label)).toEqual(['Keep going', 'Stop here']);
     small.service.renew();
     expect(small.service.status().session!.steps).toBe(0);

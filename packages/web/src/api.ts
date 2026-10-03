@@ -1399,6 +1399,8 @@ export interface AgentEngine {
   thinking: 'on' | 'off' | null;
   /** Idle time before a fresh conversation. Optional: an older server does not send it. */
   idleRollover?: IdleRollover;
+  /** Where it may look (`browser:` in agent.md). Optional: an older server does not send it. */
+  browser?: 'auto' | BrowserRoute;
   credentialKind: string;
   credentialEnv: string;
   available: boolean;
@@ -2369,6 +2371,8 @@ export interface EngineChange {
   thinking?: 'on' | 'off' | null;
   /** `null` removes the setting: back to three hours. */
   idleRollover?: IdleRollover | null;
+  /** Where it may look; `auto` lets the runtime choose. */
+  browser?: 'auto' | BrowserRoute;
 }
 
 /** How long a chat may sit idle before the next message starts a fresh one. */
@@ -2542,7 +2546,7 @@ export const api = {
   removeCredential: (name: string) => post<ProvidersView>(`/providers/credentials/${encodeURIComponent(name)}/remove`),
   testProvider: (kind: string) => post<{ state: string; message: string }>(`/providers/${encodeURIComponent(kind)}/test`),
   browser: (scope?: { agentId: string; conversationId: string }) => get<BrowserStatus>(`/browser${scope ? `?agentId=${encodeURIComponent(scope.agentId)}&conversationId=${encodeURIComponent(scope.conversationId)}` : ''}`),
-  browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
+  browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string, options?: { forever?: boolean }) => post<BrowserStatus>(`/browser/${action}`, { ...(sessionId === undefined ? {} : { sessionId }), ...(options?.forever ? { forever: true } : {}) }),
   browserSettings: (settings: Partial<ControlSettings>) => post<BrowserStatus>('/browser/settings', settings),
   browserPin: (conversationId: string, route: 'auto' | BrowserRoute) => post<BrowserStatus>('/browser/pin', { conversationId, route }),
   browserCard: (conversationId: string, answer: string) => post<{ answered?: string; status: BrowserStatus }>('/browser/card', { conversationId, answer }),
@@ -3159,7 +3163,11 @@ export interface BrowserRouteStatus {
 /** A browser card the run is parked on, waiting for the owner. */
 export interface BrowserOwnerCard {
   kind: 'uncertain' | 'budget' | 'sign-in' | 'code' | 'human' | 'stopped';
+  /** The title, a newline, the line: what Telegram sends. */
   question: string;
+  /** The same words split, from a gateway that has them. */
+  title?: string;
+  line?: string;
   options: Array<{ label: string; hint?: string; recommended?: boolean }>;
   site?: string;
 }
@@ -3192,7 +3200,7 @@ export interface BrowserStatus {
   enabled: boolean;
   busy: boolean;
   session?: { id: string; agentId: string; conversationId: string; requestId: string; task: string; expiresAt: string; steps: number; maxSteps: number };
-  page?: { id: string; url: string; title: string; capturedAt: string; tabs: Array<{ id: string; url: string; title: string }> };
+  page?: { id: string; url: string; title: string; capturedAt: string; tabs: Array<{ id: string; url: string; title: string }>; appId?: string };
   lastAction?: string;
   message?: string;
   hasScreenshot: boolean;

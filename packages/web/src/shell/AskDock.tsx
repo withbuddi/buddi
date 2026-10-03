@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api, chatApi } from '../api';
 import { ApprovalDock } from '../chat/ApprovalDock';
 import { QuestionPicker } from '../chat/QuestionPicker';
+import { BrowserAsk, browserCardOf } from '../chat/BrowserAsk';
 import { OfferButtons, pendingApprovals, useThreadActions } from '../chat/thread-actions';
 import { speakReply } from '../chat/ChatPage';
 import { Composer, type ComposerDraft, type ComposerHandle } from '../chat/Composer';
@@ -463,6 +464,8 @@ function DockThread({
             onSay={(text) => send(text, [])}
             onOpenFull={() => navigate(route)}
           />
+        ) : question && browserCardOf(question) ? (
+          <BrowserAsk key={question.id} card={browserCardOf(question)!} disabled={answeringQuestion || running} onAnswer={answerQuestion} />
         ) : question ? (
           <QuestionPicker
             key={question.id}

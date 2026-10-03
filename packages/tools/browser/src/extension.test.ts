@@ -102,7 +102,7 @@ describe('the owner\'s Chrome as a route', () => {
 
     expect((await controller.configure({ yourChrome: true })).settings).toMatchObject({ yourChrome: true });
     expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8'))).toMatchObject({ version: 2, yourChrome: true });
-    await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('b'))).resolves.toMatchObject({ completed: true, route: 'chrome', routeNote: 'I used your Chrome for example.com (sign-in).' });
+    await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('b'))).resolves.toMatchObject({ completed: true, route: 'chrome', routeNote: 'I used your Chrome because Example needs your sign-in.' });
     expect(sent.map((c) => c.name)).toEqual(['navigate', 'observe', 'screenshot']);
   });
 });

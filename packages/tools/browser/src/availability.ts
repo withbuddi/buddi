@@ -35,9 +35,9 @@ export interface DetectDeps {
 }
 
 /** What the tool and the page say when no browser is installed. */
-export const NO_BROWSER_STATUS = 'No browser installed for the agents yet. Install one from Settings → Computer & browser, or run `buddi browser install` (about 150 MB).';
+export const NO_BROWSER_STATUS = 'No browser installed for the agents yet. Install one from Settings → Where agents may look, or run `buddi browser install` (about 150 MB).';
 /** What a `browser.act` call fails with, one sentence the model can relay. */
-export const NO_BROWSER_ACT = 'There is no browser installed yet; the owner can install one from Settings → Computer & browser or with `buddi browser install`.';
+export const NO_BROWSER_ACT = 'There is no browser installed yet; the owner can install one from Settings → Where agents may look or with `buddi browser install`.';
 /** Said in the status when this machine has no display and the browser runs headless. */
 export const HEADLESS_NOTE = 'The agents\' browser runs headless on this machine, since it has no display. Watch it and take over from the conversation\'s Canvas.';
 

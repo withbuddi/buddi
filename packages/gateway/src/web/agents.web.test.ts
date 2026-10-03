@@ -227,6 +227,21 @@ describe('the engine endpoint', () => {
     expect(readFileSync(file, 'utf8')).not.toContain('idleRollover');
   });
 
+  it('shows where the agent may look (auto by default) and pins it, auto taking the key back out', async () => {
+    const { cookie, csrf } = await signIn();
+    const headers = { cookie, 'x-buddi-csrf': csrf, origin: base };
+    const listed = (await (await fetch(`${base}/api/agents`, { headers: { cookie } })).json()) as { engines: Array<{ browser: string }> };
+    expect(listed.engines[0]!.browser).toBe('auto');
+    const set = (await (await post({ browser: 'own' }, headers)).json()) as { agent: { browser: string }; changed: string[] };
+    expect(set.changed).toEqual(['browser']);
+    expect(set.agent.browser).toBe('own');
+    expect(readFileSync(file, 'utf8')).toContain('browser: own');
+    expect((await post({ browser: 'firefox' }, headers)).status).toBe(400);
+    const back = (await (await post({ browser: 'auto' }, headers)).json()) as { agent: { browser: string } };
+    expect(back.agent.browser).toBe('auto');
+    expect(readFileSync(file, 'utf8')).not.toContain('browser:');
+  });
+
   it('lists engines and the model catalogue alongside the agents', async () => {
     const { cookie } = await signIn();
     const res = await fetch(`${base}/api/agents`, { headers: { cookie } });

@@ -26,10 +26,11 @@ import { useServedPreviews } from '../canvas/served';
 import { FILES_TAB_ID, filesRenderable, useAgentWorkspace, workspaceChanges } from '../canvas/files';
 import { profileRenderable, profileTabId } from './properties';
 import { useAsync } from '../ui';
-import { BrowserView } from '../canvas/views/BrowserView';
+import { BrowserMenu, BrowserView } from '../canvas/views/BrowserView';
 import { HostControls } from '../views/HostControls';
 import { ErrorBanner, Notice } from '../ui';
-import { BROWSER_TOOLS, browserSteps, conversationBrowser, endedBrowser, stepFor } from './browser';
+import { BROWSER_TOOLS, conversationBrowser, endedBrowser, pausedBrowser, stepFor } from './browser';
+import { BrowserAsk, browserCardOf } from './BrowserAsk';
 import { WEB_SOURCE_TOOLS } from './sources';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
@@ -510,10 +511,24 @@ export function ChatPage({
     // Put away like any other panel of history.
     && !dismissed.includes(endedBrowserTab.tab.id)
     ? endedBrowserTab.tab : null;
-  const browserTab = liveBrowser ?? keptBrowserTab;
-
-  /** Every action this conversation took on that screen, from its own calls. */
-  const steps = useMemo(() => browserSteps(conversation?.messages ?? []), [conversation]);
+  /*
+   * The card the conversation is parked on, when it is one of the browser's
+   * five: drawn the kit's way in the dock, and — for the Stop's Resume — the
+   * reason the Page tab shows the pause with no page open.
+   */
+  const browserCard = browserCardOf(conversation?.question);
+  const pausedTab = liveBrowser ? null : pausedBrowser(browserStatus, conversationId ?? null, browserCard?.kind === 'paused');
+  const browserTab = liveBrowser ?? pausedTab ?? keptBrowserTab;
+  /*
+   * The composer's "Use my Chrome": this conversation pinned to the owner's
+   * Chrome. Offered only once his Chrome is allowed and paired, since a pin
+   * never allows what the switches forbid.
+   */
+  const chromeRoute = browserStatus?.routes?.find((route) => route.kind === 'chrome');
+  const chromeChip = !group && conversationId && chromeRoute?.allowed && chromeRoute.paired ? {
+    on: browserStatus?.pin === 'chrome',
+    onChange: (on: boolean) => { void api.browserPin(conversationId, on ? 'chrome' : 'auto').catch(() => undefined).finally(browser.reload); },
+  } : undefined;
   /** A step the owner clicked in the chat, held until they click another. */
   const [focusedStep, setFocusedStep] = useState<string | null>(null);
 
@@ -1077,11 +1092,13 @@ export function ChatPage({
           status={ownStatus}
           error={browser.error}
           reload={browser.reload}
-          steps={steps}
           live={liveBrowser !== null}
-          focusedStepId={focusedStep}
+          agentName={agent?.name ?? 'The agent'}
+          timezone={timezone}
+          paused={pausedTab && browserStatus?.stop ? browserStatus.stop : null}
         />
       ) : null}
+      browserMenu={browserTab ? <BrowserMenu status={browserStatus} timezone={timezone} reload={browser.reload} /> : null}
       descriptors={descriptors}
       grantedTools={group ? members.flatMap((member) => member.tools ?? []) : agent?.tools ?? []}
       {...(agent ? { agentName: agent.name } : {})}
@@ -1389,7 +1406,15 @@ export function ChatPage({
             onOpenFull={(toolUseId) => { setActiveTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
           />
         ) : null}
-        {blocked || docked.length > 0 ? null : conversation?.question ? (
+        {blocked || docked.length > 0 ? null : conversation?.question && browserCard ? (
+          <BrowserAsk
+            key={conversation.question.id}
+            card={browserCard}
+            disabled={answeringQuestion || running}
+            onAnswer={answerQuestion}
+            site={browserStatus?.needsOwner?.site ?? browserStatus?.page?.url?.replace(/^https?:\/\/(www\.)?([^/]+).*$/, '$2')}
+          />
+        ) : conversation?.question ? (
           <QuestionPicker
             key={conversation.question.id}
             question={conversation.question}
@@ -1416,6 +1441,7 @@ export function ChatPage({
             history={ownHistory}
             threadKey={conversationId ?? (group ? `group:${group.id}` : agentId)}
             model={group ? null : (agent?.model ?? null)}
+            chrome={chromeChip}
             setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup', 'brain') : null)}
             thinking={thinking}
             {...(!group && agent && thinkingIsHonoured(effectiveProviderKind(agent, providerAccounts.data)) ? { onThinking: switchThinking } : {})}

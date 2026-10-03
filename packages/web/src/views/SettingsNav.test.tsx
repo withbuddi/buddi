@@ -69,7 +69,7 @@ describe('the settings list', () => {
       .toEqual(['You', 'Models and access', 'Running', 'Plugins']);
     const names = (group: HTMLElement): string[] => within(group).getAllByRole('link').map((a) => a.textContent ?? '');
     expect(names(groups[0]!)).toEqual(['Profile', 'Appearance', 'Notifications', 'Telegram', 'Memory', 'Proposals']);
-    expect(names(groups[1]!)).toEqual(['Model accounts', 'Computer & browser', 'Keys and secrets', 'Connections', 'Lock screen', 'API tokens']);
+    expect(names(groups[1]!)).toEqual(['Model accounts', 'Where agents may look', 'Keys and secrets', 'Connections', 'Lock screen', 'API tokens']);
     expect(names(groups[2]!)).toEqual(['Watchers', 'Backup', 'System']);
     expect(names(groups[3]!)[0]).toBe('All plugins');
     // No tab strip is left.
@@ -112,7 +112,7 @@ describe('the settings list', () => {
       ['#/settings/appearance', 'Appearance'],
       ['#/settings/proposals?plugin=alpha', 'Proposals'],
       ['#/settings/accounts', 'Model accounts'],
-      ['#/settings/computer', 'Computer & browser'],
+      ['#/settings/computer', 'Where agents may look'],
       ['#/settings/watchers', 'Watchers'],
       ['#/settings/backup', 'Backup'],
       ['#/settings/system', 'System'],
@@ -223,7 +223,7 @@ describe('on a narrow window', () => {
     const options = [...list.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
     expect(options.map((o) => o.textContent)).toEqual([
       'Profile', 'Appearance', 'Notifications', 'Telegram', 'Memory', 'Proposals',
-      'Model accounts', 'Computer & browser', 'Keys and secrets', 'Connections', 'Lock screen', 'API tokens',
+      'Model accounts', 'Where agents may look', 'Keys and secrets', 'Connections', 'Lock screen', 'API tokens',
       'Watchers', 'Backup', 'System',
       'All plugins', 'Alpha', 'mike', 'Zulu',
     ]);

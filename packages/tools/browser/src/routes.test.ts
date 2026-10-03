@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardAnswer, chooseRoute, detectWall, ownerCard, routeNote, siteListed, siteOf, type RouteInput } from './routes.js';
+import { cardAnswer, chooseRoute, detectWall, ownerCard, routeNote, siteListed, siteName, siteOf, type RouteInput } from './routes.js';
 import { STOP_CAUSES, summarize, telemetryLines, BrowserTelemetry } from './telemetry.js';
 
 const all = { own: true, chrome: true, apps: true };
@@ -33,7 +33,8 @@ describe('sites, notes and walls', () => {
     expect(siteOf('https://www.amazon.com/cart')).toBe('amazon.com');
     expect(siteListed('smile.amazon.com', ['amazon.com'])).toBe(true);
     expect(siteListed('notamazon.com', ['amazon.com'])).toBe(false);
-    expect(routeNote('chrome', 'sign-in', 'amazon.com')).toBe('I used your Chrome for amazon.com (sign-in).');
+    expect(routeNote('chrome', 'sign-in', 'amazon.com')).toBe('I used your Chrome because Amazon needs your sign-in.');
+    expect(siteName('smile.amazon.co.uk')).toBe('Amazon');
     expect(routeNote('own', 'default', 'amazon.com')).toBeUndefined();
   });
   it('detects a login wall, a code and a captcha, and not a login box on an ordinary page', () => {
@@ -55,7 +56,12 @@ describe('the cards and their answers', () => {
     expect(cardAnswer(ownerCard('sign-in', { chrome: 'usable' }), 'Use my Chrome')).toBe('chrome');
     expect(cardAnswer(ownerCard('human'), 'Take over')).toBe('takeover');
     expect(cardAnswer(ownerCard('stopped', { stoppedAgo: '2 days ago' }), 'Resume')).toBe('resume');
-    expect(ownerCard('stopped', { stoppedAgo: '2 days ago' }).question).toBe('Browsing is stopped (by you, 2 days ago). Resume?');
+    expect(ownerCard('stopped', { since: '10:12', until: '11:12', site: 'amazon.com' }).question).toBe('Browsing is paused since 10:12\nYou paused agents\u2019 browsing from the Canvas, until 11:12. I need one page: amazon.com.');
+    expect(ownerCard('sign-in', { site: 'amazon.com', chrome: 'usable' })).toMatchObject({ title: 'Amazon needs your sign-in', line: 'Sign in on the page and give it back, and I carry on. Or let me use your Chrome, where you\u2019re signed in.' });
+    // A tap on a label an older card carried still answers it.
+    expect(cardAnswer(ownerCard('human'), 'Skip it')).toBe('decline');
+    expect(cardAnswer(ownerCard('stopped'), 'Leave it stopped')).toBe('decline');
+    for (const kind of ['uncertain', 'budget', 'sign-in', 'code', 'human', 'stopped'] as const) expect(ownerCard(kind, { site: 'www.some-long-shop-name.example.co.uk', chrome: 'offline', since: '10:12', until: '11:12' }).question.length).toBeLessThanOrEqual(300);
     for (const kind of ['uncertain', 'budget', 'sign-in', 'code', 'human', 'stopped'] as const) {
       for (const option of ownerCard(kind, { chrome: 'offline' }).options) expect(option.label.length).toBeLessThanOrEqual(48);
     }

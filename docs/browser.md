@@ -212,6 +212,60 @@ could serve now (`available`), who provides it (`installed: false` on the apps
 route when nothing does), and the one fix when it is down (`repair`: install,
 sandbox, pair, permissions, helper).
 
+## On the dashboard
+
+What the owner sees and touches, as the kit draws it (buddi-design
+`Browser.jsx`).
+
+**Settings → Where agents may look.** One panel, a row per route, a repair
+where health is red; no radio buttons.
+
+- **buddi's own browser** — always on: *ready*; *Chromium isn't installed*
+  with **Install · 150 MB**; installing, with the percent; on Linux with
+  AppArmor, the one `sysctl` command to copy and **Check again**.
+- **Your Chrome** — *Used only for sites that need your sign-in*, and the
+  sites you listed. Before a pairing it reads **Add to Chrome ↗** (the store,
+  in a new tab). While the extension asks to pair, the page reads the code it
+  shows in that same browser and pairs by itself; from another browser you type
+  the six digits once. Paired: a switch, *connected* or *Chrome closed*. When
+  the extension in this browser has forgotten a pairing buddi still holds:
+  *Chrome forgot the pairing* with **Pair again**. ⋯ has Pair again, Install
+  unpacked… (a developer build) and Forget this Chrome… (asks once more).
+- **Your apps** — only with the Computer plugin: its health and fix (*Allow
+  in macOS* opens the plugin's page), a switch, and **Settings ›** to the
+  plugin's own page (the helper, the macOS permissions, the allowed apps).
+  Without the plugin, on a Mac, one line offers it.
+- While a Stop holds, a warning with **Resume** says since when and until when.
+- **Advanced**: the first choice for every agent (Let them choose · Own
+  browser only · Your Chrome first), the agents with their own rule (a select
+  and Remove per row, Give an agent its own rule — the same `browser:` the
+  agent's page writes), the sites that need your sign-in, how long Stop lasts
+  (an hour or until you say), pages open at once in buddi's own browser, and
+  showing it as a window.
+
+**The Page tab.** The page's letter, its title and one quiet line: *Looking at
+amazon.com · in buddi's browser*, *· in your Chrome · background tab*,
+*Working in Numbers · its own window*, *Waiting for you · it asks for your
+sign-in*. **Stop** closes this conversation's page; **Take over** (the accent
+while it waits for you) puts the remote hand in the same frame — *You have the
+page*, *Nothing you type here is kept. Home Manager carries on when you give it
+back*, **Keyboard** · **Give it back**. No step list, counter, mode or
+observation time. While a Stop holds, a conversation that asked for a page
+shows *Browsing is paused* with **Resume** there too.
+
+**The cards.** One at a time in the dock above the composer (and in the corner
+chat): *Amazon needs your sign-in* (Save a login for next time · Use my Chrome
+· Take over; with Chrome closed, Use Chrome when it's open), *This page asks
+for a human* (Skip this site · Take over), *I'm not sure that went through.
+Look?* (Carry on · Look), *Keep going?* (Stop here · Keep going) and *Browsing
+is paused since 10:12* (Keep paused · Resume). They are ordinary questions
+underneath (`ctx.ask`), so a tap answers with the label.
+
+**Pins.** *Use my Chrome* under the composer pins one conversation to your
+Chrome (offered once your Chrome is allowed and paired); an agent's page →
+Tools → **Where it may look** pins the agent. A pin narrows; it never allows
+what the switches forbid.
+
 ## A route a plugin provides
 
 A plugin may declare `routes: [{ kind: 'apps', label, platforms?, exclusive?,
@@ -294,8 +348,8 @@ is the Computer plugin's: see its
 
 ## Optional: "Your browser", the Chrome extension
 
-The third mode, shown in **Computer & browser** as **Your browser**: agents work
-in the Chrome you are already signed in to, through a Manifest V3 extension.
+The **Your Chrome** row of Settings → Where agents may look: agents work in
+the Chrome you are already signed in to, through a Manifest V3 extension.
 **[Add it to Chrome from the Chrome Web Store](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)**; it
 updates itself from there. It works in Chrome, Edge, Brave and Arc on macOS,
 Linux and Windows, because it is the browser doing the work. The same extension
@@ -303,8 +357,8 @@ also ships unpacked in `<install root>/extension`, for developers.
 
 Setup, in the owner's words:
 
-1. Choose **Your browser** in Computer & browser. Release any active session
-   first; modes never switch themselves.
+1. Turn on **Your Chrome** in Where agents may look (it reads Add to Chrome
+   until a Chrome is paired).
 2. Press **Add to Chrome** on the settings page, which opens the
    [store listing](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah) in a new tab, and install it there.
    (Developer install, folded under it: open `chrome://extensions`, turn on
@@ -458,12 +512,13 @@ submission; it does not produce another approval dialog for every click.
 Open **Host browser** in the dashboard rail (or `#/browser`) to see the current
 agent, task, URL, step budget and latest page snapshot.
 
-In chat, an active session also opens a **Browser** tab in the right-hand canvas,
+In chat, an open page also opens a **Page** tab in the right-hand canvas,
 beside charts and artifacts. It follows only the selected agent and conversation,
-updates the snapshot after actions, and includes the same owner controls. You can
-switch canvas tabs without the browser's polling pulling you back. On smaller
-screens, use the chat's Canvas button. **Open full browser view** still opens the
-separate page. Closing or releasing the session removes its live canvas tab.
+updates the picture after actions, and holds Stop and Take over; ⋯ on the strip
+holds Stop agents' browsing, Show the window and the full page view. You can
+switch canvas tabs without the polling pulling you back. On smaller screens, use
+the chat's Canvas button. When the page closes the tab keeps its last picture,
+unpinned.
 
 **One tab, pinned, for as long as the session lives.** A browser session used to
 open a tab per `browser.act` — a row of "Browser · Act" cards, each showing one
@@ -500,7 +555,7 @@ directory accordingly. No tool exports passwords, cookies or profile files.
 - **Resume access** is an owner-only control. Send a new message to the agent
   afterward; the UI does not silently replay the interrupted task. The agent
   must observe again before acting.
-- **Stop all browsers** closes every conversation's tabs and revokes browser access, including across
+- **Stop agents' browsing** (⋯ on the Page tab, for an hour or until you say) closes every conversation's tabs and revokes browser access, including across
   service restarts, until you explicitly resume access. It cannot undo a form
   submission that has already reached a website.
 - **Close & release** ends only the selected conversation's task and closes its
@@ -509,7 +564,7 @@ directory accordingly. No tool exports passwords, cookies or profile files.
 ### The remote hand: driving from the dashboard
 
 **Take over** now offers more than a pause. In the two browser modes — "Your
-browser" and Playwright — the Browser tab answers it with a live picture of the
+browser" and Playwright — the Page tab answers it with a live picture of the
 page and takes your pointer and keyboard on it, so a login, an MFA prompt or a
 consent banner can be dealt with from a phone instead of by walking to the
 machine. A thin bar over the picture says *You are driving. Nothing you type
@@ -604,7 +659,7 @@ timeout, the tab, its context and its cookies stay exactly as they were, and
 the live view paints the page the agent was on. In "Your browser" the extension
 is told to stop the command and your tab is left alone. Either way the agent's
 evidence is void and it must observe again after you resume. If the interrupt
-leaves nothing to paint — the tab really did close — the Browser tab says so at
+leaves nothing to paint — the tab really did close — the Page tab says so at
 once instead of offering a live view that never draws its first frame.
 
 In "Your browser" the frames are Chrome's own `Page.startScreencast` through
@@ -646,7 +701,7 @@ information. Do not put passwords or MFA codes in chat.
 
 ## On Telegram: the same screen, from the phone
 
-A conversation bound to a Telegram chat gets what the dashboard's Browser panel
+A conversation bound to a Telegram chat gets what the dashboard's Page tab
 shows, in the two forms a phone has.
 
 **A photo per step.** After every `browser.act`, the observation the agent just
@@ -676,7 +731,7 @@ caption says *open this on the computer buddi runs on*.
 | Command | Same as the dashboard's |
 | --- | --- |
 | `/browser` | the panel's own state: mode, who is driving, whether access is stopped |
-| `/browser stop` | **Stop all browsers** / **Stop computer control** |
+| `/browser stop` | **Stop agents' browsing** |
 | `/browser resume` | **Resume access** |
 | `/browser release` | **Close & release** / **Release control** |
 

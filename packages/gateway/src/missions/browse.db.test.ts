@@ -248,11 +248,11 @@ suite('missions that browse (postgres)', () => {
       const parked = await getJob(pool, job.id);
       const conversationId = (parked?.payload as { parked?: { conversationId: string } }).parked!.conversationId;
       const question = await openQuestion(pool, { conversationId, now: new Date() });
-      expect(question?.question).toBe('amazon.com needs your sign-in.');
+      expect(question?.question.split('\n')[0]).toBe('Amazon needs your sign-in');
       expect(parked?.suspendedReason).toBe(`${PARKED_REASON_PREFIX}${question!.id}`);
       // It reached the owner as a notification with an action, and Needs you holds it past fifteen minutes.
       const { rows } = await pool.query(`select kind, action, dedupe_key from core.owner_notifications`);
-      expect(rows).toEqual([{ kind: 'question', action: 'amazon.com needs your sign-in.', dedupe_key: `question:${question!.id}` }]);
+      expect(rows).toEqual([{ kind: 'question', action: 'Amazon needs your sign-in Sign in on the page and give it back, and I carry on.', dedupe_key: `question:${question!.id}` }]);
       const later = new Date(Date.now() + 20 * 60_000);
       expect((await readAgentAttention(pool, later)).agents.find((a) => a.agentId === AGENT)?.question?.conversationId).toBe(conversationId);
       expect(delivered).toEqual([]);
@@ -285,7 +285,7 @@ suite('missions that browse (postgres)', () => {
       expect(await expireParkedRuns(pool, new Date(Date.now() + 61 * 60_000))).toBe(1);
       await waitFor(async () => (await getJob(pool, job.id))?.state === 'succeeded');
       expect(delivered).toHaveLength(1);
-      expect(delivered[0]).toMatch(/^Headlines needed you and stopped: "amazon.com needs your sign-in\." No answer came within an hour/);
+      expect(delivered[0]).toMatch(/^Headlines needed you and stopped: "Amazon needs your sign-in\." No answer came within an hour/);
       expect((await getOccurrence(pool, occurrence.id))?.state).toBe('succeeded');
       // The card takes no late tap.
       const late = await answerQuestion(pool, { id: question!.id, answer: 'Take over', optionId: question!.options[0]!.id, via: 'web', now: new Date() });

@@ -142,23 +142,38 @@ export interface RemoteHandProps {
   onGiveBack: () => void;
   /** Injected by tests; the real one is a `WebSocket`. */
   connect?: (url: string) => HandSocket;
+  /**
+   * The Page tab draws Keyboard and Give it back in its own header (the kit's
+   * take-over): the hand then shows only the picture, and the keyboard is the
+   * header's to switch.
+   */
+  bare?: boolean;
+  typing?: boolean;
+  onTyping?: (typing: boolean) => void;
 }
 
 type Phase = 'connecting' | 'driving' | 'lost' | 'refused';
 
-export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandProps): JSX.Element {
+export function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false, typing: typingProp, onTyping }: RemoteHandProps): JSX.Element {
   const [phase, setPhase] = useState<Phase>('connecting');
   const [refusal, setRefusal] = useState<string | null>(null);
   /** Whether any picture has arrived. The picture itself lives on the canvas. */
   const [painted, setPainted] = useState(false);
   const [metadata, setMetadata] = useState<HandFrameMetadata | null>(null);
-  const [typing, setTyping] = useState(false);
+  const [typingOwn, setTypingOwn] = useState(false);
+  const typing = typingProp ?? typingOwn;
+  const setTyping = (next: boolean) => { if (onTyping) onTyping(next); else setTypingOwn(next); };
   const [attempt, setAttempt] = useState(0);
   const socket = useRef<HandSocket | null>(null);
   const picture = useRef<HTMLCanvasElement | null>(null);
   const keyboard = useRef<HTMLInputElement | null>(null);
   /** The last pointer position sent, and the one waiting for the throttle. */
   const moved = useRef<{ at: number; pending?: Record<string, unknown>; timer?: ReturnType<typeof setTimeout> }>({ at: 0 });
+  // A keyboard switched from the header: the hidden input takes focus, which is what raises a phone's keys.
+  useEffect(() => {
+    if (typingProp === undefined) return;
+    if (typingProp) keyboard.current?.focus?.(); else keyboard.current?.blur?.();
+  }, [typingProp]);
 
   useEffect(() => {
     const open = connect ?? ((url: string) => new WebSocket(url) as unknown as HandSocket);
@@ -338,9 +353,9 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
   };
 
   return (
-    <section className="hand" data-testid="remote-hand" data-phase={phase} aria-label="Driving the host browser">
-      <div className="hand-bar">
-        <span className="hand-said" role="status">You are driving. Nothing you type here is kept.</span>
+    <section className="hand" data-testid="remote-hand" data-phase={phase} data-bare={bare ? 'true' : undefined} aria-label="Driving the page">
+      {bare ? null : <div className="hand-bar">
+        <span className="hand-said" role="status">You have the page. Nothing you type here is kept.</span>
         <Toolbar align="end">
           <Button
             size="sm"
@@ -352,7 +367,7 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
           </Button>
           <Button size="sm" variant="accent" onClick={onGiveBack}>Give it back</Button>
         </Toolbar>
-      </div>
+      </div>}
       {phase === 'lost' ? (
         <Notice tone="warning" role="status">
           Connection lost. The picture below is the last frame that arrived.

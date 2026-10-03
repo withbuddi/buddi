@@ -402,3 +402,20 @@ it('shows the idle rollover the agent file declares', async () => {
   render(<AgentSetup agentId="demo" section="brain" />);
   expect(await screen.findByRole('combobox', { name: 'New chat after' })).toHaveValue('1d');
 });
+
+it('offers Where it may look on Tools for an agent granted the browser, saved as it changes', async () => {
+  vi.mocked(api.setAgentEngine).mockResolvedValue({ changed: ['browser'], note: 'Saved' } as never);
+  vi.mocked(api.agents).mockResolvedValue({ ...view, agents: [{ ...(view.agents[0] as object), tools: ['browser.*'] }], engines: [{ ...(view.engines[0] as object), browser: 'own' }] } as unknown as AgentsView);
+  render(<AgentSetup agentId="demo" section="tools" />);
+  const select = await screen.findByRole('combobox', { name: 'Where Demo may look' });
+  expect(select).toHaveValue('own');
+  fireEvent.change(select, { target: { value: 'chrome' } });
+  await waitFor(() => expect(api.setAgentEngine).toHaveBeenCalledWith('demo', { browser: 'chrome' }));
+  expect(screen.getByRole('link', { name: 'Where agents may look' })).toHaveAttribute('href', '#/settings/computer');
+});
+
+it('offers no Where it may look to an agent without the browser', async () => {
+  render(<AgentSetup agentId="demo" section="tools" />);
+  await screen.findByRole('button', { name: 'All orchard tools' });
+  expect(screen.queryByText('Where it may look')).not.toBeInTheDocument();
+});

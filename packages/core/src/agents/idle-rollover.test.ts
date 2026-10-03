@@ -44,3 +44,13 @@ describe('the idle rollover setting', () => {
     expect(cleared.text).not.toContain('idleRollover');
   });
 });
+
+describe('where the agent may look', () => {
+  it('is an engine key too: browser set from the agent page, null back to the runtime choosing', () => {
+    expect(ENGINE_KEYS).toContain('browser');
+    const set = patchAgentSource(FILE, enginePatch({ browser: 'chrome' }));
+    expect(set.text).toContain('browser: chrome');
+    expect(parseAgentFile(set.text, { dirName: 'demo' }).frontmatter.browser).toBe('chrome');
+    expect(patchAgentSource(set.text, enginePatch({ browser: null })).text).not.toContain('browser:');
+  });
+});

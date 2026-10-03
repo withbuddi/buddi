@@ -91,6 +91,12 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
                 </ButtonLink>
               }
             />
+          ) : section === 'computer' ? (
+            /* Where agents may look, as the kit draws it: the way back, the title; the apps page one step further. */
+            <PageHeader
+              before={<Breadcrumb inline items={[{ label: 'Settings', href: SETTINGS_ROUTE, onClick: () => navigate(SETTINGS_ROUTE) }]} />}
+              title="Where agents may look"
+            />
           ) : section === 'plugins' || section === 'connections' ? (
             /* Plugins and Connections are pages of their own inside Settings, as
                the kit draws them: the way back to Settings, then their own title and lede. */
@@ -122,7 +128,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} initialTab={memoryTabOf(hash)} /> : null}
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
           {section === 'accounts' ? <Providers embedded account={parseAccountRoute(hash)} /> : null}
-          {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
+          {section === 'computer' ? <Browser embedded timezone={timezone} navigate={navigate} /> : null}
           {section === 'secrets' ? (
             <Secrets embedded timezone={timezone} secret={parseSecretRoute(hash)} adding={parseSecretsAdd(hash)} navigate={navigate} />
           ) : null}

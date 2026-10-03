@@ -178,6 +178,12 @@ export const Composer = forwardRef<ComposerHandle, {
   draft?: ComposerDraft | null;
   /** The model this agent runs on, shown where the decision is made. */
   model?: string | null;
+  /**
+   * "Use my Chrome for this conversation": the conversation's pin to the
+   * owner's Chrome (docs/browser.md, "Pins"). Shown only when his Chrome is
+   * allowed and paired; it clears when the conversation does.
+   */
+  chrome?: { on: boolean; onChange: (on: boolean) => void } | undefined;
   /** Where the model is changed. The pill is a link when this is given. */
   setupHref?: string | null;
   /**
@@ -235,7 +241,7 @@ export const Composer = forwardRef<ComposerHandle, {
   placeholder?: string;
   /** One line that grows as it is typed into, the controls on its right (Home's box). */
   slim?: boolean;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, team, onCommand, history, threadKey, conversationId, readAloud, onReadAloud, placeholder, slim }, ref) {
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, chrome, setupHref, thinking, onThinking, onOpenFile, mentions, team, onCommand, history, threadKey, conversationId, readAloud, onReadAloud, placeholder, slim }, ref) {
   /*
    * Where this thread's draft is kept, and the function that reads it.
    *
@@ -935,6 +941,22 @@ export const Composer = forwardRef<ComposerHandle, {
               >
                 <span className="wb-composer-think-dot" aria-hidden="true" />
                 Thinking
+              </button>
+            ) : null}
+
+            {chrome ? (
+              <button
+                type="button"
+                className="wb-composer-think wb-composer-chrome"
+                aria-pressed={chrome.on}
+                disabled={disabled}
+                title={chrome.on
+                  ? 'This conversation looks in your Chrome first, where you are signed in. Click to let the agent choose again.'
+                  : 'Use my Chrome for this conversation: pages open in background tabs of your Chrome, where you are signed in.'}
+                onClick={() => chrome.onChange(!chrome.on)}
+              >
+                <span className="wb-composer-think-dot" aria-hidden="true" />
+                {phone ? 'Chrome' : 'Use my Chrome'}
               </button>
             ) : null}
 

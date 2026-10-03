@@ -70,10 +70,12 @@ export interface EnginePatch {
   thinking?: 'on' | 'off' | null | undefined;
   /** Idle time before a fresh conversation. `null` removes the key: back to `3h`. */
   idleRollover?: IdleRollover | null | undefined;
+  /** Where the agent may look (`browser:`, docs/browser.md "Pins"). `null` removes the key: the runtime chooses. */
+  browser?: 'own' | 'chrome' | 'apps' | null | undefined;
 }
 
 /** Keys `buddi agents set` and the dashboard may write. Nothing else. */
-export const ENGINE_KEYS: readonly string[] = ['provider', 'model', 'maxTurns', 'language', 'thinking', 'idleRollover'];
+export const ENGINE_KEYS: readonly string[] = ['provider', 'model', 'maxTurns', 'language', 'thinking', 'idleRollover', 'browser'];
 
 /* ------------------------------------------------------------------ *
  * Serialization
@@ -291,6 +293,7 @@ export function enginePatch(change: EnginePatch): FrontmatterPatch {
   if (change.language !== undefined) patch.language = change.language;
   if (change.thinking !== undefined) patch.thinking = change.thinking;
   if (change.idleRollover !== undefined) patch.idleRollover = change.idleRollover;
+  if (change.browser !== undefined) patch.browser = change.browser;
   return patch;
 }
 

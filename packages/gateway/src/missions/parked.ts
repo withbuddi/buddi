@@ -98,7 +98,9 @@ export function waitWords(ms: number): string {
 
 /** The one line a run that waited in vain delivers. */
 export function neededYouLine(input: { missionName: string; question: string; waitedMs: number }): string {
-  const asked = input.question.trim().replace(/\s+/g, ' ');
+  // A browser card is its title, a newline and a line of why: the title is what was asked.
+  const title = (input.question.trim().split('\n')[0] ?? '').trim().replace(/\s+/g, ' ');
+  const asked = /[.?!]$/.test(title) ? title : `${title}.`;
   return `${input.missionName} needed you and stopped: "${asked}" No answer came within ${waitWords(input.waitedMs)}, so it ended there. Run it again from Missions when you can take a look.`;
 }
 

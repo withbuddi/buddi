@@ -83,16 +83,26 @@ export function siteListed(site: string | undefined, list: Iterable<string>): bo
   return false;
 }
 
+/** A site as a person says it: `amazon.com` → `Amazon`, `smile.amazon.co.uk` → `Amazon`. */
+export function siteName(site: string | undefined): string | undefined {
+  if (!site) return undefined;
+  const labels = site.split('.').filter(Boolean);
+  if (labels.length < 2) return site;
+  // The label before the public suffix, guessed: `co.uk`, `com.au` and the like take two.
+  const short = labels.length >= 3 && /^(co|com|net|org|gov|ac|edu)$/.test(labels[labels.length - 2]!) ? labels[labels.length - 3]! : labels[labels.length - 2]!;
+  return short.charAt(0).toUpperCase() + short.slice(1);
+}
+
 /** The one chat line, only when the route is not the own browser or changed mid-task. */
 export function routeNote(route: RouteKind, reason: RouteReason, site: string | undefined, appName?: string): string | undefined {
   const where = site ?? 'this site';
   if (route === 'chrome') {
-    if (reason === 'sign-in' || reason === 'sign-in-fallback') return `I used your Chrome for ${where} (sign-in).`;
+    if (reason === 'sign-in' || reason === 'sign-in-fallback') return `I used your Chrome because ${siteName(site) ?? 'this site'} needs your sign-in.`;
     if (reason === 'prefer') return `I used your Chrome for ${where}, as you asked.`;
-    if (reason === 'pin') return `I used your Chrome for ${where} (pinned).`;
+    if (reason === 'pin') return `I used your Chrome for ${where}, as you set it.`;
     return `I used your Chrome for ${where}.`;
   }
-  if (route === 'apps') return appName ? `I used ${appName} on your computer.` : 'I used your apps for this.';
+  if (route === 'apps') return appName ? `I opened ${appName} because the task needs it.` : 'I used your apps for this.';
   if (reason === 'chrome-unavailable') return `Your Chrome isn't connected, so I used my own browser for ${where}.`;
   if (reason === 'apps-unavailable') return `Your apps aren't available, so I used my own browser for ${where}.`;
   return undefined;
@@ -134,7 +144,14 @@ export function detectWall(page: Pick<Observation, 'url' | 'title' | 'tree' | 't
 export type CardKind = 'uncertain' | 'budget' | 'sign-in' | 'code' | 'human' | 'stopped';
 export interface OwnerCard {
   kind: CardKind;
+  /**
+   * What every surface shows: the card's title, a newline, then one line of
+   * why and what happens next. Telegram sends it as is; the dashboard draws
+   * the title bold and the line under it (`title` and `line`, the same words).
+   */
   question: string;
+  title: string;
+  line: string;
   options: Array<{ label: string; hint?: string; recommended?: boolean }>;
   site?: string;
 }
@@ -142,38 +159,63 @@ export interface OwnerCard {
 /** The card's labels, which the owner's tap comes back as. */
 export const CARD_LABELS = {
   look: 'Look', carryOn: 'Carry on', keepGoing: 'Keep going', stopHere: 'Stop here',
-  takeOver: 'Take over', useChrome: 'Use my Chrome', openChrome: "Open Chrome and I'll use it there",
-  saveLogin: 'Save a login for next time', skip: 'Skip it', resume: 'Resume', leaveStopped: 'Leave it stopped',
+  takeOver: 'Take over', useChrome: 'Use my Chrome', openChrome: 'Use Chrome when it\u2019s open',
+  saveLogin: 'Save a login for next time', skip: 'Skip this site', resume: 'Resume', leaveStopped: 'Keep paused',
 } as const;
 
-export function ownerCard(kind: CardKind, facts: { site?: string | undefined; chrome?: 'usable' | 'offline' | 'none'; storedLogin?: boolean; stoppedAgo?: string; until?: string } = {}): OwnerCard {
+/** Labels an older card carried: a tap on one still answers it. */
+const OLD_LABELS = { openChrome: "Open Chrome and I'll use it there", skip: 'Skip it', leaveStopped: 'Leave it stopped' } as const;
+
+const card = (kind: CardKind, title: string, line: string, options: OwnerCard['options'], site?: string): OwnerCard =>
+  ({ kind, question: `${title}\n${line}`, title, line, options, ...(site ? { site } : {}) });
+
+export interface CardFacts {
+  site?: string | undefined;
+  chrome?: 'usable' | 'offline' | 'none';
+  storedLogin?: boolean;
+  /** The Stop's start and end, already in the owner's clock (`10:12`). */
+  since?: string;
+  until?: string;
+  /** How long ago the Stop began, when no clock time is at hand. */
+  stoppedAgo?: string;
+}
+
+/** The four moments and the Stop, in the words of the kit (buddi-design Browser.jsx). */
+export function ownerCard(kind: CardKind, facts: CardFacts = {}): OwnerCard {
   const site = facts.site;
-  const named = site ?? 'This page';
+  const name = siteName(site) ?? 'This page';
   switch (kind) {
     case 'uncertain':
-      return { kind, question: "I'm not sure that went through. Look?", options: [
+      return card(kind, 'I\u2019m not sure that went through. Look?', 'The page didn\u2019t change the way I expected after my last step.', [
         { label: CARD_LABELS.look, hint: 'Take over the page and check it yourself', recommended: true },
-        { label: CARD_LABELS.carryOn, hint: 'I look again and judge from the page' }], ...(site ? { site } : {}) };
+        { label: CARD_LABELS.carryOn, hint: 'I look again and judge from the page' }], site);
     case 'budget':
-      return { kind, question: "I've used this task's steps and time. Keep going?", options: [
+      return card(kind, 'Keep going?', 'This has taken its hour or its steps. What I found so far is above; I can keep going.', [
         { label: CARD_LABELS.keepGoing, hint: 'Another 200 steps and an hour', recommended: true },
-        { label: CARD_LABELS.stopHere, hint: 'I stop and tell you where I got to' }], ...(site ? { site } : {}) };
+        { label: CARD_LABELS.stopHere, hint: 'I stop and tell you where I got to' }], site);
     case 'sign-in':
     case 'code': {
       const options: OwnerCard['options'] = [{ label: CARD_LABELS.takeOver, hint: kind === 'code' ? 'Enter the code yourself, then give it back' : 'Sign in yourself, then give it back', recommended: true }];
       if (facts.chrome === 'usable') options.push({ label: CARD_LABELS.useChrome, hint: 'Where you are already signed in' });
-      if (facts.chrome === 'offline') options.push({ label: CARD_LABELS.openChrome });
+      if (facts.chrome === 'offline') options.push({ label: CARD_LABELS.openChrome, hint: 'I wait for Chrome, where you are signed in' });
       if (!facts.storedLogin) options.push({ label: CARD_LABELS.saveLogin, hint: 'Keys and secrets, with the site filled in' });
-      return { kind, question: kind === 'code' ? `${named} asks for a code.` : `${named} needs your sign-in.`, options, ...(site ? { site } : {}) };
+      const first = kind === 'code' ? 'Enter the code on the page and give it back, and I carry on.' : 'Sign in on the page and give it back, and I carry on.';
+      const chrome = facts.chrome === 'usable' ? ' Or let me use your Chrome, where you\u2019re signed in.'
+        : facts.chrome === 'offline' ? ' Or open Chrome, where you\u2019re signed in, and I use that.' : '';
+      return card(kind, kind === 'code' ? `${name} asks for a code` : `${name} needs your sign-in`, `${first}${chrome}`, options, site);
     }
     case 'human':
-      return { kind, question: `${named} asks for a human.`, options: [
+      return card(kind, 'This page asks for a human', `${site ?? 'This page'} wants a \u201cnot a robot\u201d check. Take over, answer it and give it back; I carry on.`, [
         { label: CARD_LABELS.takeOver, hint: 'Do the check yourself, then give it back', recommended: true },
-        { label: CARD_LABELS.skip, hint: 'I leave this page' }], ...(site ? { site } : {}) };
-    case 'stopped':
-      return { kind, question: `Browsing is stopped (by you${facts.stoppedAgo ? `, ${facts.stoppedAgo}` : ''}${facts.until ? `, until ${facts.until}` : ''}). Resume?`, options: [
+        { label: CARD_LABELS.skip, hint: 'I leave this page' }], site);
+    case 'stopped': {
+      const when = facts.since ? ` since ${facts.since}` : facts.stoppedAgo ? ` (${facts.stoppedAgo})` : '';
+      const until = facts.until ? `, until ${facts.until}` : ', until you resume it';
+      const need = site ? ` I need one page: ${site}.` : ' I need to look at a page.';
+      return card(kind, `Browsing is paused${when}`, `You paused agents\u2019 browsing from the Canvas${until}.${need}`, [
         { label: CARD_LABELS.resume, recommended: true },
-        { label: CARD_LABELS.leaveStopped }] };
+        { label: CARD_LABELS.leaveStopped }], site);
+    }
   }
 }
 
@@ -186,9 +228,17 @@ export function cardAnswer(card: OwnerCard, text: string): 'takeover' | 'continu
     case 'uncertain': return is(CARD_LABELS.look, 'take over') ? 'takeover' : is(CARD_LABELS.carryOn, 'continue', 'go on') ? 'continue' : undefined;
     case 'budget': return is(CARD_LABELS.keepGoing, 'continue', 'go on', 'yes') ? 'continue' : is(CARD_LABELS.stopHere, 'stop', 'no') ? 'decline' : undefined;
     case 'sign-in': case 'code': case 'human':
-      return is(CARD_LABELS.takeOver, 'look') ? 'takeover' : is(CARD_LABELS.useChrome, CARD_LABELS.openChrome, 'use chrome', 'in my chrome') ? 'chrome' : is(CARD_LABELS.skip) ? 'decline' : undefined;
-    case 'stopped': return is(CARD_LABELS.resume, 'yes') ? 'resume' : is(CARD_LABELS.leaveStopped, 'no') ? 'decline' : undefined;
+      return is(CARD_LABELS.takeOver, 'look') ? 'takeover' : is(CARD_LABELS.useChrome, CARD_LABELS.openChrome, OLD_LABELS.openChrome, 'use chrome', 'in my chrome') ? 'chrome' : is(CARD_LABELS.skip, OLD_LABELS.skip, 'skip') ? 'decline' : undefined;
+    case 'stopped': return is(CARD_LABELS.resume, 'yes') ? 'resume' : is(CARD_LABELS.leaveStopped, OLD_LABELS.leaveStopped, 'no') ? 'decline' : undefined;
   }
+}
+
+/** An instant on the owner's clock, `10:12`; UTC with its name when the zone is unknown. */
+export function ownerClock(at: number, timezone?: string): string {
+  try {
+    if (timezone) return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: timezone }).format(new Date(at));
+  } catch { /* an unknown zone: UTC below */ }
+  return `${new Date(at).toISOString().slice(11, 16)} UTC`;
 }
 
 /** How long ago, said the way the Stop card says it. */

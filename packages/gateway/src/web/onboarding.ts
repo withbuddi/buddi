@@ -59,7 +59,7 @@ export const WEB_ONBOARDING_STEPS = [
   'take-on',
   // Chapter 4: the phone, a mailbox, the app and the browser, each optional.
   'reach',
-  // Never a gate: a missing browser is fixed later, from Computer & browser.
+  // Never a gate: a missing browser is fixed later, from Where agents may look.
   'browser',
   'agent',
   'hello',

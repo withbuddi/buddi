@@ -1,179 +1,464 @@
 /**
- * Computer & browser, for the owner rather than the engineer.
+ * Settings → Where agents may look (docs/browser.md, "Routes"; the kit's
+ * `WhereAgentsLook` in buddi-design Browser.jsx).
  *
- * Two questions, answered in order: can agents look at all, and where may
- * they look. The apps route is the Computer plugin's (its own settings page
- * holds the helper, the macOS permissions and the apps list); here it is one
- * row, shown only when the plugin is installed. The live view of what an
- * agent is doing is not here: it is on the Canvas of the conversation doing it,
- * and this page only says who is driving and links there.
+ * Permissions and health, one row per route, a repair where health is red; no
+ * radio buttons. Agents pick where to look for each task: buddi's own browser
+ * first, the owner's Chrome for a site that needs his sign-in, an app when he
+ * names one. This page says what they may use. The live view of what an agent
+ * is doing is not here: it is the Page tab on the Canvas of the conversation.
+ *
+ * The apps row exists only when a plugin provides the route (the Computer
+ * plugin); its own settings page (helper, macOS permissions, the allowed apps)
+ * opens from the row's Settings. Without it, one line offers the plugin.
  */
-import { useEffect, useState } from 'react';
-import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { api, type AgentEngine, type BrowserRoute, type BrowserRouteStatus, type BrowserStatus, type ControlSettings, type ExtensionState } from '../api';
 import { fmtClock, fmtTime } from '../format';
 import { chatRoute, pluginSettingsRoute } from '../routes';
-import { InstallProgress } from './parts/InstallProgress';
-import { Avatar, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Spacer, Stack, Switch, Toolbar, useAsync } from '../ui';
-import { RemoteHand } from './RemoteHand';
+import { ActionMenu, Avatar, Icon, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, Panel, Pill, Segment, Sheet, Spacer, Switch, Toolbar, useAsync } from '../ui';
 import { useThisMachine } from '../useThisMachine';
 
-export function Browser({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
+/** The fix Ubuntu's AppArmor needs before Chromium's sandbox starts (docs/browser.md, Linux). */
+export const SANDBOX_COMMAND = 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0';
+
+export function Browser({ timezone, navigate }: { embedded?: boolean; timezone?: string; navigate?: (route: string) => void } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
   const session = useAsync(() => api.session(), []);
-  // The Computer plugin is macOS-only: elsewhere the page does not offer it.
+  // Computer control is macOS-only. An unreadable or older session answer keeps the page as it was.
   const macOS = session.data?.platform ? session.data.platform === 'darwin' : true;
   const settled = !!session.data || !!session.error;
+  const go = (route: string) => { if (navigate) navigate(route); else window.location.hash = route; };
   return (
-    <PageFrame embedded={embedded} title="Computer & browser">
+    <div className="ui-stack br-looking" data-gap="lg">
       <ErrorBanner message={error} />
-      {!data || !settled ? <Empty>Checking the host…</Empty> : <ControlSettingsView key={JSON.stringify(data.settings ?? null)} data={data} macOS={macOS} reload={reload} timezone={timezone} />}
-    </PageFrame>
+      {!data || !settled ? <Empty>Checking where agents may look…</Empty>
+        : <WhereAgentsLook data={data} macOS={macOS} reload={reload} timezone={timezone} go={go} />}
+    </div>
   );
 }
 
-function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserStatus; macOS: boolean; reload: () => void; timezone?: string }): JSX.Element {
+/* ---------------- small parts, as the kit draws them ---------------- */
+
+function Glyph({ kind }: { kind: 'own' | 'chrome' | 'apps' }): JSX.Element {
+  const svg = {
+    own: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="2.8" y="3.6" width="14.4" height="12.8" rx="1.8" /><path d="M2.8 7.2h14.4M5.4 5.4h.1M7.4 5.4h.1" /></svg>,
+    chrome: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="7.1" /><circle cx="10" cy="10" r="2.6" /><path d="M10 7.4h6.6M7.8 11.4 4.4 5.6M12.2 11.4 9 16.9" /></svg>,
+    apps: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="6" height="6" rx="1.4" /><rect x="11" y="3" width="6" height="6" rx="1.4" /><rect x="3" y="11" width="6" height="6" rx="1.4" /><rect x="11" y="11" width="6" height="6" rx="1.4" /></svg>,
+  }[kind];
+  return <span className="br-glyph" aria-hidden="true">{svg}</span>;
+}
+
+/** The two lines under a row's name: what it is for, then what is wrong (or happening) now. */
+function Lines({ line, status, tone, children }: { line: ReactNode; status?: ReactNode; tone?: 'critical' | 'warning'; children?: ReactNode }): JSX.Element {
+  return (
+    <>
+      <span className="pl-row-line">{line}</span>
+      {status ? <span className="pl-row-status" data-tone={tone}>{status}</span> : null}
+      {children}
+    </>
+  );
+}
+
+/** A command to run once, with Copy. */
+function CopyLine({ text }: { text: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="br-copy">
+      <code className="mono">{text}</code>
+      <Button size="sm" variant="ghost" onClick={() => { void navigator.clipboard?.writeText(text).then(() => setCopied(true), () => undefined); }}>{copied ? 'Copied' : 'Copy'}</Button>
+    </span>
+  );
+}
+
+/** A label and a hint on the left, the control on the right: the kit's Pref. */
+function Pref({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }): JSX.Element {
+  return (
+    <div className="br-adv-row">
+      <span className="br-adv-head"><span className="br-adv-title">{label}</span>{hint ? <span className="br-adv-hint">{hint}</span> : null}</span>
+      {children}
+    </div>
+  );
+}
+
+/** `com.apple.iWork.Numbers` → `Numbers`: a name to say in a line, without asking Spotlight. */
+export function appWord(bundleId: string): string {
+  const last = bundleId.split('.').filter(Boolean).at(-1) ?? bundleId;
+  return last.charAt(0).toUpperCase() + last.slice(1);
+}
+
+/** `Numbers, Preview and 2 more`. */
+function listWords(names: string[]): string {
+  if (names.length <= 2) return names.join(' and ');
+  return `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+}
+
+const PIN_CHOICES: Array<{ value: 'auto' | BrowserRoute; label: string }> = [
+  { value: 'auto', label: 'Let it choose' },
+  { value: 'own', label: 'Its own browser only' },
+  { value: 'chrome', label: 'Your Chrome first' },
+  { value: 'apps', label: 'Your apps first' },
+];
+
+/** Where an agent may look, as a select: the Advanced list and the agent's own page. */
+export function PinSelect({ value, label, apps, disabled, onChange }: { value: 'auto' | BrowserRoute; label: string; apps: boolean; disabled?: boolean; onChange: (value: 'auto' | BrowserRoute) => void }): JSX.Element {
+  return (
+    <select className="br-select" value={value} aria-label={label} disabled={disabled} onChange={(event) => onChange(event.target.value as 'auto' | BrowserRoute)}>
+      {PIN_CHOICES.filter((choice) => apps || choice.value !== 'apps' || value === 'apps').map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+    </select>
+  );
+}
+
+/** Whether a plugin provides the apps route here. */
+export function appsProvided(route: BrowserRouteStatus | undefined): boolean {
+  return route?.installed === true;
+}
+
+/* ---------------- the page ---------------- */
+
+type ChromeState = 'none' | 'pair' | 'broken' | 'notrunning' | 'connected';
+
+/**
+ * Which of the kit's Chrome states this is. `broken` is a pairing this buddi
+ * still holds that the extension in this browser has forgotten: the only way
+ * a page can tell, since the gateway cannot see a pairing it has lost.
+ */
+export function chromeState(ext: ExtensionState | undefined, probe: ExtensionProbe | null): ChromeState {
+  if (!ext) return 'none';
+  if (ext.pending) return 'pair';
+  if (!ext.pairedAt) return probe && probe.state !== 'paired' ? 'pair' : 'none';
+  if (ext.connected) return 'connected';
+  if (probe && probe.state !== 'paired' && sameGateway(probe.gateway)) return 'broken';
+  return 'notrunning';
+}
+
+function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserStatus; macOS: boolean; reload: () => void; timezone?: string; go: (route: string) => void }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  // Where agents may look: permissions, not a mode. The kit-driven redesign of this page is the next step;
-  // until then the routes are switches here (docs/browser.md).
-  const settings = data.settings;
-  const chromeRoute = data.routes?.find((route) => route.kind === 'chrome');
-  // Your apps: a route the Computer plugin provides; without it, one line offering the plugin.
-  const appsRoute = data.routes?.find((route) => route.kind === 'apps');
-  const appsInstalled = appsRoute?.installed === true;
-  const sessions = data.sessions?.length ? data.sessions : data.session ? [data] : [];
-  const active = sessions.length > 0 || data.busy;
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true); setFailure(null);
-    try { await action(); } catch (error) { setFailure(error instanceof Error ? error.message : String(error)); }
+    try { await action(); } catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); reload(); }
   };
+  const settings = data.settings;
   const save = (next: Partial<ControlSettings>) => void run(() => api.browserSettings(next));
-  // The agents' own browser: none installed, or installed but unable to start, is not ready.
-  const own = data.browser;
-  const installing = own?.install?.state === 'running';
-  const noBrowser = own?.engine === 'none';
-  const ready = !!data.enabled && !noBrowser && !own?.problem;
-  const readyLine = 'Ready. Agents look in their own browser, in the background; your Chrome only for sites that need your sign-in, when you allow it.';
+  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const appsRoute = data.routes?.find((route) => route.kind === 'apps');
+  const showApps = appsProvided(appsRoute);
+  const sessions = data.sessions?.length ? data.sessions : data.session ? [data] : [];
 
   return (
-    <Stack gap="lg">
+    <>
+      <Notice>Agents pick where to look for each task: their own browser first, your Chrome for a site that needs your sign-in, an app when you name one. You don’t choose each time; here you say what they may use.</Notice>
       <ErrorBanner message={failure} />
+      {!data.enabled ? <Notice tone="warning">Agents can’t look at pages from here. Start buddi serve on the machine buddi runs on.</Notice> : null}
+      {data.stop ? (
+        <Notice tone="warning" role="status" action={<Button size="sm" variant="accent" disabled={busy} onClick={() => void run(() => api.browserControl('resume'))}>Resume</Button>}>
+          {`Agents’ browsing is paused since ${fmtClock(new Date(data.stop.at), zone)}, by you from the Canvas, ${data.stop.until ? `until ${fmtClock(new Date(data.stop.until), zone)}` : 'until you resume it'}. An agent that needs a page asks you in its chat.`}
+        </Notice>
+      ) : null}
 
-      <Section
-        title="Status"
-        panel
-        actions={
-          <>
-            <Button size="sm" disabled={busy} onClick={() => void run(async () => undefined)}>Check again</Button>
-            {noBrowser || installing ? <Button size="sm" variant="accent" disabled={busy || installing} onClick={() => void run(() => api.browserInstall())}>{installing ? 'Installing…' : 'Install Chromium'}</Button> : null}
-          </>
-        }
-      >
-        <Stack>
-          {!data.enabled ? (
-            <Notice tone="warning">The host is not available. Start buddi serve on a machine with a desktop session.</Notice>
-          ) : noBrowser ? (
-            <Notice tone="warning" title="No browser installed for the agents yet">
-              Install Chromium here (about 150 MB), or run <code>buddi browser install</code> on this machine.
-            </Notice>
-          ) : own?.problem ? (
-            <Notice tone="warning">{own.message}</Notice>
-          ) : ready ? (
-            <Notice tone="good">{readyLine}</Notice>
-          ) : null}
-          {/* A bar and one line in buddi's words while it runs; the
-              installer's own progress text never reaches the page. */}
-          {own?.install?.state === 'running' ? (
-            <InstallProgress progress={own.install.progress} />
-          ) : own?.install ? (
-            <p className="muted" role="status">
-              {own.install.state === 'done' ? 'Chromium is installed. Agents can open their browser now.'
-                : `The install did not finish: ${own.install.line ?? 'no reason given'}`}
-            </p>
-          ) : null}
-          {own?.headless && !noBrowser ? <p className="muted">The agents’ browser runs headless on this machine, since it has no display. Watch it and take over from the conversation’s Canvas.</p> : null}
-        </Stack>
-      </Section>
+      <Panel title="Browsers and apps" flush>
+        <div className="ui-list">
+          <OwnRow data={data} busy={busy} run={run} />
+          {settings ? <ChromeRow settings={settings} busy={busy || !data.enabled} save={save} zone={zone} /> : null}
+          {showApps && settings ? <AppsRow route={appsRoute!} settings={settings} busy={busy || !data.enabled} save={save} run={run} onSettings={() => go(pluginSettingsRoute(appsRoute!.provider || 'computer'))} /> : null}
+        </div>
+      </Panel>
+      {!showApps && macOS ? <p className="pl-note br-foot" data-testid="computer-plugin-offer">Agents can also work in apps on this Mac with the Computer plugin. <a href="#/settings/plugins?tab=browse&kind=plugins">See plugins</a></p> : null}
 
-      <Section
-        title="Who is driving"
-        panel
-        actions={sessions.length > 0 ? (
-          <Button variant="danger" size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>Stop agents’ browsing</Button>
-        ) : undefined}
-      >
-        {sessions.length === 0 ? (
-          <p className="ui-card-meta">Nobody right now. Ask an agent to open a website or one of the allowed apps, and you will see it working on that conversation’s Canvas.</p>
-        ) : (
+      {sessions.length > 0 ? (
+        <Panel title="Looking now" flush actions={<Button size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>Stop agents’ browsing</Button>}>
           <div className="ui-list">
             {sessions.map((s) => (
-              <a key={s.session!.id} className="ui-list-row" href={chatRoute(s.session!.agentId, s.session!.conversationId)}>
+              <a key={s.session!.id} className="ui-list-row" href={chatRoute(s.session!.agentId, s.session!.conversationId, 'browser')}>
                 <Avatar id={s.session!.agentId} name={s.session!.agentId} size="sm" />
                 <span className="ui-list-main">
-                  <span className="ui-list-title">{s.session!.task}</span>
-                  <span className="ui-list-sub">{s.session!.agentId}, {s.needsOwner ? 'waiting for you' : s.busy ? 'working' : s.state}{s.route === 'chrome' ? ', in your Chrome' : s.route === 'apps' ? ', in your apps' : ''}</span>
+                  <span className="ui-list-title">{s.page?.title || s.session!.task}</span>
+                  <span className="ui-list-sub">{lookingLine(s)}</span>
                 </span>
                 <span className="ui-list-side">Open the Canvas</span>
               </a>
             ))}
           </div>
-        )}
-      </Section>
-
-      {settings ? (
-        <>
-          <Section title="Where agents may look" panel>
-            <Stack divided>
-              <div className="ui-list-row">
-                <span className="ui-list-main">
-                  <span className="ui-list-title">Their own browser</span>
-                  <span className="ui-list-sub">Always on. A separate profile, in the background; you watch and take over on the conversation’s Canvas.</span>
-                </span>
-                <Switch checked label="Their own browser" disabled onChange={() => undefined} />
-              </div>
-              <div className="ui-list-row">
-                <span className="ui-list-main">
-                  <span className="ui-list-title">Your Chrome</span>
-                  <span className="ui-list-sub">For sites that need your sign-in, in background tabs, through the buddi extension.{chromeRoute?.message ? ` ${chromeRoute.message}` : ''}</span>
-                </span>
-                <Switch checked={settings.yourChrome} label="Your Chrome" disabled={busy || !data.enabled} onChange={(on) => save({ yourChrome: on })} />
-              </div>
-              {appsInstalled ? (
-                <div className="ui-list-row">
-                  <span className="ui-list-main">
-                    <span className="ui-list-title">Your apps</span>
-                    <span className="ui-list-sub">
-                      {settings.yourApps === 'off' ? 'Off. Agents tell you when a task needs an app.' : 'From the Computer plugin · when you name an app.'}
-                      {appsRoute?.message && settings.yourApps !== 'off' && !appsRoute.available ? <span className="pl-row-status" data-tone="critical"> {appsRoute.message}</span> : null}
-                    </span>
-                  </span>
-                  <Toolbar>
-                    {settings.yourApps !== 'off' && appsRoute?.available ? <Pill tone="good">ready</Pill> : null}
-                    <Switch checked={settings.yourApps !== 'off'} label="Let agents use your apps" disabled={busy || !data.enabled} onChange={(on) => save({ yourApps: on ? 'on' : 'off' })} />
-                    <ButtonLink size="sm" variant="ghost" href={pluginSettingsRoute(appsRoute?.provider || 'computer')}>Settings</ButtonLink>
-                  </Toolbar>
-                </div>
-              ) : null}
-              {data.stop ? (
-                <Notice tone="warning" title="Browsing is stopped">
-                  Since {fmtTime(data.stop.at, timezone ?? 'UTC')}{data.stop.until ? `, until ${fmtTime(data.stop.until, timezone ?? 'UTC')}` : ', until you resume it'}.{' '}
-                  <Button size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('resume'))}>Resume</Button>
-                </Notice>
-              ) : null}
-              {settings.yourChrome ? <ExtensionPairing busy={busy} timezone={timezone} /> : null}
-            </Stack>
-          </Section>
-          {macOS && !appsInstalled ? (
-            <p className="muted" data-testid="computer-plugin-offer">
-              Agents can also work in apps on this Mac with the Computer plugin.{' '}
-              <a href="#/settings/plugins?tab=browse&kind=plugins">See plugins</a>
-            </p>
-          ) : null}
-
-        </>
+        </Panel>
       ) : null}
-    </Stack>
+
+      {settings ? <Advanced settings={settings} busy={busy} save={save} run={run} showApps={showApps} /> : null}
+    </>
+  );
+}
+
+/** "Looking at amazon.com · in your Chrome · background tab": the Page tab's quiet line. */
+export function lookingLine(status: BrowserStatus): string {
+  if (status.needsOwner) return `Waiting for you · ${status.needsOwner.kind === 'human' ? 'it asks for a human' : status.needsOwner.kind === 'uncertain' ? 'did that click land?' : status.needsOwner.kind === 'budget' ? 'keep going?' : 'it asks for your sign-in'}`;
+  if (status.route === 'apps') return `Working in ${status.page?.appId ? appWord(status.page.appId) : 'an app'} · its own window`;
+  const site = siteOfUrl(status.page?.url);
+  return `Looking at ${site ?? 'a page'} · ${status.route === 'chrome' ? 'in your Chrome · background tab' : 'in buddi’s browser'}`;
+}
+
+/** The host without `www.`, as the runtime names a site. */
+export function siteOfUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try { return new URL(url).hostname.replace(/^www\./, '') || undefined; } catch { return undefined; }
+}
+
+/* ---- buddi's own browser: always on, health only ---- */
+
+function OwnRow({ data, busy, run }: { data: BrowserStatus; busy: boolean; run: (action: () => Promise<unknown>) => Promise<void> }): JSX.Element {
+  const own = data.browser;
+  const install = own?.install;
+  const purpose = data.settings?.showWindow ? 'For every page, in a window on this machine' : 'For every page, out of sight';
+  let sub: ReactNode;
+  let side: ReactNode;
+  if (install?.state === 'running') {
+    const percent = install.progress?.percent;
+    sub = <Lines line={purpose} status={<span className="br-installing"><span className="pl-spin" aria-hidden="true" />{`Installing Chromium…${percent !== undefined ? ` ${Math.round(percent)}%` : ''}`}</span>} />;
+    side = null;
+  } else if (own?.engine === 'none') {
+    sub = <Lines line={purpose} tone="critical" status={install?.state === 'failed' ? `The install didn’t finish: ${install.line ?? 'no reason given'}` : 'Chromium isn’t installed, so agents can’t look at pages yet.'} />;
+    side = <Button size="sm" variant="accent" disabled={busy} onClick={() => void run(() => api.browserInstall())}>Install · 150 MB</Button>;
+  } else if (own?.problem === 'no-sandbox') {
+    sub = <Lines line={purpose} tone="critical" status="Linux blocks its sandbox (AppArmor). Run this once, then Check again:"><CopyLine text={SANDBOX_COMMAND} /></Lines>;
+    side = <Button size="sm" disabled={busy} onClick={() => void run(() => api.browserCheck())}>Check again</Button>;
+  } else if (own?.problem) {
+    sub = <Lines line={purpose} tone="critical" status={own.message ?? 'It doesn’t start on this machine.'} />;
+    side = <Button size="sm" disabled={busy} onClick={() => void run(() => api.browserCheck())}>Check again</Button>;
+  } else {
+    sub = data.settings?.showWindow ? 'For every page, in a window on this machine. You also watch it on the Canvas.' : 'For every page, out of sight. You watch it on the Canvas.';
+    side = data.enabled ? <Pill tone="good" dot>ready</Pill> : null;
+  }
+  return (
+    <div className="ui-list-row">
+      <Glyph kind="own" />
+      <span className="ui-list-main"><span className="ui-list-title">buddi’s own browser</span><span className="ui-list-sub">{sub}</span></span>
+      {side ? <span className="ui-list-side"><span className="br-side">{side}</span></span> : null}
+    </div>
+  );
+}
+
+/* ---- your Chrome: the switch once paired; Add to Chrome, the code, Pair again otherwise ---- */
+
+function ChromeRow({ settings, busy, save, zone }: { settings: ControlSettings; busy: boolean; save: (next: Partial<ControlSettings>) => void; zone: string }): JSX.Element {
+  const ext = useAsync(() => api.extension(), [], 3_000);
+  const probe = useAsync(() => askExtension(), [], 3_000).data ?? null;
+  const thisMachine = useThisMachine();
+  const [code, setCode] = useState('');
+  const [working, setWorking] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [forgetting, setForgetting] = useState(false);
+  const [unpacked, setUnpacked] = useState(false);
+  const state = chromeState(ext.data, probe);
+  const target = installTarget();
+  const act = async (action: () => Promise<unknown>) => {
+    setWorking(true); setFailure(null);
+    try { await action(); } catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
+    finally { setWorking(false); ext.reload(); }
+  };
+  /*
+   * The code is on screen in the extension's popup, in this very browser: the
+   * page reads it and pairs by itself, so the owner never types it. A code the
+   * page cannot read (another browser) is typed once.
+   */
+  const offered = ext.data?.pending && probe?.state === 'pairing' ? probe.code ?? '' : '';
+  const tried = useRef('');
+  useEffect(() => {
+    if (!offered || tried.current === offered || working) return;
+    tried.current = offered;
+    void act(() => api.pairExtension(offered));
+  }, [offered]);
+  const disabled = busy || working;
+  const paired = ext.data?.pairedAt ? `paired ${fmtTime(ext.data.pairedAt, zone)}` : null;
+  const version = probe?.version ?? ext.data?.extension;
+  const more = (
+    <ActionMenu label="More for your Chrome" items={[
+      paired || state === 'broken' || state === 'notrunning' || state === 'connected' ? { label: 'Pair again', hint: [version ? `Extension ${version}` : null, paired].filter(Boolean).join(' · ') || undefined, onSelect: () => void act(() => api.forgetExtension()) } : null,
+      { label: 'Install unpacked…', hint: 'For a developer build of the extension', onSelect: () => setUnpacked(true) },
+      ext.data?.pairedAt ? 'separator' : null,
+      ext.data?.pairedAt ? { label: 'Forget this Chrome…', tone: 'critical', onSelect: () => setForgetting(true) } : null,
+    ]} />
+  );
+  const sites = settings.signInSites;
+  const sitesLine = sites.length > 0 ? `Always for ${listWords(sites)}` : null;
+  let sub: ReactNode;
+  let side: ReactNode;
+  if (state === 'none') {
+    sub = <Lines line="For sites that need your sign-in" status={target === 'chromium'
+      ? 'Add the buddi extension to Chrome, then pair it here. Until then agents use their own browser and your saved logins.'
+      : `The buddi extension runs in Chrome, Edge, Brave or Arc on a computer: add it there, then pair it on this page. Until then agents use their own browser and your saved logins.`} />;
+    side = <>{target === 'chromium' ? <ButtonLink size="sm" variant="accent" href={STORE_URL} target="_blank" rel="noopener noreferrer">Add to Chrome <span aria-hidden="true">↗</span></ButtonLink> : null}{more}</>;
+  } else if (state === 'pair') {
+    const found = probe ? `Extension ${probe.version} found in Chrome` : 'The buddi extension asks to pair';
+    sub = offered ? (
+      <Lines line={found} status="Pairing with the code the extension shows. This finishes by itself."><span className="br-code mono" aria-label="Pairing code">{offered.replace(/^(\d{3})(\d{3})$/, '$1 · $2')}</span></Lines>
+    ) : ext.data?.pending ? (
+      <Lines line={found} status="Type the six digits the extension shows. This finishes by itself.">
+        <span className="br-pair">
+          <input aria-label="Pairing code" inputMode="numeric" placeholder="482 913" value={code} onChange={(e) => setCode(e.target.value)} />
+          <Button size="sm" variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void act(async () => { await api.pairExtension(code); setCode(''); })}>Pair</Button>
+        </span>
+      </Lines>
+    ) : <Lines line={found} status="Open the extension and press Connect: it shows a code, and this page pairs with it." />;
+    side = more;
+  } else if (state === 'broken') {
+    sub = <Lines line="Used only for sites that need your sign-in" tone="critical" status="Chrome forgot the pairing, so agents use their own browser instead." />;
+    side = <><Button size="sm" variant="accent" disabled={disabled} onClick={() => void act(() => api.forgetExtension())}>Pair again</Button>{more}</>;
+  } else {
+    const line = !settings.yourChrome ? 'Off. Sites that need a sign-in use your saved logins, or ask you.'
+      : state === 'notrunning' ? `Used only for sites that need your sign-in · Chrome isn’t open on ${thisMachine}; agents wait or use their own browser`
+      : 'Used only for sites that need your sign-in · background tabs in a buddi group';
+    sub = sitesLine && settings.yourChrome ? <Lines line={line} status={sitesLine} /> : line;
+    side = (
+      <>
+        {settings.yourChrome ? (state === 'notrunning' ? <Pill>Chrome closed</Pill> : <Pill tone="good" dot>connected</Pill>) : null}
+        <Switch checked={settings.yourChrome} label="Let agents use your Chrome" disabled={disabled} onChange={(on) => save({ yourChrome: on })} />
+        {more}
+      </>
+    );
+  }
+  const outdated = probe && ext.data?.extensionMinimum && olderExtension(probe.version, ext.data.extensionMinimum)
+    ? `This extension is ${probe.version}; this buddi needs ${ext.data.extensionMinimum} or later. Update it from chrome://extensions or the store.` : null;
+  const elsewhere = probe && !sameGateway(probe.gateway) ? `The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in its popup.` : null;
+  return (
+    <>
+      <div className="ui-list-row">
+        <Glyph kind="chrome" />
+        <span className="ui-list-main">
+          <span className="ui-list-title">Your Chrome</span>
+          <span className="ui-list-sub">{sub}{outdated ? <span className="pl-row-status" data-tone="warning">{outdated}</span> : null}{elsewhere ? <span className="pl-row-status" data-tone="warning">{elsewhere}</span> : null}{failure ?? ext.error ? <span className="pl-row-status" data-tone="critical">{failure ?? ext.error}</span> : null}</span>
+        </span>
+        <span className="ui-list-side"><span className="br-side">{side}</span></span>
+      </div>
+      {forgetting ? (
+        <div className="br-confirm">
+          <Notice tone="warning" action={<Toolbar align="end"><Button size="sm" variant="ghost" onClick={() => setForgetting(false)}>Cancel</Button><Button size="sm" variant="danger" disabled={disabled} onClick={() => { setForgetting(false); void act(() => api.forgetExtension()); }}>Forget</Button></Toolbar>}>
+            Forget this Chrome? Agents stop using it until you pair it again.
+          </Notice>
+        </div>
+      ) : null}
+      {unpacked ? (
+        <Sheet title="Install the extension unpacked" onClose={() => setUnpacked(false)}>
+          <div className="ui-prose muted">
+            <p>For a developer build. Open chrome://extensions, turn on Developer mode, choose Load unpacked, and pick this folder. Then pair it on this page.</p>
+          </div>
+          <Code label="The unpacked extension">{ext.data?.path ?? '…'}</Code>
+        </Sheet>
+      ) : null}
+    </>
+  );
+}
+
+/* ---- your apps: only when a provider exists ---- */
+
+function AppsRow({ route, settings, busy, save, run, onSettings }: { route: BrowserRouteStatus; settings: ControlSettings; busy: boolean; save: (next: Partial<ControlSettings>) => void; run: (action: () => Promise<unknown>) => Promise<void>; onSettings: () => void }): JSX.Element {
+  const on = settings.yourApps !== 'off';
+  const from = `From the ${route.label ?? appWord(route.provider.replace(/^@withbuddi\/plugin-/, ''))} plugin`;
+  const broken = on && !route.available && !!route.message;
+  const sub = broken
+    ? <Lines line={from} tone="critical" status={route.message} />
+    : on ? `${from} · ${settings.yourApps === 'ask' ? 'asks for each app' : 'when you name an app'}` : 'Off. Agents tell you when a task needs an app.';
+  return (
+    <div className="ui-list-row">
+      <Glyph kind="apps" />
+      <span className="ui-list-main"><span className="ui-list-title">Your apps</span><span className="ui-list-sub">{sub}</span></span>
+      <span className="ui-list-side">
+        <span className="br-side">
+          {broken && route.repair === 'permissions' ? <Button size="sm" variant="accent" onClick={onSettings}>Allow in macOS</Button> : null}
+          {!broken && on ? <Pill tone="good" dot>ready</Pill> : null}
+          {broken && route.repair === 'permissions' ? null : <Switch checked={on} label="Let agents use your apps" disabled={busy} onChange={(next) => save({ yourApps: next ? 'on' : 'off' })} />}
+          <Button size="sm" variant="ghost" aria-label="Manage apps" onClick={onSettings}>Settings<Icon name="chevron-right" size={12} /></Button>
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/* ---- Advanced: the first choice, the agents' own rules, the Stop, the cap, the window ---- */
+
+function Advanced({ settings, busy, save, run, showApps }: { settings: ControlSettings; busy: boolean; save: (next: Partial<ControlSettings>) => void; run: (action: () => Promise<unknown>) => Promise<void>; showApps: boolean }): JSX.Element {
+  const agents = useAsync(() => api.agents(), []);
+  const engines: AgentEngine[] = agents.data?.engines ?? [];
+  const ruled = engines.filter((engine) => engine.browser && engine.browser !== 'auto');
+  const free = engines.filter((engine) => !engine.browser || engine.browser === 'auto');
+  const [adding, setAdding] = useState(false);
+  const [pick, setPick] = useState('');
+  const [rule, setRule] = useState<'auto' | BrowserRoute>('own');
+  const [site, setSite] = useState('');
+  const setPin = (id: string, browser: 'auto' | BrowserRoute) => void run(async () => { await api.setAgentEngine(id, { browser }); agents.reload(); });
+  const first = settings.defaultRoute === 'apps' ? 'auto' : settings.defaultRoute;
+  const pages = [1, 3, 5].includes(settings.maxOwnPages) ? [1, 3, 5] : [1, 3, 5, settings.maxOwnPages].sort((a, b) => a - b);
+  const addSite = () => {
+    const host = site.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
+    if (!host || settings.signInSites.includes(host)) { setSite(''); return; }
+    save({ signInSites: [...settings.signInSites, host] });
+    setSite('');
+  };
+  return (
+    <Details boxed summary="Advanced">
+      <div className="br-adv">
+        <Pref label="First choice for every agent" hint="Let them choose is right for almost everyone: a wrong guess costs one extra page load, never a stop.">
+          <Segment label="First choice for every agent" value={first} onChange={(value) => save({ defaultRoute: value })}
+            options={[{ value: 'auto', label: 'Let them choose' }, { value: 'own', label: 'Own browser only' }, { value: 'chrome', label: 'Your Chrome first' }]} />
+        </Pref>
+        <div className="br-adv-block">
+          <span className="br-adv-head"><span className="br-adv-title">Agents with their own rule</span><span className="br-adv-hint">Also on each agent’s page, under Where it may look. A rule never allows what is off above.</span></span>
+          {ruled.length ? (
+            <div className="ui-list">
+              {ruled.map((engine) => (
+                <div key={engine.id} className="ui-list-row">
+                  <Avatar id={engine.id} name={engine.name} size="sm" />
+                  <span className="ui-list-main"><span className="ui-list-title">{engine.name}</span></span>
+                  <span className="ui-list-side">
+                    <PinSelect value={engine.browser ?? 'auto'} label={`Where ${engine.name} may look`} apps={showApps} disabled={busy} onChange={(value) => setPin(engine.id, value)} />
+                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => setPin(engine.id, 'auto')}>Remove</Button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : <p className="br-adv-empty">No agent has its own rule. Every agent follows the first choice.</p>}
+          {adding ? (
+            <Toolbar>
+              <select className="br-select" aria-label="Agent" value={pick} onChange={(event) => setPick(event.target.value)}>
+                <option value="">Choose an agent</option>
+                {free.map((engine) => <option key={engine.id} value={engine.id}>{engine.name}</option>)}
+              </select>
+              <PinSelect value={rule} label="Its rule" apps={showApps} onChange={setRule} />
+              <Spacer />
+              <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
+              <Button size="sm" variant="accent" aria-label="Add this rule" disabled={busy || !pick || rule === 'auto'} onClick={() => { setPin(pick, rule); setAdding(false); setPick(''); }}>Add</Button>
+            </Toolbar>
+          ) : (
+            <Toolbar><Button size="sm" disabled={free.length === 0} onClick={() => setAdding(true)}><span aria-hidden="true">+</span> Give an agent its own rule</Button></Toolbar>
+          )}
+        </div>
+        <div className="br-adv-block">
+          <span className="br-adv-head"><span className="br-adv-title">Sites that need your sign-in</span><span className="br-adv-hint">Always looked at in your Chrome while it is on and connected. buddi adds a site when it meets its sign-in page.</span></span>
+          {settings.signInSites.length ? (
+            <span className="br-sites">
+              {settings.signInSites.map((host) => (
+                <span key={host} className="br-site-chip mono">{host}<button type="button" aria-label={`Remove ${host}`} disabled={busy} onClick={() => save({ signInSites: settings.signInSites.filter((s) => s !== host) })}>×</button></span>
+              ))}
+            </span>
+          ) : <p className="br-adv-empty">None yet.</p>}
+          <form className="br-site-add" onSubmit={(event) => { event.preventDefault(); addSite(); }}>
+            <input aria-label="A site that needs your sign-in" placeholder="amazon.com" value={site} onChange={(event) => setSite(event.target.value)} />
+            <Button size="sm" type="submit" disabled={busy || !site.trim()}>Add</Button>
+          </form>
+        </div>
+        <Pref label="Stop agents’ browsing lasts" hint="What Stop in the Canvas does. Resume from the chat card, here, or /browser resume on Telegram.">
+          <Segment label="Stop agents’ browsing lasts" value={settings.stopExpiryMinutes === 0 ? 'until' : 'hour'} onChange={(value) => save({ stopExpiryMinutes: value === 'until' ? 0 : 60 })}
+            options={[{ value: 'hour', label: 'An hour' }, { value: 'until', label: 'Until I say' }]} />
+        </Pref>
+        <Pref label="Pages open at once" hint="In buddi’s own browser. One more waits its turn; nothing is refused.">
+          <Segment label="Pages open at once" value={String(settings.maxOwnPages)} onChange={(value) => save({ maxOwnPages: Number(value) })}
+            options={pages.map((n) => ({ value: String(n), label: String(n) }))} />
+        </Pref>
+        <Pref label="Show buddi’s browser as a window" hint="Off: it works out of sight and you watch on the Canvas. On for the few sites that refuse a hidden browser.">
+          <Switch checked={settings.showWindow} label="Show buddi’s browser as a window" disabled={busy} onChange={(on) => save({ showWindow: on })} />
+        </Pref>
+        <p className="br-adv-empty">Missions run without you, so they look only in buddi’s own browser, never in your Chrome.</p>
+      </div>
+    </Details>
   );
 }
 
@@ -216,7 +501,7 @@ export function olderExtension(a: string, b: string): boolean {
 }
 
 /** What the extension answers `buddi.status` with. */
-interface ExtensionProbe {
+export interface ExtensionProbe {
   installed: true;
   version: string;
   state: 'disconnected' | 'pairing' | 'paired';
@@ -268,277 +553,3 @@ function sameGateway(gateway: string): boolean {
   try { return new URL(gateway).origin === window.location.origin; } catch { return false; }
 }
 
-/**
- * Pair your browser, and say where the extension lives.
- *
- * Its own poll rather than a field on the browser status: the connection comes
- * and goes with Chrome, and the pairing code appears while this page is open.
- * The extension is polled from here too, on the same three seconds, so the
- * owner is told which half is missing instead of being left to guess: a page
- * that waits for a code no extension is showing looks broken.
- */
-function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string }): JSX.Element {
-  const { data, error, reload } = useAsync(() => api.extension(), [], 3_000);
-  const thisMachine = useThisMachine();
-  const probe = useAsync(() => askExtension(), [], 3_000).data ?? null;
-  const [code, setCode] = useState('');
-  const [working, setWorking] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  // The code is on screen in the popup already; typing it again is busywork.
-  const offered = probe?.state === 'pairing' ? probe.code ?? '' : '';
-  useEffect(() => { if (offered) setCode(offered); }, [offered]);
-  const run = async (action: () => Promise<unknown>) => {
-    setWorking(true); setFailure(null);
-    try { await action(); } catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
-    finally { setWorking(false); reload(); }
-  };
-  const disabled = busy || working;
-  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const target = installTarget();
-  // The store first; the unpacked folder stays for a developer, folded away.
-  const install = target === 'phone' ? null : target === 'other' ? (
-    <p className="muted">The buddi extension needs Chrome, Edge, Brave or Arc on a computer. Open this page in one of them to install it.</p>
-  ) : (
-    <Stack>
-      <Toolbar>
-        <span className="muted">Install the buddi extension from the Chrome Web Store, then pair it here.</span>
-        <Spacer />
-        <ButtonLink variant="accent" href={STORE_URL} target="_blank" rel="noopener noreferrer">Add to Chrome</ButtonLink>
-      </Toolbar>
-      <Details summary="Developer install">
-        <div className="ui-prose muted">
-          <p>Open chrome://extensions, turn on Developer mode, choose Load unpacked, and pick this folder.</p>
-          <Code label="The unpacked extension">{data?.path ?? '…'}</Code>
-        </div>
-      </Details>
-    </Stack>
-  );
-  return (
-    <Stack divided>
-      <ErrorBanner message={error ?? failure} />
-      <Toolbar>
-        <Pill tone={data?.connected ? 'good' : 'warning'}>{data?.connected ? 'Connected' : 'Not connected'}</Pill>
-        <span className="muted">
-          {data?.connected && data.pairedAt ? `Paired with Chrome on ${thisMachine} since ${fmtTime(data.pairedAt, zone)}`
-            : data?.pairedAt ? 'Paired, but Chrome is not running the extension right now.'
-            : 'No browser is paired with this buddi yet.'}
-          {data?.extension ? ` · extension ${data.extension}` : ''}
-        </span>
-      </Toolbar>
-      <Stack>
-        <p className="muted">
-          {probe ? `The browser you are reading this in has the extension, version ${probe.version}.`
-            : target === 'phone' ? 'The extension runs in Chrome, Edge, Brave or Arc on a computer: install and pair it from there.'
-            : data?.connected ? 'The browser you are reading this in has no buddi extension. You only need it here to pair this browser instead.'
-            : 'The browser you are reading this in has no buddi extension yet.'}
-          {probe?.state === 'paired' ? ' It is already paired with a buddi.' : ''}
-          {probe?.state === 'disconnected' ? ' It is not connected yet: press Connect in its popup.' : ''}
-        </p>
-        {/* Only below what this buddi needs. A newer store build is not a signal the gateway has, so it is not guessed at. */}
-        {probe && data?.extensionMinimum && olderExtension(probe.version, data.extensionMinimum) ? (
-          <p className="muted">{`This extension is ${probe.version}; this buddi needs ${data.extensionMinimum} or later. Update it from chrome://extensions or the store.`}</p>
-        ) : null}
-        {probe && !sameGateway(probe.gateway) ? (
-          <Notice tone="warning">{`The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in the popup.`}</Notice>
-        ) : null}
-      </Stack>
-      {data?.pending ? (
-        <Toolbar valign="end">
-          <Field grow label="Pair your browser" hint="Type the six digits the buddi extension is showing.">
-            <input aria-label="Pairing code" inputMode="numeric" placeholder="482 913" value={code} onChange={(e) => setCode(e.target.value)} />
-          </Field>
-          <Spacer />
-          <Button variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void run(async () => { await api.pairExtension(code); setCode(''); })}>Pair</Button>
-        </Toolbar>
-      ) : null}
-      {!install ? null : data?.connected ? <Details summary="Pair a different browser">{install}</Details> : install}
-      <Toolbar align="end">
-        <Button variant="danger" disabled={disabled || !data?.pairedAt} onClick={() => void run(() => api.forgetExtension())}>Forget this browser</Button>
-      </Toolbar>
-    </Stack>
-  );
-}
-
-/** Shared by the full page and the conversation's trusted canvas tab. */
-export function BrowserPanel({ data, error, reload, compact = false, refresh, screenshotSrc, onScreenshotError, onScreenshotLoad, controls = true }: {
-  data: BrowserStatus | undefined;
-  error: string | null;
-  reload: () => void;
-  compact?: boolean;
-  /**
-   * A picture to show instead of asking the route for one. The canvas hands
-   * over the last frame it kept when a session ends: the route has nothing
-   * left to serve by then, and an empty frame is a worse record of what the
-   * agent did than the one it actually left.
-   */
-  screenshotSrc?: string;
-  /** The picture did not arrive, so whoever is polling can slow down. */
-  onScreenshotError?: () => void;
-  /** It did, so they can stop counting failures. */
-  onScreenshotLoad?: () => void;
-  /**
-   * Whether the owner's controls are shown. They are not, once the session
-   * has ended: Stop is installation-wide, and offering it on a panel of
-   * history would stop a session this tab is not even showing.
-   */
-  controls?: boolean;
-  /**
-   * A counter the canvas advances while a session is alive. It goes on the
-   * screenshot's URL, so a new value is a new request for the last
-   * observation — which is how the preview keeps up with an agent that is
-   * working right now. Left out, the picture changes only when the
-   * observation does.
-   */
-  refresh?: number;
-}): JSX.Element {
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  /*
-   * The take-over that is also a hand.
-   *
-   * The gateway answers Take over with whether this mode can be driven from
-   * here, so the panel does not have to know which of the three is running.
-   * `driving` is the session that answer belonged to: a later status for some
-   * other session must not hand this tab a live view of a screen it never
-   * took over.
-   */
-  const [driving, setDriving] = useState<string | null>(null);
-  const [handNote, setHandNote] = useState<string | null>(null);
-  /*
-   * "Your browser" with Chrome closed on the host: the agent is paused, but
-   * there is no tab anywhere to show. The gateway says so (`handReason`), and
-   * the panel offers the two ways out instead of an empty live view.
-   */
-  const [offline, setOffline] = useState(false);
-  const machine = useThisMachine();
-  const control = async (action: 'stop' | 'takeover' | 'resume' | 'release') => {
-    setBusy(true);
-    setFailure(null);
-    setHandNote(null);
-    setOffline(false);
-    try {
-      const next = action !== 'stop' && data?.session
-        ? await api.browserControl(action, data.session.id)
-        : await api.browserControl(action);
-      if (action === 'takeover') {
-        if (next.hand && next.session) setDriving(next.session.id);
-        else if (next.handReason === 'browser-offline') setOffline(true);
-        else setHandNote(next.handMessage ?? null);
-      } else setDriving(null);
-    }
-    catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
-    finally { setBusy(false); reload(); }
-  };
-  /*
-   * The other way out: buddi's own browser. The mode is one setting for the
-   * whole installation, and it changes only with no session open, so this
-   * conversation's session is released first; the agent opens the page again
-   * in buddi's browser on the next message.
-   */
-  const switchToOwnBrowser = async () => {
-    if (!data?.settings) return;
-    setBusy(true);
-    setFailure(null);
-    try {
-      // Not a setting any more: this conversation is pinned to buddi's own browser.
-      if (data.session) {
-        await api.browserPin(data.session.conversationId, 'own');
-        await api.browserControl('release', data.session.id);
-      }
-      setOffline(false);
-      setDriving(null);
-      setHandNote('Switched to buddi\u2019s browser. Send the agent a message and it opens the page there.');
-    }
-    catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
-    finally { setBusy(false); reload(); }
-  };
-  // The hand lives exactly as long as the take-over does.
-  const hand = driving && data?.session?.id === driving && data.state === 'paused' ? driving : null;
-  const canControl = !!data?.enabled && !busy;
-  const computer = data?.mode === 'computer';
-  // The owner's own Chrome, through the extension: their tabs, not ours.
-  const yours = data?.mode === 'extension';
-  const help = computer ? 'Stop computer control interrupts native input and revokes access. Take over pauses agent input. Release ends this conversation’s control without closing your apps. Already dispatched actions cannot be undone. Avoid using the same mouse and keyboard while the agent is working.' : 'Stop all browsers closes every session and revokes access until you resume. Take over, Resume and Close & release affect only the selected conversation. An in-flight action is interrupted by closing its tabs. Actions already submitted cannot be undone.';
-  const state = data?.busy ? 'Working' : data?.state === 'running' ? 'Ready' : data?.state ?? 'Connecting';
-  const tone = data?.busy || data?.state === 'running' ? 'good' : data?.state === 'stopped' || data?.state === 'error' ? 'critical' : undefined;
-  return (
-    <section className="browser-panel" data-compact={compact ? 'true' : undefined} aria-label="Host browser">
-      <div className="browser-heading">
-        <div>
-          {compact ? null : <p className="browser-eyebrow">On your host machine</p>}
-          <h2 className="browser-title">{computer ? 'Computer' : yours ? 'Your browser' : 'Browser'}</h2>
-        </div>
-        <Pill tone={tone}>
-          <span role="status">{state}</span>
-        </Pill>
-      </div>
-      {compact ? (
-        <a className="browser-full-view" href="#/browser">{computer ? 'Open computer view & settings ↗' : 'Open full browser view ↗'}</a>
-      ) : (
-        <p className="ui-page-lede">{computer ? 'Your apps, operated through macOS accessibility, screenshots and input. No browser debugging connection.' : yours ? 'Your own Chrome, signed in as you, working in background tabs grouped as “buddi”. You keep browsing.' : 'A real browser window, driven by your assistant. You stay in control.'}</p>
-      )}
-      <ErrorBanner message={error ?? failure} />
-      {controls ? (
-        <Toolbar>
-          <Button variant="danger" disabled={!canControl || data?.state === 'stopped'} onClick={() => void control('stop')}>{computer ? 'Stop computer control' : 'Stop all browsers'}</Button>
-          <Button disabled={!canControl || !data?.session || data?.state === 'paused'} onClick={() => void control('takeover')}>Take over</Button>
-          <Button disabled={!canControl || data?.busy || !['stopped', 'paused'].includes(data?.state ?? '')} onClick={() => void control('resume')}>Resume access</Button>
-          <Button disabled={!canControl || !data?.session} onClick={() => void control('release')}>{computer ? 'Release control' : 'Close & release'}</Button>
-        </Toolbar>
-      ) : null}
-      {!controls ? null : compact ? <Details summary="About these controls"><p className="muted">{help}</p></Details> : <p className="muted">{help}</p>}
-      {handNote ? <Notice tone="warning" role="status">{handNote}</Notice> : null}
-      {offline && yours ? (
-        <Notice
-          tone="warning"
-          role="status"
-          title="Your browser isn’t connected."
-          action={(
-            <Toolbar align="end">
-              {data?.settings ? <Button size="sm" disabled={busy} onClick={() => void switchToOwnBrowser()}>Switch to buddi’s browser</Button> : null}
-              <Button size="sm" variant="accent" disabled={busy} onClick={() => void control('takeover')}>Try again</Button>
-            </Toolbar>
-          )}
-        >
-          {`There is no Chrome tab to show or drive. Open Chrome on ${machine}: the buddi extension reconnects by itself, then try again. Or switch every agent to buddi’s own browser (it doesn’t have your Chrome sign-ins; switch back on this page).`}
-        </Notice>
-      ) : null}
-      {data?.message && !hand && !(offline && yours) ? <Notice tone="warning" role="status">{data.message}</Notice> : null}
-      {data?.session ? (
-        <div className="browser-task">
-          <div className="ui-row"><strong>{data.session.agentId}</strong><span className="muted">{data.session.steps} / {data.session.maxSteps} steps</span></div>
-          {!compact ? <p>{data.session.task}</p> : null}
-          <p className="muted">Last action: {data.lastAction ?? 'None'} · Access expires {fmtClock(new Date(data.session.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}</p>
-        </div>
-      ) : (
-        <p className="browser-task muted">{data?.enabled ? computer ? 'No agent is driving. Ask an agent granted browser.* to open a website or an allowed native app.' : 'No agent is driving. Ask an agent granted browser.* to open a website.' : 'The host browser is unavailable. Start buddi serve on a machine with a desktop session.'}</p>
-      )}
-      {hand ? (
-        <RemoteHand sessionId={hand} csrf={csrfToken()} onGiveBack={() => void control('resume')} />
-      ) : null}
-      <div className="browser-window" hidden={!!hand}>
-        <div className="browser-address"><span aria-hidden="true">◉</span><span>{data?.page?.url ?? (computer ? 'Waiting for an application' : 'Waiting for a website')}</span></div>
-        {data?.hasScreenshot && data.page ? (
-          <figure>
-            <img
-              key={screenshotSrc ?? data.page.id}
-              src={screenshotSrc ?? `/api/browser/screenshot?v=${encodeURIComponent(data.page.id)}${data.session ? `&sessionId=${encodeURIComponent(data.session.id)}` : ''}${refresh ? `&tick=${refresh}` : ''}`}
-              alt={`Last browser observation: ${data.page.title || data.page.url}`}
-              {...(onScreenshotError ? { onError: onScreenshotError } : {})}
-              {...(onScreenshotLoad ? { onLoad: onScreenshotLoad } : {})}
-            />
-            <figcaption>Last observation · {fmtClock(new Date(data.page.capturedAt), Intl.DateTimeFormat().resolvedOptions().timeZone)} · {data.page.title || 'Untitled page'}</figcaption>
-          </figure>
-        ) : (
-          <div className="browser-empty"><strong>{computer ? 'Your selected app will appear here' : 'Your browser activity will appear here'}</strong><p>{computer ? 'Only the selected app window is captured, not the whole desktop. This preview is not interactive.' : 'This is a view of the host browser, not a second browser or a remote desktop.'}</p></div>
-        )}
-      </div>
-      {(data?.page?.tabs.length ?? 0) > 1 ? (
-        <Details summary={`${data!.page!.tabs.length} open tabs`}>
-          <ul className="ui-prose">{data!.page!.tabs.map((tab) => <li key={tab.id}>{tab.title || tab.id} — {tab.url}</li>)}</ul>
-        </Details>
-      ) : null}
-      <p className="muted">{computer ? 'Sign in directly in the host app during takeover. Don’t send passwords or MFA codes in chat. Native apps retain your existing logins and documents. Secure accessibility fields are masked; other sensitive window content can still appear in screenshots.' : 'Sign in directly in this conversation’s host tab during takeover. Don’t send passwords or MFA codes in chat. Agent tabs share saved logins and cookies.'} {hand ? 'While you are driving this is a live view of the page; nothing you type is kept.' : 'Screenshots update after agent actions; this is not a live video feed.'}</p>
-    </section>
-  );
-}

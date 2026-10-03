@@ -122,8 +122,8 @@ describe('one photo when the run needs the owner', () => {
     await photos.step(step);
     expect(sent).toHaveLength(0);
   });
-  it('sends the page once with the card\'s question, the action and Take over', async () => {
-    const current = { value: status() };
+  it('sends the page once with the card\'s own words and Take over \u2197, as the kit draws it', async () => {
+    const current = { value: status({ needsOwner: { kind: 'sign-in', question: 'x', title: 'Example needs your sign-in', line: 'Sign in on the page and give it back, and I carry on.', options: [{ label: 'Take over' }] } as never }) };
     const { photos, sent } = photosOn(current);
     photos.noteCall(CONVERSATION, { action: 'click', target: { name: 'Book now' } });
     await photos.step(step);
@@ -131,18 +131,19 @@ describe('one photo when the run needs the owner', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.method).toBe('sendPhoto');
     expect(sent[0]!.photo!.toString()).toBe('JPEGBYTES');
-    expect(sent[0]!.body.caption).toBe(`example.com needs your sign-in.\nBook a fixture\nClicked “Book now”\n${LOOPBACK_CAPTION}`);
+    // No page title, no step, no count: the card's title and line.
+    expect(sent[0]!.body.caption).toBe(`Example needs your sign-in\nSign in on the page and give it back, and I carry on.\n${LOOPBACK_CAPTION}`);
+    expect(TAKE_OVER_LABEL).toBe('Take over \u2197');
     expect(JSON.parse(sent[0]!.body.reply_markup)).toEqual({
       inline_keyboard: [[{ text: TAKE_OVER_LABEL, url: `http://127.0.0.1:4317/#/chat/${AGENT}/${CONVERSATION}?tab=browser` }]],
     });
   });
 
-  it('says why a step failed', async () => {
-    const current = { value: status({ page: { id: 'p-2', url: 'https://example.com/book', title: 'Book a fixture', tabs: [], capturedAt: 'x' } as any }) };
+  it('falls back to the question from a runtime that sends no title and line', async () => {
+    const current = { value: status() };
     const { photos, sent } = photosOn(current);
-    photos.noteCall(CONVERSATION, { action: 'click', target: { name: 'Book now' } });
     await photos.step({ ...step, error: 'Target is missing, ambiguous, disabled or secure.' });
-    expect(sent[0]!.body.caption).toContain('It failed: Target is missing, ambiguous, disabled or secure.');
+    expect(sent[0]!.body.caption).toBe(`example.com needs your sign-in.\n${LOOPBACK_CAPTION}`);
   });
 
   it('skips a page it has already shown — an observe of the same screen is not a step worth a picture', async () => {

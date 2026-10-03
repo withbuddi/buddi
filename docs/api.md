@@ -1315,7 +1315,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/agents/:id/file` | The agent's file as written: front matter and persona. | yes |
 | POST | `/api/agents/:id/file` | Edit the agent's front matter: name, handle, tools, persona…; checked as the loader checks it. | no |
 | POST | `/api/agents/:id/delegates` | Which agents this one may hand work to. | no |
-| POST | `/api/agents/:id/engine` | Change engine settings (effort, context, idle rollover…). | yes |
+| POST | `/api/agents/:id/engine` | Change engine settings (effort, context, idle rollover, where it may look: browser auto/own/chrome/apps…). | yes |
 | POST | `/api/agents/:id/account` | Put the agent on a model account and model. | yes |
 | GET | `/api/agents/:id/avatar` | The agent's picture (PNG, or the file its front matter names). | yes |
 | POST | `/api/agents/:id/avatar` | Upload a picture: PNG, GIF or SVG, at most 1 MB, made square. | yes |
@@ -1655,7 +1655,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 
 #### `POST /api/agents/:id/engine`
 
-Change engine settings (effort, context, idle rollover…).
+Change engine settings (effort, context, idle rollover, where it may look: browser auto/own/chrome/apps…).
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `engine fields; the account and model go through /account`

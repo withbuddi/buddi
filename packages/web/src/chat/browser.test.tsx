@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, chatApi, type BrowserStatus } from '../api';
 import { ChatPage, type ChatPageProps } from './ChatPage';
 import { conversationBrowser } from './browser';
-import { BrowserPanel } from '../views/Browser';
+import { BrowserView } from '../canvas/views/BrowserView';
 import type { ChatConversation } from './types';
 
 vi.mock('./stream', () => ({ openChatStream: () => ({ close() {} }) }));
@@ -80,9 +80,9 @@ describe('conversation browser canvas', () => {
   });
   it('opens a matching session beside chat with scoped controls and a full-page link', async () => {
     render(<ChatPage {...props} />);
-    expect(await screen.findByRole('tab', { name: 'Browser' })).toHaveAttribute('data-state', 'active');
-    expect(await screen.findByAltText('Last browser observation: Fixture')).toHaveAttribute('src', '/api/browser/screenshot?v=o1&sessionId=s1');
-    expect(screen.getByRole('link', { name: /Open full browser view/ })).toHaveAttribute('href', '#/browser');
+    expect(await screen.findByRole('tab', { name: 'Page' })).toHaveAttribute('data-state', 'active');
+    expect(await screen.findByAltText('What Keeper sees: Fixture')).toHaveAttribute('src', '/api/browser/screenshot?v=o1&sessionId=s1');
+    expect(screen.getByRole('button', { name: 'More for this page' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('takeover', 's1'));
   });
@@ -92,49 +92,46 @@ describe('conversation browser canvas', () => {
   ])('never shows another session: %o', async (other) => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, session: { ...status.session!, ...other } });
     await act(async () => { render(<ChatPage {...props} />); });
-    expect(screen.queryByRole('tab', { name: 'Browser' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Page' })).not.toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
   it('drops the preview immediately when switching agents', async () => {
     const view = render(<ChatPage {...props} />);
-    await screen.findByAltText('Last browser observation: Fixture');
+    await screen.findByAltText('What Keeper sees: Fixture');
     await act(async () => {
       view.rerender(<ChatPage {...props} agentId="other" />);
     });
-    expect(screen.queryByAltText('Last browser observation: Fixture')).not.toBeInTheDocument();
+    expect(screen.queryByAltText('What Keeper sees: Fixture')).not.toBeInTheDocument();
   });
   it('refreshes the screenshot and keeps the last one when the session ends', async () => {
     vi.useFakeTimers();
     await act(async () => { render(<ChatPage {...props} />); });
     vi.mocked(api.browser).mockResolvedValue({ ...status, page: { ...status.page!, id: 'o2', title: 'Next page' } });
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-    expect(screen.getByAltText('Last browser observation: Next page').getAttribute('src')).toContain('/api/browser/screenshot?v=o2&sessionId=s1');
+    expect(screen.getByAltText('What Keeper sees: Next page').getAttribute('src')).toContain('/api/browser/screenshot?v=o2&sessionId=s1');
     // The session ends: the tab stays, with the last screenshot, no longer live.
     vi.mocked(api.browser).mockResolvedValue({ state: 'idle', enabled: true, busy: false, hasScreenshot: false });
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-    expect(screen.queryByRole('tab', { name: 'Browser' })).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Browser (ended)' })).toBeInTheDocument();
+    // Still called Page, no longer pinned: history that can be put away.
+    expect(screen.getByRole('tab', { name: 'Page' })).toBeInTheDocument();
     expect(screen.getByTestId('browser-view')).toHaveAttribute('data-live', 'false');
     // The frame it kept, not a request to a route that now has nothing.
-    expect(screen.getByAltText('Last browser observation: Next page')).toHaveAttribute('src', 'blob:last-frame');
+    expect(screen.getByAltText('What Keeper sees: Next page')).toHaveAttribute('src', 'blob:last-frame');
     // Global controls are gone with the session that justified them.
-    expect(screen.queryByRole('button', { name: 'Stop all browsers' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    expect(screen.getByText('The page is closed. This is the last thing it showed.')).toBeInTheDocument();
     // And history can be put away.
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close Browser (ended) tab' })); });
-    expect(screen.queryByRole('tab', { name: 'Browser (ended)' })).not.toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close Page tab' })); });
+    expect(screen.queryByRole('tab', { name: 'Page' })).not.toBeInTheDocument();
   });
 
-  /* A computer session is remembered as a computer session. */
-  it('labels the ended tab from the mode last seen', async () => {
+  /* One tab, called Page, whichever route the agent looks through. */
+  it('calls the tab Page for an app too', async () => {
     vi.useFakeTimers();
-    // A session of its own: the test above dismissed `s1`, and a dismissal is
-    // remembered for the conversation exactly as the owner left it.
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: { ...status.session!, id: 's2' } });
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', route: 'apps', session: { ...status.session!, id: 's2' } });
     await act(async () => { render(<ChatPage {...props} />); });
-    expect(screen.getByRole('tab', { name: 'Computer' })).toBeInTheDocument();
-    vi.mocked(api.browser).mockResolvedValue({ state: 'idle', enabled: true, busy: false, hasScreenshot: false });
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-    expect(screen.getByRole('tab', { name: 'Computer (ended)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Page' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Computer/ })).not.toBeInTheDocument();
   });
 
   /*
@@ -153,17 +150,17 @@ describe('conversation browser canvas', () => {
     // Clicking through an unsettled canvas would be clicking a tab that is
     // already selected — a no-op the assertions below would blame on the page.
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Approval' })).toHaveAttribute('data-state', 'active'));
-    // The panel says the step has not happened.
+    // The Page tab is beside it, and the decision is not folded into it.
     //
     // The tab strip is still settling while the approval and the browser state
     // arrive, so the press is retried rather than fired once at whatever node
     // happened to be there: a click that lands between two renders is a flake,
     // not a failure of what this test is about.
     await waitFor(() => {
-      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Browser' }), { button: 0 });
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Page' }), { button: 0 });
       expect(screen.getByTestId('browser-view')).toBeInTheDocument();
     });
-    expect(within(screen.getByTestId('browser-view')).getByText('Awaiting approval')).toBeInTheDocument();
+    expect(within(screen.getByTestId('browser-view')).queryByText(/Pay/)).not.toBeInTheDocument();
     // And its row goes to the envelope, not to the panel.
     fireEvent.click(screen.getByRole('button', { name: /Approval · browser\.act/ }));
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Approval' })).toHaveAttribute('data-state', 'active'));
@@ -182,7 +179,7 @@ describe('conversation browser canvas', () => {
     ] });
     vi.spyOn(api, 'approval').mockResolvedValue({ id: 'a1', state: 'pending', tool: 'browser.act', permissionScopes: ['conversation'], preview: 'Click Pay', envelope: {}, canonicalArgs: {} } as never);
     render(<Tooltip.Provider><ChatPage {...props} requestedTab="browser" /></Tooltip.Provider>);
-    await waitFor(() => expect(screen.getByRole('tab', { name: 'Browser' })).toHaveAttribute('data-state', 'active'));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Page' })).toHaveAttribute('data-state', 'active'));
     expect(screen.getByTestId('browser-view')).toBeInTheDocument();
   });
 
@@ -204,7 +201,7 @@ describe('conversation browser canvas', () => {
    * behind all of them. Now they are one panel's list, and the chat row is the
    * way back to a particular step.
    */
-  it('folds every act into the one panel, and a chat row goes to its step', async () => {
+  it('folds every act into the one Page tab, and a chat row goes to it', async () => {
     vi.mocked(chatApi.conversation).mockResolvedValue({ conversationId: 'c1', agentId: 'keeper', messages: [
       { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'a1', name: 'browser.act', input: { action: 'navigate', url: '/fixture' } }] },
       { id: 'm2', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'a1', name: 'browser.act', ok: true, output: { observation: { id: 'o1' } } }] },
@@ -212,17 +209,16 @@ describe('conversation browser canvas', () => {
       { id: 'm4', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'a2', name: 'browser.act', ok: false, error: 'The page moved on.', output: null }] },
     ] });
     render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
-    expect(await screen.findByRole('tab', { name: 'Browser' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Page' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: /Browser · Act/ })).not.toBeInTheDocument();
-    expect(screen.getByText('The page moved on.')).toHaveClass('wb-browser-error');
     fireEvent.click(screen.getAllByRole('button', { name: /Browser · Act/ })[0]!);
-    await waitFor(() => expect(screen.getAllByRole('listitem')[0]).toHaveAttribute('data-focused', 'true'));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Page' })).toHaveAttribute('data-state', 'active'));
     expect(screen.queryByRole('tab', { name: /Browser · Act/ })).not.toBeInTheDocument();
   });
   it('uses the existing canvas sheet on narrow screens', async () => {
     render(<ChatPage {...props} narrow canvasOpen />);
     expect(await screen.findByRole('dialog', { name: 'Canvas' })).toBeInTheDocument();
-    expect(await screen.findByAltText('Last browser observation: Fixture')).toBeInTheDocument();
+    expect(await screen.findByAltText('What Keeper sees: Fixture')).toBeInTheDocument();
   });
   it('keeps other canvas tabs and does not steal focus on each poll', async () => {
     vi.useFakeTimers();
@@ -236,12 +232,12 @@ describe('conversation browser canvas', () => {
     // Start a fresh browser session after the existing result has loaded.
     vi.mocked(api.browser).mockResolvedValue({ ...status, session: { ...status.session!, id: 's2' } });
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-    expect(screen.getByRole('tab', { name: 'Browser' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('tab', { name: 'Page' })).toHaveAttribute('data-state', 'active');
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Saved chart' }), { button: 0, ctrlKey: false });
     expect(screen.getByRole('tab', { name: 'Saved chart' })).toHaveAttribute('data-state', 'active');
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(screen.getByRole('tab', { name: 'Saved chart' })).toHaveAttribute('data-state', 'active');
-    expect(screen.getByRole('tab', { name: 'Browser' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Page' })).toBeInTheDocument();
   });
   it('does not turn saved tool output into a live browser grant', () => {
     expect(conversationBrowser(undefined, 'keeper', 'c1')).toBeNull();
@@ -250,32 +246,32 @@ describe('conversation browser canvas', () => {
   });
 });
 
-describe('Take over with no browser connected', () => {
+describe('Take over with your Chrome not connected', () => {
   const extension: BrowserStatus = { ...status, mode: 'extension', route: 'chrome', settings: { version: 2, yourChrome: true, yourApps: 'off', signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } };
   const offline: BrowserStatus = { ...extension, state: 'paused', hand: false, handReason: 'browser-offline', handMessage: 'Your browser isn\u2019t connected.' };
   beforeEach(() => { vi.spyOn(api, 'session').mockResolvedValue({ platform: 'darwin' } as never); });
 
-  it('says the browser is not connected, and Try again asks again', async () => {
+  it('says your Chrome is not connected, and Try again asks again', async () => {
     vi.mocked(api.browserControl).mockResolvedValue(offline);
-    render(<BrowserPanel data={extension} error={null} reload={() => {}} />);
+    render(<BrowserView status={extension} error={null} reload={() => {}} live />);
     fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
-    expect(await screen.findByText('Your browser isn\u2019t connected.')).toBeInTheDocument();
+    expect(await screen.findByText('Your Chrome isn\u2019t connected.')).toBeInTheDocument();
     expect(screen.getByText(/Open Chrome on this Mac/)).toBeInTheDocument();
     expect(screen.queryByTestId('remote-hand')).not.toBeInTheDocument();
     vi.mocked(api.browserControl).mockResolvedValue({ ...offline, hand: true, handReason: undefined, handMessage: undefined });
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    await waitFor(() => expect(screen.queryByText('Your browser isn\u2019t connected.')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Your Chrome isn\u2019t connected.')).not.toBeInTheDocument());
     expect(api.browserControl).toHaveBeenLastCalledWith('takeover', 's1');
   });
 
-  it('switches this conversation to buddi\u2019s browser (a pin, not a setting), releasing this session first', async () => {
+  it('switches this conversation to buddi\u2019s browser (a pin, not a setting), releasing this page first', async () => {
     vi.mocked(api.browserControl).mockResolvedValue(offline);
     const pin = vi.spyOn(api, 'browserPin').mockResolvedValue({ ...status, mode: 'playwright' });
-    render(<BrowserPanel data={extension} error={null} reload={() => {}} />);
+    render(<BrowserView status={extension} error={null} reload={() => {}} live />);
     fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Switch to buddi\u2019s browser' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Use buddi\u2019s browser' }));
     await waitFor(() => expect(pin).toHaveBeenCalledWith('c1', 'own'));
     expect(api.browserControl).toHaveBeenCalledWith('release', 's1');
-    expect(await screen.findByText(/Switched to buddi\u2019s browser/)).toBeInTheDocument();
+    expect(await screen.findByText(/This conversation uses buddi\u2019s browser now/)).toBeInTheDocument();
   });
 });

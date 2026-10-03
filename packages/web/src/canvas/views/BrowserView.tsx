@@ -1,40 +1,39 @@
 /**
- * The screen an agent is driving, beside the conversation driving it.
+ * The Page tab: the page an agent is looking at, beside the conversation
+ * looking at it (docs/browser.md; the kit's `BrCanvas` in buddi-design
+ * Browser.jsx).
  *
- * While a session is alive this is one tab, pinned: the latest screenshot, the
- * page it is on, the mode it is working in, and every step taken so far. The
- * alternative — which is what this replaces — is a tab per `browser.act`, a
- * dozen of them, each holding one input and the word "Completed", with the
- * only panel worth reading buried somewhere behind them.
+ * Who is looking where, the live picture, Take over and Stop. Nothing else: no
+ * step list, no counter, no mode, no observation time. One quiet line says
+ * where it looks — "Looking at amazon.com · in buddi’s browser", "· in your
+ * Chrome · background tab", "· in Numbers" — or that it waits for the owner.
  *
- * The screenshot is re-requested on a timer rather than streamed: the route
- * hands back whatever the last observation captured, and asking again is the
- * whole of "live". The asking pauses while the tab is in the background,
- * because nobody is looking, and gives up after a few failures rather than
- * hammering a route that has stopped answering.
+ * The picture is re-requested on a timer rather than streamed: the route hands
+ * back whatever the last observation captured, and asking again is the whole
+ * of "live". The asking pauses while the tab is in the background and gives up
+ * after a few failures. **When the page closes the gateway has nothing left to
+ * serve**, so this keeps its own copy: the last status it saw, and the last
+ * frame as bytes held in the page. That copy is what a closed page shows.
  *
- * **When the session ends, the gateway has nothing left to serve.** The status
- * falls back to an empty one and the screenshot route answers 404, so a panel
- * that kept asking would end as a broken image over the word "Connecting".
- * This keeps its own copy instead: the last status it saw, and the last frame
- * as bytes held in the page. That copy is what a finished session shows.
- *
- * Nothing here is drawn from a tool result. The session, the page and the mode
- * come from the gateway's own status; the steps come from the conversation's
- * recorded calls.
+ * Take over is the remote hand in this same frame: "You have the page",
+ * nothing typed is kept, Keyboard · Give it back; the agent carries on with no
+ * new message.
  */
 import { useEffect, useRef, useState } from 'react';
-import type { BrowserStatus } from '../../api';
-import type { BrowserStep } from '../../chat/browser';
-import { BrowserPanel } from '../../views/Browser';
+import { api, csrfToken, type BrowserStatus } from '../../api';
+import { fmtClock } from '../../format';
+import { ActionMenu, Button, Notice, Toolbar } from '../../ui';
+import { RemoteHand } from '../../views/RemoteHand';
+import { appWord, lookingLine, siteOfUrl } from '../../views/Browser';
+import { useThisMachine } from '../../useThisMachine';
 
-/** How often the last observation is re-requested while a session is alive. */
+/** How often the last observation is re-requested while a page is open. */
 export const BROWSER_POLL_MS = 2000;
 
 /**
  * How many pictures may fail to arrive before the asking stops. A route that
  * has refused five times in a row is not about to answer the sixth, and the
- * panel still has the last frame that did arrive.
+ * tab still has the last frame that did arrive.
  */
 export const MAX_SCREENSHOT_FAILURES = 5;
 
@@ -42,12 +41,17 @@ export interface BrowserViewProps {
   status: BrowserStatus | undefined;
   error: string | null;
   reload: () => void;
-  /** This conversation's own actions on the screen, oldest first. */
-  steps: readonly BrowserStep[];
-  /** Is the session still being driven? */
+  /** Is the page still open? */
   live: boolean;
-  /** A step the owner clicked in the chat: scrolled to and held. */
-  focusedStepId?: string | null;
+  /** Who is looking, for the lines that name it. */
+  agentName?: string;
+  /** The owner's zone, for the paused and done times. */
+  timezone?: string;
+  /**
+   * Agents' browsing is paused and this conversation asked for a page: the
+   * tab says so with Resume, even though no page is open.
+   */
+  paused?: { at: string; until?: string } | null;
 }
 
 /** Where the route serves the picture for the observation on screen now. */
@@ -57,7 +61,15 @@ function screenshotUrl(status: BrowserStatus, refresh?: number): string | null {
   return `/api/browser/screenshot?v=${encodeURIComponent(status.page.id)}${session}${refresh ? `&tick=${refresh}` : ''}`;
 }
 
-export function BrowserView({ status, error, reload, steps, live, focusedStepId = null }: BrowserViewProps): JSX.Element {
+/** The letter on the page's tile: the site's, or the app's. */
+function tileLetter(status: BrowserStatus | undefined): string {
+  if (status?.route === 'apps' && status.page?.appId) return appWord(status.page.appId).charAt(0).toUpperCase();
+  const site = siteOfUrl(status?.page?.url);
+  return (site ?? status?.page?.title ?? '·').charAt(0).toUpperCase();
+}
+
+export function BrowserView({ status, error, reload, live, agentName = 'The agent', timezone, paused = null }: BrowserViewProps): JSX.Element {
+  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   /*
    * One counter, appended to the screenshot's URL. The image element is the
    * poller: a new query means a new request, and nothing here has to hold a
@@ -66,32 +78,23 @@ export function BrowserView({ status, error, reload, steps, live, focusedStepId 
   const [tick, setTick] = useState(0);
   const [failures, setFailures] = useState(0);
   const stalled = failures >= MAX_SCREENSHOT_FAILURES;
-
   useEffect(() => {
     if (!live || stalled) return undefined;
     const handle = window.setInterval(() => {
-      // A background tab is not being watched. Asking anyway costs the owner's
-      // machine a screenshot request every two seconds for nobody.
       if (typeof document !== 'undefined' && document.hidden) return;
       setTick((value) => value + 1);
     }, BROWSER_POLL_MS);
     return () => window.clearInterval(handle);
   }, [live, stalled]);
 
-  // The last status this panel saw while the session was its own. After the
-  // release there is nothing to read, and this is the record of what there was.
+  // The last status this tab saw while the page was its own: after the close
+  // there is nothing to read, and this is the record of what there was.
   const remembered = useRef<BrowserStatus | null>(null);
   if (live && status?.session) remembered.current = status;
+  const [closedAt, setClosedAt] = useState<number | null>(null);
+  useEffect(() => { if (!live && remembered.current && closedAt === null) setClosedAt(Date.now()); if (live) setClosedAt(null); }, [live]);
 
-  /*
-   * The last frame, kept as bytes.
-   *
-   * Fetched once per observation rather than on every tick: the tick is the
-   * image element's business, and this only has to hold whatever was last on
-   * the screen. If the fetch fails, or the engine has no object URLs, the
-   * panel simply has no frozen frame and says so rather than showing a broken
-   * picture.
-   */
+  /* The last frame, kept as bytes: fetched once per observation. */
   const [frame, setFrame] = useState<string | null>(null);
   const held = useRef<string | null>(null);
   const observation = status?.page?.id ?? null;
@@ -109,107 +112,139 @@ export function BrowserView({ status, error, reload, steps, live, focusedStepId 
         if (held.current) URL.revokeObjectURL(held.current);
         held.current = object;
         setFrame(object);
-      } catch {
-        // The live image element is still trying; a missing copy is not news.
-      }
+      } catch { /* the live image element is still trying */ }
     })();
     return () => { cancelled = true; };
   }, [live, observation]);
   useEffect(() => () => { if (held.current && typeof URL?.revokeObjectURL === 'function') URL.revokeObjectURL(held.current); }, []);
 
-  /*
-   * What the panel draws. Alive, the gateway's own status. Ended, the copy
-   * this panel kept — with the screenshot admitted as gone if no frame was
-   * ever captured, rather than pointing at a route that now answers 404.
-   */
   const kept = remembered.current;
-  const shown = live ? status : kept ? (frame ? kept : { ...kept, hasScreenshot: false }) : status;
+  const shown = live ? status : kept ?? status;
 
-  const newest = steps.at(-1) ?? null;
+  /* ---- the owner's hand ---- */
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [driving, setDriving] = useState<string | null>(null);
+  const [typing, setTyping] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+  const machine = useThisMachine();
+  const session = shown?.session;
+  const act = async (action: () => Promise<void>) => {
+    setBusy(true); setFailure(null);
+    try { await action(); } catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); reload(); }
+  };
+  const takeOver = () => void act(async () => {
+    setNote(null); setOffline(false);
+    const next = await api.browserControl('takeover', session?.id);
+    if (next.hand && next.session) setDriving(next.session.id);
+    else if (next.handReason === 'browser-offline') setOffline(true);
+    else setNote(next.handMessage ?? null);
+  });
+  const giveBack = () => void act(async () => { setDriving(null); setTyping(false); await api.browserControl('resume', session?.id); });
+  const stopPage = () => void act(async () => { setDriving(null); await api.browserControl('stop', session?.id); });
+  const ownBrowser = () => void act(async () => {
+    if (!session) return;
+    // This conversation, pinned to buddi's own browser; the agent opens the page there next.
+    await api.browserPin(session.conversationId, 'own');
+    await api.browserControl('release', session.id);
+    setOffline(false);
+    setNote('This conversation uses buddi’s browser now. Send the agent a message and it opens the page there.');
+  });
+  const hand = driving && status?.session?.id === driving && status.state === 'paused' ? driving : null;
+
+  /* ---- what the header says ---- */
+  const taking = !!hand;
+  const waiting = live && !!shown?.needsOwner;
+  const done = !live && !paused;
+  const site = siteOfUrl(shown?.page?.url) ?? (shown?.page?.appId ? appWord(shown.page.appId) : 'the page');
+  const where = shown?.route === 'chrome' ? 'in your Chrome · background tab' : shown?.route === 'apps' ? `in ${site}` : 'in buddi’s browser';
+  const title = paused ? 'Browsing is paused' : shown?.page?.title || site;
+  const line = paused ? `By you at ${fmtClock(new Date(paused.at), zone)} · ${paused.until ? `until ${fmtClock(new Date(paused.until), zone)}` : 'until you resume it'}`
+    : taking ? `You have the page · ${where}`
+    : done ? `${agentName} looked at ${site} · done${closedAt ? ` at ${fmtClock(new Date(closedAt), zone)}` : ''}`
+    : shown ? lookingLine(shown) : 'Opening the page…';
+  const src = live ? (shown ? screenshotUrl(shown, tick) : null) : frame;
 
   return (
-    <div className="wb-browser" data-testid="browser-view" data-live={live ? 'true' : 'false'}>
-      <BrowserPanel
-        data={shown}
-        error={error}
-        reload={reload}
-        compact
-        controls={live}
-        {...(live ? { refresh: tick } : {})}
-        {...(!live && frame ? { screenshotSrc: frame } : {})}
-        onScreenshotError={() => setFailures((count) => count + 1)}
-        onScreenshotLoad={() => setFailures(0)}
-      />
-      {!live ? (
-        <p className="muted wb-browser-ended" role="status">
-          This session has ended. What is on this panel is the last thing it showed.
-        </p>
-      ) : stalled ? (
-        <p className="muted wb-browser-ended" role="status">
-          The last observation could not be loaded. Showing what arrived before it.
-        </p>
+    <div className="br-canvas" data-testid="browser-view" data-live={live ? 'true' : 'false'}>
+      <header className="br-head">
+        <span className="br-tile" aria-hidden="true">{paused ? <GlobeGlyph /> : tileLetter(shown)}</span>
+        <span className="br-head-text">
+          <span className="br-head-title">{title}</span>
+          <span className="br-head-line" role="status">{live && !waiting && !taking && !paused ? <span className="br-live" aria-hidden="true" /> : null}{line}</span>
+        </span>
+        {taking ? (
+          <Toolbar align="end">
+            <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Keyboard</Button>
+            <Button size="sm" variant="accent" disabled={busy} onClick={giveBack}>Give it back</Button>
+          </Toolbar>
+        ) : paused ? (
+          <Button size="sm" variant="accent" disabled={busy} onClick={() => void act(async () => { await api.browserControl('resume'); })}>Resume</Button>
+        ) : done || !session ? null : (
+          <Toolbar align="end">
+            <Button size="sm" disabled={busy || !shown?.enabled} onClick={stopPage}>Stop</Button>
+            <Button size="sm" variant={waiting ? 'accent' : undefined} disabled={busy || !shown?.enabled || shown?.state === 'paused'} onClick={takeOver}>Take over</Button>
+          </Toolbar>
+        )}
+      </header>
+      {taking ? <p className="br-hand-said" role="status">{`Nothing you type here is kept. ${agentName} carries on when you give it back.`}</p> : null}
+      {failure || error ? <Notice tone="critical" role="alert">{failure ?? error}</Notice> : null}
+      {note ? <Notice tone="warning" role="status">{note}</Notice> : null}
+      {offline ? (
+        <Notice tone="warning" role="status" title="Your Chrome isn’t connected."
+          action={<Toolbar align="end"><Button size="sm" disabled={busy} onClick={ownBrowser}>Use buddi’s browser</Button><Button size="sm" variant="accent" disabled={busy} onClick={takeOver}>Try again</Button></Toolbar>}>
+          {`Open Chrome on ${machine} and try again, or let this conversation use buddi’s own browser.`}
+        </Notice>
       ) : null}
-      <Steps steps={steps} newestId={newest?.id ?? null} focusedId={focusedStepId ?? null} live={live} />
+      {paused ? (
+        <div className="br-frame br-frame-empty"><p className="ui-empty">{`No page is open. Agents look again when you resume${paused.until ? `, or by themselves at ${fmtClock(new Date(paused.until), zone)}` : ''}.`}</p></div>
+      ) : hand ? (
+        <div className="br-frame" data-state="yours">
+          <RemoteHand sessionId={hand} csrf={csrfToken()} onGiveBack={giveBack} bare typing={typing} onTyping={setTyping} />
+        </div>
+      ) : (
+        <div className="br-frame" data-state={waiting ? 'waiting' : done ? 'done' : 'live'}>
+          {src ? (
+            <img
+              key={live ? shown?.page?.id ?? 'live' : 'kept'}
+              className="br-shot"
+              src={src}
+              alt={`What ${agentName} sees: ${shown?.page?.title || site}`}
+              onError={() => setFailures((count) => count + 1)}
+              onLoad={() => setFailures(0)}
+            />
+          ) : <p className="ui-empty br-frame-wait">{live ? 'The page appears here as soon as it opens.' : 'No picture of this page was kept.'}</p>}
+        </div>
+      )}
+      {done ? <p className="br-ended" role="status">The page is closed. This is the last thing it showed.</p>
+        : live && stalled ? <p className="br-ended" role="status">The newest picture didn’t load. Showing the one before it.</p> : null}
     </div>
   );
 }
 
-function Steps({
-  steps,
-  newestId,
-  focusedId,
-  live,
-}: {
-  steps: readonly BrowserStep[];
-  newestId: string | null;
-  focusedId: string | null;
-  live: boolean;
-}): JSX.Element {
-  const list = useRef<HTMLOListElement | null>(null);
+function GlobeGlyph(): JSX.Element {
+  return <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.2" /><path d="M2.8 10h14.4M10 2.8c2.2 2.3 2.2 12.1 0 14.4M10 2.8c-2.2 2.3-2.2 12.1 0 14.4" /></svg>;
+}
 
-  // A row clicked in the chat is brought into view here. `scrollIntoView` is
-  // absent in jsdom and on old engines, hence the guard rather than a call.
-  useEffect(() => {
-    if (!focusedId || !list.current) return;
-    const row = list.current.querySelector(`[data-step="${CSS?.escape ? CSS.escape(focusedId) : focusedId}"]`);
-    (row as { scrollIntoView?: (options: ScrollIntoViewOptions) => void } | null)?.scrollIntoView?.({ block: 'nearest' });
-  }, [focusedId]);
-
-  if (steps.length === 0) {
-    return (
-      <p className="muted wb-browser-empty">
-        {live ? 'No action taken on this screen yet.' : 'This conversation took no action on the screen.'}
-      </p>
-    );
-  }
-
+/**
+ * The Canvas overflow on the Page tab: Stop agents' browsing for an hour or
+ * until the owner says, show the own browser's window, the full page view.
+ */
+export function BrowserMenu({ status, timezone, reload }: { status: BrowserStatus | undefined; timezone?: string; reload: () => void }): JSX.Element {
+  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const minutes = status?.settings?.stopExpiryMinutes ?? 60;
+  const back = fmtClock(new Date(Date.now() + (minutes || 60) * 60_000), zone);
+  const run = (action: () => Promise<unknown>) => void action().catch(() => undefined).finally(reload);
   return (
-    <section className="wb-browser-steps" aria-label="Steps taken on this screen">
-      <ol className="wb-browser-list" ref={list}>
-        {steps.map((step, index) => {
-          const state = step.awaiting ? 'awaiting' : step.ok === null ? 'running' : step.ok ? 'ok' : 'failed';
-          return (
-            <li
-              key={step.id}
-              data-step={step.id}
-              className="wb-browser-step"
-              data-state={state}
-              data-newest={step.id === newestId ? 'true' : undefined}
-              data-focused={step.id === focusedId ? 'true' : undefined}
-            >
-              <span className="wb-browser-index mono">{index + 1}</span>
-              <span className="wb-browser-what">
-                <strong>{step.action}</strong>
-                {step.target ? <span className="muted wb-browser-target">{step.target}</span> : null}
-                {step.error ? <span className="wb-browser-error">{step.error}</span> : null}
-              </span>
-              <span className="wb-browser-outcome" data-state={state}>
-                {state === 'awaiting' ? 'Awaiting approval' : state === 'running' ? 'Working' : state === 'ok' ? 'Done' : 'Failed'}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-    </section>
+    <ActionMenu label="More for this page" items={[
+      { heading: 'Stop agents’ browsing' },
+      { label: 'For an hour', hint: `Every agent, every conversation; back on at ${back}`, onSelect: () => run(() => api.browserControl('stop')) },
+      { label: 'Until I say', hint: 'Until you press Resume', onSelect: () => run(() => api.browserControl('stop', undefined, { forever: true })) },
+      'separator',
+      status?.settings && !status.settings.showWindow ? { label: 'Show the window', hint: 'A window on this machine, for sites that refuse a hidden browser', onSelect: () => run(() => api.browserSettings({ showWindow: true })) } : null,
+      { label: 'Open the full page view', hint: 'Every page agents have open', onSelect: () => { window.location.hash = '#/browser'; } },
+    ]} />
   );
 }

@@ -1,311 +1,303 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, type BrowserStatus } from '../api';
-import { useAsync } from '../ui';
-import { Browser, BrowserPanel, installTarget, olderExtension, STORE_URL } from './Browser';
+import { api, type BrowserRouteStatus, type BrowserStatus } from '../api';
+import { pluginSettingsRoute } from '../routes';
+import { appsProvided, appWord, Browser, chromeState, installTarget, lookingLine, olderExtension, SANDBOX_COMMAND, STORE_URL } from './Browser';
 
-vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), browserInstall: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
-const status: BrowserStatus = { state: 'running', enabled: true, busy: false, hasScreenshot: true,
-  session: { id: 's1', agentId: 'concierge', conversationId: 'c1', requestId: 'r1', task: 'Book a fixture appointment', expiresAt: new Date().toISOString(), steps: 3, maxSteps: 80 },
-  page: { id: 'o1', url: '/fixture', title: 'Appointment', capturedAt: new Date().toISOString(), tabs: [] } };
-const settings = { version: 2 as const, yourChrome: false, yourApps: 'on' as const, signInSites: [], defaultRoute: 'auto' as const, stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false };
+vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), browserCheck: vi.fn(), browserInstall: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn(), agents: vi.fn(), setAgentEngine: vi.fn() }, ApiError: class extends Error {} }));
+
+const settings = { version: 2 as const, yourChrome: true, yourApps: 'on' as const, signInSites: [] as string[], defaultRoute: 'auto' as const, stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false };
+const routes = (over: Partial<Record<'own' | 'chrome' | 'apps', Partial<BrowserRouteStatus> | null>> = {}): BrowserRouteStatus[] => [
+  { kind: 'own', allowed: true, available: true, provider: 'core', ...over.own },
+  { kind: 'chrome', allowed: true, available: true, provider: 'core', paired: true, connected: true, ...over.chrome },
+  ...(over.apps === null ? [] : [{ kind: 'apps' as const, allowed: true, available: true, provider: 'computer', installed: true, label: 'Computer', mode: 'on' as const, ...over.apps }]),
+];
+const base: BrowserStatus = { state: 'idle', enabled: true, busy: false, hasScreenshot: false, settings, routes: routes(), browser: { engine: 'chromium', headless: true } };
+const paired = { connected: true, pending: false, path: '/opt/buddi/extension', pairedAt: '2026-09-21T09:00:00Z', extension: '0.1.4' };
 const CHROME_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 const FIREFOX_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:131.0) Gecko/20100101 Firefox/131.0';
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 const useAgent = (ua: string) => vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(ua);
+const answers = (answer: unknown) => {
+  const sendMessage = vi.fn(async () => { if (answer instanceof Error) throw answer; return answer; });
+  vi.stubGlobal('chrome', { runtime: { sendMessage } });
+  return sendMessage;
+};
+const row = async (title: string) => (await screen.findByText(title, { selector: '.ui-list-title' })).closest('.ui-list-row') as HTMLElement;
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
   useAgent(CHROME_MAC);
   vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'darwin' });
-  vi.mocked(api.browser).mockResolvedValue(status); vi.mocked(api.browserControl).mockResolvedValue(status);
-  vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: false, path: '/opt/buddi/extension' });
+  vi.mocked(api.browser).mockResolvedValue(base);
+  vi.mocked(api.browserSettings).mockResolvedValue(base);
+  vi.mocked(api.browserControl).mockResolvedValue(base);
+  vi.mocked(api.extension).mockResolvedValue(paired);
+  vi.mocked(api.agents).mockResolvedValue({ agents: [], engines: [], providers: [] } as never);
+  vi.mocked(api.setAgentEngine).mockResolvedValue({ agent: {} as never, changed: ['browser'], note: '' });
+  answers({ installed: true, version: '0.1.4', state: 'paired', gateway: window.location.origin });
 });
+afterEach(() => vi.unstubAllGlobals());
 
-/** The Canvas view, fed the way the Canvas feeds it. */
-function Panel(): JSX.Element {
-  const { data, error, reload } = useAsync(() => api.browser(), []);
-  return <BrowserPanel data={data} error={error} reload={reload} />;
-}
-
-describe('computer & browser settings', () => {
-  it('says plainly when no browser is installed, installs one on click, and says when it runs headless', async () => {
-    const own = { ...status, mode: 'playwright' as const, session: undefined, settings: { ...settings, yourApps: 'off' as const } };
-    vi.mocked(api.browser).mockResolvedValue({ ...own, browser: { engine: 'none', headless: false } });
-    vi.mocked(api.browserInstall).mockResolvedValue({ ...own, browser: { engine: 'none', headless: false, install: { state: 'running' } } });
-    const { unmount } = render(<Browser />);
-    expect(await screen.findByText('No browser installed for the agents yet')).toBeInTheDocument();
-    expect(screen.queryByText(/^Ready\./)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
-    await waitFor(() => expect(api.browserInstall).toHaveBeenCalledOnce());
-    unmount();
-    vi.mocked(api.browser).mockResolvedValue({ ...own, browser: { engine: 'chromium', headless: true } });
+describe('Where agents may look: one row per route, no radio buttons', () => {
+  it('draws the three rows ready, with the kit’s words, and no mode radios or apps list on the page', async () => {
     render(<Browser />);
-    expect(await screen.findByText(/runs headless on this machine/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Install Chromium' })).not.toBeInTheDocument();
-  });
-  it('turns routes on and off as switches; the apps row is the Computer plugin\'s, with its health and a way to its page', async () => {
-    const apps = { kind: 'apps' as const, allowed: true, available: false, provider: 'computer', installed: true, mode: 'on' as const, message: 'macOS hasn’t allowed Screen Recording, so agents can’t see app windows.', repair: 'permissions' as const };
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings, routes: [apps] });
-    render(<Browser />);
-    expect(await screen.findByText('Your apps')).toBeInTheDocument();
+    expect(await screen.findByText(/Agents pick where to look for each task/)).toBeInTheDocument();
+    const own = await row('buddi’s own browser');
+    expect(within(own).getByText('For every page, out of sight. You watch it on the Canvas.')).toBeInTheDocument();
+    expect(within(own).getByText('ready')).toBeInTheDocument();
+    expect(within(own).queryByRole('switch')).not.toBeInTheDocument();
+    const chrome = await row('Your Chrome');
+    expect(await within(chrome).findByText('connected')).toBeInTheDocument();
+    expect(within(chrome).getByText('Used only for sites that need your sign-in · background tabs in a buddi group')).toBeInTheDocument();
+    expect(within(chrome).getByRole('switch', { name: 'Let agents use your Chrome' })).toBeChecked();
+    const apps = await row('Your apps');
+    expect(within(apps).getByText('From the Computer plugin · when you name an app')).toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: 'Control mode' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Accessibility')).not.toBeInTheDocument();
-    expect(screen.getByText(/hasn’t allowed Screen Recording/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '#/settings/p.computer');
-    expect(screen.getByRole('switch', { name: 'Their own browser' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('switch', { name: 'Your Chrome' }));
-    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourChrome: true }));
-    fireEvent.click(screen.getByRole('switch', { name: 'Let agents use your apps' }));
+    expect(screen.queryByText('Apps agents may use')).not.toBeInTheDocument();
+  });
+  it('turns your Chrome and your apps on and off as switches', async () => {
+    render(<Browser />);
+    fireEvent.click(within(await row('Your Chrome')).getByRole('switch', { name: 'Let agents use your Chrome' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourChrome: false }));
+    fireEvent.click(within(await row('Your apps')).getByRole('switch', { name: 'Let agents use your apps' }));
     await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourApps: 'off' }));
   });
-  it('without the Computer plugin, has no apps row and offers the plugin in one line', async () => {
-    const apps = { kind: 'apps' as const, allowed: false, available: false, provider: '', installed: false, mode: 'on' as const };
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'playwright', session: undefined, settings, routes: [apps] });
+  it('says Chrome off in the kit’s words, and Chrome closed when paired but not running', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, settings: { ...settings, yourChrome: false } });
+    const { unmount } = render(<Browser />);
+    expect(await screen.findByText('Off. Sites that need a sign-in use your saved logins, or ask you.')).toBeInTheDocument();
+    unmount();
+    vi.mocked(api.browser).mockResolvedValue(base);
+    vi.mocked(api.extension).mockResolvedValue({ ...paired, connected: false });
     render(<Browser />);
-    expect(await screen.findByTestId('computer-plugin-offer')).toHaveTextContent('Agents can also work in apps on this Mac with the Computer plugin.');
-    expect(screen.getByRole('link', { name: 'See plugins' })).toHaveAttribute('href', '#/settings/plugins?tab=browse&kind=plugins');
-    expect(screen.queryByText('Your apps')).not.toBeInTheDocument();
+    expect(await screen.findByText('Chrome closed')).toBeInTheDocument();
+    expect(screen.getByText(/Chrome isn’t open on this Mac; agents wait or use their own browser/)).toBeInTheDocument();
   });
-  it('off macOS, offers no apps route', async () => {
-    vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'linux' });
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'playwright', session: undefined, settings: { ...settings, yourApps: 'off' }, browser: { engine: 'chromium', headless: true } });
+  it('lists the sign-in sites under your Chrome', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, settings: { ...settings, signInSites: ['amazon.com', 'chase.com'] } });
     render(<Browser />);
-    expect(await screen.findByText('Their own browser')).toBeInTheDocument();
-    expect(screen.queryByText('Your apps')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('computer-plugin-offer')).not.toBeInTheDocument();
+    expect(await screen.findByText('Always for amazon.com and chase.com')).toBeInTheDocument();
   });
-  it('shows a Stop that holds, with its expiry and Resume', async () => {
-    vi.mocked(api.browser).mockResolvedValue({ ...status, session: undefined, settings, stop: { at: '2026-10-03T10:00:00.000Z', until: '2026-10-03T11:00:00.000Z' } });
-    render(<Browser />);
-    expect(await screen.findByText('Browsing is stopped')).toBeInTheDocument();
+  it('shows a Stop that holds as a warning with Resume', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, stop: { at: '2026-10-03T10:12:00Z', until: '2026-10-03T11:12:00Z' } });
+    render(<Browser timezone="UTC" />);
+    expect(await screen.findByText(/Agents’ browsing is paused since .*by you from the Canvas, until .*An agent that needs a page asks you in its chat\./)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume'));
   });
-  it('says who is looking and links to that conversation; settings stay open meanwhile', async () => {
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', settings });
+  it('says who is looking now and links to that conversation’s Canvas', async () => {
+    const session = { id: 's1', agentId: 'concierge', conversationId: 'c1', requestId: 'r1', task: 'Check the cart', expiresAt: new Date().toISOString(), steps: 3, maxSteps: 200 };
+    vi.mocked(api.browser).mockResolvedValue({ ...base, state: 'running', session, route: 'chrome', page: { id: 'p', url: 'https://www.amazon.com/cart', title: 'Your cart', capturedAt: '', tabs: [] } });
     render(<Browser />);
-    expect(await screen.findByText('Book a fixture appointment')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Book a fixture appointment/ })).toHaveAttribute('href', '#/chat/concierge/c1');
-    expect(screen.queryByText(/of 80 steps/)).not.toBeInTheDocument();
-    expect(screen.getByRole('switch', { name: 'Your Chrome' })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Stop agents’ browsing' }));
-    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('stop'));
+    const link = (await screen.findByText('Your cart')).closest('a')!;
+    expect(link).toHaveAttribute('href', expect.stringContaining('c1'));
+    expect(within(link).getByText('Looking at amazon.com · in your Chrome · background tab')).toBeInTheDocument();
   });
 });
 
-describe('your own browser', () => {
-  const chosen = { ...settings, yourChrome: true };
-  it('shows pairing only once Your Chrome is on', async () => {
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings });
+describe('buddi’s own browser: health and its one fix', () => {
+  it('missing: says so and installs on click', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, browser: { engine: 'none', headless: true } });
     render(<Browser />);
-    expect(await screen.findByText('Your Chrome')).toBeInTheDocument();
-    expect(screen.queryByText(/Load unpacked/)).not.toBeInTheDocument();
-    vi.mocked(api.browserSettings).mockImplementation(async (next) => {
-      vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: { ...settings, ...next } });
-      return { ...status, mode: 'extension', session: undefined, settings: { ...settings, ...next } };
-    });
-    fireEvent.click(screen.getByRole('switch', { name: 'Your Chrome' }));
-    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourChrome: true }));
-    expect(await screen.findByText(/Load unpacked/)).toBeInTheDocument();
-    expect(screen.getByRole('switch', { name: 'Your Chrome' })).toBeChecked();
+    expect(await screen.findByText('Chromium isn’t installed, so agents can’t look at pages yet.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Install · 150 MB' }));
+    await waitFor(() => expect(api.browserInstall).toHaveBeenCalledOnce());
   });
-  it('leads with Add to Chrome, the store opening in a new tab, the unpacked folder under Developer install', async () => {
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
+  it('installing: a spinner and the percent, no button', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, browser: { engine: 'none', headless: true, install: { state: 'running', progress: { phase: 'downloading', percent: 61, what: 'Chromium', download: 1 } } } });
     render(<Browser />);
-    const add = await screen.findByRole('link', { name: 'Add to Chrome' });
-    expect(add).toHaveAttribute('href', STORE_URL);
-    expect(STORE_URL).toBe('https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah');
-    expect(add).toHaveAttribute('target', '_blank');
-    expect(add).toHaveAttribute('rel', expect.stringContaining('noopener'));
-    const dev = screen.getByText('Developer install').closest('details');
-    expect(dev).not.toHaveAttribute('open');
-    expect(dev).toHaveTextContent('Load unpacked');
+    expect(await screen.findByText('Installing Chromium… 61%')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Install/ })).not.toBeInTheDocument();
   });
-  it('in Firefox or Safari says which browsers take it, and offers no install', async () => {
-    useAgent(FIREFOX_MAC);
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
+  it('sandbox: the one Linux command to copy, and Check again', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, browser: { engine: 'chromium', headless: true, problem: 'no-sandbox' } });
+    vi.mocked(api.browserCheck).mockResolvedValue({ ok: true });
     render(<Browser />);
-    expect(await screen.findByText(/needs Chrome, Edge, Brave or Arc/)).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Add to Chrome' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Developer install')).not.toBeInTheDocument();
-  });
-  it('on a phone hides the install and points to a computer', async () => {
-    useAgent(IPHONE);
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
-    render(<Browser />);
-    expect(await screen.findByText(/install and pair it from there/)).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Add to Chrome' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Developer install')).not.toBeInTheDocument();
-    expect(screen.queryByText(/needs Chrome, Edge/)).not.toBeInTheDocument();
-  });
-  it('tells desktop Chromium browsers from the rest and from phones', () => {
-    expect(installTarget({ userAgent: CHROME_MAC })).toBe('chromium');
-    expect(installTarget({ userAgent: `${CHROME_MAC} Edg/141.0.0.0` })).toBe('chromium');
-    expect(installTarget({ userAgent: 'x', userAgentData: { mobile: false, brands: [{ brand: 'Chromium' }, { brand: 'Brave' }] } })).toBe('chromium');
-    expect(installTarget({ userAgent: FIREFOX_MAC })).toBe('other');
-    expect(installTarget({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15' })).toBe('other');
-    expect(installTarget({ userAgent: IPHONE })).toBe('phone');
-    expect(installTarget({ userAgent: 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36' })).toBe('phone');
-  });
-  it('says it is not connected, prints the unpacked folder and the four words', async () => {
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
-    render(<Browser />);
-    expect(await screen.findByText('Not connected')).toBeInTheDocument();
-    expect(screen.getByText(/chrome:\/\/extensions/)).toHaveTextContent('Developer mode');
-    expect(screen.getByText(/chrome:\/\/extensions/)).toHaveTextContent('Load unpacked');
-    expect(screen.getByText('/opt/buddi/extension')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Pairing code')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Forget this browser' })).toBeDisabled();
-  });
-  it('pairs with the code the extension is showing, and forgets a paired browser', async () => {
-    const paired = new Date('2026-09-20T10:00:00Z').toISOString();
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
-    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/opt/buddi/extension', pairedAt: paired, extension: '0.1.0' });
-    render(<Browser />);
-    const field = await screen.findByLabelText('Pairing code');
-    expect(screen.getByRole('button', { name: 'Pair' })).toBeDisabled();
-    fireEvent.change(field, { target: { value: '482 913' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
-    await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482 913'));
-    fireEvent.click(screen.getByRole('button', { name: 'Forget this browser' }));
-    await waitFor(() => expect(api.forgetExtension).toHaveBeenCalled());
+    expect(await screen.findByText(SANDBOX_COMMAND)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(api.browserCheck).toHaveBeenCalledOnce());
   });
 });
 
-/**
- * The dashboard noticing the extension.
- *
- * `chrome.runtime.sendMessage` to a fixed id is the only way a page can ask,
- * so the fake below is exactly what the browser would put on `globalThis`: a
- * function that answers when the extension is there and rejects when it is not.
- */
-describe('finding the extension from the dashboard', () => {
-  const chosen = { ...settings, yourChrome: true };
-  const EXTENSION_IDS = ['kmbckpnnjfggeffkkbmkggojnolkdokb', 'pbfpjefkiijjgefblpnlnlpmeaddfbah'];
-  const answers = (answer: unknown) => {
-    const sendMessage = vi.fn(async (id: string, message: unknown) => {
-      expect(EXTENSION_IDS).toContain(id);
-      expect(message).toEqual({ type: 'buddi.status' });
-      if (answer instanceof Error) throw answer;
-      return answer;
-    });
-    vi.stubGlobal('chrome', { runtime: { sendMessage } });
-    return sendMessage;
-  };
-  const here = () => window.location.origin;
-  beforeEach(() => {
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
-  });
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('says the extension is missing when nothing answers', async () => {
+describe('your Chrome: Add to Chrome, the code, Pair again', () => {
+  it('none: Add to Chrome opens the store in a new tab', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: false, path: '/opt/buddi/extension' });
     answers(new Error('Could not establish connection.'));
     render(<Browser />);
-    expect(await screen.findByText(/The browser you are reading this in has no buddi extension/)).toBeInTheDocument();
-    expect(screen.getByText(/chrome:\/\/extensions/)).toHaveTextContent('Load unpacked');
+    const add = await screen.findByRole('link', { name: /Add to Chrome/ });
+    expect(add).toHaveAttribute('href', STORE_URL);
+    expect(add).toHaveAttribute('target', '_blank');
+    expect(screen.getByText(/Add the buddi extension to Chrome, then pair it here/)).toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Let agents use your Chrome' })).not.toBeInTheDocument();
   });
-
-  it('finds the store-installed extension under its own id', async () => {
-    const sendMessage = vi.fn(async (id: string) => {
-      if (id !== 'pbfpjefkiijjgefblpnlnlpmeaddfbah') throw new Error('Could not establish connection.');
-      return { installed: true, version: '0.1.0.30', state: 'paired', gateway: here() };
-    });
-    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+  it('none, in Firefox or on a phone: no install button, and says where it runs', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: false, path: '/opt/buddi/extension' });
+    answers(new Error('none'));
+    useAgent(FIREFOX_MAC);
     render(<Browser />);
-    expect(await screen.findByText(/has the extension, version 0\.1\.0\.30/)).toBeInTheDocument();
-    expect(sendMessage).toHaveBeenCalledWith('pbfpjefkiijjgefblpnlnlpmeaddfbah', { type: 'buddi.status' });
+    expect(await screen.findByText(/runs in Chrome, Edge, Brave or Arc on a computer/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Add to Chrome/ })).not.toBeInTheDocument();
   });
-
-  it('says so in a browser that has no extensions at all', async () => {
+  it('pair: reads the code the extension shows in this browser and pairs by itself', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/x' });
+    answers({ installed: true, version: '0.1.4', state: 'pairing', code: '482913', gateway: window.location.origin });
+    vi.mocked(api.pairExtension).mockResolvedValue(paired);
     render(<Browser />);
-    expect(await screen.findByText(/The browser you are reading this in has no buddi extension/)).toBeInTheDocument();
+    expect(await screen.findByText('Extension 0.1.4 found in Chrome')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Pairing code')).toHaveTextContent('482 · 913');
+    await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482913'));
+    expect(api.pairExtension).toHaveBeenCalledOnce();
   });
-
-  it('names the version it found, and fills in the code it is showing', async () => {
-    answers({ installed: true, version: '0.1.0', state: 'pairing', code: '482 913', gateway: here() });
-    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/opt/buddi/extension' });
+  it('pair: from another browser the six digits are typed once', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/x' });
+    answers(new Error('none'));
+    vi.mocked(api.pairExtension).mockResolvedValue(paired);
     render(<Browser />);
-    expect(await screen.findByText(/has the extension, version 0\.1\.0/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText('Pairing code')).toHaveValue('482 913'));
-    // Pair is the only thing to press: the code arrived, nothing else changed.
-    const pair = screen.getByRole('button', { name: 'Pair' });
-    expect(pair).toBeEnabled();
-    fireEvent.click(pair);
-    await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482 913'));
+    const input = await screen.findByRole('textbox', { name: 'Pairing code' });
+    fireEvent.change(input, { target: { value: '123 456' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
+    await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('123 456'));
   });
-
-  it('says when the browser it found is already paired', async () => {
-    answers({ installed: true, version: '0.1.0', state: 'paired', gateway: here() });
+  it('broken: Chrome forgot the pairing, Pair again starts over', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ ...paired, connected: false });
+    answers({ installed: true, version: '0.1.4', state: 'disconnected', gateway: window.location.origin });
+    vi.mocked(api.forgetExtension).mockResolvedValue({ connected: false, pending: false, path: '/x' });
     render(<Browser />);
-    expect(await screen.findByText(/already paired/)).toBeInTheDocument();
-    expect(screen.queryByText(/pointed at/)).not.toBeInTheDocument();
+    expect(await screen.findByText('Chrome forgot the pairing, so agents use their own browser instead.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pair again' }));
+    await waitFor(() => expect(api.forgetExtension).toHaveBeenCalledOnce());
   });
-
-  it('says nothing when the extension meets the minimum, whatever buddi\'s own version (the store build reports 0.1.0)', async () => {
-    answers({ installed: true, version: '0.1.0', state: 'paired', gateway: here() });
-    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.35', extensionMinimum: '0.1.0' });
+  it('asks for an update only below the minimum the gateway declares, and points out another buddi', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ ...paired, extensionMinimum: '0.1.0.24' });
+    answers({ installed: true, version: '0.1.0.20', state: 'paired', gateway: 'http://127.0.0.1:4317' });
     render(<Browser />);
-    expect(await screen.findByText(/has the extension, version 0\.1\.0\./)).toBeInTheDocument();
-    expect(screen.queryByText(/Update it from/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/This extension is 0\.1\.0\.20; this buddi needs 0\.1\.0\.24 or later/)).toBeInTheDocument();
+    expect(screen.getByText(/The extension is pointed at http:\/\/127\.0\.0\.1:4317/)).toBeInTheDocument();
   });
-
-  it('asks for an update only below the minimum the gateway declares, and carries on', async () => {
-    answers({ installed: true, version: '0.1.0.24', state: 'paired', gateway: here() });
-    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.40', extensionMinimum: '0.1.0.30' });
+  it('forgets this Chrome only after a second word', async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(api.forgetExtension).mockResolvedValue({ connected: false, pending: false, path: '/x' });
     render(<Browser />);
-    expect(await screen.findByText('This extension is 0.1.0.24; this buddi needs 0.1.0.30 or later. Update it from chrome://extensions or the store.')).toBeInTheDocument();
-    expect(screen.getByText(/already paired/)).toBeInTheDocument();
-  });
+    await user.click(within(await row('Your Chrome')).getByRole('button', { name: 'More for your Chrome' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Forget this Chrome/ }));
+    expect(api.forgetExtension).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole('button', { name: 'Forget' }));
+    await waitFor(() => expect(api.forgetExtension).toHaveBeenCalledOnce());
+  }, 60_000);
+});
 
-  it('says nothing about versions to an older gateway that declares no minimum', async () => {
-    answers({ installed: true, version: '0.1.0', state: 'paired', gateway: here() });
-    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.35' });
+describe('your apps: only with the Computer plugin', () => {
+  it('broken: the macOS fix on the row sends to the plugin’s page, no switch', async () => {
+    const navigate = vi.fn();
+    vi.mocked(api.browser).mockResolvedValue({ ...base, routes: routes({ apps: { available: false, message: 'macOS hasn’t allowed Screen Recording, so agents can’t see app windows.', repair: 'permissions' } }) });
+    render(<Browser navigate={navigate} />);
+    const apps = await row('Your apps');
+    expect(within(apps).getByText('macOS hasn’t allowed Screen Recording, so agents can’t see app windows.')).toBeInTheDocument();
+    expect(within(apps).queryByRole('switch')).not.toBeInTheDocument();
+    fireEvent.click(within(apps).getByRole('button', { name: 'Allow in macOS' }));
+    expect(navigate).toHaveBeenCalledWith(pluginSettingsRoute('computer'));
+  });
+  it('without the plugin: no apps row, one line offering it on a Mac, nothing elsewhere', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, routes: routes({ apps: { installed: false } }) });
+    const { unmount } = render(<Browser />);
+    expect(await screen.findByTestId('computer-plugin-offer')).toHaveTextContent('Agents can also work in apps on this Mac with the Computer plugin.');
+    expect(screen.queryByText('Your apps')).not.toBeInTheDocument();
+    unmount();
+    vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'linux' });
     render(<Browser />);
-    expect(await screen.findByText(/has the extension, version 0\.1\.0\./)).toBeInTheDocument();
-    expect(screen.queryByText(/Update it from/)).not.toBeInTheDocument();
+    await row('Your Chrome');
+    expect(screen.queryByTestId('computer-plugin-offer')).not.toBeInTheDocument();
   });
-
-  it('compares Chrome versions part by part', () => {
-    expect(olderExtension('0.1.0', '0.1.0')).toBe(false);
-    expect(olderExtension('0.1.0.24', '0.1.0')).toBe(false);
-    expect(olderExtension('0.1.0', '0.1.0.1')).toBe(true);
-    expect(olderExtension('0.1.0.9', '0.1.0.10')).toBe(true);
-    expect(olderExtension('0.2', '0.1.0.99')).toBe(false);
-    expect(olderExtension('junk', '0.1.0')).toBe(false);
+  it('Settings opens the plugin’s own page', async () => {
+    const navigate = vi.fn();
+    render(<Browser navigate={navigate} />);
+    fireEvent.click(within(await row('Your apps')).getByRole('button', { name: 'Manage apps' }));
+    expect(navigate).toHaveBeenCalledWith(pluginSettingsRoute('computer'));
   });
-
-  it('points out an extension aimed at another buddi', async () => {
-    answers({ installed: true, version: '0.1.0', state: 'disconnected', gateway: 'http://127.0.0.1:4999' });
-    render(<Browser />);
-    expect(await screen.findByText(`The extension is pointed at http://127.0.0.1:4999; set it to ${here()} in the popup.`)).toBeInTheDocument();
+  it('reads a provider only from the plugin', () => {
+    expect(appsProvided({ kind: 'apps', allowed: true, available: true, provider: 'computer', installed: true })).toBe(true);
+    expect(appsProvided({ kind: 'apps', allowed: true, available: true, provider: 'core', installed: false })).toBe(false);
+    expect(appsProvided(undefined)).toBe(false);
   });
 });
 
-describe('the Canvas browser view', () => {
-  it('shows the task, the host observation and the controlling agent, and releases only its own session', async () => {
-    render(<Panel />);
-    expect(await screen.findByText('Book a fixture appointment')).toBeInTheDocument();
-    expect(screen.getByText('concierge')).toBeInTheDocument();
-    expect(screen.getByAltText('Last browser observation: Appointment')).toHaveAttribute('src', '/api/browser/screenshot?v=o1&sessionId=s1');
-    fireEvent.click(screen.getByRole('button', { name: 'Close & release' }));
-    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('release', 's1'));
-    fireEvent.click(screen.getByRole('button', { name: 'Stop all browsers' }));
-    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('stop'));
+describe('Advanced', () => {
+  const open = async () => { fireEvent.click(await screen.findByText('Advanced')); };
+  it('sets the first choice, the Stop’s length, the pages at once and the window', async () => {
+    render(<Browser />);
+    await open();
+    fireEvent.click(screen.getByRole('radio', { name: 'Own browser only' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ defaultRoute: 'own' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Until I say' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ stopExpiryMinutes: 0 }));
+    fireEvent.click(screen.getByRole('radio', { name: '5' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ maxOwnPages: 5 }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Show buddi’s browser as a window' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ showWindow: true }));
+    expect(screen.getByText(/Missions run without you, so they look only in buddi’s own browser/)).toBeInTheDocument();
   });
-  it('does not offer control when the host is unavailable', async () => {
-    vi.mocked(api.browser).mockResolvedValue({ state: 'unavailable', enabled: false, busy: false, hasScreenshot: false });
-    render(<Panel />);
-    expect(await screen.findByText(/Start buddi serve/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Stop all browsers' })).toBeDisabled();
+  it('lists the agents with their own rule, changes and removes one, and gives another its rule', async () => {
+    vi.mocked(api.agents).mockResolvedValue({ agents: [], providers: [], engines: [
+      { id: 'ledger', name: 'Ledger', browser: 'own' }, { id: 'home', name: 'Home Manager', browser: 'chrome' }, { id: 'scout', name: 'Scout', browser: 'auto' },
+    ] } as never);
+    render(<Browser />);
+    await open();
+    const select = await screen.findByRole('combobox', { name: 'Where Ledger may look' });
+    expect(select).toHaveValue('own');
+    fireEvent.change(select, { target: { value: 'chrome' } });
+    await waitFor(() => expect(api.setAgentEngine).toHaveBeenCalledWith('ledger', { browser: 'chrome' }));
+    fireEvent.click(within(screen.getByText('Home Manager').closest('.ui-list-row') as HTMLElement).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(api.setAgentEngine).toHaveBeenCalledWith('home', { browser: 'auto' }));
+    fireEvent.click(screen.getByRole('button', { name: /Give an agent its own rule/ }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'scout' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add this rule' }));
+    await waitFor(() => expect(api.setAgentEngine).toHaveBeenCalledWith('scout', { browser: 'own' }));
   });
-  it('renders resume after an owner stop and reports control failures', async () => {
-    vi.mocked(api.browser).mockResolvedValue({ ...status, state: 'stopped', session: undefined, hasScreenshot: false });
-    vi.mocked(api.browserControl).mockRejectedValue(new Error('Host is restarting'));
-    render(<Panel />);
-    await screen.findByText('stopped');
-    fireEvent.click(screen.getByRole('button', { name: 'Resume access' }));
-    expect(await screen.findByText('Host is restarting')).toBeInTheDocument();
+  it('says when no agent has its own rule', async () => {
+    render(<Browser />);
+    await open();
+    expect(await screen.findByText('No agent has its own rule. Every agent follows the first choice.')).toBeInTheDocument();
+  });
+  it('adds and removes a site that needs the owner’s sign-in', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...base, settings: { ...settings, signInSites: ['chase.com'] } });
+    render(<Browser />);
+    await open();
+    fireEvent.change(screen.getByRole('textbox', { name: 'A site that needs your sign-in' }), { target: { value: 'https://www.Amazon.com/cart' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ signInSites: ['chase.com', 'amazon.com'] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove chase.com' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ signInSites: [] }));
+  });
+});
+
+describe('the words', () => {
+  it('tells desktop Chromium browsers from the rest and from phones', () => {
+    expect(installTarget({ userAgent: CHROME_MAC })).toBe('chromium');
+    expect(installTarget({ userAgent: FIREFOX_MAC })).toBe('other');
+    expect(installTarget({ userAgent: IPHONE })).toBe('phone');
+  });
+  it('compares Chrome versions part by part', () => {
+    expect(olderExtension('0.1.0.20', '0.1.0.24')).toBe(true);
+    expect(olderExtension('0.1.1', '0.1.0.24')).toBe(false);
+    expect(olderExtension('dev', '0.1.0.24')).toBe(false);
+  });
+  it('reads the Chrome state from the gateway and the extension in this browser', () => {
+    expect(chromeState(undefined, null)).toBe('none');
+    expect(chromeState({ connected: false, pending: true, path: '' }, null)).toBe('pair');
+    expect(chromeState({ connected: true, pending: false, path: '', pairedAt: 'x' }, null)).toBe('connected');
+    expect(chromeState({ connected: false, pending: false, path: '', pairedAt: 'x' }, null)).toBe('notrunning');
+    expect(chromeState({ connected: false, pending: false, path: '', pairedAt: 'x' }, { installed: true, version: '1', state: 'disconnected', gateway: window.location.origin })).toBe('broken');
+  });
+  it('says where a page is looked at in one quiet line', () => {
+    const page = { id: 'p', url: 'https://www.amazon.com/cart', title: 'Cart', capturedAt: '', tabs: [] };
+    expect(lookingLine({ ...base, page })).toBe('Looking at amazon.com · in buddi’s browser');
+    expect(lookingLine({ ...base, page, route: 'chrome' })).toBe('Looking at amazon.com · in your Chrome · background tab');
+    expect(lookingLine({ ...base, page: { ...page, appId: 'com.apple.iWork.Numbers' }, route: 'apps' })).toBe('Working in Numbers · its own window');
+    expect(lookingLine({ ...base, page, needsOwner: { kind: 'sign-in', question: 'x', options: [] } })).toBe('Waiting for you · it asks for your sign-in');
+    expect(appWord('com.google.Chrome')).toBe('Chrome');
   });
 });
