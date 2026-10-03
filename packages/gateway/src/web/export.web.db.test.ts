@@ -121,7 +121,7 @@ suite('document export route', () => {
     const started = performance.now();
     const res = await get(raggedId, 'xlsx');
     expect(res.status).toBe(413);
-    expect((await res.json()).error).toMatch(/cells/);
+    expect(((await res.json()) as { error: string }).error).toMatch(/cells/);
     expect(performance.now() - started).toBeLessThan(2_000);
   });
 
