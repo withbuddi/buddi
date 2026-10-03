@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { rememberOwnerTimezone } from '../time.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../registry.js';
 import type { PluginManifest } from '../tools.js';
@@ -17,6 +17,7 @@ import {
   type CatalogAgent,
   injectToday,
   loadAgentCatalog,
+  setCatalogNoticeLog,
   resolveToolGrants,
   resolveToolNames,
   toDateString,
@@ -1093,6 +1094,22 @@ describe('skills in the catalog', () => {
     expect(lines.filter((l) => /shadows the shared one/.test(l))).toHaveLength(1);
     open();
     expect(lines.filter((l) => /shadows the shared one/.test(l))).toHaveLength(1);
+  });
+
+  it('sends the shadowing notice to the notice channel when the loader has no log, not to the console', () => {
+    const own = skillFile(['name: verdicts', 'description: Mine.', 'provenance: owner'].join('\n'), 'Mine.');
+    const dir = catalogDir({ 'finance-advisor': FINANCE }, { shared: { verdicts: VERDICTS }, skills: { 'finance-advisor': { verdicts: own } } });
+    const notices: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setCatalogNoticeLog((line) => notices.push(line));
+    try {
+      loadAgentCatalog({ dir, registry: registryOf(), env: {} });
+    } finally {
+      setCatalogNoticeLog(undefined);
+      warn.mockRestore();
+    }
+    expect(notices.filter((l) => /shadows the shared one/.test(l))).toHaveLength(1);
+    expect(warn.mock.calls.flat().filter((l) => /shadows the shared one/.test(String(l)))).toHaveLength(0);
   });
 });
 

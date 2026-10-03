@@ -8,6 +8,10 @@ What changes in buddi from one release to the next, newest first.
 
 - Telegram: "Still useful?" for a quiet watch now has Keep and Stop buttons, alone or after the end-of-day message. Only the owner's tap counts, a second tap says what already happened, and the message is edited to show the outcome.
 
+### Fixed
+
+- `buddi status` (and every other command but `serve`) no longer prints "agents: … has its own skill … it shadows the shared one" above its output. The line stays in the gateway's log; a command shows it on stderr with `BUDDI_DEBUG=1`.
+
 ## 0.1.0-pre.34 — 2026-10-02
 
 ### Changed

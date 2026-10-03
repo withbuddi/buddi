@@ -15,7 +15,7 @@
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { compareVersions, createPool, createVault, timezoneFromEnv, ToolRegistry } from '@buddi/core';
+import { compareVersions, createPool, createVault, setCatalogNoticeLog, timezoneFromEnv, ToolRegistry } from '@buddi/core';
 import {
   createWiringAsync,
   currentVersion,
@@ -155,6 +155,12 @@ async function service(action: ServiceAction, json = false): Promise<number> {
   return 0;
 }
 
+/** The CLI's debug channel: stderr with `BUDDI_DEBUG` set, nothing otherwise. */
+export function debugLine(env: NodeJS.ProcessEnv): (line: string) => void {
+  const on = env.BUDDI_DEBUG !== undefined && env.BUDDI_DEBUG !== '' && env.BUDDI_DEBUG !== '0';
+  return on ? (line) => console.error(`debug: ${line}`) : () => {};
+}
+
 /** What `main` works out before dispatching: the JSON switch and the argv a delegate re-parses. */
 export interface DispatchOptions {
   json?: boolean;
@@ -169,6 +175,10 @@ function withJson(argv: string[], json: boolean): string[] {
 export async function dispatch(command: Command, opts: DispatchOptions = {}): Promise<number> {
   const json = opts.json === true;
   const env = opts.env ?? process.env;
+  // The catalog's notices (an agent's own skill shadowing a shared one) belong
+  // in the gateway's log, which `serve` writes. Any other command loads the
+  // catalog only to read it, so they go to the debug channel, not above its output.
+  if (command.kind !== 'serve') setCatalogNoticeLog(debugLine(env));
   switch (command.kind) {
     case 'help':
       return printHelp(command.topic ?? [], env);

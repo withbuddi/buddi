@@ -753,6 +753,19 @@ export function generatedSection(
 /** Shadowing pairs already logged, so a reload does not repeat the line. */
 const shadowWarned = new Set<string>();
 
+/**
+ * Where a loader without its own `log` sends a notice that is not a problem —
+ * an agent's own skill shadowing a shared one. The console by default, which
+ * for the gateway is its log; a CLI command (`buddi status`, `buddi agents`)
+ * points it at its debug channel so the line does not land above its output.
+ */
+let catalogNotice: (line: string) => void = (line) => console.warn(line);
+
+/** Point the catalog's notices somewhere else; `undefined` puts back the console. */
+export function setCatalogNoticeLog(log: ((line: string) => void) | undefined): void {
+  catalogNotice = log ?? ((line: string) => console.warn(line));
+}
+
 export function selectSkills(
   agentId: string,
   declared: readonly string[],
@@ -760,6 +773,7 @@ export function selectSkills(
   sharedSkills: readonly Skill[],
   privateOf?: (agentId: string) => readonly Skill[] | undefined,
   warn?: (line: string) => void,
+  notice: ((line: string) => void) | undefined = warn,
 ): Skill[] {
   const ownNames = new Set(privateSkills.map((s) => s.name));
   // A plain request for a name the agent owns is satisfied by its own skill.
@@ -780,9 +794,9 @@ export function selectSkills(
     shadowed.add(skill.name);
     const key = `${agentId}\0${skill.file}\0${own.file}`;
     // A caller without a log (the Skills page's resolving) does not use up the one warning.
-    if (warn !== undefined && !shadowWarned.has(key)) {
+    if (notice !== undefined && !shadowWarned.has(key)) {
       shadowWarned.add(key);
-      warn(
+      notice(
         `agents: ${agentId} has its own skill "${skill.name}" (${own.file}); it shadows the shared one ` +
           `(${skill.file}) for this agent only`,
       );
@@ -934,6 +948,7 @@ function buildAgent(
     sharedSkills,
     privateOf,
     opts.log ?? ((line: string) => console.warn(line)),
+    opts.log ?? ((line: string) => catalogNotice(line)),
   );
   const section = skillsSection(skills);
   const colleagues = roster.filter((entry) => entry.id !== frontmatter.id);
