@@ -1,24 +1,26 @@
 /**
  * Computer & browser, for the owner rather than the engineer.
  *
- * Three questions, answered in order: does macOS let agents act at all, which
- * apps may they touch, and how do they get a browser. The live view of what an
+ * Two questions, answered in order: can agents look at all, and where may
+ * they look. The apps route is the Computer plugin's (its own settings page
+ * holds the helper, the macOS permissions and the apps list); here it is one
+ * row, shown only when the plugin is installed. The live view of what an
  * agent is doing is not here: it is on the Canvas of the conversation doing it,
  * and this page only says who is driving and links there.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api';
 import { fmtClock, fmtTime } from '../format';
-import { chatRoute } from '../routes';
+import { chatRoute, pluginSettingsRoute } from '../routes';
 import { InstallProgress } from './parts/InstallProgress';
-import { Avatar, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Segment, Sheet, Spacer, Stack, Switch, Toolbar, useAsync } from '../ui';
+import { Avatar, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Spacer, Stack, Switch, Toolbar, useAsync } from '../ui';
 import { RemoteHand } from './RemoteHand';
 import { useThisMachine } from '../useThisMachine';
 
 export function Browser({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
   const session = useAsync(() => api.session(), []);
-  // Computer control is macOS-only. An unreadable or older session answer keeps the page as it was.
+  // The Computer plugin is macOS-only: elsewhere the page does not offer it.
   const macOS = session.data?.platform ? session.data.platform === 'darwin' : true;
   const settled = !!session.data || !!session.error;
   return (
@@ -32,12 +34,13 @@ export function Browser({ embedded, timezone }: { embedded?: boolean; timezone?:
 function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserStatus; macOS: boolean; reload: () => void; timezone?: string }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const [picking, setPicking] = useState(false);
   // Where agents may look: permissions, not a mode. The kit-driven redesign of this page is the next step;
-  // until then the three routes are switches here (docs/browser.md).
+  // until then the routes are switches here (docs/browser.md).
   const settings = data.settings;
-  const computer = macOS && settings?.yourApps !== undefined && settings.yourApps !== 'off';
   const chromeRoute = data.routes?.find((route) => route.kind === 'chrome');
+  // Your apps: a route the Computer plugin provides; without it, one line offering the plugin.
+  const appsRoute = data.routes?.find((route) => route.kind === 'apps');
+  const appsInstalled = appsRoute?.installed === true;
   const sessions = data.sessions?.length ? data.sessions : data.session ? [data] : [];
   const active = sessions.length > 0 || data.busy;
   const run = async (action: () => Promise<unknown>) => {
@@ -46,15 +49,11 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
     finally { setBusy(false); reload(); }
   };
   const save = (next: Partial<ControlSettings>) => void run(() => api.browserSettings(next));
-  const perms = data.permissions;
   // The agents' own browser: none installed, or installed but unable to start, is not ready.
   const own = data.browser;
   const installing = own?.install?.state === 'running';
   const noBrowser = own?.engine === 'none';
-  // An install without the native helper (an older npm release): "Use my apps" says so on its card, once.
-  const helperMissing = macOS && data.helper?.present === false;
-  const helperLine = helperMissing ? data.helper?.message ?? 'The computer helper is missing from this install. Update buddi.' : undefined;
-  const ready = !!data.enabled && !noBrowser && !own?.problem && !(computer && helperMissing) && (!computer || !perms?.supported || (perms.accessibility && perms.screenRecording));
+  const ready = !!data.enabled && !noBrowser && !own?.problem;
   const readyLine = 'Ready. Agents look in their own browser, in the background; your Chrome only for sites that need your sign-in, when you allow it.';
 
   return (
@@ -66,8 +65,7 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
         panel
         actions={
           <>
-            <Button size="sm" disabled={busy} onClick={() => void run(() => api.computerPermissions(false))}>Check again</Button>
-            {computer && !ready && perms?.supported ? <Button size="sm" variant="accent" disabled={busy || active} onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</Button> : null}
+            <Button size="sm" disabled={busy} onClick={() => void run(async () => undefined)}>Check again</Button>
             {noBrowser || installing ? <Button size="sm" variant="accent" disabled={busy || installing} onClick={() => void run(() => api.browserInstall())}>{installing ? 'Installing…' : 'Install Chromium'}</Button> : null}
           </>
         }
@@ -81,28 +79,8 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
             </Notice>
           ) : own?.problem ? (
             <Notice tone="warning">{own.message}</Notice>
-          ) : computer && helperMissing ? (
-            <p className="muted">“Use my apps” cannot run on this install; see its card below.</p>
           ) : ready ? (
             <Notice tone="good">{readyLine}</Notice>
-          ) : (
-            <Notice tone="warning">macOS has not granted everything yet. Grant the permissions below, then check again.</Notice>
-          )}
-          {!computer || helperMissing ? null : perms?.supported ? (
-            <ul className="perm-list">
-              <li className="perm-row">
-                <Pill tone={perms.accessibility ? 'good' : 'warning'}>{perms.accessibility ? 'Granted' : 'Needed'}</Pill>
-                <span className="perm-name">Accessibility</span>
-                <span className="muted">Lets agents click and type in the apps you allow.</span>
-              </li>
-              <li className="perm-row">
-                <Pill tone={perms.screenRecording ? 'good' : 'warning'}>{perms.screenRecording ? 'Granted' : 'Needed'}</Pill>
-                <span className="perm-name">Screen Recording</span>
-                <span className="muted">Lets agents see the window they are working in.</span>
-              </li>
-            </ul>
-          ) : perms ? (
-            <p className="muted">Computer control requires macOS 14 or later.</p>
           ) : null}
           {/* A bar and one line in buddi's words while it runs; the
               installer's own progress text never reaches the page. */}
@@ -115,8 +93,6 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
             </p>
           ) : null}
           {own?.headless && !noBrowser ? <p className="muted">The agents’ browser runs headless on this machine, since it has no display. Watch it and take over from the conversation’s Canvas.</p> : null}
-          {computer && !helperMissing && perms?.message ? <p className="muted">{perms.message}</p> : null}
-          {computer && perms?.supported && !ready ? <p className="muted">macOS may ask you to restart buddi after granting them.</p> : null}
         </Stack>
       </Section>
 
@@ -163,13 +139,20 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
                 </span>
                 <Switch checked={settings.yourChrome} label="Your Chrome" disabled={busy || !data.enabled} onChange={(on) => save({ yourChrome: on })} />
               </div>
-              {macOS ? (
+              {appsInstalled ? (
                 <div className="ui-list-row">
                   <span className="ui-list-main">
                     <span className="ui-list-title">Your apps</span>
-                    <span className="ui-list-sub">{helperLine ?? 'Only for app jobs (“open Numbers”). Off, ask for each app, or on for the apps below.'}</span>
+                    <span className="ui-list-sub">
+                      {settings.yourApps === 'off' ? 'Off. Agents tell you when a task needs an app.' : 'From the Computer plugin · when you name an app.'}
+                      {appsRoute?.message && settings.yourApps !== 'off' && !appsRoute.available ? <span className="pl-row-status" data-tone="critical"> {appsRoute.message}</span> : null}
+                    </span>
                   </span>
-                  <Segment label="Your apps" value={settings.yourApps} options={[{ value: 'off', label: 'Off' }, { value: 'ask', label: 'Ask' }, { value: 'on', label: 'On' }]} onChange={(value) => save({ yourApps: value })} />
+                  <Toolbar>
+                    {settings.yourApps !== 'off' && appsRoute?.available ? <Pill tone="good">ready</Pill> : null}
+                    <Switch checked={settings.yourApps !== 'off'} label="Let agents use your apps" disabled={busy || !data.enabled} onChange={(on) => save({ yourApps: on ? 'on' : 'off' })} />
+                    <ButtonLink size="sm" variant="ghost" href={pluginSettingsRoute(appsRoute?.provider || 'computer')}>Settings</ButtonLink>
+                  </Toolbar>
                 </div>
               ) : null}
               {data.stop ? (
@@ -181,29 +164,13 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
               {settings.yourChrome ? <ExtensionPairing busy={busy} timezone={timezone} /> : null}
             </Stack>
           </Section>
-
-          {macOS ? <Section title="Apps agents may use" panel>
-            <Stack>
-              {settings.yourApps === 'off' ? (
-                <p className="muted">Only used when your apps are on. The list is kept for when you turn them on.</p>
-              ) : null}
-              <AppList settings={settings} disabled={busy || !data.enabled} onChange={save} onAdd={() => setPicking(true)} />
-              <Details summary="Details">
-                <div className="ui-prose muted">
-                  <p>Agents see what is on screen in these apps, and what they see goes to the agent’s model provider. Allow only apps you want operated.</p>
-                  <p>Never type a password or a sign-in code in chat. Sign in yourself, in the app, while you have taken over.</p>
-                  <p>This is an allow list, not a sandbox: an allowed app’s own network traffic is not inspected.</p>
-                </div>
-              </Details>
-            </Stack>
-          </Section> : null}
-          {picking ? (
-            <AppPicker
-              chosen={settings.allowedApps}
-              onClose={() => setPicking(false)}
-              onPick={(id) => { setPicking(false); if (!settings.allowedApps.includes(id)) save({ ...settings, allowedApps: [...settings.allowedApps, id] }); }}
-            />
+          {macOS && !appsInstalled ? (
+            <p className="muted" data-testid="computer-plugin-offer">
+              Agents can also work in apps on this Mac with the Computer plugin.{' '}
+              <a href="#/settings/plugins?tab=browse&kind=plugins">See plugins</a>
+            </p>
           ) : null}
+
         </>
       ) : null}
     </Stack>
@@ -389,110 +356,6 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
         <Button variant="danger" disabled={disabled || !data?.pairedAt} onClick={() => void run(() => api.forgetExtension())}>Forget this browser</Button>
       </Toolbar>
     </Stack>
-  );
-}
-
-function AppList({ settings, disabled, onChange, onAdd }: { settings: ControlSettings; disabled: boolean; onChange: (next: ControlSettings) => void; onAdd: () => void }): JSX.Element {
-  const apps = useAsync(() => api.installedApps(), []);
-  const nameOf = (id: string): string => apps.data?.apps.find((a) => a.id === id)?.name ?? id;
-  return (
-    <>
-      {settings.allowedApps.length === 0 ? <Empty>No apps yet. Agents cannot touch anything until you add one.</Empty> : (
-        <ul className="ui-list" aria-label="Allowed apps">
-          {settings.allowedApps.map((id) => (
-            <li key={id} className="ui-list-row">
-              <Avatar id={id} name={nameOf(id)} size="sm" />
-              <span className="ui-list-main">
-                <span className="ui-list-title">{nameOf(id)}{id === settings.browserApp ? <Pill tone="accent" className="app-role">browser</Pill> : null}</span>
-                <span className="ui-list-sub mono">{id}</span>
-              </span>
-              <Toolbar>
-                {id !== settings.browserApp && isBrowser(id) ? <Button size="sm" variant="ghost" disabled={disabled} onClick={() => onChange({ ...settings, browserApp: id })}>Use as browser</Button> : null}
-                {id === settings.browserApp
-                  ? <span className="muted">In use as the browser</span>
-                  : <Button size="sm" variant="ghost" disabled={disabled} onClick={() => onChange({ ...settings, allowedApps: settings.allowedApps.filter((a) => a !== id) })}>Remove</Button>}
-              </Toolbar>
-            </li>
-          ))}
-        </ul>
-      )}
-      <Toolbar>
-        <Button variant="accent" disabled={disabled} onClick={onAdd}>Add an app</Button>
-        <span className="muted">The app marked as browser is the one agents open websites in.</span>
-      </Toolbar>
-      {settings.yourApps !== 'off' && CHROMIUM.includes(settings.browserApp) ? <ProfileChoice settings={settings} disabled={disabled} onChange={onChange} /> : null}
-    </>
-  );
-}
-
-const CHROMIUM = ['com.google.Chrome', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser'];
-
-/** Which of the browser's profiles agents open websites in. */
-function ProfileChoice({ settings, disabled, onChange }: { settings: ControlSettings; disabled: boolean; onChange: (next: ControlSettings) => void }): JSX.Element {
-  const profiles = useAsync(() => api.browserProfiles(settings.browserApp), [settings.browserApp]);
-  const list = profiles.data?.profiles ?? [];
-  const known = settings.browserProfile ? list.some((p) => p.directory === settings.browserProfile) : true;
-  return (
-    <Field
-      label="Browser profile"
-      hint={settings.browserProfile ? 'Websites open in this profile, signed in as it is.' : 'Not chosen: websites open in whichever profile’s window is in front, or the last one you used.'}
-    >
-      <select
-        value={settings.browserProfile ?? ''}
-        disabled={disabled}
-        onChange={(e) => {
-          const { browserProfile: _drop, ...rest } = settings;
-          onChange(e.target.value ? { ...rest, browserProfile: e.target.value } : rest);
-        }}
-      >
-        <option value="">Whichever is in front</option>
-        {!known && settings.browserProfile ? <option value={settings.browserProfile}>{settings.browserProfile} (not found)</option> : null}
-        {list.map((p) => <option key={p.directory} value={p.directory}>{p.name}{p.directory === 'Default' ? '' : ` (${p.directory})`}</option>)}
-      </select>
-    </Field>
-  );
-}
-
-const BROWSERS = ['com.google.Chrome', 'com.apple.Safari', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser', 'org.mozilla.firefox', 'company.thebrowser.Browser'];
-function isBrowser(id: string): boolean { return BROWSERS.includes(id); }
-
-function AppPicker({ chosen, onClose, onPick }: { chosen: string[]; onClose: () => void; onPick: (id: string) => void }): JSX.Element {
-  const apps = useAsync(() => api.installedApps(), []);
-  const [q, setQ] = useState('');
-  const [manual, setManual] = useState('');
-  const rows = useMemo(() => {
-    const list = apps.data?.apps ?? [];
-    const needle = q.trim().toLowerCase();
-    return list.filter((a) => !needle || a.name.toLowerCase().includes(needle) || a.id.toLowerCase().includes(needle)).slice(0, 60);
-  }, [apps.data, q]);
-  return (
-    <Sheet title="Add an app" onClose={onClose}>
-      <input autoFocus aria-label="Search apps" placeholder="Search installed apps" value={q} onChange={(e) => setQ(e.target.value)} />
-      <ErrorBanner message={apps.error} />
-      {!apps.data ? <Empty>Reading your Applications folder…</Empty> : rows.length === 0 ? <Empty>No app matches.</Empty> : (
-        <ul className="ui-list" aria-label="Installed apps">
-          {rows.map((a) => {
-            const already = chosen.includes(a.id);
-            return (
-              <li key={a.id} className="ui-list-row">
-                <Avatar id={a.id} name={a.name} size="sm" />
-                <span className="ui-list-main">
-                  <span className="ui-list-title">{a.name}</span>
-                  <span className="ui-list-sub mono">{a.id}</span>
-                </span>
-                <Button size="sm" disabled={already} onClick={() => onPick(a.id)}>{already ? 'Allowed' : 'Allow'}</Button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      <Details summary="Add by bundle identifier instead">
-        <Toolbar>
-          <input aria-label="Bundle identifier" placeholder="com.apple.TextEdit" value={manual} onChange={(e) => setManual(e.target.value)} />
-          <Button disabled={!manual.trim()} onClick={() => onPick(manual.trim())}>Allow this identifier</Button>
-        </Toolbar>
-      </Details>
-    </Sheet>
   );
 }
 

@@ -477,19 +477,20 @@ boundary. See [host-execution.md](host-execution.md).
 
 ### Browser and native apps
 
-The `browser` plugin has three backends behind the same `browser.*` tools
-([browser.md](browser.md)):
+The `browser` plugin has two routes of its own behind the same `browser.*`
+tools, and a third a plugin provides ([browser.md](browser.md)):
 
 - **The agents' own browser** (Playwright), the default: a dedicated persistent
   profile, per-conversation tab controllers, public-web egress through a
   DNS-checked proxy.
 - **Your browser**: the Chrome extension (`packages/extension`), working in the
   owner's own Chrome in background tabs.
-- **Use my apps**: native control on macOS 14 and up. A fixed Swift helper
-  uses the accessibility tree, capture of the selected window only, and
-  synthesized input; no shell, AppleScript or browser debugging is exposed.
-  Apps beyond the browser need an owner allowlist entry, one conversation
-  controls the desktop at a time, and secure fields are masked.
+- **Your apps**: a route a plugin provides (host API 1.29 `routes`), today
+  the Computer plugin (`@withbuddi/plugin-computer`, macOS 14 and up): a fixed
+  Swift helper uses the accessibility tree, capture of the selected window
+  only, and synthesized input; no shell, AppleScript or browser debugging is
+  exposed. Apps beyond the plugin's list need the owner's card, one
+  conversation controls the desktop at a time, and secure fields are masked.
 
 An agent cannot tell which backend answered. buddi never switches backend on
 its own when a permission or a site fails.

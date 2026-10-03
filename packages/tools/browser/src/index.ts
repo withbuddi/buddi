@@ -39,7 +39,7 @@ export type { SecretFillInput, SecretTypeInput };
  * has: moving it would move the owner's profile.
  *
  * `options.extensionBridge` is the gateway's WebSocket endpoint, injected the
- * way computer mode's native bridge is: a factory, so nothing is built until a
+ * as a factory, so nothing is built until a
  * driver needs it. It is applied on every call rather than only on creation,
  * because this manifest is read before the gateway has a server to attach to.
  * `options.lookup` is core's address guard for Playwright mode's proxy.
@@ -136,14 +136,12 @@ export { chooseRoute, detectWall, ownerCard, cardAnswer, routeNote, siteOf, orig
 export type { OwnerCard, CardKind, Wall, RouteChoice, RouteReason } from './routes.js';
 export { BrowserTelemetry, STOP_CAUSES, summarize, readTelemetry, telemetryLines } from './telemetry.js';
 export type { StopCause, TelemetryEvent, TelemetrySummary } from './telemetry.js';
-export { ComputerRouteProvider } from './computer-route.js';
-export { APPS_UNAVAILABLE } from './controller.js';
+export { APPS_UNAVAILABLE, APPS_NOT_INSTALLED } from './controller.js';
 export { BrowserManager } from './manager.js';
 export { PlaywrightHost } from './host.js';
 export type { GuardedLookup } from './proxy.js';
 export { PlaywrightDriver } from './driver.js';
 export { HostController } from './controller.js';
-export { ComputerDriver, NativeComputerBridge, COMPUTER_HELPER, COMPUTER_HELPER_MISSING, computerHelperPresent, computerHelperFacts } from './computer.js';
 export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED } from './extension.js';
 export type { ExtensionBridge, ExtensionCommand, ExtensionCommandName, ExtensionEvent, ExtensionResult } from './extension.js';
 export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, HAND_QUALITY, HAND_QUALITY_LOW } from './types.js';

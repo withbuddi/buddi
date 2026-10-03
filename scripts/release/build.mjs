@@ -9,7 +9,6 @@ import { spawnSync } from 'node:child_process';
 import { BINARY_VERSION } from '../../packages/core/dist/postgres/index.js';
 import { CHANGELOG, ChangelogError, sectionOf } from './changelog.mjs';
 import { writeExtensionZip } from './extension-zip.mjs';
-import { helperInPack, INSTALLED_HELPER, stageNativeHelper } from './native.mjs';
 import { stampManifest } from '../../packages/extension/scripts/version.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -43,12 +42,6 @@ for (const { dir, source, pkg } of packages) {
   if (pkg.name !== '@buddi/install') delete staged.bin;
   await writeFile(path.join(dest, 'package.json'), JSON.stringify(staged, null, 2));
 }
-// The macOS computer helper ("Use my apps"), built by the release workflow's
-// macOS job. Required for a release (BUDDI_RELEASE_REQUIRE_NATIVE=1); a local
-// pack without it ships without it.
-const requireNative = process.env.BUDDI_RELEASE_REQUIRE_NATIVE === '1';
-const shipsHelper = await stageNativeHelper(stage, { require: requireNative });
-if (!shipsHelper) console.error('No macOS computer helper in this pack: "Use my apps" will be unavailable on a Mac that installs it.');
 await cp(path.join(root, 'packages/web/dist'), path.join(stage, 'packages/web/dist'), { recursive: true });
 // The Chrome extension ships unpacked, at the top of the installation, because
 // the owner has to point Chrome's "Load unpacked" at this exact folder and the
@@ -145,10 +138,6 @@ if (filename === undefined) {
   filename = readdirSync(stage).find((name) => name.endsWith('.tgz'));
 }
 if (filename === undefined) throw new Error(`npm pack produced no tarball in ${stage}: ${packed.stdout.slice(0, 200)}`);
-if (shipsHelper && Array.isArray(packEntry?.files) && !helperInPack(packEntry.files)) {
-  throw new Error(`The tarball does not carry ${INSTALLED_HELPER} as an executable, though it was staged. Staging preserved: ${stage}`);
-}
-if (shipsHelper) console.log(`Computer helper: ${INSTALLED_HELPER}`);
 // The Chrome Web Store upload, beside the tarball: same files, no `key`. The
 // release workflow attaches it to the GitHub release. The last line stays the
 // tarball, which is what callers read.

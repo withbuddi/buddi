@@ -36,13 +36,13 @@ export async function browserDoctor(env: NodeJS.ProcessEnv = process.env, days =
   let warn = false;
   try {
     const raw = JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8')) as unknown;
-    const { settings } = migrateSettings(raw, { paired: record !== undefined, helperPresent: process.platform === 'darwin' });
+    const { settings } = migrateSettings(raw, { paired: record !== undefined });
     const parts = ['own browser'];
     if (settings.yourChrome) {
       parts.push(record ? `your Chrome (paired${record.lastSeenAt ? `, last seen ${record.lastSeenAt}` : ''})` : 'your Chrome (on, not paired)');
       if (!record) warn = true;
     }
-    if (settings.yourApps !== 'off') parts.push(`your apps (${settings.yourApps})`);
+    if (settings.yourApps !== 'off') parts.push(`your apps (${settings.yourApps}; served by the Computer plugin when installed)`);
     routes = parts.join(', ');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') { routes = `settings will not read: ${err instanceof Error ? err.message : String(err)}`; warn = true; }

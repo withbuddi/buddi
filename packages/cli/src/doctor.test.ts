@@ -12,7 +12,6 @@ import {
   checkRecovery,
   checkTailscale,
   checkTimezone,
-  checkComputerHelper,
   checkSubscriptionSignIns,
   checkVault,
   collectChecks,
@@ -805,16 +804,6 @@ describe('checkTimezone', () => {
       'America/New_York (default — set one in Settings → Profile; this machine is on Europe/Paris)',
     );
     expect(checkTimezone({ profile: 'Europe/Paris', envZone: null, system: 'Europe/Paris' }).detail).toBe('Europe/Paris (Settings → Profile)');
-  });
-});
-
-describe('checkComputerHelper', () => {
-  it('warns with the fix when the helper is missing, and prints the version when it answers', () => {
-    const missing = checkComputerHelper({ path: '/x/dist/native/buddi-computer', present: false });
-    expect(missing.status).toBe('warn');
-    expect(missing.detail).toContain('npm install -g @withbuddi/buddi');
-    expect(checkComputerHelper({ path: '/x', present: true, version: '1' })).toEqual({ status: 'ok', detail: 'present, version 1' });
-    expect(checkComputerHelper({ path: '/x', present: true, problem: 'Unknown operation' }).detail).toContain('version unknown');
   });
 });
 

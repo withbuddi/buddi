@@ -16,8 +16,8 @@
  *
  * **Nothing is sent that the owner's own allow lists would not let the agent
  * see.** A screenshot is page content, and Telegram is a third party's server:
- * a picture of a host outside `BUDDI_BROWSER_HOSTS`, or of a native app that is
- * not in the owner's `allowedApps`, is dropped rather than sent. The drivers
+ * a picture of a host outside `BUDDI_BROWSER_HOSTS`, or of a native app the
+ * conversation was not let into, is dropped rather than sent. The drivers
  * already refuse to *go* there, so this is belt to their braces — an observation
  * recorded before a setting changed, or a page that redirected under the agent.
  */
@@ -99,12 +99,13 @@ export function actionWords(call: StepCall): string {
 /**
  * Whether this observation may be photographed and sent to Telegram.
  *
- * The same two lists the drivers enforce, read here from the status the
- * dashboard reads: the owner's allowed hosts, and — in computer mode, where a
- * screenshot is a picture of a whole application window — the owner's allowed
- * bundle IDs, or an app the owner allowed Once for this session's
- * conversation (`session.allowedOnce`). Fails closed: an unparseable address, or a computer-mode
- * observation whose settings did not arrive, is not sent.
+ * The same lists the runtime enforces, read here from the status the
+ * dashboard reads: the owner's allowed hosts, and — on the apps route, where a
+ * screenshot is a picture of a whole application window — the apps this
+ * session's conversation was let into (`session.allowedApps`: on the Computer
+ * plugin's list, or allowed by card) or allowed Once (`session.allowedOnce`).
+ * Fails closed: an unparseable address, or an app page whose session did not
+ * say it was let in, is not sent.
  */
 export function screenshotAllowed(
   status: BrowserStatus,
@@ -113,7 +114,7 @@ export function screenshotAllowed(
   const page = status.page;
   if (!page || !status.hasScreenshot) return false;
   if (page.appId !== undefined) {
-    return status.settings?.allowedApps?.includes(page.appId) === true
+    return status.session?.allowedApps?.includes(page.appId) === true
       || status.session?.allowedOnce?.includes(page.appId) === true;
   }
   if (allowedHosts.length === 0) return true;

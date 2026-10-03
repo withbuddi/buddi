@@ -71,7 +71,6 @@ import { carryOverDeps } from '../surfaces/carry-over.js';
 import { deleteCarryOver } from '../surfaces/browser-handoff.js';
 import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
 import { ProviderAccountError, type ProviderAccounts } from '../provider-accounts.js';
-import { listBrowserProfiles, listInstalledApps } from './apps.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR } from '../agents/catalog.js';
 import { setDelegatesFromWeb } from './write.js';
 import { mlxhBaseUrl, probeMlxh } from '../mlxh.js';
@@ -1665,6 +1664,10 @@ export function createWebApp(deps: WebServerDeps): Server {
             now: deps.now,
             agents: () => deps.catalog.list(),
             plugins: () => deps.registry.manifests().map((m) => m.name),
+            appsWithoutPlugin: () => {
+              const apps = browser.status().routes?.find((route) => route.kind === 'apps');
+              return apps !== undefined && apps.installed === false && apps.mode !== undefined && apps.mode !== 'off';
+            },
             needsSetup: async () => {
               const out: Array<{ plugin: string; note?: string; route?: string }> = [];
               for (const manifest of deps.registry.manifests()) {
@@ -1947,10 +1950,6 @@ export function createWebApp(deps: WebServerDeps): Server {
           const permissions = (await listToolPermissions(deps.pool, deps.ctx.ownerId)).filter(p => p.tool === 'host.exec' && (!agentId || p.agentId === agentId) && (!conversationId || !p.conversationId || p.conversationId === conversationId));
           return sendJson(res, 200, { permissions, runs: host.runs(deps.ctx.ownerId, agentId, conversationId) });
         }
-        case '/api/host/apps':
-          return sendJson(res, 200, { apps: await listInstalledApps() });
-        case '/api/host/browser-profiles':
-          return sendJson(res, 200, { profiles: await listBrowserProfiles(q.get('app') ?? '') });
         case '/api/extension':
           return sendJson(res, 200, await extension.view());
         case '/api/browser':
@@ -2961,16 +2960,11 @@ export function createWebApp(deps: WebServerDeps): Server {
       try { return sendJson(res, 200, await browser.checkLaunch()); }
       catch (error) { return sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
     }
-    if (path === '/api/browser/settings' || path === '/api/browser/permissions') {
+    if (path === '/api/browser/settings') {
       const body = await readJsonBody(req);
       try {
-        if (path.endsWith('/settings')) {
-          if (!browser.configure) return sendJson(res, 409, { error: 'This host does not support changing control modes.' });
-          return sendJson(res, 200, await browser.configure(body));
-        }
-        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'prompt') || ('prompt' in body && typeof body.prompt !== 'boolean')) return sendJson(res, 400, { error: 'Expected {prompt: boolean}' });
-        if (!browser.checkPermissions) return sendJson(res, 409, { error: 'This host does not support native permission checks.' });
-        return sendJson(res, 200, await browser.checkPermissions((body as { prompt?: boolean }).prompt === true));
+        if (!browser.configure) return sendJson(res, 409, { error: 'This host does not support changing control modes.' });
+        return sendJson(res, 200, await browser.configure(body));
       } catch (error) {
         return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
       }

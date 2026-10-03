@@ -36,7 +36,23 @@ export interface TipRule {
 /** The plugins the market's Recommended shelf offers; the tip is quiet once any is here. */
 export const RECOMMENDED_PLUGINS = ['finance', 'image', 'speech', 'weather', 'calendar'] as const;
 
+/** The Computer plugin's market link: its install card, the same two yeses as any install. */
+export const COMPUTER_PLUGIN_ROUTE = '#/settings/plugins?install=@withbuddi/plugin-computer';
+
 export const TIPS: readonly TipRule[] = [
+  {
+    // Computer control left core for a plugin (pre.38): an owner who used his
+    // apps is told once, before anything else, how to keep them. × or the
+    // install ends it; installing the plugin makes it false anyway.
+    id: 'computer-plugin',
+    when: (f) => f.appsWithoutPlugin,
+    holdsForDays: 0,
+    text: 'Computer control is now a plugin — install it to keep using your apps.',
+    action: { label: 'Install the Computer plugin', route: COMPUTER_PLUGIN_ROUTE },
+    cooldownDays: 36_500,
+    plugin: 'computer',
+    installs: true,
+  },
   {
     // The upgrade path for a zero-key first run: first in the list, so it is
     // the tip Home shows while it holds, and it comes back until it is acted on.

@@ -2541,14 +2541,11 @@ export const api = {
   saveCredential: (name: string, value: string) => post<ProvidersView>(`/providers/credentials/${encodeURIComponent(name)}/save`, { value }),
   removeCredential: (name: string) => post<ProvidersView>(`/providers/credentials/${encodeURIComponent(name)}/remove`),
   testProvider: (kind: string) => post<{ state: string; message: string }>(`/providers/${encodeURIComponent(kind)}/test`),
-  browserProfiles: (app: string) => get<{ profiles: Array<{ directory: string; name: string }> }>('/host/browser-profiles', { app }),
-  installedApps: () => get<{ apps: Array<{ id: string; name: string; path: string }> }>('/host/apps'),
   browser: (scope?: { agentId: string; conversationId: string }) => get<BrowserStatus>(`/browser${scope ? `?agentId=${encodeURIComponent(scope.agentId)}&conversationId=${encodeURIComponent(scope.conversationId)}` : ''}`),
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
   browserSettings: (settings: Partial<ControlSettings>) => post<BrowserStatus>('/browser/settings', settings),
   browserPin: (conversationId: string, route: 'auto' | BrowserRoute) => post<BrowserStatus>('/browser/pin', { conversationId, route }),
   browserCard: (conversationId: string, answer: string) => post<{ answered?: string; status: BrowserStatus }>('/browser/card', { conversationId, answer }),
-  computerPermissions: (prompt = false) => post<BrowserStatus>('/browser/permissions', { prompt }),
   browserInstall: () => post<BrowserStatus>('/browser/install', {}),
   /** Launch the agents' browser once and close it: does it start here? */
   browserCheck: () => post<BrowserLaunchCheck>('/browser/check', {}),
@@ -3133,10 +3130,8 @@ export type BrowserMode = 'computer' | 'playwright' | 'extension';
 export interface ControlSettings {
   version: 2;
   yourChrome: boolean;
+  /** Your apps, when the Computer plugin provides them; its own page keeps the list of apps. */
   yourApps: 'off' | 'ask' | 'on';
-  browserApp: string;
-  allowedApps: string[];
-  browserProfile?: string;
   signInSites: string[];
   defaultRoute: 'auto' | 'own' | 'chrome' | 'apps';
   stopExpiryMinutes: number;
@@ -3152,6 +3147,9 @@ export interface BrowserRouteStatus {
   allowed: boolean;
   available: boolean;
   provider: string;
+  /** Apps: a plugin provides the route here; false, the page offers the Computer plugin instead. */
+  installed?: boolean;
+  label?: string;
   message?: string;
   repair?: 'install' | 'permissions' | 'pair' | 'helper' | 'sandbox';
   paired?: boolean;
@@ -3190,9 +3188,6 @@ export interface BrowserStatus {
   stop?: { at: string; until?: string };
   pin?: string;
   settings?: ControlSettings;
-  permissions?: { supported: boolean; accessibility: boolean; screenRecording: boolean; message?: string };
-  /** macOS only: whether this install has the native computer helper, and the fix when it does not. */
-  helper?: { present: boolean; message?: string };
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
   enabled: boolean;
   busy: boolean;

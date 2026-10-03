@@ -759,10 +759,15 @@ checks that table against the interface as it does for `ToolContext`.
 
 1.29 is routes for the browser runtime ([browser.md](browser.md)): a
 manifest's optional `routes: [{ kind: 'apps', label, health, look, do,
-release?, exclusive? }]` (types `RouteProvider`, `RouteHealth`, `RoutePage`,
-`RouteCommand` in `@buddi/core/plugin`) declares a route the runtime may pick
-for app jobs; core's own computer control is driven through the same
-interface. A tool's `waitsForOwner` may be a function of its result, a tool
+release?, exclusive?, platforms?, reach?, takeover?, resume?, handMessage?,
+focused?, typeSecret? }]` (types `RouteProvider`, `RouteHealth`, `RoutePage`,
+`RouteCommand`, `RouteReach`, `RouteTarget` in `@buddi/core/plugin`) declares
+a route the runtime may pick for app jobs. Core has no apps route of its own:
+computer control is `@withbuddi/plugin-computer`. `reach` answers who a name
+stands for, whether it is on the owner's list and what to do with one that is
+not (core draws the card); `takeover`/`resume`/`handMessage` are take-over
+without a remote hand; `focused`/`typeSecret` (together or neither) carry
+`secret.type`. A tool's `waitsForOwner` may be a function of its result, a tool
 may declare `ownBudget` (its turns do not spend the run's `maxTurns`), and
 `ctx.ask` lets a tool put one question card with choices in front of the
 owner on an interactive surface. An older buddi ignores `routes` and treats

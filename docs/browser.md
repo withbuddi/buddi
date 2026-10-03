@@ -20,7 +20,7 @@ permissions, not a choice.
 | --- | --- | --- |
 | **Their own browser** (Playwright, buddi's profile) | Every page by default | The Canvas only: it runs headless, in the background |
 | **Your Chrome** (the buddi extension) | A site that needs your sign-in, when allowed and connected; or the agent reads the task as yours (`prefer: "yours"`: your cart, your orders) | Background tabs in the **buddi** tab group; the Canvas |
-| **Your apps** (a provided route; core's computer control on macOS) | App jobs only ("open Numbers") | The app window; the Canvas |
+| **Your apps** (only with the [Computer plugin](https://github.com/withbuddi/buddi-plugins/tree/main/computer), macOS) | App jobs only ("open Numbers") | The app window; the Canvas |
 
 **The choice**, in order: an app job goes to your apps; a pin (below) narrows
 or orders; a site on your **sites that need my sign-in** list, a site buddi
@@ -183,29 +183,62 @@ extra turns); the browser's budget is the ceiling, and its card is Keep going?.
 ## Settings: where agents may look
 
 `browser/settings.json` is `{version: 2, yourChrome, yourApps: off|ask|on,
-browserApp, allowedApps, browserProfile?, signInSites, defaultRoute,
-stopExpiryMinutes, maxOwnPages, showWindow, missionWaitMinutes}`; `POST /api/browser/settings`
-takes a partial object. No lock: a change applies with pages open, and
-turning a route off closes its pages. **Your apps: ask** asks for every app
-each conversation; **on** opens the listed apps and asks for the rest.
+signInSites, defaultRoute, stopExpiryMinutes, maxOwnPages, showWindow,
+missionWaitMinutes}`;
+`POST /api/browser/settings` takes a partial object. No lock: a change
+applies with pages open, and turning a route off closes its pages.
+**Your apps** is a switch on the page, shown only when a plugin provides the
+route: **on** opens the apps on the plugin's list and treats the rest as the
+plugin says (a card, or a refusal); **ask** (API only) asks for every app each
+conversation. Without the plugin the page has one line instead: "Agents can
+also work in apps on this Mac with the Computer plugin. See plugins". The
+list of apps, the browser app, the helper and the macOS permissions are the
+plugin's own settings page (Settings → Computer).
 
 The old `{mode}` file is migrated once, kept beside it as `settings.v1.json`:
 *Your browser* → your Chrome on, apps off; *Use my apps* → your Chrome on when
-a pairing exists, apps on when the helper is installed; *their own browser* →
-your Chrome on when a pairing exists, apps off. The profile and the pairing
-are untouched.
+a pairing exists, apps on; *their own browser* → your Chrome on when a pairing
+exists, apps off. The apps list computer control kept in this file
+(`browserApp`, `allowedApps`, `browserProfile`) is dropped, and a v2 file that
+still has it is rewritten once without it (kept as `settings.apps.json`); the
+Computer plugin seeds its own list from those files the first time it starts. The
+profile and the pairing are untouched. An owner with apps on and no plugin
+providing them gets one Home card, once: "Computer control is now a plugin —
+install it to keep using your apps", whose button opens the plugin's install
+card (tip `computer-plugin`).
 
 `browser.status` reports `routes`: each one's switch (`allowed`), whether it
-could serve now (`available`), who provides it, and the one fix when it is
-down (`repair`: install, sandbox, pair, permissions, helper).
+could serve now (`available`), who provides it (`installed: false` on the apps
+route when nothing does), and the one fix when it is down (`repair`: install,
+sandbox, pair, permissions, helper).
 
 ## A route a plugin provides
 
-A plugin may declare `routes: [{ kind: 'apps', label, health, look, do,
-release?, exclusive? }]` (host API 1.29). The runtime routes app jobs to the
-first one for this platform, ahead of core's computer control, which is itself
-driven through the same interface (`ComputerRouteProvider`) so its move to
-`@withbuddi/plugin-computer` is mechanical.
+A plugin may declare `routes: [{ kind: 'apps', label, platforms?, exclusive?,
+health, look, do, release?, reach?, takeover?, resume?, handMessage?,
+focused?, typeSecret? }]` (host API 1.29; types in `@buddi/core/plugin`).
+The runtime routes app jobs to the first one for this platform; core has no
+apps route of its own. Core keeps the choice, the queue (`exclusive`: one
+conversation at a time), the cards and the Once answers; the provider answers
+the rest:
+
+- **`reach`**: who a name stands for (`resolve`, refusing none or several with
+  the close names), whether an app is on the owner's list (`listed`), what to
+  do with one that is not (`unlisted`: `ask` → the Once / Always card,
+  `refuse` → refused without a card), and `remember` for an Always. Core calls
+  `do` with `open` only for an app it let through.
+- **Take-over**: a provided route has no remote hand. The Canvas shows the
+  route's frames (the picture `look` returns) and, on Take over, `handMessage`
+  ("Take over at the Mac"); `takeover` and `resume` pause and continue it.
+- **`focused` / `typeSecret`**: `secret.type` reads the app in front from the
+  route and types the owner's value into its focused field; a route without
+  them refuses `secret.type`.
+
+The [Computer plugin](https://github.com/withbuddi/buddi-plugins/tree/main/computer)
+(`@withbuddi/plugin-computer`) is the one that exists: the native macOS
+helper, the list of apps and its settings page, readiness ("helper present,
+Accessibility and Screen Recording allowed"). Its README has the install,
+permissions and limits.
 
 ## The agent's tools
 
@@ -254,194 +287,10 @@ under 0.2).
 # Technical appendix
 
 The sections below describe each route's machinery. Where they say "mode",
-read the route: *Use my apps* is the apps route, *Your browser* the owner's
-Chrome, *Playwright / their own browser* buddi's own browser.
-
-## Computer control: Use my apps
-
-**Use my apps** lets an agent drive your own apps on macOS, in the selected
-browser's existing profile and in any other app you allow. The headed
-Playwright browser stays available as **Browser automation**. buddi never
-switches modes on its own when a permission, the accessibility tree or a
-website fails.
-
-The same tools do the work: `browser.status` and `browser.act`, granted to an
-agent as `browser.*`, and the `#/browser` route. In this mode they operate the
-apps you allowed as well as the browser, and the canvas tab reads
-**Computer**. Every action needs an interactive task from you, signed in; the
-step, time and ownership limits, the rules on delegation, and your Stop apply
-exactly as in the other modes.
-
-### Setting it up
-
-1. **A Mac on macOS 14 or newer.** Computer control uses one fixed helper, an
-   ad-hoc-signed Swift executable at
-   `packages/tools/browser/dist/native/buddi-computer`, built with the Xcode
-   Command Line Tools (`xcrun swiftc`). Nothing is downloaded to act for it: no
-   AppleScript, shell command, browser extension, CDP or WebDriver. Other
-   platforms are not offered it.
-2. **Choose it.** Open **Host browser → Computer & browser settings** and pick
-   Use my apps, the browser app, and the apps agents may use (by bundle id).
-   Chrome and Safari are allowed to begin with, and Chrome is selected. Any
-   other app, such as `com.apple.TextEdit`, you allow here ahead of time or
-   answer on a card the first time an agent asks to open it (below). Agents
-   cannot change the mode, and reach the list of allowed apps only through
-   your Always on that card.
-3. **Grant the permissions.** Click **Check permissions**, then **Request
-   macOS permissions** if needed, and grant **Accessibility** and **Screen
-   Recording** to the helper or service macOS names in its prompt; macOS may
-   attribute it to the app or service that launched it. Restart buddi and
-   check again if macOS asks you to. buddi cannot grant these itself, and a
-   rebuilt helper may need them granted again.
-4. **Ask an agent.** Send a fresh task to an agent granted `browser.*`.
-   `navigate` opens an ordinary tab through macOS LaunchServices, in the
-   selected browser's existing profile. `open` brings an app forward by bundle
-   id (`appId`) or by name (`app`). No debugging connection is made.
-
-**Allowed apps.** You can allow an app in Settings ahead of time, or answer the
-card when an agent first asks. `open` with `app` finds the name through
-Spotlight as exactly one installed application (the exact name, any case;
-nothing is launched to find it, and it takes five seconds at most); none or
-several is refused, and the refusal lists the candidates. An app not on the
-list turns the call into a decision card in the agent's conversation — "Use
-Voicito on your computer?" — naming the agent, the app and its bundle id as
-found on this Mac, never as the agent wrote them, with **Once** (this
-conversation only), **Always** (added to `allowedApps` in `settings.json`, so
-Settings shows it; with the list full at 32 it counts as Once) and Reject. The
-agent is told to wait. After a yes it calls `open` again; after a no, the next
-`open` of that app is refused ("The owner said no to Voicito this time.") and
-no second card is raised in that conversation. Your answers are read from the
-approvals ledger (`ApprovalsArea.decisionsInConversation`), so they hold across
-a restart; a Once is also kept on the conversation's session
-(`session.allowedOnce`), so the Telegram photo guard treats that app as
-allowed. The browser app itself is only ever a Settings choice: `navigate`
-never asks. The agents' own browser and "Your browser" have no apps, so `open`
-is refused there.
-
-The settings live in `<BUDDI_DATA_DIR>/browser/settings.json`, readable only by
-you. Release any active session before you change them or request permissions.
-Switching modes does not lift a Stop you set, and old requests cannot be
-replayed to get a fresh budget after a switch. The agents' own browser keeps
-its separate profile; it never uses your browser's.
-
-### What an agent can do, and taking over
-
-```json
-{"action":"open","appId":"com.apple.calculator"}
-{"action":"navigate","url":"https://en.wikipedia.org"}
-{"action":"observe"}
-{"action":"click","observation":"LATEST_ID","target":{"ref":"ax12"}}
-{"action":"click","observation":"LATEST_ID","target":{"x":120,"y":180}}
-{"action":"fill","observation":"LATEST_ID","target":{"ref":"ax5"},"value":"search text"}
-{"action":"close"}
-```
-
-Refs come from the macOS accessibility tree of the selected app's focused
-window. A click uses the accessibility action where the app offers one, and
-an OS mouse event otherwise. Fill and the allowed keys use OS keyboard events,
-never the clipboard. Before any input, buddi checks again that it is the same
-window, that it has focus and that the target is the one observed. A pixel
-click is relative to the window's screenshot and needs that screenshot
-unchanged, so an animation can make a coordinate click fail, safely; refs are
-better. There is no DOM `select` and there are no Playwright tab ids: the agent
-clicks the visible option or tab.
-
-**One conversation at a time** controls your computer. It keeps the lock
-between tool calls and while you have taken over; another conversation cannot
-take the desktop or switch modes to get around it.
-
-- **Take over** interrupts the agent's input.
-- **Resume access** hands control back, and the agent must observe afresh.
-- **Release control**, and the agent's `close`, end control **without closing
-  any window or app**.
-- **Stop computer control** revokes access, across restarts, until you resume.
-
-Apps, documents and browser tabs stay open. An action already sent cannot be
-undone. Do not use the mouse and keyboard while the agent is driving. If focus
-moves, the next action is refused rather than refocused: take over, then
-resume in the app you meant.
-
-Every observation carries `observedAt`, and its result opens with "Observed
-12:04:35 UTC.", so the agent can tell the newest screen from an older one.
-After a click that submits or navigates, it observes once more before it
-concludes, and judges from the newest observation only.
-
-When a site mails a one-time code, an agent that has the email tools reads it
-from your inbox before asking you: the newest message from that site, arrived
-in the last ten minutes. The code is never stored and never reused. The agent
-types it with `browser.act`, so it appears in that call's input in the
-transcript; the scrubber only knows values saved under Keys and secrets.
-
-When an observation or a screenshot fails, the agent gets the helper's actual
-error, never an empty observation that looks like success. Most of these are a
-page still loading or busy, so control stays with the agent: the result says
-"The page has not answered yet. Wait a few seconds and observe again.", and the
-next action must be a fresh observation, never a click on old evidence. If the
-input went through before the capture failed, the result says so: the agent
-must not repeat the input just to get a screenshot. In your own Chrome, the
-extension injects its page script again and reads the page up to three more
-times, after 0.5, 1 and 2 seconds, before it reports that the page has not
-answered.
-
-Control pauses when:
-
-- the tab or window the agent was reading is gone (closed by you, or by the page);
-- observation fails three times in a row in the same session;
-- a click, fill, select or press failed part-way, since it may have half
-  happened;
-- targeting fails three times in a row;
-- you take over.
-
-While paused the agent cannot retry or click. Look at the reported cause and
-the selected window, press **Resume access** (or send `/browser resume` on
-Telegram), then ask for a fresh observation. Resuming clears old screenshots
-and target evidence. Release is always available.
-
-When a long conversation rolls over to a new transcript because of its size, in
-Telegram or the dashboard, the same agent carries on with the same computer or
-browser task. The session moves before the new transcript is taken up, carrying
-at most six short text messages and the task description, never old tool calls
-or accessibility trees. The session's identity, expiry and paused state
-survive; old requests are fenced off, and the next action must be a fresh
-observation (or a release). No click is replayed. A rollover after idle time,
-an explicit reset, another chat or another agent does not take control over,
-and permissions to run commands on the host for that conversation do not carry
-over.
-
-### What leaves the machine, and the limits
-
-- **What is captured.** Only the selected window, never the whole desktop. Its
-  screenshot and a bounded amount of accessibility text go to your configured
-  model provider. Secure accessibility fields are masked and cannot be filled;
-  anything else visible can still be captured, so take over yourself for
-  passwords and two-factor codes.
-- **What the helper can do.** It is a short-lived fixed executable with bounded
-  JSON input, output and timeout; cancelling kills any helper still running.
-  There is no arbitrary script, arbitrary hotkey, clipboard or file transfer.
-  The list of allowed apps limits which app buddi picks, **not what an allowed
-  app itself can do**. This is not an OS sandbox, and nothing guarantees that a
-  gesture matches what you meant in words.
-- **The network.** Your apps use their normal network and sessions. The
-  public-URL and host checks apply to an explicit `navigate` only. **The
-  Playwright SOCKS guard cannot constrain an app's redirects, clicked links,
-  background traffic or the apps it launches.** The two modes are not confined
-  the same way.
-- **What it cannot reach.** App menus, complex popovers, minimised or
-  off-screen windows and custom widgets may expose no usable accessibility
-  target. Only the one focused window that matches is captured. There is no
-  drag, no right-click, no arbitrary keyboard shortcut, no overview across
-  several monitors and no live remote view.
-- **Detection.** OS input does not make automation undetectable. It removes
-  the browser's debugging connection, not the other signals a website reads.
-- **Testing.** buddi's automated tests use a fake native bridge; only the
-  helper's build and the permission probe, which never prompts, run against
-  the real system.
-
-**Try it.** After granting the permissions, allow `com.apple.calculator`, ask
-an agent to open Calculator, work out `12 × 7` by clicking the visible buttons,
-report the result, and release control with Calculator left open. Then
-Wikipedia: ask the agent to open it and wait, take over and choose an article,
-resume, and ask it to observe and summarise without navigating away.
+read the route: *Your browser* is the owner's Chrome, *Playwright / their own
+browser* buddi's own browser. Computer control (*Use my apps*, the apps route)
+is the Computer plugin's: see its
+[README](https://github.com/withbuddi/buddi-plugins/tree/main/computer#readme).
 
 ## Optional: "Your browser", the Chrome extension
 
@@ -678,10 +527,11 @@ conversation's session and switches the mode to Playwright (the mode is one
 setting for the installation and changes only with no session open, so another
 conversation's open session refuses it with that sentence).
 
-Computer mode has no remote hand and says so — *Take over at the computer for
-this mode* — because the native helper acts on accessibility targets and has no
-raw pointer or keystroke to forward. Telegram is unchanged; it still says to
-take over from the dashboard.
+A route a plugin provides (the Computer plugin's apps) has no remote hand and
+says so with the route's own sentence (its `handMessage`, *Take over at the
+computer for your apps* when it gives none), while the Canvas keeps showing
+the frames the route sends. Telegram is unchanged; it still says to take over
+from the dashboard.
 
 **Nothing typed during a take-over is kept.** The keystroke goes from the page
 to the socket to the host browser and is gone: it is never written to a log, an
@@ -807,10 +657,11 @@ did not change.
 
 **Nothing is sent that the agent was not allowed to see.** A screenshot is page
 content going to a third party's servers, so it is checked again on the way
-out: a page whose host is not in `BUDDI_BROWSER_HOSTS` is not sent, and in
-computer mode — where the screenshot is a whole application window — the window's
-bundle ID must be in the owner's `allowedApps`, or allowed Once for that
-conversation (`session.allowedOnce`). Anything unreadable or missing
+out: a page whose host is not in `BUDDI_BROWSER_HOSTS` is not sent, and on the
+apps route — where the screenshot is a whole application window — the window's
+bundle ID must be one the conversation was let into (`session.allowedApps`: on
+the Computer plugin's list, or allowed by card) or allowed Once
+(`session.allowedOnce`). Anything unreadable or missing
 fails closed and the step is reported in words only.
 
 **A "Take over" button** under the photo links to that conversation's Browser

@@ -30,7 +30,7 @@ export {
 export { AGENT_ONLY_FIELD, REPORT_MAX_DEFAULT, REPORT_MAX_LIMIT, ToolRefusal, isToolRefusal } from '../tools.js';
 export { HOST_API_VERSION, hostApiProblem } from './version.js';
 export { PROVIDED_ROUTE_KINDS, routeProviderProblem } from '../routes.js';
-export type { ProvidedRouteKind, RegisteredRouteProvider, RouteCommand, RouteHealth, RoutePage, RouteProvider } from '../routes.js';
+export type { ProvidedRouteKind, RegisteredRouteProvider, RouteCommand, RouteHealth, RoutePage, RouteProvider, RouteReach, RouteTarget } from '../routes.js';
 export { OAUTH_PROVIDERS, SignInExpiredError, isSignInExpired, oauthHostCovered } from './sign-in.js';
 export type { OAuthProvider, OAuthSignInRequest, OAuthSignInStart, OAuthSignInStatus } from './sign-in.js';
 export { NATIVE_BACKEND_ID, SEARCH_BACKEND_VAR, parseSearchBackend } from './search.js';

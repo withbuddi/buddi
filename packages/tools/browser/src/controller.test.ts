@@ -8,8 +8,7 @@ import type { RouteProvider } from '@buddi/core/plugin';
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
 const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
-import { APPS_UNAVAILABLE, HostController, UNATTENDED_APPS, UNATTENDED_CHROME } from './controller.js';
-import type { AppQuery } from './computer.js';
+import { APPS_NOT_INSTALLED, APPS_UNAVAILABLE, HostController, UNATTENDED_APPS, UNATTENDED_CHROME } from './controller.js';
 import { NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import { migrateSettings } from './settings.js';
 import { commandSchema, type BrowserDriver, type Observation } from './types.js';
@@ -42,7 +41,7 @@ async function routes(options: { settings?: Record<string, unknown>; connected?:
   const log: string[] = [];
   const connected = { value: options.connected ?? true };
   const controller = new HostController(dir, {
-    platform: options.platform ?? 'darwin', env: {}, helperPresent: () => true,
+    platform: options.platform ?? 'darwin', env: {},
     detect: () => ({ engine: 'chromium', executable: '/x/chrome' }),
     extensionBridge: () => chromeBridge(connected),
     drivers: { own: routeDriver('own', log, options.page), chrome: routeDriver('chrome', log, options.page), apps: routeDriver('apps', log) },
@@ -60,16 +59,29 @@ const LOGIN = (url: string): Partial<Observation> => url.includes('/ap/signin')
 
 describe('settings become permissions, migrated from the old mode', () => {
   it.each([
-    ['extension', false, true, { yourChrome: true, yourApps: 'off' }],
-    ['computer', true, true, { yourChrome: true, yourApps: 'on' }],
-    ['computer', false, false, { yourChrome: false, yourApps: 'off' }],
-    ['computer', false, true, { yourChrome: false, yourApps: 'on' }],
-    ['playwright', true, false, { yourChrome: true, yourApps: 'off' }],
-    ['playwright', false, true, { yourChrome: false, yourApps: 'off' }],
-  ] as const)('%s (paired %s, helper %s)', (mode, paired, helperPresent, expected) => {
-    const { settings, migrated } = migrateSettings({ mode, browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome', 'com.apple.Numbers'] }, { paired, helperPresent });
+    ['extension', false, { yourChrome: true, yourApps: 'off' }],
+    ['computer', true, { yourChrome: true, yourApps: 'on' }],
+    ['computer', false, { yourChrome: false, yourApps: 'on' }],
+    ['playwright', true, { yourChrome: true, yourApps: 'off' }],
+    ['playwright', false, { yourChrome: false, yourApps: 'off' }],
+  ] as const)('%s (paired %s)', (mode, paired, expected) => {
+    const { settings, migrated } = migrateSettings({ mode, browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome', 'com.apple.Numbers'] }, { paired });
     expect(migrated).toBe(true);
-    expect(settings).toMatchObject({ version: 2, ...expected, allowedApps: ['com.google.Chrome', 'com.apple.Numbers'] });
+    expect(settings).toMatchObject({ version: 2, ...expected });
+    // The apps list is the Computer plugin's now.
+    expect(settings).not.toHaveProperty('allowedApps');
+  });
+  it('drops the apps list from a v2 file, once, keeping the file beside it', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-routes-'));
+    await writeFile(path.join(dir, 'settings.json'), JSON.stringify({ version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'] }));
+    const controller = new HostController(dir, { platform: 'darwin', env: {} });
+    resources.push({ dir, controller }); await controller.enable();
+    const stored = JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8'));
+    expect(stored).toMatchObject({ version: 2, yourApps: 'on' });
+    expect(stored).not.toHaveProperty('allowedApps');
+    expect(JSON.parse(await readFile(path.join(dir, 'settings.apps.json'), 'utf8'))).toMatchObject({ allowedApps: ['com.google.Chrome'] });
+    // Wanted, but nobody provides it: not allowed, and the row says what to install.
+    expect(controller.status().routes!.find((route) => route.kind === 'apps')).toMatchObject({ installed: false, allowed: false, available: false, mode: 'on', repair: 'install' });
   });
   it('rewrites settings.json once, keeping the old file beside it', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'buddi-routes-'));
@@ -88,13 +100,14 @@ describe('settings become permissions, migrated from the old mode', () => {
     expect(controller.status().sessions).toHaveLength(0);
     await expect(controller.execute(navigate('https://shop.test/', { prefer: 'yours' }), ctx())).resolves.toMatchObject({ route: 'own' });
   });
-  it('validates a change and keeps apps to macOS', async () => {
+  it('validates a change, and turns apps on only where a plugin provides them', async () => {
     const { controller } = await routes({ platform: 'linux' });
-    await expect(controller.configure({ allowedApps: [] })).rejects.toThrow();
+    await expect(controller.configure({ maxOwnPages: 0 })).rejects.toThrow();
     const dir = await mkdtemp(path.join(tmpdir(), 'buddi-routes-'));
-    const linux = new HostController(dir, { platform: 'linux', env: {} });
-    resources.push({ dir, controller: linux }); await linux.enable();
-    await expect(linux.configure({ yourApps: 'on' })).rejects.toThrow('macOS only');
+    const bare = new HostController(dir, { platform: 'darwin', env: {} });
+    resources.push({ dir, controller: bare }); await bare.enable();
+    await expect(bare.configure({ yourApps: 'on' })).rejects.toThrow('Computer plugin');
+    await expect(bare.execute(open, ctx())).rejects.toThrow(APPS_NOT_INSTALLED);
   });
 });
 
@@ -331,13 +344,43 @@ describe('a route a plugin provides', () => {
       do: async (_session, command) => { done.push(command.action); },
       look: async () => ({ id: 'p1', url: 'app://numbers', title: 'Numbers', tree: '', tabs: [], capturedAt: new Date().toISOString(), screenshot: new Uint8Array([1, 2]) }),
     };
-    const controller = new HostController(dir, { platform: 'linux', env: {}, resolveApp: async (query: AppQuery) => 'bundleId' in query ? [{ bundleId: query.bundleId, name: 'Numbers' }] : [] });
+    const controller = new HostController(dir, { platform: 'linux', env: {} });
     controller.useRouteProviders(() => [{ ...provider, plugin: 'computer' }]);
     resources.push({ dir, controller }); await controller.enable();
-    await controller.configure({ yourApps: 'on', allowedApps: ['com.google.Chrome', 'com.apple.Numbers'] });
+    await controller.configure({ yourApps: 'on' });
     expect(controller.status().routes!.find((route) => route.kind === 'apps')).toMatchObject({ provider: 'computer', allowed: true, available: true });
     await expect(controller.execute(commandSchema.parse({ action: 'open', appId: 'com.apple.Numbers' }), ctx())).resolves.toMatchObject({ route: 'apps', observation: { title: 'Numbers' } });
     expect(done).toEqual(['open']);
+  });
+  it('is left out where its platforms say it does not run', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-routes-'));
+    const controller = new HostController(dir, { platform: 'linux', env: {} });
+    controller.useRouteProviders(() => [{ kind: 'apps', label: 'your apps', platforms: ['darwin'], health: () => ({ ok: true }), do: async () => {}, look: async () => { throw new Error('never'); }, plugin: 'computer' }]);
+    resources.push({ dir, controller }); await controller.enable();
+    expect(controller.status().routes!.find((route) => route.kind === 'apps')).toMatchObject({ installed: false });
+  });
+  it('has no remote hand: take-over pauses it and the Canvas gets its sentence; native typing passes through', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-routes-'));
+    const calls: string[] = [];
+    const provider: RouteProvider = {
+      kind: 'apps', label: 'your apps', health: () => ({ ok: true }), handMessage: 'Take over at the Mac.',
+      do: async (_s, command) => { calls.push(command.action); },
+      look: async () => ({ id: 'p1', url: 'app://com.apple.Numbers', appId: 'com.apple.Numbers', title: 'Numbers', tree: '', tabs: [], capturedAt: new Date().toISOString() }),
+      takeover: async () => { calls.push('takeover'); }, resume: () => { calls.push('resume'); },
+      focused: async () => 'com.apple.Numbers', typeSecret: async () => { calls.push('typed'); },
+    };
+    const controller = new HostController(dir, { platform: 'darwin', env: {} });
+    controller.useRouteProviders(() => [{ ...provider, plugin: 'computer' }]);
+    resources.push({ dir, controller }); await controller.enable();
+    await controller.configure({ yourApps: 'on' });
+    await controller.execute(commandSchema.parse({ action: 'open', appId: 'com.apple.Numbers' }), ctx());
+    const scope = { agentId: 'a', conversationId: 'a' };
+    expect(controller.status(scope).session?.allowedApps).toEqual(['com.apple.Numbers']);
+    expect(controller.hand(scope)).toEqual({ supported: false, message: 'Take over at the Mac.' });
+    const session = controller.status(scope).session!.id;
+    await controller.control('takeover', session);
+    await controller.control('resume', session);
+    expect(calls).toEqual(['open', 'takeover', 'resume']);
   });
 });
 
@@ -430,30 +473,47 @@ describe('background by default', () => {
 
 describe('an app the owner has not allowed', () => {
   const conversation = '11111111-1111-4111-8111-111111111111';
-  const voicito = { bundleId: 'com.example.voicito', name: 'Voicito' };
+  const voicito = { id: 'com.example.voicito', name: 'Voicito' };
   type Card = { envelope: unknown; state: string; choices?: Record<string, string> };
   function asking(cards: Card[] = []) {
     const base = ctx(conversation);
     return { ...base, buddi: { ...base.buddi!, approvals: { ...base.buddi!.approvals, decisionsInConversation: async () => cards } } } as CoreToolContext;
   }
-  async function computer(apps: Array<typeof voicito> = [voicito]) {
+  const precondition = (message: string) => Object.assign(new Error(message), { precondition: true });
+  /** The Computer plugin, faked: its list, what it does with an app not on it, and Spotlight as a table. */
+  async function computer(options: { apps?: Array<typeof voicito>; listed?: string[]; unlisted?: 'ask' | 'refuse'; full?: boolean } = {}) {
     const dir = await mkdtemp(path.join(tmpdir(), 'buddi-computer-'));
     const performed: unknown[] = [];
-    const driver: BrowserDriver = { start: vi.fn(async () => {}), perform: vi.fn(async (command) => { performed.push(command); }), close: vi.fn(async () => {}), screenshot: async () => undefined,
-      observe: async () => ({ id: 'o', url: 'app://com.example.voicito', appId: 'com.example.voicito', title: 'Voicito', tree: '', tabs: [], capturedAt: new Date().toISOString() }) };
-    const resolveApp = vi.fn(async (query: AppQuery) => apps.filter((app) => 'near' in query ? true : 'name' in query ? app.name.toLowerCase() === query.name.toLowerCase() : app.bundleId === query.bundleId));
-    const controller = new HostController(dir, { platform: 'darwin', resolveApp, env: {}, drivers: { apps: () => driver } });
+    const apps = options.apps ?? [voicito, { id: 'com.apple.Safari', name: 'Safari' }];
+    const listed = [...(options.listed ?? ['com.apple.Safari'])];
+    const provider: RouteProvider = {
+      kind: 'apps', label: 'your apps', exclusive: true, health: () => ({ ok: true }),
+      do: async (_s, command) => { performed.push(command); },
+      look: async () => ({ id: 'o', url: 'app://com.example.voicito', appId: 'com.example.voicito', title: 'Voicito', tree: '', tabs: [], capturedAt: new Date().toISOString() }),
+      reach: {
+        resolve: async (query) => {
+          const found = apps.filter((app) => 'name' in query ? app.name.toLowerCase() === query.name.toLowerCase() : app.id === query.id);
+          if (found.length !== 1) throw precondition('name' in query ? `No installed app is called ${query.name}.` : `No installed app has the bundle id ${query.id}.`);
+          return found[0]!;
+        },
+        listed: (id) => listed.includes(id),
+        unlisted: () => options.unlisted ?? 'ask',
+        remember: async (target) => { if (options.full) return false; listed.push(target.id); return true; },
+      },
+    };
+    const controller = new HostController(dir, { platform: 'darwin', env: {} });
+    controller.useRouteProviders(() => [{ ...provider, plugin: 'computer' }]);
     resources.push({ dir, controller }); await controller.enable();
     await controller.configure({ yourApps: 'on' });
-    return { dir, controller, performed, resolveApp };
+    return { dir, controller, performed, listed };
   }
   const byName = commandSchema.parse({ action: 'open', app: 'voicito' });
 
-  it('resolves a name to one installed app and refuses none or several', async () => {
-    const { controller } = await computer([voicito, { bundleId: 'org.other.voicito', name: 'Voicito' }]);
-    await expect(controller.tierFor(byName, asking())).rejects.toThrow('Several apps are called voicito: Voicito (com.example.voicito), Voicito (org.other.voicito). Say which bundle id.');
+  it('asks the plugin who a name stands for, and refuses with its words', async () => {
+    const { controller } = await computer();
     await expect(controller.tierFor(commandSchema.parse({ action: 'open', app: 'Nope' }), asking())).rejects.toThrow('No installed app is called Nope.');
     await expect(controller.tierFor(commandSchema.parse({ action: 'open', appId: 'com.nope' }), asking())).rejects.toThrow('No installed app has the bundle id com.nope.');
+    await expect(controller.execute(commandSchema.parse({ action: 'open', app: 'Nope' }), asking())).rejects.toThrow('No installed app is called Nope.');
   });
   it('asks with a card naming the resolved app, Once or Always', async () => {
     const { controller } = await computer();
@@ -462,13 +522,17 @@ describe('an app the owner has not allowed', () => {
     expect(card.envelope).toEqual({ tool: 'browser.act', allowApp: 'com.example.voicito', name: 'Voicito' });
     expect(card.preview).toBe(`Use Voicito on your computer?\n${conversation} wants to open Voicito (com.example.voicito). While it works, buddi sees that window's screen and sends it to the model, as with the apps you allowed already.`);
     expect(card.choices).toEqual([{ key: 'remember', label: 'Allow', options: ['Once', 'Always'], default: 'Once' }]);
-    // An allowed app, and every other action, is the session grant as before.
-    await expect(controller.tierFor(commandSchema.parse({ action: 'open', app: 'Safari' }), asking())).rejects.toThrow('No installed app');
+    // An app on the plugin's list, and every other action, is the session grant as before.
     await expect(controller.tierFor(open, asking())).resolves.toEqual({ tier: 'session' });
     await expect(controller.tierFor(commandSchema.parse({ action: 'navigate', url: 'https://example.com' }), asking())).resolves.toEqual({ tier: 'session' });
   });
+  it('refuses without a card when the plugin says not to open others', async () => {
+    const { controller } = await computer({ unlisted: 'refuse' });
+    await expect(controller.tierFor(byName, asking())).rejects.toThrow("Voicito is not on the owner's list of apps");
+    await expect(controller.tierFor(open, asking())).resolves.toEqual({ tier: 'session' });
+  });
   it('Once allows it for this conversation only, and the screen guard sees it', async () => {
-    const { controller, performed } = await computer();
+    const { controller, performed, listed } = await computer();
     await expect(controller.execute(byName, asking())).rejects.toThrow('not allowed yet');
     const granted = await controller.execute(byName, { ...asking(), actionId: 'action-1', choices: { remember: 'Once' } });
     expect(granted).toMatchObject({ allowed: { appId: 'com.example.voicito', remember: 'Once' } });
@@ -477,16 +541,17 @@ describe('an app the owner has not allowed', () => {
     await controller.execute(byName, asking());
     expect(performed).toEqual([expect.objectContaining({ action: 'open', appId: 'com.example.voicito' })]);
     expect(controller.status({ agentId: conversation, conversationId: conversation }).session?.allowedOnce).toEqual(['com.example.voicito']);
-    expect(controller.status().settings!.allowedApps).not.toContain('com.example.voicito');
+    expect(listed).not.toContain('com.example.voicito');
     await expect(controller.tierFor(byName, { ...asking(), conversationId: '22222222-2222-4222-8222-222222222222' })).resolves.toEqual({ tier: 'gated' });
   });
-  it('Always adds it to the list in Settings, with a session running', async () => {
-    const { controller, dir } = await computer();
+  it('Always puts it on the plugin\'s list; a full list makes it Once', async () => {
+    const { controller, listed } = await computer();
     await controller.execute(open, asking());
-    await controller.execute(byName, { ...asking(), actionId: 'action-1', choices: { remember: 'Always' } });
-    expect(controller.status().settings!.allowedApps).toContain('com.example.voicito');
-    expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8')).allowedApps).toContain('com.example.voicito');
+    await expect(controller.execute(byName, { ...asking(), actionId: 'action-1', choices: { remember: 'Always' } })).resolves.toMatchObject({ allowed: { remember: 'Always' } });
+    expect(listed).toContain('com.example.voicito');
     await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'session' });
+    const full = await computer({ full: true });
+    await expect(full.controller.execute(byName, { ...asking(), actionId: 'action-2', choices: { remember: 'Always' } })).resolves.toMatchObject({ allowed: { remember: 'Once' } });
   });
   it('No is refused without a second card; a waiting card is not doubled; a Once survives a restart through the ledger', async () => {
     const { controller } = await computer();
@@ -497,30 +562,17 @@ describe('an app the owner has not allowed', () => {
     await expect(controller.tierFor(byName, asking([{ envelope: { ...envelope, allowApp: 'com.other' }, state: 'rejected' }]))).resolves.toEqual({ tier: 'gated' });
     await expect(controller.tierFor(byName, asking([{ envelope, state: 'succeeded', choices: { remember: 'Once' } }]))).resolves.toEqual({ tier: 'session' });
   });
-  it('answers a typo with the close names and picks none of them', async () => {
-    const { controller, performed } = await computer([{ bundleId: 'co.applex.vocito', name: 'Vocito' }]);
-    await expect(controller.tierFor(byName, asking())).rejects.toThrow('No app called voicito. Did you mean Vocito (co.applex.vocito)? Ask again with that name.');
-    await expect(controller.execute(byName, asking())).rejects.toThrow('Did you mean Vocito');
-    expect(performed).toEqual([]);
-  });
-  it('opens the conversation\'s own app again without a card, to bring it forward', async () => {
-    const { controller, performed } = await computer();
-    await controller.execute(byName, { ...asking(), actionId: 'action-1', choices: { remember: 'Once' } });
-    await controller.execute(byName, asking());
-    await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'session' });
-    await controller.execute(commandSchema.parse({ action: 'open', appId: 'com.example.voicito' }), asking());
-    expect(performed).toEqual([expect.objectContaining({ action: 'open', appId: 'com.example.voicito' }), expect.objectContaining({ action: 'open', appId: 'com.example.voicito' })]);
-  });
   it('raises no card with apps off, and the app job says the one fix', async () => {
     const { controller } = await computer();
     await controller.configure({ yourApps: 'off' });
     await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'session' });
     await expect(controller.execute(byName, asking())).rejects.toThrow(APPS_UNAVAILABLE);
   });
-  it('"ask each app" asks even for an app on the list', async () => {
-    const { controller } = await computer();
-    await controller.configure({ yourApps: 'ask', allowedApps: ['com.google.Chrome', 'com.example.voicito'] });
+  it('"ask each app" asks even for an app on the list, and offers Once only', async () => {
+    const { controller } = await computer({ listed: ['com.apple.Safari', 'com.example.voicito'] });
+    await controller.configure({ yourApps: 'ask' });
     await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'gated' });
+    expect((await controller.describe(byName, asking())).choices).toEqual([{ key: 'remember', label: 'Allow', options: ['Once'], default: 'Once' }]);
     await controller.configure({ yourApps: 'on' });
     await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'session' });
   });

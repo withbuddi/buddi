@@ -251,7 +251,7 @@ describe('conversation browser canvas', () => {
 });
 
 describe('Take over with no browser connected', () => {
-  const extension: BrowserStatus = { ...status, mode: 'extension', route: 'chrome', settings: { version: 2, yourChrome: true, yourApps: 'off', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } };
+  const extension: BrowserStatus = { ...status, mode: 'extension', route: 'chrome', settings: { version: 2, yourChrome: true, yourApps: 'off', signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } };
   const offline: BrowserStatus = { ...extension, state: 'paused', hand: false, handReason: 'browser-offline', handMessage: 'Your browser isn\u2019t connected.' };
   beforeEach(() => { vi.spyOn(api, 'session').mockResolvedValue({ platform: 'darwin' } as never); });
 

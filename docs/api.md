@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-313 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+310 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -3774,8 +3774,6 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | GET | `/api/host` | Host execution: standing permissions and recent runs. | yes |
 | POST | `/api/host/stop` | Stop an agent’s running commands in a conversation. | yes |
 | POST | `/api/host/revoke` | Revoke a standing host-execution permission. | yes |
-| GET | `/api/host/apps` | Apps installed on this computer. | yes |
-| GET | `/api/host/browser-profiles` | A browser app's profiles. | yes |
 | GET | `/api/browser` | The agents' browser: installed, running, its session and page. | yes |
 | GET | `/api/browser/screenshot` | The browser’s current screen, as JPEG. | yes |
 | POST | `/api/browser/install` | Download the browser agents use (about 150 MB); follow on GET /api/browser. | no |
@@ -3784,7 +3782,6 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | POST | `/api/browser/pin` | Pin one conversation to a route, or clear it. | yes |
 | POST | `/api/browser/card` | Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) without a chat message. | yes |
 | GET | `/api/browser/telemetry` | Browser stops by cause, cards and routes over the last days. | yes |
-| POST | `/api/browser/permissions` | Check (and optionally ask for) the operating system’s permissions. | yes |
 | POST | `/api/browser/stop` | Stop one page, or with no session stop agents' browsing (expires after the set time unless forever). | yes |
 | POST | `/api/browser/takeover` | Take over the screen from the agent. | yes |
 | POST | `/api/browser/resume` | Give the screen back to the agent. | yes |
@@ -3833,31 +3830,6 @@ Revoke a standing host-execution permission.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"id":"…"}' "$BUDDI_URL/api/host/revoke"
-```
-
-#### `GET /api/host/apps`
-
-Apps installed on this computer.
-
-- **Auth:** Session or API token.
-- **Answer:** `{ apps }`
-- **Since:** 0.1.0-pre.15
-
-```sh
-curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/host/apps"
-```
-
-#### `GET /api/host/browser-profiles`
-
-A browser app's profiles.
-
-- **Auth:** Session or API token.
-- **Query:** `app: string`
-- **Answer:** `{ profiles }`
-- **Since:** 0.1.0-pre.15
-
-```sh
-curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/host/browser-profiles"
 ```
 
 #### `GET /api/browser`
@@ -3965,20 +3937,6 @@ Browser stops by cause, cards and routes over the last days.
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/telemetry"
-```
-
-#### `POST /api/browser/permissions`
-
-Check (and optionally ask for) the operating system’s permissions.
-
-- **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ prompt?: boolean }`
-- **Answer:** JSON
-- **Errors:** 400; 409
-- **Since:** 0.1.0-pre.15
-
-```sh
-curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/browser/permissions"
 ```
 
 #### `POST /api/browser/stop`

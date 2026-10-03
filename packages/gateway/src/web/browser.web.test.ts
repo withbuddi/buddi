@@ -191,10 +191,10 @@ describe('browser dashboard endpoints', () => {
     expect((await fetch(`${origin}/?t=${ticket}`, { headers: proxy, redirect: 'manual' })).status).toBe(302);
     const stale = mintTicket(TOKEN, new Date(Date.now() - 10 * 60_000));
     expect((await fetch(`${origin}/?t=${stale}`, { headers: proxy, redirect: 'manual' })).status).toBe(401);
-    browser.checkPermissions = vi.fn(async () => browser.status());
-    expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers: { ...headers, Origin: 'https://evil.example' }, body: '{}' })).status).toBe(403);
-    expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
-    expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers, body: '{}' })).status).toBe(200);
+    browser.configure = vi.fn(async () => browser.status());
+    expect((await fetch(`${origin}/api/browser/settings`, { method: 'POST', headers: { ...headers, Origin: 'https://evil.example' }, body: '{}' })).status).toBe(403);
+    expect((await fetch(`${origin}/api/browser/settings`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
+    expect((await fetch(`${origin}/api/browser/settings`, { method: 'POST', headers, body: '{}' })).status).toBe(200);
   });
   it('starts a browser install for the owner only, behind CSRF and origin', async () => {
     const { origin, browser } = await setup(); const headers = await session(origin);
@@ -222,22 +222,17 @@ describe('browser dashboard endpoints', () => {
     checkLaunch.mockResolvedValueOnce({ ok: true } as never);
     expect(await (await fetch(`${origin}/api/browser/check`, { method: 'POST', headers, body: '{}' })).json()).toEqual({ ok: true });
   });
-  it('protects mode settings and permission prompts with owner authentication, CSRF and origin', async () => {
+  it('protects where-agents-may-look settings with owner authentication, CSRF and origin; the permissions route is the Computer plugin\'s now', async () => {
     const { origin, browser } = await setup(); const headers = await session(origin);
-    const configure = vi.fn(async () => browser.status()); const checkPermissions = vi.fn(async () => browser.status());
-    browser.configure = configure; browser.checkPermissions = checkPermissions;
-    for (const route of ['settings', 'permissions']) {
-      expect((await fetch(`${origin}/api/browser/${route}`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
-      expect((await fetch(`${origin}/api/browser/${route}`, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' }, body: '{}' })).status).toBe(403);
-    }
-    expect(configure).not.toHaveBeenCalled(); expect(checkPermissions).not.toHaveBeenCalled();
-    const settings = { mode: 'computer', browserApp: 'com.apple.Safari', allowedApps: ['com.apple.Safari'] };
+    const configure = vi.fn(async () => browser.status());
+    browser.configure = configure;
+    expect((await fetch(`${origin}/api/browser/settings`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
+    expect((await fetch(`${origin}/api/browser/settings`, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' }, body: '{}' })).status).toBe(403);
+    expect(configure).not.toHaveBeenCalled();
+    const settings = { yourApps: 'on' };
     expect((await fetch(`${origin}/api/browser/settings`, { method: 'POST', headers, body: JSON.stringify(settings) })).status).toBe(200);
     expect(configure).toHaveBeenCalledWith(settings);
-    expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers, body: JSON.stringify({ prompt: 'yes' }) })).status).toBe(400);
-    expect(checkPermissions).not.toHaveBeenCalled();
-    expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers, body: JSON.stringify({ prompt: true }) })).status).toBe(200);
-    expect(checkPermissions).toHaveBeenCalledWith(true);
+    expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers, body: JSON.stringify({ prompt: true }) })).status).toBe(404);
   });
   it('serves only the requested conversation and releases it without affecting another', async () => {
     let count = 0;

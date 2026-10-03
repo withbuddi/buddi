@@ -474,8 +474,9 @@ for a developer install (`chrome://extensions` → Developer mode → Load
 unpacked). Nothing about it is macOS-only.
 
 - **macOS** is the reference platform, and the one supported today.
-  Everything on this page works there. Computer control (the browser plugin's
-  Use my apps mode) is macOS-only.
+  Everything on this page works there. Computer control (agents working in
+  your apps) is the Computer plugin, `@withbuddi/plugin-computer`, and is
+  macOS-only.
 - **Linux** is in trial, on a Pop!_OS home server. The npm install works: the
   file vault, the bundled Postgres, and a systemd *user* unit that `buddi`
   writes the way it writes the LaunchAgent on macOS (it survives logging out

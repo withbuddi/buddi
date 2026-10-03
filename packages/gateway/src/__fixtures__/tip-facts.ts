@@ -23,6 +23,7 @@ export function facts(over: Partial<Facts> = {}): Facts {
     secondDevice: false,
     financeConnected: false,
     localBrain: false,
+    appsWithoutPlugin: false,
     ...over,
   };
 }

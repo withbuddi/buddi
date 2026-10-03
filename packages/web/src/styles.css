@@ -2919,10 +2919,6 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
  * Settings: computer & browser
  * ================================================================== */
 
-.perm-list { display: flex; flex-direction: column; gap: var(--space-2); }
-.perm-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; font-size: var(--text-md); }
-.perm-name { font-weight: var(--weight-medium); min-width: 130px; }
-
 .mode-choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); }
 .mode-option {
   display: flex;
@@ -2945,7 +2941,6 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .mode-option-title { font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold); }
 .mode-option-body { font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
 .mode-option-health { font-size: var(--text-sm); color: var(--warning); line-height: var(--leading); }
-.app-role { margin-left: var(--space-2); }
 
 /* ---- alerts: a detail that can run long ---- */
 /* ---- Activity → Alerts: decisions, not chores ---- */

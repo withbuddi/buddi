@@ -4,13 +4,13 @@
  * Fakes on both sides: a bridge standing in for the owner's Chrome, and a page
  * standing in for Playwright's. What is being checked is the mapping — which
  * command goes out for a click, which CDP call starts and acks a screencast,
- * and that computer mode says so in one sentence rather than pretending.
+ * and that a provided route (the Computer plugin's apps) says so in one
+ * sentence rather than pretending.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { ExtensionDriver, type ExtensionBridge, type ExtensionCommand } from './extension.js';
 import { PlaywrightDriver } from './driver.js';
-import { ComputerDriver } from './computer.js';
-import { settingsSchema } from './settings.js';
+import { RouteProviderDriver } from './routes.js';
 import { BrowserService } from './service.js';
 import type { HandFrame } from './types.js';
 
@@ -215,12 +215,13 @@ describe('the Playwright driver’s hand', () => {
   });
 });
 
-describe('computer mode', () => {
+describe('a provided route', () => {
   it('has no hand, and says where to take over instead', () => {
-    const driver = new ComputerDriver(settingsSchema.parse({}), { run: async () => ({}), cancel: () => {} });
+    const provider = { kind: 'apps' as const, label: 'your apps', health: () => ({ ok: true }), do: async () => {}, look: async () => { throw new Error('unused'); } };
+    const driver = new RouteProviderDriver(provider, 's');
     expect(driver.supportsHand).toBe(false);
-    const service = new BrowserService(driver);
-    expect(service.hand()).toEqual({ supported: false, message: 'Take over at the computer for this mode.' });
+    expect(new BrowserService(driver).hand()).toEqual({ supported: false, message: 'Take over at the computer for your apps.' });
+    expect(new BrowserService(new RouteProviderDriver({ ...provider, handMessage: 'Take over at the Mac.' }, 's')).hand()).toEqual({ supported: false, message: 'Take over at the Mac.' });
   });
 
   it('offers a hand only while the owner holds the screen', async () => {

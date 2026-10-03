@@ -59,6 +59,12 @@ export interface Facts {
   financeConnected: boolean;
   /** An agent thinks with the Ollama on this machine: a small local model. */
   localBrain: boolean;
+  /**
+   * The owner had "Use my apps" on (the old computer mode, or apps on in
+   * Where agents may look) and no plugin provides the apps route: computer
+   * control left core for the Computer plugin.
+   */
+  appsWithoutPlugin: boolean;
 }
 
 interface Queryable {
@@ -76,6 +82,8 @@ export interface FactsDeps {
   mailboxSet: () => Promise<boolean>;
   /** The plugins not set up yet; none when absent. */
   needsSetup?: () => Promise<Facts['needsSetup']>;
+  /** Apps were wanted and nothing provides them now; false when absent. */
+  appsWithoutPlugin?: () => boolean;
 }
 
 /** Mail Triage's agent id, as the email plugin proposes it. */
@@ -213,5 +221,6 @@ export async function readFacts(deps: FactsDeps): Promise<Facts> {
           where a.enabled and a.kind = 'openai-compatible'`,
       )
     ).some((row) => typeof row.base_url === 'string' && isLocalOllamaUrl(row.base_url)),
+    appsWithoutPlugin: (() => { try { return deps.appsWithoutPlugin?.() === true; } catch { return false; } })(),
   };
 }

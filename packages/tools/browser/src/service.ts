@@ -62,8 +62,12 @@ export interface RouteStatus {
   allowed: boolean;
   /** It could serve a page right now. */
   available: boolean;
-  /** Who provides it: core, or a plugin's name. */
+  /** Who provides it: core, or a plugin's name ('' when nothing does). */
   provider: string;
+  /** Apps: a plugin provides the route here. False: the row offers the Computer plugin instead. */
+  installed?: boolean;
+  /** Apps: how the providing plugin names it. */
+  label?: string;
   message?: string;
   repair?: 'install' | 'permissions' | 'pair' | 'helper' | 'sandbox';
   /** Chrome: a pairing exists / the extension is connected right now. */
@@ -79,16 +83,15 @@ export interface BrowserStatus {
   /** Where the selected session looks. */
   route?: RouteKind;
   settings?: ControlSettings;
-  permissions?: { accessibility: boolean; screenRecording: boolean; supported: boolean; message?: string };
-  /** macOS only: whether the native computer helper ships with this install, and the fix when it does not. */
-  helper?: { present: boolean; message?: string };
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
   enabled: boolean;
   busy: boolean;
   session?: { id: string; agentId: string; conversationId: string; requestId: string; task: string; expiresAt: string; steps: number; maxSteps: number;
     route?: RouteKind;
-    /** Computer mode: apps the owner allowed once for this session's conversation, beside `settings.allowedApps`. */
-    allowedOnce?: string[] };
+    /** The apps route: apps the owner allowed Once for this session's conversation. */
+    allowedOnce?: string[];
+    /** The apps route: every app this conversation was let into (on the plugin's list, or allowed by card). */
+    allowedApps?: string[] };
   page?: Omit<Observation, 'tree' | 'targets'>;
   lastAction?: string;
   message?: string;
@@ -140,7 +143,6 @@ export interface BrowserController {
   control(action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string, options?: { forever?: boolean }): Promise<BrowserStatus>;
   hand?(scope?: BrowserScope): BrowserHandOffer;
   configure?(settings: unknown): Promise<BrowserStatus>;
-  checkPermissions?(prompt?: boolean): Promise<BrowserStatus>;
   installBrowser?(): BrowserStatus;
   tierFor?(command: BrowserCommand, ctx: ToolContext): Promise<{ tier: 'session' | 'gated'; reason?: string }>;
   describe?(command: BrowserCommand, ctx: ToolContext): Promise<EffectDescription>;

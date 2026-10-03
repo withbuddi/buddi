@@ -6,9 +6,8 @@
 # version (`v0.1.0`) goes under `latest`. The GitHub release is created in
 # the same run, marked latest until a stable version exists, with the
 # tarball, the Chrome Web Store zip of the extension and the Linux install
-# script attached. The macOS computer helper is built in a macOS job
-# (native.yml) and dropped into the tarball by the Linux publish job; a
-# tarball without it fails the release.
+# script attached. Computer control (the macOS helper) is not in it: it is
+# the Computer plugin, built and published from withbuddi/buddi-plugins.
 #
 # Once, on npmjs.com: package `@withbuddi/buddi` → Settings → Publishing access →
 # add a trusted publisher: GitHub, owner `withbuddi`, repository `buddi`,
@@ -21,11 +20,8 @@ jobs:
   # The full gate first: a tag publishes only what passed everything.
   gate:
     uses: ./.github/workflows/gate.yml
-  # The universal macOS computer helper, as the `buddi-computer` artifact.
-  native:
-    uses: ./.github/workflows/native.yml
   publish:
-    needs: [gate, native]
+    needs: [gate]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm
@@ -46,12 +42,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The tarball is built from the workspace's dist output.
       - run: pnpm -r build
-      # Where @buddi/tool-browser spawns it; build.mjs copies it into the
-      # tarball and restores the execute bit the artifact drops.
-      - uses: actions/download-artifact@v4
-        with:
-          name: buddi-computer
-          path: packages/tools/browser/dist/native
       - name: Version from the tag
         id: v
         run: |
@@ -76,13 +66,10 @@ jobs:
         id: pack
         env:
           BUDDI_RELEASE_VERSION: ${{ steps.v.outputs.version }}
-          BUDDI_RELEASE_REQUIRE_NATIVE: '1'
         run: |
           out=$(pnpm -s release:pack | tail -1)
           tgz="${out##*Release: }"
           test -f "$tgz" || { echo "release:pack printed no tarball: $out" >&2; exit 1; }
-          tar -tzvf "$tgz" | grep -E '^-rwx.* package/node_modules/@buddi/tool-browser/dist/native/buddi-computer$' \
-            || { echo "::error::the tarball has no executable computer helper" >&2; exit 1; }
           echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
           # The Chrome Web Store zip, written beside the tarball (no `key`: the store assigns the id).
           zip="$(dirname "$tgz")/buddi-extension-${{ steps.v.outputs.version }}.zip"

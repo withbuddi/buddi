@@ -2,13 +2,11 @@ import { existsSync, statSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ToolRefusal, type EffectDescription, type RegisteredRouteProvider, type RouteProvider, type ToolContext } from '@buddi/core/plugin';
+import { ToolRefusal, type EffectDescription, type RegisteredRouteProvider, type RouteTarget, type ToolContext } from '@buddi/core/plugin';
 import { BrowserManager, type BrowserManagerOptions } from './manager.js';
 import { PlaywrightHost, type DriverOptions, type LaunchProblem } from './host.js';
 import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
-import { COMPUTER_HELPER_MISSING, ComputerDriver, computerHelperPresent, NativeComputerBridge, resolveApp, spotlightApps, type AppResolver, type ComputerBridge, type ComputerPermissions, type InstalledApp } from './computer.js';
-import { ComputerRouteProvider } from './computer-route.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngineStatus, type BrowserHandOffer, type BrowserScope, type BrowserServiceOptions, type BrowserStatus, type BrowserRollover, type BrowserTouch, type CardResult, type RouteStatus, type SecretFillInput, type SecretTypeInput } from './service.js';
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
@@ -31,6 +29,11 @@ export const UNATTENDED_CHROME = "A mission looks only in buddi's own browser, n
 /** What a mission is told when it asks for an app. */
 export const UNATTENDED_APPS = "A mission looks only in buddi's own browser; the owner's apps need the owner. Report what you could not do instead.";
 export const APPS_UNAVAILABLE = 'Your apps are not available to agents right now. The owner can turn them on, or repair them, in Settings → Where agents may look.';
+/** What the agent is told when no plugin provides the apps route. */
+export const APPS_NOT_INSTALLED = 'Agents cannot work in apps here: that needs the Computer plugin (macOS), which the owner installs from Settings → Plugins.';
+/** An installed app as the route names it: its id (a bundle id) and its name. */
+type InstalledApp = { bundleId: string; name: string };
+const asApp = (target: RouteTarget): InstalledApp => ({ bundleId: target.id, name: target.name });
 
 /** The global Stop as it is kept on disk. */
 interface StopRecord { at: number; until?: number }
@@ -43,21 +46,21 @@ const ROUTES: readonly RouteKind[] = ['own', 'chrome', 'apps'];
  *
  * Three routes, one manager each: buddi's own browser (headless, shown in the
  * Canvas), the owner's Chrome (background tabs through the extension) and the
- * owner's apps (a provided route; core's computer control by default). The
+ * owner's apps (a route a plugin provides: the Computer plugin). The
  * settings are permissions; per task the runtime chooses, falls back
  * silently when a route cannot serve, and says one line when the route was
  * not its own browser. The owner is asked on four occasions only, by card.
  */
 export class HostController implements BrowserController {
   #settings: ControlSettings = settingsSchema.parse({});
-  #permissions?: ComputerPermissions;
   #enabled = false;
   #extension?: () => ExtensionBridge;
   #providers?: () => readonly RegisteredRouteProvider[];
   #problem?: LaunchProblem;
   #install?: NonNullable<BrowserEngineStatus['install']>;
   #once = new Map<string, Set<string>>();
-  #acting?: string;
+  /** The apps each conversation was let into (listed or allowed by card), for the Telegram picture check. */
+  #opened = new Map<string, Set<string>>();
   #names = new Map<string, string>();
   #managers: Record<RouteKind, BrowserManager>;
   #ownOptions: BrowserManagerOptions;
@@ -76,7 +79,6 @@ export class HostController implements BrowserController {
   readonly telemetry: BrowserTelemetry;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
-    bridge?: () => ComputerBridge;
     extensionBridge?: () => ExtensionBridge;
     /** Test seam: a driver per route instead of the real ones. */
     drivers?: Partial<Record<RouteKind, () => BrowserDriver>>;
@@ -86,8 +88,6 @@ export class HostController implements BrowserController {
     detect?: () => BrowserAvailability;
     installer?: (onLine: (line: string) => void) => Promise<InstallOutcome>;
     launch?: ProbeDeps['launch'];
-    resolveApp?: AppResolver;
-    helperPresent?: () => boolean;
     /** The pin an agent's `agent.md` declares (`browser:`). */
     agentPin?: (agentId: string) => RoutePin | undefined;
     /** Passed to every page: budgets, clock, backoff. Tests shorten them. */
@@ -130,7 +130,6 @@ export class HostController implements BrowserController {
     const offline: ExtensionBridge = { connected: () => false, send: () => Promise.reject(new Error(NOT_CONNECTED)), close: () => {} };
     return this.#extension?.() ?? offline;
   }
-  get #macOS(): boolean { return (this.options.platform ?? process.platform) === 'darwin'; }
   get #env(): NodeJS.ProcessEnv { return this.options.env ?? process.env; }
   /** Headless unless the owner asked to see the window (or BUDDI_BROWSER_HEADED=1); always headless with no display. */
   get #headless(): boolean {
@@ -152,29 +151,17 @@ export class HostController implements BrowserController {
 
   /* ---------------- the apps route ---------------- */
 
-  /** A plugin's apps route for this platform, when one is installed; it wins over core's. */
+  /** The plugin that provides the apps route on this platform, when one is installed. */
   #pluginApps(): RegisteredRouteProvider | undefined {
     const platform = this.options.platform ?? process.platform;
     return this.#providers?.().find((provider) => provider.kind === 'apps' && (!provider.platforms || provider.platforms.includes(platform)));
-  }
-  #helperPresent(): boolean { return this.options.bridge !== undefined || (this.options.helperPresent ?? computerHelperPresent)(); }
-  #coreAppsHealth(): { ok: boolean; message?: string; repair?: 'permissions' | 'helper' } {
-    if (!this.#macOS) return { ok: false, message: 'Your apps can be used on macOS.' };
-    if (!this.#helperPresent()) return { ok: false, message: COMPUTER_HELPER_MISSING, repair: 'helper' };
-    if (this.#permissions && (!this.#permissions.accessibility || !this.#permissions.screenRecording)) {
-      return { ok: false, message: 'Your apps need macOS Accessibility and Screen Recording permission.', repair: 'permissions' };
-    }
-    return { ok: true };
   }
   #appsDriver(): BrowserDriver {
     const test = this.options.drivers?.apps;
     if (test) return test();
     const plugin = this.#pluginApps();
-    if (plugin) return new RouteProviderDriver(plugin, randomUUID());
-    const computer = new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts,
-      (appId) => this.#allowed(appId, this.#acting), (appId) => this.#nameOf(appId));
-    const provider: RouteProvider = new ComputerRouteProvider(computer, () => this.#coreAppsHealth());
-    return new RouteProviderDriver(provider, randomUUID());
+    if (!plugin) throw new BrowserPreconditionError(APPS_NOT_INSTALLED);
+    return new RouteProviderDriver(plugin, randomUUID());
   }
 
   /* ---------------- routes and their health ---------------- */
@@ -196,8 +183,11 @@ export class HostController implements BrowserController {
     let health: { ok: boolean; message?: string; repair?: string };
     if (this.options.drivers?.apps) health = { ok: true };
     else if (plugin) { try { const answered = plugin.health(); health = answered instanceof Promise ? this.#lastPluginHealth : answered; if (answered instanceof Promise) void answered.then((value) => { this.#lastPluginHealth = value; }, () => undefined); } catch (error) { health = { ok: false, message: error instanceof Error ? error.message : String(error) }; } }
-    else health = this.#coreAppsHealth();
-    const apps: RouteStatus = { kind: 'apps', allowed: this.#settings.yourApps !== 'off', available: this.#settings.yourApps !== 'off' && health.ok, provider: plugin?.plugin ?? 'core', mode: this.#settings.yourApps,
+    else health = { ok: false, message: APPS_NOT_INSTALLED, repair: 'install' };
+    const installed = plugin !== undefined || this.options.drivers?.apps !== undefined;
+    const apps: RouteStatus = { kind: 'apps', allowed: installed && this.#settings.yourApps !== 'off', available: installed && this.#settings.yourApps !== 'off' && health.ok,
+      provider: plugin?.plugin ?? (this.options.drivers?.apps ? 'test' : ''), installed, mode: this.#settings.yourApps,
+      ...(plugin ? { label: plugin.label } : {}),
       ...(health.message ? { message: health.message } : {}), ...(health.repair ? { repair: health.repair as RouteStatus['repair'] } : {}) };
     return [own, chrome, apps];
   }
@@ -258,10 +248,12 @@ export class HostController implements BrowserController {
     if (this.#enabled) return;
     const raw = await this.#readJson('settings.json');
     if (raw !== undefined) {
-      const { settings, migrated } = migrateSettings(raw, { paired: this.#chromePaired(), helperPresent: this.#macOS && this.#helperPresent() });
+      const { settings, migrated } = migrateSettings(raw, { paired: this.#chromePaired() });
       this.#settings = settings;
       if (migrated) {
-        await this.#writeJson('settings.v1.json', raw).catch(() => undefined);
+        // The first shape is kept once; a v2 file only loses the apps list the Computer plugin keeps now.
+        const v2 = (raw as { version?: unknown } | null)?.version === 2;
+        await this.#writeJson(v2 ? 'settings.apps.json' : 'settings.v1.json', raw).catch(() => undefined);
         await this.#writeJson('settings.json', settings);
       }
     }
@@ -312,17 +304,18 @@ export class HostController implements BrowserController {
     }
     const stop = this.#activeStop();
     if (stop && !status.session) status = { ...status, state: 'stopped' };
-    const helper = this.#macOS ? { helper: this.#helperPresent() ? { present: true } : { present: false, message: COMPUTER_HELPER_MISSING } } : {};
     const metadata = {
-      settings: { ...this.#settings, allowedApps: [...this.#settings.allowedApps], signInSites: [...this.#settings.signInSites] },
-      permissions: this.#permissions, ...helper, browser: this.#engine(), routes: this.routes(),
+      settings: { ...this.#settings, signInSites: [...this.#settings.signInSites] },
+      browser: this.#engine(), routes: this.routes(),
       ...(stop ? { stop: { at: new Date(stop.at).toISOString(), ...(stop.until !== undefined ? { until: new Date(stop.until).toISOString() } : {}) } } : {}),
       ...(scope?.conversationId && this.#pins.has(scope.conversationId) ? { pin: this.#pins.get(scope.conversationId)! } : {}),
     };
     const once = (entry: BrowserStatus): BrowserStatus => {
       const allowed = entry.session ? this.#once.get(entry.session.conversationId) : undefined;
+      const opened = entry.session ? this.#opened.get(entry.session.conversationId) : undefined;
       const withMode = { ...entry, mode: entry.mode ?? 'playwright' as const };
-      return allowed?.size && withMode.session ? { ...withMode, session: { ...withMode.session, allowedOnce: [...allowed] } } : withMode;
+      if (!withMode.session || (!allowed?.size && !opened?.size)) return withMode;
+      return { ...withMode, session: { ...withMode.session, ...(allowed?.size ? { allowedOnce: [...allowed] } : {}), ...(opened?.size ? { allowedApps: [...opened] } : {}) } };
     };
     return once({ ...status, ...metadata, ...(status.sessions ? { sessions: status.sessions.map((session) => once({ ...session, ...metadata })) } : {}) });
   }
@@ -335,35 +328,53 @@ export class HostController implements BrowserController {
 
   /* ---------------- apps: names, cards, Once / Always ---------------- */
 
-  #allowed(appId: string, conversationId: string | undefined): boolean {
+  /**
+   * May this conversation open the app without a card? `ask` asks every
+   * time; `on` opens what the plugin lists. A Once yes counts either way.
+   */
+  async #allowed(appId: string, conversationId: string | undefined): Promise<boolean> {
     const once = conversationId !== undefined && this.#once.get(conversationId)?.has(appId) === true;
-    if (this.#settings.yourApps === 'ask') return once;
-    return this.#settings.allowedApps.includes(appId) || once;
+    if (once) return true;
+    if (this.#settings.yourApps !== 'on') return false;
+    const reach = this.#pluginApps()?.reach;
+    if (!reach) return this.options.drivers?.apps !== undefined || this.#pluginApps() !== undefined;
+    try { return (await reach.listed(appId)) === true; } catch { return false; }
   }
   #remember(app: InstalledApp): InstalledApp { if (app.name !== app.bundleId) this.#names.set(app.bundleId, app.name); return app; }
-  async #nameOf(appId: string): Promise<string | undefined> {
-    const known = this.#names.get(appId);
-    if (known) return known;
-    try { return this.#remember(await resolveApp({ bundleId: appId }, this.options.resolveApp ?? spotlightApps)).name; } catch { return undefined; }
-  }
   async #resolve(command: BrowserCommand, conversationId: string | undefined): Promise<InstalledApp> {
-    const resolver = this.options.resolveApp ?? spotlightApps;
-    if (command.app !== undefined) return this.#remember(await resolveApp({ name: command.app }, resolver));
-    const appId = command.appId!;
-    if (this.#allowed(appId, conversationId)) return { bundleId: appId, name: this.#names.get(appId) ?? appId };
-    return this.#remember(await resolveApp({ bundleId: appId }, resolver));
+    const reach = this.#pluginApps()?.reach;
+    if (command.app === undefined && await this.#allowed(command.appId!, conversationId)) return { bundleId: command.appId!, name: this.#names.get(command.appId!) ?? command.appId! };
+    if (!reach) {
+      if (command.app !== undefined) throw new BrowserPreconditionError(`The apps route cannot look up ${command.app} by name. Ask with its id.`);
+      return { bundleId: command.appId!, name: command.appId! };
+    }
+    try {
+      return this.#remember(asApp(await reach.resolve(command.app !== undefined ? { name: command.app } : { id: command.appId! })));
+    } catch (error) {
+      if ((error as { precondition?: boolean }).precondition === true && !(error instanceof BrowserPreconditionError)) throw new BrowserPreconditionError((error as Error).message);
+      throw error;
+    }
   }
   async #resolveOrRefuse(command: BrowserCommand, conversationId: string | undefined): Promise<InstalledApp> {
     try { return await this.#resolve(command, conversationId); }
     catch (error) { throw error instanceof BrowserPreconditionError ? new ToolRefusal(error.message) : error; }
+  }
+  /** What the plugin does with an app not on its list: a card, or a refusal. */
+  async #unlisted(): Promise<'ask' | 'refuse'> {
+    const reach = this.#pluginApps()?.reach;
+    if (!reach || this.#settings.yourApps === 'ask') return 'ask';
+    try { return (await reach.unlisted()) === 'refuse' ? 'refuse' : 'ask'; } catch { return 'ask'; }
   }
   /** Session for everything but an `open` of an app the owner has not allowed: that one asks with a card. */
   async tierFor(command: BrowserCommand, ctx: ToolContext): Promise<{ tier: 'session' | 'gated'; reason?: string }> {
     if (command.action !== 'open' || this.#settings.yourApps === 'off') return { tier: 'session' };
     // No app card for a mission: nobody is there to answer it, and apps are never its route.
     if (!ctx.ownerRequest) throw new ToolRefusal(UNATTENDED_APPS);
+    // No plugin provides apps: no card either; the call itself says what to install.
+    if (!this.#pluginApps() && !this.options.drivers?.apps) return { tier: 'session' };
     const app = await this.#resolveOrRefuse(command, ctx.conversationId);
-    if (this.#allowed(app.bundleId, ctx.conversationId)) return { tier: 'session' };
+    if (await this.#allowed(app.bundleId, ctx.conversationId)) return { tier: 'session' };
+    if (await this.#unlisted() === 'refuse') throw new ToolRefusal(`${app.name} is not on the owner's list of apps, and the owner said not to open others. They can add it in Settings → Computer.`);
     const conversationId = ctx.conversationId;
     if (conversationId && UUID.test(conversationId) && ctx.buddi?.approvals.decisionsInConversation) {
       const cards = (await ctx.buddi.approvals.decisionsInConversation('browser.act', conversationId))
@@ -382,10 +393,11 @@ export class HostController implements BrowserController {
     const app = await this.#resolveOrRefuse(command, undefined);
     const agent = ctx.agentId ?? 'An agent';
     const envelope: AppEnvelope = { tool: 'browser.act', allowApp: app.bundleId, name: app.name };
+    const always = this.#settings.yourApps === 'on' && this.#pluginApps()?.reach?.remember !== undefined;
     return {
       envelope,
       preview: `Use ${app.name} on your computer?\n${agent} wants to open ${app.name} (${app.bundleId}). While it works, buddi sees that window's screen and sends it to the model, as with the apps you allowed already.`,
-      choices: [{ ...REMEMBER, options: [...REMEMBER.options] }],
+      choices: [{ ...REMEMBER, options: always ? [...REMEMBER.options] : ['Once'] }],
     };
   }
   #allowOnce(conversationId: string, appId: string): void {
@@ -393,17 +405,19 @@ export class HostController implements BrowserController {
     apps.add(appId); this.#once.set(conversationId, apps);
   }
   async #grant(command: BrowserCommand, ctx: ToolContext): Promise<unknown> {
-    if (this.#settings.yourApps === 'off') throw new BrowserPreconditionError('Your apps are off, so there is no app to allow. Ask the owner.');
+    if (this.#settings.yourApps === 'off' || !this.#pluginApps()) throw new BrowserPreconditionError('Your apps are off, so there is no app to allow. Ask the owner.');
     if (!ctx.conversationId) throw new Error('An app is allowed for a conversation, and this call has none.');
     const app = await this.#resolve(command, undefined);
     let remember = ctx.choices?.remember === 'Always' ? 'Always' : 'Once';
     let note = '';
-    if (remember === 'Always' && !this.#settings.allowedApps.includes(app.bundleId)) {
-      if (this.#settings.allowedApps.length >= 32) { remember = 'Once'; note = ' The list of apps is full (32), so it is allowed for this conversation only.'; }
-      else await this.#writeSettings({ ...this.#settings, allowedApps: [...this.#settings.allowedApps, app.bundleId] });
+    const reach = this.#pluginApps()?.reach;
+    if (remember === 'Always') {
+      let kept = false;
+      try { kept = reach?.remember ? await reach.remember({ id: app.bundleId, name: app.name }) : false; } catch { kept = false; }
+      if (!kept) { remember = 'Once'; note = ' The list of apps could not take it (it may be full), so it is allowed for this conversation only.'; }
     }
     if (remember === 'Once') this.#allowOnce(ctx.conversationId, app.bundleId);
-    const how = remember === 'Always' ? 'Always: it is now on the list in Settings' : 'Once: for this conversation';
+    const how = remember === 'Always' ? 'Always: it is now on the list in Settings → Computer' : 'Once: for this conversation';
     return {
       allowed: { appId: app.bundleId, name: app.name, remember },
       message: `Allowed ${app.name} (${how}).${note}`,
@@ -437,6 +451,8 @@ export class HostController implements BrowserController {
     if (moved && current) { this.#current.delete(oldKey); this.#current.set(this.#key(input.ownerId, input.agentId, input.conversationId), current); }
     const once = this.#once.get(input.previousConversationId);
     if (moved && once) { this.#once.delete(input.previousConversationId); this.#once.set(input.conversationId, once); }
+    const opened = this.#opened.get(input.previousConversationId);
+    if (moved && opened) { this.#opened.delete(input.previousConversationId); this.#opened.set(input.conversationId, opened); }
     const pin = this.#pins.get(input.previousConversationId);
     if (pin) { this.#pins.set(input.conversationId, pin); this.#later(this.#savePins()); }
     return moved;
@@ -510,14 +526,20 @@ export class HostController implements BrowserController {
     let run = command;
     let appName: string | undefined;
     if (command.action === 'open') {
+      if (!this.#pluginApps() && !this.options.drivers?.apps) {
+        this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId });
+        throw new Error(APPS_NOT_INSTALLED);
+      }
       if (this.#settings.yourApps === 'off') {
         this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId, ...missionMark(ctx) });
         throw new Error(APPS_UNAVAILABLE);
       }
       const app = await this.#resolve(command, ctx.conversationId);
-      if (!this.#allowed(app.bundleId, ctx.conversationId)) throw new BrowserPreconditionError(`${app.name} is not allowed yet. Ask to open it again so the owner gets a card.`);
+      if (!await this.#allowed(app.bundleId, ctx.conversationId)) throw new BrowserPreconditionError(`${app.name} is not allowed yet. Ask to open it again so the owner gets a card.`);
       run = { ...command, appId: app.bundleId, app: undefined };
       appName = app.name;
+      const opened = this.#opened.get(ctx.conversationId) ?? new Set<string>();
+      opened.add(app.bundleId); this.#opened.set(ctx.conversationId, opened);
     }
     // A mission browses in buddi's own browser only: asked for the owner's Chrome, it is told so plainly (no pin changes that).
     if (unattended && command.prefer === 'yours') {
@@ -545,9 +567,8 @@ export class HostController implements BrowserController {
       route = choice.route;
       this.#current.set(key, route);
     }
-    this.#acting = ctx.conversationId;
     let result: unknown;
-    try {
+    {
       try { result = await this.#managers[route].execute(run, ctx); }
       catch (error) {
         // The owner's Chrome went away: the same page in buddi's own browser, silently.
@@ -563,7 +584,7 @@ export class HostController implements BrowserController {
         result = await this.#managers.own.execute({ action: 'navigate', url } as BrowserCommand, ctx);
       }
       ({ result, route, choice } = await this.#walls(result, route, choice, ctx, unattended));
-    } finally { if (this.#acting === ctx.conversationId) this.#acting = undefined; }
+    }
     return this.#annotate(result, route, choice, ctx, appName);
   }
 
@@ -740,23 +761,13 @@ export class HostController implements BrowserController {
   async configure(input: unknown): Promise<BrowserStatus> {
     if (!this.#enabled) throw new Error('Host control is unavailable. Start buddi serve.');
     const next = applySettingsChange(this.#settings, input);
-    if (next.yourApps !== 'off' && !this.#macOS && !this.#pluginApps() && !this.options.drivers?.apps) throw new Error('Your apps can be used on macOS only.');
+    if (next.yourApps !== 'off' && this.#settings.yourApps === 'off' && !this.#pluginApps() && !this.options.drivers?.apps) throw new Error('Your apps need the Computer plugin. Install it from Settings → Plugins first.');
     const chromeOff = this.#settings.yourChrome && !next.yourChrome;
     const appsOff = this.#settings.yourApps !== 'off' && next.yourApps === 'off';
     await this.#writeSettings(next);
     if (chromeOff) await this.#managers.chrome.control('stop');
     if (appsOff) await this.#managers.apps.control('stop');
     for (const [key, route] of this.#current) if ((chromeOff && route === 'chrome') || (appsOff && route === 'apps')) this.#current.delete(key);
-    return this.status();
-  }
-  async checkPermissions(prompt = false): Promise<BrowserStatus> {
-    if (!this.#macOS) this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: 'Your apps can be used on macOS 14+.' };
-    else if (!this.#helperPresent()) this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: COMPUTER_HELPER_MISSING };
-    else {
-      const bridge = this.options.bridge?.() ?? new NativeComputerBridge();
-      const result = await bridge.run({ operation: 'permissions', prompt });
-      this.#permissions = { supported: result.supported === true, accessibility: result.accessibility === true, screenRecording: result.screenRecording === true };
-    }
     return this.status();
   }
   async shutdown(): Promise<void> {

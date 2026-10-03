@@ -27,6 +27,22 @@ describe('route providers (host API 1.29)', () => {
     expect(() => new ToolRegistry().register(manifest([{ ...route, kind: 'own' }]))).toThrow("plugin computer: a route's kind must be one of apps");
     expect(() => new ToolRegistry().register(manifest([{ ...route, look: undefined }]))).toThrow('plugin computer: a route needs a look handler');
   });
+  it('passes reach, take-over and native typing through, and refuses them half-declared', async () => {
+    const registry = new ToolRegistry();
+    const typed: string[] = [];
+    registry.register(manifest([{ ...route, handMessage: 'Take over at the Mac.',
+      reach: { resolve: async () => ({ id: 'com.apple.Numbers', name: 'Numbers' }), listed: () => true, unlisted: () => 'ask' as const },
+      takeover: async () => {}, resume: () => {},
+      focused: async () => 'com.apple.Numbers', typeSecret: async (_s: string, value: string) => { typed.push(value); } }]));
+    const [provided] = registry.routeProviders();
+    expect(provided!.handMessage).toBe('Take over at the Mac.');
+    await expect(provided!.reach!.resolve({ name: 'Numbers' })).resolves.toEqual({ id: 'com.apple.Numbers', name: 'Numbers' });
+    await expect(provided!.focused!('s')).resolves.toBe('com.apple.Numbers');
+    await provided!.typeSecret!('s', 'x');
+    expect(typed).toEqual(['x']);
+    expect(() => new ToolRegistry().register(manifest([{ ...route, focused: async () => 'x' }]))).toThrow('plugin computer: a route declares focused and typeSecret together, or neither');
+    expect(() => new ToolRegistry().register(manifest([{ ...route, reach: { resolve: async () => ({ id: 'a', name: 'a' }) } }]))).toThrow("plugin computer: a route's reach needs listed");
+  });
   it('waitsForOwner may decide per result, and ownBudget is read back', () => {
     const registry = new ToolRegistry();
     registry.register({ name: 'page', version: '1', schema: 'page', migrationsDir: '', tools: [

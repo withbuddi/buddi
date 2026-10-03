@@ -41,6 +41,3 @@ jobs:
           echo "Changelog check passed."
   gate:
     uses: ./.github/workflows/gate.yml
-  # The macOS computer helper the release ships: still compiles, universal, signed.
-  native:
-    uses: ./.github/workflows/native.yml

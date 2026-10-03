@@ -205,37 +205,29 @@ export function agoText(ms: number): string {
 /* ---------------- a provided route, as a driver ---------------- */
 
 /**
- * Any `RouteProvider` driven as a page: `do` acts, `look` answers. Extras a
- * provider also has as a driver (the remote hand, take-over, native typing),
- * which core's own computer provider does, pass straight through, so the
- * computer route behaves exactly as it did before it went behind this
- * interface.
+ * A plugin's `RouteProvider` driven as a page: `do` acts, `look` answers.
+ * A provided route has no remote hand: take-over pauses it (`takeover` /
+ * `resume`) and the Canvas says where the owner takes over instead
+ * (`handMessage`). Native typing (`secret.type`) passes through when the
+ * route declares it. Apps are the owner's, so their windows are kept.
  */
 export class RouteProviderDriver implements BrowserDriver {
   #picture?: Buffer;
-  constructor(readonly provider: RouteProvider & Partial<BrowserDriver>, readonly session: string) {
-    const extras = provider as Partial<BrowserDriver>;
-    if (extras.hand) this.hand = extras.hand;
-    if (extras.supportsHand !== undefined) this.supportsHand = extras.supportsHand;
-    if (extras.handMessage !== undefined) this.handMessage = extras.handMessage;
-    if (extras.preservesWindows !== undefined) this.preservesWindows = extras.preservesWindows;
-    if (extras.takeover) this.takeover = () => extras.takeover!.call(provider);
-    if (extras.interrupt) this.interrupt = () => extras.interrupt!.call(provider);
-    if (extras.resume) this.resume = () => extras.resume!.call(provider);
-    if (extras.handReady) this.handReady = () => extras.handReady!.call(provider);
-    if (extras.focusedBundleId) this.focusedBundleId = () => extras.focusedBundleId!.call(provider);
-    if (extras.nativeType) this.nativeType = (value: string) => extras.nativeType!.call(provider, value);
-  }
-  hand?: BrowserDriver['hand'];
-  supportsHand?: boolean;
-  handMessage?: string;
-  preservesWindows?: boolean;
-  takeover?: () => Promise<void>;
-  interrupt?: () => Promise<void>;
-  resume?: () => void;
-  handReady?: () => boolean;
+  readonly supportsHand = false;
+  readonly handMessage: string;
+  readonly preservesWindows: boolean;
   focusedBundleId?: () => Promise<string | undefined>;
   nativeType?: (value: string) => Promise<void>;
+  constructor(readonly provider: RouteProvider, readonly session: string) {
+    this.handMessage = provider.handMessage ?? `Take over at the computer for ${provider.label}.`;
+    this.preservesWindows = provider.kind === 'apps';
+    if (provider.focused && provider.typeSecret) {
+      this.focusedBundleId = () => provider.focused!(session);
+      this.nativeType = (value: string) => provider.typeSecret!(session, value);
+    }
+  }
+  async takeover(): Promise<void> { this.#picture = undefined; await this.provider.takeover?.(this.session); }
+  resume(): void { void Promise.resolve(this.provider.resume?.(this.session)).catch(() => undefined); }
   async start(): Promise<void> {
     const health = await this.provider.health();
     if (!health.ok) throw new Error(health.message ?? `${this.provider.label} is not available.`);
@@ -249,7 +241,12 @@ export class RouteProviderDriver implements BrowserDriver {
     }
   }
   async observe(): Promise<Observation> {
-    const page: RoutePage = await this.provider.look(this.session);
+    let page: RoutePage;
+    try { page = await this.provider.look(this.session); }
+    catch (error) {
+      if ((error as { precondition?: boolean }).precondition === true && !(error instanceof BrowserPreconditionError)) throw new BrowserPreconditionError((error as Error).message);
+      throw error;
+    }
     const { screenshot, ...rest } = page;
     this.#picture = screenshot ? Buffer.from(screenshot) : undefined;
     return rest;

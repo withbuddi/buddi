@@ -938,6 +938,12 @@ export class ToolRegistry {
       look: (session) => route.look(session),
       do: (session, command) => route.do(session, command),
       ...(route.release ? { release: (session: string) => route.release!(session) } : {}),
+      ...(route.reach ? { reach: route.reach } : {}),
+      ...(route.takeover ? { takeover: (session: string) => route.takeover!(session) } : {}),
+      ...(route.resume ? { resume: (session: string) => route.resume!(session) } : {}),
+      ...(route.handMessage !== undefined ? { handMessage: route.handMessage } : {}),
+      ...(route.focused ? { focused: (session: string) => route.focused!(session) } : {}),
+      ...(route.typeSecret ? { typeSecret: (session: string, value: string) => route.typeSecret!(session, value) } : {}),
       plugin: manifest.name,
     })));
   }

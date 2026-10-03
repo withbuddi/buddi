@@ -164,17 +164,17 @@ describe('one photo when the run needs the owner', () => {
     expect(sent).toHaveLength(0);
   });
 
-  it('withholds a page outside the owner’s allowed hosts, and an app outside allowedApps', async () => {
+  it('withholds a page outside the owner’s allowed hosts, and an app this conversation was not let into', async () => {
     const outside = { value: status({ page: { id: 'p-9', url: 'https://tracker.example.net/x', title: 'Elsewhere', tabs: [], capturedAt: 'x' } as any }) };
     const { photos, sent } = photosOn(outside, { allowedHosts: ['example.com'] });
     await photos.step(step);
     expect(sent).toHaveLength(0);
 
-    // Computer mode: the screenshot is a whole application window, so the
-    // bundle ID is what has to be on the owner's list.
+    // The apps route: the screenshot is a whole application window, so the
+    // bundle ID is what the conversation must have been let into.
     const app = { value: status({
       mode: 'computer',
-      settings: { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } as const,
+      settings: { version: 2, yourChrome: false, yourApps: 'on', signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } as const,
       page: { id: 'p-a', url: 'app://com.apple.Notes', title: 'Notes', appId: 'com.apple.Notes', tabs: [], capturedAt: 'x' } as any,
     }) };
     const second = photosOn(app);
@@ -183,7 +183,8 @@ describe('one photo when the run needs the owner', () => {
 
     const allowed = { value: status({
       mode: 'computer',
-      settings: { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } as const,
+      settings: { version: 2, yourChrome: false, yourApps: 'on', signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } as const,
+      session: { ...status().session!, allowedApps: ['com.google.Chrome'] },
       page: { id: 'p-b', url: 'app://com.google.Chrome', title: 'Chrome', appId: 'com.google.Chrome', tabs: [], capturedAt: 'x' } as any,
     }) };
     const third = photosOn(allowed);
@@ -192,7 +193,7 @@ describe('one photo when the run needs the owner', () => {
   });
 
   it('sends an app the owner allowed Once for this conversation, and only that one', () => {
-    const settings: NonNullable<BrowserStatus['settings']> = { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } satisfies NonNullable<BrowserStatus['settings']>;
+    const settings: NonNullable<BrowserStatus['settings']> = { version: 2, yourChrome: false, yourApps: 'on', signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } satisfies NonNullable<BrowserStatus['settings']>;
     const session = { id: 's', agentId: 'a', conversationId: 'c', requestId: 'r', task: 't', expiresAt: 'x', steps: 1, maxSteps: 10 };
     const page = (appId: string) => ({ id: 'p', url: `app://${appId}`, title: '', appId, tabs: [], capturedAt: 'x' }) as any;
     expect(screenshotAllowed(status({ mode: 'computer', settings, session: { ...session, allowedOnce: ['com.example.voicito'] }, page: page('com.example.voicito') }))).toBe(true);
