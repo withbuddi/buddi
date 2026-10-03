@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { BrowserService, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import WebSocket from 'ws';
-import { ExtensionEndpoint } from './extension.js';
+import { ExtensionEndpoint, MIN_EXTENSION_VERSION } from './extension.js';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName, portOf } from './http.js';
 
@@ -96,6 +96,9 @@ describe('the browser extension endpoint', () => {
       .toMatchObject({ connected: false, pending: false, path: path.join(dir, 'extension') });
     // Its own version, plain, so the page can compare it with the extension's.
     expect(((await (await fetch(`${origin}/api/extension`, { headers })).json()) as { buddi?: string }).buddi).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
+    // The oldest extension it works with, in Chrome's scheme; the store's first build (0.1.0) meets it.
+    expect(((await (await fetch(`${origin}/api/extension`, { headers })).json()) as { extensionMinimum?: string }).extensionMinimum).toBe(MIN_EXTENSION_VERSION);
+    expect(MIN_EXTENSION_VERSION).toMatch(/^\d+(\.\d+){0,3}$/);
 
     const client = connect(socketUrl);
     await client.open;

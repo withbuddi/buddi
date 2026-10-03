@@ -61,6 +61,17 @@ export interface ExtensionRecord {
   extensionId?: string;
 }
 
+/**
+ * The oldest extension this gateway works with, in Chrome's numeric version
+ * scheme (`packages/extension/scripts/version.mjs`: `0.1.0-pre.24` is
+ * `0.1.0.24`). The socket protocol (knock, proof, token, commands) has not
+ * changed since the first paired extension, and the store's first build
+ * reports `0.1.0`, so that is the floor. Raise it in the same commit that
+ * makes the gateway send something an older extension cannot handle; the
+ * Settings page asks for an update only below it.
+ */
+export const MIN_EXTENSION_VERSION = '0.1.0';
+
 /** What the Settings page draws. */
 export interface ExtensionView {
   connected: boolean;
@@ -75,6 +86,8 @@ export interface ExtensionView {
    * A skew is said, never refused.
    */
   buddi: string;
+  /** {@link MIN_EXTENSION_VERSION}: the page asks for an update only when the extension is older. */
+  extensionMinimum: string;
 }
 
 export function extensionFile(env: NodeJS.ProcessEnv = process.env): string {
@@ -492,7 +505,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const record = await this.#read();
     const pending = !!this.#pair && this.#pair.expiresAt > this.#now();
     this.#buddiVersion ??= currentVersion(this.#env()).then((version) => version.split(' ')[0] || version);
-    return { connected: this.connected(), pending, path: await extensionDir(this.#env()), buddi: await this.#buddiVersion,
+    return { connected: this.connected(), pending, path: await extensionDir(this.#env()), buddi: await this.#buddiVersion, extensionMinimum: MIN_EXTENSION_VERSION,
       ...(record ? { pairedAt: record.pairedAt, extension: record.extension, lastSeenAt: record.lastSeenAt } : {}) };
   }
 

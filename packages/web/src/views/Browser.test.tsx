@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserStatus } from '../api';
 import { useAsync } from '../ui';
-import { Browser, BrowserPanel, installTarget, STORE_URL } from './Browser';
+import { Browser, BrowserPanel, installTarget, olderExtension, STORE_URL } from './Browser';
 
 vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), browserInstall: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
 const status: BrowserStatus = { state: 'running', enabled: true, busy: false, hasScreenshot: true,
@@ -262,20 +262,37 @@ describe('finding the extension from the dashboard', () => {
     expect(screen.queryByText(/pointed at/)).not.toBeInTheDocument();
   });
 
-  it('says when the extension and buddi are different versions, and carries on', async () => {
-    answers({ installed: true, version: '0.1.0.24', state: 'paired', gateway: here() });
-    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.25' });
+  it('says nothing when the extension meets the minimum, whatever buddi\'s own version (the store build reports 0.1.0)', async () => {
+    answers({ installed: true, version: '0.1.0', state: 'paired', gateway: here() });
+    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.35', extensionMinimum: '0.1.0' });
     render(<Browser />);
-    expect(await screen.findByText('buddi is 0.1.0-pre.25; the extension is 0.1.0.24. Update it from chrome://extensions or the store.')).toBeInTheDocument();
+    expect(await screen.findByText(/has the extension, version 0\.1\.0\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Update it from/)).not.toBeInTheDocument();
+  });
+
+  it('asks for an update only below the minimum the gateway declares, and carries on', async () => {
+    answers({ installed: true, version: '0.1.0.24', state: 'paired', gateway: here() });
+    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.40', extensionMinimum: '0.1.0.30' });
+    render(<Browser />);
+    expect(await screen.findByText('This extension is 0.1.0.24; this buddi needs 0.1.0.30 or later. Update it from chrome://extensions or the store.')).toBeInTheDocument();
     expect(screen.getByText(/already paired/)).toBeInTheDocument();
   });
 
-  it('says nothing about versions when they are the same one, spelled two ways', async () => {
-    answers({ installed: true, version: '0.1.0.25', state: 'paired', gateway: here() });
-    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.25' });
+  it('says nothing about versions to an older gateway that declares no minimum', async () => {
+    answers({ installed: true, version: '0.1.0', state: 'paired', gateway: here() });
+    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.35' });
     render(<Browser />);
-    expect(await screen.findByText(/has the extension, version 0\.1\.0\.25/)).toBeInTheDocument();
+    expect(await screen.findByText(/has the extension, version 0\.1\.0\./)).toBeInTheDocument();
     expect(screen.queryByText(/Update it from/)).not.toBeInTheDocument();
+  });
+
+  it('compares Chrome versions part by part', () => {
+    expect(olderExtension('0.1.0', '0.1.0')).toBe(false);
+    expect(olderExtension('0.1.0.24', '0.1.0')).toBe(false);
+    expect(olderExtension('0.1.0', '0.1.0.1')).toBe(true);
+    expect(olderExtension('0.1.0.9', '0.1.0.10')).toBe(true);
+    expect(olderExtension('0.2', '0.1.0.99')).toBe(false);
+    expect(olderExtension('junk', '0.1.0')).toBe(false);
   });
 
   it('points out an extension aimed at another buddi', async () => {

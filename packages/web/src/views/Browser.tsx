@@ -230,15 +230,20 @@ export const STORE_URL = 'https://chromewebstore.google.com/detail/pbfpjefkiijjg
 const EXTENSION_IDS = [EXTENSION_ID, STORE_EXTENSION_ID].filter(Boolean);
 
 /**
- * buddi's version as Chrome spells it: `0.1.0-pre.25` is `0.1.0.25`, `0.1.0`
- * stays, any other suffix is dropped. The same mapping as
- * `packages/extension/scripts/version.mjs`, which stamps the manifest.
+ * Is Chrome version `a` older than `b`? Both in Chrome's scheme, one to four
+ * dot-separated integers (`packages/extension/scripts/version.mjs`), compared
+ * part by part with missing parts as 0. Anything unreadable is never "older":
+ * a version the page cannot read is no reason to nag.
  */
-function chromeVersion(version: string): string {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(version.trim());
-  if (!match) return version;
-  const numbered = match[4] ? /^pre\.(\d+)$/.exec(match[4]) : null;
-  return [match[1], match[2], match[3], ...(numbered ? [numbered[1]] : [])].map(Number).join('.');
+export function olderExtension(a: string, b: string): boolean {
+  const parse = (v: string) => /^\d+(\.\d+){0,3}$/.test(v.trim()) ? v.trim().split('.').map(Number) : null;
+  const x = parse(a); const y = parse(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < 4; i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return false;
 }
 
 /** What the extension answers `buddi.status` with. */
@@ -360,8 +365,9 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
           {probe?.state === 'paired' ? ' It is already paired with a buddi.' : ''}
           {probe?.state === 'disconnected' ? ' It is not connected yet: press Connect in its popup.' : ''}
         </p>
-        {probe && data?.buddi && chromeVersion(data.buddi) !== probe.version ? (
-          <p className="muted">{`buddi is ${data.buddi}; the extension is ${probe.version}. Update it from chrome://extensions or the store.`}</p>
+        {/* Only below what this buddi needs. A newer store build is not a signal the gateway has, so it is not guessed at. */}
+        {probe && data?.extensionMinimum && olderExtension(probe.version, data.extensionMinimum) ? (
+          <p className="muted">{`This extension is ${probe.version}; this buddi needs ${data.extensionMinimum} or later. Update it from chrome://extensions or the store.`}</p>
         ) : null}
         {probe && !sameGateway(probe.gateway) ? (
           <Notice tone="warning">{`The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in the popup.`}</Notice>
