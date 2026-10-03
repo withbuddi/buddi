@@ -226,9 +226,9 @@ describe('the lock screen', () => {
       ],
     }));
     render(<LockScreen initial={locked} onUnlocked={() => {}} />);
-    const weather = await screen.findByRole('group', { name: 'Weather at home' });
+    const tile = await screen.findByRole('group', { name: 'Weather at home' });
     expect(screen.queryByRole('group', { name: 'Coming up' })).toBeNull();
-    expect(weather.closest('.lk-grid')).toHaveAttribute('data-cols', '1');
+    expect(tile.closest('.lk-grid')).toHaveAttribute('data-cols', '1');
   });
 
   it('opens Needs you once unlocked when its count was tapped', async () => {

@@ -9,7 +9,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { api } from '../api';
 import { MissionReport, isEditionReport, reportView } from './report';
-import { edWays, editionIdOf, editionOf } from './EditionCard';
+import { editionIdOf, editionOf } from './EditionCard';
 import { MessageList } from './MessageList';
 import type { ChatMessage } from './types';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -46,8 +46,17 @@ const EDITION = {
             storyId: 's1', title: 'ECOWAS leaders open a two-day summit in Lomé', lead: 'Leaders from the fifteen member states open a two-day summit in Lomé today.',
             outlet: 'RFI Afrique', more: 3, link: { url: 'https://www.rfi.fr/fr/afrique/cedeao', label: 'rfi.fr' },
             logos: [{ name: 'RFI Afrique', logo: 'rfi.fr' }, { name: 'Reuters' }],
-            topicId: 'west-africa', topicName: 'Togo & West Africa',
-            mutable: [{ id: 'o_rfi', name: 'RFI Afrique' }, { id: 'o_reuters', name: 'Reuters' }, { id: '../bad', name: 'Bad' }],
+            topicName: 'Togo & West Africa',
+            // The plugin's declared ways out, in the page grammar; the card knows none of them by name.
+            actions: [
+              { tool: 'news.hide_story', label: 'Not interested', hint: 'Hides it and shows fewer like it', args: { id: { const: 's1' }, action: { const: 'not_interested' } }, done: 'Hidden. It won’t come back.', undo: { tool: 'news.hide_story', label: 'Undo', args: { id: { const: 's1' }, action: { const: 'undo' } } } },
+              { tool: 'news.mute_outlet', label: 'Mute RFI Afrique', group: 'Mute an outlet', args: { outlet: { const: 'o_rfi' }, muted: { const: true } }, done: 'Muted RFI Afrique. Its stories are hidden.', undo: { tool: 'news.mute_outlet', label: 'Undo', args: { outlet: { const: 'o_rfi' }, muted: { const: false } } } },
+              { tool: 'news.mute_outlet', label: 'Mute Reuters', group: 'Mute an outlet', args: { outlet: { const: 'o_reuters' }, muted: { const: true } }, done: 'Muted Reuters. Its stories are hidden.' },
+              { tool: 'Bad Tool', label: 'Bad', args: {}, done: 'x' },
+              { tool: 'news.mute_outlet', label: 'Raw args', args: { outlet: 'o_x' }, done: 'x' },
+              { tool: 'news.set_topic', label: 'Quiet Togo & West Africa for a week', hint: 'Back on its own next Saturday', args: { topic: { const: 'west-africa' }, mutedForHours: { const: 168 } }, done: 'Togo & West Africa is quiet for a week.', undo: { tool: 'news.set_topic', label: 'Undo', args: { topic: { const: 'west-africa' }, mutedForHours: { const: 0 } } } },
+              { tool: 'news.set_topic', label: 'Mute Togo & West Africa', hint: 'Undo it in Sources', confirm: 'Mute Togo & West Africa everywhere?', args: { topic: { const: 'west-africa' }, muted: { const: true } }, done: 'Muted Togo & West Africa. Anchor leaves it out too.', undo: { tool: 'news.set_topic', label: 'Undo', args: { topic: { const: 'west-africa' }, muted: { const: false } } } },
+            ],
           },
           {
             mark: 'update', markLabel: 'UPDATE', title: 'Ghana raises the cocoa price', lead: 'It takes effect on Monday.', outlet: 'Reuters', more: 0,
@@ -126,17 +135,33 @@ describe('a news edition in chat', () => {
 });
 
 describe('the ways out on an edition story', () => {
-  it('offers the kit\'s ways for a told story, and none for one the edition did not match', () => {
+  it('offers the ways the plugin declared for a told story, and none for one the edition did not match', () => {
     const e = editionOf(EDITION)!;
     const [told, stray] = e.groups[0]!.stories;
-    expect(told!.mutable).toEqual([{ id: 'o_rfi', name: 'RFI Afrique' }, { id: 'o_reuters', name: 'Reuters' }]);
-    const ways = edWays(told!, new Date('2026-10-03T08:00:00Z'));
+    const ways = told!.actions!;
+    // A tool that is no tool name, or an argument that is no `{ const }`, is left out.
     expect(ways.map((w) => w.label)).toEqual(['Not interested', 'Mute RFI Afrique', 'Mute Reuters', 'Quiet Togo & West Africa for a week', 'Mute Togo & West Africa']);
-    expect(ways[0]).toMatchObject({ tool: 'news.hide_story', args: { id: 's1', action: 'not_interested' }, undo: { id: 's1', action: 'undo' } });
-    expect(ways[1]).toMatchObject({ tool: 'news.mute_outlet', args: { outlet: 'o_rfi', muted: true }, undo: { outlet: 'o_rfi', muted: false } });
+    expect(ways[0]).toMatchObject({ tool: 'news.hide_story', args: { id: 's1', action: 'not_interested' }, undo: { tool: 'news.hide_story', label: 'Undo', args: { id: 's1', action: 'undo' } } });
+    expect(ways[1]).toMatchObject({ tool: 'news.mute_outlet', group: 'Mute an outlet', args: { outlet: 'o_rfi', muted: true }, undo: { args: { outlet: 'o_rfi', muted: false } } });
+    expect(ways[2]!.undo).toBeUndefined();
     expect(ways[3]).toMatchObject({ tool: 'news.set_topic', args: { topic: 'west-africa', mutedForHours: 168 }, hint: 'Back on its own next Saturday' });
-    expect(ways[4]).toMatchObject({ tool: 'news.set_topic', args: { topic: 'west-africa', muted: true } });
-    expect(edWays(stray!)).toEqual([]);
+    expect(ways[4]).toMatchObject({ tool: 'news.set_topic', args: { topic: 'west-africa', muted: true }, confirm: 'Mute Togo & West Africa everywhere?' });
+    expect(stray!.actions).toBeUndefined();
+  }, 180_000);
+
+  it('asks first when the action declares a question', async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(api.pageQuery).mockResolvedValue({ data: EDITION });
+    vi.mocked(api.pageAct).mockResolvedValue({ result: {} });
+    render(<MissionReport view={report('#/p/news/stories?edition=e_abc')} />);
+    const card = await screen.findByTestId('edition-card');
+    await user.click(within(card).getByRole('button', { name: /^Ways out for/ }));
+    await user.click(await screen.findByRole('menuitem', { name: /^Mute Togo & West Africa/ }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Mute Togo & West Africa everywhere?' });
+    expect(api.pageAct).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Mute Togo & West Africa' }));
+    expect(api.pageAct).toHaveBeenCalledWith('news', { tool: 'news.set_topic', args: { topic: 'west-africa', muted: true } });
+    expect(await within(card).findByText('Muted Togo & West Africa. Anchor leaves it out too.')).toBeInTheDocument();
   }, 180_000);
 
   it('runs the owner tool, leaves the sentence and Undo in the story\'s place, and Undo takes it back', async () => {

@@ -13,14 +13,15 @@
  *
  * One logo per story, the outlet Anchor named (the kit's choice): "and N
  * more" says the rest. Each story the edition told carries the kit's ⋯ ways
- * out — Not interested, Mute an outlet, Quiet the topic for a week, Mute the
- * topic — run through the news plugin's owner tools (the same ones the News
- * page's ways call); the story then leaves its sentence and Undo in place.
+ * out, which the plugin declares as page actions (label, tool, args, the
+ * sentence once done, the call that undoes it) in its answer: the card knows
+ * no plugin tool, it runs what it is handed through the page-action route the
+ * plugin pages use, and the story then leaves its sentence and Undo in place.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import { AssetImage, assetSrc } from '../pages/AssetImage';
-import { ActionMenu, Button, ButtonLink } from '../ui';
+import { ActionMenu, Button, ButtonLink, Modal } from '../ui';
 import { AudioCard, clock, useAudioPlayer } from './AudioCard';
 import type { ReportView } from './report';
 
@@ -46,12 +47,26 @@ export interface EditionStory {
   more: number;
   link?: { url: string; label: string };
   logos: Array<{ name: string; logo?: string }>;
-  /** The told story it matched; only such a story has ways out. */
-  storyId?: string;
-  topicId?: string;
   topicName?: string;
-  /** Outlets that can be muted, the named one first (up to four). */
-  mutable?: Array<{ id: string; name: string }>;
+  /** The ⋯ menu the plugin declared for a story the edition told; none for one it did not match. */
+  actions?: EdAction[];
+}
+
+/**
+ * One way out, as the plugin declared it in the page grammar: the tool and its
+ * arguments (`{ const }` literals), the line under it, the heading above its
+ * group, a question to confirm first, what it says once done, and the call
+ * that takes it back.
+ */
+export interface EdAction {
+  label: string;
+  hint?: string;
+  group?: string;
+  tool: string;
+  args: Record<string, unknown>;
+  confirm?: string;
+  done: string;
+  undo?: { tool: string; label: string; args: Record<string, unknown> };
 }
 
 export interface Edition {
@@ -65,9 +80,48 @@ export interface Edition {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
-const ID = /^[A-Za-z0-9_.:-]{1,80}$/;
-const id = (v: unknown): string => (typeof v === 'string' && ID.test(v) ? v : '');
 const isWeb = (url: string): boolean => /^https?:\/\/[^\s]+$/i.test(url);
+const TOOL = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+const obj = (v: unknown): Record<string, unknown> | null => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+
+/** A declared call's arguments: each a `{ const }` literal, or the call is dropped. */
+function constArgs(v: unknown): Record<string, unknown> | null {
+  const raw = obj(v);
+  if (!raw) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, ref] of Object.entries(raw)) {
+    const r = obj(ref);
+    if (!r || !('const' in r)) return null;
+    out[key] = r['const'];
+  }
+  return out;
+}
+
+/** A story's declared ways out, read defensively: an item with a bad tool or argument is left out. */
+export function edActions(v: unknown): EdAction[] {
+  return (Array.isArray(v) ? v : []).flatMap((a): EdAction[] => {
+    const r = obj(a);
+    if (!r) return [];
+    const label = str(r['label']).trim();
+    const tool = str(r['tool']);
+    const args = constArgs(r['args'] ?? {});
+    if (label === '' || !TOOL.test(tool) || !args) return [];
+    const u = obj(r['undo']);
+    const undoArgs = u ? constArgs(u['args'] ?? {}) : null;
+    const undo = u && TOOL.test(str(u['tool'])) && undoArgs ? { tool: str(u['tool']), label: str(u['label']).trim() || 'Undo', args: undoArgs } : null;
+    const hint = str(r['hint']).trim();
+    const group = str(r['group']).trim();
+    const confirm = str(r['confirm']).trim();
+    return [{
+      label, tool, args,
+      ...(hint ? { hint } : {}),
+      ...(group ? { group } : {}),
+      ...(confirm ? { confirm } : {}),
+      done: str(r['done']).trim() || 'Done.',
+      ...(undo ? { undo } : {}),
+    }];
+  }).slice(0, 12);
+}
 
 /** The query's answer, read defensively: anything off is left out, nothing is trusted to be a string. */
 export function editionOf(data: unknown): Edition | null {
@@ -84,15 +138,8 @@ export function editionOf(data: unknown): Edition | null {
       const link = o['link'] !== null && typeof o['link'] === 'object' ? (o['link'] as Record<string, unknown>) : null;
       const url = link ? str(link['url']) : '';
       const mark = o['mark'] === 'update' || o['mark'] === 'opinion' ? o['mark'] : undefined;
-      const storyId = id(o['storyId']);
-      const topicId = id(o['topicId']);
       const topicName = str(o['topicName']).trim();
-      const mutable = (Array.isArray(o['mutable']) ? o['mutable'] : []).flatMap((m) => {
-        if (m === null || typeof m !== 'object') return [];
-        const outletId = id((m as Record<string, unknown>)['id']);
-        const name = str((m as Record<string, unknown>)['name']).trim();
-        return outletId && name ? [{ id: outletId, name }] : [];
-      }).slice(0, 4);
+      const actions = edActions(o['actions']);
       return [{
         ...(mark ? { mark, markLabel: str(o['markLabel']) || undefined } : {}),
         title,
@@ -106,9 +153,8 @@ export function editionOf(data: unknown): Edition | null {
           const logo = str((l as Record<string, unknown>)['logo']);
           return name ? [{ name, ...(logo ? { logo } : {}) }] : [];
         }),
-        ...(storyId ? { storyId } : {}),
-        ...(storyId && topicId ? { topicId, topicName: topicName || topicId } : {}),
-        ...(storyId && mutable.length > 0 ? { mutable } : {}),
+        ...(topicName ? { topicName } : {}),
+        ...(actions.length > 0 ? { actions } : {}),
       }];
     });
     return stories.length > 0 ? [{ topic: str((g as Record<string, unknown>)['topic']), stories }] : [];
@@ -126,77 +172,36 @@ export function editionOf(data: unknown): Edition | null {
   };
 }
 
-/** One way out: the owner tool it runs, what it says after, and the call that takes it back. */
-export interface EdWay {
-  label: string;
-  hint?: string;
-  heading?: string;
-  tool: string;
-  args: Record<string, unknown>;
-  done: string;
-  undo: Record<string, unknown>;
-}
+type MenuItem = { label: string; hint?: string; onSelect: () => void } | { heading: string } | 'separator';
 
-/** "Back on its own next Saturday": a week from now, by its weekday. */
-function weekHint(now: Date): string {
-  const at = new Date(now.getTime() + 7 * 86_400_000);
-  return `Back on its own next ${new Intl.DateTimeFormat('en-GB', { weekday: 'long' }).format(at)}`;
-}
-
-/** The kit's ways out for a story the edition told, in its order; none for a story it did not match. */
-export function edWays(s: EditionStory, now: Date = new Date()): EdWay[] {
-  if (!s.storyId) return [];
-  const ways: EdWay[] = [{
-    label: 'Not interested', hint: 'Hides it and shows fewer like it', tool: 'news.hide_story',
-    args: { id: s.storyId, action: 'not_interested' }, done: 'Hidden. It won’t come back.', undo: { id: s.storyId, action: 'undo' },
-  }];
-  for (const o of s.mutable ?? []) {
-    ways.push({
-      label: `Mute ${o.name}`, heading: 'Mute an outlet', tool: 'news.mute_outlet',
-      args: { outlet: o.id, muted: true }, done: `Muted ${o.name}. Its stories are hidden.`, undo: { outlet: o.id, muted: false },
-    });
-  }
-  if (s.topicId) {
-    const t = s.topicName ?? s.topicId;
-    ways.push({
-      label: `Quiet ${t} for a week`, hint: weekHint(now), tool: 'news.set_topic',
-      args: { topic: s.topicId, mutedForHours: 168 }, done: `${t} is quiet for a week.`, undo: { topic: s.topicId, mutedForHours: 0 },
-    });
-    ways.push({
-      label: `Mute ${t}`, hint: 'Undo it in Sources', tool: 'news.set_topic',
-      args: { topic: s.topicId, muted: true }, done: `Muted ${t}. Anchor leaves it out too.`, undo: { topic: s.topicId, muted: false },
-    });
-  }
-  return ways;
-}
-
-/** The menu's items: Not interested · Mute an outlet · Quiet and Mute, hairlines between the groups. */
-function menuItems(ways: EdWay[], onPick: (way: EdWay) => void): Array<{ label: string; hint?: string; onSelect: () => void } | { heading: string } | 'separator'> {
-  const items: Array<{ label: string; hint?: string; onSelect: () => void } | { heading: string } | 'separator'> = [];
-  let group: string | undefined | null = null;
-  ways.forEach((way, i) => {
-    const g = way.heading ?? (way.tool === 'news.set_topic' ? 'topic' : way.tool);
+/** The menu's items, hairlines between the groups (an item without a group is grouped with its tool's). */
+function menuItems(actions: EdAction[], onPick: (action: EdAction) => void): MenuItem[] {
+  const items: MenuItem[] = [];
+  let group: string | null = null;
+  actions.forEach((action, i) => {
+    const g = action.group ?? action.tool;
     if (i > 0 && g !== group) items.push('separator');
-    if (way.heading && g !== group) items.push({ heading: way.heading });
+    if (action.group && g !== group) items.push({ heading: action.group });
     group = g;
-    items.push({ label: way.label, ...(way.hint ? { hint: way.hint } : {}), onSelect: () => onPick(way) });
+    items.push({ label: action.label, ...(action.hint ? { hint: action.hint } : {}), onSelect: () => onPick(action) });
   });
   return items;
 }
 
 /** What a picked way left in the story's place. */
-interface Gone { text: string; undo?: { tool: string; args: Record<string, unknown> } }
+interface Gone { text: string; undo?: NonNullable<EdAction['undo']> }
 
 function EdStory({ s }: { s: EditionStory }): JSX.Element {
   const [gone, setGone] = useState<Gone | null>(null);
   const first = s.logos[0] ?? { name: s.outlet || s.title };
   const outlet = s.outlet || first.name;
-  const ways = edWays(s);
+  const [asking, setAsking] = useState<EdAction | null>(null);
+  const actions = s.actions ?? [];
 
-  const pick = async (way: EdWay): Promise<void> => {
+  const run = async (action: EdAction): Promise<void> => {
     try {
-      const answer = await api.pageAct(NEWS, { tool: way.tool, args: way.args });
-      setGone(answer.approvalId ? { text: 'Waiting for your approval.' } : { text: way.done, undo: { tool: way.tool, args: way.undo } });
+      const answer = await api.pageAct(NEWS, { tool: action.tool, args: action.args });
+      setGone(answer.approvalId ? { text: 'Waiting for your approval.' } : { text: action.done, ...(action.undo ? { undo: action.undo } : {}) });
     } catch (error) {
       setGone({ text: error instanceof Error && error.message ? `That did not work: ${error.message}` : 'That did not work.' });
     }
@@ -217,7 +222,7 @@ function EdStory({ s }: { s: EditionStory }): JSX.Element {
         {gone.undo ? (
           <>
             <span className="pl-story-gone-sep" aria-hidden="true">·</span>
-            <Button size="sm" variant="ghost" onClick={() => void undo(gone.undo!)}>Undo</Button>
+            <Button size="sm" variant="ghost" onClick={() => void undo(gone.undo!)}>{gone.undo.label}</Button>
           </>
         ) : null}
       </li>
@@ -227,10 +232,22 @@ function EdStory({ s }: { s: EditionStory }): JSX.Element {
   const words = [s.topicName, outlet ? (s.more > 0 ? `${outlet} and ${s.more} more` : outlet) : ''].filter(Boolean).join(' · ');
   return (
     <li className="ed-story">
-      {ways.length > 0 ? (
+      {actions.length > 0 ? (
         <span className="ed-more-btn">
-          <ActionMenu label={`Ways out for ${s.title}`} items={menuItems(ways, (way) => void pick(way))} sheet={{ title: s.title, sub: words }} stacked />
+          <ActionMenu label={`Ways out for ${s.title}`} items={menuItems(actions, (action) => (action.confirm ? setAsking(action) : void run(action)))} sheet={{ title: s.title, sub: words }} stacked />
         </span>
+      ) : null}
+      {asking ? (
+        <Modal
+          title={asking.confirm ?? asking.label}
+          onClose={() => setAsking(null)}
+          foot={
+            <>
+              <Button variant="ghost" onClick={() => setAsking(null)}>Cancel</Button>
+              <Button variant="accent" onClick={() => { const chosen = asking; setAsking(null); void run(chosen); }}>{asking.label}</Button>
+            </>
+          }
+        />
       ) : null}
       <AssetImage src={first.logo ? assetSrc(NEWS, first.logo) : null} label={first.name} className="pl-logo-md" />
       <span className="ed-story-text">
