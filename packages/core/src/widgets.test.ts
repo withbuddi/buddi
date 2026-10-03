@@ -34,6 +34,18 @@ describe('parseWidgets', () => {
     expect(() => parse([widget])).toThrow(message);
   });
 
+  it('keeps a preview checked like a body, for every size or per size, and refuses one that cannot be drawn', () => {
+    const [w] = parse([{ id: 'demo.now', title: 'Now', sizes: ['small', 'medium'], preview: { kind: 'stat', value: '18°C', caption: 'Clear · Paris', icon: 'rocket' }, produce }]);
+    const stat = { kind: 'stat', value: '18°C', caption: 'Clear · Paris' };
+    expect(w!.preview).toEqual({ small: stat, medium: stat });
+    const [each] = parse([{ id: 'demo.each', title: 'Each', sizes: ['small', 'medium'], preview: { medium: { kind: 'list', rows: [{ title: 'A', image: { asset: 'logo' } }] } }, produce }]);
+    expect(each!.preview).toEqual({ medium: { kind: 'list', rows: [{ title: 'A' }] } });
+    expect(parse([{ id: 'demo.none', title: 'None', sizes: ['small'], produce }])[0]).not.toHaveProperty('preview');
+    expect(() => parse([{ id: 'demo.bad', title: 'Bad', sizes: ['small'], preview: { kind: 'chart' }, produce }])).toThrow(/widget demo\.bad: its small preview cannot be drawn/);
+    expect(() => parse([{ id: 'demo.big', title: 'Big', sizes: ['small'], preview: { medium: { kind: 'text', text: 'x' } }, produce }])).toThrow(/names the size "medium", which it does not offer/);
+    expect(() => parse([{ id: 'demo.empty', title: 'Empty', sizes: ['small'], preview: {}, produce }])).toThrow(/names no size/);
+  });
+
   it('refuses the same id twice, in one plugin or across plugins', () => {
     const w = { id: 'demo.now', title: 'T', sizes: ['small'], produce };
     expect(() => parse([w, w])).toThrow(/declared twice/);

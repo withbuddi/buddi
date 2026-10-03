@@ -144,7 +144,8 @@ needs me, what is my team up to, what is coming.
   use the arrow keys, or the ‹ › buttons (up and down on a phone); pick Small or
   Medium; the gear opens its settings; × takes one off; "Add widgets" lists
   every widget — one already on Home that has settings offers "Add another" and
-  opens its settings at once. Done saves, Cancel puts it all back. A
+  opens its settings at once — and ends with **Get more widgets**, Browse's
+  Widgets shelf. Done saves, Cancel puts it all back. A
   widget whose last refresh failed keeps its last panel and says how old it is
   ("2 h old"); one that never answered says "Couldn't load this." with Try
   again; a sensitive one (a budget) is hidden on screen until Show. With
@@ -546,14 +547,19 @@ A list of sections in four groups.
   buddi**, folded, names the plugins compiled in and how many tools each adds.
   **Browse** is the plugin list from withbuddi.com, fetched through buddi only
   when you open the tab and kept an hour (Refresh asks again). On top, **All ·
-  Plugins · Agents**: All shows the plugins and then three teammates from the
-  catalogue with **See all**; Agents shows every catalogue card with **Open
+  Plugins · Widgets · Agents**: All shows the plugins and then three teammates from the
+  catalogue with **See all**; Widgets (`&kind=widgets`) shows every widget a
+  listed plugin brings, at the size it starts at on Home and drawn as Home
+  draws it from the plugin's sample data (marked Sample; a plugin that gave
+  none shows a quiet frame instead), its plugin and Install under it — a
+  plugin that is only a widget is listed like any other; Agents shows every catalogue card with **Open
   the catalogue** (`#/settings/plugins?tab=browse&kind=agents`), each card
   opening its page there. For plugins: a search field, filter chips (All,
   **Recommended** — the plugins buddi publishes that you do not have — and each
   category: Your days, Money, Voice, Work, Home, Other), and one grid of cards
-  with who made it, how it is trusted and what you have installed. A card opens
-  a sheet with its screenshot, the package, its tools (how many run without
+  with who made it (and how many widgets it brings), how it is trusted and what you have installed. A card opens
+  a sheet with its screenshot, its **Widgets** (each at every size it offers,
+  from the sample), the package, its tools (how many run without
   asking and how many ask you first), the hosts it talks to, what it reaches in
   buddi, its dependencies, and its licence and price. The icons and screenshots
   come through buddi, which keeps them beside the list; the page never fetches
@@ -617,7 +623,8 @@ what it reads as now, such as "Profile (12-hour)"; 12-hour; 24-hour — nothing 
 kept until you pick one), Date (Profile, three spellings, or none), A second clock (one of your
 places in another zone, or any town) — and its widgets: up to four, each with
 its size, its own settings, its order and ×; "Add a widget" offers Home's (a
-copy with the same settings) or any widget. Every change is kept at once. It
+copy with the same settings) or any widget, and Get more widgets opens Browse's
+Widgets shelf. Every change is kept at once. It
 works before a PIN is set too, and is reachable only from Settings, never from
 the lock screen itself. All of it is kept by the installation, so every device
 signed in gets the same.

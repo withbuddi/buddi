@@ -2139,6 +2139,17 @@ export type MarketCategory = 'days' | 'money' | 'home' | 'voice' | 'work' | 'oth
  * on: the entry as the site wrote it, plus what this installation knows about
  * it (`installed`, `update`, `usesWords`).
  */
+/** A listed widget: Browse's Widgets shelf and the previews on a listing. */
+export interface MarketWidgetView {
+  id: string;
+  title: string;
+  sizes: WidgetSize[];
+  sensitive?: true;
+  /** How many settings each placement has. */
+  settings: number;
+  preview?: Partial<Record<WidgetSize, WidgetBody>>;
+}
+
 export interface MarketEntryView {
   name: string;
   npm: string;
@@ -2169,6 +2180,8 @@ export interface MarketEntryView {
   };
   /** The areas it reaches in buddi, in the staged card's words. */
   usesWords?: Array<{ use: string; words: string }>;
+  /** The widgets it brings, checked by the gateway; `preview` is the plugin's sample per size. */
+  widgets?: MarketWidgetView[];
   /** Set when it is installed here: the installed version and the name it is installed under. */
   installed?: { version: string; name?: string };
   /** The listed version, when it is newer than the installed one. */

@@ -226,6 +226,8 @@ describe('edit mode', { timeout: 180_000 }, () => {
     ]);
     // Nothing navigates while editing.
     expect(within(frame('Weather at home')).queryByRole('link')).toBeNull();
+    // More come with plugins: the gallery ends with Browse's Widgets shelf.
+    expect(within(gallery).getByRole('link', { name: /Get more widgets/ })).toHaveAttribute('href', '#/settings/plugins?tab=browse&kind=widgets');
     fireEvent.click(screen.getByRole('button', { name: 'Take Spent this month off Home' }));
     fireEvent.click(within(frame('Today')).getByRole('radio', { name: 'Small' }));
     fireEvent.click(screen.getByRole('button', { name: 'Move Today earlier' }));

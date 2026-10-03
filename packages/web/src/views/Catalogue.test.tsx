@@ -587,6 +587,69 @@ describe("Browse's kind filter", () => {
   });
 });
 
+describe("Browse's Widgets shelf", () => {
+  const listing = (name: string, over: Record<string, unknown> = {}) => ({
+    name,
+    npm: `@withbuddi/plugin-${name}`,
+    version: '1.0.0',
+    title: name.charAt(0).toUpperCase() + name.slice(1),
+    summary: `${name} things.`,
+    category: 'days' as const,
+    trust: 'by-buddi' as const,
+    pricing: { kind: 'free' as const },
+    author: { name: 'withbuddi' },
+    claims: { manifest: { tools: [{ name: `${name}.x`, tier: 'auto' }] } },
+    ...over,
+  });
+  const MARKET = {
+    plugins: [
+      listing('weather', {
+        widgets: [{
+          id: 'weather.now', title: 'Weather', sizes: ['small', 'medium'], settings: 3,
+          preview: {
+            small: { kind: 'stat', value: '18°C', caption: 'Sunny · Lyon' },
+            medium: { kind: 'strip', value: '18°C', items: [{ label: '15:00', value: '21°' }] },
+          },
+        }],
+      }),
+      listing('tides', { claims: { manifest: { tools: [] } }, author: { name: 'Kofi Mensah' }, trust: 'reviewed', widgets: [{ id: 'tides.next', title: 'Tides', sizes: ['medium'], settings: 0 }] }),
+      listing('finance'),
+    ],
+  };
+
+  it('lists every widget at the size it starts at, with its sample and the plugin under it', async () => {
+    vi.mocked(api.market).mockResolvedValue(MARKET as never);
+    render(<Plugins hash="#/settings/plugins?tab=browse&kind=widgets" navigate={vi.fn()} />);
+    const shelf = await screen.findByTestId('browse-widgets');
+    expect(screen.getByRole('radio', { name: 'Widgets' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(shelf).getByRole('img', { name: 'Weather, small: a preview with sample data' })).toHaveTextContent('18°C');
+    expect(within(shelf).getByRole('img', { name: 'Tides, medium: no preview' })).toHaveTextContent('No preview from this plugin.');
+    expect(shelf).toHaveTextContent('Weather plugin · by withbuddi · small or medium');
+    expect(shelf).toHaveTextContent('A widget · by Kofi Mensah · medium only');
+    expect(within(shelf).queryByText('Finance')).not.toBeInTheDocument();
+    expect(within(shelf).getByRole('button', { name: 'Install Tides' })).toBeInTheDocument();
+    expect(screen.queryByTestId('browse-agents')).not.toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: 'Search widgets' })).toBeInTheDocument();
+  });
+
+  it('a widget opens its listing, whose Widgets section draws it at every size it offers', async () => {
+    vi.mocked(api.market).mockResolvedValue(MARKET as never);
+    render(<Plugins hash="#/settings/plugins?tab=browse&kind=widgets" navigate={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Weather, from Weather: details' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText('Widgets')).toBeInTheDocument();
+    expect(within(sheet).getByText('small or medium · settings per placement')).toBeInTheDocument();
+    expect(within(sheet).getByRole('img', { name: 'Weather, small: a preview with sample data' })).toBeInTheDocument();
+    expect(within(sheet).getByRole('img', { name: 'Weather, medium: a preview with sample data' })).toHaveTextContent('15:00');
+  });
+
+  it("a plugin's card counts its widgets", async () => {
+    vi.mocked(api.market).mockResolvedValue(MARKET as never);
+    render(<Plugins hash="#/settings/plugins?tab=browse&kind=plugins" navigate={vi.fn()} />);
+    expect(await screen.findByText(/by withbuddi · 1 widget/)).toBeInTheDocument();
+  });
+});
+
 describe('the words', () => {
   it('card states from the list', () => {
     expect(VIEW.agents.map(cardState)).toEqual(['ready', 'added', 'ready', 'update', 'edited', 'ready', 'ready', 'ready']);

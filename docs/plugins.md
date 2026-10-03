@@ -1351,6 +1351,10 @@ export const todayWidget: WidgetDefinition = {
       options: [{ value: '1', label: 'Today' }, { value: '2', label: 'Two days' }, { value: '7', label: 'A week' }] },
     { key: 'time', kind: 'timeFormat', label: 'Times' },
   ],
+  preview: {                     // sample data for the market's previews (optional; one body, or one per size)
+    medium: { kind: 'list', rows: [{ title: 'Dinner with Ana', sub: 'Le Kitchen', side: '20:00' }, { title: 'Standup', sub: 'Tomorrow · Zoom', side: '09:30' }], more: '2 more by tomorrow night' },
+    small: { kind: 'list', rows: [{ title: 'Dinner with Ana', side: '20:00' }, { title: 'Standup', side: '09:30' }] },
+  },
   async produce(ctx, { size, settings }) {
     // Read-only: ctx.buddi.db is the read-only pool a page query runs in.
     // settings: this placement's, resolved — { calendars: string[], days: '2', time: '12h' | '24h' | null }.
@@ -1371,6 +1375,19 @@ The six bodies, every value already formatted in your units:
 | `progress` | `value`, `ratio` (0–1), `caption?`, `foot?`, `tone?` | a figure and a bar |
 | `text` | `text` (≤ 160), `icon?`, `sub?` | a glyph and a sentence: for "add a place first" as much as for news |
 | `clocks` | `home` (the owner's IANA zone), `clocks: { label, zone, latitude?, longitude? }[]` (1–4, labels ≤ 24; coordinates since 1.24, both or neither), `time?: '12h' \| '24h'` | analog faces side by side, four on medium and two on small, that the page ticks itself from each zone — no new answer every minute; a light face from sunrise to sunset at the face's coordinates (6:00–18:00 in its zone for a face without them) and a dark one at night; under each the label, Today / Tomorrow / Yesterday against `home` and the offset ("+6 h", "−1 h 30"); a first face in `home` reads "Here". Zones must be IANA names. Host API 1.21 |
+
+**Preview** (optional). `preview` is the widget as withbuddi.com and
+Browse show it before anyone installs your plugin: one body drawn at every
+size the widget offers, or `{ small, medium }` for a body per size (a key must
+be a size it offers). Write it with made-up data that reads like a real day,
+never the owner's. It is checked like a body when buddi loads the plugin
+(one that cannot be drawn is a load error naming the widget; a row's `image`
+is left off), `buddi plugins describe` reports it with the widget's id,
+title, sizes and settings, and the market's check copies that into the
+listing, so the page draws exactly what you declared. The running host never
+reads it, so any buddi accepts a manifest that has one. Without it, the
+listing shows the widget as a quiet frame with your icon. A plugin that is
+only a widget is welcome in the market.
 
 Glyphs are the tile icons (`views.ts`); one outside the set is left off.
 Values are cut at 12 characters and lines at 40, with an ellipsis; a body

@@ -35,6 +35,7 @@ import { useMinute } from '../shell/useMinute';
 import { ActionMenu, Button, ErrorBanner, Field, Icon, Section, Segment, useAsync } from '../ui';
 import { newPlacementKey } from './parts/HomeWidgets';
 import { WidgetSettingsSheet } from './parts/WidgetSettings';
+import { pluginsBrowseRoute } from '../routes';
 
 const LOCK_MAX = 4;
 const DEFAULT_CLOCK: LockClock = { time: 'profile', date: 'profile', zone: null };
@@ -296,6 +297,8 @@ export function LockFaceEditor({ clock: saved, onClock, version }: {
                     fromHome.length > 0 ? 'separator' as const : null,
                     { heading: 'Every widget' },
                     ...every.map((w) => ({ label: w.title, onSelect: () => add(w.id, {}) })),
+                    'separator' as const,
+                    { label: 'Get more widgets', hint: 'Browse', onSelect: () => { window.location.hash = pluginsBrowseRoute('widgets'); } },
                   ]}
                 />
               )}

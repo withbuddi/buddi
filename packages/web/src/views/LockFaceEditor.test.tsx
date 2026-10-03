@@ -107,7 +107,7 @@ describe('the lock screen editor', { timeout: 180_000 }, () => {
     expect(screen.getByText(/A sensitive widget — Spent this month — never shows here\./)).toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: /Add a widget/ }), { key: 'Enter' });
     const items = screen.getAllByRole('menuitem').map((i) => i.textContent);
-    expect(items).toEqual(['Weather · Worksame settings', 'Weather', 'Waiting on you', 'World clock']);
+    expect(items).toEqual(['Weather · Worksame settings', 'Weather', 'Waiting on you', 'World clock', 'Get more widgetsBrowse']);
     fireEvent.click(screen.getByRole('menuitem', { name: /Weather · Work/ }));
     await waitFor(() => expect(api.saveWidgets).toHaveBeenLastCalledWith('lock', [
       p('l1', 'email.waiting'),

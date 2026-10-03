@@ -34,6 +34,7 @@ import {
   createPool,
   describeSource,
   migrate,
+  parseWidgets,
   readPluginsFile,
   renderContribution,
   renderUses,
@@ -873,9 +874,30 @@ export function describeJson(staged: StagedPlugin, manifest: PluginManifest): Re
       pages: (manifest.pages ?? []).map((p) => ({ id: p.id, title: p.title, place: p.place })),
       views: contribution.views,
       home: (manifest.home ?? []).length,
+      widgets: widgetClaims(manifest),
     },
     drift: driftBetween(staged.claims, manifest),
   };
+}
+
+/**
+ * The widgets a listing claims: each one checked the way register checks it
+ * (a declaration that would not load throws here too), as the market shows
+ * them — id, title, sizes, whether it is sensitive, what each placement can
+ * set (keys, kinds and labels; options read from the owner's data are not
+ * listed), and the sample body the plugin declares as `preview`, if any.
+ */
+export function widgetClaims(manifest: PluginManifest): Array<Record<string, unknown>> {
+  if (manifest.widgets === undefined) return [];
+  const pages = (manifest.pages ?? []).map((p) => p.id);
+  return parseWidgets(manifest.name, manifest.widgets, { pages, taken: () => false }).map((w) => ({
+    id: w.id,
+    title: w.title,
+    sizes: w.sizes,
+    ...(w.sensitive ? { sensitive: true } : {}),
+    settings: (w.settings ?? []).map((f) => ({ key: f.key, kind: f.kind, label: f.label })),
+    ...(w.preview ? { preview: w.preview } : {}),
+  }));
 }
 
 function packageJsonOf(staged: StagedPlugin): Record<string, unknown> {

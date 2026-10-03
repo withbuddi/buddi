@@ -36,6 +36,7 @@ import {
   type MarketCategory,
   type MarketEntryView,
   type MarketView,
+  type MarketWidgetView,
   type PluginAuthorView,
   type PluginDrift,
   type PluginJob,
@@ -48,6 +49,7 @@ import { fmtRelative } from '../format';
 import { AGENTS_ROUTE, catalogueRoute, parseBrowseKind, parsePluginsInstall, parsePluginsTab, pluginPageRoute, pluginSettingsRoute, settingsRoute, type BrowseKind } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
 import { announcePagesChanged } from '../pages/usePages';
+import { ListedWidgetFrame, widgetSizesInOrder, widgetSizesWords } from './parts/ListedWidget';
 import { pluginWords, restartWhile } from '../shell/restart';
 import {
   ActionMenu,
@@ -2019,7 +2021,7 @@ const CATEGORIES: Array<{ value: MarketCategory; label: string }> = [
 function matches(entry: MarketEntryView, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (q === '') return true;
-  return [entry.title, entry.summary, entry.npm].some((text) => text.toLowerCase().includes(q));
+  return [entry.title, entry.summary, entry.npm, ...(entry.widgets ?? []).map((w) => w.title)].some((text) => text.toLowerCase().includes(q));
 }
 
 /** What it costs, in words: "free", or "a subscription · 14 days to try · its maker's page". */
@@ -2062,7 +2064,10 @@ function MarketCard({
         <AppIcon svg={entry.iconSvg} size="lg" />
         <div className="plugins-card-name">
           <h3 className="ui-card-title">{entry.title}</h3>
-          <div className="plugins-card-by">by {entry.author?.name ?? 'someone who gave no name'}</div>
+          <div className="plugins-card-by">
+            by {entry.author?.name ?? 'someone who gave no name'}
+            {entry.widgets?.length ? ` · ${plural(entry.widgets.length, 'widget', 'widgets')}` : ''}
+          </div>
         </div>
       </div>
       <p className="plugins-summary">{entry.summary}</p>
@@ -2169,6 +2174,7 @@ function ListingSheet({
     >
       {shot ? <img className="plugins-shot" src={api.marketAssetUrl(shot)} alt={`${entry.title}, as it looks in buddi`} /> : null}
       <p className="plugins-summary-full">{entry.summary}</p>
+      <ListingWidgets entry={entry} />
       <div className="plugins-facts">
         <KV
           items={[
@@ -2209,6 +2215,98 @@ function ListingSheet({
   );
 }
 
+/** One widget's line: its sizes, whether each placement has settings, whether it hides on screen. */
+function widgetLine(widget: MarketWidgetView): string {
+  return [
+    widgetSizesWords(widget.sizes),
+    widget.settings > 0 ? 'settings per placement' : null,
+    widget.sensitive ? 'hidden until you show it, never on the lock screen' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** A listing's widgets in its sheet: each one at every size it offers, from the plugin's sample. */
+function ListingWidgets({ entry }: { entry: MarketEntryView }): JSX.Element | null {
+  const widgets = entry.widgets ?? [];
+  if (widgets.length === 0) return null;
+  return (
+    <Section title="Widgets" aside={<span className="plugins-note">Sample data, drawn as Home draws it</span>}>
+      <div className="plugins-widgets">
+        {widgets.map((widget) => (
+          <div key={widget.id} className="plugins-widget">
+            <div className="plugins-widget-head">
+              <span className="plugins-widget-title">{widget.title}</span>
+              <span className="plugins-widget-sub">{widgetLine(widget)}</span>
+            </div>
+            <div className="plugins-widget-frames">
+              {widgetSizesInOrder(widget.sizes).map((size) => (
+                <ListedWidgetFrame key={size} widget={widget} size={size} svg={entry.iconSvg} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+/** Whether a listing is only widgets: no tools, nothing on a timer, no agents. */
+function widgetOnly(entry: MarketEntryView): boolean {
+  const manifest = entry.claims?.manifest;
+  return (entry.widgets?.length ?? 0) > 0 && (manifest?.tools?.length ?? 0) === 0 && (manifest?.sentinels?.length ?? 0) === 0 && (manifest?.agents?.length ?? 0) === 0;
+}
+
+/**
+ * Browse's Widgets shelf: every listed widget at the size it starts at, on
+ * Home's grid and row height, the plugin it comes with under it. The frame
+ * opens the listing; Install stages the plugin, as on its card.
+ */
+function WidgetShelf({
+  entries,
+  busy,
+  onOpen,
+  onInstall,
+}: {
+  entries: MarketEntryView[];
+  busy: boolean;
+  onOpen: (entry: MarketEntryView) => void;
+  onInstall: (entry: MarketEntryView) => void;
+}): JSX.Element {
+  return (
+    <div className="plugins-wgrid" data-testid="browse-widgets">
+      {entries.flatMap((entry) =>
+        (entry.widgets ?? []).map((widget) => {
+          const size = widget.sizes[0] ?? 'small';
+          return (
+            <div key={`${entry.npm}:${widget.id}`} className="plugins-witem" data-size={size}>
+              <button type="button" className="plugins-witem-frame" aria-label={`${widget.title}, from ${entry.title}: details`} onClick={() => onOpen(entry)}>
+                <ListedWidgetFrame widget={widget} size={size} svg={entry.iconSvg} />
+              </button>
+              <div className="plugins-witem-foot">
+                <span className="plugins-witem-text">
+                  <span className="plugins-witem-title">{widget.title}</span>
+                  <span className="plugins-witem-sub">
+                    {widgetOnly(entry) ? 'A widget' : `${entry.title} plugin`} · by {entry.author?.name ?? 'someone who gave no name'} · {widgetSizesWords(widget.sizes)}
+                  </span>
+                </span>
+                {/* An update is the plugin's business: its card and its sheet offer it. */}
+                {entry.installed ? (
+                  <span className="plugins-witem-have">Installed</span>
+                ) : (
+                  <Button size="sm" variant="accent" disabled={busy} aria-label={`Install ${entry.title}`} onClick={() => onInstall(entry)}>
+                    Install
+                  </Button>
+                )}
+              </div>
+            </div>
+          );
+        }),
+      )}
+    </div>
+  );
+}
+
 function Browse({
   kind = 'all',
   onKind,
@@ -2221,7 +2319,7 @@ function Browse({
   onInstall,
   onUpdate,
 }: {
-  /** All, only plugins, or the catalogue's agents (`&kind=agents`). */
+  /** All, only plugins, the plugins' widgets (`&kind=widgets`), or the catalogue's agents (`&kind=agents`). */
   kind?: BrowseKind;
   onKind?: (kind: BrowseKind) => void;
   navigate?: ((route: string) => void) | undefined;
@@ -2242,6 +2340,7 @@ function Browse({
     ...CATEGORIES.filter((category) => listed.some((entry) => entry.category === category.value)),
   ];
   const shown = listed.filter((entry) => {
+    if (kind === 'widgets' && (entry.widgets?.length ?? 0) === 0) return false;
     if (shelf === 'recommended' && (entry.trust !== 'by-buddi' || entry.installed)) return false;
     if (shelf !== 'all' && shelf !== 'recommended' && entry.category !== shelf) return false;
     return matches(entry, query);
@@ -2252,7 +2351,7 @@ function Browse({
       <Segment<BrowseKind> label="Show" options={BROWSE_KINDS} value={kind} onChange={(next) => onKind?.(next)} />
     </div>
   );
-  const teammates = kind === 'plugins' ? null : <BrowseAgents kind={kind} navigate={navigate} />;
+  const teammates = kind === 'plugins' || kind === 'widgets' ? null : <BrowseAgents kind={kind} navigate={navigate} />;
   if (kind === 'agents') {
     return (
       <Stack gap="lg">
@@ -2271,9 +2370,9 @@ function Browse({
       <Toolbar>
         <SearchField
           grow
-          label="Search plugins"
+          label={kind === 'widgets' ? 'Search widgets' : 'Search plugins'}
           value={query}
-          placeholder="Search plugins: weather, money, calendar…"
+          placeholder={kind === 'widgets' ? 'Search widgets: weather, calendar, news…' : 'Search plugins: weather, money, calendar…'}
           onChange={setQuery}
         />
         <FilterChips<Shelf> label="Show" options={shelves} value={shelf} onChange={setShelf} />
@@ -2313,7 +2412,9 @@ function Browse({
               {market.fetchedAt ? ` ${fmtRelative(market.fetchedAt)}` : ' last time'}.
             </Notice>
           ) : null}
-          {shown.length > 0 ? (
+          {shown.length > 0 && kind === 'widgets' ? (
+            <WidgetShelf entries={shown} busy={busy} onOpen={onOpen} onInstall={onInstall} />
+          ) : shown.length > 0 ? (
             <div className="plugins-grid">
               {shown.map((entry) => (
                 <MarketCard
@@ -2329,8 +2430,10 @@ function Browse({
           ) : (
             <Empty warm title="Nothing listed matches">
               {q !== ''
-                ? `No plugin on withbuddi.com mentions “${q}”.`
-                : listed.length === 0
+                ? `No ${kind === 'widgets' ? 'widget' : 'plugin'} on withbuddi.com mentions “${q}”.`
+                : kind === 'widgets' && !listed.some((entry) => (entry.widgets?.length ?? 0) > 0)
+                  ? 'No plugin on withbuddi.com brings a widget yet.'
+                  : listed.length === 0
                   ? 'withbuddi.com lists no plugins yet.'
                   : 'Nothing on this shelf yet.'}
             </Empty>
@@ -2345,6 +2448,7 @@ function Browse({
 const BROWSE_KINDS: ReadonlyArray<{ value: BrowseKind; label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'plugins', label: 'Plugins' },
+  { value: 'widgets', label: 'Widgets' },
   { value: 'agents', label: 'Agents' },
 ];
 

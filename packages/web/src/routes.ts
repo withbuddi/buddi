@@ -331,8 +331,8 @@ export function pluginInstallRoute(spec: string): string {
 /** Settings → Plugins on its Browse tab. */
 export const PLUGINS_BROWSE_ROUTE = `${settingsRoute('plugins')}?tab=browse`;
 
-/** Browse's kind filter: All, Plugins, or the catalogue's Agents (`&kind=agents`). */
-export type BrowseKind = 'all' | 'plugins' | 'agents';
+/** Browse's kind filter: All, Plugins, Widgets (`&kind=widgets`), or the catalogue's Agents (`&kind=agents`). */
+export type BrowseKind = 'all' | 'plugins' | 'widgets' | 'agents';
 export function pluginsBrowseRoute(kind: BrowseKind = 'all'): string {
   return kind === 'all' ? PLUGINS_BROWSE_ROUTE : `${PLUGINS_BROWSE_ROUTE}&kind=${kind}`;
 }
@@ -381,7 +381,7 @@ export function parsePluginsInstall(hash: string): string | null {
 /** Which kind Browse opens on: `&kind=plugins|agents`, else All. */
 export function parseBrowseKind(hash: string): BrowseKind {
   const kind = pluginsQuery(hash)?.get('kind');
-  return kind === 'plugins' || kind === 'agents' ? kind : 'all';
+  return kind === 'plugins' || kind === 'widgets' || kind === 'agents' ? kind : 'all';
 }
 
 /** Which tab of Settings → Plugins a hash opens: `?tab=browse`, else Installed. */

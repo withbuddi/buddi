@@ -22,6 +22,17 @@ const weather = {
   page: 'https://withbuddi.com/plugins/weather',
   claims: { package: { uses: ['http', 'owner:notify', 'not-an-area'] }, manifest: { network: [{ host: 'api.open-meteo.com' }] } },
 };
+const weatherWidgets = [
+  {
+    id: 'weather.now',
+    title: 'Weather',
+    sizes: ['medium', 'small', 'large'],
+    settings: [{ key: 'place', kind: 'select', label: 'Place' }],
+    preview: { medium: { kind: 'list', rows: [{ title: 'Paris', side: '18°', image: { src: 'https://tracker.example/x.png' } }], script: 'alert(1)' }, large: { kind: 'text', text: 'no' } },
+  },
+  { id: 'weather.bad', title: 'Bad', sizes: ['small'], preview: { small: { kind: 'html', html: '<b>x</b>' } } },
+  { id: 'weather.nosize', title: 'No size', sizes: ['huge'] },
+];
 const finance = { ...weather, name: 'finance', npm: '@withbuddi/plugin-finance', version: '1.0.0', title: 'Finance', category: 'money' };
 
 let root: string;
@@ -140,6 +151,16 @@ describe('GET /api/market', () => {
     answer = () => ({ status: 200, body: { plugins: [weather, { name: 'half' }] } });
     const some = (await route('?refresh=1')).body as { plugins: Array<{ name: string }> };
     expect(some.plugins.map((p) => p.name)).toEqual(['weather']);
+  });
+
+  it('passes each listing\'s widgets on checked: two sizes, a preview the page can draw, no outside picture', async () => {
+    answer = () => ({ status: 200, body: { plugins: [{ ...weather, widgets: weatherWidgets }, { ...finance, claims: { manifest: { widgets: [{ id: 'finance.spent', title: 'Spent', sizes: ['medium'], sensitive: true }] } } }] } });
+    const body = (await route()).body as { plugins: Array<Record<string, unknown>> };
+    expect(body.plugins[0]?.widgets).toEqual([
+      { id: 'weather.now', title: 'Weather', sizes: ['small', 'medium'], settings: 1, preview: { medium: { kind: 'list', rows: [{ title: 'Paris', side: '18°' }] } } },
+      { id: 'weather.bad', title: 'Bad', sizes: ['small'], settings: 0 },
+    ]);
+    expect(body.plugins[1]?.widgets).toEqual([{ id: 'finance.spent', title: 'Spent', sizes: ['medium'], sensitive: true, settings: 0 }]);
   });
 
   it('marks what is installed, and what has a newer listed version', async () => {

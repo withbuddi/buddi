@@ -23,7 +23,7 @@ import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'rea
 import { api, type WidgetInfo, type WidgetPlacement, type WidgetSize, type WidgetsAnswer, type WidgetView } from '../../api';
 import { fmtRelative, fmtShortRelative } from '../../format';
 import { pluginPageHref } from '../../pages/pageLinks';
-import { settingsRoute } from '../../routes';
+import { pluginsBrowseRoute, settingsRoute } from '../../routes';
 import { ActionMenu, Button, Icon, Notice, useAsync } from '../../ui';
 import { GLANCE_UNDO_MS } from './HomeGlances';
 import { WidgetBodyView } from './WidgetBody';
@@ -592,6 +592,12 @@ export function HomeWidgets({
               );
             })}
           </ul>
+          {/* More widgets come with plugins: Browse, on its Widgets shelf. */}
+          <a className="wg-gallery-more" href={pluginsBrowseRoute('widgets')} onClick={(event) => { event.preventDefault(); navigate(pluginsBrowseRoute('widgets')); }}>
+            <Icon name="plug" size={14} />
+            <span>Get more widgets</span>
+            <span className="wg-gallery-more-sub">from plugins on withbuddi.com</span>
+          </a>
         </div>
       ) : null}
       {open && openInfo ? (

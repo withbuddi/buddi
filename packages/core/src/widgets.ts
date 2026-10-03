@@ -204,12 +204,26 @@ export interface WidgetDefinition {
    * placement keeps its own; `produce` reads them resolved in `settings`.
    */
   settings?: WidgetSettingField[];
+  /**
+   * Sample data for the market (withbuddi.com and Browse): what the widget
+   * looks like before it is installed, drawn in a frame at each size it
+   * offers on the plugin's listing. One body for every size, or one per size
+   * (`{ small, medium }`) when a medium says more. Static, checked like a body
+   * at register (a row's `image` is left off), read by `buddi plugins
+   * describe` and never by the running host, so any buddi accepts it.
+   */
+  preview?: WidgetBody | WidgetPreview;
   /** The body for now, or null when there is nothing to show. Read-only. */
   produce(ctx: ToolContext, request: WidgetRequest): Promise<WidgetBody | null>;
 }
 
+/** A sample body per size, for the market's previews. */
+export type WidgetPreview = Partial<Record<WidgetSize, WidgetBody>>;
+
 /** A widget, the plugin that contributed it, and its refresh made concrete. */
-export interface RegisteredWidget extends Omit<WidgetDefinition, 'produce'> {
+export interface RegisteredWidget extends Omit<WidgetDefinition, 'produce' | 'preview'> {
+  /** The sample, per size it offers, checked (`parseWidgets`). */
+  preview?: WidgetPreview;
   plugin: string;
   refreshSeconds: number;
   produce(ctx: CoreToolContext, request: WidgetRequest): Promise<WidgetBody | null>;
@@ -264,6 +278,7 @@ export function parseWidgets(
     }
     if (w.sensitive !== undefined && typeof w.sensitive !== 'boolean') fail(`widget ${id}: sensitive must be true or false`);
     const settings = parseWidgetSettings(plugin, id, w.settings);
+    const preview = w.preview === undefined ? undefined : previewOf(w.preview, sizes as WidgetSize[], (why) => fail(`widget ${id}: ${why}`));
     return {
       id,
       plugin,
@@ -273,9 +288,34 @@ export function parseWidgets(
       ...(link ? { link: { page: link.page as string } } : {}),
       ...(w.sensitive === true ? { sensitive: true } : {}),
       ...(settings ? { settings } : {}),
+      ...(preview ? { preview } : {}),
       produce: w.produce as WidgetDefinition['produce'],
     };
   });
+}
+
+/**
+ * A declared preview made concrete: one body for every size the widget
+ * offers, or one per size (keys among those sizes, at least one). Each is
+ * checked like a body; a row's picture is left off, there being no plugin
+ * assets on the market.
+ */
+function previewOf(raw: unknown, sizes: readonly WidgetSize[], fail: (why: string) => never): WidgetPreview {
+  if (!raw || typeof raw !== 'object') return fail('preview must be a body or { small, medium }');
+  const bySize: Array<[WidgetSize, unknown]> = 'kind' in raw
+    ? sizes.map((size) => [size, raw])
+    : Object.entries(raw).map(([size, body]) => {
+        if (!sizes.includes(size as WidgetSize)) fail(`preview names the size "${size}", which it does not offer`);
+        return [size as WidgetSize, body];
+      });
+  if (bySize.length === 0) fail('preview names no size');
+  const out: WidgetPreview = {};
+  for (const [size, body] of bySize) {
+    const checked = widgetBodyOf(body);
+    if (!checked.ok) fail(`its ${size} preview cannot be drawn: ${checked.reason}`);
+    else out[size] = checked.body;
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ *

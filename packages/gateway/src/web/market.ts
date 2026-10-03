@@ -31,7 +31,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { compareVersions, resolveDataDir, type InstalledPlugin } from '@buddi/core';
+import { compareVersions, cutLine, resolveDataDir, WIDGET_SIZES, WIDGET_TITLE_MAX, widgetBodyOf, type InstalledPlugin, type WidgetBody, type WidgetSize } from '@buddi/core';
 import { installedRecord, usesWords, type RouteReply } from './plugins.js';
 import { sanitizeIconSvg } from './svg.js';
 
@@ -179,6 +179,54 @@ function listedUses(entry: MarketEntry): unknown[] {
   return Array.isArray(uses) ? uses : [];
 }
 
+/** A listed widget as Browse draws it: the market's Widgets filter, and the previews on a card and a listing. */
+export interface MarketWidget {
+  id: string;
+  title: string;
+  sizes: WidgetSize[];
+  sensitive?: true;
+  settings: number;
+  /** The plugin's sample, per size. */
+  preview?: Partial<Record<WidgetSize, WidgetBody>>;
+}
+
+/**
+ * The widgets a listing declares (`widgets` in the index, else its claims),
+ * each checked the way a plugin's own answer is: the title cut, only the two
+ * sizes, the preview passed through `widgetBodyOf` with no plugin to bind a
+ * picture to, so a row's image is left off and nothing the page cannot draw
+ * reaches it; a size it does not offer is not kept. One without an id, a
+ * title or a size is left out.
+ */
+export function listedWidgets(entry: MarketEntry): MarketWidget[] {
+  const e = entry as { widgets?: unknown; claims?: { manifest?: { widgets?: unknown } } };
+  const raw = Array.isArray(e.widgets) ? e.widgets : Array.isArray(e.claims?.manifest?.widgets) ? e.claims.manifest.widgets : [];
+  const out: MarketWidget[] = [];
+  for (const item of raw.slice(0, 12)) {
+    if (!item || typeof item !== 'object') continue;
+    const w = item as Record<string, unknown>;
+    const title = cutLine(w.title, WIDGET_TITLE_MAX);
+    const sizes = Array.isArray(w.sizes) ? WIDGET_SIZES.filter((size) => (w.sizes as unknown[]).includes(size)) : [];
+    if (typeof w.id !== 'string' || w.id === '' || !title || sizes.length === 0) continue;
+    const preview: Partial<Record<WidgetSize, WidgetBody>> = {};
+    if (w.preview && typeof w.preview === 'object') {
+      for (const size of sizes) {
+        const checked = widgetBodyOf((w.preview as Record<string, unknown>)[size]);
+        if (checked.ok) preview[size] = checked.body;
+      }
+    }
+    out.push({
+      id: w.id,
+      title,
+      sizes,
+      ...(w.sensitive === true ? { sensitive: true as const } : {}),
+      settings: Array.isArray(w.settings) ? w.settings.length : 0,
+      ...(Object.keys(preview).length > 0 ? { preview } : {}),
+    });
+  }
+  return out;
+}
+
 export function annotateMarket(
   plugins: readonly MarketEntry[],
   record: readonly InstalledPlugin[],
@@ -189,6 +237,7 @@ export function annotateMarket(
     return {
       ...entry,
       usesWords: usesWords(listedUses(entry)),
+      widgets: listedWidgets(entry),
       ...(here === undefined ? {} : { installed: { version: here.version, name: here.name } }),
       ...(newer ? { update: entry.version } : {}),
     };

@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { REPO_ROOT } from './agents/catalog.js';
 import { listStaged, TRUST_SENTENCE } from './plugins/stage.js';
-import { describeSpec, needsIntegrityFirst, parsePluginsArgs, USAGE } from './plugins-cli.js';
+import { describeSpec, needsIntegrityFirst, parsePluginsArgs, USAGE, widgetClaims } from './plugins-cli.js';
+import type { PluginManifest } from '@buddi/core';
 import type { StagedPlugin } from './plugins/stage.js';
 
 describe('buddi plugins', () => {
@@ -205,6 +206,7 @@ describe('buddi plugins describe', () => {
       pages: [],
       views: 0,
       home: 0,
+      widgets: [],
     });
     expect(out.drift).toEqual([]);
     expect(existsSync(path.join(root, 'plugins.json'))).toBe(false);
@@ -220,5 +222,51 @@ describe('buddi plugins describe', () => {
     expect(text).toContain('fixture-marker.echo');
     expect(text).toContain('Nothing\nwas installed');
     expect(listStaged(env)).toEqual([]);
+  });
+});
+
+/** What a listing shows of a plugin's widgets: the market's Widgets filter and previews read this. */
+describe('widgetClaims', () => {
+  const produce = async () => null;
+  const manifest = (widgets: unknown): PluginManifest =>
+    ({ name: 'weather', version: '1.0.0', schema: 'weather', pages: [{ id: 'weather' }], widgets }) as unknown as PluginManifest;
+
+  it('lists each widget with its sizes, its settings and its preview, checked like a body', () => {
+    expect(
+      widgetClaims(
+        manifest([
+          {
+            id: 'weather.now',
+            title: 'Weather',
+            sizes: ['small', 'medium'],
+            link: { page: 'weather' },
+            settings: [
+              { key: 'place', kind: 'select', label: 'Place', inTitle: true, options: async () => [] },
+              { key: 'time', kind: 'timeFormat', label: 'Times' },
+            ],
+            preview: { kind: 'stat', icon: 'sun', value: '18°C', caption: 'Clear · Paris', extra: 'dropped' },
+            produce,
+          },
+          { id: 'weather.spent', title: 'Spent', sizes: ['medium'], sensitive: true, produce },
+        ]),
+      ),
+    ).toEqual([
+      {
+        id: 'weather.now',
+        title: 'Weather',
+        sizes: ['small', 'medium'],
+        settings: [
+          { key: 'place', kind: 'select', label: 'Place' },
+          { key: 'time', kind: 'timeFormat', label: 'Times' },
+        ],
+        preview: { small: { kind: 'stat', icon: 'sun', value: '18°C', caption: 'Clear · Paris' }, medium: { kind: 'stat', icon: 'sun', value: '18°C', caption: 'Clear · Paris' } },
+      },
+      { id: 'weather.spent', title: 'Spent', sizes: ['medium'], sensitive: true, settings: [] },
+    ]);
+  });
+
+  it('is empty without widgets, and refuses a declaration that would not load', () => {
+    expect(widgetClaims(manifest(undefined))).toEqual([]);
+    expect(() => widgetClaims(manifest([{ id: 'weather.now', title: 'W', sizes: ['small'], preview: { kind: 'chart' }, produce }]))).toThrow(/preview cannot be drawn/);
   });
 });
