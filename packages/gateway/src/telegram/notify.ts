@@ -13,7 +13,7 @@ import {
   type Offer,
   type Queryable,
 } from '@buddi/core';
-import { TelegramApi, type FetchLike } from './api.js';
+import { TelegramApi, type FetchLike, type InlineKeyboardMarkup } from './api.js';
 import { offersKeyboard, SURFACE } from './surface.js';
 
 /** No paired owner chat: there is nowhere to send, and no fallback is invented. */
@@ -41,6 +41,8 @@ export interface NotifyOptions {
    * this surface gets controls or words, and this function does what it says.
    */
   offers?: readonly Offer[];
+  /** A keyboard of the caller's own (Keep/Stop on "Still useful?"), used when there are no offers. */
+  replyMarkup?: InlineKeyboardMarkup;
   /** Reuse an open pool; otherwise one is created from DATABASE_URL and closed. */
   pool?: Queryable;
   token?: string;
@@ -87,9 +89,11 @@ export async function notifyOwner(text: string, opts: NotifyOptions = {}): Promi
     await api.sendMessage(
       chatId,
       rendered.text,
-      rendered.controls.length === 0
-        ? {}
-        : { replyMarkup: offersKeyboard(rendered.controls) },
+      rendered.controls.length > 0
+        ? { replyMarkup: offersKeyboard(rendered.controls) }
+        : opts.replyMarkup
+          ? { replyMarkup: opts.replyMarkup }
+          : {},
     );
     return chatId;
   } finally {

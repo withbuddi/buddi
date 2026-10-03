@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import type { Queryable } from '../owner.js';
 import { parseCron } from './cron.js';
 import { coalesceOptions, type CoalesceOptions } from './enqueue.js';
 import {
@@ -396,6 +397,47 @@ export async function keepMission(pool: Pool, missionId: string): Promise<Missio
     [missionId],
   );
   return rows.length > 0 ? toMission(rows[0] as MissionRow) : null;
+}
+
+/** The notification key "Still useful?" carries: one open question per mission. */
+export function stillUsefulKey(missionId: string): string {
+  return `still-useful:${missionId}`;
+}
+
+/** The mission a "Still useful?" notification key is about, or undefined. */
+export function missionIdOfStillUsefulKey(key: string | null | undefined): string | undefined {
+  const raw = (key ?? '').trim();
+  if (!raw.startsWith('still-useful:')) return undefined;
+  const id = raw.slice('still-useful:'.length);
+  return id === '' ? undefined : id;
+}
+
+export type StillUsefulOutcome = 'kept' | 'stopped' | 'already-kept' | 'already-stopped' | 'gone';
+
+/**
+ * The owner's answer to "Still useful?" from a surface with buttons: Keep is
+ * `keepMission`, Stop switches the mission off. Idempotent: a second tap (or a
+ * tap after the dashboard answered) changes nothing and says what already
+ * happened.
+ */
+export async function answerStillUseful(
+  db: Queryable,
+  missionId: string,
+  choice: 'keep' | 'stop',
+): Promise<StillUsefulOutcome> {
+  // Every helper below only queries; a surface's `Queryable` is enough.
+  const pool = db as unknown as Pool;
+  const mission = await getMission(pool, missionId);
+  if (!mission) return 'gone';
+  if (choice === 'stop') {
+    if (!mission.enabled) return 'already-stopped';
+    await setMissionEnabled(pool, missionId, false);
+    return 'stopped';
+  }
+  if (!mission.enabled) return 'already-stopped';
+  if (mission.stillUsefulAskedAt === null || mission.stillUsefulAskedAt === undefined) return 'already-kept';
+  await keepMission(pool, missionId);
+  return 'kept';
 }
 
 /** The reason a disabled plugin's missions carry: "paused: finance is disabled". */

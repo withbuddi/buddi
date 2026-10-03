@@ -17,7 +17,11 @@
  */
 import {
   DEFAULT_TIMEZONE,
+  answerStillUseful,
   cancelReminder,
+  getNotification,
+  markActedForKey,
+  missionIdOfStillUsefulKey,
   getOnboarding,
   consumePairingCode,
   getActiveAgent,
@@ -82,6 +86,11 @@ import {
 } from './browser-view.js';
 import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
 import { whereText } from './commands.js';
+import {
+  parseStillUsefulCallback,
+  STILL_USEFUL_CALLBACK_PREFIX,
+  stillUsefulOutcomeText,
+} from './still-useful.js';
 import { handleReaction, recordSentAnswer, takeFeedbackNote, type ReactionDeps } from './reactions.js';
 import { focusSetText, focusStatusText, FOCUS_USAGE_TEXT, parseFocusArg } from './focus.js';
 import {
@@ -1209,7 +1218,7 @@ export function continueKeyboard(agentId: string): InlineKeyboardMarkup {
  * Which handler owns a callback payload. One small dispatcher keyed by prefix,
  * so approvals keep owning `apr:` and nothing else has to know about them.
  */
-export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'question' | 'proposal' | 'continue' | 'approval';
+export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'question' | 'proposal' | 'continue' | 'still-useful' | 'approval';
 
 export function callbackKind(data: string | undefined): CallbackKind {
   const raw = (data ?? '').trim();
@@ -1219,6 +1228,7 @@ export function callbackKind(data: string | undefined): CallbackKind {
   if (raw.startsWith(`${QUESTION_CALLBACK_PREFIX}:`)) return 'question';
   if (raw.startsWith(`${PROPOSAL_CALLBACK_PREFIX}:`)) return 'proposal';
   if (raw.startsWith(`${CONTINUE_CALLBACK_PREFIX}:`)) return 'continue';
+  if (raw.startsWith(`${STILL_USEFUL_CALLBACK_PREFIX}:`)) return 'still-useful';
   return 'approval';
 }
 
@@ -1405,6 +1415,10 @@ export class TelegramSurface {
       }
       if (kind === 'continue') {
         this.enqueue(chain, () => this.handleContinueCallback(callback));
+        return;
+      }
+      if (kind === 'still-useful') {
+        this.enqueue(chain, () => this.handleStillUsefulCallback(callback));
         return;
       }
       if (kind === 'proposal') {
@@ -2618,6 +2632,76 @@ export class TelegramSurface {
         );
       } catch (err) {
         this.#log(`telegram: refreshing the reminder list failed: ${message(err)}`);
+      }
+    }
+  }
+
+  /**
+   * Keep or Stop under "Still useful?". Owner-only, like every callback; the
+   * answer is idempotent (`answerStillUseful`), and the message is redrawn from
+   * its notification row with the outcome last and no buttons left.
+   */
+  async handleStillUsefulCallback(
+    query: NonNullable<TelegramUpdate['callback_query']>,
+  ): Promise<void> {
+    const api = this.#opts.api;
+    const pool = this.#opts.pool;
+    const userId = query.from?.id === undefined ? '' : String(query.from.id);
+    const chatId = query.message?.chat?.id === undefined ? '' : String(query.message.chat.id);
+    const messageId = query.message?.message_id;
+
+    const parsed = parseStillUsefulCallback(query.data);
+    if (parsed === undefined || userId === '' || chatId === '') {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    const resolution = await resolveOwnerForSurface(pool, {
+      surface: SURFACE,
+      externalUserId: userId,
+      externalChatId: chatId,
+    });
+    if (!resolution.ok) {
+      this.#log(
+        `telegram: still-useful callback rejected (${resolution.reason}) from user ${userId} in chat ${chatId}`,
+      );
+      await appendSurfaceEvent(pool, 'surface.rejected', {
+        surface: SURFACE,
+        kind: 'callback',
+        reason: resolution.reason,
+        externalUserId: userId,
+        externalChatId: chatId,
+        callbackId: query.id,
+        notificationId: parsed.notificationId,
+      });
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    const row = await getNotification(pool, parsed.notificationId);
+    const missionId = missionIdOfStillUsefulKey(row?.dedupeKey);
+    if (!row || !missionId) {
+      await api.answerCallbackQuery(query.id, stillUsefulOutcomeText('gone')).catch(() => {});
+      return;
+    }
+    const outcome = await answerStillUseful(pool, missionId, parsed.choice);
+    if (outcome === 'kept' || outcome === 'stopped') {
+      await markActedForKey(pool, row.dedupeKey!, new Date(this.#now())).catch(() => 0);
+      await appendSurfaceEvent(pool, 'mission.still_useful_answered', {
+        surface: SURFACE,
+        missionId,
+        choice: parsed.choice,
+      }).catch(() => {});
+    }
+    const line = stillUsefulOutcomeText(outcome);
+    await api.answerCallbackQuery(query.id, line).catch(() => {});
+
+    if (messageId !== undefined) {
+      const body = row.text ? `${row.title}\n\n${row.text}` : row.title;
+      try {
+        await api.editMessageText(chatId, messageId, `${body}\n\n${line}`, { replyMarkup: { inline_keyboard: [] } });
+      } catch (err) {
+        this.#log(`telegram: editing the still-useful message failed: ${message(err)}`);
       }
     }
   }

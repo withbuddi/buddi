@@ -9,8 +9,16 @@
  * alone when it is sent alone, and after the end-of-day message when it came
  * with it.
  */
-import { getAction, proposalIdOfKey, type ActionRecord, type OwnerChannel, type Queryable } from '@buddi/core';
+import {
+  getAction,
+  missionIdOfStillUsefulKey,
+  proposalIdOfKey,
+  type ActionRecord,
+  type OwnerChannel,
+  type Queryable,
+} from '@buddi/core';
 import { notifyOwner, ownerChatId, OwnerNotPairedError } from './notify.js';
+import { stillUsefulKeyboard } from './still-useful.js';
 
 /**
  * Telegram turns any `@word` into a link to that public username, so an
@@ -43,6 +51,8 @@ export function ownerMessageText(message: {
   const lines = [...asks, ...(action ? [`→ ${action}`] : [])];
   return lines.length > 0 ? `${body}\n\n${lines.join('\n')}` : body;
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface TelegramChannelOptions {
   pool: Queryable;
@@ -91,10 +101,15 @@ export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChanne
       // An agent's own message (`owner.notify`) is information only: plain
       // text, already signed "@agent: …", never a button or a card.
       const offers = message.kind === 'agent' ? [] : message.offers ?? [];
-      const chatId = await sendText(unlinkSignatures(ownerMessageText(message)), {
+      // "Still useful?" asks Keep or Stop: the buttons say it, so the
+      // spelled-out action line goes.
+      const stillUseful = message.kind !== 'agent' && UUID.test(message.id) && missionIdOfStillUsefulKey(message.dedupeKey) !== undefined;
+      const { action: _asked, ...withoutAction } = message;
+      const chatId = await sendText(unlinkSignatures(ownerMessageText(stillUseful ? withoutAction : message)), {
         pool: opts.pool,
         env: opts.env ?? process.env,
         ...(offers.length > 0 ? { offers } : {}),
+        ...(stillUseful ? { replyMarkup: stillUsefulKeyboard(message.id) } : {}),
       });
       // The end-of-day message names every proposal in one line each; the
       // ones still open follow as their cards, so each can be decided here.
@@ -104,6 +119,16 @@ export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChanne
           if (!id) continue;
           await proposals.request(chatId, id).catch(() => false);
         }
+      }
+      // So does each "Still useful?" in it, with its Keep and Stop.
+      for (const part of message.parts ?? []) {
+        if (!UUID.test(part.id) || missionIdOfStillUsefulKey(part.dedupeKey) === undefined) continue;
+        const { action: _partAsked, ...bare } = part;
+        await sendText(unlinkSignatures(ownerMessageText(bare)), {
+          pool: opts.pool,
+          env: opts.env ?? process.env,
+          replyMarkup: stillUsefulKeyboard(part.id),
+        }).catch(() => '');
       }
       return { id: chatId };
     },

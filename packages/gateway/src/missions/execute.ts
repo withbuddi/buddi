@@ -22,6 +22,7 @@ import {
   endExpiredMissions,
   getAction,
   noteMissionRun,
+  stillUsefulKey,
   notifyOwner,
   markFindingDelivered,
   mutedFindingKeys,
@@ -405,7 +406,7 @@ export function createMissionExecutor(
           action: 'Keep or stop it?',
           link: { route: '#/missions' },
           agentId: mission.agentId,
-          dedupeKey: `still-useful:${mission.id}`,
+          dedupeKey: stillUsefulKey(mission.id),
         });
         await appendEvent(deps.pool, 'mission.still_useful', { missionId: mission.id, quietRuns: counted.quietRuns });
       } catch (err) {

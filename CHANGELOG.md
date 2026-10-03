@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Telegram: "Still useful?" for a quiet watch now has Keep and Stop buttons, alone or after the end-of-day message. Only the owner's tap counts, a second tap says what already happened, and the message is edited to show the outcome.
+
 ## 0.1.0-pre.34 — 2026-10-02
 
 ### Changed
