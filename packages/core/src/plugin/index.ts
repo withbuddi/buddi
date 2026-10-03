@@ -217,3 +217,6 @@ export type {
   NetworkArea,
 } from '../host/types.js';
 export type { OwnerPlace } from '../places.js';
+
+// Widget declarations are checked the way the host checks them; plugin tests use this.
+export { parseWidgets } from '../widgets.js';
