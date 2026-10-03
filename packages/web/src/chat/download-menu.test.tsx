@@ -40,6 +40,10 @@ describe('the Download menu', { timeout: 180_000 }, () => {
     expect(items).toEqual(['PDF.pdf', 'Word.docx', 'Markdown.md, as written']);
     await user.click(within(menu).getByRole('menuitem', { name: /Word/ }));
     expect(clicked).toEqual([{ href: '/api/artifacts/d0c/export/docx', download: 'Heat pumps (v2).docx' }]);
+    // The file as written is the plain download, which has no conversion limit.
+    await user.click(screen.getByRole('button', { name: 'Download Heat pumps (v2).md' }));
+    await user.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: /Markdown/ }));
+    expect(clicked.at(-1)).toEqual({ href: '/api/artifacts/d0c/download', download: 'Heat pumps (v2).md' });
   });
 
   it('sits on the canvas card of a table, with Excel first', async () => {

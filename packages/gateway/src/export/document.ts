@@ -37,6 +37,8 @@ import {
 import writeExcelFile from 'write-excel-file/node';
 import { parseMarkdown, plain, type Block, type Run } from './markdown.js';
 
+export { DocumentTooComplex } from './markdown.js';
+
 /** What a stored file can be downloaded as. */
 export type ExportFormat = 'md' | 'pdf' | 'docx' | 'csv' | 'xlsx';
 
@@ -48,8 +50,11 @@ export const EXPORT_MIME: Record<ExportFormat, string> = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
 
-/** The largest source a conversion takes; a bigger file is downloaded as it is. */
-export const MAX_EXPORT_SOURCE_BYTES = 2 * 1024 * 1024;
+/**
+ * The largest source a conversion takes (the most `artifacts.write` saves);
+ * a bigger file is downloaded as it is.
+ */
+export const MAX_EXPORT_SOURCE_BYTES = 512 * 1024;
 
 function bareMime(mime: string): string {
   return mime.toLowerCase().split(';')[0]!.trim();
@@ -304,13 +309,39 @@ export async function markdownToDocx(markdown: string, filename: string | null):
 
 /* ------------------------------------------------------------------ Tables */
 
-/** RFC 4180 CSV: quoted fields, doubled quotes, CRLF or LF. Ragged rows are padded. */
-export function parseCsv(text: string): string[][] {
+/** Limits on a table buddi converts, checked while it is read: never padded past them. */
+export const CSV_LIMITS = { rows: 100_000, columns: 1_000, cells: 300_000 } as const;
+
+/** A table too large to convert; the message says which limit. */
+export class TableTooLarge extends Error {
+  override name = 'TableTooLarge';
+}
+
+/**
+ * RFC 4180 CSV: quoted fields, doubled quotes, CRLF or LF. Ragged rows are
+ * padded to the widest — after the rows, columns and padded cells are
+ * checked against `limits`, as they are read, so a few kilobytes of ragged
+ * rows cannot ask for millions of cells.
+ */
+export function parseCsv(text: string, limits: { rows: number; columns: number; cells: number } = CSV_LIMITS): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
   let quoted = false;
-  const source = text.replace(/^﻿/, '');
+  let width = 0;
+  const pushField = (): void => {
+    row.push(field);
+    field = '';
+    if (row.length > limits.columns) throw new TableTooLarge(`row ${rows.length + 1} has more than ${limits.columns} columns; too many to convert`);
+  };
+  const pushRow = (): void => {
+    rows.push(row);
+    if (row.length > width) width = row.length;
+    row = [];
+    if (rows.length > limits.rows) throw new TableTooLarge(`the table has more than ${limits.rows} rows; too many to convert`);
+    if (rows.length * width > limits.cells) throw new TableTooLarge(`the table has more than ${limits.cells} cells; too many to convert`);
+  };
+  const source = text.replace(/^\uFEFF/, '');
   for (let i = 0; i < source.length; i++) {
     const c = source[i]!;
     if (quoted) {
@@ -318,15 +349,15 @@ export function parseCsv(text: string): string[][] {
         if (source[i + 1] === '"') { field += '"'; i++; } else quoted = false;
       } else field += c;
     } else if (c === '"' && field === '') quoted = true;
-    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === ',') pushField();
     else if (c === '\n' || c === '\r') {
       if (c === '\r' && source[i + 1] === '\n') i++;
-      row.push(field); rows.push(row); row = []; field = '';
+      pushField(); pushRow();
     } else field += c;
   }
-  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
-  const width = Math.max(0, ...rows.map((r) => r.length));
-  return rows.map((r) => (r.length < width ? [...r, ...Array(width - r.length).fill('')] : r));
+  if (field !== '' || row.length > 0) { pushField(); pushRow(); }
+  for (const r of rows) while (r.length < width) r.push('');
+  return rows;
 }
 
 /** A plain decimal, never a code with a leading zero or a long id that would lose digits. */
@@ -341,15 +372,23 @@ export async function csvToXlsx(csv: string, filename: string | null): Promise<B
     if (NUMBER.test(value)) return { value: Number(value), type: Number };
     return { value, type: String };
   }));
-  const widths = (rows[0] ?? []).map((_, c) => ({ width: Math.min(60, Math.max(8, ...rows.slice(0, 500).map((row) => (row[c] ?? '').length + 2))) }));
+  const sample = rows.slice(0, 500);
+  const widths = (rows[0] ?? []).map((_, c) => {
+    let widest = 8;
+    for (const row of sample) widest = Math.max(widest, (row[c] ?? '').length + 2);
+    return { width: Math.min(60, widest) };
+  });
   const sheet = exportName(filename, 'xlsx').replace(/\.xlsx$/, '').replace(/[\\/?*[\]:]/g, ' ').slice(0, 31).trim() || 'Sheet1';
   const out = await writeExcelFile(sheetData as any, { columns: widths, sheet, stickyRowsCount: rows.length > 1 ? 1 : 0 } as any).toBuffer();
   return Buffer.from(out);
 }
 
 /**
- * The conversion the download route runs. `null` when the file does not offer
- * that format; the stored format comes back as the stored bytes.
+ * One conversion, in this thread. `null` when the file does not offer that
+ * format; the stored format comes back as the stored bytes. Throws
+ * `DocumentTooComplex` or `TableTooLarge` for what it will not convert.
+ * The gateway runs it through `runExport` (convert.ts): in a worker, one at
+ * a time, with a memory and a time limit.
  */
 export async function exportDocument(
   source: { bytes: Buffer; mime: string; filename: string | null },

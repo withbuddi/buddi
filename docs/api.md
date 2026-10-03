@@ -2341,7 +2341,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/note
 | GET | `/api/artifacts` | The library: every file buddi holds, paged. | yes |
 | GET | `/api/artifacts/:id` | One file: its metadata, where it was used, whether its bytes are still there. | yes |
 | GET | `/api/artifacts/:id/download` | The file, as a download. | yes |
-| GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. | yes |
+| GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds. | yes |
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
 | DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
 
@@ -2389,12 +2389,12 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/down
 
 #### `GET /api/artifacts/:id/export/:format`
 
-A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx.
+A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds.
 
 - **Auth:** Session or API token.
 - **Kind:** bytes, not JSON
 - **Answer:** JSON
-- **Errors:** 404; 413 too large to convert; 415 not offered for this file
+- **Errors:** 404; 410 contents gone from disk; 413 too large or complex to convert; 415 not offered for this file; 503 another conversion is running (Retry-After); 504 took too long
 - **Since:** unreleased
 
 ```sh

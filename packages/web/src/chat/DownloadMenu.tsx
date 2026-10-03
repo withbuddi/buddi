@@ -5,7 +5,7 @@
  * An agent writes a report as Markdown and a table as CSV (`artifacts.write`);
  * the gateway makes the PDF, the Word file and the spreadsheet on the way out
  * (`GET /api/artifacts/:id/export/:format`). The menu lists what people send
- * first and the file as written last. The same component sits in the Files
+ * first and the file as written last, which is the plain download. The same component sits in the Files
  * detail and on the file's canvas card, so the choice reads the same in both.
  */
 import { ActionMenu, Icon } from '../ui';
@@ -85,7 +85,10 @@ export function DownloadMenu({
   const item = (o: ExportOption) => ({
     label: o.label,
     hint: o.hint,
-    onSelect: () => startDownload(exportUrl(artifactId, o.format), exportFilename(filename, o.format)),
+    // The file as written is the plain download: no conversion, so no size limit.
+    onSelect: () => (o.asWritten
+      ? startDownload(downloadUrl(artifactId), name)
+      : startDownload(exportUrl(artifactId, o.format), exportFilename(filename, o.format))),
   });
   return (
     <ActionMenu

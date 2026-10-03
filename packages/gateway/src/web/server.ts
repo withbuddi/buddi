@@ -117,7 +117,8 @@ import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
-import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportDocument, exportFormats, exportName, type ExportFormat } from '../export/document.js';
+import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
+import { ExportRefused, runExport } from '../export/convert.js';
 import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
@@ -1575,8 +1576,21 @@ export function createWebApp(deps: WebServerDeps): Server {
         const format = exported[2] as ExportFormat;
         // Only what this file offers: a Markdown document as PDF or Word, a table as Excel.
         if (!exportFormats(artifact.mime, artifact.filename).includes(format)) return sendJson(res, 415, { error: `this file cannot be downloaded as ${format}` });
-        if (artifact.sizeBytes > MAX_EXPORT_SOURCE_BYTES) return sendJson(res, 413, { error: 'this file is too large to convert; download it as it is' });
-        const bytes = await exportDocument({ bytes: await readArtifactBytes(deps.env ?? process.env, artifact), mime: artifact.mime, filename: artifact.filename }, format);
+        // The bytes may be gone while the row remains: say so rather than fail.
+        if (!(await artifactBytesExist(deps.env ?? process.env, artifact).catch(() => false))) {
+          return sendJson(res, 410, { error: 'the file’s contents are gone from disk' });
+        }
+        // The file as written is never converted, so it has no size limit; only a conversion does.
+        const own = format === exportFormats(artifact.mime, artifact.filename)[0];
+        if (!own && artifact.sizeBytes > MAX_EXPORT_SOURCE_BYTES) return sendJson(res, 413, { error: 'this file is too large to convert; download it as it is' });
+        let bytes: Buffer | null;
+        try {
+          bytes = await runExport({ bytes: await readArtifactBytes(deps.env ?? process.env, artifact), mime: artifact.mime, filename: artifact.filename }, format);
+        } catch (err) {
+          if (!(err instanceof ExportRefused)) throw err;
+          if (err.retryAfter !== undefined) res.setHeader('Retry-After', String(err.retryAfter));
+          return sendJson(res, err.status, { error: err.message });
+        }
         if (!bytes) return sendJson(res, 415, { error: `this file cannot be downloaded as ${format}` });
         res.setHeader('Content-Type', EXPORT_MIME[format]);
         res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(exportName(artifact.filename, format)).replace(/'/g, '%27')}`);

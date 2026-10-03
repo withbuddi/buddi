@@ -622,8 +622,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'GET', path: '/api/artifacts/:id/download', area: 'files', kind: 'bytes', summary: 'The file, as a download.', errors: '404' },
   {
     method: 'GET', path: '/api/artifacts/:id/export/:format', area: 'files', kind: 'bytes',
-    summary: "A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx.",
-    errors: '404; 413 too large to convert; 415 not offered for this file',
+    summary: "A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds.",
+    errors: '404; 410 contents gone from disk; 413 too large or complex to convert; 415 not offered for this file; 503 another conversion is running (Retry-After); 504 took too long',
   },
   {
     method: 'GET', path: '/api/artifacts/:id/preview', area: 'files', kind: 'bytes',

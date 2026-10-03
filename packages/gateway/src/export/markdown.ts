@@ -186,9 +186,133 @@ function toBlocks(tokens: readonly Token[]): Block[] {
   return blocks;
 }
 
-/** A Markdown document as blocks. */
+/**
+ * A document buddi will not convert: too deep, too many parts, or written so
+ * that reading it would take the gateway minutes. The message says which.
+ */
+export class DocumentTooComplex extends Error {
+  override name = 'DocumentTooComplex';
+}
+
+/** Limits on what a conversion reads, so a short file cannot cost minutes or gigabytes. */
+export const MARKDOWN_LIMITS = {
+  /** Nested lists and quotes, counted from indentation and `>` markers. */
+  depth: 16,
+  /** Leading indentation, in columns, outside a fenced code block. */
+  indent: 64,
+  /** `*` and `_` in one paragraph: marked's inline reader is quadratic in unmatched ones. */
+  delimitersPerParagraph: 500,
+  delimitersPerDocument: 20_000,
+  /** Blocks, list items, table cells and runs, all told. */
+  nodes: 50_000,
+  /** Cells of all tables together. */
+  tableCells: 20_000,
+} as const;
+
+/**
+ * The cheap read before the real one: a line scan that refuses what would
+ * make the lexer itself blow up (deep nesting, runs of emphasis markers).
+ */
+export function checkMarkdownShape(markdown: string, limits = MARKDOWN_LIMITS): void {
+  let fence: string | null = null;
+  let paragraph = 0;
+  let total = 0;
+  let lineNo = 0;
+  for (const line of markdown.split('\n')) {
+    lineNo++;
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence !== null) {
+      if (fenceMatch && fenceMatch[1]!.startsWith(fence)) fence = null;
+      continue;
+    }
+    if (fenceMatch) {
+      fence = fenceMatch[1]!;
+      paragraph = 0;
+      continue;
+    }
+    if (line.trim() === '') {
+      paragraph = 0;
+      continue;
+    }
+    let indent = 0;
+    let quotes = 0;
+    for (const c of line) {
+      if (c === ' ') indent++;
+      else if (c === '\t') indent += 4 - (indent % 4);
+      else if (c === '>') quotes++;
+      else break;
+    }
+    if (indent > limits.indent) throw new DocumentTooComplex(`line ${lineNo} is indented ${indent} columns; buddi converts at most ${limits.indent}`);
+    if (quotes > limits.depth) {
+      throw new DocumentTooComplex(`line ${lineNo} is nested too deep to convert (at most ${limits.depth} levels)`);
+    }
+    // A list item or a heading is inline text of its own; a rule has no inline text.
+    const rest = line.replace(/^[\s>]*/, '');
+    if (/^([*_-])(\s*\1){2,}\s*$/.test(rest)) continue;
+    const marker = /^([*+-]|\d{1,9}[.)])\s+|^#{1,6}\s/.exec(rest);
+    if (marker) paragraph = 0;
+    let delimiters = 0;
+    for (let i = (line.length - rest.length) + (marker ? marker[0].length : 0); i < line.length; i++) {
+      const c = line.charCodeAt(i);
+      if (c === 42 || c === 95) delimiters++; // * _
+    }
+    paragraph += delimiters;
+    total += delimiters;
+    if (paragraph > limits.delimitersPerParagraph) {
+      throw new DocumentTooComplex(`the paragraph at line ${lineNo} has more than ${limits.delimitersPerParagraph} * and _ marks; too many to convert`);
+    }
+    if (total > limits.delimitersPerDocument) {
+      throw new DocumentTooComplex(`the document has more than ${limits.delimitersPerDocument} * and _ marks; too many to convert`);
+    }
+  }
+}
+
+/** The read blocks, counted: refuses a document with more parts than a conversion should draw. */
+export function checkBlocks(blocks: readonly Block[], limits = MARKDOWN_LIMITS): void {
+  let nodes = 0;
+  let cells = 0;
+  const visit = (list: readonly Block[], depth: number): void => {
+    if (depth > limits.depth) throw new DocumentTooComplex(`the document nests deeper than ${limits.depth} levels`);
+    for (const block of list) {
+      nodes++;
+      switch (block.type) {
+        case 'heading':
+        case 'paragraph':
+          nodes += block.runs.length;
+          break;
+        case 'list':
+          for (const item of block.items) {
+            nodes += 1 + item.runs.length;
+            if (nodes > limits.nodes) break;
+            visit(item.children, depth + 1);
+          }
+          break;
+        case 'table': {
+          const tableCells = block.header.length * (block.rows.length + 1);
+          cells += tableCells;
+          nodes += tableCells;
+          if (cells > limits.tableCells) throw new DocumentTooComplex(`the tables have more than ${limits.tableCells} cells; too many to convert`);
+          break;
+        }
+        case 'quote':
+          visit(block.blocks, depth + 1);
+          break;
+        default:
+          break;
+      }
+      if (nodes > limits.nodes) throw new DocumentTooComplex(`the document has more than ${limits.nodes} parts; too many to convert`);
+    }
+  };
+  visit(blocks, 0);
+}
+
+/** A Markdown document as blocks, refused first if it is too deep or too large to convert. */
 export function parseMarkdown(markdown: string): Block[] {
-  return toBlocks(marked.lexer(markdown.replace(/\r\n?/g, '\n'), { gfm: true }));
+  const text = markdown.replace(/\r\n?/g, '\n');
+  checkMarkdownShape(text);
+  const blocks = toBlocks(marked.lexer(text, { gfm: true }));
+  checkBlocks(blocks);
+  return blocks;
 }
 
 /** The plain text of some runs, for a title or an alt. */

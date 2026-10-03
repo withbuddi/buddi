@@ -35,6 +35,10 @@ suite('document export route', () => {
   let mdId: string;
   let csvId: string;
   let pngId: string;
+  let bigId: string;
+  let raggedId: string;
+  let goneId: string;
+  let bigBytes: Buffer;
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);
@@ -50,6 +54,12 @@ suite('document export route', () => {
     mdId = (await saveArtifact(pool, { bytes: Buffer.from('# Quarterly review\n\n- Revenue **up**\n\n| A | B |\n|---|---|\n| 1 | 2 |\n'), mime: 'text/markdown', filename: 'Quarterly review (v2).md', createdBy: 'researcher' }, env)).id;
     csvId = (await saveArtifact(pool, { bytes: Buffer.from('Item,Amount\r\nRent,1200\r\n'), mime: 'text/csv', filename: 'Budget.csv', createdBy: 'cfo' }, env)).id;
     pngId = (await saveArtifact(pool, { bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1kAAAAASUVORK5CYII=', 'base64'), mime: 'image/png', filename: 'a.png', createdBy: 'owner' }, env)).id;
+    bigBytes = Buffer.from(`# Big\n\n${'word '.repeat(150_000)}\n`);
+    bigId = (await saveArtifact(pool, { bytes: bigBytes, mime: 'text/markdown', filename: 'Big.md', createdBy: 'researcher' }, env)).id;
+    raggedId = (await saveArtifact(pool, { bytes: Buffer.from(`${','.repeat(999)}\n${'a\n'.repeat(1_000)}`), mime: 'text/csv', filename: 'Ragged.csv', createdBy: 'cfo' }, env)).id;
+    const gone = await saveArtifact(pool, { bytes: Buffer.from('# Gone\n'), mime: 'text/markdown', filename: 'Gone.md', createdBy: 'researcher' }, env);
+    goneId = gone.id;
+    await rm(path.join(dir, gone.storagePath));
     const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
     web = await startWebServer({
       pool, registry: new ToolRegistry(), catalog: emptyCatalog(), ctx, timezone: 'UTC', now: () => new Date(), env,
@@ -94,6 +104,29 @@ suite('document export route', () => {
     expect(xlsx.status).toBe(200);
     expect(await readSheet(Buffer.from(await xlsx.arrayBuffer()))).toEqual([['Item', 'Amount'], ['Rent', 1200]]);
     expect(await (await get(csvId, 'csv')).text()).toBe('Item,Amount\r\nRent,1200\r\n');
+  });
+
+  it('a document past the conversion limit still downloads as written, in full', async () => {
+    expect(bigBytes.length).toBeGreaterThan(512 * 1024);
+    const md = await get(bigId, 'md');
+    expect(md.status).toBe(200);
+    expect(Buffer.from(await md.arrayBuffer()).equals(bigBytes)).toBe(true);
+    const plain = await fetch(`${base}/api/artifacts/${bigId}/download`, { headers: { authorization: `Bearer ${token}` } });
+    expect(plain.status).toBe(200);
+    expect((await plain.arrayBuffer()).byteLength).toBe(bigBytes.length);
+    expect((await get(bigId, 'pdf')).status).toBe(413);
+  });
+
+  it('refuses a few kilobytes of ragged CSV asking for a million cells, quickly', async () => {
+    const started = performance.now();
+    const res = await get(raggedId, 'xlsx');
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toMatch(/cells/);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it('says the contents are gone rather than failing', async () => {
+    expect((await get(goneId, 'pdf')).status).toBe(410);
   });
 
   it('refuses what a file does not offer, a missing file, and no credential', async () => {

@@ -24,7 +24,8 @@ import {
 } from './api.js';
 import { formatBytes, type ArtifactRow, type ArtifactStore } from './attachments.js';
 import { canvasShow, type CanvasShowInput } from '../agents/canvas.js';
-import { MAX_EXPORT_SOURCE_BYTES, documentFamily, exportName, markdownToPdf } from '../export/document.js';
+import { documentFamily, exportName } from '../export/document.js';
+import { ExportRefused, runExport } from '../export/convert.js';
 
 /* ------------------------------------------------------------------ *
  * The first-run burst
@@ -745,12 +746,17 @@ async function sendFile(deps: ExtrasDeps, chatId: string, id: string, filesUrl?:
       // A document shows its name already; a caption would say it twice.
       await deps.api.sendDocument(chatId, bytes, { filename: name, contentType: mime });
       // A Markdown document reads badly on a phone as source: its PDF follows.
-      if (documentFamily(mime, name) === 'markdown' && bytes.length <= MAX_EXPORT_SOURCE_BYTES) {
-        const pdf = await markdownToPdf(bytes.toString('utf8'), name).catch((err: unknown) => {
+      if (documentFamily(mime, name) === 'markdown') {
+        // Made in a worker, one at a time, within a deadline; a document too
+        // large or too complex for that goes as its .md alone, with a word why.
+        const pdf = await runExport({ bytes, mime, filename: name }, 'pdf', { wait: true }).catch((err: unknown) => {
           deps.log(`telegram: no PDF of ${name}: ${message(err)}`);
-          return null;
+          return err instanceof ExportRefused ? err : null;
         });
-        if (pdf) await deps.api.sendDocument(chatId, pdf, { filename: exportName(name, 'pdf'), contentType: 'application/pdf' });
+        if (pdf instanceof Buffer) await deps.api.sendDocument(chatId, pdf, { filename: exportName(name, 'pdf'), contentType: 'application/pdf' });
+        else if (pdf instanceof ExportRefused) {
+          await deps.api.sendMessage(chatId, `No PDF of ${name} this time: it is too large or too complex to convert here. The .md above is the whole document; Files can download it.`).catch(() => {});
+        }
       }
     }
   } catch (err) {
