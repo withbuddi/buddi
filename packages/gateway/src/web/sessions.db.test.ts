@@ -9,7 +9,7 @@
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, ToolRegistry, createPool, ensureOwner, migrate, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { csrfCookieName, sessionCookieName } from './http.js';
 import { startWebServer, type WebServer } from './server.js';
 import { SessionStore, csrfFor, sessionIdHash, type SessionDb } from './sessions.js';
@@ -232,7 +232,8 @@ suite('dashboard sessions in the database', () => {
       const sessionPair = pairs.find((p) => p.startsWith(`${sessionCookieName(port)}=`))!;
       const csrf = pairs.find((p) => p.startsWith(`${csrfCookieName(port)}=`))!.split('=')[1]!;
       const id = sessionPair.slice(sessionPair.indexOf('=') + 1);
-      expect((await rows()).map((r) => r.id_hash)).toEqual([sessionIdHash(id)]);
+      // The row is written after the redirect answers; under a loaded suite it can land a beat later.
+      await vi.waitFor(async () => expect((await rows()).map((r) => r.id_hash)).toEqual([sessionIdHash(id)]), { timeout: 5000 });
       await first.close();
 
       // The restarted gateway: a new server, a new store, the same table — and
