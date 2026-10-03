@@ -194,7 +194,25 @@ suite('onboarding (postgres)', () => {
       displayName: null,
       timeFormat: null,
       dateFormat: null,
+      // Who the owner is joined it with migration 074.
+      fullName: null,
+      pronouns: null,
+      birthday: null,
     });
+  });
+
+  it('keeps the full name, pronouns and a birthday, the year optional, and clears an impossible day', async () => {
+    await setOwnerProfile(pool, { fullName: 'Amenophis Mouzou', pronouns: 'he/him', birthday: { day: 2, month: 10, year: null } });
+    expect(await getOwnerProfile(pool)).toMatchObject({ fullName: 'Amenophis Mouzou', pronouns: 'he/him', birthday: { day: 2, month: 10, year: null } });
+    await setOwnerProfile(pool, { birthday: { day: 29, month: 2, year: 1992 } });
+    expect((await getOwnerProfile(pool)).birthday).toEqual({ day: 29, month: 2, year: 1992 });
+    await setOwnerProfile(pool, { birthday: { day: 31, month: 4, year: null } });
+    expect((await getOwnerProfile(pool)).birthday).toBeNull();
+    // Absent leaves it alone.
+    await setOwnerProfile(pool, { birthday: { day: 2, month: 10, year: 1990 } });
+    await setOwnerProfile(pool, { pronouns: null });
+    expect(await getOwnerProfile(pool)).toMatchObject({ pronouns: null, birthday: { day: 2, month: 10, year: 1990 } });
+    await setOwnerProfile(pool, { fullName: null, birthday: null });
   });
 
   it('keeps how the owner reads times and dates, Auto being null', async () => {

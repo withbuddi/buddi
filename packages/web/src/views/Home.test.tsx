@@ -27,6 +27,7 @@ vi.mock('../api', async (importOriginal) => {
       proposals: empty({ open: [] }),
       agentOffers: empty({ offers: [] }),
       owner: empty({}),
+      birthday: vi.fn(async () => ({ today: false, date: '2026-09-21', name: null, age: null, note: null, from: null, image: null })),
       version: vi.fn(),
       notifications: vi.fn(async () => ({ notifications: [] })),
       notificationsNeedingYou: vi.fn(async () => ({ notifications: [] })),
@@ -615,5 +616,39 @@ describe('your team and the catalogue', () => {
     expect(navigate).toHaveBeenCalledWith('#/agents/catalogue');
     expect(screen.queryByTestId('home-suggestions')).not.toBeInTheDocument();
     expect(api.catalogue).not.toHaveBeenCalled();
+  });
+});
+
+describe("the owner's birthday", () => {
+  const AGENTS = [
+    { id: 'concierge', name: 'Buddi', handle: 'buddi', description: 'The front desk.', available: true, roles: ['front-desk'], provider: 'anthropic', model: 'claude-sonnet-5' },
+    { id: 'postie', name: 'Postie', handle: 'postie', description: 'Mail.', available: true, roles: [], provider: 'anthropic', model: 'claude-sonnet-5' },
+  ] as never;
+  const birthday = (over: Record<string, unknown> = {}) => ({ today: true, date: '2026-10-02', name: 'Amen', age: 36, note: 'Happy birthday, Amen! Thirty-six looks good on you.', from: 'concierge', image: '33333333-3333-4333-8333-333333333333', ...over });
+
+  it('says it in the greeting and puts the team’s note and picture under the glance', async () => {
+    vi.mocked(api.birthday).mockResolvedValue(birthday());
+    await act(async () => { render(<Home timezone="UTC" navigate={vi.fn()} agents={AGENTS} defaultAgentId="concierge" attention={new Map()} />); });
+    expect(await screen.findByRole('heading', { name: 'Happy birthday, Amen.' })).toBeInTheDocument();
+    const card = screen.getByRole('region', { name: 'Your birthday' });
+    expect(card).toHaveTextContent('From your team');
+    expect(card).toHaveTextContent('Happy birthday, Amen! Thirty-six looks good on you.');
+    expect(card).toHaveTextContent('Buddi and Postie');
+    expect(screen.getByRole('img', { name: 'A picture your team made for your birthday' })).toHaveAttribute('src', expect.stringContaining('33333333-3333-4333-8333-333333333333'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Put it away for today' })); });
+    expect(api.homeDismiss).toHaveBeenCalledWith('birthday', '2026-10-02');
+    expect(screen.queryByRole('region', { name: 'Your birthday' })).not.toBeInTheDocument();
+  });
+
+  it('draws the note alone without a picture, and no card before the greeting went out', async () => {
+    vi.mocked(api.birthday).mockResolvedValue(birthday({ image: null }));
+    await act(async () => { render(<Home timezone="UTC" navigate={vi.fn()} agents={AGENTS} attention={new Map()} />); });
+    expect(await screen.findByRole('region', { name: 'Your birthday' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /picture/ })).not.toBeInTheDocument();
+    cleanup();
+    vi.mocked(api.birthday).mockResolvedValue(birthday({ note: null, image: null }));
+    await act(async () => { render(<Home timezone="UTC" navigate={vi.fn()} agents={AGENTS} attention={new Map()} />); });
+    expect(await screen.findByRole('heading', { name: 'Happy birthday, Amen.' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Your birthday' })).not.toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
-import { createSystemManifest, DECISION_LINES, formatLine, hostFacts, NOTIFY_LINE, resourcefulLines, systemContext, systemTime } from './system-context.js';
+import { birthdayLine, createSystemManifest, DECISION_LINES, formatLine, hostFacts, NOTIFY_LINE, ownerLines, resourcefulLines, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
@@ -71,6 +71,20 @@ describe('shared platform context', () => {
     expect(desk).toContain('- Home: 12 Elm St, Portland, Maine (Portland, Maine, United States), America/New_York');
     expect(desk).toContain('- Work: Boston, Massachusetts, United States');
     expect((await systemContext(ctx, { agentId: 'scout', tools: [] }, { isFrontDesk })).prompt).not.toContain('places');
+  });
+  it('tells every agent who the owner is: full name, pronouns and the birthday, today said as today', async () => {
+    const row = { preferred_name: 'Amen', full_name: 'Amenophis Mouzou', pronouns: 'he/him', birthday_day: 2, birthday_month: 10, birthday_year: 1990, timezone: 'Europe/Paris' };
+    const query = vi.fn().mockResolvedValue({ rows: [row] });
+    const at = (iso: string): CoreToolContext => ({ db: { query } as unknown as CoreToolContext['db'], ownerId: 'owner', timezone: 'Europe/Paris', now: () => new Date(iso) });
+    const lines = await ownerLines(at('2026-10-01T23:30:00Z'));
+    expect(lines).toContain('- Call them Amen.');
+    expect(lines).toContain('- Full name: Amenophis Mouzou (for letters, forms and bookings).');
+    expect(lines).toContain('- Pronouns: he/him.');
+    // 01:30 on the 2nd in Paris: the owner's day, not UTC's.
+    expect(lines).toContain('- Birthday: 2 October 1990. Today is their birthday (36).');
+    expect(birthdayLine({ day: 2, month: 10, year: null }, at('2026-09-28T12:00:00Z'))).toBe('- Birthday: 2 October. It is in 4 days.');
+    expect(birthdayLine({ day: 2, month: 10, year: null }, at('2026-06-01T12:00:00Z'))).toBe('- Birthday: 2 October.');
+    expect(birthdayLine(null, at('2026-06-01T12:00:00Z'))).toBe('');
   });
   it('tells every agent how the owner reads times and dates, and nothing for Auto', () => {
     expect(formatLine({ timeFormat: '12h', dateFormat: 'short' })).toBe('- Write times and dates the way they read them: 12-hour time (2:05 PM) and dates like "Thu, Oct 1".');

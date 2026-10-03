@@ -1,6 +1,6 @@
 /**
- * You: who the agents are talking to, how they read the time, and where
- * their places are.
+ * You: who the agents are talking to (name, full name, pronouns, birthday),
+ * how they read the time, and where their places are.
  *
  * The profile is one row in the database, read into every agent's prompt —
  * the same row the first-run interview fills and an agent updates when you
@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ApiError, api, type FoundPlaceView, type OwnerPlaceView, type OwnerView } from '../api';
 import { FORMATS_CHANGED, fmtClock, fmtDate, setDisplayFormats, underFormats } from '../format';
+import { DayMonthField, dateOf, draftOf, sameDate } from './parts/DayMonthField';
 import {
   Button,
   ErrorBanner,
@@ -70,6 +71,9 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
   const [date, setDate] = useState<DateChoice>(initial.dateFormat ?? '');
   const [language, setLanguage] = useState(initial.language ?? '');
   const [about, setAbout] = useState(initial.about ?? '');
+  const [fullName, setFullName] = useState(initial.fullName ?? '');
+  const [pronouns, setPronouns] = useState(initial.pronouns ?? '');
+  const [birthday, setBirthday] = useState(draftOf(initial.birthday));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -80,10 +84,15 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
     setDate(initial.dateFormat ?? '');
     setLanguage(initial.language ?? '');
     setAbout(initial.about ?? '');
+    setFullName(initial.fullName ?? '');
+    setPronouns(initial.pronouns ?? '');
+    setBirthday(draftOf(initial.birthday));
     // Keyed on the saved values, not the object: a reload that brings the same
     // profile must not wipe what the owner is typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initial.preferredName, initial.timezone, initial.timeFormat, initial.dateFormat, initial.language, initial.about]);
+  }, [initial.preferredName, initial.timezone, initial.timeFormat, initial.dateFormat, initial.language, initial.about, initial.fullName, initial.pronouns, initial.birthday?.day, initial.birthday?.month, initial.birthday?.year]);
+
+  const birthdayDate = dateOf(birthday);
 
   const dirty =
     name.trim() !== (initial.preferredName ?? '') ||
@@ -91,7 +100,10 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
     time !== (initial.timeFormat ?? '') ||
     date !== (initial.dateFormat ?? '') ||
     language.trim() !== (initial.language ?? '') ||
-    about.trim() !== (initial.about ?? '');
+    about.trim() !== (initial.about ?? '') ||
+    fullName.trim() !== (initial.fullName ?? '') ||
+    pronouns.trim() !== (initial.pronouns ?? '') ||
+    (birthdayDate !== 'incomplete' && !sameDate(birthdayDate, initial.birthday));
 
   const save = async (): Promise<void> => {
     setSaving(true);
@@ -104,6 +116,9 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
         dateFormat: date === '' ? null : date,
         language: language.trim() === '' ? null : language.trim(),
         about: about.trim() === '' ? null : about.trim(),
+        fullName: fullName.trim() === '' ? null : fullName.trim(),
+        pronouns: pronouns.trim() === '' ? null : pronouns.trim(),
+        ...(birthdayDate !== 'incomplete' ? { birthday: birthdayDate } : {}),
       });
       // Every date and time on the open pages reads the new way at once.
       setDisplayFormats({ timeFormat: answer.timeFormat ?? null, dateFormat: answer.dateFormat ?? null });
@@ -135,11 +150,22 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
       }
     >
       <Stack divided gap="lg">
-        <Section title="Name, time and language">
+        <Section title="Who you are">
           <FormGrid>
-            <Field label="What the agents call you">
+            <Field label="Full name" hint="For letters, forms and bookings.">
+              <input value={fullName} maxLength={120} placeholder={initial.displayName ?? 'Your full name'} onChange={(e) => touched(setFullName)(e.target.value)} />
+            </Field>
+            <Field label="What the agents call you" hint="How you like to be addressed.">
               <input value={name} maxLength={80} placeholder={initial.displayName ?? 'Your name'} onChange={(e) => touched(setName)(e.target.value)} />
             </Field>
+            <Field label="Pronouns" hint="Optional.">
+              <input value={pronouns} maxLength={40} placeholder="he/him, she/her, they/them…" onChange={(e) => touched(setPronouns)(e.target.value)} />
+            </Field>
+            <DayMonthField label="Birthday" hint="The year is optional. Your team greets you on the day." value={birthday} onChange={touched(setBirthday)} />
+          </FormGrid>
+        </Section>
+        <Section title="Time and language">
+          <FormGrid>
             <Field label="Timezone" hint={`This host is in ${initial.detectedTimezone}. Existing schedules keep the zone they were made in.`}>
               <select value={zone} onChange={(e) => touched(setZone)(e.target.value)}>
                 <option value="">Not set (use the host's)</option>

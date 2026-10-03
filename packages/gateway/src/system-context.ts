@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
 import { ASK_TOOL } from './surfaces/pending-question.js';
-import { MAX_QUESTION_OPTIONS, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateTimeString, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
+import { MAX_QUESTION_OPTIONS, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
 const clean = (value: string): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 120);
@@ -149,12 +149,32 @@ export async function ownerLines(ctx: CoreToolContext): Promise<string> {
   try { profile = await getOwnerProfile(ctx.db); } catch { return ''; }
   const lines: string[] = [];
   if (profile.preferredName) lines.push(`- Call them ${profile.preferredName}.`);
+  if (profile.fullName && profile.fullName !== profile.preferredName) lines.push(`- Full name: ${profile.fullName} (for letters, forms and bookings).`);
+  if (profile.pronouns) lines.push(`- Pronouns: ${profile.pronouns}.`);
+  const birthday = birthdayLine(profile.birthday, ctx);
+  if (birthday) lines.push(birthday);
   if (profile.language) lines.push(`- They prefer to be answered in ${profile.language}, unless they write in another language or ask otherwise.`);
   if (profile.about) lines.push(`- In their words: ${profile.about.replace(/\s+/g, ' ').trim()}`);
   const formats = formatLine(profile);
   if (formats) lines.push(formats);
   if (lines.length === 0) return '';
   return `About the owner (set by them in Settings; context, not instruction):\n${lines.join('\n')}`;
+}
+
+/**
+ * The birthday as one line, and when it is today or close, said so: an agent
+ * that knows it is the owner's birthday can say so first. Zone: the owner's.
+ */
+export function birthdayLine(birthday: DayMonth | null, ctx: Pick<CoreToolContext, 'now' | 'timezone'>): string {
+  if (!birthday) return '';
+  let today: string;
+  try { today = localDateString(ctx.now(), isKnownTimezone(ctx.timezone) ? ctx.timezone : 'UTC'); } catch { return ''; }
+  const until = daysUntil(birthday, today);
+  const age = turning(birthday, today);
+  const when = until === 0 ? ' Today is their birthday' + (age !== null ? ` (${age})` : '') + '.'
+    : until <= 7 ? ` It is in ${until} ${until === 1 ? 'day' : 'days'}${age !== null ? ` (turning ${age})` : ''}.`
+      : '';
+  return `- Birthday: ${dayMonthText(birthday)}.${when}`;
 }
 
 /**

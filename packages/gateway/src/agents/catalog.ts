@@ -13,6 +13,7 @@ import {
   DELEGATE_EVERYONE,
   loadAgentCatalog,
   migrationNotice,
+  ownerTimezone,
   pluginsFilePath,
   readPluginsFile,
   resolveAgentSearchPath,
@@ -231,7 +232,7 @@ export function installedManifests(env: NodeJS.ProcessEnv = process.env): Plugin
  * `runAgent` and the agent starts every run knowing what it remembers.
  */
 export function memoryPreambleFor(pool: Queryable): (agentId: string) => Promise<string> {
-  return (agentId) => buildPreamble(pool, agentId);
+  return (agentId) => buildPreamble(pool, agentId, { timezone: ownerTimezone() });
 }
 
 /**
@@ -239,7 +240,7 @@ export function memoryPreambleFor(pool: Queryable): (agentId: string) => Promise
  * a member's private notes (docs/groups.md, "Memory").
  */
 export function memoryPreambleForGroup(pool: Queryable): (groupId: string) => Promise<string> {
-  return (groupId) => buildPreambleForScopes(pool, [SHARED, groupScope(groupId)]);
+  return (groupId) => buildPreambleForScopes(pool, [SHARED, groupScope(groupId)], { timezone: ownerTimezone() });
 }
 
 export interface GatewayCatalogOptions {

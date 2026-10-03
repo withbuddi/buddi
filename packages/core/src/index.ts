@@ -49,6 +49,7 @@ export * from './system-context.js';
 export * from './groups.js';
 export * from './semver.js';
 export * from './places.js';
+export * from './day-month.js';
 export * from './plugin-assets.js';
 export * from './host/index.js';
 export * from './secrets/index.js';

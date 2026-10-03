@@ -1672,6 +1672,11 @@ export interface OwnerView {
   /** How times and dates read; null is Auto. */
   timeFormat?: '12h' | '24h' | null;
   dateFormat?: 'short' | 'long' | 'iso' | null;
+  /** For letters, forms and bookings. */
+  fullName?: string | null;
+  pronouns?: string | null;
+  /** Day and month, the year optional. */
+  birthday?: DayMonthView | null;
   /** The owner's places, in their order. */
   places?: OwnerPlaceView[];
   /** The zone this host runs in, offered as the default. */
@@ -1697,7 +1702,57 @@ export interface FoundPlaceView {
   longitude: number;
   timezone?: string;
 }
+/** A yearly date: a birthday, an anniversary. */
+export interface DayMonthView {
+  day: number;
+  month: number;
+  year: number | null;
+}
+
+/** One of the owner's people (Settings → Memory → People). */
+export interface PersonRow {
+  id: string;
+  name: string;
+  relationship: string | null;
+  addressAs: string | null;
+  birthday: DayMonthView | null;
+  anniversary: DayMonthView | null;
+  notes: string | null;
+  createdBy: string;
+  updatedAt: string | null;
+  /** The soonest date, counted in the owner's zone. */
+  next: { what: 'birthday' | 'anniversary'; inDays: number; turning: number | null } | null;
+  /** Whether its reminder missions are on; null without a date. */
+  reminders: boolean | null;
+}
+
+export interface PersonPatch {
+  id?: string;
+  name: string;
+  relationship: string | null;
+  addressAs: string | null;
+  birthday: DayMonthView | null;
+  anniversary: DayMonthView | null;
+  notes: string | null;
+  reminders?: boolean;
+}
+
+/** Home on the owner's birthday. */
+export interface BirthdayGlanceView {
+  today: boolean;
+  /** The owner's local date. */
+  date: string;
+  name: string | null;
+  age: number | null;
+  note: string | null;
+  from: string | null;
+  image: string | null;
+}
+
 export interface OwnerPatch {
+  fullName?: string | null;
+  pronouns?: string | null;
+  birthday?: DayMonthView | null;
   timeFormat?: '12h' | '24h' | null;
   dateFormat?: 'short' | 'long' | 'iso' | null;
   preferredName?: string | null;
@@ -2713,6 +2768,11 @@ export const api = {
   forgetPreference: (body: { key: string; scope: string }) => post<null>('/memory/preferences/forget', body),
   updateNote: (id: string, change: { content?: string; scope?: string; kind?: string }) => post<MemoryNote>(`/memory/notes/${encodeURIComponent(id)}`, change),
   forgetNote: (id: string) => post<null>(`/memory/notes/${encodeURIComponent(id)}/forget`),
+  people: () => get<{ people: PersonRow[]; today: string }>('/memory/people'),
+  savePerson: (person: PersonPatch) => post<{ person: PersonRow; people: PersonRow[] }>('/memory/people', person),
+  forgetPerson: (id: string) => post<{ people: PersonRow[] }>(`/memory/people/${encodeURIComponent(id)}/forget`),
+  restorePerson: (id: string) => post<{ people: PersonRow[] }>(`/memory/people/${encodeURIComponent(id)}/restore`),
+  birthday: () => get<BirthdayGlanceView>('/owner/birthday'),
   setDelegates: (id: string, delegates: string[]) => post<{ delegates: string[]; asksEveryone?: 'front-desk' | 'maker' | 'list' }>(`/agents/${encodeURIComponent(id)}/delegates`, { delegates }),
   agentProfile: (id: string) => get<AgentProfile>(`/agents/${encodeURIComponent(id)}/profile`),
   /** Every skill the agent loads; learned ones with their version and provenance. */

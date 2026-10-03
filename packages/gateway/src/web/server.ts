@@ -275,7 +275,9 @@ import { tipsRoute } from '../tips/route.js';
 import { createWidgets, widgetsRoute } from './widgets.js';
 import { createRequirements, type Requirements } from '../plugins/requires.js';
 import { placesList, placesRoute } from './places.js';
-import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS, type HttpArea } from '@buddi/core';
+import { peopleRoute } from './people.js';
+import { syncDateMissions } from '../missions/dates.js';
+import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS, validDayMonth, type HttpArea } from '@buddi/core';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
@@ -2034,6 +2036,12 @@ export function createWebApp(deps: WebServerDeps): Server {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, places: await placesList(deps.pool), detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
         }
+        // Settings → Memory → People, and Home's birthday card (web/people.ts).
+        case '/api/memory/people':
+        case '/api/owner/birthday': {
+          const answered = await peopleRoute({ pool: deps.pool, catalog: deps.catalog, now: deps.now, log }, 'GET', path, {});
+          return sendJson(res, answered!.status, answered!.body);
+        }
         case '/api/memory': {
           try {
             // `?agent=` narrows it to what that agent sees: the agent sheet's tab.
@@ -3553,7 +3561,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     if (path === '/api/owner') {
       const patch: OwnerProfilePatch = {};
-      for (const key of ['preferredName', 'timezone', 'language', 'about'] as const) {
+      for (const key of ['preferredName', 'timezone', 'language', 'about', 'fullName', 'pronouns'] as const) {
         const given = body[key];
         if (given === undefined) continue;
         if (given !== null && typeof given !== 'string') return sendJson(res, 400, { error: `\`${key}\` must be a string or null` });
@@ -3571,8 +3579,23 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (patch.timezone && !isKnownTimezone(patch.timezone)) return sendJson(res, 400, { error: `"${patch.timezone}" is not a timezone this host knows.` });
       if (patch.preferredName && patch.preferredName.length > 80) return sendJson(res, 400, { error: 'The name is too long (80 characters at most).' });
       if (patch.about && patch.about.length > 1000) return sendJson(res, 400, { error: 'Keep the line about you under 1,000 characters.' });
+      if (patch.fullName && patch.fullName.length > 120) return sendJson(res, 400, { error: 'The full name is too long (120 characters at most).' });
+      if (patch.pronouns && patch.pronouns.length > 40) return sendJson(res, 400, { error: 'Keep the pronouns under 40 characters.' });
+      // The birthday: day and month (the year optional), or null to clear it.
+      if (body.birthday !== undefined) {
+        if (body.birthday === null) patch.birthday = null;
+        else {
+          const birthday = validDayMonth(body.birthday as Record<string, unknown>);
+          if (!birthday) return sendJson(res, 400, { error: 'The birthday needs a real day and month; the year is optional.' });
+          patch.birthday = birthday;
+        }
+      }
       // The zone applies at once; schedules kept in the old one move with it.
       const { profile, zoneChange } = await saveOwnerProfile(deps.pool, patch, deps.env ?? process.env);
+      // The birthday greeting follows the new day at once (missions/dates.ts).
+      if (patch.birthday !== undefined) {
+        await syncDateMissions({ pool: deps.pool, catalog: deps.catalog, now: deps.now, log }).catch((err: unknown) => log(`dates: ${err instanceof Error ? err.message : String(err)}`));
+      }
       if (zoneChange) log(`owner: timezone ${zoneChange.from} → ${zoneChange.to}${zoneChange.missions.length > 0 ? `; moved ${zoneChange.missions.join(', ')}` : ''}`);
       return sendJson(res, 200, { ...profile, places: await placesList(deps.pool), detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
     }
@@ -3585,6 +3608,12 @@ export function createWebApp(deps: WebServerDeps): Server {
         requirements.readiness.forget();
         return sendJson(res, answered.status, answered.body);
       }
+    }
+
+    /* People, the owner's side: add, change, forget, bring back (web/people.ts). */
+    if (path.startsWith('/api/memory/people')) {
+      const answered = await peopleRoute({ pool: deps.pool, catalog: deps.catalog, now: deps.now, log }, 'POST', path, body);
+      if (answered) return sendJson(res, answered.status, answered.body);
     }
 
     /* Memory, the owner's side: correct a preference, retire one, edit or forget a note. */

@@ -91,6 +91,7 @@ import { createDigestPrepare } from './missions/recap.js';
 import { createMailWatcherPrepare } from './missions/watcher-mail.js';
 import { createReminderTick } from './missions/reminders.js';
 import { PROPOSAL_SWEEP_MS, adoptPluginPolicies, createProposalSweep } from './agents/learning.js';
+import { FRONT_DESK_ROLE, createDatesPrepare, onDatesChanged, syncDateMissions } from './missions/dates.js';
 import { LEARNING_DIGEST_ID, ensureDigestMission, runLearningDigest } from './agents/learning-digest.js';
 import { ownerFollowingDeclarations } from './missions/zone-provenance.js';
 import { startLoop } from './loop.js';
@@ -750,7 +751,15 @@ export async function main(): Promise<void> {
         deliver: ownerDeliver(pool, notifyDeps),
         // Two, composed: the weekly digest on the recap, and the conversation
         // a mail watcher's finding is about on a wake run (docs/email.md §7).
-        prepare: composePrepare(createDigestPrepare(pool, { now }), createMailWatcherPrepare(pool)),
+        // And the dates buddi acts on: the owner's birthday and their people's (missions/dates.ts).
+        prepare: composePrepare(createDigestPrepare(pool, { now }), createMailWatcherPrepare(pool), createDatesPrepare({
+          pool,
+          now,
+          team: () => wiring.catalog.list().filter((a) => a.available && !a.heldBack && !a.roles.includes('maker')).map((a) => ({
+            id: a.id, name: a.name, handle: a.handle, tools: wiring.catalog.get(a.id)?.tools ?? [], isFrontDesk: a.roles.includes(FRONT_DESK_ROLE),
+          })),
+          imageReady: async () => wiring.registry.has('image.generate') && (await wiring.registry.readiness('image', wiring.ctx))?.ready === true,
+        })),
         askApproval,
       }),
       {
@@ -1104,6 +1113,21 @@ export async function main(): Promise<void> {
     });
     // A plugin's rules proposed before they came through core move here once.
     if (!recovering) await adoptPluginPolicies(pool, wiring.registry.manifests(), now(), (line) => console.log(line), wiring.timezone);
+    // The dates buddi acts on: the owner's birthday greeting and each person's
+    // reminders, kept in step with Settings now, every five minutes, and at
+    // once after a save (missions/dates.ts).
+    const syncDates = (): Promise<unknown> => syncDateMissions({ pool, catalog: wiring.catalog, now, log: (line) => console.log(line) });
+    if (!recovering) {
+      await syncDates().catch((err) => console.error(`dates: ${err instanceof Error ? err.message : String(err)}`));
+      onDatesChanged(syncDates);
+    }
+    const datesLoop = recovering ? idle.loop : startLoop({
+      name: 'dates',
+      everyMs: 5 * 60_000,
+      abortAfterMs: 60_000,
+      run: async () => { await syncDates(); },
+      log: logErr,
+    });
     const proposalLoop = recovering ? idle.loop : startLoop({
       name: 'proposals',
       everyMs: PROPOSAL_SWEEP_MS,
@@ -1193,7 +1217,7 @@ export async function main(): Promise<void> {
         );
         if (process.env.BUDDI_WEB_REQUIRE_AUTH === '1') {
           clearInterval(sweep); clearInterval(orphanSweep);
-          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); notificationsLoop.stop(); proposalLoop.stop(); requirementsLoop.stop();
+          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); notificationsLoop.stop(); proposalLoop.stop(); requirementsLoop.stop(); datesLoop.stop();
           await Promise.all([scheduler.stop(), worker.stop(), telegram?.stop(), sourceWatches.stopAll()]);
           throw err;
         }
@@ -1281,6 +1305,8 @@ export async function main(): Promise<void> {
       notificationsLoop.stop();
       proposalLoop.stop();
       requirementsLoop.stop();
+      datesLoop.stop();
+      onDatesChanged(null);
       telegramChannel?.();
       closingDashboard = dashboard?.close();
       closingDashboard?.catch(() => {});

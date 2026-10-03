@@ -50,6 +50,7 @@ import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
 import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
 import { HomeGlances, useGlanceHiding } from './parts/HomeGlances';
+import { BirthdayCard } from './parts/BirthdayCard';
 import { HomeWidgets, placedIds, useWidgets } from './parts/HomeWidgets';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 import { pluginTitle, type PluginPages } from '../pages/usePages';
@@ -88,6 +89,8 @@ export function Home({
   const proposals = useAsync(() => api.proposals(), [], 60_000);
   const agentOffers = useAsync(() => api.agentOffers(), [], 60_000);
   const owner = useAsync(() => api.owner(), []);
+  // The owner's birthday: the greeting says it, and the team's card sits under the glance.
+  const birthday = useAsync(() => api.birthday(), [], 5 * 60_000);
   // Only the messages that ask the owner for something: a plain report is information (Notifications → Recent).
   const notifications = useAsync(() => api.notificationsNeedingYou(), [], 30_000);
   // The same order as the rail and the Agents page: front desk first, the maker last.
@@ -177,13 +180,20 @@ export function Home({
               <HomeGlances glances={data?.glances} navigate={navigate} except={placed} hiding={hiding} />
               <TipsButton tips={tips} />
             </p>
-            <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
+            <h1 className="home-greeting">
+              {birthday.data?.today
+                ? birthdayGreeting(birthday.data.name ?? owner.data?.preferredName ?? owner.data?.displayName)
+                : greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}
+            </h1>
             <GlanceCounts items={counts} navigate={navigate} />
           </div>
           <div className="home-side">
             <Mascot size="lg" anim="idle" />
           </div>
         </header>
+        {birthday.data?.today && birthday.data.note && !closed.is('birthday', birthday.data.date) ? (
+          <BirthdayCard glance={birthday.data} team={team} onClose={() => closed.close('birthday', birthday.data!.date)} />
+        ) : null}
       </div>
     <div className="home">
       {/* The front desk, under the glance: writing to it is the commonest thing done here. */}
@@ -666,6 +676,11 @@ function hourIn(iso: string | undefined, timezone: string): number {
 }
 
 /** The time of day's greeting, by the owner's name when there is one: "Good evening, Amen." */
+/** The greeting on the owner's birthday. */
+export function birthdayGreeting(name?: string | null): string {
+  return name ? `Happy birthday, ${name}.` : 'Happy birthday.';
+}
+
 export function greeting(iso: string | undefined, timezone: string, name?: string | null): string {
   const hour = hourIn(iso, timezone);
   const to = name?.trim() ? `, ${name.trim()}` : '';

@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import type { PluginManifest } from '@buddi/core/plugin';
 import { getPreferences, rememberPreference } from './tools/preferences.js';
 import { forget, note, recall } from './tools/notes.js';
+import { forgetPersonTool, people, peoplePolicyHandler, person } from './people.js';
 
 /** Absolute path to this plugin's migrations, resolved from the built file. */
 export const MIGRATIONS_DIR = path.resolve(
@@ -29,8 +30,11 @@ export const manifest: PluginManifest = {
   version: '0.1.0',
   schema: 'memory',
   migrationsDir: MIGRATIONS_DIR,
-  tools: [rememberPreference, getPreferences, note, recall, forget],
-  uses: [],
+  tools: [rememberPreference, getPreferences, note, recall, forget, person, people, forgetPersonTool],
+  // A person an agent was not told about by the owner in that turn is a
+  // proposal card (people.ts); keeping it comes back here.
+  policies: peoplePolicyHandler,
+  uses: ['proposals'],
 };
 
 export default manifest;
@@ -41,3 +45,4 @@ export { selectNotes, scopesFor } from './tools/notes.js';
 export { groupScope, SHARED } from './tools/shared.js';
 export * from './preamble.js';
 export * from './admin.js';
+export * from './people.js';

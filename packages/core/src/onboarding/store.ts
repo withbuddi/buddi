@@ -33,6 +33,7 @@ import type {
 } from './types.js';
 import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS } from './types.js';
 import { rememberOwnerTimezone } from '../time.js';
+import { validDayMonth, type DayMonth } from '../day-month.js';
 
 /** Every column, in one place, so the row mapper and the SQL cannot drift. */
 const COLUMNS = `owner_id, state, started_at, completed_at, surface, steps_done, details,
@@ -317,14 +318,20 @@ function toProfile(row: any): OwnerProfile {
     displayName: text(row.display_name),
     timeFormat: (OWNER_TIME_FORMATS as readonly string[]).includes(row.time_format) ? (row.time_format as OwnerTimeFormat) : null,
     dateFormat: (OWNER_DATE_FORMATS as readonly string[]).includes(row.date_format) ? (row.date_format as OwnerDateFormat) : null,
+    fullName: text(row.full_name),
+    pronouns: text(row.pronouns),
+    birthday: row.birthday_day && row.birthday_month
+      ? { day: Number(row.birthday_day), month: Number(row.birthday_month), year: row.birthday_year ? Number(row.birthday_year) : null }
+      : null,
   };
 }
+
+const PROFILE_COLUMNS = 'preferred_name, timezone, language, about, display_name, time_format, date_format, full_name, pronouns, birthday_day, birthday_month, birthday_year';
 
 /** What the agents know about how to address the owner. All of it may be null. */
 export async function getOwnerProfile(pool: Queryable): Promise<OwnerProfile> {
   const { rows } = await pool.query(
-    `select preferred_name, timezone, language, about, display_name, time_format, date_format
-       from core.owner where id = $1`,
+    `select ${PROFILE_COLUMNS} from core.owner where id = $1`,
     [OWNER_ID],
   );
   return rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;
@@ -342,7 +349,7 @@ export async function refreshOwnerTimezone(pool: Queryable): Promise<void> {
   }
 }
 
-const EMPTY_PROFILE: OwnerProfile = { preferredName: null, timezone: null, language: null, about: null, displayName: null, timeFormat: null, dateFormat: null };
+const EMPTY_PROFILE: OwnerProfile = { preferredName: null, timezone: null, language: null, about: null, displayName: null, timeFormat: null, dateFormat: null, fullName: null, pronouns: null, birthday: null };
 
 /**
  * Write the profile. Absent keys are left alone; an explicit `null` clears one.
@@ -371,6 +378,10 @@ export async function setOwnerProfile(
     given === undefined ? undefined : given !== null && known.includes(given) ? given : null;
   const timeFormat = format(patch.timeFormat, OWNER_TIME_FORMATS);
   const dateFormat = format(patch.dateFormat, OWNER_DATE_FORMATS);
+  const fullName = value(patch.fullName);
+  const pronouns = value(patch.pronouns);
+  // A birthday is a real day of the year or nothing: an impossible one clears it.
+  const birthday = patch.birthday === undefined ? undefined : patch.birthday === null ? null : validDayMonth(patch.birthday);
 
   const { rows } = await pool.query(
     `update core.owner
@@ -379,9 +390,14 @@ export async function setOwnerProfile(
             language       = case when $6::boolean then $7 else language end,
             about          = case when $8::boolean then $9 else about end,
             time_format    = case when $10::boolean then $11 else time_format end,
-            date_format    = case when $12::boolean then $13 else date_format end
+            date_format    = case when $12::boolean then $13 else date_format end,
+            full_name      = case when $14::boolean then $15 else full_name end,
+            pronouns       = case when $16::boolean then $17 else pronouns end,
+            birthday_day   = case when $18::boolean then $19::smallint else birthday_day end,
+            birthday_month = case when $18::boolean then $20::smallint else birthday_month end,
+            birthday_year  = case when $18::boolean then $21::smallint else birthday_year end
       where id = $1
-      returning preferred_name, timezone, language, about, display_name, time_format, date_format`,
+      returning ${PROFILE_COLUMNS}`,
     [
       OWNER_ID,
       preferredName !== undefined,
@@ -396,6 +412,14 @@ export async function setOwnerProfile(
       timeFormat ?? null,
       dateFormat !== undefined,
       dateFormat ?? null,
+      fullName !== undefined,
+      fullName ?? null,
+      pronouns !== undefined,
+      pronouns ?? null,
+      birthday !== undefined,
+      birthday?.day ?? null,
+      birthday?.month ?? null,
+      birthday?.year ?? null,
     ],
   );
   const profile = rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;
@@ -403,3 +427,4 @@ export async function setOwnerProfile(
   if (timezone !== undefined) rememberOwnerTimezone(profile.timezone);
   return profile;
 }
+

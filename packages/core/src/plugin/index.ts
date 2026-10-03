@@ -11,6 +11,8 @@
 
 /* Values: pure. */
 export { localDateString } from '../time.js';
+export { validDayMonth, daysUntil, isOnDay, turning, dayMonthText, yearlyCron, daysBefore, occurrenceIn, MONTH_NAMES } from '../day-month.js';
+export type { DayMonth } from '../day-month.js';
 export { sha256Of } from './hash.js';
 export { QueryRefusal, pageFile, isPageFile } from './page-file.js';
 export { parseViewDescriptors } from '../views.js';

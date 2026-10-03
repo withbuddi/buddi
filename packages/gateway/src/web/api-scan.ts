@@ -35,6 +35,7 @@ export const ROUTE_FILES = [
   'web/widgets.ts',
   'web/connections.ts',
   'web/places.ts',
+  'web/people.ts',
   'web/pages.ts',
   'web/preview.ts',
   'web/extension.ts',

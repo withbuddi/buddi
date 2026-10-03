@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-295 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+300 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2380,6 +2380,10 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | POST | `/api/memory/preferences/forget` | Retire a preference. | yes |
 | POST | `/api/memory/notes/:id` | Edit a note. | yes |
 | POST | `/api/memory/notes/:id/forget` | Forget a note. | yes |
+| GET | `/api/memory/people` | The owner’s people: who they are, how to address them, their dates, the next one and whether its reminders are on. | yes |
+| POST | `/api/memory/people` | Add a person, or change one by id; reminders switches their date missions. | yes |
+| POST | `/api/memory/people/:id/forget` | Forget a person; their reminders go with them. | yes |
+| POST | `/api/memory/people/:id/restore` | Bring a forgotten person back (Undo). | yes |
 
 #### `GET /api/memory`
 
@@ -2448,6 +2452,58 @@ Forget a note.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/notes/<id>/forget"
+```
+
+#### `GET /api/memory/people`
+
+The owner’s people: who they are, how to address them, their dates, the next one and whether its reminders are on.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ people: Array<{ id, name, relationship, addressAs, birthday, anniversary, notes, next: { what, inDays, turning }|null, reminders: boolean|null }>, today }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/people"
+```
+
+#### `POST /api/memory/people`
+
+Add a person, or change one by id; reminders switches their date missions.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ id?, name, relationship?, addressAs?, notes?: string|null, birthday?, anniversary?: { day, month, year? }|null, reminders?: boolean }`
+- **Answer:** `{ person, people }`
+- **Errors:** 400; 409 the name is taken
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/memory/people"
+```
+
+#### `POST /api/memory/people/:id/forget`
+
+Forget a person; their reminders go with them.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `{ person, people }`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/people/<id>/forget"
+```
+
+#### `POST /api/memory/people/:id/restore`
+
+Bring a forgotten person back (Undo).
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `{ person, people }`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/people/<id>/restore"
 ```
 
 ### Files
@@ -2552,6 +2608,7 @@ curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts
 | POST | `/api/owner` | Change the profile; what is left out stays. | yes |
 | POST | `/api/owner/places` | Save a place (new, or by id). | yes |
 | POST | `/api/owner/places/find` | Find a place by address or town (Open-Meteo). | yes |
+| GET | `/api/owner/birthday` | Home on the owner’s birthday: whether it is today, and the team’s note and picture once sent. | yes |
 | POST | `/api/owner/places/remove` | Remove a place. | yes |
 
 #### `GET /api/owner`
@@ -2559,7 +2616,7 @@ curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts
 The owner’s profile, places, and the timezones this host knows.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ preferredName, timezone, language, about, timeFormat, dateFormat, places, detectedTimezone, zones }`
+- **Answer:** `{ preferredName, fullName, pronouns, birthday: { day, month, year|null }|null, timezone, language, about, timeFormat, dateFormat, places, detectedTimezone, zones }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
@@ -2571,7 +2628,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/owner"
 Change the profile; what is left out stays.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ preferredName?, timezone?, language?, about?: string|null, timeFormat?: '12h'|'24h'|null, dateFormat?: 'short'|'long'|'iso'|null }`
+- **Body:** `{ preferredName?, fullName?, pronouns?, timezone?, language?, about?: string|null, birthday?: { day, month, year? }|null, timeFormat?: '12h'|'24h'|null, dateFormat?: 'short'|'long'|'iso'|null }`
 - **Answer:** `as GET`
 - **Errors:** 400
 - **Since:** 0.1.0-pre.15
@@ -2606,6 +2663,18 @@ Find a place by address or town (Open-Meteo).
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"address":"…"}' "$BUDDI_URL/api/owner/places/find"
+```
+
+#### `GET /api/owner/birthday`
+
+Home on the owner’s birthday: whether it is today, and the team’s note and picture once sent.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ today, date, name, age, note, from, image }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/owner/birthday"
 ```
 
 #### `POST /api/owner/places/remove`

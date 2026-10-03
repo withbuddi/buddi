@@ -38,6 +38,8 @@ import {
   notifyFromAgent,
   markStepDone,
   saveOwnerProfile,
+  validDayMonth,
+  type DayMonth,
   updateAgentFrontmatter,
   type PluginManifest,
   type ToolDefinition,
@@ -45,6 +47,7 @@ import {
 import path from 'node:path';
 import { z } from 'zod';
 import { EXAMPLES_AGENTS_DIR } from './catalog.js';
+import { datesChanged } from '../missions/dates.js';
 import type { AgentCatalog } from '../telegram/types.js';
 
 /** Plugin family name. One manifest, four tools, no tables of its own. */
@@ -163,6 +166,26 @@ const setProfileInput = z
       .max(1000)
       .optional()
       .describe('A short line about themselves in their own words — how to address them, what they do, how they like answers — only when they offer it as something every agent should know.'),
+    fullName: z
+      .string()
+      .min(1)
+      .max(120)
+      .optional()
+      .describe('Their full name, for letters, forms and bookings, as they said it. preferredName stays what you call them.'),
+    pronouns: z
+      .string()
+      .min(1)
+      .max(40)
+      .optional()
+      .describe('Their pronouns, as they wrote them ("she/her"). Only when they said.'),
+    birthday: z
+      .object({
+        day: z.number().int().min(1).max(31),
+        month: z.number().int().min(1).max(12),
+        year: z.number().int().min(1900).max(2100).optional(),
+      })
+      .optional()
+      .describe('Their birthday, when they said it: day and month, the year only if they gave it. Their team greets them on the day.'),
   })
   .strict();
 
@@ -299,8 +322,19 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
             'and try again; nothing was recorded.',
         };
       }
+      const { birthday: givenBirthday, ...rest } = input;
+      let birthday: DayMonth | undefined;
+      if (givenBirthday !== undefined) {
+        const valid = validDayMonth(givenBirthday);
+        if (!valid) {
+          return { ok: false, reason: 'unknown-day', message: 'That day does not exist. Ask the owner again; nothing was recorded.' };
+        }
+        birthday = valid;
+      }
       // The zone applies at once; schedules kept in the old one move with it.
-      const { profile } = await saveOwnerProfile(ctx.db, input);
+      const { profile } = await saveOwnerProfile(ctx.db, { ...rest, ...(birthday ? { birthday } : {}) });
+      // The birthday greeting's schedule follows the new day at once.
+      if (birthday) await datesChanged();
       // The steps the shipped skill records. Free-form strings in core, so an
       // owner's own first-run skill is free to record something else entirely.
       if (input.preferredName !== undefined) await markStepDone(ctx.db, 'name');

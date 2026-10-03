@@ -97,7 +97,9 @@ The page the dashboard opens on. It answers three questions in order: what
 needs me, what is my team up to, what is coming.
 
 - **The glance** at the top: the date (with plugins' one-line glances and the
-  Tips bulb), a large greeting, and what needs you as one line of counts, each
+  Tips bulb), a large greeting ("Happy birthday, <name>." on your birthday,
+  with the team's note and picture in one card under the glance until you put
+  it away), and what needs you as one line of counts, each
   a link to its list (failed jobs and urgent alerts to Activity, proposals to
   Settings; approvals, questions, requests, connections to check, agents to
   set up and a restore to finish scroll to Needs you). The counts, the rail's
@@ -484,7 +486,9 @@ Try it: open a goal that is behind and ask its agent why.
 
 A list of sections in four groups.
 
-- **Profile**: your name and how the agents address you, your timezone,
+- **Profile**: who you are — your full name, what the agents call you, your
+  pronouns and your birthday (day and month, the year optional; your team
+  greets you on the day, [memory.md](memory.md#dates-buddi-acts-on)) — your timezone,
   **Time** (Auto, 12-hour or 24-hour) and **Dates** (Auto, "Thu, Oct 1",
   "Thursday, 1 October" or ISO "2026-10-01") — every date and time on the
   dashboard reads that way, and agents write them that way; Auto follows the
@@ -502,7 +506,10 @@ A list of sections in four groups.
   installation.
 - **Notifications**: where messages go, the focus schedules, the end of the
   day, and the last twenty sent. Also where Telegram is paired.
-- **Memory**: what the agents have kept about you, and the means to correct it.
+- **Memory**: what the agents have kept about you, and the means to correct it,
+  in three tabs: **People** first (the people in your life, their dates and
+  reminders, and the ones agents proposed waiting to be kept;
+  [memory.md](memory.md#people)), then Preferences and Notes.
 - **Proposals**: what the agents learned, to keep or discard.
 - **Model accounts**: the credentials the agents run on.
 - **Computer & browser**: whether agents may act on this Mac, which apps, and

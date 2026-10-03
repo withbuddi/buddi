@@ -118,7 +118,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'appearance' ? <AppearanceSection railPages={plugins.rail} /> : null}
           {section === 'notifications' ? <Notifications timezone={timezone} /> : null}
           {section === 'telegram' ? <TelegramSettings timezone={timezone} /> : null}
-          {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
+          {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} initialTab={memoryTabOf(hash)} /> : null}
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
           {section === 'accounts' ? <Providers embedded account={parseAccountRoute(hash)} /> : null}
           {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
@@ -892,4 +892,10 @@ function UpgradeOutcome({ attempt }: { attempt: UpgradeAttempt }): JSX.Element {
       {attempt.backup ? <span className="ui-card-meta"> Backup: <span className="mono">{attempt.backup}</span></span> : null}
     </span>
   );
+}
+
+/** `#/settings/memory?tab=notes` opens that tab; anything else opens People. */
+export function memoryTabOf(hash: string): 'people' | 'preferences' | 'notes' {
+  const tab = /[?&]tab=(people|preferences|notes)\b/.exec(hash)?.[1];
+  return (tab as 'people' | 'preferences' | 'notes' | undefined) ?? 'people';
 }

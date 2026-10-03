@@ -927,6 +927,9 @@ other two:
   private unless shared explicitly, an optional expiry, and a soft delete so
   the row stays auditable.
 - Recall is a keyword search.
+- **People** are a third kind ([memory.md](memory.md#people)): a person an
+  agent did not hear about from the owner in that turn is a proposal the owner
+  keeps.
 
 Every memory tool is `auto`. [learning.md](learning.md) covers how buddi
 proposes changes and the owner keeps them.

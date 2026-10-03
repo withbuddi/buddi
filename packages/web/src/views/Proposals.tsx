@@ -584,13 +584,10 @@ function ProposalCard({
               { label: 'Plugin', value: <span className="mono">{String(payload.plugin ?? '')}</span> },
               { label: 'Matches', value: <span className="mono">{matcherLine(payload.matcher ?? {})}</span> },
               { label: 'Does', value: String(payload.action ?? '') },
-              {
-                label: 'Learned from',
-                value: (() => {
-                  const n = Array.isArray(payload.verdicts) ? payload.verdicts.length : 0;
-                  return `${n} ${n === 1 ? 'decision' : 'decisions'}`;
-                })(),
-              },
+              // A rule learned from nothing the owner decided (a person an agent proposes) says nothing here.
+              ...(Array.isArray(payload.verdicts) && payload.verdicts.length > 0
+                ? [{ label: 'Learned from', value: `${payload.verdicts.length} ${payload.verdicts.length === 1 ? 'decision' : 'decisions'}` }]
+                : []),
             ]}
           />
         ) : null}

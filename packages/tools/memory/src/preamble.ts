@@ -9,6 +9,8 @@
 import { currentPreferences } from './tools/preferences.js';
 import { scopesFor, selectNotes } from './tools/notes.js';
 import { toDay } from './tools/shared.js';
+import { listPeople, peopleLines } from './people.js';
+import { localDateString } from '@buddi/core/plugin';
 
 /** Budget for the whole block, persona-first. */
 export const PREAMBLE_MAX_CHARS = 1500;
@@ -31,6 +33,8 @@ export interface Queryable {
 
 export interface BuildPreambleOptions {
   now?: () => Date;
+  /** The owner's zone, for "today" in the people's dates ("in 5 days"). UTC when absent. */
+  timezone?: string;
   maxChars?: number;
   noteLimit?: number;
 }
@@ -40,8 +44,9 @@ export function renderPreamble(
   preferences: readonly { key: string; value: string }[],
   notes: readonly { content: string; kind: string; createdAt: string | null }[],
   maxChars: number = PREAMBLE_MAX_CHARS,
+  people: readonly string[] = [],
 ): string {
-  if (preferences.length === 0 && notes.length === 0) return '';
+  if (preferences.length === 0 && notes.length === 0 && people.length === 0) return '';
 
   const prefLines = preferences.map((p) => `- ${p.key}: ${p.value}`);
   const noteLine = (n: { content: string; kind: string; createdAt: string | null }): string =>
@@ -49,18 +54,26 @@ export function renderPreamble(
 
   // Drop the oldest notes until the block fits. Preferences are the owner's own
   // words and stay; notes are derived and are the ones worth losing.
+  // People have their own room (`PEOPLE_CONTEXT_MAX` lines): a long life of
+  // notes never pushes the owner's wife out of the prompt.
+  const peopleChars = people.length > 0 ? PEOPLE_HEADING.length + 1 + people.join('\n').length + 1 : 0;
   let kept = notes.slice();
   for (;;) {
-    const block = assemble(prefLines, kept.map(noteLine));
-    if (block.length <= maxChars || kept.length === 0) return block;
+    const block = assemble(prefLines, kept.map(noteLine), people);
+    if (block.length <= maxChars + peopleChars || kept.length === 0) return block;
     kept = kept.slice(0, -1);
   }
 }
 
-function assemble(prefLines: readonly string[], noteLines: readonly string[]): string {
+export const PEOPLE_HEADING = "People in the owner's life (memory.people has their notes):";
+
+function assemble(prefLines: readonly string[], noteLines: readonly string[], people: readonly string[] = []): string {
   const parts: string[] = [PREAMBLE_HEADING];
   if (prefLines.length > 0) {
     parts.push('Stated preferences:', ...prefLines);
+  }
+  if (people.length > 0) {
+    parts.push(PEOPLE_HEADING, ...people);
   }
   if (noteLines.length > 0) {
     parts.push('Recent notes (newest first):', ...noteLines);
@@ -89,9 +102,13 @@ export async function buildPreambleForScopes(
   opts: BuildPreambleOptions = {},
 ): Promise<string> {
   const now = (opts.now ?? (() => new Date()))();
-  const [preferences, notes] = await Promise.all([
+  const [preferences, notes, people] = await Promise.all([
     currentPreferences(db, scopes),
     selectNotes(db, { scopes, now, limit: opts.noteLimit ?? PREAMBLE_NOTE_LIMIT }),
+    // An installation migrated before People has no table yet: no people, not an error.
+    listPeople(db).catch(() => []),
   ]);
-  return renderPreamble(preferences, notes, opts.maxChars ?? PREAMBLE_MAX_CHARS);
+  let today: string | null = null;
+  try { today = localDateString(now, opts.timezone ?? 'UTC'); } catch { today = null; }
+  return renderPreamble(preferences, notes, opts.maxChars ?? PREAMBLE_MAX_CHARS, peopleLines(people, today));
 }

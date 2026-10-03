@@ -124,6 +124,14 @@ export interface DeliverContext {
 export interface PreparedRun {
   appendix: string;
   commit?: () => Promise<void>;
+  /**
+   * Not today: the run does not happen, no model is called, and the
+   * occurrence closes silent with this reason. A yearly date's mission fires
+   * on a superset of days (`yearlyCron`) and says which ones are real here.
+   */
+  skip?: string;
+  /** "This thing, again" for the message it sends: a birthday's greeting is one per day. */
+  dedupeKey?: string;
 }
 
 /**
@@ -146,15 +154,21 @@ export function composePrepare(...prepares: readonly PrepareRun[]): PrepareRun {
   return async (mission, finding) => {
     const parts: string[] = [];
     const commits: Array<() => Promise<void>> = [];
+    let skip: string | undefined;
+    let dedupeKey: string | undefined;
     for (const prepare of prepares) {
       const prepared = await prepare(mission, finding);
       if (!prepared) continue;
+      if (prepared.skip) skip ??= prepared.skip;
+      if (prepared.dedupeKey) dedupeKey ??= prepared.dedupeKey;
       if (prepared.appendix.trim() !== '') parts.push(prepared.appendix);
       if (prepared.commit) commits.push(prepared.commit);
     }
-    if (parts.length === 0 && commits.length === 0) return null;
+    if (parts.length === 0 && commits.length === 0 && !skip && !dedupeKey) return null;
     return {
       appendix: parts.join('\n\n'),
+      ...(skip ? { skip } : {}),
+      ...(dedupeKey ? { dedupeKey } : {}),
       ...(commits.length === 0
         ? {}
         : {
@@ -429,6 +443,12 @@ export function createMissionExecutor(
     const registry = registryForRun(deps.registry, sink, mission.reportMax);
 
     const prepared = deps.prepare ? await deps.prepare(mission, finding) : null;
+    // Not one of its days (a yearly date's superset cron): no run, no model call.
+    if (prepared?.skip && !control?.resume) {
+      log(`mission ${mission.id}: occurrence ${occurrence.id} not run — ${prepared.skip}`);
+      await appendEvent(deps.pool, 'mission.silent', { missionId: mission.id, occurrenceId: occurrence.id, reason: prepared.skip });
+      return { conversationId: '', text: '', delivered: false, decision: 'silent', reason: prepared.skip };
+    }
     // Read once, for a fresh run: a resumed run already has it in its first message.
     const material = control?.resume ? '' : await missionContextBlock(deps.registry, mission, deps.ctx, log);
     const userMessage = [
@@ -600,6 +620,7 @@ export function createMissionExecutor(
         ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
         // One finding is "this thing, again"; a batch is news of its own.
         ...(finding && findings.length === 1 ? { dedupeKey: finding.notify?.dedupeKey ?? `finding:${finding.key}` } : {}),
+        ...(!finding && prepared?.dedupeKey ? { dedupeKey: prepared.dedupeKey } : {}),
         ...(findings.length > 0 && findings.every((f) => f.notify?.urgency === 'today') ? { notifyUrgency: 'today' as const } : {}),
         ...(decision?.kind === 'report' && decision.link ? { link: decision.link } : {}),
         ...(decision?.kind === 'report' && decision.audio ? { audio: decision.audio.fileId } : {}),

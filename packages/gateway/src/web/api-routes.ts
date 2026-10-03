@@ -647,6 +647,13 @@ export const API_ROUTES: readonly ApiRoute[] = [
     body: "{ content?: string, scope?: string, kind?: 'fact'|'observation'|'todo' }", errors: '400; 404',
   },
   { method: 'POST', path: '/api/memory/notes/:id/forget', area: 'memory', summary: 'Forget a note.', answer: '204', errors: '404' },
+  { method: 'GET', path: '/api/memory/people', area: 'memory', summary: 'The owner’s people: who they are, how to address them, their dates, the next one and whether its reminders are on.', answer: '{ people: Array<{ id, name, relationship, addressAs, birthday, anniversary, notes, next: { what, inDays, turning }|null, reminders: boolean|null }>, today }' },
+  {
+    method: 'POST', path: '/api/memory/people', area: 'memory', summary: 'Add a person, or change one by id; reminders switches their date missions.',
+    body: '{ id?, name, relationship?, addressAs?, notes?: string|null, birthday?, anniversary?: { day, month, year? }|null, reminders?: boolean }', answer: '{ person, people }', errors: '400; 409 the name is taken',
+  },
+  { method: 'POST', path: '/api/memory/people/:id/forget', area: 'memory', summary: 'Forget a person; their reminders go with them.', answer: '{ person, people }', errors: '404' },
+  { method: 'POST', path: '/api/memory/people/:id/restore', area: 'memory', summary: 'Bring a forgotten person back (Undo).', answer: '{ person, people }', errors: '404' },
 
   /* ---------------- files ---------------- */
   {
@@ -673,16 +680,17 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
 
   /* ---------------- owner ---------------- */
-  { method: 'GET', path: '/api/owner', area: 'owner', summary: 'The owner’s profile, places, and the timezones this host knows.', answer: '{ preferredName, timezone, language, about, timeFormat, dateFormat, places, detectedTimezone, zones }' },
+  { method: 'GET', path: '/api/owner', area: 'owner', summary: 'The owner’s profile, places, and the timezones this host knows.', answer: '{ preferredName, fullName, pronouns, birthday: { day, month, year|null }|null, timezone, language, about, timeFormat, dateFormat, places, detectedTimezone, zones }' },
   {
     method: 'POST', path: '/api/owner', area: 'owner', summary: 'Change the profile; what is left out stays.',
-    body: "{ preferredName?, timezone?, language?, about?: string|null, timeFormat?: '12h'|'24h'|null, dateFormat?: 'short'|'long'|'iso'|null }", answer: 'as GET', errors: '400',
+    body: "{ preferredName?, fullName?, pronouns?, timezone?, language?, about?: string|null, birthday?: { day, month, year? }|null, timeFormat?: '12h'|'24h'|null, dateFormat?: 'short'|'long'|'iso'|null }", answer: 'as GET', errors: '400',
   },
   {
     method: 'POST', path: '/api/owner/places', area: 'owner', summary: 'Save a place (new, or by id).',
     body: '{ id?, label: string, name: string, address?: string, latitude: number, longitude: number, timezone?: string }', answer: '{ place, places }', errors: '400',
   },
   { method: 'POST', path: '/api/owner/places/find', area: 'owner', summary: 'Find a place by address or town (Open-Meteo).', body: '{ address: string }', answer: '{ found: Array<{ name, latitude, longitude, timezone? }> }', errors: '400; 502' },
+  { method: 'GET', path: '/api/owner/birthday', area: 'owner', summary: 'Home on the owner’s birthday: whether it is today, and the team’s note and picture once sent.', answer: '{ today, date, name, age, note, from, image }' },
   { method: 'POST', path: '/api/owner/places/remove', area: 'owner', summary: 'Remove a place.', body: '{ id: string }', answer: '{ removed, places }', errors: '404' },
 
   /* ---------------- model accounts ---------------- */

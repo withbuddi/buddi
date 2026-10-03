@@ -47,6 +47,9 @@ scheduled runs and delegates. No agent-file edits or approval grants are needed.
   "Thu, Oct 1", "Thursday, 1 October" or ISO) is one line under "About the
   owner" for every agent, so a reply writes "2:05 PM" to someone who reads
   12-hour time. Auto adds nothing.
+- Who the owner is — full name, pronouns, birthday (said as today, or "in N
+  days" within a week, with the age when the year is set) — is in the same
+  block, from Settings → Profile.
 - The front desk alone is also told the owner's places — each label, the
   address as typed, the town it was matched to and its zone — as context, the
   way it is told the timezone. Other agents are not; a plugin reads them only

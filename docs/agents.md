@@ -88,9 +88,13 @@ question. The golden set's `one-writable-calendar-is-taken` case holds this.
 ## What every agent is told about you
 
 Beside the clock (docs/system-context.md), every agent is told what you set on
-Settings → Profile: the name to use, the language, your own few lines, and how
-you read times and dates (12-hour or 24-hour, "Thu, Oct 1" or "Thursday, 1
-October" or ISO), so its replies match. The front desk is also told your
+Settings → Profile: the name to use, your full name (for letters, forms and
+bookings), your pronouns, your birthday (and, when it is today or within a
+week, that it is), the language, your own few lines, and how you read times
+and dates (12-hour or 24-hour, "Thu, Oct 1" or "Thursday, 1 October" or ISO),
+so its replies match. Every agent also reads the people in your life, one line
+each, from memory ([memory.md](memory.md#people)): who they are to you, how to
+address them, their birthdays and anniversaries. The front desk is also told your
 places — Home, Work and the rest, with the address, the town and its zone — so
 "how long to work?" or "the weather at home" needs no explaining. All of it is
 context, never an instruction or a grant.

@@ -147,7 +147,15 @@ export interface OwnerProfile {
   timeFormat: OwnerTimeFormat | null;
   /** `short` (Thu, Oct 1), `long` (Thursday, 1 October) or `iso` (2026-10-01); null is Auto. */
   dateFormat: OwnerDateFormat | null;
+  /** The full name, for letters, forms and bookings. `preferredName` stays what agents call them. */
+  fullName: string | null;
+  /** As the owner wrote them ("he/him"). */
+  pronouns: string | null;
+  /** Day and month, the year optional; null when not set. The owner-birthday mission greets on it. */
+  birthday: DayMonth | null;
 }
+
+import type { DayMonth } from '../day-month.js';
 
 export const OWNER_TIME_FORMATS = ['12h', '24h'] as const;
 export type OwnerTimeFormat = (typeof OWNER_TIME_FORMATS)[number];
@@ -162,4 +170,7 @@ export interface OwnerProfilePatch {
   about?: string | null;
   timeFormat?: OwnerTimeFormat | null;
   dateFormat?: OwnerDateFormat | null;
+  fullName?: string | null;
+  pronouns?: string | null;
+  birthday?: DayMonth | null;
 }

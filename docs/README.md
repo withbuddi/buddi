@@ -31,6 +31,8 @@ unbuilt specs are kept outside this repository.
 - [Email](email.md): accounts, threads, policies, watchers.
 - [Goals](goals.md): a target with a clock.
 - [Learning](learning.md): buddi proposes, the owner keeps.
+- [Memory](memory.md): preferences, notes, the people in your life, and the
+  dates buddi acts on.
 - [Owner secrets](owner-secrets.md): used, never seen.
 - [Connections](connections.md): services that speak MCP, their tools given to
   your agents.

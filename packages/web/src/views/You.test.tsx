@@ -50,6 +50,36 @@ describe('You', () => {
     await waitFor(() => expect(displayFormats()).toEqual({ time: '12h', date: 'short' }));
   });
 
+  it('saves who the owner is: full name, pronouns and a birthday with or without a year', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner());
+    vi.mocked(api.setOwner).mockResolvedValue(owner({ fullName: 'Amenophis Mouzou', pronouns: 'he/him', birthday: { day: 2, month: 10, year: null } }));
+    render(<You />);
+    fireEvent.change(await screen.findByLabelText(/^Full name/), { target: { value: 'Amenophis Mouzou' } });
+    fireEvent.change(screen.getByLabelText(/^Pronouns/), { target: { value: 'he/him' } });
+    // Half a date is not saved, and says what it needs.
+    fireEvent.change(screen.getByLabelText('Birthday: day'), { target: { value: '2' } });
+    expect(screen.getByText('A day and a month; the year is optional, four digits.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Birthday: month'), { target: { value: '10' } });
+    expect(screen.getByText('The year is optional. Your team greets you on the day.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.setOwner).toHaveBeenCalledWith(expect.objectContaining({
+      fullName: 'Amenophis Mouzou', pronouns: 'he/him', birthday: { day: 2, month: 10, year: null },
+    })));
+  });
+
+  it('shows a saved birthday and clears it when emptied', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ birthday: { day: 14, month: 3, year: 1990 } }));
+    vi.mocked(api.setOwner).mockResolvedValue(owner());
+    render(<You />);
+    expect(await screen.findByLabelText('Birthday: year (optional)')).toHaveValue('1990');
+    expect(screen.getByLabelText('Birthday: month')).toHaveValue('3');
+    fireEvent.change(screen.getByLabelText('Birthday: day'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Birthday: month'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Birthday: year (optional)'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.setOwner).toHaveBeenCalledWith(expect.objectContaining({ birthday: null })));
+  });
+
   it('offers Home and Work until they are set, and shows a place’s address and country', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ places: [{ ...HOME, address: '12 Elm St, Portland' }] }));
     render(<You />);

@@ -10,17 +10,22 @@
  *
  * What an agent sees at the start of a turn is the shared set plus its own,
  * with the ten newest notes; the rest stays reachable by search. This page
- * shows all of it, because it is yours.
+ * shows all of it, because it is yours. People, the third kind, are their
+ * own tab and come first (People.tsx).
  */
 import { useState } from 'react';
 import { ApiError, api, type MemoryNote, type MemoryPreference } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtDate, fmtRelative } from '../format';
-import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Sheet, Stack, Table, Toolbar, useAsync } from '../ui';
+import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Sheet, Stack, Tab, Table, Tabs, Toolbar, useAsync } from '../ui';
+import { settingsRoute } from '../routes';
+import { People } from './People';
 
 const KINDS = ['fact', 'observation', 'todo'] as const;
 
-export function Memory({ embedded, agents, timezone, agentId }: {
+export function Memory({ embedded, agents, timezone, agentId, initialTab = 'people' }: {
+  /** Which tab opens: People unless a link says otherwise (`?tab=notes`). */
+  initialTab?: 'people' | 'preferences' | 'notes';
   embedded?: boolean;
   agents: ChatAgent[];
   timezone: string;
@@ -32,6 +37,8 @@ export function Memory({ embedded, agents, timezone, agentId }: {
   const [adding, setAdding] = useState<{ key: string; scope: string } | null>(null);
   const [editing, setEditing] = useState<MemoryNote | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // People first: who the owner's people are is what most often needs a look.
+  const [tab, setTab] = useState<'people' | 'preferences' | 'notes'>(initialTab);
   const nameOf = (scope: string): string => scope === 'shared' ? 'Everyone' : (agents.find((a) => a.id === scope)?.name ?? scope);
 
   const run = async (work: Promise<unknown>): Promise<void> => {
@@ -89,12 +96,22 @@ export function Memory({ embedded, agents, timezone, agentId }: {
         </Stack>
       ) : (
         <Stack gap="lg">
-          <Section title="Preferences" aside="what you said you want, one current value each" actions={add} panel flush>
-            {data ? <PreferenceTable preferences={data.preferences} empty={'Nothing stated yet. Tell any agent "from now on…" or add one here.'} {...rows} /> : <Empty>Loading…</Empty>}
-          </Section>
-          <Section title="Notes" aside="what an agent wrote down, with who wrote it" panel flush>
-            {data ? <NoteTable notes={data.notes} empty="No notes yet. An agent writes one when you state something durable about your life." {...rows} /> : <Empty>Loading…</Empty>}
-          </Section>
+          <Tabs label="Memory">
+            {([['people', 'People'], ['preferences', 'Preferences', data?.preferences.length], ['notes', 'Notes', data?.notes.length]] as const).map(([id, label, count]) => (
+              <Tab key={id} href={`${settingsRoute('memory')}?tab=${id}`} active={tab === id} {...(count ? { count } : {})} onClick={(e) => { e.preventDefault(); setTab(id); }}>{label}</Tab>
+            ))}
+          </Tabs>
+          {tab === 'people' ? <People /> : null}
+          {tab === 'preferences' ? (
+            <Section title="Preferences" aside="what you said you want, one current value each" actions={add} panel flush>
+              {data ? <PreferenceTable preferences={data.preferences} empty={'Nothing stated yet. Tell any agent "from now on…" or add one here.'} {...rows} /> : <Empty>Loading…</Empty>}
+            </Section>
+          ) : null}
+          {tab === 'notes' ? (
+            <Section title="Notes" aside="what an agent wrote down, with who wrote it" panel flush>
+              {data ? <NoteTable notes={data.notes} empty="No notes yet. An agent writes one when you state something durable about your life." {...rows} /> : <Empty>Loading…</Empty>}
+            </Section>
+          ) : null}
         </Stack>
       )}
 

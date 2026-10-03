@@ -65,9 +65,10 @@ describe('Memory on an agent sheet', () => {
     await waitFor(() => expect(api.forgetNote).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111'));
   });
 
-  it('still shows everything, unfolded, in Settings', async () => {
-    render(<Memory embedded agents={AGENTS as never} timezone="UTC" />);
+  it('still shows everything, unfolded, in Settings, under its tab', async () => {
+    render(<Memory embedded agents={AGENTS as never} timezone="UTC" initialTab="notes" />);
     await screen.findByText('the owner is paid on Thursdays');
+    expect(screen.getByRole('link', { name: 'People' })).toHaveAttribute('href', '#/settings/memory?tab=people');
     expect(api.memory).toHaveBeenCalledWith(undefined);
     expect(screen.queryByText(/Shared with every agent/)).toBeNull();
   });
