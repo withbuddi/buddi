@@ -188,11 +188,56 @@ under that conversation's files. This alone does not prove "created from".
 Only show a derivation link if the producing tool explicitly recorded it;
 automatic lineage inference and a version graph are postponed.
 
+## Documents agents write
+
+An agent granted `artifacts.write` saves a document into Files itself, so the
+owner never has to paste an answer into Word:
+
+```
+artifacts.write { title, format: 'markdown' | 'csv' | 'json', content, folder? }
+  → { artifactId, filename, title, format, version, mime, sizeBytes, folder?, unchanged?, note }
+```
+
+- **What is stored.** Markdown as a `.md` file; a table as a `.csv` (`json`
+  takes an array of objects, an array of arrays with a header first, or
+  `{ columns, rows }`, and is stored as the CSV it describes). At most
+  1,000,000 characters. The title becomes the file's name only, cleaned of
+  separators, control characters and leading dots; the bytes are stored
+  content-addressed like every other artifact, so no input reaches the disk as a
+  path. `folder` is a short label kept as the file's caption: Files shows it at
+  the start of the row and under **Filed under**, and search finds it.
+- **Provenance.** The file is credited to the agent and the conversation the
+  call ran in, the same as any file a run produced, and appears under the
+  answer in the chat.
+- **Versions.** Writing the same title again in the same conversation saves a
+  new file, `Title (v2).md`, then `(v3)`; the earlier ones stay. Exactly the
+  same bytes again are not a copy: the tool says nothing new was saved. Outside a
+  conversation (a mission) every write is version 1.
+- **Tier `auto`.** Its only effect is a new file in the owner's own library,
+  never an overwrite and nothing outside buddi, like the memory writes. It is
+  granted per agent like any tool; the catalogue's Researcher, Writer, Chief of
+  Staff and CFO come with it.
+
+**Downloads are made by buddi, not the model.** A Markdown file's Download in
+Files and on its canvas card is a menu: PDF, Word (.docx), then the `.md` as
+written; a CSV's is Excel (.xlsx), then the `.csv`. The gateway converts on
+`GET /api/artifacts/<id>/export/<md|pdf|docx|csv|xlsx>` (dashboard session or
+API token), in pure JavaScript with no browser and nothing fetched: PDF with
+pdfmake (MIT, Roboto from pdfmake, Apache-2.0), Word with docx (MIT), Excel
+with write-excel-file (MIT). Headings, lists, task lists, tables, links (http,
+https and mailto only), code and quotes carry over; an image is its alt text.
+Sources over 2 MB are downloaded as they are (413). In a Telegram conversation
+the Markdown file is sent as itself and then as a PDF.
+
+The shipped skill `examples/skills/writing-a-document.md` tells an agent with
+the tool when a file beats a chat answer and how to shape one: title and date
+first, the answer up front, tables only for comparisons, sources last.
+
 ## API and access boundaries
 
 Add owner-authenticated, read-only library endpoints:
 
-- `GET /api/artifacts`: metadata with filename search, origin and family filters;
+- `GET /api/artifacts`: metadata with search (filename and caption), origin and family filters;
   simple page-based pagination, default 50 entries and maximum 100 per page.
 - `GET /api/artifacts/<id>`: detail metadata and paginated conversation links.
 - Reuse `/api/artifacts/<id>/download` and `/preview` for their supported
@@ -223,7 +268,7 @@ This owner-facing library does not change agent grants, memory scopes or file
 access policy. In particular, it must not expose a new owner-wide library API
 as an automatically granted agent tool. Existing `artifacts.*` tools remain
 separate; this spec does not claim they already enforce conversation-level
-isolation.
+isolation. `artifacts.write` (above) only adds files; it reads nothing new.
 
 ## Acceptance checks
 

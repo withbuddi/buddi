@@ -6,6 +6,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Agents can write documents: with the new `artifacts.write` tool an agent saves a report (Markdown) or a table (CSV, or JSON rows) into Files, credited to it and the conversation; the same title again saves a new version. The Download in Files and on the file's canvas card becomes a menu, and buddi itself converts: Markdown to PDF or Word, a table to Excel. On Telegram a written document arrives as the .md and a PDF. A shipped skill, "writing-a-document", says when a file beats a chat answer and how to shape it. Files search also finds the label a document was filed under.
+
 - Telegram: "Still useful?" for a quiet watch now has Keep and Stop buttons, alone or after the end-of-day message. Only the owner's tap counts, a second tap says what already happened, and the message is edited to show the outcome.
 
 ### Fixed

@@ -1607,6 +1607,8 @@ export interface AgentProfile {
 export interface LibraryEntry {
   id: string;
   filename: string | null;
+  /** What the file was handed in with, or the label an agent filed a document under. */
+  caption: string | null;
   mime: string;
   family: 'image' | 'pdf' | 'table' | 'text' | 'code' | 'audio' | 'video' | 'archive' | 'file';
   sizeBytes: number;

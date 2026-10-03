@@ -16,8 +16,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
 import { ApiError, api, type LibraryContext, type LibraryEntry } from '../api';
 import { ArtifactPreview } from '../chat/ArtifactPreview';
-import { FAMILY_LABEL, downloadUrl, formatBytes, previewUrl } from '../chat/attachments';
+import { FAMILY_LABEL, formatBytes, previewUrl } from '../chat/attachments';
 import { FamilyMark } from '../chat/FileTile';
+import { DownloadMenu } from '../chat/DownloadMenu';
 import { fmtRelative, fmtTime } from '../format';
 import { chatRoute, fileRoute, groupChatRoute, parseFileRoute } from '../routes';
 import { AgentAvatar, Button, Chip, Empty, ErrorBanner, Field, FormGrid, KV, List, Notice, PickRow, SearchBar, Split, Toolbar, EmptyState } from '../ui';
@@ -109,7 +110,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
               }
               title={entry.filename ?? 'Untitled file'}
               meta={<span title={fmtTime(entry.createdAt, timezone)}>{fmtRelative(entry.createdAt)}</span>}
-              sub={`${FAMILY_LABEL[entry.family]} · ${formatBytes(entry.sizeBytes)} · ${originLabel(entry, nameOf)}${contextLabel(entry, nameOf)}`}
+              sub={`${entry.caption && entry.origin === 'produced' ? `${entry.caption} · ` : ''}${FAMILY_LABEL[entry.family]} · ${formatBytes(entry.sizeBytes)} · ${originLabel(entry, nameOf)}${contextLabel(entry, nameOf)}`}
             />
           ))}
         </List>
@@ -139,7 +140,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
           <SearchBar
             label="Files"
             onSubmit={() => setFilters({ q: typed }, true)}
-            main={<input type="search" value={typed} placeholder="Search by filename" aria-label="Search files by name" onChange={(e) => setTyped(e.target.value)} />}
+            main={<input type="search" value={typed} placeholder="Search by name or label" aria-label="Search files by name or label" onChange={(e) => setTyped(e.target.value)} />}
             filters={
               <FormGrid dense>
                 <Field label="Origin">
@@ -241,12 +242,13 @@ function FileDetail({ id, timezone, agents, navigate, onBack }: {
           <h3 className="files-detail-name">{name}</h3>
           <p className="files-detail-meta">{FAMILY_LABEL[entry.family]} · {formatBytes(entry.sizeBytes)} · {fmtTime(entry.createdAt, timezone)}</p>
         </div>
-        {available ? <a className="ui-btn" data-variant="accent" href={downloadUrl(entry.id)} download={name}>Download</a> : null}
+        {available ? <DownloadMenu artifactId={entry.id} filename={entry.filename} mime={entry.mime} /> : null}
       </header>
       {!available ? <Notice tone="warning">The file's bytes are no longer on this machine. What is known about it stays here; the download will not work.</Notice> : null}
       <ArtifactPreview artifactId={entry.id} filename={entry.filename} mime={entry.mime} family={entry.family} available={available} />
       <KV items={[
         { label: 'Origin', value: originLabel(entry, nameOf) },
+        ...(entry.caption && entry.origin === 'produced' ? [{ label: 'Filed under', value: entry.caption }] : []),
         ...(entry.agentId && entry.origin === 'produced' ? [{ label: 'Made by', value: <span className="files-agent"><AgentAvatar agents={agents} id={entry.agentId} size="sm" />{nameOf(entry.agentId)}</span> }] : []),
         { label: 'Type', value: <span className="mono">{entry.mime}</span> },
         { label: 'Id', value: <span className="mono">{entry.id}</span> },

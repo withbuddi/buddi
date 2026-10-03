@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-282 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+283 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2326,6 +2326,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/note
 | GET | `/api/artifacts` | The library: every file buddi holds, paged. | yes |
 | GET | `/api/artifacts/:id` | One file: its metadata, where it was used, whether its bytes are still there. | yes |
 | GET | `/api/artifacts/:id/download` | The file, as a download. | yes |
+| GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. | yes |
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
 | DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
 
@@ -2369,6 +2370,20 @@ The file, as a download.
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/download" -o out
+```
+
+#### `GET /api/artifacts/:id/export/:format`
+
+A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx.
+
+- **Auth:** Session or API token.
+- **Kind:** bytes, not JSON
+- **Answer:** JSON
+- **Errors:** 404; 413 too large to convert; 415 not offered for this file
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/export/<format>" -o out
 ```
 
 #### `GET /api/artifacts/:id/preview`

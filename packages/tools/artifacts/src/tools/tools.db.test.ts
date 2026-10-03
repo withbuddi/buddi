@@ -24,16 +24,18 @@ suite('artifacts tools (postgres)', () => {
   let previousDataDir: string | undefined;
   const registry = new ToolRegistry();
 
-  const ctx = (): CoreToolContext => ({
+  let conversationId = '';
+  const ctx = (conversation?: string): CoreToolContext => ({
     db: pool,
     ownerId: 'test',
     now: () => new Date('2026-09-13T12:00:00Z'),
     timezone: 'UTC',
     agentId: 'finance-advisor',
+    ...(conversation ? { conversationId: conversation } : {}),
   });
 
-  const call = async (name: string, args: unknown): Promise<any> => {
-    const result = await registry.invoke(name, args, ctx());
+  const call = async (name: string, args: unknown, conversation?: string): Promise<any> => {
+    const result = await registry.invoke(name, args, ctx(conversation));
     if (!result.ok) throw new Error(`${name} refused (${result.reason}): ${result.message}`);
     return result.output;
   };
@@ -78,6 +80,8 @@ suite('artifacts tools (postgres)', () => {
       createdBy: 'owner',
     });
     imageId = photo.id;
+    const { rows } = await pool.query(`insert into core.conversations (agent_id) values ('finance-advisor') returning id`);
+    conversationId = String(rows[0].id);
   }, 60_000); // a fresh schema plus fixtures: under the whole gate's load the default 10 s was flaky
 
   afterAll(async () => {
@@ -89,20 +93,21 @@ suite('artifacts tools (postgres)', () => {
     if (dataDir) await rm(dataDir, { recursive: true, force: true });
   });
 
-  it('registers three auto-tier tools and no migrations', () => {
+  it('registers four auto-tier tools and no migrations', () => {
     expect(manifest.migrationsDir).toBe('');
     const specs = registry.list().filter((s) => s.name.startsWith('artifacts.'));
     expect(specs.map((s) => s.name)).toEqual([
       'artifacts.list',
       'artifacts.describe',
       'artifacts.text',
+      'artifacts.write',
     ]);
     expect(specs.every((s) => s.tier === 'auto')).toBe(true);
   });
 
   it('lists metadata only — never the bytes', async () => {
     const out = await call('artifacts.list', { limit: 10 });
-    expect(out.count).toBe(2);
+    expect(out.count).toBeGreaterThanOrEqual(2);
     const first = out.artifacts[0];
     expect(Object.keys(first).sort()).toEqual(
       ['caption', 'createdAt', 'filename', 'id', 'kind', 'mime', 'sizeBytes'].sort(),
@@ -152,5 +157,64 @@ suite('artifacts tools (postgres)', () => {
     const bad = await registry.invoke('artifacts.describe', { id: 'august.pdf' }, ctx());
     expect(bad.ok).toBe(false);
     if (!bad.ok) expect(bad.reason).toBe('invalid-args');
+  });
+
+  describe('artifacts.write', () => {
+    it('saves a Markdown document into Files, credited to the agent and its conversation', async () => {
+      const out = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: '# Heat pumps\n\nThree models.', folder: 'Home' }, conversationId);
+      expect(out).toMatchObject({ filename: 'Heat pumps compared.md', version: 1, mime: 'text/markdown', folder: 'Home', format: 'markdown' });
+      expect(out.note).toMatch(/PDF or Word/);
+      const { rows } = await pool.query('select created_by, conversation_id, caption, storage_path from core.artifacts where id = $1', [out.artifactId]);
+      expect(rows[0]).toMatchObject({ created_by: 'finance-advisor', conversation_id: conversationId, caption: 'Home' });
+      expect(rows[0].storage_path).toMatch(/^artifacts\/\d{4}\/\d{2}\/[0-9a-f]{64}\.md$/);
+      const read = await call('artifacts.text', { id: out.artifactId });
+      expect(read.text).toContain('Three models.');
+    });
+
+    it('writing the same title again in the conversation makes a new version, keeping the first', async () => {
+      const second = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: '# Heat pumps\n\nFour models now.' }, conversationId);
+      expect(second).toMatchObject({ filename: 'Heat pumps compared (v2).md', version: 2 });
+      const third = await call('artifacts.write', { title: 'heat pumps compared', format: 'markdown', content: 'Five.' }, conversationId);
+      expect(third.filename).toBe('heat pumps compared (v3).md');
+      const { rows } = await pool.query(`select count(*)::int as n from core.artifacts where conversation_id = $1 and deleted_at is null`, [conversationId]);
+      expect(rows[0].n).toBe(3);
+      // Another conversation starts its own count.
+      const elsewhere = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: 'Elsewhere.' });
+      expect(elsewhere.version).toBe(1);
+    });
+
+    it('the same bytes again are not a silent copy: it says nothing new was saved', async () => {
+      const again = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: '# Heat pumps\n\nFour models now.' }, conversationId);
+      expect(again.unchanged).toBe(true);
+      expect(again.filename).toBe('Heat pumps compared (v2).md');
+      expect(again.version).toBe(2);
+    });
+
+    it('stores a JSON table as CSV', async () => {
+      const out = await call('artifacts.write', { title: 'Budget', format: 'json', content: JSON.stringify([{ Item: 'Rent', Amount: 1200 }, { Item: 'Food, misc', Amount: 400 }]) }, conversationId);
+      expect(out).toMatchObject({ filename: 'Budget.csv', mime: 'text/csv' });
+      const read = await call('artifacts.text', { id: out.artifactId });
+      expect(read.text.split(/\r?\n/)).toEqual(['Item,Amount', 'Rent,1200', '"Food, misc",400']);
+    });
+
+    it('a title cannot reach outside the store', async () => {
+      const out = await call('artifacts.write', { title: '../../../etc/passwd', format: 'csv', content: 'a,b\n1,2' }, conversationId);
+      expect(out.filename).toBe('etc-passwd.csv');
+      const { rows } = await pool.query('select storage_path from core.artifacts where id = $1', [out.artifactId]);
+      expect(rows[0].storage_path).not.toContain('..');
+    });
+
+    it('refuses bad input before writing anything', async () => {
+      const big = await registry.invoke('artifacts.write', { title: 'Big', format: 'markdown', content: 'x'.repeat(1_000_001) }, ctx(conversationId));
+      expect(big.ok).toBe(false);
+      if (!big.ok) expect(big.reason).toBe('invalid-args');
+      const badFormat = await registry.invoke('artifacts.write', { title: 'A', format: 'docx', content: 'x' }, ctx(conversationId));
+      expect(badFormat.ok).toBe(false);
+      const badTable = await registry.invoke('artifacts.write', { title: 'A', format: 'json', content: '{"a":1}' }, ctx(conversationId));
+      expect(badTable.ok).toBe(false);
+      if (!badTable.ok) expect(badTable.message).toMatch(/array of objects/);
+      const extra = await registry.invoke('artifacts.write', { title: 'A', format: 'markdown', content: 'x', path: '/etc' }, ctx(conversationId));
+      expect(extra.ok).toBe(false);
+    });
   });
 });

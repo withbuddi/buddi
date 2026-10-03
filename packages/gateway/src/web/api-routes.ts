@@ -620,6 +620,11 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   { method: 'GET', path: '/api/artifacts/:id/download', area: 'files', kind: 'bytes', summary: 'The file, as a download.', errors: '404' },
   {
+    method: 'GET', path: '/api/artifacts/:id/export/:format', area: 'files', kind: 'bytes',
+    summary: "A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx.",
+    errors: '404; 413 too large to convert; 415 not offered for this file',
+  },
+  {
     method: 'GET', path: '/api/artifacts/:id/preview', area: 'files', kind: 'bytes',
     summary: 'The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only).', errors: '404; 415 not previewable',
   },

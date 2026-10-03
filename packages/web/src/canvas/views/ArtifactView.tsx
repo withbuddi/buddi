@@ -4,13 +4,14 @@
  * The preview is the same one the Files library draws (chat/ArtifactPreview):
  * an image at the size the panel allows, a PDF in the browser's own viewer,
  * text and tables as text. Anything else is named and measured, with the one
- * thing you can do with it — take a copy — as the panel's only button. The
+ * thing you can do with it — take a copy — as the panel's only button: a menu
+ * for a document buddi converts (PDF and Word, Excel), one button otherwise. The
  * agent reads the same file through its tools; this panel is for you.
  */
 import { ArtifactPreview } from '../../chat/ArtifactPreview';
+import { DownloadMenu } from '../../chat/DownloadMenu';
 import {
   FAMILY_LABEL,
-  downloadUrl,
   familyOf,
   formatBytes,
   type AttachmentBlock,
@@ -22,7 +23,6 @@ export interface ArtifactViewProps {
 
 export function ArtifactView({ attachment }: ArtifactViewProps): JSX.Element {
   const family = familyOf(attachment.mime, attachment.filename);
-  const name = attachment.filename ?? 'Untitled file';
 
   return (
     <div className="wb-artifact" data-family={family} data-testid="artifact-view">
@@ -33,7 +33,7 @@ export function ArtifactView({ attachment }: ArtifactViewProps): JSX.Element {
         <dt>Id</dt><dd className="mono">{attachment.artifactId}</dd>
       </dl>
       <div className="ui-toolbar" data-align="end">
-        <a className="ui-btn" href={downloadUrl(attachment.artifactId)} download={name}>Download</a>
+        <DownloadMenu artifactId={attachment.artifactId} filename={attachment.filename} mime={attachment.mime} />
       </div>
     </div>
   );

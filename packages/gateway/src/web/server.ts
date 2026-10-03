@@ -117,6 +117,7 @@ import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportDocument, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
@@ -1564,6 +1565,24 @@ export function createWebApp(deps: WebServerDeps): Server {
         const artifact = await getArtifact(deps.pool, found.entry.id);
         const available = artifact ? await artifactBytesExist(deps.env ?? process.env, artifact).catch(() => false) : false;
         return sendJson(res, 200, { ...found, available });
+      }
+
+      const exported = /^\/api\/artifacts\/([0-9a-f-]{36})\/export\/([a-z]{2,4})$/.exec(path);
+      if (exported) {
+        const artifact = await getArtifact(deps.pool, exported[1]!);
+        if (!artifact) return sendEmpty(res, 404);
+        const format = exported[2] as ExportFormat;
+        // Only what this file offers: a Markdown document as PDF or Word, a table as Excel.
+        if (!exportFormats(artifact.mime, artifact.filename).includes(format)) return sendJson(res, 415, { error: `this file cannot be downloaded as ${format}` });
+        if (artifact.sizeBytes > MAX_EXPORT_SOURCE_BYTES) return sendJson(res, 413, { error: 'this file is too large to convert; download it as it is' });
+        const bytes = await exportDocument({ bytes: await readArtifactBytes(deps.env ?? process.env, artifact), mime: artifact.mime, filename: artifact.filename }, format);
+        if (!bytes) return sendJson(res, 415, { error: `this file cannot be downloaded as ${format}` });
+        res.setHeader('Content-Type', EXPORT_MIME[format]);
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(exportName(artifact.filename, format)).replace(/'/g, '%27')}`);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(method === 'HEAD' ? undefined : bytes);
+        return;
       }
 
       const download = /^\/api\/artifacts\/([0-9a-f-]{36})\/(download|preview)$/.exec(path);

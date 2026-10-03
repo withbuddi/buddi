@@ -39,6 +39,8 @@ describe('the library', () => {
     const { sql, params } = seen[0]!;
     expect(params[1]).toBe("%50\\%\\_off'%");
     expect(sql).not.toContain("off'");
+    // The label a document was filed under is found by the same search.
+    expect(sql).toContain('a.caption ilike');
     expect(params).toContain('produced');
     expect(params).toContain('pdf');
     expect(sql).toContain('(a.created_at, a.id) <');

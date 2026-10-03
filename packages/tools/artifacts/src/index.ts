@@ -8,10 +8,12 @@
  * over that store — so `migrationsDir` is empty and uninstalling removes tools,
  * not data.
  *
- * Every tool is a read or a pure extraction, so the family is tier `auto`.
+ * The reads are tier `auto`, and so is `artifacts.write`: its only effect is a
+ * new file in the owner's own library, credited to the agent that wrote it.
  */
 import type { PluginManifest } from '@buddi/core/plugin';
 import { describe, list, text } from './tools/artifacts.js';
+import { write } from './tools/write.js';
 
 /** This plugin ships no migrations: it reads `core.artifacts`. */
 export const MIGRATIONS_DIR = '';
@@ -23,12 +25,14 @@ export const manifest: PluginManifest = {
   // dropped here, which is exactly what an empty migrationsDir means.
   schema: 'core',
   migrationsDir: MIGRATIONS_DIR,
-  tools: [list, describe, text],
+  tools: [list, describe, text, write],
   uses: ['files:library'],
 };
 
 export default manifest;
 
-export { list, describe, text };
+export { list, describe, text, write };
+export type { WrittenDocument } from './tools/write.js';
+export * from './document.js';
 export type { ArtifactSummary, ArtifactDescription } from './tools/artifacts.js';
 export * from './extract.js';

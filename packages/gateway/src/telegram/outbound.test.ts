@@ -102,6 +102,20 @@ describe('files out', () => {
     expect(Buffer.isBuffer(calls[0]?.args[1])).toBe(true);
   });
 
+  it('sends a Markdown document as itself and then as a PDF', async () => {
+    const { api, calls } = fakeApi();
+    const id = 'd0c00000-0000-4000-8000-000000000000';
+    const artifacts: ArtifactStore = {
+      ...store([row(id, { filename: 'Heat pumps (v2).md', mime: 'text/markdown' })]),
+      load: async () => ({ mime: 'text/markdown', data: Buffer.from('# Heat pumps\n\nThree models.\n').toString('base64') }),
+    };
+    await sendRunExtras({ api, log, artifacts }, 'c1', { artifacts: [id] });
+    expect(calls.map((c) => c.method)).toEqual(['sendDocument', 'sendDocument']);
+    expect(calls[0]?.args[2]).toEqual({ filename: 'Heat pumps (v2).md', contentType: 'text/markdown' });
+    expect(calls[1]?.args[2]).toEqual({ filename: 'Heat pumps (v2).pdf', contentType: 'application/pdf' });
+    expect((calls[1]?.args[1] as Buffer).subarray(0, 5).toString('latin1')).toBe('%PDF-');
+  }, 30_000);
+
   it('names a file that has no name after its type', async () => {
     const { api, calls } = fakeApi();
     const id = '0123abcd-0000-4000-8000-000000000000';

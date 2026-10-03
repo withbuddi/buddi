@@ -79,6 +79,8 @@ export type FileOrigin = 'uploaded' | 'produced' | 'unknown';
 export interface LibraryEntry {
   id: string;
   filename: string | null;
+  /** What the file was handed in with, or the label an agent filed a document under. */
+  caption: string | null;
   mime: string;
   family: FileFamily;
   sizeBytes: number;
@@ -175,7 +177,8 @@ export async function listLibrary(
   const key = filterKey(input);
   if (input.q && input.q.trim() !== '') {
     params.push(`%${input.q.trim().replace(/[%_\\]/g, (c) => `\\${c}`)}%`);
-    where.push(`a.filename ilike $${params.length} escape '\\'`);
+    // The caption is searched too: it holds the label a document was filed under.
+    where.push(`(a.filename ilike $${params.length} escape '\\' or a.caption ilike $${params.length} escape '\\')`);
   }
   const origin = originSql('a.created_by', '$1::text[]');
   if (input.origin) {
@@ -194,7 +197,7 @@ export async function listLibrary(
   }
   params.push(limit + 1);
   const { rows } = await pool.query(
-    `select a.id, a.filename, a.mime, a.size_bytes, a.created_at, a.created_at::text as created_at_exact, a.created_by, a.deleted_at,
+    `select a.id, a.filename, a.caption, a.mime, a.size_bytes, a.created_at, a.created_at::text as created_at_exact, a.created_by, a.deleted_at,
             (${origin}) as origin,
             (${FAMILY_EXPR}) as family,
             (select count(distinct u.conversation_id)::int from core.artifact_uses u where u.artifact_id = a.id) as contexts,
@@ -227,7 +230,7 @@ export async function getLibraryEntry(
 ): Promise<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number } | null> {
   if (!UUID.test(id)) return null;
   const { rows } = await pool.query(
-    `select a.id, a.filename, a.mime, a.size_bytes, a.created_at, a.created_by, a.deleted_at,
+    `select a.id, a.filename, a.caption, a.mime, a.size_bytes, a.created_at, a.created_by, a.deleted_at,
             (${originSql('a.created_by', '$2::text[]')}) as origin,
             (${FAMILY_EXPR}) as family,
             (select count(distinct u.conversation_id)::int from core.artifact_uses u where u.artifact_id = a.id) as contexts,
@@ -290,6 +293,7 @@ function toEntry(row: any): LibraryEntry {
   return {
     id: String(row.id),
     filename: row.filename ?? null,
+    caption: row.caption ?? null,
     mime: String(row.mime),
     family: (FILE_FAMILIES as readonly string[]).includes(row.family) ? row.family : familyOf(String(row.mime), row.filename),
     sizeBytes: Number(row.size_bytes ?? 0),

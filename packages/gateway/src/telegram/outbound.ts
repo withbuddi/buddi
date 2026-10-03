@@ -24,6 +24,7 @@ import {
 } from './api.js';
 import { formatBytes, type ArtifactRow, type ArtifactStore } from './attachments.js';
 import { canvasShow, type CanvasShowInput } from '../agents/canvas.js';
+import { MAX_EXPORT_SOURCE_BYTES, documentFamily, exportName, markdownToPdf } from '../export/document.js';
 
 /* ------------------------------------------------------------------ *
  * The first-run burst
@@ -743,6 +744,14 @@ async function sendFile(deps: ExtrasDeps, chatId: string, id: string, filesUrl?:
     } else {
       // A document shows its name already; a caption would say it twice.
       await deps.api.sendDocument(chatId, bytes, { filename: name, contentType: mime });
+      // A Markdown document reads badly on a phone as source: its PDF follows.
+      if (documentFamily(mime, name) === 'markdown' && bytes.length <= MAX_EXPORT_SOURCE_BYTES) {
+        const pdf = await markdownToPdf(bytes.toString('utf8'), name).catch((err: unknown) => {
+          deps.log(`telegram: no PDF of ${name}: ${message(err)}`);
+          return null;
+        });
+        if (pdf) await deps.api.sendDocument(chatId, pdf, { filename: exportName(name, 'pdf'), contentType: 'application/pdf' });
+      }
     }
   } catch (err) {
     deps.log(`telegram: sending ${name} failed: ${message(err)}`);
