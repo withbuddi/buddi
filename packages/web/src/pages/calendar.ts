@@ -28,6 +28,8 @@ export interface CalEvent {
   /** 0 to 3: one of the four pinned tones. */
   tone: number;
   location: string;
+  /** The row it was read from, for an event's sheet (1.28). */
+  row?: unknown;
 }
 
 /** The part of an event on one day. */
@@ -169,6 +171,7 @@ export function toEvents(rows: readonly unknown[], map: CalendarMap, timezone: s
       calendar: map.calendar === undefined ? '' : text(readPath(row, map.calendar)),
       tone,
       location: map.location === undefined ? '' : text(readPath(row, map.location)),
+      row,
     };
     if (allDay) {
       const startDate = start.slice(0, 10);
@@ -257,4 +260,27 @@ export function lanesOf<T extends { part: DayPart }>(items: readonly T[]): Array
   }
   if (cluster.length > 0) flush();
   return out;
+}
+
+/** An event's length in words: "45 min", "1 h", "1 h 30". */
+export function lengthOf(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h} h` : `${h} h ${String(m).padStart(2, '0')}`;
+}
+
+/** When an event is, as its sheet says it (1.28): "Mon 5 Oct · 14:00–15:00 · 1 h", "Mon 5 Oct · all day". */
+export function whenOf(event: CalEvent): string {
+  if (event.allDay) {
+    const last = addDays(event.endDate, -1);
+    return last > event.startDate ? `${dayLabel(event.startDate)} – ${dayLabel(last)} · all day` : `${dayLabel(event.startDate)} · all day`;
+  }
+  const days = Math.round((Date.parse(`${event.endDate}T00:00:00Z`) - Date.parse(`${event.startDate}T00:00:00Z`)) / 86_400_000);
+  const minutes = days * 1440 + event.endMin - event.startMin;
+  const span =
+    days === 0
+      ? `${dayLabel(event.startDate)} · ${hm(event.startMin)}–${hm(event.endMin)}`
+      : `${dayLabel(event.startDate)} ${hm(event.startMin)} – ${dayLabel(event.endDate)} ${hm(event.endMin)}`;
+  return minutes > 0 ? `${span} · ${lengthOf(minutes)}` : span;
 }

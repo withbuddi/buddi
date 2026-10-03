@@ -67,7 +67,9 @@ import {
 import { AgentOffer } from '../views/parts/AgentOffer';
 import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
 import { messageOf, playOf, playSound, stopSound, usePlaying } from './play';
-import { todayIn, toEvents } from './calendar';
+import { todayIn, toEvents, whenOf, type CalEvent } from './calendar';
+import { askInCorner } from '../shell/ask';
+import { CHAT_ROUTE } from '../routes';
 import { CalendarView, useCalendarState } from './CalendarPiece';
 import { SeriesPanel } from './SeriesPanel';
 import { AssetImage, assetSrc } from './AssetImage';
@@ -2843,6 +2845,9 @@ function CalendarPiece({ component, data }: { component: Of<'calendar'>; data: u
       ),
     [query.data, component.events, component.map, scope.timezone, scope.plugin, scope.page],
   );
+  // 1.28: an event opens its own sheet, kept by id so a refresh keeps it open on the same event.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const open = component.sheet && openId !== null ? (events.find((event) => event.id === openId) ?? null) : null;
   return (
     <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
@@ -2852,8 +2857,84 @@ function CalendarPiece({ component, data }: { component: Of<'calendar'>; data: u
         hours={component.hours}
         empty={component.empty ?? 'Nothing.'}
         label={component.title ?? 'Calendar'}
+        onEvent={component.sheet ? (event) => setOpenId(event.id) : undefined}
+        count={component.count && query.data !== undefined ? events.length : undefined}
       />
+      {open && component.sheet ? <EventSheet event={open} sheet={component.sheet} onClose={() => setOpenId(null)} /> : null}
     </PieceSection>
+  );
+}
+
+/**
+ * One event, in a sheet on the right (a full-width one on a phone), as the
+ * News story opens (1.28): the title, when and how long, its calendar with
+ * its colour, the place linked out to a map, the notes, a link to it where it
+ * lives, and asks that open the corner chat with the request written in — a
+ * change goes through an agent and its card, never straight from here.
+ */
+function EventSheet({ event, sheet, onClose }: { event: CalEvent; sheet: NonNullable<Of<'calendar'>['sheet']>; onClose: () => void }): JSX.Element {
+  const scope = useScope();
+  const row = event.row;
+  const read = (path: string | undefined): string => {
+    if (path === undefined) return '';
+    const value = readPath(row, path);
+    return value === undefined || value === null ? '' : String(value);
+  };
+  const when = whenOf(event);
+  const color = read(sheet.color);
+  const notes = read(sheet.notes);
+  const map = outsideHref(read(sheet.mapHref));
+  const openHref = sheet.open ? outsideHref(read(sheet.open.href)) : null;
+  const openLabel = sheet.open ? read(sheet.open.label) : '';
+  const ask = (text: string): void => {
+    const filled = fill(text.replace(/\{when\}/g, when), { row: { ...(row as object), title: event.title, calendar: event.calendar, location: event.location } });
+    onClose();
+    if (!askInCorner(filled)) scope.navigate(CHAT_ROUTE);
+  };
+  return (
+    <Sheet
+      title={event.title}
+      onClose={onClose}
+      foot={
+        sheet.asks && sheet.asks.length > 0 ? (
+          <Toolbar align="end">
+            {sheet.asks.map((item, index) => (
+              <Button key={index} onClick={() => ask(item.text)}>
+                {item.label}
+              </Button>
+            ))}
+          </Toolbar>
+        ) : undefined
+      }
+    >
+      <div className="pl-event-sheet">
+        <p className="pl-event-when">{when}</p>
+        {event.calendar ? (
+          <p className="pl-event-cal">
+            {color && SWATCH.test(color) ? (
+              <span className="pl-swatch" aria-hidden="true" style={{ '--swatch': color } as CSSProperties} />
+            ) : (
+              <span className="cal-dot" data-tone={event.tone} aria-hidden="true" />
+            )}
+            {event.calendar}
+          </p>
+        ) : null}
+        {event.location ? (
+          <p className="pl-event-where">
+            <Icon name="pin" size={14} />
+            {map ? <OutsideLink href={map}>{event.location}</OutsideLink> : <span>{event.location}</span>}
+          </p>
+        ) : null}
+        {notes ? <p className="pl-event-notes">{notes}</p> : null}
+        {openHref && openLabel ? (
+          <p className="pl-event-open">
+            <OutsideLink href={openHref} className="wb-src-link">
+              {openLabel}
+            </OutsideLink>
+          </p>
+        ) : null}
+      </div>
+    </Sheet>
   );
 }
 

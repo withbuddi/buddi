@@ -117,9 +117,15 @@ export function CalendarView({
   hours,
   empty,
   label,
+  onEvent,
+  count,
 }: {
   state: CalendarState;
   events: CalEvent[];
+  /** 1.28: an event opens its own sheet; its day's list is no longer drawn under the week. */
+  onEvent?: ((event: CalEvent) => void) | undefined;
+  /** 1.28: "12 events" beside the range's name. */
+  count?: number | undefined;
   hours?: [number, number] | undefined;
   /** The words for a day with nothing on it. */
   empty: string;
@@ -131,7 +137,7 @@ export function CalendarView({
   const unit = view === 'month' ? 'month' : 'week';
   const monthSelected =
     state.selected ?? (anchor.slice(0, 7) === today.slice(0, 7) ? today : `${anchor.slice(0, 8)}01`);
-  const shownDay = view === 'month' ? monthSelected : view === 'week' ? state.selected : null;
+  const shownDay = view === 'month' ? monthSelected : view === 'week' && !onEvent ? state.selected : null;
   const onKey = (event: KeyboardEvent<HTMLDivElement>): void => {
     const target = event.target as HTMLElement;
     if (target.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -156,6 +162,7 @@ export function CalendarView({
         </Button>
         <h3 className="cal-title" aria-live="polite">
           {rangeTitle(view, anchor, from, days)}
+          {count !== undefined ? <span className="cal-count">{count === 0 ? 'No events' : count === 1 ? '1 event' : `${count} events`}</span> : null}
         </h3>
         {state.views.length > 1 ? (
           <Segment
@@ -167,7 +174,7 @@ export function CalendarView({
         ) : null}
       </div>
       {view === 'week' ? (
-        <WeekGrid dates={dates} today={today} events={events} hours={hours ?? [7, 21]} onPick={state.select} />
+        <WeekGrid dates={dates} today={today} events={events} hours={hours ?? [7, 21]} onPick={state.select} onEvent={onEvent} />
       ) : null}
       {view === 'month' ? (
         <MonthGrid
@@ -177,16 +184,17 @@ export function CalendarView({
           events={events}
           selected={monthSelected}
           onPick={state.select}
+          onEvent={onEvent}
         />
       ) : null}
       {view === 'list' ? (
         <div className="cal-list">
           {dates.map((date) => (
-            <DayPanel key={date} date={date} today={today} events={events} empty={empty} />
+            <DayPanel key={date} date={date} today={today} events={events} empty={empty} onEvent={onEvent} />
           ))}
         </div>
       ) : null}
-      {shownDay ? <DayPanel date={shownDay} today={today} events={events} empty={empty} /> : null}
+      {shownDay ? <DayPanel date={shownDay} today={today} events={events} empty={empty} onEvent={onEvent} /> : null}
     </div>
   );
 }
@@ -196,11 +204,13 @@ function DayPanel({
   today,
   events,
   empty,
+  onEvent,
 }: {
   date: string;
   today: string;
   events: CalEvent[];
   empty: string;
+  onEvent?: ((event: CalEvent) => void) | undefined;
 }): JSX.Element {
   const on = eventsOn(events, date);
   return (
@@ -216,6 +226,7 @@ function DayPanel({
               title={event.title}
               sub={event.location || undefined}
               side={timeOf(event, part)}
+              {...(onEvent ? { onClick: () => onEvent(event) } : {})}
             />
           ))
         )}
@@ -230,12 +241,14 @@ function WeekGrid({
   events,
   hours,
   onPick,
+  onEvent,
 }: {
   dates: string[];
   today: string;
   events: CalEvent[];
   hours: [number, number];
   onPick: (date: string) => void;
+  onEvent?: ((event: CalEvent) => void) | undefined;
 }): JSX.Element {
   const scroller = useRef<HTMLDivElement>(null);
   // Open on the first hour of `hours`; the rest of the day is a scroll away.
@@ -276,7 +289,7 @@ function WeekGrid({
                     className="cal-chip"
                     data-tone={event.tone}
                     aria-label={summaryOf(event, part, date)}
-                    onClick={() => onPick(date)}
+                    onClick={() => (onEvent ? onEvent(event) : onPick(date))}
                   >
                     {event.title}
                   </button>
@@ -304,7 +317,7 @@ function WeekGrid({
                     data-short={part.to - part.from < 60 ? 'true' : undefined}
                     data-lane={lane}
                     aria-label={summaryOf(event, part, date)}
-                    onClick={() => onPick(date)}
+                    onClick={() => (onEvent ? onEvent(event) : onPick(date))}
                     style={{
                       top: `calc(var(--cal-hour) * ${part.from / 60})`,
                       height: `calc(var(--cal-hour) * ${Math.max(part.to - part.from, MIN_DRAWN) / 60})`,
@@ -335,6 +348,7 @@ function MonthGrid({
   events,
   selected,
   onPick,
+  onEvent,
 }: {
   dates: string[];
   month: string;
@@ -342,6 +356,7 @@ function MonthGrid({
   events: CalEvent[];
   selected: string;
   onPick: (date: string) => void;
+  onEvent?: ((event: CalEvent) => void) | undefined;
 }): JSX.Element {
   const weeks = Array.from({ length: 6 }, (_, w) => dates.slice(w * 7, w * 7 + 7));
   const [y, m] = month.split('-').map(Number) as [number, number];
@@ -386,6 +401,15 @@ function MonthGrid({
                       data-tone={event.tone}
                       data-timed={part.allDay ? undefined : 'true'}
                       aria-label={summaryOf(event, part, date)}
+                      {...(onEvent
+                        ? {
+                            onClick: (e: { stopPropagation: () => void }) => {
+                              e.stopPropagation();
+                              onPick(date);
+                              onEvent(event);
+                            },
+                          }
+                        : {})}
                     >
                       {part.allDay ? (
                         event.title

@@ -33,6 +33,7 @@ import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, UploadedAttac
 import { readAloudPreference, saveReadAloud, stopPlayback } from '../chat/voice';
 import { CHAT_ROUTE, HOME_ROUTE, chatRoute, parseWelcomeRoute, placeOf } from '../routes';
 import { Blob, Button, ButtonLink, Dock, ErrorBanner, Mark } from '../ui';
+import { ASK_EVENT, type AskDetail } from './ask';
 
 /**
  * The dock's conversation, for this page load: closing the dock keeps it.
@@ -74,6 +75,19 @@ export function AskDock({
   const label = `Ask ${agent.name}`;
   /** A reply is on its way in the dock: the corner Blob thinks until it lands. */
   const [busy, setBusy] = useState(false);
+  /** A request a page wrote in (an event sheet's Move or change…), for the dock's composer. */
+  const [prefill, setPrefill] = useState<ComposerDraft | null>(null);
+  useEffect(() => {
+    const onAsk = (event: Event): void => {
+      const detail = (event as CustomEvent<AskDetail>).detail;
+      if (!detail || typeof detail.text !== 'string') return;
+      detail.handled = true;
+      setPrefill({ text: detail.text, at: Date.now() });
+      onOpenChange(true);
+    };
+    window.addEventListener(ASK_EVENT, onAsk);
+    return () => window.removeEventListener(ASK_EVENT, onAsk);
+  }, [onOpenChange]);
 
   // Closed mid-reply: listen on from where the dock left off, for the run's end.
   useEffect(() => {
@@ -106,7 +120,7 @@ export function AskDock({
   }, [open]);
 
   if (open) {
-    return <DockThread agent={agent} agents={agents} timezone={timezone} navigate={navigate} onClose={() => onOpenChange(false)} onBusy={setBusy} />;
+    return <DockThread agent={agent} agents={agents} timezone={timezone} navigate={navigate} onClose={() => onOpenChange(false)} onBusy={setBusy} prefill={prefill} />;
   }
 
   return (
@@ -139,6 +153,7 @@ function DockThread({
   navigate,
   onClose,
   onBusy,
+  prefill,
 }: {
   agent: ChatAgent;
   agents: ChatAgent[];
@@ -146,6 +161,8 @@ function DockThread({
   navigate: (route: string) => void;
   onClose: () => void;
   onBusy: (busy: boolean) => void;
+  /** A request a page wrote in: put in the box, never sent by itself. */
+  prefill?: ComposerDraft | null;
 }): JSX.Element {
   const composer = useRef<ComposerHandle>(null);
   const [conversationId, setConversationId] = useState<string | null>(
@@ -158,7 +175,10 @@ function DockThread({
   const [running, setRunning] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<ComposerDraft | null>(null);
+  const [draft, setDraft] = useState<ComposerDraft | null>(prefill ?? null);
+  useEffect(() => {
+    if (prefill) setDraft(prefill);
+  }, [prefill]);
   const [now, setNow] = useState(Date.now());
   const [readAloud, setReadAloud] = useState(readAloudPreference);
   const readAloudOn = useRef(readAloud);

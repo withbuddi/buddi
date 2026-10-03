@@ -296,3 +296,95 @@ describe('a polled card that finishes by itself', () => {
     }
   });
 });
+
+describe('an event that opens its own sheet', () => {
+  const cal = {
+    plugin: 'calendar',
+    id: 'agenda',
+    title: 'Calendar',
+    place: 'rail',
+    body: [
+      {
+        kind: 'calendar',
+        query: { query: 'agenda' },
+        events: 'events',
+        map: { id: 'id', title: 'title', start: 'start', end: 'end', allDay: 'allDay', calendar: 'calendar', tone: 'tone', location: 'location' },
+        views: ['week', 'month', 'list'],
+        default: 'list',
+        count: true,
+        sheet: {
+          notes: 'notes',
+          color: 'color',
+          mapHref: 'mapHref',
+          open: { label: 'openLabel', href: 'openHref' },
+          asks: [
+            { label: 'Move or change…', text: 'Move or change “{title}” ({when}) on {calendar}: ' },
+            { label: 'Cancel…', text: 'Cancel “{title}” ({when}) on {calendar}.' },
+          ],
+        },
+      },
+    ],
+  } as unknown as PluginPageDescriptor;
+  const EVENTS = {
+    events: [
+      {
+        id: 'e1', title: 'Team lunch', start: '2026-09-28T10:00:00Z', end: '2026-09-28T11:30:00Z', allDay: false, calendar: 'Work', tone: 1,
+        location: 'Café Lou', color: '#1f6feb', notes: 'Bring the plan', mapHref: 'https://www.google.com/maps/search/?api=1&query=Caf%C3%A9%20Lou',
+        openLabel: 'Open in Google Calendar', openHref: 'https://calendar.google.com/calendar/event?eid=x',
+      },
+      { id: 'e2', title: 'Gym', start: '2026-09-29T16:00:00Z', end: '2026-09-29T17:00:00Z', allDay: false, calendar: 'Gym', tone: 2, location: '', openHref: 'javascript:alert(1)', openLabel: 'Open' },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-09-28T08:00:00Z') });
+    vi.mocked(api.pageQuery).mockImplementation((() => Promise.resolve({ data: EVENTS })) as unknown as typeof api.pageQuery);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('counts the range’s events beside its name, and opens an event’s sheet with its time, length, calendar, place, notes and link', async () => {
+    render(<PluginPage page={cal} item={null} navigate={navigate} timezone="UTC" siblings={[cal]} />);
+    expect(await screen.findByText('2 events')).toBeInTheDocument();
+    fireEvent.click(await screen.findByText('Team lunch'));
+    const sheet = await screen.findByRole('dialog', { name: 'Team lunch' });
+    expect(within(sheet).getByText('Mon 28 Sep · 10:00–11:30 · 1 h 30')).toBeInTheDocument();
+    expect(within(sheet).getByText('Work').querySelector('.pl-swatch')).toHaveStyle({ '--swatch': '#1f6feb' });
+    expect(within(sheet).getByRole('link', { name: /Café Lou/ })).toHaveAttribute('href', EVENTS.events[0]!.mapHref);
+    expect(within(sheet).getByText('Bring the plan')).toBeInTheDocument();
+    const out = within(sheet).getByRole('link', { name: /Open in Google Calendar/ });
+    expect(out).toHaveAttribute('target', '_blank');
+    expect(out).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('draws no link that is not https, and asks the corner chat with the request written in', async () => {
+    const asked: string[] = [];
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent<{ text: string; handled: boolean }>).detail;
+      detail.handled = true;
+      asked.push(detail.text);
+    };
+    window.addEventListener('buddi:ask', listener);
+    try {
+      render(<PluginPage page={cal} item={null} navigate={navigate} timezone="UTC" siblings={[cal]} />);
+      fireEvent.click(await screen.findByText('Gym'));
+      const gym = await screen.findByRole('dialog', { name: 'Gym' });
+      expect(within(gym).queryByRole('link')).not.toBeInTheDocument();
+      fireEvent.click(within(gym).getByRole('button', { name: 'Close' }));
+      fireEvent.click(await screen.findByText('Team lunch'));
+      const sheet = await screen.findByRole('dialog', { name: 'Team lunch' });
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Move or change…' }));
+      expect(asked).toEqual(['Move or change “Team lunch” (Mon 28 Sep · 10:00–11:30 · 1 h 30) on Work: ']);
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('buddi:ask', listener);
+    }
+  });
+
+  it('goes to the chat when no corner buddi takes the request', async () => {
+    render(<PluginPage page={cal} item={null} navigate={navigate} timezone="UTC" siblings={[cal]} />);
+    fireEvent.click(await screen.findByText('Team lunch'));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Team lunch' })).getByRole('button', { name: 'Cancel…' }));
+    expect(navigate).toHaveBeenCalledWith('#/chat');
+  });
+});

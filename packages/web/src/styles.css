@@ -4904,6 +4904,14 @@ button.lk-chip:disabled { cursor: default; }
 .pl-wait { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
 .pl-spin { width: var(--space-3); height: var(--space-3); border-radius: 50%; border: var(--space-0) solid var(--line); border-top-color: var(--accent); animation: ui-spin 0.9s linear infinite; flex: none; }
 @media (prefers-reduced-motion: reduce) { .pl-spin { animation: none; } }
+/* 1.28: a calendar's count beside its range; an event's sheet. */
+.cal-count { margin-left: var(--space-2); font-size: var(--text-sm); font-weight: var(--weight-normal); color: var(--text-muted); }
+.pl-event-sheet { display: flex; flex-direction: column; gap: var(--space-3); }
+.pl-event-when { margin: 0; font-size: var(--text-md); color: var(--text); }
+.pl-event-cal, .pl-event-where { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+.pl-event-where .ui-icon { flex: none; color: var(--text-faint); }
+.pl-event-notes { margin: 0; padding-top: var(--space-3); border-top: 1px solid var(--line); font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pl-event-open { margin: 0; font-size: var(--text-sm); }
 @media (max-width: 720px) {
   .pl-group-head { flex-wrap: wrap; row-gap: var(--space-0); }
   .ui-list-row:has(.pl-choice) { flex-wrap: wrap; }

@@ -26,6 +26,7 @@ import type {
   ArgRef as CoreArgRef,
   BulkAction as CoreBulkAction,
   CalendarMap as CoreCalendarMap,
+  CalendarSheet as CoreCalendarSheet,
   ChartSeries as CoreChartSeries,
   Component as CoreComponent,
   ComponentCommon as CoreComponentCommon,
@@ -68,6 +69,7 @@ import type {
   BulkAction,
   CalendarComponent,
   CalendarMap,
+  CalendarSheet,
   ChartSeries,
   Component,
   ComponentCommon,
@@ -168,6 +170,7 @@ interface Conformance {
   selection: Exact<CoreSelection, Selection>;
   groupBy: Exact<CoreGroupBy, GroupBy>;
   calendarMap: Exact<CoreCalendarMap, CalendarMap>;
+  calendarSheet: Exact<CoreCalendarSheet, CalendarSheet>;
   /** The web's `CalendarComponent` is core's calendar arm, named for its renderer. */
   calendarComponent: Exact<Extract<CoreComponent, { kind: 'calendar' }>, CalendarComponent>;
   /** The web's `TilesComponent` is core's tiles arm, named for its renderer. */
@@ -224,6 +227,7 @@ export const CONTRACTS_AGREE: Conformance = {
   selection: true,
   groupBy: true,
   calendarMap: true,
+  calendarSheet: true,
   calendarComponent: true,
   tilesComponent: true,
   tilesLayout: true,
@@ -311,6 +315,7 @@ export const CHECKED_TYPES = [
   'Selection',
   'GroupBy',
   'CalendarMap',
+  'CalendarSheet',
   'ChartSeries',
   'PageTab',
   'TabsPick',

@@ -168,10 +168,11 @@ type Component =
 // link tone: 'accent'; tabs param (the chosen tab in a page parameter); TabsPick look: 'chips' and add; ListItem logo, tag, status;
 // RowAction menu, hint, group; GroupBy label and aside; a first notice's text read from the page's data is the page's intro.
 // 1.28 additions elsewhere: ListItem swatch and choice; GroupBy asideTone and actions; a form drawer's id (button optional);
-// a repeat's poll.finish; `where` on every component; `menu` in a section's or a page's head; ArgRef { choice: true }.
+// a repeat's poll.finish; a calendar's count and sheet (CalendarSheet); `where` on every component; `menu` in a section's or a page's head; ArgRef { choice: true }.
 interface RowChoice extends Omit<ToolRef, 'args' | 'confirm'> { value: string; options: RowChoiceOption[]; args: Record<string, ValueRef | { row: string } | { choice: true }> }
 interface RowChoiceOption { value: string; label: string; when?: Visibility; disabledWhen?: Visibility; hint?: string }
 interface MenuItem { label: string; hint?: string; when?: Visibility; action?: ToolRef; open?: string }
+interface CalendarSheet { notes?: string; color?: string; mapHref?: string; open?: { label: string; href: string }; asks?: Array<{ label: string; text: string }> }
 interface RepeatPoll { seconds: number; while: Visibility; finish?: { when: Visibility; action: Omit<ToolRef, 'args' | 'confirm'> & { args: Record<string, ValueRef | { row: string }> } } }
 interface StoryRow { id: string; title: string; lead?: string; summary?: string; update?: string; url?: string; ago?: string; opinion?: boolean; languages?: string;
   mark?: { kind: 'told' | 'new'; text: string }; quiet?: boolean; outlets: Array<{ id?: string; name: string; logo?: string }>; group?: { id: string; name: string };
@@ -275,6 +276,7 @@ What each one is for, in email's terms:
 | `series-panel` | (Weather) Today's next 24 hours, and the picked day's hours in Week: temperature, rain chance and wind as tabs over the hourly strip |
 | `list` with `groupBy.actions`, `swatch` and `choice` | (Calendar) Settings: one list grouped by account, Sign in again and ⋯ Remove account… on each head, each calendar's colour and Not linked · Read · Read and change |
 | `menu` with drawer ids | (Calendar) Add a calendar → Sign in with Google · Link with an app password · Paste a private link |
+| `calendar` with `count` and `sheet` | (Calendar) The rail page: "12 events" beside the week, an event opening its sheet with Move or change… and Cancel… for the corner chat |
 | `repeat` with `poll.finish` and `where` | (Calendar) The Google sign-in card: it finishes by itself when Google answers, the pasted address only from another computer |
 
 A `chart` is small on purpose: a trend beside the numbers, drawn inline in
@@ -300,7 +302,11 @@ are drawn in the owner's zone. `tone` picks one of four pinned colours
 time the range changes, so the query must declare both: a descriptor whose
 query does not is refused at load, and so is a `default` that is not one of
 its `views`. The chosen view is remembered per page in the browser; with none
-chosen a phone (under 720 px) opens on the list. Needs host API `^1.11`.
+chosen a phone (under 720 px) opens on the list. Needs host API `^1.11`. Since host API 1.28, `count: true` writes how many events the range holds
+beside its name, and `sheet` opens an event in a sheet of its own — when and
+how long, its calendar and colour, the place linked out, the notes, a link to
+it where it lives, and asks that open the corner chat with a request written
+in — instead of listing its day under the week ([plugin-host-api.md](plugin-host-api.md) §7).
 
 `tabs`, `hero`, `tiles` and a chart's `series` are the design kit's Weather
 screen, and need host API `^1.12`. **`tabs`**: a bar with the pick's segment

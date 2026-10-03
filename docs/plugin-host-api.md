@@ -735,6 +735,20 @@ older buddi's descriptor check — a plugin that uses one asks for `^1.28`:
    of the rows.
 6. **Where the page is opened.** `where: 'local' | 'remote'` on any
    component: a browser on this computer, or anywhere else.
+7. **An event's sheet, and a count.** A `calendar`'s `sheet` makes an event
+   open a sheet of its own (on the right; full width on a phone) instead of
+   its day's list: the title, when and how long ("Mon 5 Oct · 14:00–15:00 ·
+   1 h"), its calendar with its `color`, the place linked out (`mapHref`), the
+   `notes`, `open` (a link out to the event where it lives), and up to three
+   `asks` that open the corner chat with a request written in — `{field}`
+   read from the row, `{when}` as the sheet says it — for the owner to edit
+   and send; a change still goes through an agent and its card. `count: true`
+   writes "12 events" beside the range's name:
+
+   ```ts
+   sheet: { notes: 'notes', color: 'color', mapHref: 'mapHref', open: { label: 'openLabel', href: 'openHref' },
+            asks: [{ label: 'Move or change…', text: 'Move or change “{title}” ({when}) on {calendar}: ' }] }
+   ```
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

@@ -394,7 +394,20 @@ export type CalendarComponent = ComponentCommon & {
   views?: Array<'week' | 'month' | 'list'>;
   default?: 'week' | 'month' | 'list';
   hours?: [number, number];
+  /** 1.28: "12 events" beside the range's name. */
+  count?: true;
+  /** 1.28: an event opens a sheet of its own. */
+  sheet?: CalendarSheet;
 };
+
+/** What an event's sheet shows (1.28): paths within the event's row. */
+export interface CalendarSheet {
+  notes?: string;
+  color?: string;
+  mapHref?: string;
+  open?: { label: string; href: string };
+  asks?: Array<{ label: string; text: string }>;
+}
 
 export type ListComponent = ComponentCommon & {
   kind: 'list';

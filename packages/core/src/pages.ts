@@ -756,6 +756,24 @@ export interface RepeatPoll {
   finish?: { when: Visibility; action: Omit<ToolRef, 'args' | 'confirm'> & { args: Record<string, ValueRef | { row: string }> } };
 }
 
+/**
+ * What an event's sheet shows besides its title, its time and length and its
+ * calendar (since host API 1.28); every path is read within the event's row.
+ * `color` is the calendar's own `#rrggbb` beside its name; `mapHref` an
+ * https address the place links out to; `open` a link out to the event where
+ * it lives ("Open in Google Calendar"); `asks` buttons that open the corner
+ * chat with a request written in — "Move or change {title}…" — since a change
+ * goes through an agent and its approval card. `{field}` in an ask's `text`
+ * reads the row; `{when}` is the event's day and time as the sheet shows it.
+ */
+export interface CalendarSheet {
+  notes?: string;
+  color?: string;
+  mapHref?: string;
+  open?: { label: string; href: string };
+  asks?: Array<{ label: string; text: string }>;
+}
+
 /** What a section may put on the right of its heading: going, or doing. */
 export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' } | { kind: 'menu' }>;
 
@@ -942,6 +960,10 @@ export type Component =
       views?: Array<'week' | 'month' | 'list'>;
       default?: 'week' | 'month' | 'list';
       hours?: [number, number];
+      /** "12 events" beside the range's name in the bar (since host API 1.28). */
+      count?: true;
+      /** An event opens a sheet of its own instead of its day's list (since host API 1.28). */
+      sheet?: CalendarSheet;
     })
   /**
    * A row of small cards, one per item — the canvas `tiles`, on a page: a
@@ -1620,6 +1642,17 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         hours: z
           .tuple([z.number().int().min(0).max(23), z.number().int().min(1).max(24)])
           .refine(([from, to]) => to - from >= 4, 'a calendar shows at least four hours: `hours` is [from, to], from before to')
+          .optional(),
+        count: z.literal(true).optional(),
+        sheet: z
+          .object({
+            notes: viewPathSchema.optional(),
+            color: viewPathSchema.optional(),
+            mapHref: viewPathSchema.optional(),
+            open: z.object({ label: viewPathSchema, href: viewPathSchema }).strict().optional(),
+            asks: z.array(z.object({ label, text: sentence }).strict()).max(3).optional(),
+          })
+          .strict()
           .optional(),
       })
       .strict(),
