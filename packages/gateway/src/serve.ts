@@ -86,6 +86,7 @@ import {
 } from './missions/execute.js';
 import { withNudgeBudget } from './missions/getting-started.js';
 import { createDeadLetterWatch } from './missions/dead-letter.js';
+import { expireParkedRuns, parkedAnswerOf, parkedRunOf, PARKED_REASON_PREFIX, type ParkedAnswer, type ParkedRun } from './missions/parked.js';
 import { createInlineMissionRunner, type InlineMissionDeps } from './missions/inline.js';
 import { createDigestPrepare } from './missions/recap.js';
 import { createMailWatcherPrepare } from './missions/watcher-mail.js';
@@ -173,6 +174,8 @@ export const REMINDER_TICK_MS = 60_000;
  * speak, it only notices — the aggregation window inside it decides that.
  */
 export const DEAD_LETTER_TICK_MS = 60_000;
+/** How often parked mission runs are checked for a parking time that ran out. */
+export const PARKED_TICK_MS = 60_000;
 /** How often held and shown notifications are looked at: escalations, quiet hours, the end of the day. */
 export const NOTIFICATIONS_TICK_MS = 60_000;
 
@@ -200,6 +203,10 @@ export interface MissionJobPayload {
   missionId: string;
   awaiting?: { actionId: string; conversationId: string };
   approval?: ApprovalResume;
+  /** Written when the run parks on a browser card (docs/browser.md, "Missions"). */
+  parked?: ParkedRun;
+  /** Merged in by the owner's answer, or by the clock when nobody answered. */
+  answer?: ParkedAnswer;
 }
 
 function missionJobPayload(payload: unknown): MissionJobPayload | null {
@@ -226,6 +233,8 @@ function missionJobPayload(payload: unknown): MissionJobPayload | null {
     ...(approval && typeof approval.actionId === 'string' && typeof approval.state === 'string'
       ? { approval: approval as unknown as ApprovalResume }
       : {}),
+    ...(parkedRunOf(p.parked) ? { parked: parkedRunOf(p.parked)! } : {}),
+    ...(parkedAnswerOf(p.answer) ? { answer: parkedAnswerOf(p.answer)! } : {}),
   };
 }
 
@@ -405,10 +414,16 @@ export function createMissionJobHandler(deps: {
     // A job coming back from an approval carries the decision in its payload.
     // The run continues in the conversation it suspended in; the occurrence was
     // deliberately left claimed while it waited.
+    // Or back from a browser card: the owner's answer, or the clock saying nobody came.
+    const answered = payload.parked && payload.answer && payload.answer.questionId === payload.parked.questionId
+      ? { parked: payload.parked, ...(payload.answer.text !== undefined ? { text: payload.answer.text } : {}), ...(payload.answer.timedOut ? { timedOut: true } : {}) }
+      : null;
     const control: MissionRunControl = {
       jobId: job.id,
       signal: jobContext.signal,
-      ...(payload.approval && payload.awaiting
+      ...(answered
+        ? { answer: answered }
+        : payload.approval && payload.awaiting
         ? {
             resume: {
               conversationId: payload.awaiting.conversationId,
@@ -430,7 +445,16 @@ export function createMissionJobHandler(deps: {
         );
         return {
           suspended: `awaiting-approval:${result.awaiting.actionId}`,
-          payloadPatch: { awaiting: result.awaiting },
+          // A browser card answered earlier is done with: only the decision brings this back.
+          payloadPatch: { awaiting: result.awaiting, parked: null, answer: null },
+        } satisfies Suspension;
+      }
+      // Parked on a browser card: the answer, or the parking time running out, brings it back.
+      if (result.parked) {
+        log(`mission ${mission.id}: parked on a browser card (question ${result.parked.questionId}) — waiting for the owner until ${result.parked.until}`);
+        return {
+          suspended: `${PARKED_REASON_PREFIX}${result.parked.questionId}`,
+          payloadPatch: { parked: result.parked, answer: null, awaiting: null, approval: null },
         } satisfies Suspension;
       }
       await finishOccurrence(deps.pool, occurrence.id, {
@@ -761,6 +785,8 @@ export async function main(): Promise<void> {
           imageReady: async () => wiring.registry.has('image.generate') && (await wiring.registry.readiness('image', wiring.ctx))?.ready === true,
         })),
         askApproval,
+        // A mission that browses (`browser: own`): the owner's answer touches its page; the parking time is the browser's setting.
+        browser: browserHost(process.env),
       }),
       {
         pool,
@@ -1058,6 +1084,19 @@ export async function main(): Promise<void> {
       log: logErr,
     });
 
+    // Mission runs parked on a browser card whose parking time is up: each ends
+    // as "needed you" with its one report line (docs/browser.md, "Missions").
+    const parkedLoop = recovering ? idle.loop : startLoop({
+      name: 'parked-missions',
+      everyMs: PARKED_TICK_MS,
+      abortAfterMs: PARKED_TICK_MS * 2,
+      run: async () => {
+        const woken = await expireParkedRuns(pool, now());
+        if (woken > 0) console.log(`missions: ${woken} parked run${woken === 1 ? '' : 's'} ran out of time waiting for you`);
+      },
+      log: logErr,
+    });
+
     // Notifications that were shown or held and whose moment came: an unseen
     // one escalates, a focus ends, the day ends (docs/notifications.md).
     const notificationsLoop = recovering ? idle.loop : startLoop({
@@ -1217,7 +1256,7 @@ export async function main(): Promise<void> {
         );
         if (process.env.BUDDI_WEB_REQUIRE_AUTH === '1') {
           clearInterval(sweep); clearInterval(orphanSweep);
-          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); notificationsLoop.stop(); proposalLoop.stop(); requirementsLoop.stop(); datesLoop.stop();
+          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); notificationsLoop.stop(); parkedLoop.stop(); proposalLoop.stop(); requirementsLoop.stop(); datesLoop.stop();
           await Promise.all([scheduler.stop(), worker.stop(), telegram?.stop(), sourceWatches.stopAll()]);
           throw err;
         }
@@ -1303,6 +1342,7 @@ export async function main(): Promise<void> {
       reminderLoop.stop();
       deadLetterLoop.stop();
       notificationsLoop.stop();
+      parkedLoop.stop();
       proposalLoop.stop();
       requirementsLoop.stop();
       datesLoop.stop();

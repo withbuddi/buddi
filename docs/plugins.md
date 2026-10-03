@@ -582,7 +582,11 @@ export const GATED_TIERS: readonly Tier[] = ['gated'];
 - **`session`** — it runs only inside a live owner request. `invoke` executes it
   when, and only when, there is an unexpired `ctx.ownerRequest`, this tool is
   named in `ctx.sessionTools`, there is an agent and a conversation, and
-  `delegationDepth` is 0. Anything less is `session-not-authorized`.
+  `delegationDepth` is 0. Anything less is `session-not-authorized`. Two
+  narrow exceptions exist for `browser.act` only (docs/browser.md): a mission
+  whose package says `browser: own` runs it with no owner request (the tool
+  declares `unattended`), and a delegate asked from an owner conversation with
+  a browser session open holds it one level down.
   `browser.act` is the one shipped at this tier; do not reach for it unless the
   whole point of your tool is "only while the owner is asking, right now".
 - **`draft`** — refused with `tier-not-executable`. The machinery it needs does
@@ -3284,6 +3288,7 @@ version each arrived in — is §9b.
 | `requires` | `Record<string, string>` | no | Plugins you need, by name, with a semver range. Repeated as `buddi.requires` in `package.json`; the two must match. Until each is installed, enabled, in range and set up, nothing of yours loads; declaring any gives `ctx.buddi.plugins`. Host API 1.18. See §2.10. |
 | `optional` | `Record<string, string>` | no | Plugins you use when they are there, by name, with a semver range. Repeated as `buddi.optional` in `package.json`; the two must match. Nothing of yours is held back without one: `ctx.buddi.plugins.has(name)` says whether it is loaded and in range, and `plugins.call` reaches its exports while it is ("Needs Speech" beside a setting). A name may not be both required and optional. Host API 1.27. See §2.10. |
 | `exports` | `Record<string, PluginExport>` | no | Named read-only queries (`{ description?, params, produce(params, ctx) }`) a plugin that requires you may call through `ctx.buddi.plugins.call`. Nothing else of yours is reachable from another plugin. Host API 1.18. See §2.10. |
+| `routes` | `RouteProvider[]` | no | Places the browser runtime can route an agent's look/do to (docs/browser.md, "Routes"): `{ kind, label, health, look, do, release? }`. Core's own computer control provides the apps route through this interface. Host API 1.29. |
 | `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. See §1.4. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with `ctx.buddi.proposals.proposePolicy(ctx, { matcher, action, params, verdicts, why, sources })`, your name and the clock filled in (declare `proposals`); `adopt` is handed your host as `buddi`. Keeping one for a plugin with no `apply` is refused and the card stays open. |
 
@@ -3314,7 +3319,9 @@ version each arrived in — is §9b.
 | `claim` | `(input, ctx) => Promise<void>` | no | For a `gated` tool whose subject someone else can edit while the owner decides: take exclusive hold of it in one conditional statement, immediately before the ledger row. A throw settles the approval `refused` and records no effect attempt. |
 | `timeoutMs` | `number` | no | How long the Executor waits before recording the attempt as `unknown`. `DEFAULT_EFFECT_TIMEOUT_MS` when absent. |
 | `sequential` | `boolean` | no | Dependent calls in the same model turn are skipped after this one fails. |
-| `waitsForOwner` | `boolean` | no | A successful call leaves a decision with the owner: no more tools this run. |
+| `waitsForOwner` | `boolean \| (output) => boolean` | no | A successful call leaves a decision with the owner: no more tools this run. A function decides per result (1.29): `browser.act` waits only when its result carries `needsOwner`. |
+| `ownBudget` | `boolean` | no | Its calls are bounded by a budget of their own (the browser's steps and minutes), so a turn spent only on them does not count against the run's `maxTurns`. Host API 1.29. |
+| `unattended` | `boolean` | no | A `session` tool that may also run in a mission whose package opted in (`browser: own`), with no owner request. Core still asks the rest of the session floor and the executor's own list (only `browser.act` today); the tool holds its own unattended limits. See docs/browser.md, "Missions". |
 | `sideEffect` | `boolean` | no | An `auto` tool whose call still reaches outside the run: a message, a report, a saved file. A run interrupted by a restart after such a call is failed, not queued again, so nothing happens twice. Since 1.28. |
 | `image` | `(output, ctx) => Promise<{mime,data}\|undefined>` | no | An ephemeral image for the next model call. Never stored as base64. |
 
@@ -3348,7 +3355,8 @@ closed when it is absent rather than guess.
 | `buddi` | `BuddiHost` | no | The host, bound to your plugin: everything you reach beyond your arguments — the database, the owner, the clock and zone, the preview port, the protected paths, the model accounts. Set by core on every context it hands you; optional only so core's own contexts compile. See §1.1 and §9b. |
 | `systemContext` | `(run?) => Promise<SystemContext>` | no | Fresh owner timezone and host facts, from the composition root. The loop passes the run's agent and grant, so a paragraph meant only for agents holding certain tools (the learning one) is decided by the grant. |
 | `ownerRequest` | `{ id; text; expiresAt }` | no | Issued by an authenticated interactive surface, never by a model. What a `session` tool is checked against. |
-| `sessionTools` | `readonly string[]` | no | Session grants resolved for this run. A delegate never inherits them. |
+| `ask` | `(question) => void` | no | Put one question card with choices in front of the owner for this run (the browser's four moments use it). Set by an interactive surface, and by a mission that browses, where the card parks the run until the owner answers (docs/browser.md, "Missions"). Host API 1.29. |
+| `sessionTools` | `readonly string[]` | no | Session grants resolved for this run. A delegate holds only what the delegation passed down: `browser.act`, from an owner conversation with a browser session open. |
 | `signal` | `AbortSignal` | no | Cooperative cancellation. Check it before each external operation. |
 | `approvedEffect` | `{ envelope: unknown }` | no | Set only by the executor: the exact effect the owner approved. |
 | `conversationId` | `string` | no | Provenance. The loop fills it in for every call it makes. |

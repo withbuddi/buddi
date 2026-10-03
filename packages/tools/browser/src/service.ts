@@ -6,7 +6,7 @@ import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './
 import { APP_BEHIND, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
 import { ownerCard, siteOf, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
-import type { BrowserTelemetry, StopCause } from './telemetry.js';
+import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
 
 /**
  * Said when the owner has stopped agents' browsing. On Telegram the way back
@@ -150,6 +150,8 @@ export interface BrowserController {
   touch?(input: BrowserTouch): Promise<{ answered?: string } | void>;
   /** Pin a conversation to a route, or clear its pin (`auto`). */
   pin?(conversationId: string, pin: string): Promise<BrowserStatus>;
+  /** How long a mission run waits on a card for the owner, in milliseconds (settings `missionWaitMinutes`). */
+  missionWaitMs?(): number;
 }
 
 export interface BrowserServiceOptions {
@@ -204,7 +206,7 @@ export class BrowserService {
   #sleep(ms: number): Promise<void> { return this.options.sleep ? this.options.sleep(ms) : new Promise((resolve) => setTimeout(resolve, ms)); }
   #stamp(observation: Observation): Observation { return { ...observation, observedAt: new Date(this.#now()).toISOString() }; }
   #stop(cause: StopCause, ctx?: ToolContext, recovered?: 'silent' | 'card' | 'none'): void {
-    this.options.telemetry?.stop(cause, { route: this.#route, ...(ctx?.agentId ? { agent: ctx.agentId } : {}), ...(ctx?.surface?.id ? { surface: ctx.surface.id } : {}),
+    this.options.telemetry?.stop(cause, { route: this.#route, ...(ctx?.agentId ? { agent: ctx.agentId } : {}), ...(ctx?.surface?.id ? { surface: ctx.surface.id } : {}), ...missionMark(ctx),
       ...(siteOf(this.#observation?.url ?? this.#lastUrl) ? { host: siteOf(this.#observation?.url ?? this.#lastUrl)! } : {}), ...(recovered ? { recovered } : {}) });
   }
 
@@ -646,7 +648,7 @@ export class BrowserService {
     const session = this.#session;
     if (session && this.options.telemetry) {
       this.options.telemetry.record({ type: 'browser.task', outcome: this.#card ? (this.#card.kind === 'budget' ? 'budget' : 'needs-owner') : state === 'stopped' ? 'stopped' : 'done',
-        actions: session.actions, seconds: Math.round((this.#now() - session.startedAt) / 1000), cards: session.cards, agent: session.agentId, route: this.#route });
+        actions: session.actions, seconds: Math.round((this.#now() - session.startedAt) / 1000), cards: session.cards, agent: session.agentId, route: this.#route, ...(session.requestId === 'unattended' ? { mission: true as const } : {}) });
     }
     if (this.#observation?.url) this.#lastUrl = this.#observation.url;
     this.#handless = false;

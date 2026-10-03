@@ -61,6 +61,12 @@ export type Mission = {
   context?: { plugin: string; export: string; args?: Record<string, unknown> } | null;
   /** The longest report its `mission.report` takes; null is `REPORT_MAX_DEFAULT`. */
   reportMax?: number | null;
+  /**
+   * `own`: the package opted this mission in to browsing unattended, in
+   * buddi's own browser only (docs/browser.md, "Missions"). Null: it opens
+   * no page.
+   */
+  browser?: 'own' | null;
   createdAt: Date;
 };
 
@@ -116,6 +122,7 @@ export type MissionRow = {
   coalesce_max_wait_seconds?: number | null;
   context?: unknown;
   report_max?: number | null;
+  browser?: string | null;
   created_at: Date;
 };
 
@@ -164,6 +171,7 @@ export function toMission(row: MissionRow): Mission {
       : null,
     context: contextOf(row.context),
     reportMax: typeof row.report_max === 'number' ? row.report_max : null,
+    browser: row.browser === 'own' ? 'own' : null,
     createdAt: row.created_at,
   };
 }

@@ -100,6 +100,12 @@ const missionSchema = z
     alwaysDeliver: z.boolean().optional(),
     /** Host API 1.27: the longest report it takes, 200–6,000 characters. */
     reportMax: z.number().int().min(200).max(REPORT_MAX_LIMIT).optional(),
+    /**
+     * 0.1.0-pre.38: `own` opts the mission in to browsing unattended, in
+     * buddi's own browser only (docs/browser.md, "Missions"). Absent: it
+     * opens no page.
+     */
+    browser: z.literal('own').optional(),
     /** Host API 1.27: an export of a required plugin, read before each run. */
     context: z
       .object({

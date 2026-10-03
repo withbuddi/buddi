@@ -44,3 +44,19 @@ export function toQuestion(row: Record<string, any>): Question {
     answer: row.answer ?? null,
   };
 }
+
+/**
+ * The notification key a question carries when it is sent as a notification
+ * (a mission's browser moment, docs/browser.md "Missions"): a channel that
+ * draws buttons reads the question back from it and draws its options.
+ */
+export function questionKey(questionId: string): string {
+  return `question:${questionId}`;
+}
+
+/** The question a notification key names, or undefined. */
+export function questionIdOfKey(key: string | null | undefined): string | undefined {
+  if (!key?.startsWith('question:')) return undefined;
+  const id = key.slice('question:'.length).trim();
+  return id === '' ? undefined : id;
+}

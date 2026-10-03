@@ -97,7 +97,8 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
         description: `Type the owner's own secret into the focused field of the focused macOS app, by name, without ever seeing the value. Input { name }. Apps only: the backend reports which app is in front and the owner's binding must name that bundle id; an app switch before the typing is refused. Every use asks the owner with a decision card naming the app, so the result is {typed:true}, {pending:true,actionId} — tell the owner and wait — or the refusal. The value never appears anywhere. The result carries the app as it is after typing.`,
         waitsForOwner: (output: unknown) => needsOwner(output), ownBudget: true,
         execute: (input: SecretTypeInput, ctx) => service().secretType(input, ctx) },
-      { name: 'browser.act', tier: 'session', untrusted: 'web', sequential: true, input: commandSchema,
+      // `unattended`: an opted-in mission (`browser: own`) may call it with nobody there; the controller keeps it to buddi's own browser.
+      { name: 'browser.act', tier: 'session', unattended: true, untrusted: 'web', sequential: true, input: commandSchema,
         description: BROWSER_ACT_DESCRIPTION,
         waitsForOwner: (output: unknown) => needsOwner(output), ownBudget: true,
         execute: (command, ctx) => service().execute(command, ctx),

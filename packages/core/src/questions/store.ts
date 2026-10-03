@@ -16,6 +16,8 @@ export interface AskQuestionInput {
   options: Array<Omit<QuestionOption, 'id'> & { id?: string }>;
   allowOther: boolean;
   now: Date;
+  /** How long it stays open; default `QUESTION_TTL_MS`. A parked mission's wait (docs/browser.md, "Missions"). */
+  ttlMs?: number;
 }
 
 function normalizeOptions(input: AskQuestionInput['options']): QuestionOption[] {
@@ -46,7 +48,7 @@ function normalizeOptions(input: AskQuestionInput['options']): QuestionOption[] 
 
 export async function askQuestion(pool: Queryable, input: AskQuestionInput): Promise<Question> {
   const options = normalizeOptions(input.options);
-  const expiresAt = new Date(input.now.getTime() + QUESTION_TTL_MS);
+  const expiresAt = new Date(input.now.getTime() + (input.ttlMs !== undefined && input.ttlMs > 0 ? input.ttlMs : QUESTION_TTL_MS));
   await pool.query(
     `update core.questions
         set expires_at = $2, answered_at = $2, answered_via = 'replaced'
@@ -113,4 +115,18 @@ export async function answerQuestion(
     [input.id, input.now, input.via, answer],
   );
   return rows[0] ? { ok: true, question: toQuestion(rows[0]) } : { ok: false, reason: 'closed' };
+}
+
+/**
+ * Close a question nobody answered, with how it closed (`timeout`): a parked
+ * mission run that waited its time ends as "needed you", and its card must
+ * not take a late tap that would resume nothing.
+ */
+export async function closeQuestion(pool: Queryable, input: { id: string; via: string; now: Date }): Promise<boolean> {
+  const { rows } = await pool.query(
+    `update core.questions set answered_at = $2, answered_via = $3, expires_at = least(expires_at, $2)
+      where id = $1 and answered_at is null returning id`,
+    [input.id, input.now, input.via],
+  );
+  return rows.length > 0;
 }

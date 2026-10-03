@@ -78,3 +78,42 @@ describe('a report\'s voice note on Telegram (host API 1.27)', () => {
     expect(calls.map((c) => c.text).join('\n\n')).toBe(text);
   });
 });
+
+describe("a parked mission's card on Telegram (docs/browser.md, Missions)", () => {
+  const QID = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const question = (over: Record<string, unknown> = {}) => ({
+    id: QID, agent_id: 'travel', conversation_id: 'c1', question: 'amazon.com needs your sign-in.',
+    options: [{ id: 'option-1', label: 'Take over', hint: null, recommended: true }, { id: 'option-2', label: 'Save a login for next time', hint: null, recommended: false }],
+    allow_other: true, created_at: new Date(), expires_at: new Date(Date.now() + 60 * 60_000), answered_at: null, answered_via: null, answer: null, ...over,
+  });
+  const card = { id: '1b4e28ba-2fa1-41d2-883f-0016d3cca427', kind: 'question' as const, urgency: 'now' as const,
+    title: 'Trip check: amazon.com needs your sign-in.', text: 'It waits an hour.', action: 'amazon.com needs your sign-in.', dedupeKey: `question:${QID}` };
+
+  it("draws the card's options as its buttons, without the spelled-out action line", async () => {
+    const sent: Array<{ text: string; markup: unknown }> = [];
+    const channel = createTelegramChannel({
+      pool: { query: async (sql: string) => ({ rows: sql.includes('core.questions') ? [question()] : [] }) },
+      env: {},
+      sendText: async (text, opts) => { sent.push({ text, markup: opts?.replyMarkup }); return '42'; },
+    });
+    await channel.deliver(card);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.text).not.toContain('→');
+    expect(sent[0]!.markup).toEqual({ inline_keyboard: [
+      [{ text: '★ Take over', callback_data: `q:${QID}:0` }],
+      [{ text: 'Save a login for next time', callback_data: `q:${QID}:1` }],
+    ] });
+  });
+
+  it('sends only the text once the card was answered', async () => {
+    const sent: Array<{ text: string; markup: unknown }> = [];
+    const channel = createTelegramChannel({
+      pool: { query: async (sql: string) => ({ rows: sql.includes('core.questions') ? [question({ answered_at: new Date() })] : [] }) },
+      env: {},
+      sendText: async (text, opts) => { sent.push({ text, markup: opts?.replyMarkup }); return '42'; },
+    });
+    await channel.deliver(card);
+    expect(sent[0]!.markup).toBeUndefined();
+    expect(sent[0]!.text).toContain('→ amazon.com needs your sign-in.');
+  });
+});

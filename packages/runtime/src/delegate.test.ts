@@ -120,6 +120,8 @@ function harness(
     catalog?: DelegateCatalog;
     depth?: number;
     surface?: CoreToolContext['surface'];
+    delegableSession?: (ctx: CoreToolContext) => readonly string[];
+    extra?: Partial<CoreToolContext>;
   } = {},
 ): Harness {
   const db = new FakeDb();
@@ -132,6 +134,7 @@ function harness(
     provider: () => provider,
     pool: db,
     allowlistFor: (agentId) => allow[agentId] ?? [],
+    ...(opts.delegableSession ? { delegableSession: opts.delegableSession } : {}),
     runAgent: async (runOpts) => {
       captured.push(runOpts);
       const { runAgent } = await import('./loop.js');
@@ -156,6 +159,7 @@ function harness(
     conversationId: 'conv-caller',
     ...(opts.depth === undefined ? {} : { delegationDepth: opts.depth }),
     ...(opts.surface === undefined ? {} : { surface: opts.surface }),
+    ...opts.extra,
   };
   return { db, registry, ctx, captured };
 }
@@ -256,6 +260,34 @@ describe('agent.delegate', () => {
     expect(nested?.agent.maxTurns).toBe(8);
     expect(nested?.ctx.delegationDepth).toBe(1);
     expect(nested?.ctx.ownerId).toBe('owner');
+  });
+
+  describe('session tools one level down (docs/browser.md, "Delegates")', () => {
+    const owner = { ownerRequest: { id: 'r1', text: 'look at the cart', expiresAt: Date.now() + 60_000 } };
+    const withPage = () => ['browser.act'];
+
+    it('passes browser.act down from an owner conversation that has a browser session', async () => {
+      const { registry, ctx, captured } = harness({ delegableSession: withPage, extra: owner });
+      await registry.invoke(DELEGATE_TOOL, task, ctx);
+      expect(captured[0]?.ctx.delegatedSession).toEqual(['browser.act']);
+      expect(captured[0]?.ctx.unattendedSession).toEqual([]);
+    });
+
+    it("passes nothing from a mission (no owner request), even with a page, and never a mission's own grant", async () => {
+      const { registry, ctx, captured } = harness({ delegableSession: withPage, extra: { unattendedSession: ['browser.act'] } });
+      await registry.invoke(DELEGATE_TOOL, task, ctx);
+      expect(captured[0]?.ctx.delegatedSession).toEqual([]);
+      expect(captured[0]?.ctx.unattendedSession).toEqual([]);
+    });
+
+    it('passes nothing when the asking conversation has no browser session, or the request expired', async () => {
+      const none = harness({ delegableSession: () => [], extra: owner });
+      await none.registry.invoke(DELEGATE_TOOL, task, none.ctx);
+      expect(none.captured[0]?.ctx.delegatedSession).toEqual([]);
+      const stale = harness({ delegableSession: withPage, extra: { ownerRequest: { id: 'r1', text: 'x', expiresAt: Date.now() - 1 } } });
+      await stale.registry.invoke(DELEGATE_TOOL, task, stale.ctx);
+      expect(stale.captured[0]?.ctx.delegatedSession).toEqual([]);
+    });
   });
 
   it('refuses a target that is not in the caller allowlist', async () => {

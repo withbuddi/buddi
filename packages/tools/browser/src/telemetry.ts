@@ -46,10 +46,16 @@ export const STOP_CAUSES = {
 } as const;
 export type StopCause = keyof typeof STOP_CAUSES;
 
+/** `mission: true` marks a row from an unattended mission run (docs/browser.md, "Missions"); absent on the owner's runs. */
 export type TelemetryEvent =
-  | { type: 'browser.stop'; cause: StopCause; route: string; agent?: string; surface?: string; host?: string; recovered: 'silent' | 'card' | 'none' }
-  | { type: 'browser.route'; chosen: string; reason: string; fallbackFrom?: string; agent?: string; host?: string }
-  | { type: 'browser.task'; outcome: 'done' | 'needs-owner' | 'stopped' | 'budget'; actions: number; seconds: number; cards: number; agent?: string; route?: string };
+  | { type: 'browser.stop'; cause: StopCause; route: string; agent?: string; surface?: string; host?: string; recovered: 'silent' | 'card' | 'none'; mission?: true }
+  | { type: 'browser.route'; chosen: string; reason: string; fallbackFrom?: string; agent?: string; host?: string; mission?: true }
+  | { type: 'browser.task'; outcome: 'done' | 'needs-owner' | 'stopped' | 'budget'; actions: number; seconds: number; cards: number; agent?: string; route?: string; mission?: true };
+
+/** The mark a row carries when no owner is behind the run: only an opted-in mission reaches the browser that way. */
+export function missionMark(ctx: { ownerRequest?: unknown } | undefined): { mission?: true } {
+  return ctx && !ctx.ownerRequest ? { mission: true } : {};
+}
 
 /** The structured log behind `buddi doctor browser`. Host only, never a URL or a value. */
 export class BrowserTelemetry {

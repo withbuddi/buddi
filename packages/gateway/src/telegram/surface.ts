@@ -53,6 +53,7 @@ import {
   idleRolloverMs,
 } from '@buddi/core';
 import type { Pool } from 'pg';
+import { resumeParkedForQuestion } from '../missions/parked.js';
 import { InterjectionQueue, createConversation, type InterjectionSource } from '@buddi/runtime';
 import {
   MAX_CALLBACK_DATA_BYTES,
@@ -2751,6 +2752,15 @@ export class TelegramSurface {
     await api.answerCallbackQuery(query.id, option.label).catch(() => {});
     if (query.message?.message_id !== undefined) {
       await api.editMessageReplyMarkup(chatId, query.message.message_id, { inline_keyboard: [] }).catch(() => {});
+    }
+    // A mission run parked on this card (docs/browser.md, "Missions"): the tap wakes it; no chat turn starts.
+    const woke = await resumeParkedForQuestion(this.#opts.pool as Pool, settled.question, option.label).catch((err) => {
+      this.#log(`telegram: waking the mission parked on question ${question.id} failed: ${message(err)}`);
+      return false;
+    });
+    if (woke) {
+      await api.sendMessage(chatId, `${option.label}: it carries on, and tells you when it is done.`).catch(() => {});
+      return;
     }
     const agent = this.#opts.catalog.get(question.agentId);
     if (!agent) {

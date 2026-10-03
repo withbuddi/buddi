@@ -441,6 +441,8 @@ export interface PackageMissionPlan {
   /** Host API 1.27: an export read before each run, and the longest report. */
   context?: { plugin: string; export: string; args?: Record<string, unknown> };
   reportMax?: number;
+  /** `own`: browses unattended in buddi's own browser (docs/browser.md, "Missions"). */
+  browser?: 'own';
 }
 
 export interface InstallAgentEnvelope {
@@ -513,12 +515,14 @@ export interface InstallAgentEnvelope {
   };
 }
 
-/** One existing mission's new `context`/`reportMax`, as the package now says. */
+/** One existing mission's new `context`/`reportMax`/`browser`, as the package now says. */
 export interface MissionSettingsChange {
   id: string;
   name: string;
   context: { plugin: string; export: string; args?: Record<string, unknown> } | null;
   reportMax: number | null;
+  /** Present only when it changes (absent in an envelope from before pre.38): absent keeps the mission's own. */
+  browser?: 'own' | null;
 }
 
 /** JSON with sorted keys, so a jsonb column's own key order never reads as a change. */
@@ -534,8 +538,12 @@ function stableJson(value: unknown): string {
 export function missionSettingsWords(change: MissionSettingsChange): string {
   const reads = change.context ? `reads ${change.context.plugin}.${change.context.export} before each run` : 'reads nothing before it runs';
   const length = change.reportMax ? `reports up to ${change.reportMax.toLocaleString('en-US')} characters` : 'reports at the usual length';
-  return `${reads}; ${length}`;
+  const browses = change.browser === undefined ? '' : change.browser === 'own' ? `; ${BROWSES_WORDS}` : '; opens no page';
+  return `${reads}; ${length}${browses}`;
 }
+
+/** What the card says about a mission that opted in to browsing. */
+export const BROWSES_WORDS = "may look at pages in buddi's own browser while you are away (never your Chrome or apps); a sign-in or a check waits for you";
 
 export const installAgentInput = z
   .object({
@@ -821,6 +829,7 @@ function missionPlans(
       ...(m.misfirePolicy === undefined ? {} : { misfirePolicy: m.misfirePolicy }),
       ...(m.context === undefined ? {} : { context: m.context }),
       ...(m.reportMax === undefined ? {} : { reportMax: m.reportMax }),
+      ...(m.browser === undefined ? {} : { browser: m.browser }),
     };
   });
 }
@@ -1178,8 +1187,10 @@ async function buildUpdate(
       // An existing mission is the owner's; only what the package says it reads and how long it reports may follow it.
       const context = plan.context ?? null;
       const reportMax = plan.reportMax ?? null;
-      if (stableJson(row.context ?? null) !== stableJson(context) || (row.reportMax ?? null) !== reportMax) {
-        missionSettings.push({ id: plan.id, name: row.name, context, reportMax });
+      const browser = plan.browser ?? null;
+      if (stableJson(row.context ?? null) !== stableJson(context) || (row.reportMax ?? null) !== reportMax || (row.browser ?? null) !== browser) {
+        // `browser` only when it changes: the card names what changes, and an absent one keeps the row's.
+        missionSettings.push({ id: plan.id, name: row.name, context, reportMax, ...((row.browser ?? null) !== browser ? { browser } : {}) });
       }
     }
   }
@@ -1237,7 +1248,8 @@ function missionLines(missions: readonly PackageMissionPlan[], specs: readonly T
   return missions.map(
     (mission) =>
       `  ${ownerText(mission.name, specs)}, ${describeCadence(mission.cron, mission.timezone)} — ` +
-      (mission.enabled ? 'ON from the start' : 'off until you turn it on'),
+      (mission.enabled ? 'ON from the start' : 'off until you turn it on') +
+      (mission.browser === 'own' ? `; ${BROWSES_WORDS}` : ''),
   );
 }
 
@@ -1655,13 +1667,14 @@ export function createCatalogueTools(
         // The settings the owner approved for missions the agent already has: just these two, nothing the owner controls.
         if (envelope.mode === 'update') {
           for (const change of envelope.update?.missionSettings ?? []) {
-            await setMissionExtras(ctx.db as never, change.id, { context: change.context, reportMax: change.reportMax });
+            const row = change.browser === undefined ? await getMission(ctx.db as never, change.id).catch(() => null) : null;
+            await setMissionExtras(ctx.db as never, change.id, { context: change.context, reportMax: change.reportMax, browser: change.browser === undefined ? row?.browser ?? null : change.browser });
           }
         }
         for (const mission of envelope.missions) {
           if (envelope.mode === 'update' && (await getMission(ctx.db as never, mission.id).catch(() => null))) {
             // The owner's prompt and hour stay; what the package says it reads and how long it reports follow it.
-            await setMissionExtras(ctx.db as never, mission.id, { context: mission.context ?? null, reportMax: mission.reportMax ?? null });
+            await setMissionExtras(ctx.db as never, mission.id, { context: mission.context ?? null, reportMax: mission.reportMax ?? null, browser: mission.browser ?? null });
             continue;
           }
           await upsertMission(ctx.db as never, {
@@ -1673,6 +1686,7 @@ export function createCatalogueTools(
             alwaysDeliver: mission.alwaysDeliver ?? false,
             ...(mission.context ? { context: mission.context } : {}),
             ...(mission.reportMax ? { reportMax: mission.reportMax } : {}),
+            ...(mission.browser ? { browser: mission.browser } : {}),
           });
           await setSchedule(ctx.db as never, mission.id, {
             cron: mission.cron,

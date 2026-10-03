@@ -19,6 +19,7 @@
  */
 import {
   appendEvent,
+  closeQuestion,
   endExpiredMissions,
   getAction,
   noteMissionRun,
@@ -57,6 +58,18 @@ import {
 } from './report.js';
 import { findingsOf, renderFindings, type FindingPayload } from './sentinel-wake.js';
 import { missionOwnerAgent } from './reminders.js';
+import { askInto } from '../surfaces/browser-cards.js';
+import type { AskSink } from '../surfaces/pending-question.js';
+import { DEFAULT_MISSION_WAIT_MS, neededYouLine, parkMissionRun, type ParkedRun } from './parked.js';
+
+/** The tools an opted-in mission (`browser: own`) may call with nobody there (docs/browser.md, "Missions"). */
+export const UNATTENDED_BROWSER_TOOLS: readonly string[] = ['browser.act'];
+
+/** The browser, as a mission run needs it: the owner's answer touches the page, and the parking time is a setting. */
+export interface MissionBrowser {
+  touch?(input: { conversationId: string; agentId?: string; text?: string }): Promise<unknown>;
+  missionWaitMs?(): number;
+}
 
 /** Re-exported so callers keep catching the error they always caught. */
 export { UnknownAgentError };
@@ -211,11 +224,14 @@ export interface MissionExecutorDeps {
    * the action is still recorded and still waits for `/approvals`.
    */
   askApproval?: (action: ActionRecord) => Promise<void>;
+  /** The browser, for a mission that browses (`browser: own`): touched by the owner's answer, and the parking time. */
+  browser?: MissionBrowser;
   log?: (line: string) => void;
   onToolCall?: (name: string, input: unknown) => void;
 }
 
-export type MissionDecisionKind = 'report' | 'silent' | 'no-decision';
+/** `needed-you`: it parked on a browser card and nobody answered in time; one report line said so. */
+export type MissionDecisionKind = 'report' | 'silent' | 'no-decision' | 'needed-you';
 
 /**
  * How a *durable* run is threaded through the executor.
@@ -235,6 +251,12 @@ export interface MissionRunControl {
   jobId?: string;
   /** Continue the run that suspended on an approval, in its own conversation. */
   resume?: { conversationId: string; approval: ApprovalResume };
+  /**
+   * Continue the run that parked on a browser card (docs/browser.md,
+   * "Missions"): with the owner's answer as its next turn, or — timed out —
+   * end it as "needed you" with one report line.
+   */
+  answer?: { parked: ParkedRun; text?: string; timedOut?: boolean };
 }
 
 /** What the run is waiting for, when it stopped instead of finishing. */
@@ -263,6 +285,12 @@ export interface MissionRunResult {
    * delivered and no decision was taken: the caller suspends and comes back.
    */
   awaiting?: AwaitingApproval;
+  /**
+   * Set when the run parked on a browser card: nothing was delivered and no
+   * decision was taken; the caller suspends until the owner answers or the
+   * parking time runs out.
+   */
+  parked?: ParkedRun;
   /**
    * The actions the report offered, stored and ready to bind. Handed back so a
    * caller that prints rather than delivers — `--inline` — can render them for
@@ -387,6 +415,8 @@ export function createMissionExecutor(
   const catalog = deps.catalog ?? gatewayCatalog(deps.env);
 
   return async function execute(occurrence, mission, control): Promise<MissionRunResult> {
+    // Coming back from the owner: an approval's decision, or an answer to a browser card.
+    const resumed = Boolean(control?.resume || control?.answer);
     // Fails closed with UnknownAgentError: a mission naming an agent this
     // install does not carry is a configuration problem, not a fallback.
     // A coalesced wake carries several findings for the same agent; the first
@@ -395,7 +425,7 @@ export function createMissionExecutor(
     // A mute set after the wake was enqueued still silences it: what it now
     // covers leaves the run, and a run left with nothing does not happen. A
     // resumed run is the owner's own decision on an approval and goes on.
-    if (findings.length > 0 && !control?.resume) {
+    if (findings.length > 0 && !resumed) {
       const muted = await mutedFindingKeys(deps.pool, findings.map((f) => f.key));
       if (muted.size > 0) {
         const dropped = findings.filter((f) => muted.has(f.key));
@@ -417,7 +447,7 @@ export function createMissionExecutor(
     const agentId = finding?.agentId || mission.agentId;
     // An agent's watch past its end switches off quietly, before any model
     // call: an occurrence made before the end does not get one more run.
-    if (!control?.resume && mission.endsAt && mission.endsAt.getTime() <= deps.now().getTime()) {
+    if (!resumed && mission.endsAt && mission.endsAt.getTime() <= deps.now().getTime()) {
       for (const ended of await endExpiredMissions(deps.pool, deps.now())) {
         await appendEvent(deps.pool, 'mission.ended', { missionId: ended, reason: 'end-date' });
       }
@@ -439,18 +469,38 @@ export function createMissionExecutor(
       ],
     };
 
+    // Parked on a browser card and nobody came: one line says so, and the run ends there. Never silently.
+    if (control?.answer?.timedOut) {
+      const parked = control.answer.parked;
+      const conversationId = parked.conversationId;
+      const text = neededYouLine({ missionName: mission.name, question: parked.question, waitedMs: parked.waitMs });
+      await closeQuestion(deps.pool, { id: parked.questionId, via: 'timeout', now: deps.now() }).catch(() => false);
+      await appendEvent(deps.pool, 'mission.needed_you', { missionId: mission.id, occurrenceId: occurrence.id, conversationId, questionId: parked.questionId }, conversationId);
+      log(`mission ${mission.id}: occurrence ${occurrence.id} needed the owner and nobody answered — ending with the report line`);
+      let chatId: string | undefined;
+      try {
+        control.signal?.throwIfAborted();
+        chatId = await deps.deliver(text, [], { agentId, conversationId, origin: 'mission', urgency: 'normal' });
+      } catch (err) {
+        if (!(err instanceof OwnerNotPairedError)) throw err;
+        log(`mission ${mission.id}: the "needed you" line was not delivered — ${err.message}`);
+        return { conversationId, text, delivered: false, decision: 'needed-you', reason: 'needed-you', skipped: err.message };
+      }
+      return { conversationId, text, delivered: true, decision: 'needed-you', reason: 'needed-you', ...(chatId ? { chatId } : {}) };
+    }
+
     const sink: DecisionSink = {};
     const registry = registryForRun(deps.registry, sink, mission.reportMax);
 
     const prepared = deps.prepare ? await deps.prepare(mission, finding) : null;
     // Not one of its days (a yearly date's superset cron): no run, no model call.
-    if (prepared?.skip && !control?.resume) {
+    if (prepared?.skip && !resumed) {
       log(`mission ${mission.id}: occurrence ${occurrence.id} not run — ${prepared.skip}`);
       await appendEvent(deps.pool, 'mission.silent', { missionId: mission.id, occurrenceId: occurrence.id, reason: prepared.skip });
       return { conversationId: '', text: '', delivered: false, decision: 'silent', reason: prepared.skip };
     }
     // Read once, for a fresh run: a resumed run already has it in its first message.
-    const material = control?.resume ? '' : await missionContextBlock(deps.registry, mission, deps.ctx, log);
+    const material = resumed ? '' : await missionContextBlock(deps.registry, mission, deps.ctx, log);
     const userMessage = [
       mission.prompt,
       material,
@@ -464,12 +514,24 @@ export function createMissionExecutor(
     // A resumed run continues in the conversation it suspended in; the decision
     // arrives as its opening turn. A fresh run gets a fresh conversation.
     const conversationId =
-      control?.resume?.conversationId ?? (await createConversation(deps.pool, agentId));
+      control?.resume?.conversationId ?? control?.answer?.parked.conversationId ?? (await createConversation(deps.pool, agentId));
     log(
       control?.resume
         ? `mission ${mission.id}: occurrence ${occurrence.id} resumed in conversation ${conversationId} (action ${control.resume.approval.actionId} ${control.resume.approval.state})`
-        : `mission ${mission.id}: occurrence ${occurrence.id} -> conversation ${conversationId}`,
+        : control?.answer
+          ? `mission ${mission.id}: occurrence ${occurrence.id} resumed in conversation ${conversationId} (the owner answered its card)`
+          : `mission ${mission.id}: occurrence ${occurrence.id} -> conversation ${conversationId}`,
     );
+
+    // Opted in (`browser: own`): browser.act with nobody there, in buddi's own
+    // browser only, and the browser's owner moments are caught as one card.
+    const browses = mission.browser === 'own';
+    const asked: AskSink = {};
+    // The owner's answer is a touch on the page: the card is answered (Take over, Keep going) and the budget renews.
+    if (control?.answer && browses && deps.browser?.touch) {
+      try { await deps.browser.touch({ conversationId, agentId, text: control.answer.text ?? '' }); }
+      catch (err) { log(`mission ${mission.id}: touching the page with the owner's answer failed: ${err instanceof Error ? err.message : String(err)}`); }
+    }
 
     // The job rides on the tool context: a gated call records it on the action,
     // and that is the only way the owner's decision later finds this run.
@@ -477,6 +539,7 @@ export function createMissionExecutor(
       ...deps.ctx,
       ...(control?.jobId ? { jobId: control.jobId } : {}),
       ...(control?.signal ? { signal: control.signal } : {}),
+      ...(browses ? { unattendedSession: UNATTENDED_BROWSER_TOOLS, ask: askInto(asked) } : {}),
     };
 
     /*
@@ -518,7 +581,9 @@ export function createMissionExecutor(
       conversationId,
       ...(control?.resume
         ? { resume: control.resume.approval }
-        : { userMessage }),
+        : control?.answer
+          ? { userMessage: answeredMessage(control.answer.parked.question, control.answer.text ?? '') }
+          : { userMessage }),
       surface: scheduledSurface(reportMaxOf(mission.reportMax)),
       systemSuffix: SCHEDULED_RUN_SUFFIX,
       memoryPreamble: memoryPreambleFor(deps.pool),
@@ -554,6 +619,22 @@ export function createMissionExecutor(
         decision: 'no-decision',
         awaiting: { actionId: result.pendingActionId, conversationId },
       };
+    }
+
+    // A browser moment needed the owner (Look? / Keep going? / Sign in / Human check): park on the card.
+    // Whatever the run decided after the card is held back (it was told to stop); the answer brings it back here.
+    if (browses && asked.asked) {
+      if (sink.decision) log(`mission ${mission.id}: the run decided (${sink.decision.kind}) after a browser card; parking on the card instead`);
+      const parked = await parkMissionRun({ pool: deps.pool, now: deps.now, timezone: deps.ctx.timezone, log }, {
+        missionId: mission.id,
+        missionName: mission.name,
+        agentId,
+        conversationId,
+        asked: asked.asked,
+        waitMs: deps.browser?.missionWaitMs?.() ?? DEFAULT_MISSION_WAIT_MS,
+      });
+      log(`mission ${mission.id}: parked on the owner's card (question ${parked.questionId}, until ${parked.until})`);
+      return { conversationId, text: result.text.trim(), delivered: false, decision: 'no-decision', parked };
     }
 
     const decision: MissionDecision | undefined = sink.decision;
@@ -684,6 +765,12 @@ export function createMissionExecutor(
 }
 
 export type { FindingPayload };
+
+/** The opening turn of a run the owner's answer brought back. */
+export function answeredMessage(question: string, answer: string): string {
+  const said = answer.trim() || '(no words)';
+  return `The owner answered your card "${question.trim()}": ${said}. Carry on with the task from where you stopped; the page is as you left it, or as the owner left it if they took over. End with mission.report or mission.silent as before.`;
+}
 
 /**
  * Persist the actions a report offered, if it offered any.

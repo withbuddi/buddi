@@ -59,16 +59,30 @@ export const PER_CALL_TIERS: readonly Tier[] = ['auto', 'gated', 'session'];
  * It is asked of a tool that *declares* `session` on every call, whatever a
  * `tierFor` decided that call costs — the declaration is what the runtime
  * resolved a grant from, so it is also what the grant is checked against.
+ *
+ * Three ways through, and only three (docs/browser.md, "Missions" and
+ * "Delegates"):
+ *
+ *  - **The owner's own run**: a live owner request, depth 0.
+ *  - **The owner's run, one level down**: a live owner request and the tool
+ *    in `delegatedSession`, which only the delegation tool sets, and only when
+ *    the delegating conversation is an owner conversation with a browser
+ *    session.
+ *  - **An opted-in mission**: no owner request, the tool declares
+ *    `unattended`, and the mission executor listed it in `unattendedSession`.
+ *    Depth 0 only: a mission's delegate never browses.
+ *
+ * Every way also needs the agent's grant (`sessionTools`), an agent and a
+ * conversation.
  */
-function sessionAuthorized(name: string, ctx: CoreToolContext): boolean {
-  return Boolean(
-    ctx.ownerRequest &&
-      ctx.ownerRequest.expiresAt > Date.now() &&
-      ctx.sessionTools?.includes(name) &&
-      ctx.agentId &&
-      ctx.conversationId &&
-      (ctx.delegationDepth ?? 0) === 0,
-  );
+function sessionAuthorized(name: string, ctx: CoreToolContext, unattended = false): boolean {
+  if (!ctx.sessionTools?.includes(name) || !ctx.agentId || !ctx.conversationId) return false;
+  const depth = ctx.delegationDepth ?? 0;
+  if (ctx.ownerRequest) {
+    if (ctx.ownerRequest.expiresAt <= Date.now()) return false;
+    return depth === 0 || (depth === 1 && ctx.delegatedSession?.includes(name) === true);
+  }
+  return unattended && depth === 0 && ctx.unattendedSession?.includes(name) === true;
 }
 
 /** A page descriptor, and the plugin whose route it lives under. */
@@ -1130,9 +1144,13 @@ export class ToolRegistry {
      * the strictest tier there is, which is the exact opposite of what the
      * declaration means.
      */
-    if ((declared === 'session' || tier === 'session') && !sessionAuthorized(name, ctx)) {
+    if ((declared === 'session' || tier === 'session') && !sessionAuthorized(name, ctx, tool.unattended === true)) {
       return { ok: false, reason: 'session-not-authorized',
-        message: 'This tool requires a current owner request and an explicit agent grant; ask the owner directly.' };
+        message: (ctx.delegationDepth ?? 0) > 0
+          ? 'A delegated run cannot use this tool unless the owner is in the conversation that asked, with a browser session open there. Answer with what you have; the asking agent can do it itself.'
+          : !ctx.ownerRequest && tool.unattended === true
+            ? 'This mission has not opted in to browsing (its package says browser: own when it should). Report what you could not check instead.'
+            : 'This tool requires a current owner request and an explicit agent grant; ask the owner directly.' };
     }
 
     if (opts.askOnly === true && !GATED_TIERS.includes(tier)) {

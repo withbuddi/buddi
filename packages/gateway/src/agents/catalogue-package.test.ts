@@ -114,6 +114,11 @@ describe('host API 1.27 missions', () => {
     );
     expect(refusal(agentEntry('n3', { manifest: { missions: [{ ...edition, reportMax: 9000 }] } }))).toMatch(/reportMax|6000/);
   });
+  it('takes browser: own on a mission (pre.38), and nothing else for it', () => {
+    const pkg = parseAgentPackage(agentEntry('b1', { manifest: { missions: [{ ...edition, browser: 'own' }] } }));
+    expect(pkg.manifest.missions[0]).toMatchObject({ browser: 'own' });
+    expect(refusal(agentEntry('b2', { manifest: { missions: [{ ...edition, browser: 'chrome' }] } }))).toMatch(/browser/);
+  });
 });
 
 describe('the denylist', () => {

@@ -38,6 +38,12 @@ export const settingsSchema = z.object({
   maxOwnPages: z.number().int().min(1).max(8).default(3),
   /** Show the own browser's window on this machine instead of running headless. */
   showWindow: z.boolean().default(false),
+  /**
+   * How long a mission run waits for the owner's answer on a browser card
+   * (Look? / Keep going? / Sign in / Human check) before it ends as "needed
+   * you", in minutes (docs/browser.md, "Missions").
+   */
+  missionWaitMinutes: z.number().int().min(5).max(24 * 60).default(60),
 }).strict().refine((value) => value.allowedApps.includes(value.browserApp), 'The selected browser must also be in allowedApps');
 export type ControlSettings = z.infer<typeof settingsSchema>;
 

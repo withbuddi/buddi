@@ -50,3 +50,22 @@ export async function browserDoctor(env: NodeJS.ProcessEnv = process.env, days =
   const summary = summarize(readTelemetry(path.join(dir, 'telemetry.jsonl')), Date.now(), days);
   return { routes, lines: telemetryLines(summary), summary, warn };
 }
+
+/**
+ * `delegableSession` for delegation (docs/browser.md, "Delegates"): a
+ * colleague asked from a conversation that has a browser session open may
+ * use `browser.act` too; from anywhere else, nothing. The delegation tool
+ * already asked for a live owner request at depth 0 before this is read.
+ */
+export function browserDelegable(
+  browser: { status(scope?: { agentId?: string; conversationId?: string }): { session?: unknown } },
+): (ctx: { agentId?: string; conversationId?: string }) => readonly string[] {
+  return (ctx) => {
+    if (!ctx.agentId || !ctx.conversationId) return [];
+    try {
+      return browser.status({ agentId: ctx.agentId, conversationId: ctx.conversationId }).session ? ['browser.act'] : [];
+    } catch {
+      return [];
+    }
+  };
+}

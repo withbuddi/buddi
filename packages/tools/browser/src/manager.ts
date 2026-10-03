@@ -2,6 +2,7 @@ import { BrowserService, type BrowserServiceOptions, type BrowserHandOffer, type
 import type { BrowserCommand, BrowserDriver } from './types.js';
 import type { ToolContext } from '@buddi/core/plugin';
 import { originOf } from './routes.js';
+import { missionMark } from './telemetry.js';
 import type { OwnerCard } from './routes.js';
 
 export interface BrowserManagerOptions extends BrowserServiceOptions {
@@ -142,7 +143,7 @@ export class BrowserManager {
     const existing = this.#children.get(key) ?? await this.#opening.get(key);
     if (existing || !create) return existing;
     const opening = (async () => {
-      await this.#slot(ctx.signal, () => this.options.telemetry?.stop('slot-limit', { route: this.options.route ?? 'own', ...(ctx.agentId ? { agent: ctx.agentId } : {}) }));
+      await this.#slot(ctx.signal, () => this.options.telemetry?.stop('slot-limit', { route: this.options.route ?? 'own', ...(ctx.agentId ? { agent: ctx.agentId } : {}), ...missionMark(ctx) }));
       const reserved = this.options.maxSessions !== undefined;
       try {
         const child = new BrowserService(this.createDriver(), this.options);

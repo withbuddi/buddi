@@ -114,6 +114,20 @@ export interface DelegateDeps {
    * asking model. Defaults to the artifact store under the caller's `ctx.db`.
    */
   loadArtifact?: LoadArtifact;
+  /**
+   * The `session` tools a delegate may hold, decided from the asking run
+   * (docs/browser.md, "Delegates"). The gateway answers `['browser.act']`
+   * only when the asking conversation is an owner conversation (a live owner
+   * request, depth 0) that has a browser session open; absent or empty, a
+   * delegate holds none. Core still checks the owner request on every call.
+   */
+  delegableSession?: (ctx: CoreToolContext) => readonly string[];
+}
+
+/** What a delegate may hold of the asking run's session tools: only from a live owner request at depth 0. */
+function delegableFrom(ctx: CoreToolContext, deps: Pick<DelegateDeps, 'delegableSession'>): readonly string[] {
+  if ((ctx.delegationDepth ?? 0) !== 0 || !ctx.ownerRequest || ctx.ownerRequest.expiresAt <= Date.now()) return [];
+  try { return [...(deps.delegableSession?.(ctx) ?? [])]; } catch { return []; }
 }
 
 export const delegateInput = z.object({
@@ -490,7 +504,14 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
           registry: deps.registry,
           // The nested run is one level deeper, and it is the target's run: the
           // loop stamps `agentId`/`conversationId` itself.
-          ctx: { ...base, delegationDepth: depth + 1, ...(ctx.signal ? { signal: ctx.signal } : {}) },
+          ctx: {
+            ...base,
+            delegationDepth: depth + 1,
+            delegatedSession: delegableFrom(ctx, deps),
+            // An unattended mission's grant never reaches a delegate.
+            unattendedSession: [],
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          },
           pool,
           conversationId,
           runId,

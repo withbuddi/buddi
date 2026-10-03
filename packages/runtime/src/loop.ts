@@ -935,7 +935,12 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
     ...(platformContext ? { timezone: platformContext.timezone } : {}),
     conversationId,
     agentId: agent.id,
-    sessionTools: (ctx.delegationDepth ?? 0) === 0 ? registry.list().filter((t) => t.tier === 'session' && allowedTools.has(t.name)).map((t) => t.name) : [],
+    // A delegate holds only what the delegation tool passed down (an owner
+    // conversation with a browser session); core checks the rest every call.
+    sessionTools: registry.list()
+      .filter((t) => t.tier === 'session' && allowedTools.has(t.name))
+      .map((t) => t.name)
+      .filter((name) => (ctx.delegationDepth ?? 0) === 0 || ctx.delegatedSession?.includes(name) === true),
     ...(opts.surface ? { surface: opts.surface } : {}),
     // So `web.status` can answer "can I search right now?" truthfully for *this*
     // agent. Without it the plugin would report the Tavily key's state to an

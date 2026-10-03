@@ -3140,6 +3140,8 @@ export interface ControlSettings {
   signInSites: string[];
   defaultRoute: 'auto' | 'own' | 'chrome' | 'apps';
   stopExpiryMinutes: number;
+  /** How long a mission waits on a browser card for the owner before it ends as "needed you", in minutes. */
+  missionWaitMinutes?: number;
   maxOwnPages: number;
   showWindow: boolean;
 }

@@ -27,6 +27,8 @@ export type UpsertMissionInput = {
   context?: { plugin: string; export: string; args?: Record<string, unknown> } | null;
   /** The longest report it takes (200–6,000). Default `REPORT_MAX_DEFAULT`. */
   reportMax?: number | null;
+  /** `own`: browses unattended in buddi's own browser (docs/browser.md, "Missions"). Default none. */
+  browser?: 'own' | null;
 };
 
 export type SetScheduleInput = {
@@ -44,7 +46,7 @@ export type SetScheduleInput = {
 };
 
 const MISSION_COLUMNS =
-  'id, name, agent_id, prompt, enabled, always_deliver, paused_reason, stop_when, ends_at, ended_at, quiet_runs, still_useful_asked_at, coalesce_window_seconds, coalesce_max_wait_seconds, context, report_max, created_at';
+  'id, name, agent_id, prompt, enabled, always_deliver, paused_reason, stop_when, ends_at, ended_at, quiet_runs, still_useful_asked_at, coalesce_window_seconds, coalesce_max_wait_seconds, context, report_max, browser, created_at';
 const SPEC_COLUMNS =
   'id, mission_id, revision, cron, timezone, timezone_explicit, misfire_policy, deadline_minutes, active, created_at';
 
@@ -56,8 +58,8 @@ export async function upsertMission(pool: Pool, input: UpsertMissionInput): Prom
     throw new Error('upsertMission: coalesce needs whole seconds, a window of 1–3600 and a max wait no shorter than it (at most 86400)');
   }
   const { rows } = await pool.query<MissionRow>(
-    `insert into core.missions (id, name, agent_id, prompt, enabled, always_deliver, coalesce_window_seconds, coalesce_max_wait_seconds, context, report_max)
-     values ($1, $2, $3, $4, coalesce($5, true), coalesce($6, false), $7, $8, $9::jsonb, $10)
+    `insert into core.missions (id, name, agent_id, prompt, enabled, always_deliver, coalesce_window_seconds, coalesce_max_wait_seconds, context, report_max, browser)
+     values ($1, $2, $3, $4, coalesce($5, true), coalesce($6, false), $7, $8, $9::jsonb, $10, $11)
      on conflict (id) do update
        set name = excluded.name,
            agent_id = excluded.agent_id,
@@ -67,7 +69,8 @@ export async function upsertMission(pool: Pool, input: UpsertMissionInput): Prom
            coalesce_window_seconds = excluded.coalesce_window_seconds,
            coalesce_max_wait_seconds = excluded.coalesce_max_wait_seconds,
            context = excluded.context,
-           report_max = excluded.report_max
+           report_max = excluded.report_max,
+           browser = excluded.browser
      returning ${MISSION_COLUMNS}`,
     [
       input.id,
@@ -80,24 +83,25 @@ export async function upsertMission(pool: Pool, input: UpsertMissionInput): Prom
       coalesce?.maxWaitSeconds ?? null,
       input.context ? JSON.stringify(input.context) : null,
       input.reportMax ?? null,
+      input.browser === 'own' ? 'own' : null,
     ],
   );
   return toMission(rows[0] as MissionRow);
 }
 
 /**
- * A mission's context and report length as its package now says (host API
- * 1.27), leaving everything the owner may have changed — prompt, schedule,
+ * A mission's context, report length and browsing as its package now says
+ * (host API 1.27; `browser` since 0.1.0-pre.38), leaving everything the owner may have changed — prompt, schedule,
  * switch — where it is: an agent package's update.
  */
 export async function setMissionExtras(
   pool: Pool,
   missionId: string,
-  extras: Pick<UpsertMissionInput, 'context' | 'reportMax'>,
+  extras: Pick<UpsertMissionInput, 'context' | 'reportMax' | 'browser'>,
 ): Promise<Mission | null> {
   const { rows } = await pool.query<MissionRow>(
-    `update core.missions set context = $2::jsonb, report_max = $3 where id = $1 returning ${MISSION_COLUMNS}`,
-    [missionId, extras.context ? JSON.stringify(extras.context) : null, extras.reportMax ?? null],
+    `update core.missions set context = $2::jsonb, report_max = $3, browser = $4 where id = $1 returning ${MISSION_COLUMNS}`,
+    [missionId, extras.context ? JSON.stringify(extras.context) : null, extras.reportMax ?? null, extras.browser === 'own' ? 'own' : null],
   );
   return rows.length > 0 ? toMission(rows[0] as MissionRow) : null;
 }

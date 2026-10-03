@@ -174,7 +174,7 @@ describe('one photo when the run needs the owner', () => {
     // bundle ID is what has to be on the owner's list.
     const app = { value: status({
       mode: 'computer',
-      settings: { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } as const,
+      settings: { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } as const,
       page: { id: 'p-a', url: 'app://com.apple.Notes', title: 'Notes', appId: 'com.apple.Notes', tabs: [], capturedAt: 'x' } as any,
     }) };
     const second = photosOn(app);
@@ -183,7 +183,7 @@ describe('one photo when the run needs the owner', () => {
 
     const allowed = { value: status({
       mode: 'computer',
-      settings: { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } as const,
+      settings: { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } as const,
       page: { id: 'p-b', url: 'app://com.google.Chrome', title: 'Chrome', appId: 'com.google.Chrome', tabs: [], capturedAt: 'x' } as any,
     }) };
     const third = photosOn(allowed);
@@ -192,7 +192,7 @@ describe('one photo when the run needs the owner', () => {
   });
 
   it('sends an app the owner allowed Once for this conversation, and only that one', () => {
-    const settings: NonNullable<BrowserStatus['settings']> = { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } satisfies NonNullable<BrowserStatus['settings']>;
+    const settings: NonNullable<BrowserStatus['settings']> = { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false, missionWaitMinutes: 60 } satisfies NonNullable<BrowserStatus['settings']>;
     const session = { id: 's', agentId: 'a', conversationId: 'c', requestId: 'r', task: 't', expiresAt: 'x', steps: 1, maxSteps: 10 };
     const page = (appId: string) => ({ id: 'p', url: `app://${appId}`, title: '', appId, tabs: [], capturedAt: 'x' }) as any;
     expect(screenshotAllowed(status({ mode: 'computer', settings, session: { ...session, allowedOnce: ['com.example.voicito'] }, page: page('com.example.voicito') }))).toBe(true);

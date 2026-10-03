@@ -26,7 +26,8 @@ permissions, not a choice.
 or orders; a site on your **sites that need my sign-in** list, a site buddi
 met a login wall on before (remembered in `browser/sign-in-sites.json`), or
 the agent's `prefer: "yours"` goes to your Chrome; everything else to the own
-browser. A run with no owner behind it (a mission) is kept in the own browser.
+browser. A run with no owner behind it (a mission) is kept in the own browser
+(see [Missions](#missions-browsing-while-you-are-away)).
 
 **Fallback, without a stop.** Your Chrome asked for but not connected, or
 turned off: the own browser, and the chat line says so ("Your Chrome isn't
@@ -88,6 +89,80 @@ budget and the agent's next action returns the page as you left it. A stored
 login is used before any card: the agent is pointed at `secret.list` and
 `secret.fill`, and a TOTP secret answers a code.
 
+## Missions: browsing while you are away
+
+A mission may look at pages unattended **only in buddi's own browser**, never
+your Chrome and never your apps, and only when its package says so:
+`"browser": "own"` on the mission in the catalogue package. Every other
+mission opens no page (`browser.act` answers "this mission has not opted in
+to browsing"), and the agent must hold `browser.act` in its own grant; the
+opt-in adds no tool. The install and update cards say it in a line: *may look
+at pages in buddi's own browser while you are away (never your Chrome or
+apps); a sign-in or a check waits for you*.
+
+**How it is allowed.** `browser.act` is a `session` tool: it runs inside a
+live owner request. A mission has none, so core's session floor has one more
+way through, and only one: the tool declares `unattended`, and the mission
+executor lists it in the run's `unattendedSession` (only for an opted-in
+mission). The agent's grant, an agent, a conversation and depth 0 are still
+asked on every call.
+
+**What it may not do.** Asked for your Chrome (`prefer: "yours"`) it is
+refused with the reason; an app job is refused before any card (nobody is
+there to answer one); a sign-in wall never moves to your Chrome; pins, the
+agent's, the conversation's and the global one, are passed over. The owner's
+own Stop holds for missions too: the run is told browsing is stopped and ends,
+with no card.
+
+**The four moments park the run.** Look?, Keep going?, Sign in and Human
+check have no chat to sit in, so each becomes:
+
+- the same question card `conversation.ask` records, open in the mission's
+  own conversation for the parking time;
+- a `question` notification with an action (it always reaches you, even in a
+  focus): on Telegram the card's options are its buttons; on Home and Needs
+  you the agent shows *Asked you a question* until the time is up;
+- a suspended job (`awaiting-owner:<question id>`), holding no worker, no
+  transaction and no model call.
+
+Your answer, a tap on Telegram, the card in the conversation, or your own
+words there, wakes the job: the page is touched with it (Take over hands you
+the page; Keep going renews the budget) and the run carries on in the same
+conversation with *The owner answered your card …* as its next turn. No
+answer within the parking time and the run ends as **needed you**: the card
+closes (a late tap is refused) and one report line is delivered, *Headlines
+needed you and stopped: "amazon.com needs your sign-in." No answer came
+within an hour, so it ended there.* Never silently. The parking time is
+`missionWaitMinutes` in the browser settings (60 by default, 5 to 1,440); a
+page is kept at least an hour, so after a longer wait the next action re-opens
+the last address.
+
+Which lineup missions opt in (buddi-market): Travel planner's **Trip check**
+(check-in windows and booking pages that do not read as plain pages).
+Researcher's **Pages I'm watching** reads pages with `web.read` and Anchor's
+editions read `news.read`; neither needs a browser, and the rest of the lineup
+does not look at pages on a schedule.
+
+## Delegates
+
+A delegated run (one agent asking a colleague) holds no `session` tool, with
+one exception: when the asking conversation is **an owner conversation with a
+browser session open** (a live owner request, depth 0, and a page of its own
+in that conversation), the colleague may use `browser.act` too, one level
+down, under the same owner request. The reasoning:
+
+- The owner is there and already watching a page in that conversation, so a
+  colleague looking at another page is the same task, seen on the same
+  Canvas, renewed by the same owner touches; nothing happens that the owner
+  would not see.
+- Anywhere else it stays blocked: a mission's delegate (no owner request), a
+  delegate of a conversation with no page (the owner never let a browser into
+  this task), and two levels down. A mission's `unattendedSession` is never
+  passed to a delegate, so a mission cannot reach the browser through a
+  colleague either.
+- Core checks the owner request on every call (`delegatedSession`, set only by
+  the delegation tool); a request that expired ends it.
+
 ## Stop agents' browsing
 
 The Stop closes every page and **expires**: an hour by default
@@ -109,7 +184,7 @@ extra turns); the browser's budget is the ceiling, and its card is Keep going?.
 
 `browser/settings.json` is `{version: 2, yourChrome, yourApps: off|ask|on,
 browserApp, allowedApps, browserProfile?, signInSites, defaultRoute,
-stopExpiryMinutes, maxOwnPages, showWindow}`; `POST /api/browser/settings`
+stopExpiryMinutes, maxOwnPages, showWindow, missionWaitMinutes}`; `POST /api/browser/settings`
 takes a partial object. No lock: a change applies with pages open, and
 turning a route off closes its pages. **Your apps: ask** asks for every app
 each conversation; **on** opens the listed apps and asks for the rest.
@@ -146,7 +221,8 @@ picks the browser and signs in with a stored login or asks once with a card.
 ## Telemetry: stop causes
 
 Every stop is counted (`browser/telemetry.jsonl`, host only, never a URL),
-with every route choice and every finished task. `buddi doctor` has a browser
+with every route choice and every finished task. A row from a mission run
+carries `mission: true`. `buddi doctor` has a browser
 row; `buddi doctor browser` and `GET /api/browser/telemetry` give the last
 week's stops by cause, cards and routes, and stops per task (the target is
 under 0.2).

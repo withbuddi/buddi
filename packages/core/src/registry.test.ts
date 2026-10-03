@@ -293,6 +293,58 @@ describe('tierFor: a tier decided per call', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  describe('missions and delegates (docs/browser.md)', () => {
+    /** A declared-`session` tool that may run in an opted-in mission. */
+    const unattendedTool = (execute = vi.fn(async (i: { n: number }) => i.n * 2)) => {
+      const base = manifest('session', execute as never);
+      return { manifest: { ...base, tools: [{ ...base.tools[0]!, unattended: true }] }, execute };
+    };
+    const mission = (over: Partial<CoreToolContext> = {}): CoreToolContext =>
+      granted({ ownerRequest: undefined, unattendedSession: ['demo.double'], ...over });
+
+    it('runs an unattended tool in a mission that opted in, with no owner request', async () => {
+      const r = new ToolRegistry();
+      const { manifest: m, execute } = unattendedTool();
+      r.register(m);
+      await expect(r.invoke('demo.double', { n: 21 }, mission())).resolves.toEqual({ ok: true, output: 42 });
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses it in a mission that did not opt in, at any depth, without the grant, or for a tool not declared unattended', async () => {
+      const r = new ToolRegistry();
+      const { manifest: m, execute } = unattendedTool();
+      r.register(m);
+      for (const [what, context] of [
+        ['not opted in', mission({ unattendedSession: undefined })],
+        ["a mission's delegate", mission({ delegationDepth: 1 })],
+        ['no agent grant', mission({ sessionTools: [] })],
+        ['no conversation', mission({ conversationId: undefined })],
+      ] as Array<[string, CoreToolContext]>) {
+        expect(await r.invoke('demo.double', { n: 1 }, context), what).toMatchObject({ ok: false, reason: 'session-not-authorized' });
+      }
+      const plain = new ToolRegistry();
+      plain.register(manifest('session', execute as never));
+      expect(await plain.invoke('demo.double', { n: 1 }, mission())).toMatchObject({ ok: false, reason: 'session-not-authorized' });
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it('blocks a delegate unless the delegation passed the tool down from a live owner request', async () => {
+      const r = new ToolRegistry();
+      const { manifest: m, execute } = unattendedTool();
+      r.register(m);
+      const blocked = await r.invoke('demo.double', { n: 1 }, granted({ delegationDepth: 1 }));
+      expect(blocked).toMatchObject({ ok: false, reason: 'session-not-authorized' });
+      expect((blocked as { message: string }).message).toMatch(/delegated run/);
+      // Passed down, but the owner's request is gone: still no.
+      expect(await r.invoke('demo.double', { n: 1 }, granted({ delegationDepth: 1, delegatedSession: ['demo.double'], ownerRequest: undefined }))).toMatchObject({ ok: false });
+      // Two levels down: no.
+      expect(await r.invoke('demo.double', { n: 1 }, granted({ delegationDepth: 2, delegatedSession: ['demo.double'] }))).toMatchObject({ ok: false });
+      expect(execute).not.toHaveBeenCalled();
+      // From an owner conversation with a browser session: yes.
+      await expect(r.invoke('demo.double', { n: 2 }, granted({ delegationDepth: 1, delegatedSession: ['demo.double'] }))).resolves.toEqual({ ok: true, output: 4 });
+    });
+  });
+
   it('keeps them when the call was decided gated, before any action is recorded', async () => {
     const r = new ToolRegistry();
     const { manifest: m } = deciding(async () => ({ tier: 'gated', reason: 'rm -rf is a destroyer.' }));

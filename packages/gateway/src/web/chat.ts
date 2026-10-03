@@ -137,6 +137,10 @@ import {
   readVitals,
 } from '../surfaces/conversation-lifetime.js';
 import { QUESTION_ASKED, QUESTION_CLEARED, holdsQuestion } from './attention.js';
+import { resumeParkedForQuestion } from '../missions/parked.js';
+
+/** The run id an answer hands back when it woke a parked mission run instead of starting a turn: the job carries on. */
+export const PARKED_RUN_ID = 'mission';
 import { type ArtifactStore } from '../telegram/attachments.js';
 import { LiveTurns } from './live.js';
 import { pictureUrl } from '../agents/avatars.js';
@@ -1534,10 +1538,18 @@ export class WebChat {
       const status = settled.reason === 'unknown' ? 404 : 409;
       return { ok: false, status, error: 'That question is no longer waiting for an answer.' };
     }
-    const groupId = await conversationGroup(this.#deps.pool, settled.question.conversationId).catch(() => null);
     // What was recorded is what the agent reads: the option's label, the
     // owner's own words, or the skipped sentence.
     const text = settled.question.answer ?? input.answer;
+    // A mission run parked on this card (docs/browser.md, "Missions"): the
+    // answer wakes that run, in its own conversation; no turn starts here.
+    if (await resumeParkedForQuestion(this.#deps.pool, settled.question, text).catch((err) => {
+      this.#log(`web chat: waking the mission parked on question ${settled.question.id} failed: ${message(err)}`);
+      return false;
+    })) {
+      return { ok: true, conversationId: settled.question.conversationId, runId: PARKED_RUN_ID };
+    }
+    const groupId = await conversationGroup(this.#deps.pool, settled.question.conversationId).catch(() => null);
     if (groupId) {
       const sent = await this.sendToGroup({ groupId, conversationId: settled.question.conversationId, text });
       return sent.ok ? { ok: true, conversationId: sent.conversationId, runId: sent.runId } : sent;

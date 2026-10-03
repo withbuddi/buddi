@@ -60,7 +60,7 @@ import { bindOwnerTools } from './agents/owner-tools.js';
 import { bindPlatformTools } from './agents/platform.js';
 import type { CatalogueService } from './agents/platform-catalogue.js';
 import { createCatalogueService } from './web/catalogue-source.js';
-import { browserHost } from './browser-host.js';
+import { browserDelegable, browserHost } from './browser-host.js';
 import { loadDefaultAgentRecord, writeDefaultAgentRecord } from './agents/default-agent.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 import { loadPluginsOnce } from './plugins/load.js';
@@ -477,6 +477,8 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
       const agent = catalog.get(id);
       return agent ? providerFor(agent) : provider;
     },
+    // A delegate browses only from an owner conversation with a page open there.
+    delegableSession: browserDelegable(browser),
   });
   // `owner.rename_me` rewrites the calling agent's own file, so it needs the
   // catalog for the same reason delegation does. Each surface rebinds with its

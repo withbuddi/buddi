@@ -12,6 +12,8 @@
 import {
   getAction,
   getArtifact,
+  getQuestion,
+  questionIdOfKey,
   readArtifactBytes,
   missionIdOfStillUsefulKey,
   proposalIdOfKey,
@@ -24,6 +26,7 @@ import { TelegramApi } from './api.js';
 import { ownerMessageHtml } from './html.js';
 import { notifyOwner, ownerChatId, OwnerNotPairedError } from './notify.js';
 import { stillUsefulKeyboard } from './still-useful.js';
+import { questionKeyboard } from './surface.js';
 
 /**
  * Telegram turns any `@word` into a link to that public username, so an
@@ -140,6 +143,21 @@ export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChanne
         if (!chatId) throw new OwnerNotPairedError();
         // Decided on the dashboard since: there is nothing left to ask.
         await proposals.request(chatId, proposalId);
+        return { id: chatId };
+      }
+      // A question card sent as a notification (a parked mission's browser
+      // moment, docs/browser.md "Missions"): its options are the buttons, and
+      // a tap answers that exact card. Answered or closed since: just the text.
+      const questionId = message.kind === 'question' ? questionIdOfKey(message.dedupeKey) : undefined;
+      if (questionId) {
+        const question = await getQuestion(opts.pool, questionId).catch(() => null);
+        const open = question && !question.answeredAt && Date.parse(question.expiresAt) > Date.now() && question.options.length > 0;
+        const { action: _asked, ...bare } = message;
+        const chatId = await sendText(unlinkSignatures(ownerMessageText(open ? bare : message)), {
+          pool: opts.pool,
+          env: opts.env ?? process.env,
+          ...(open ? { replyMarkup: questionKeyboard(question) } : {}),
+        });
         return { id: chatId };
       }
       // An agent's own message (`owner.notify`) is information only: plain

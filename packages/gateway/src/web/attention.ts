@@ -149,20 +149,27 @@ async function heldQuestions(
   now: Date,
 ): Promise<Map<string, { at: string; conversationId: string | null }>> {
   const cutoff = new Date(now.getTime() - PENDING_TTL_MS);
+  // A parked mission's card says how long it waits (`until`, docs/browser.md
+  // "Missions"): it holds for that long instead of fifteen minutes. Looked
+  // back a day at most, the longest a mission waits.
   const { rows } = await pool.query(
     `select distinct on (payload->>'agentId')
-            payload->>'agentId' as agent_id, kind, conversation_id, created_at
+            payload->>'agentId' as agent_id, kind, conversation_id, created_at, payload->>'until' as until
        from core.events
       where kind = any($1::text[])
-        and created_at > $2
+        and created_at > $3
+        and (created_at > $2 or (payload->>'until') is not null)
         and payload->>'agentId' is not null
       order by payload->>'agentId', id desc`,
-    [[QUESTION_ASKED, QUESTION_CLEARED], cutoff],
+    [[QUESTION_ASKED, QUESTION_CLEARED], cutoff, new Date(now.getTime() - 24 * 60 * 60_000)],
   );
 
   const held = new Map<string, { at: string; conversationId: string | null }>();
   for (const row of rows) {
     if (String(row.kind) !== QUESTION_ASKED) continue;
+    const created = new Date(row.created_at).getTime();
+    const until = row.until ? Date.parse(String(row.until)) : NaN;
+    if (Number.isFinite(until) ? until <= now.getTime() : created <= cutoff.getTime()) continue;
     held.set(String(row.agent_id), {
       at: new Date(row.created_at).toISOString(),
       conversationId: row.conversation_id === null ? null : String(row.conversation_id),

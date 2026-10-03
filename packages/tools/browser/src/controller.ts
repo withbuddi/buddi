@@ -15,7 +15,7 @@ import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
 import { applySettingsChange, migrateSettings, PIN_VALUES, settingsSchema, type ControlSettings, type RouteKind, type RoutePin } from './settings.js';
 import { agoText, cardAnswer, chooseRoute, detectWall, ownerCard, RouteProviderDriver, routeNote, siteListed, siteOf, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
-import { BrowserTelemetry, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
+import { BrowserTelemetry, missionMark, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
 import { canonicalOrigin, fieldBoundTo } from './secrets.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -26,6 +26,10 @@ function isAppEnvelope(value: unknown): value is AppEnvelope {
   return typeof value === 'object' && value !== null && typeof (value as AppEnvelope).allowApp === 'string';
 }
 /** What the agent is told when an app job has no route: the one fix, never a mode. */
+/** What a mission is told when it asks for the owner's Chrome (docs/browser.md, "Missions"). */
+export const UNATTENDED_CHROME = "A mission looks only in buddi's own browser, never the owner's Chrome: nobody is there to watch it. Use the own browser, or report what needs the owner's sign-in.";
+/** What a mission is told when it asks for an app. */
+export const UNATTENDED_APPS = "A mission looks only in buddi's own browser; the owner's apps need the owner. Report what you could not do instead.";
 export const APPS_UNAVAILABLE = 'Your apps are not available to agents right now. The owner can turn them on, or repair them, in Settings → Where agents may look.';
 
 /** The global Stop as it is kept on disk. */
@@ -356,6 +360,8 @@ export class HostController implements BrowserController {
   /** Session for everything but an `open` of an app the owner has not allowed: that one asks with a card. */
   async tierFor(command: BrowserCommand, ctx: ToolContext): Promise<{ tier: 'session' | 'gated'; reason?: string }> {
     if (command.action !== 'open' || this.#settings.yourApps === 'off') return { tier: 'session' };
+    // No app card for a mission: nobody is there to answer it, and apps are never its route.
+    if (!ctx.ownerRequest) throw new ToolRefusal(UNATTENDED_APPS);
     const app = await this.#resolveOrRefuse(command, ctx.conversationId);
     if (this.#allowed(app.bundleId, ctx.conversationId)) return { tier: 'session' };
     const conversationId = ctx.conversationId;
@@ -466,6 +472,11 @@ export class HostController implements BrowserController {
     catch { /* a surface's drawing never decides a run */ }
   }
 
+  /** How long a mission run waits on a card for the owner, in milliseconds (settings `missionWaitMinutes`). */
+  missionWaitMs(): number {
+    return this.#settings.missionWaitMinutes * 60_000;
+  }
+
   async execute(command: BrowserCommand, ctx: ToolContext): Promise<unknown> {
     ctx.signal?.throwIfAborted();
     if (!this.#enabled) throw new Error('Browser driving is available through buddi serve.');
@@ -474,14 +485,19 @@ export class HostController implements BrowserController {
     // The owner's Stop: one card with Resume, never a Settings trip.
     const stop = this.#activeStop();
     if (stop && command.action !== 'close') {
-      this.telemetry.stop('owner-stop', { route: 'own', agent: ctx.agentId, ...(ctx.surface?.id ? { surface: ctx.surface.id } : {}) });
+      this.telemetry.stop('owner-stop', { route: 'own', agent: ctx.agentId, ...missionMark(ctx), ...(ctx.surface?.id ? { surface: ctx.surface.id } : {}) });
       const card = ownerCard('stopped', { stoppedAgo: agoText(this.#now() - stop.at), ...(stop.until !== undefined ? { until: new Date(stop.until).toISOString().slice(11, 16) + ' UTC' } : {}) });
       this.#stopCards.set(ctx.conversationId, card);
-      this.#ask(ctx, card);
+      // The owner's own Stop is not a moment to park a mission on: it says so and ends.
+      if (!unattended) this.#ask(ctx, card);
       return { completed: false, dispatched: false, needsOwner: card, message: `${browserStoppedMessage(ctx.surface)} Say that in one sentence and stop.` } satisfies Omit<CardResult, 'notice'>;
     }
     // The owner's yes on an app card, run by core's executor: record it; the agent opens next.
     if (ctx.actionId !== undefined && command.action === 'open') return this.#grant(command, ctx);
+    if (unattended && command.action === 'open') {
+      this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId, ...missionMark(ctx) });
+      throw new ToolRefusal(UNATTENDED_APPS);
+    }
     const key = this.#key(ctx.buddi.owner.id, ctx.agentId, ctx.conversationId);
     if (command.action === 'close') {
       for (const route of ROUTES) await this.#managers[route].execute(command, ctx);
@@ -495,13 +511,18 @@ export class HostController implements BrowserController {
     let appName: string | undefined;
     if (command.action === 'open') {
       if (this.#settings.yourApps === 'off') {
-        this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId });
+        this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId, ...missionMark(ctx) });
         throw new Error(APPS_UNAVAILABLE);
       }
       const app = await this.#resolve(command, ctx.conversationId);
       if (!this.#allowed(app.bundleId, ctx.conversationId)) throw new BrowserPreconditionError(`${app.name} is not allowed yet. Ask to open it again so the owner gets a card.`);
       run = { ...command, appId: app.bundleId, app: undefined };
       appName = app.name;
+    }
+    // A mission browses in buddi's own browser only: asked for the owner's Chrome, it is told so plainly (no pin changes that).
+    if (unattended && command.prefer === 'yours') {
+      this.telemetry.stop('route-unavailable', { route: 'chrome', agent: ctx.agentId, ...missionMark(ctx) });
+      throw new ToolRefusal(UNATTENDED_CHROME);
     }
     let route = this.#current.get(key);
     let choice: RouteChoice = { route, reason: 'continuing' };
@@ -515,12 +536,12 @@ export class HostController implements BrowserController {
         choice = { route: 'chrome', reason: 'continuing' };
       }
       if (!choice.route) {
-        this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId });
-        throw new Error(unattended ? 'An unattended task looks only in buddi\'s own browser; apps need the owner.' : APPS_UNAVAILABLE);
+        this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId, ...missionMark(ctx) });
+        throw new Error(unattended ? UNATTENDED_APPS : APPS_UNAVAILABLE);
       }
-      if (choice.fallbackFrom) this.telemetry.stop('route-unavailable', { route: choice.route, agent: ctx.agentId, ...(site ? { host: site } : {}) });
+      if (choice.fallbackFrom) this.telemetry.stop('route-unavailable', { route: choice.route, agent: ctx.agentId, ...missionMark(ctx), ...(site ? { host: site } : {}) });
       if (route && route !== choice.route) await this.#managers[route].release(ctx.conversationId, ctx.agentId);
-      if (route !== choice.route) this.telemetry.record({ type: 'browser.route', chosen: choice.route, reason: choice.reason, ...(choice.fallbackFrom ? { fallbackFrom: choice.fallbackFrom } : {}), agent: ctx.agentId, ...(site ? { host: site } : {}) });
+      if (route !== choice.route) this.telemetry.record({ type: 'browser.route', chosen: choice.route, reason: choice.reason, ...(choice.fallbackFrom ? { fallbackFrom: choice.fallbackFrom } : {}), agent: ctx.agentId, ...missionMark(ctx), ...(site ? { host: site } : {}) });
       route = choice.route;
       this.#current.set(key, route);
     }
@@ -531,7 +552,7 @@ export class HostController implements BrowserController {
       catch (error) {
         // The owner's Chrome went away: the same page in buddi's own browser, silently.
         if (route !== 'chrome' || !(error instanceof Error) || !error.message.includes(NOT_CONNECTED.slice(0, 30))) throw error;
-        this.telemetry.stop('not-connected', { route: 'chrome', agent: ctx.agentId, ...(site ? { host: site } : {}) });
+        this.telemetry.stop('not-connected', { route: 'chrome', agent: ctx.agentId, ...missionMark(ctx), ...(site ? { host: site } : {}) });
         const last = this.#managers.chrome.child({ agentId: ctx.agentId, conversationId: ctx.conversationId })?.lastUrl;
         await this.#managers.chrome.release(ctx.conversationId, ctx.agentId);
         route = 'own';
@@ -564,7 +585,7 @@ export class HostController implements BrowserController {
     const url = observation.observation.url;
     const site = siteOf(url);
     if (wall === 'human') {
-      this.telemetry.stop('human-check', { route, agent: ctx.agentId!, ...(site ? { host: site } : {}) });
+      this.telemetry.stop('human-check', { route, agent: ctx.agentId!, ...missionMark(ctx), ...(site ? { host: site } : {}) });
       const card = child.park('human');
       return { result: { ...observation, completed: false, needsOwner: card, message: `${site ?? 'This page'} asks for a human. Say so in one sentence and stop; the card asks the owner to take over.` }, route, choice };
     }
@@ -576,15 +597,15 @@ export class HostController implements BrowserController {
       await this.#managers.own.release(ctx.conversationId!, ctx.agentId!);
       const key = this.#key(ctx.buddi!.owner.id, ctx.agentId!, ctx.conversationId!);
       this.#current.set(key, 'chrome');
-      this.telemetry.record({ type: 'browser.route', chosen: 'chrome', reason: 'sign-in-fallback', fallbackFrom: 'own', agent: ctx.agentId!, ...(site ? { host: site } : {}) });
+      this.telemetry.record({ type: 'browser.route', chosen: 'chrome', reason: 'sign-in-fallback', fallbackFrom: 'own', agent: ctx.agentId!, ...missionMark(ctx), ...(site ? { host: site } : {}) });
       const moved = await this.#managers.chrome.execute({ action: 'navigate', url } as BrowserCommand, ctx);
       return this.#walls(moved, 'chrome', { route: 'chrome', reason: 'sign-in-fallback', fallbackFrom: 'own' }, ctx, unattended);
     }
     if (await this.#storedLogin(ctx, url)) {
       return { result: { ...observation, message: `${(observation as { message?: string }).message ?? ''} This is a sign-in page and the owner keeps a login for it: secret.list, then secret.fill (a TOTP secret answers a code).`.trim() }, route, choice };
     }
-    if (unattended) return { result, route, choice };
-    this.telemetry.stop('sign-in', { route, agent: ctx.agentId!, ...(site ? { host: site } : {}) });
+    // A mission's sign-in is one of the four moments too: the card parks the run until the owner answers (Take over, or a saved login).
+    this.telemetry.stop('sign-in', { route, agent: ctx.agentId!, ...missionMark(ctx), ...(site ? { host: site } : {}) });
     const card = child.park(wall === 'code' ? 'code' : 'sign-in', { chrome: route === 'chrome' ? 'none' : chromeUsable ? 'usable' : allowed.chrome && !available.chrome ? 'offline' : 'none', storedLogin: false });
     return { result: { ...observation, completed: false, needsOwner: card, message: `${card.question} Say that in one sentence and stop; the card has Take over. You continue when the owner gives the page back.` }, route, choice };
   }

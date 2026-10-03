@@ -213,6 +213,20 @@ export interface CoreToolContext extends ToolContext {
    * that needs it refuses. See `ProviderAccountsAccess`.
    */
   providerAccounts?: ProviderAccountsAccess;
+  /**
+   * Set only by the mission executor, for a run whose mission opted in
+   * (`browser: own`): the `session` tools declared `unattended` that this run
+   * may call with no owner request (docs/browser.md, "Missions"). Never set
+   * by a surface, never read from a model, and dead at any delegation depth.
+   */
+  unattendedSession?: readonly string[];
+  /**
+   * Set only by the delegation tool, one level down: the `session` tools a
+   * delegate may call because the conversation that delegated is an owner
+   * conversation with a browser session of its own (docs/browser.md,
+   * "Delegates"). The owner request still has to be live.
+   */
+  delegatedSession?: readonly string[];
 }
 
 /**
@@ -435,6 +449,15 @@ export interface ToolDefinition<I = unknown, O = unknown> {
    * `maxTurns`. The runtime still caps such turns. Since host API 1.29.
    */
   ownBudget?: boolean;
+  /**
+   * A `session` tool that may also run in an unattended mission run whose
+   * mission opted in (`browser: own`), with no owner request behind it. Core
+   * still asks the rest of the session floor (an agent, a conversation, no
+   * delegation, the agent's grant) and the executor's `unattendedSession`;
+   * the tool itself must hold its own unattended limits (the browser: its own
+   * browser only, never the owner's Chrome or apps). Core-shipped tools only.
+   */
+  unattended?: boolean;
   /** Optional ephemeral image for the next model call; never stored as base64. */
   image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
 }

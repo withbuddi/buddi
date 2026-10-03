@@ -93,6 +93,13 @@ export interface DelegationBinding {
    * absent every nested run uses `provider`.
    */
   providerFor?: (agent: { id: string }) => RuntimeProvider;
+  /**
+   * The `session` tools a delegate may hold (docs/browser.md, "Delegates"):
+   * `['browser.act']` only when the asking conversation has a browser session
+   * open. The delegation tool asks it only for a run with a live owner
+   * request at depth 0, so a mission's delegate never gets here.
+   */
+  delegableSession?: (ctx: { agentId?: string; conversationId?: string }) => readonly string[];
 }
 
 const bindings = new WeakMap<ToolRegistry, DelegationBinding>();
@@ -295,6 +302,7 @@ export function createDelegationManifest(
           return binding.providerFor?.(agent) ?? binding.provider;
         },
         registry,
+        delegableSession: (ctx) => bindings.get(registry)?.delegableSession?.(ctx) ?? [],
         /*
          * The allowlist, with the one entry it may never contain removed at the
          * point of use as well as at load. An agent that can write the

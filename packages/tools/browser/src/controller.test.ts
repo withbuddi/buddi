@@ -8,7 +8,7 @@ import type { RouteProvider } from '@buddi/core/plugin';
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
 const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
-import { APPS_UNAVAILABLE, HostController } from './controller.js';
+import { APPS_UNAVAILABLE, HostController, UNATTENDED_APPS, UNATTENDED_CHROME } from './controller.js';
 import type { AppQuery } from './computer.js';
 import { NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import { migrateSettings } from './settings.js';
@@ -149,6 +149,34 @@ describe('the route, chosen per task', () => {
     const { controller } = await routes({ settings: { yourChrome: true, signInSites: ['shop.test'] } });
     const mission = { ...ctx(), ownerRequest: undefined } as CoreToolContext;
     await expect(controller.execute(navigate('https://shop.test/'), mission)).resolves.toMatchObject({ route: 'own' });
+  });
+  it('a mission asking for the owner\'s Chrome or an app is refused with the reason, and no pin changes that', async () => {
+    const { controller, log } = await routes({ settings: { yourChrome: true, yourApps: 'on', defaultRoute: 'chrome' } });
+    const mission = { ...ctx('m'), ownerRequest: undefined } as CoreToolContext;
+    await controller.pin('m', 'chrome');
+    await expect(controller.execute(navigate('https://shop.test/', { prefer: 'yours' }), mission)).rejects.toThrow(UNATTENDED_CHROME);
+    await expect(controller.tierFor(open, mission)).rejects.toThrow(UNATTENDED_APPS);
+    await expect(controller.execute(open, mission)).rejects.toThrow(UNATTENDED_APPS);
+    // The pins (conversation and global say Chrome) are passed over: the own browser.
+    await expect(controller.execute(navigate('https://shop.test/'), mission)).resolves.toMatchObject({ route: 'own' });
+    expect(log).toEqual(['own https://shop.test/']);
+  });
+  it("a mission's telemetry rows are marked; the owner's are not", async () => {
+    const { controller } = await routes({ settings: { yourChrome: true } });
+    await controller.execute(navigate('https://shop.test/'), { ...ctx('m'), ownerRequest: undefined } as CoreToolContext);
+    await controller.execute(navigate('https://shop.test/'), ctx('o'));
+    const routed = controller.telemetry.events.filter((event) => event.type === 'browser.route');
+    expect(routed.map((event) => [event.agent, event.mission ?? false])).toEqual([['m', true], ['o', false]]);
+  });
+  it('a sign-in wall in a mission is a Sign in card (no Chrome option), asked through ctx.ask', async () => {
+    const asked: Asked[] = [];
+    const { controller } = await routes({ settings: { yourChrome: true }, page: LOGIN });
+    const mission = { ...ctx('m', asked), ownerRequest: undefined } as CoreToolContext;
+    const result = await controller.execute(navigate('https://www.amazon.com/ap/signin'), mission) as { route: string; needsOwner?: { kind: string; options: Array<{ label: string }> } };
+    expect(result.route).toBe('own');
+    expect(result.needsOwner?.kind).toBe('sign-in');
+    expect(result.needsOwner?.options.map((o) => o.label)).not.toContain('Use my Chrome');
+    expect(asked).toHaveLength(1);
   });
 });
 
