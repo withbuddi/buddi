@@ -3131,7 +3131,7 @@ A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin 
 - **Kind:** bytes, not JSON
 - **Answer:** `image/png, with an ETag`
 - **Errors:** 404 no such asset
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.36
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/plugin-assets/<plugin>/<key>" -o out
