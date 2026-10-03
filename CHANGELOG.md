@@ -32,6 +32,7 @@ What changes in buddi from one release to the next, newest first.
 - A tool name in a catalogue listing's owner-facing text (pitch, description, about, what changed, examples, mission names, skill descriptions), such as "(artifacts.write)", is rewritten in words from the tool's description, or dropped, wherever buddi shows it.
 - A scheduled mission run now tells the agent its mission's own report cap (`reportMax`, such as 4,000 characters) instead of always 1,500, and that Telegram splits a message past 4,000 characters at paragraphs; a morning edition had dropped stories to fit the wrong limit.
 - A plugin request that carries an owner secret can no longer be steered to another server: caller-set `Host`, forwarding and `Proxy-Authorization` headers are dropped, and TLS always names the URL's own host. The sign-in budget (120 a minute) is now shared by every run of a plugin instead of reset per run, a refused or pending sign-in no longer uses it up, and a response cap that is not a whole number (`NaN`) falls back to the default instead of lifting the cap.
+- A plugin's logo can no longer exhaust buddi's memory: images are capped at a megapixel (2048 on a side) before any pixel buffer is made, a PNG with a second header or data that inflates past its own size is refused (also inside an ICO), a GIF frame must fit its canvas, and decoding runs one at a time in a worker thread with a memory limit and a five-second deadline.
 
 ## 0.1.0-pre.35 — 2026-10-03
 
