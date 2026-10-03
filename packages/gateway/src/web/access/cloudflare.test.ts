@@ -182,7 +182,7 @@ describe('the provider', () => {
     const provider = cloudflareProvider({ jwks, log: () => {}, ingressProblem: () => problem });
     const ctx = { dashboardPort: () => 4317, ingressPort: () => 4319, publicOrigin: () => undefined };
     expect((await provider.status(toCloudflareSetting(null), ctx)).state).toBe('off');
-    expect(await provider.status(toCloudflareSetting({ teamDomain: TEAM }), ctx)).toEqual({ state: 'needs-setup', sentence: 'Off. Needs the AUD tag and your email.' });
+    expect(await provider.status(toCloudflareSetting({ teamDomain: TEAM }), ctx)).toEqual({ state: 'off', sentence: 'Off. Your own domain, with Cloudflare’s sign-in in front of it.' });
     expect(await provider.status(enabled, ctx)).toEqual({ state: 'waiting', sentence: 'Waiting for a first visit through Cloudflare.' });
     problem = 'Port 4319 is taken.';
     expect((await provider.status(enabled, ctx)).state).toBe('needs-setup');

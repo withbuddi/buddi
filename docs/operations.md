@@ -405,6 +405,46 @@ command:
    address (`https://buddi.example.com`), tick *Let this email sign in through
    Cloudflare*, and Save.
 
+**Set it up for me.** The panel (and `buddi access cloudflare setup --host
+buddi.example.com [--zone example.com] [--email you@example.com]`) does steps
+2–5 through Cloudflare's API instead. Create a token under My Profile → API
+Tokens → Create Token → Custom token with:
+
+- Account · Cloudflare Tunnel · Edit
+- Account · Access: Apps and Policies · Edit
+- Account · Access: Organizations, Identity Providers, and Groups · Read (for
+  the team domain)
+- Zone · DNS · Edit, on the zone of your hostname
+
+Paste it with the hostname and your email (the CLI reads
+`CLOUDFLARE_API_TOKEN`, or asks with the input hidden). buddi keeps it as the
+owner secret `CLOUDFLARE_API_TOKEN` (Settings → Keys and secrets; the scrubber
+masks it in every log line), finds the zone the hostname is on, and then
+creates or reuses, each found by its tag first: the tunnel `buddi-<host>`, its
+ingress (`<host>` → `http://127.0.0.1:<ingress port>`, everything else 404), a
+proxied CNAME commented "Made by buddi…", a reusable Allow policy `buddi —
+<host>` for your email (24-hour sessions) and a self-hosted Access application
+`buddi (<host>)`. It reads the AUD tag and the team domain, fills in and turns
+on the setting above, and shows the one command it never runs itself:
+
+```sh
+sudo cloudflared service install <tunnel token>
+```
+
+(on a Mac after `brew install cloudflared`; if sudo cannot find it, use
+`/opt/homebrew/bin/cloudflared`, or `/usr/local/bin/cloudflared` on an Intel
+Mac; on Linux after the `.deb` or the package repository). buddi then waits up
+to 30 minutes for the tunnel to report healthy and runs Test my setup. A step
+that fails says why — a missing token permission is named — and nothing made
+so far is lost: running it again picks up where it stopped. It refuses to
+touch a DNS record or an Access application for that hostname it did not make.
+*Remove what buddi made* (or `buddi access cloudflare remove`) deletes the
+application, the policy, the DNS record and the tunnel, each only when it
+carries buddi's tag, turns the setting off when setup filled it in, forgets
+the token once everything went, and shows `sudo cloudflared service uninstall`
+for the connector. The CLI writes the database directly; the running service
+binds its ingress listener within 15 seconds.
+
 On Save buddi binds the ingress listener and fetches the team's signing keys
 once, and says whether that worked; *Test my setup* does the same fetch without
 saving. The row then says "Waiting for a first visit through Cloudflare" until

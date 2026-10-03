@@ -6,7 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { api, type AccessView, type CloudflareAccessView } from '../api';
+import { api, type AccessView, type CloudflareAccessView, type CloudflareSetupProgress, type CloudflareSetupView } from '../api';
 import { AccessSettings, CloudflareAccess } from './Access';
 
 vi.mock('../api', async (load) => ({
@@ -18,6 +18,10 @@ vi.mock('../api', async (load) => ({
     cloudflareAccess: vi.fn(),
     setCloudflareAccess: vi.fn(),
     testCloudflareAccess: vi.fn(),
+    cloudflareSetup: vi.fn(),
+    startCloudflareSetup: vi.fn(),
+    stopCloudflareSetup: vi.fn(),
+    removeCloudflareSetup: vi.fn(),
   },
 }));
 
@@ -57,6 +61,22 @@ const CF: CloudflareAccessView = {
   },
 };
 
+const IDS = ['token', 'tunnel', 'route', 'dns', 'access', 'save', 'connector', 'healthy', 'test'] as const;
+function progress(state: CloudflareSetupProgress['state'], doneUpTo: number, extra: Partial<CloudflareSetupProgress> = {}): CloudflareSetupProgress {
+  return {
+    state, host: 'buddi.example.com', email: 'owner@example.com',
+    steps: IDS.map((id, i) => ({ id, state: i < doneUpTo ? 'done' : i === doneUpTo ? 'now' : 'next', text: `step ${id}` })),
+    install: null, error: null, url: null, removed: [], uninstall: null, ...extra,
+  };
+}
+const SETUP: CloudflareSetupView = {
+  progress: progress('idle', -1),
+  tokenStored: false,
+  record: null,
+  permissions: ['Account · Cloudflare Tunnel · Edit', 'Zone · DNS · Edit — on the zone of your hostname'],
+  ingressPort: 4319,
+};
+
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('Sign in from elsewhere', () => {
@@ -68,7 +88,11 @@ describe('Sign in from elsewhere', () => {
     expect(screen.getByText('Ready')).toBeInTheDocument();
     expect(screen.getByText(/Off\. Your own domain/)).toBeInTheDocument();
     expect(screen.getByText(/works everywhere/)).toBeInTheDocument();
+    vi.mocked(api.cloudflareSetup).mockResolvedValue(SETUP);
     fireEvent.click(screen.getByText('Cloudflare Access'));
+    // Not set up yet: "Set it up for me" first, the five steps one click away.
+    expect(await screen.findByRole('button', { name: 'Set it up for me' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /do it myself/ }));
     // The steps, with the real ingress port to copy.
     expect(await screen.findByText('http://127.0.0.1:4319')).toBeInTheDocument();
     expect(screen.getByText('brew install cloudflared')).toBeInTheDocument();
@@ -120,12 +144,61 @@ describe('the Cloudflare row', () => {
     expect(within(command.closest('.tailscale-command') as HTMLElement).getByRole('button', { name: 'Copy' })).toBeInTheDocument();
   });
 
+  it('says what is missing in a neutral line, and as the error only once the switch is tried', async () => {
+    vi.mocked(api.cloudflareAccess).mockResolvedValue(CF);
+    render(<CloudflareAccess />);
+    const line = await screen.findByText('To turn this on, fill in the team domain, the AUD tag and your email.');
+    expect(line.closest('[role="alert"]')).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('To turn this on, fill in the team domain, the AUD tag and your email.');
+    expect(api.setCloudflareAccess).not.toHaveBeenCalled();
+  });
+
   it('says the server’s sentence when a save is refused', async () => {
     const { ApiError } = await import('../api');
-    vi.mocked(api.cloudflareAccess).mockResolvedValue(CF);
-    vi.mocked(api.setCloudflareAccess).mockRejectedValue(new ApiError(400, 'To turn this on, fill in the AUD tag and your email.'));
+    vi.mocked(api.cloudflareAccess).mockResolvedValue({ ...CF, teamDomain: 'team.cloudflareaccess.com', aud: 'a'.repeat(64), email: 'owner@example.com' });
+    vi.mocked(api.setCloudflareAccess).mockRejectedValue(new ApiError(400, 'The public address must be an https:// address.'));
     render(<CloudflareAccess />);
     fireEvent.click(await screen.findByRole('checkbox'));
-    expect(await screen.findByText('To turn this on, fill in the AUD tag and your email.')).toBeInTheDocument();
+    expect(await screen.findByText('The public address must be an https:// address.')).toBeInTheDocument();
+  });
+});
+
+describe('Set it up for me', () => {
+  it('takes the token, hostname and email, then shows the run with the one command to copy', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    vi.mocked(api.cloudflareSetup).mockResolvedValue(SETUP);
+    const waiting = progress('waiting', 6, { install: { command: 'sudo cloudflared service install eyJtoken', note: 'If sudo can’t find it, use /opt/homebrew/bin/cloudflared.' } });
+    vi.mocked(api.startCloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: waiting });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Set it up for me' }));
+    expect(screen.getByText('Account · Cloudflare Tunnel · Edit')).toBeInTheDocument();
+    const start = screen.getByRole('button', { name: 'Set it up' });
+    expect(start).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/API token/), { target: { value: 'cf-token-0123456789abcdef' } });
+    fireEvent.change(screen.getByLabelText(/Hostname/), { target: { value: 'buddi.example.com' } });
+    fireEvent.change(screen.getByLabelText(/Your email/), { target: { value: 'owner@example.com' } });
+    fireEvent.click(start);
+    await waitFor(() => expect(api.startCloudflareSetup).toHaveBeenCalledWith({ token: 'cf-token-0123456789abcdef', host: 'buddi.example.com', email: 'owner@example.com' }));
+    const command = await screen.findByText('sudo cloudflared service install eyJtoken');
+    expect(within(command.closest('.tailscale-command') as HTMLElement).getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    expect(screen.getByText(/never runs sudo itself/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop waiting' })).toBeInTheDocument();
+  });
+
+  it('shows a failure in its step, with Remove what buddi made and Try again', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    const failed = progress('failed', 4, { error: 'The token can’t list Access policies.' });
+    failed.steps[4] = { id: 'access', state: 'failed', text: 'Creating the Access application', why: 'The token can’t list Access policies. Add Account · Access: Apps and Policies · Edit to it.' };
+    vi.mocked(api.cloudflareSetup).mockResolvedValue({ ...SETUP, progress: failed });
+    vi.mocked(api.removeCloudflareSetup).mockResolvedValue({ ...SETUP, progress: { ...progress('removed', 0), steps: [], removed: ['the DNS record', 'the tunnel'], uninstall: 'sudo cloudflared service uninstall' } });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    expect(await screen.findByText(/Add Account · Access: Apps and Policies · Edit/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove what buddi made' }));
+    expect(await screen.findByText('Removed the DNS record and the tunnel. Signing in through Cloudflare is off.')).toBeInTheDocument();
+    expect(screen.getByText('sudo cloudflared service uninstall')).toBeInTheDocument();
   });
 });

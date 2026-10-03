@@ -3,3 +3,6 @@ export * from './provider.js';
 export * from './registry.js';
 export * from './tailscale.js';
 export * from './cloudflare.js';
+export * from './cloudflare-api.js';
+export * from './cloudflare-setup.js';
+export * from './cloudflare-token.js';

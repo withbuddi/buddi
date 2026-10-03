@@ -10,9 +10,9 @@
  * Seen through any provider, the whole block is read-only: the setting that
  * let this browser in cannot be widened from the far end of it.
  */
-import { Fragment, useState } from 'react';
-import { ApiError, api, type AccessState, type CloudflareAccessChange, type CloudflareAccessView, type TailscaleView } from '../api';
-import { Button, ErrorBanner, Field, Icon, List, ListRow, Notice, Pill, Section, Stack, Toolbar, useAsync } from '../ui';
+import { Fragment, useEffect, useState } from 'react';
+import { ApiError, api, type AccessState, type CloudflareAccessChange, type CloudflareAccessView, type CloudflareSetupProgress, type CloudflareSetupView, type TailscaleView } from '../api';
+import { Button, ButtonLink, ErrorBanner, Field, Icon, List, ListRow, Notice, Pill, Section, Stack, Toolbar, useAsync } from '../ui';
 
 /** Put a command on the clipboard, where there is one. */
 async function copyText(text: string): Promise<void> {
@@ -99,7 +99,7 @@ export function AccessSettings(): JSX.Element {
             />
             {open === row.id ? (
               <div className="access-body">
-                {row.id === 'tailscale' ? <Tailscale embedded onSaved={view.reload} /> : <CloudflareAccess onSaved={view.reload} />}
+                {row.id === 'tailscale' ? <Tailscale embedded onSaved={view.reload} /> : <CloudflareRow enabled={row.enabled} locked={locked} onSaved={view.reload} />}
               </div>
             ) : null}
           </Fragment>
@@ -209,8 +209,9 @@ const FIELDS: Array<keyof CloudflareForm> = ['teamDomain', 'aud', 'email', 'publ
  * and Save. Test fetches the team's signing keys for the domain in the form;
  * Save stores the setting, binds the listener and fetches them once more.
  */
-export function CloudflareAccess({ onSaved }: { onSaved?: () => void } = {}): JSX.Element {
+export function CloudflareAccess({ onSaved, extra }: { onSaved?: () => void; extra?: JSX.Element | null } = {}): JSX.Element {
   const view = useAsync(() => api.cloudflareAccess(), []);
+  const [tried, setTried] = useState(false);
   const [form, setForm] = useState<CloudflareForm | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
@@ -226,7 +227,16 @@ export function CloudflareAccess({ onSaved }: { onSaved?: () => void } = {}): JS
   const locked = data?.proxied === true;
   const off = busy || !data || locked;
   const set = (key: keyof CloudflareForm, value: string): void => setForm({ ...values, [key]: value });
+  const missing = [
+    values.teamDomain.trim() === '' ? 'the team domain' : null,
+    values.aud.trim() === '' ? 'the AUD tag' : null,
+    values.email.trim() === '' ? 'your email' : null,
+  ].filter((m): m is string => m !== null);
+  const missingLine = missing.length > 0 ? `To turn this on, fill in ${missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`}.` : null;
   const save = (enabled: boolean): void => {
+    // What is missing is a neutral line until the owner tries to turn it on.
+    if (enabled && missingLine) { setTried(true); return; }
+    setTried(false);
     setBusy(true);
     setFailed(null);
     setSaved(false);
@@ -297,16 +307,236 @@ export function CloudflareAccess({ onSaved }: { onSaved?: () => void } = {}): JS
           );
         })}
       </div>
+      {missingLine && !locked && !(data?.enabled ?? false)
+        ? (tried ? <Notice tone="critical" role="alert">{missingLine}</Notice> : <p className="ui-card-meta">{missingLine}</p>)
+        : null}
       {result ? <Notice tone={result.ok ? 'good' : 'critical'} role="status">{result.sentence}</Notice> : null}
       <p className="ui-card-meta">
         buddi checks Cloudflare&rsquo;s signature on every visit and never trusts a header alone. Anyone Cloudflare
         signs in with this email, on any device, is signed in to buddi.
       </p>
       {saved && !result ? <Notice tone="good" role="status">Saved.</Notice> : null}
+      {extra ?? null}
       <Toolbar align="end">
         <Button disabled={off || values.teamDomain.trim() === ''} onClick={test}>Test my setup</Button>
         <Button variant="accent" disabled={off} onClick={() => save(data?.enabled ?? false)}>Save</Button>
       </Toolbar>
     </Stack>
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * "Set it up for me"
+ * ------------------------------------------------------------------ */
+
+const LIVE: ReadonlyArray<CloudflareSetupProgress['state']> = ['running', 'waiting', 'removing'];
+
+/**
+ * Cloudflare Access's row, opened. Not set up yet, it offers "Set it up for
+ * me" first, with "I'll do it myself" as the way to the five steps; a run in
+ * progress (or its outcome) shows as the checklist; set up, it is the form
+ * as always, with Remove what buddi made when buddi made it.
+ */
+export function CloudflareRow({ enabled, locked, onSaved }: { enabled: boolean; locked: boolean; onSaved?: () => void }): JSX.Element {
+  const [setup, setSetup] = useState<CloudflareSetupView | null>(null);
+  const [mode, setMode] = useState<'offer' | 'form' | 'run' | 'manual' | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (locked) return;
+    api.cloudflareSetup().then(setSetup).catch(() => setSetup(null));
+  }, [locked]);
+  const state = setup?.progress.state ?? 'idle';
+  const live = LIVE.includes(state);
+  useEffect(() => {
+    if (!live) return undefined;
+    const timer = window.setInterval(() => {
+      api.cloudflareSetup().then((next) => {
+        setSetup(next);
+        if (!LIVE.includes(next.progress.state)) onSaved?.();
+      }).catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [live, onSaved]);
+
+  const shown = locked ? 'manual' : mode ?? (state !== 'idle' ? 'run' : enabled || setup?.record ? 'manual' : setup ? 'offer' : null);
+  const act = (call: () => Promise<CloudflareSetupView>, next?: 'run'): void => {
+    setBusy(true);
+    setFailed(null);
+    call()
+      .then((answer) => { setSetup(answer); if (next) setMode(next); onSaved?.(); })
+      .catch((error: unknown) => setFailed(error instanceof ApiError ? error.message : String(error)))
+      .finally(() => setBusy(false));
+  };
+  const remove = (): void => act(() => api.removeCloudflareSetup(), 'run');
+
+  if (shown === null) return <p className="ui-card-meta">…</p>;
+  if (shown === 'manual') {
+    const extra = setup?.record && !locked ? (
+      <p className="ui-card-meta">Set up by buddi for {setup.record.host} on {setup.record.zone}.</p>
+    ) : null;
+    return (
+      <Stack gap="sm">
+        <ErrorBanner message={failed} />
+        <CloudflareAccess onSaved={onSaved} extra={extra} />
+        {setup?.record && !locked ? (
+          <Toolbar align="end">
+            <Button disabled={busy} onClick={remove}>Remove what buddi made</Button>
+            <Button disabled={busy} onClick={() => setMode('form')}>Set it up again</Button>
+          </Toolbar>
+        ) : null}
+      </Stack>
+    );
+  }
+  if (shown === 'offer') {
+    return (
+      <Stack gap="sm">
+        <p className="ui-card-meta">
+          buddi can make the tunnel, the DNS record and the Access application for you, with one Cloudflare API
+          token. You run one command; buddi does the rest and tests it.
+        </p>
+        <Toolbar align="end">
+          <Button onClick={() => setMode('manual')}>I&rsquo;ll do it myself</Button>
+          <Button variant="accent" onClick={() => setMode('form')}>Set it up for me</Button>
+        </Toolbar>
+      </Stack>
+    );
+  }
+  if (shown === 'form') {
+    return (
+      <SetupForm
+        setup={setup}
+        busy={busy}
+        failed={failed}
+        onCancel={() => { setFailed(null); setMode(null); }}
+        onStart={(input) => act(() => api.startCloudflareSetup(input), 'run')}
+      />
+    );
+  }
+  return (
+    <SetupRun
+      progress={setup?.progress ?? null}
+      busy={busy}
+      failed={failed}
+      onStop={() => act(() => api.stopCloudflareSetup())}
+      onRetry={() => setMode('form')}
+      onRemove={remove}
+      onAgain={() => setMode('form')}
+    />
+  );
+}
+
+function SetupForm({ setup, busy, failed, onCancel, onStart }: {
+  setup: CloudflareSetupView | null;
+  busy: boolean;
+  failed: string | null;
+  onCancel: () => void;
+  onStart: (input: { token?: string; host: string; email: string }) => void;
+}): JSX.Element {
+  const [token, setToken] = useState('');
+  const [host, setHost] = useState(setup?.record?.host ?? setup?.progress.host ?? '');
+  const [email, setEmail] = useState(setup?.record?.email ?? setup?.progress.email ?? '');
+  const kept = setup?.tokenStored === true;
+  const ready = (kept || token.trim() !== '') && host.trim() !== '' && email.trim() !== '';
+  return (
+    <Stack gap="sm">
+      <ErrorBanner message={failed} />
+      <p className="ui-card-meta">In Cloudflare: My Profile &rarr; API Tokens &rarr; Create Token &rarr; Custom token, with these permissions.</p>
+      <ul className="access-perms">
+        {(setup?.permissions ?? []).map((line) => <li key={line} className="mono">{line}</li>)}
+      </ul>
+      <Toolbar>
+        <ButtonLink size="sm" href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">Open Cloudflare &#8599;</ButtonLink>
+      </Toolbar>
+      <div className="access-grid">
+        <Field label="API token" hint="Kept as an owner secret, used only to set this up and to remove it.">
+          <input type="password" className="mono" value={token} placeholder={kept ? 'Kept. Paste a new one to replace it' : 'Paste the token'} autoComplete="off" spellCheck={false} disabled={busy} onChange={(e) => setToken(e.target.value)} />
+        </Field>
+        <Field label="Hostname" hint="A name on a domain the token can edit. buddi finds the zone.">
+          <input type="text" value={host} placeholder="buddi.example.com" autoComplete="off" spellCheck={false} disabled={busy} onChange={(e) => setHost(e.target.value)} />
+        </Field>
+        <Field label="Your email" hint="The one Cloudflare will let in.">
+          <input type="email" value={email} placeholder="you@example.com" autoComplete="off" spellCheck={false} disabled={busy} onChange={(e) => setEmail(e.target.value)} />
+        </Field>
+      </div>
+      <Toolbar align="end">
+        <Button disabled={busy} onClick={onCancel}>Cancel</Button>
+        <Button variant="accent" disabled={busy || !ready} onClick={() => onStart({ ...(token.trim() ? { token: token.trim() } : {}), host: host.trim(), email: email.trim() })}>Set it up</Button>
+      </Toolbar>
+    </Stack>
+  );
+}
+
+function SetupRun({ progress, busy, failed, onStop, onRetry, onRemove, onAgain }: {
+  progress: CloudflareSetupProgress | null;
+  busy: boolean;
+  failed: string | null;
+  onStop: () => void;
+  onRetry: () => void;
+  onRemove: () => void;
+  onAgain: () => void;
+}): JSX.Element {
+  if (!progress) return <p className="ui-card-meta">…</p>;
+  if (progress.state === 'removed' || progress.state === 'removing') {
+    return (
+      <Stack gap="sm">
+        <ErrorBanner message={failed} />
+        {progress.state === 'removing' ? <p className="ui-card-meta">Removing what buddi made…</p> : null}
+        {progress.state === 'removed' && progress.removed.length > 0 ? (
+          <Notice tone="good" role="status">Removed {inWords(progress.removed)}. Signing in through Cloudflare is off.</Notice>
+        ) : null}
+        {progress.error ? <Notice tone="critical" role="alert">{progress.error}</Notice> : null}
+        {progress.uninstall ? (
+          <>
+            <p className="ui-card-meta">The connector is still installed on this computer. To remove it too:</p>
+            <Command text={progress.uninstall} />
+          </>
+        ) : null}
+        <Toolbar align="end">
+          {progress.error && progress.state === 'removed' ? <Button disabled={busy} onClick={onRemove}>Remove again</Button> : null}
+          <Button variant="accent" disabled={busy} onClick={onAgain}>Set it up again</Button>
+        </Toolbar>
+      </Stack>
+    );
+  }
+  const live = progress.state === 'running' || progress.state === 'waiting';
+  return (
+    <Stack gap="sm">
+      <ErrorBanner message={failed} />
+      {progress.state === 'done' && progress.url ? (
+        <Notice tone="good" role="status">Done. Open {progress.url} from another device and sign in as {progress.email}.</Notice>
+      ) : null}
+      {progress.state === 'stopped' && progress.error ? <Notice role="status">{progress.error}</Notice> : null}
+      <ol className="cat-steps access-run" aria-live="polite">
+        {progress.steps.map((step) => (
+          <li key={step.id} className="cat-step" data-state={step.state}>
+            <span className="cat-step-mark">
+              {step.state === 'done' ? <Icon name="check" size={12} /> : step.state === 'failed' ? <Icon name="alert" size={14} /> : null}
+            </span>
+            <div className="access-run-text">
+              <span>{step.state === 'now' && step.id !== 'connector' ? `${step.text}…` : step.text}</span>
+              {step.state === 'failed' && step.why ? <span className="access-run-why">{step.why}</span> : null}
+              {step.id === 'connector' && step.state !== 'done' && progress.install ? (
+                <div className="access-run-more">
+                  <span className="ui-card-meta">Run this once in a terminal on this computer. buddi never runs sudo itself.</span>
+                  <Command text={progress.install.command} />
+                  <span className="ui-card-meta">{progress.install.note}</span>
+                </div>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ol>
+      <Toolbar align="end">
+        {live ? <Button disabled={busy} onClick={onStop}>Stop waiting</Button> : null}
+        {progress.state === 'failed' || progress.state === 'done' || progress.state === 'stopped' ? <Button disabled={busy} onClick={onRemove}>Remove what buddi made</Button> : null}
+        {progress.state === 'failed' || progress.state === 'stopped' ? <Button variant="accent" disabled={busy} onClick={onRetry}>Try again</Button> : null}
+      </Toolbar>
+    </Stack>
+  );
+}
+
+function inWords(items: string[]): string {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }

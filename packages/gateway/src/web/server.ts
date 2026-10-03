@@ -127,6 +127,7 @@ import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
+import { createVault } from '@buddi/core';
 import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
@@ -185,6 +186,19 @@ import {
   type Jwks,
 } from './access/cloudflare.js';
 import { arrivalOf } from './access/arrival.js';
+import type { HttpTransport } from '@buddi/runtime';
+import { createCloudflareApi, CLOUDFLARE_PERMISSION_LINES } from './access/cloudflare-api.js';
+import {
+  CLOUDFLARE_SETUP_KEY,
+  checkSetupInput,
+  freshProgress,
+  removeCloudflareSetup,
+  runCloudflareSetup,
+  type SetupDeps,
+  type SetupProgress,
+  type SetupRecord,
+} from './access/cloudflare-setup.js';
+import { ownerSecretTokenStore, type CloudflareTokenStore } from './access/cloudflare-token.js';
 import { createAccessRegistry } from './access/registry.js';
 import { createIngress, type Ingress } from './access/ingress.js';
 import type { AccessContext, AccessProviderId, AccessRefusal } from './access/provider.js';
@@ -430,7 +444,18 @@ export interface WebServerDeps {
    * Cloudflare Access's signing keys, injected. A test passes a JWKS of its
    * own; a running gateway fetches the team's through the transport.
    */
-  cloudflare?: { jwks?: Jwks } | undefined;
+  cloudflare?: {
+    jwks?: Jwks;
+    /**
+     * "Set it up for me": Cloudflare's API (a test's fake at `baseUrl`), the
+     * token store (owner secrets by default), the platform the install line
+     * is for, and the health poll's pace.
+     */
+    api?: { transport?: HttpTransport | undefined; baseUrl?: string | undefined } | undefined;
+    tokens?: CloudflareTokenStore | undefined;
+    platform?: NodeJS.Platform | undefined;
+    setup?: Pick<SetupDeps, 'pollMs' | 'waitMs' | 'sleep'> | undefined;
+  } | undefined;
 }
 
 export interface WebServer {
@@ -899,6 +924,83 @@ export function createWebApp(deps: WebServerDeps): Server {
       proxied: throughProvider(req, session),
     };
   };
+  /**
+   * Store a Cloudflare setting and do what a Save does: end the sessions it
+   * admitted unless the same person, team and application stay on, then bind
+   * or close the ingress listener. The panel's Save and "Set it up for me"
+   * both come through here.
+   */
+  const applyCloudflareSetting = async (value: CloudflareAccessSetting): Promise<void> => {
+    const before = await readCloudflareSetting();
+    await writeWebSetting(deps.pool, CLOUDFLARE_SETTING_KEY, value);
+    await readCloudflareSetting();
+    const same = before.enabled && value.enabled && before.email.toLowerCase() === value.email.toLowerCase()
+      && before.teamDomain === value.teamDomain && before.aud === value.aud;
+    if (!same) {
+      const forgotten = new Set<string>();
+      await sessions.forget((s) => { const drop = s.via === 'provider' && s.provider === 'cloudflare-access'; if (drop && s.id) forgotten.add(s.id); return drop; });
+      hand.revoke((lease) => forgotten.has(lease), 'Cloudflare access changed. Sign in again.');
+    }
+    await ingress.sync();
+  };
+
+  /*
+   * "Set it up for me" (access/cloudflare-setup.ts): one run at a time, in
+   * the background — the health wait lasts as long as the owner takes to run
+   * one command — and its progress kept here for the panel to poll. The token
+   * is an owner secret, read once per run.
+   */
+  let cfTokens: CloudflareTokenStore | null = deps.cloudflare?.tokens ?? null;
+  const tokenStore = (): CloudflareTokenStore => (cfTokens ??= ownerSecretTokenStore(deps.pool as never, createVault({ env: deps.env ?? process.env })));
+  let setupRun: { progress: SetupProgress; abort: AbortController; done: Promise<void> } | null = null;
+  const setupBusy = (): boolean => setupRun !== null && ['running', 'waiting', 'removing'].includes(setupRun.progress.state);
+  const readSetupRecord = async (): Promise<SetupRecord | null> => {
+    const row = await readWebSetting<SetupRecord>(deps.pool, CLOUDFLARE_SETUP_KEY);
+    return row && typeof row === 'object' && typeof row.host === 'string' ? row : null;
+  };
+  const setupDepsFor = (token: string, signal?: AbortSignal): SetupDeps => ({
+    api: createCloudflareApi({ token, transport: deps.cloudflare?.api?.transport, baseUrl: deps.cloudflare?.api?.baseUrl }),
+    ingressPort: ingress.port() ?? (askedIngressPort() || null) ?? accessCtx.dashboardPort() + 2,
+    platform: deps.cloudflare?.platform ?? process.platform,
+    readSetting: readCloudflareSetting,
+    saveSetting: applyCloudflareSetting,
+    readRecord: readSetupRecord,
+    saveRecord: (record) => writeWebSetting(deps.pool, CLOUDFLARE_SETUP_KEY, record),
+    test: (team) => jwks.refresh(team),
+    ...(deps.cloudflare?.setup ?? {}),
+    signal,
+  });
+  const setupView = async () => {
+    const record = await readSetupRecord();
+    return {
+      progress: setupRun?.progress ?? freshProgress(record?.host ?? '', record?.email ?? ''),
+      tokenStored: await tokenStore().has().catch(() => false),
+      record: record ? { host: record.host, email: record.email, zone: record.zone.name, teamDomain: record.teamDomain } : null,
+      permissions: CLOUDFLARE_PERMISSION_LINES,
+      ingressPort: ingress.port() ?? (askedIngressPort() || null) ?? accessCtx.dashboardPort() + 2,
+    };
+  };
+  const startSetup = (job: (onProgress: (p: SetupProgress) => void, signal: AbortSignal) => Promise<SetupProgress>, first: SetupProgress): void => {
+    const abort = new AbortController();
+    const run: { progress: SetupProgress; abort: AbortController; done: Promise<void> } = { progress: first, abort, done: Promise.resolve() };
+    setupRun = run;
+    run.done = job((p) => { run.progress = p; }, abort.signal)
+      .then((p) => { run.progress = p; })
+      .catch(() => { run.progress = { ...run.progress, state: 'failed', error: 'The setup stopped unexpectedly. Try again.' }; });
+  };
+  /*
+   * A setting written elsewhere (`buddi access cloudflare setup` writes the
+   * database directly) reaches the ingress listener here: bound or closed
+   * within a quarter of a minute.
+   */
+  const ingressResync = setInterval(() => {
+    void readCloudflareSetting().then((setting) => {
+      if (setting.enabled !== (ingress.port() !== null)) return ingress.sync();
+      return undefined;
+    }).catch(() => undefined);
+  }, 15_000);
+  ingressResync.unref?.();
+
   /** Every provider's row, for "Sign in from elsewhere". */
   const accessView = async (req: IncomingMessage, session: Session) => ({
     proxied: throughProvider(req, session),
@@ -916,15 +1018,16 @@ export function createWebApp(deps: WebServerDeps): Server {
    * loopback-only check. cloudflared points here, never at the dashboard's
    * own port, so a tunnel arrival can never be mistaken for this machine.
    */
+  /** `BUDDI_INGRESS_PORT`, when it names a port. */
+  function askedIngressPort(): number | null {
+    const raw = (deps.env ?? process.env).BUDDI_INGRESS_PORT?.trim();
+    const asked = raw ? Number(raw) : NaN;
+    return Number.isInteger(asked) && asked >= 0 && asked <= 65535 ? asked : null;
+  }
   const ingress = createIngress({
     onRequest: (req, res) => onRequest(req, res),
     onUpgrade: (req, socket, head) => { server.emit('upgrade', req, socket, head); },
-    port: () => {
-      const raw = (deps.env ?? process.env).BUDDI_INGRESS_PORT?.trim();
-      const asked = raw ? Number(raw) : NaN;
-      if (Number.isInteger(asked) && asked >= 0 && asked <= 65535) return asked;
-      return deps.config.port === 0 ? 0 : boundPort() + 2;
-    },
+    port: () => askedIngressPort() ?? (deps.config.port === 0 ? 0 : boundPort() + 2),
     wanted: async () => (await readCloudflareSetting()).enabled,
     log,
   });
@@ -1094,7 +1197,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
   extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
-  server.once('close', () => { extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); void ingress.close(); });
+  server.once('close', () => { extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); clearInterval(ingressResync); setupRun?.abort.abort(); void ingress.close(); });
   return server;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1929,6 +2032,10 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, await accessView(req, session));
         case '/api/access/cloudflare-access':
           return sendJson(res, 200, await cloudflareView(req, session));
+        case '/api/access/cloudflare-access/setup':
+          // The install line holds the tunnel's connector token: this machine only.
+          if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+          return sendJson(res, 200, await setupView());
         case '/api/overview':
           return sendJson(
             res,
@@ -2703,23 +2810,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         const checked = validateCloudflareInput(put);
         if (!checked.ok) return sendJson(res, 400, { error: checked.error });
-        const before = await readCloudflareSetting();
-        await writeWebSetting(deps.pool, CLOUDFLARE_SETTING_KEY, checked.value);
-        await readCloudflareSetting();
-        /*
-         * The sessions this setting admitted go when it goes off or names
-         * another person, team or application; saving the same thing again
-         * keeps them.
-         */
-        const same = before.enabled && checked.value.enabled && before.email.toLowerCase() === checked.value.email.toLowerCase()
-          && before.teamDomain === checked.value.teamDomain && before.aud === checked.value.aud;
-        if (!same) {
-          const forgotten = new Set<string>();
-          await sessions.forget((s) => { const drop = s.via === 'provider' && s.provider === 'cloudflare-access'; if (drop && s.id) forgotten.add(s.id); return drop; });
-          hand.revoke((lease) => forgotten.has(lease), 'Cloudflare access changed. Sign in again.');
-        }
-        // Bind the ingress listener now, or close it.
-        await ingress.sync();
+        await applyCloudflareSetting(checked.value);
         // On Save buddi fetches the team's keys once and says whether it worked.
         const test = checked.value.enabled ? await jwks.refresh(checked.value.teamDomain) : null;
         return sendJson(res, 200, { ...(await cloudflareView(req, session)), ...(test ? { test } : {}) });
@@ -2780,6 +2871,48 @@ export function createWebApp(deps: WebServerDeps): Server {
      * this machine only, like the setting itself: it makes this computer
      * fetch a URL the caller names part of.
      */
+    /*
+     * "Set it up for me": start a run (202, then poll GET …/setup), stop the
+     * health wait, or remove what buddi made. From this machine only, like the
+     * setting it fills in.
+     */
+    if (path === '/api/access/cloudflare-access/setup' || path === '/api/access/cloudflare-access/setup/stop' || path === '/api/access/cloudflare-access/setup/remove') {
+      if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+      if (path.endsWith('/stop')) {
+        setupRun?.abort.abort();
+        await setupRun?.done;
+        return sendJson(res, 200, await setupView());
+      }
+      if (setupBusy()) return sendJson(res, 409, { error: 'A Cloudflare setup is already running.' });
+      const body = await readJsonBody(req).catch(() => ({} as Record<string, unknown>));
+      const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+      const tokens = tokenStore();
+      const pasted = str(body.token);
+      if (path.endsWith('/remove')) {
+        const token = pasted || await tokens.use().catch(() => null);
+        if (!token) return sendJson(res, 400, { error: 'Paste the Cloudflare API token again: buddi needs it to remove what it made.' });
+        const progress = await removeCloudflareSetup({ ...setupDepsFor(token), host: str(body.host) || undefined });
+        setupRun = { progress, abort: new AbortController(), done: Promise.resolve() };
+        if (!progress.error) await tokens.remove().catch(() => undefined);
+        return sendJson(res, 200, await setupView());
+      }
+      const input = { host: str(body.host), email: str(body.email), zone: str(body.zone) || undefined };
+      const invalid = checkSetupInput(input);
+      if (invalid) return sendJson(res, 400, { error: invalid });
+      if (pasted) {
+        if (/\s/.test(pasted) || pasted.length < 20 || pasted.length > 400) return sendJson(res, 400, { error: 'That doesn’t look like a Cloudflare API token.' });
+        try {
+          await tokens.put(pasted);
+        } catch {
+          return sendJson(res, 409, { error: 'The token could not be kept in the vault. Check that the vault is unlocked, then try again.' });
+        }
+      }
+      const token = pasted || await tokens.use().catch(() => null);
+      if (!token) return sendJson(res, 400, { error: 'Paste a Cloudflare API token.' });
+      const first = { ...freshProgress(input.host, input.email), state: 'running' as const };
+      startSetup((onProgress, signal) => runCloudflareSetup(input, setupDepsFor(token, signal), onProgress), first);
+      return sendJson(res, 202, await setupView());
+    }
     if (path === '/api/access/cloudflare-access/test') {
       if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
       const body = await readJsonBody(req).catch(() => ({} as Record<string, unknown>));

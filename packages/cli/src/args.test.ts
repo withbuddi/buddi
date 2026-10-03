@@ -224,4 +224,13 @@ describe('buddi speech', () => {
     expect(() => parseArgs(['speech', 'install', 'piper'])).toThrow(UsageError);
     expect(() => parseArgs(['speech', 'remove'])).toThrow(/expected install or status/);
   });
+
+  it('parses buddi access cloudflare setup and remove', () => {
+    expect(parseArgs(['access', 'cloudflare', 'setup', '--host', 'buddi.example.com', '--email=sam@example.com'])).toEqual({ kind: 'access', action: 'cloudflare-setup', host: 'buddi.example.com', email: 'sam@example.com' });
+    expect(parseArgs(['access', 'cloudflare', 'remove'])).toEqual({ kind: 'access', action: 'cloudflare-remove' });
+    expect(() => parseArgs(['access', 'cloudflare', 'setup'])).toThrow(/needs --host/);
+    expect(() => parseArgs(['access', 'cloudflare', 'setup', '--host'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['access', 'cloudflare', 'remove', '--zone', 'x.com'])).toThrow(/unexpected argument/);
+    expect(() => parseArgs(['access', 'tailscale'])).toThrow(UsageError);
+  });
 });

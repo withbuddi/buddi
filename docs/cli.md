@@ -1394,6 +1394,8 @@ The ways your agents reach you, and the ways you reach them.
 - [`buddi telegram pair`](#buddi-telegram-pair): Show a QR code and a link that pair a phone with your agents.
 - [`buddi telegram devices`](#buddi-telegram-devices): List every paired device.
 - [`buddi telegram unpair`](#buddi-telegram-unpair): Unpair a device, so it can no longer reach your agents.
+- [`buddi access cloudflare setup`](#buddi-access-cloudflare-setup): Set up signing in through Cloudflare Access on your own domain: tunnel, DNS, Access application and policy, from one API token.
+- [`buddi access cloudflare remove`](#buddi-access-cloudflare-remove): Remove what `access cloudflare setup` made in Cloudflare, and turn signing in through Cloudflare off.
 - [`buddi mcp`](#buddi-mcp): Run buddi as an MCP server over stdio, for Claude Code or any MCP client.
 
 ### buddi telegram pair
@@ -1462,6 +1464,60 @@ buddi telegram unpair 12
 - `1`: No paired device has that id.
 - `2`: The command was not typed right.
 - `3`: The database is not reachable, or not configured.
+
+### buddi access cloudflare setup
+
+Set up signing in through Cloudflare Access on your own domain: tunnel, DNS, Access application and policy, from one API token.
+
+```sh
+buddi access cloudflare setup --host <hostname> [--zone <zone>] [--email <email>]
+```
+
+**Flags**
+
+- `--host <hostname>`: The address to reach buddi at, on a domain in your Cloudflare account.
+- `--zone <zone>`: The Cloudflare zone, when the hostname alone does not say which.
+- `--email <email>`: The one email Cloudflare lets in. Asked for when not given or already set.
+
+**Example**
+
+```sh
+buddi access cloudflare setup --host buddi.example.com
+```
+
+**Then**: Run the `sudo cloudflared service install …` line it prints; it waits for the tunnel, then tests. The token comes from CLOUDFLARE_API_TOKEN or a hidden prompt.
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: A step failed; the sentence says which and why. Run it again to pick up where it stopped.
+- `2`: The command was not typed right.
+- `3`: The database is not reachable.
+
+### buddi access cloudflare remove
+
+Remove what `access cloudflare setup` made in Cloudflare, and turn signing in through Cloudflare off.
+
+```sh
+buddi access cloudflare remove [--host <hostname>]
+```
+
+**Flags**
+
+- `--host <hostname>`: Which setup, when buddi has no record of it.
+
+**Example**
+
+```sh
+buddi access cloudflare remove
+```
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: Something could not be removed; run it again.
+- `2`: The command was not typed right.
+- `3`: The database is not reachable.
 
 ### buddi mcp
 

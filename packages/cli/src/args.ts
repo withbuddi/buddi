@@ -103,6 +103,8 @@ export type Command =
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
+  /** `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>]` and `… remove [--host <h>]`. */
+  | { kind: 'access'; action: 'cloudflare-setup' | 'cloudflare-remove'; host?: string; zone?: string; email?: string }
   /** The local dashboard over the event log. */
   | { kind: 'dashboard'; action: DashboardAction }
   /** The agents' own browser: `status` says which one is here, `install` downloads Chromium. */
@@ -516,6 +518,25 @@ export function parseArgs(argv: string[]): Command {
     }
     if (rest.length > 1) throw new UsageError(`unexpected argument: ${rest[1]}`);
     return { kind: 'telegram', action: action as TelegramAction };
+  }
+
+  if (head === 'access') {
+    if (rest[0] !== 'cloudflare' || (rest[1] !== 'setup' && rest[1] !== 'remove')) {
+      throw new UsageError('buddi access needs: cloudflare setup --host <hostname> [--zone <zone>] [--email <email>], or cloudflare remove');
+    }
+    const action = rest[1] === 'setup' ? 'cloudflare-setup' as const : 'cloudflare-remove' as const;
+    const allowed = action === 'cloudflare-setup' ? ['--host', '--zone', '--email'] : ['--host'];
+    const values: Record<string, string> = {};
+    for (let i = 2; i < rest.length; i++) {
+      const arg = rest[i]!;
+      const [flag, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
+      if (!allowed.includes(flag!)) throw new UsageError(`unexpected argument: ${arg}`);
+      const value = inline ?? rest[++i];
+      if (value === undefined || value.startsWith('--')) throw new UsageError(`${flag} needs a value`);
+      values[flag!.slice(2)] = value;
+    }
+    if (action === 'cloudflare-setup' && !values.host) throw new UsageError('buddi access cloudflare setup needs --host <hostname>, like --host buddi.example.com');
+    return { kind: 'access', action, ...values };
   }
 
   throw new UsageError(`buddi ${head} is not a command.`);

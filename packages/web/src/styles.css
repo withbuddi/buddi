@@ -5193,3 +5193,10 @@ button.lk-chip:disabled { cursor: default; }
 .access-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3) var(--space-4); }
 .access-foot { margin: 0; padding: var(--space-3) var(--space-5); border-top: 1px solid var(--line); font-size: var(--text-sm); color: var(--text-faint); }
 @media (max-width: 720px) { .access-body { padding: var(--space-4); } }
+/* "Set it up for me": the permissions to give the token, and the run as a checklist (the .cat-step marks). */
+.access-perms { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-sm); color: var(--text); }
+.access-run .cat-step { align-items: flex-start; font-size: var(--text-sm); }
+.access-run .cat-step-mark { margin-top: var(--space-0); }
+.access-run-text { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; flex: 1 1 auto; }
+.access-run-why { color: var(--text); font-weight: var(--weight-normal); }
+.access-run-more { display: flex; flex-direction: column; gap: var(--space-2); font-weight: var(--weight-normal); }

@@ -79,6 +79,7 @@ import { runMcp } from './mcp/server.js';
 import { toggleInGateway } from './plugins-toggle.js';
 import { createServiceManager, followLogs } from './service/index.js';
 import { runTelegram } from './telegram-cmd.js';
+import { runAccess } from './access-cmd.js';
 import { runUpgrade } from './upgrade.js';
 import { runVault } from './vault-cmd.js';
 
@@ -344,6 +345,12 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       loadEnv();
       const { runSpeechCli } = await import('@buddi/gateway');
       return runSpeechCli(command.action, command.model, process.env);
+    }
+    case 'access': {
+      await loadEnvironment();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
+      return runAccess(command, process.env);
     }
     case 'telegram': {
       await loadEnvironment();

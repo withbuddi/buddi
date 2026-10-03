@@ -1901,6 +1901,28 @@ export interface CloudflareAccessTest {
   ingressPort: number | null;
 }
 
+/** "Set it up for me": one run of the Cloudflare setup, as the checklist draws it. */
+export type CloudflareSetupStepId = 'token' | 'tunnel' | 'route' | 'dns' | 'access' | 'save' | 'connector' | 'healthy' | 'test';
+export interface CloudflareSetupProgress {
+  state: 'idle' | 'running' | 'waiting' | 'done' | 'failed' | 'stopped' | 'removing' | 'removed';
+  host: string;
+  email: string;
+  steps: Array<{ id: CloudflareSetupStepId; state: 'next' | 'now' | 'done' | 'failed'; text: string; why?: string }>;
+  /** The one line buddi never runs itself; it holds the tunnel's connector token. */
+  install: { command: string; note: string } | null;
+  error: string | null;
+  url: string | null;
+  removed: string[];
+  uninstall: string | null;
+}
+export interface CloudflareSetupView {
+  progress: CloudflareSetupProgress;
+  tokenStored: boolean;
+  record: { host: string; email: string; zone: string; teamDomain: string } | null;
+  permissions: string[];
+  ingressPort: number;
+}
+
 export interface VersionView {
   current: string;
   latest?: string;
@@ -2924,6 +2946,10 @@ export const api = {
   cloudflareAccess: () => get<CloudflareAccessView>('/access/cloudflare-access'),
   setCloudflareAccess: (change: CloudflareAccessChange) => put<CloudflareAccessView>('/access/cloudflare-access', change),
   testCloudflareAccess: (change: { teamDomain: string }) => post<CloudflareAccessTest>('/access/cloudflare-access/test', change),
+  cloudflareSetup: () => get<CloudflareSetupView>('/access/cloudflare-access/setup'),
+  startCloudflareSetup: (input: { token?: string; host: string; email: string }) => post<CloudflareSetupView>('/access/cloudflare-access/setup', input),
+  stopCloudflareSetup: () => post<CloudflareSetupView>('/access/cloudflare-access/setup/stop'),
+  removeCloudflareSetup: (input: { token?: string } = {}) => post<CloudflareSetupView>('/access/cloudflare-access/setup/remove', input),
   /* ---- owner API tokens (docs/api.md, "Authentication") ---- */
   apiTokens: () => get<{ tokens: ApiTokenView[] }>('/api-tokens'),
   /** The answer's `token` is the only time the token itself exists outside the program that will use it. */

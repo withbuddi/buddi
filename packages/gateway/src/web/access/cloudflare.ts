@@ -474,11 +474,9 @@ export function cloudflareProvider(deps: CloudflareProviderDeps): CloudflareProv
     allowed: (setting) => setting.email,
     lastVisit: () => visit,
     async status(setting): Promise<AccessStatus> {
-      if (!setting.enabled) {
-        const missing = cloudflareMissing(setting);
-        if (missing.length < 3 && missing.length > 0) return { state: 'needs-setup', sentence: `Off. Needs ${listInWords(missing)}.` };
-        return { state: 'off', sentence: 'Off. Your own domain, with Cloudflare’s sign-in in front of it.' };
-      }
+      // Off is off, however much of the form is filled in: what is missing
+      // is the panel's neutral line until the owner tries to turn it on.
+      if (!setting.enabled) return { state: 'off', sentence: 'Off. Your own domain, with Cloudflare’s sign-in in front of it.' };
       const problem = deps.ingressProblem?.() ?? null;
       if (problem) return { state: 'needs-setup', sentence: problem };
       if (deps.jwks.failing(setting.teamDomain)) {
