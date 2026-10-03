@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.38 — 2026-10-03
+
 - Trusted access: the Cloudflare "Open Cloudflare" button opens the token form pre-filled with the four permissions buddi needs (Cloudflare template URL); the owner names and creates the token, then pastes it.
 
 ### Added
