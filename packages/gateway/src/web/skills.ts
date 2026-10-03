@@ -922,6 +922,7 @@ export function acceptBundleRoute(deps: SkillsDeps, stagedId: string, body: Reco
     `created: "${today}"`,
     ...(grant.every ? [] : ['agents: []']),
     ...(mine ? [] : ['untrusted: true']),
+    ...(staged.skill.network === true ? ['network: true'] : []),
   ];
   const skillText = `---\n${lines.join('\n')}\n---\n\n${staged.skill.body.trim()}\n`;
 
@@ -968,7 +969,7 @@ export function acceptBundleRoute(deps: SkillsDeps, stagedId: string, body: Reco
  * folder, and only one the catalog composes into this agent's prompt.
  */
 export function skillBundlesFor(deps: Pick<SkillsDeps, 'catalog' | 'skillsDir'>): {
-  held(agentId: string, name: string): { name: string; title: string; dir: string; untrusted: boolean; files: string[]; scripts: string[] } | null;
+  held(agentId: string, name: string): { name: string; title: string; dir: string; untrusted: boolean; network: boolean; files: string[]; scripts: string[] } | null;
   root(): string;
 } {
   return {
@@ -990,6 +991,7 @@ export function skillBundlesFor(deps: Pick<SkillsDeps, 'catalog' | 'skillsDir'>)
         title: titleOf(skill),
         dir,
         untrusted: skill.untrusted && !skill.learned,
+        network: skill.network === true,
         files: [BUNDLE_SKILL_FILE, ...bundle.files.map((f) => f.path)],
         scripts: bundle.scripts,
       };

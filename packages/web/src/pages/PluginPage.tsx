@@ -2777,15 +2777,24 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
   const finish = component.poll?.finish;
   const act = useAct();
   const [finished, setFinished] = useState<ReadonlySet<string>>(() => new Set());
-  const due = finish ? rows.find((row) => holds(row, finish.when)) : undefined;
+  // The first due row not already finished: a finished row that stays due
+  // (its answer still says so) does not hide the next one behind it.
+  const due = finish
+    ? rows.find((row) => {
+        if (!holds(row, finish.when)) return false;
+        const key = String(readPath(row, component.key) ?? '');
+        return key !== '' && !finished.has(key);
+      })
+    : undefined;
   const dueKey = due === undefined ? null : String(readPath(due, component.key) ?? '');
   useEffect(() => {
     if (!finish || due === undefined || dueKey === null || dueKey === '' || finished.has(dueKey) || act.busy) return;
     setFinished((done) => new Set([...done, dueKey]));
     void act.run(finish.action, resolveArgs(finish.action.args, { data: due, row: due, scope }));
-    // Only when another row becomes due.
+    // When another row becomes due, and again once a busy action clears (a
+    // row that came due while busy was skipped, not dropped).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dueKey]);
+  }, [dueKey, act.busy]);
   const finishing = finish !== undefined && act.running === finish.action.tool;
   return (
     <PieceSection title={component.title} note={component.note}>

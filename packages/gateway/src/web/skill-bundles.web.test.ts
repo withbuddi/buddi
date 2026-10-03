@@ -131,6 +131,18 @@ describe('skill bundles, server side', () => {
       expect(r.kind).toBe('big');
     });
 
+    it('refuses a file and a folder of the same name as damaged, not as a server error', () => {
+      for (const extra of <Zippable[]>[
+        { 'cover-art-kit/assets/a': strToU8('x'), 'cover-art-kit/assets/a/b.txt': strToU8('y') },
+        { 'cover-art-kit/assets/c/d.txt': strToU8('y'), 'cover-art-kit/assets/c': strToU8('x') },
+      ]) {
+        const out = stage(coverKit(extra));
+        expect(out.status).toBe(422);
+        expect((out.body as { refusal: Refusal }).refusal.kind).toBe('damaged');
+        expect(readdirSync(incomingDir).filter((n) => !n.endsWith('.zip'))).toEqual([]);
+      }
+    });
+
     it('refuses a zip with no SKILL.md, saying where it looked', () => {
       const r = refused({ 'photo-tools-main/README.md': strToU8('hi'), 'photo-tools-main/scripts/a.py': strToU8('') }, 'photo-tools.zip');
       expect(r).toMatchObject({ kind: 'noskill', looked: ['', 'photo-tools-main/'] });

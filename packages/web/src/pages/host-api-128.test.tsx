@@ -278,6 +278,22 @@ describe('a polled card that finishes by itself', () => {
     expect(api.pageAct).toHaveBeenCalledTimes(1);
   });
 
+  it('finishes the next due row once the first is done and the busy action clears', async () => {
+    vi.mocked(api.pageQuery).mockImplementation((() =>
+      Promise.resolve({ data: { waiting: false, rows: [{ id: 'si-a', state: 'received' }, { id: 'si-b', state: 'received' }] } })) as unknown as typeof api.pageQuery);
+    const answers: Array<(v: unknown) => void> = [];
+    vi.mocked(api.pageAct).mockImplementation(() => new Promise((resolve) => answers.push(resolve)) as never);
+    drawPage(card());
+    await waitFor(() => expect(api.pageAct).toHaveBeenCalledTimes(1));
+    expect(api.pageAct).toHaveBeenLastCalledWith('calendar', { tool: 'calendar.google_finish', args: { id: 'si-a' } });
+    await act(async () => answers[0]!({ result: { note: 'ok' } }));
+    await waitFor(() => expect(api.pageAct).toHaveBeenCalledTimes(2));
+    expect(api.pageAct).toHaveBeenLastCalledWith('calendar', { tool: 'calendar.google_finish', args: { id: 'si-b' } });
+    await act(async () => answers[1]!({ result: { note: 'ok' } }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(api.pageAct).toHaveBeenCalledTimes(2);
+  });
+
   it('draws a `where: remote` piece only away from this computer', async () => {
     vi.mocked(api.pageQuery).mockImplementation((() =>
       Promise.resolve({ data: { waiting: false, rows: [{ id: 'si-3', state: 'waiting' }] } })) as unknown as typeof api.pageQuery);

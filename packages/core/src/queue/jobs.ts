@@ -405,8 +405,10 @@ export type InterruptedJob = Job & {
  * Take back the leases of runs that will never report, and settle each one.
  *
  * The retry policy is the run's own record: an attempt that had not yet
- * called a tool with an effect (any tier but `auto`, read from the
- * `tool.called` events carrying this job's id since its latest claim) goes
+ * called a tool with an effect (any tier but `auto`, or an `auto` tool marked
+ * `sideEffect`, read from the `tool.called` events carrying this job's id
+ * since its latest claim) and whose report was not delivered (a
+ * `mission.delivered` event for its occurrence or conversation) goes
  * back on the queue — once. One that had acted, or that was already requeued
  * after an interruption, or that has no attempts left, fails with the reason in
  * `last_error`, where Activity → Jobs shows it; a mission occurrence it was
@@ -420,6 +422,14 @@ export async function interruptLeases(
   pool: Pool,
   scope: InterruptScope,
   detail?: string,
+  opts: {
+    /**
+     * False when the attempt may still be running in this process (its
+     * handler ignored the stop): putting it back would let the next start run
+     * it beside the one still going, so it fails instead.
+     */
+    requeue?: boolean;
+  } = {},
 ): Promise<InterruptedJob[]> {
   const params: unknown[] = [];
   let where: string;
@@ -438,14 +448,33 @@ export async function interruptLeases(
     acted: string[]; requeues: number;
   }>(
     `select j.id, j.lease_owner, j.attempts, j.max_attempts,
-       coalesce((select array_agg(distinct e.payload->>'name' order by e.payload->>'name')
-          from core.events e
-         where e.kind = 'tool.called'
-           and e.payload->>'jobId' = j.id::text
-           and coalesce(e.payload->>'tier', 'gated') <> 'auto'
-           and e.created_at >= coalesce((select max(c.created_at) from core.events c
-                where c.kind = 'job.claimed' and c.payload->>'jobId' = j.id::text), j.created_at)
-       ), '{}'::text[]) as acted,
+       coalesce((select array_agg(distinct a.name order by a.name) from (
+          select e.payload->>'name' as name
+            from core.events e
+           where e.kind = 'tool.called'
+             and e.payload->>'jobId' = j.id::text
+             and (coalesce(e.payload->>'tier', 'gated') <> 'auto' or e.payload->>'sideEffect' = 'true')
+             and e.created_at >= coalesce((select max(c.created_at) from core.events c
+                  where c.kind = 'job.claimed' and c.payload->>'jobId' = j.id::text), j.created_at)
+          union all
+          -- An earlier version recorded calls without the job or the tier, so
+          -- one of those since this claim may be this run's: count it as acted.
+          select 'a tool call recorded by an earlier version'
+            from core.events e
+           where e.kind = 'tool.called'
+             and not (e.payload ? 'tier')
+             and (j.conversation_id is null or e.conversation_id is null or e.conversation_id = j.conversation_id)
+             and e.created_at >= coalesce((select max(c.created_at) from core.events c
+                  where c.kind = 'job.claimed' and c.payload->>'jobId' = j.id::text), j.created_at)
+          union all
+          select 'its report was delivered'
+            from core.events e
+           where e.kind = 'mission.delivered'
+             and ((j.payload->>'occurrenceId' is not null and e.payload->>'occurrenceId' = j.payload->>'occurrenceId')
+                  or (j.conversation_id is not null and e.conversation_id = j.conversation_id))
+             and e.created_at >= coalesce((select max(c.created_at) from core.events c
+                  where c.kind = 'job.claimed' and c.payload->>'jobId' = j.id::text), j.created_at)
+       ) a), '{}'::text[]) as acted,
        (select count(*)::int from core.events e
          where e.kind = 'job.interrupted' and e.payload->>'jobId' = j.id::text
            and e.payload->>'requeued' = 'true') as requeues
@@ -458,9 +487,11 @@ export async function interruptLeases(
   const why = detail ? `${INTERRUPTED_REASON} (${detail})` : INTERRUPTED_REASON;
   for (const c of candidates) {
     const acted = c.acted.filter((name) => typeof name === 'string' && name !== '');
-    const requeue = acted.length === 0 && c.requeues === 0 && c.attempts < c.max_attempts;
+    const requeue = opts.requeue !== false && acted.length === 0 && c.requeues === 0 && c.attempts < c.max_attempts;
     const message = requeue
       ? `${why}; queued again`
+      : opts.requeue === false && acted.length === 0
+        ? `${why} while it was still running; not run again on its own, so it never runs twice at once. Retry it if it should run.`
       : acted.length > 0
         ? `${why} after it had acted (${acted.join(', ')}); not run again on its own, so nothing happens twice. Retry it if it should run.`
         : c.requeues > 0

@@ -184,13 +184,22 @@ Skills page and the picker say which agents those are. Each run:
 - asks you every time — the card names the script, the bundle, the arguments,
   the working folder and what it may touch, with Reject · Show the script ·
   Allow once and no Auto or Always (no standing permission answers for it);
-- works in its own folder (`<data>/host/skill-runs/<bundle>/…`), reads the
-  bundle without changing it and writes only in that folder, confined by
-  `sandbox-exec` on macOS or bubblewrap (`bwrap`) on Linux. With neither, bundle
-  scripts do not run. The network is as host commands have it.
+- works in its own folder (`<data>/host/skill-runs/<bundle>/…`), confined by
+  `sandbox-exec` on macOS or bubblewrap (`bwrap`) on Linux; with neither,
+  bundle scripts do not run. Confined means: it writes only in that folder; it
+  reads only the bundle, that folder, the system folders and its interpreter's
+  install — nothing in your home, no keys, no other projects; it has **no
+  network** unless the bundle's SKILL.md says `network: true`, and then the card
+  says "Network: on" and why that matters. On macOS it also cannot start
+  `open`, `osascript`, `automator` or `shortcuts` or reach LaunchServices, so it
+  cannot ask another app to act for it. On Linux it runs in its own namespaces.
 
-A plain `host.exec` command that names the skills folder is refused. The
-developer plugin's run list does not run bundle scripts.
+A plain `host.exec` command that reaches into the skills folder is refused
+with a pointer to the `skill` form: every path in it (and its working folder)
+is resolved, after each `cd` and through links. It reads the command's text,
+so a command built to hide a path (a variable, an `eval`) can still get there:
+a plain host command runs as your user, unsandboxed, and its card says so. The developer plugin's run list does not run bundle
+scripts.
 
 `examples/skills/letterhead/` is a shipped bundle with no scripts: a letter
 template and a logo, given to no agent (`agents: []`). Copy the folder into

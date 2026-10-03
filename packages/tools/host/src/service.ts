@@ -32,6 +32,8 @@ export interface HostRun {
 export interface SkillRunView {
   bundle: string; title: string; script: string; interpreter: string; args: string[];
   sha256: string; reads: string; writes: string; files: number; untrusted: false; confinement: Confinement;
+  /** The bundle declared `network: true`. */
+  network: boolean;
 }
 interface HostEnvelope {
   command: string; shell: string; cwd: string; workspace: string; timeoutMs: number;
@@ -74,7 +76,7 @@ export class HostService {
     }
     const workspace = this.workspace(ctx);
     const run = input.skill ? this.#skillRun(input.skill, ctx) : null;
-    if (!run) this.#refuseBundleReach(input);
+    if (!run) this.#refuseBundleReach(input, workspace);
     const base = run ? run.work : workspace;
     if (!run && input.cwd && !path.isAbsolute(input.cwd)) throw new Error('cwd must be an absolute directory.');
     if (run && input.cwd && path.resolve(input.cwd) !== run.work) throw new ToolRefusal('A bundle script runs in its own working folder; leave cwd out.');
@@ -98,7 +100,7 @@ export class HostService {
       const envelope = { command: run.command, shell: '/bin/bash', cwd, workspace: base,
         timeoutMs: input.timeoutMs, attachments, outputs: input.outputs, authority: 'skill-script-confined', skillRun: run.view };
       const v = run.view;
-      return { envelope, preview: `Run a script from ${v.title} — asks every time.\n\nAgent: ${ctx.agentId}\nScript: ${v.interpreter} ${v.script}\nBundle: ${v.title} (${v.bundle})\nArguments: ${v.args.length ? v.args.join(' ') : 'none'}\nWorking folder: ${v.writes}\nIt may read ${v.title}'s ${v.files} files without changing them, and the working folder. It writes only in the working folder. Network as host commands have it.\nTimeout: ${input.timeoutMs / 1000}s\n\nInputs: ${attachments.map(a => a.path).join(', ') || 'none'}\nReturned files: ${input.outputs.join(', ') || 'none'}\n\nAllow once runs this script with these arguments, once. A bundle script is never allowed for a conversation or always.` };
+      return { envelope, preview: `Run a script from ${v.title} — asks every time.\n\nAgent: ${ctx.agentId}\nScript: ${v.interpreter} ${v.script}\nBundle: ${v.title} (${v.bundle})\nArguments: ${v.args.length ? v.args.join(' ') : 'none'}\nWorking folder: ${v.writes}\nIt reads only ${v.title}'s ${v.files} files, the working folder and the system it runs on — none of your own files. It writes only in the working folder.${v.confinement === 'macos-sandbox' ? ' It cannot open other apps.' : ''} ${v.network ? `Network: on — ${v.title} says its scripts need it, so this script can send what it reads to the internet.` : 'Network: off.'}\nTimeout: ${input.timeoutMs / 1000}s\n\nInputs: ${attachments.map(a => a.path).join(', ') || 'none'}\nReturned files: ${input.outputs.join(', ') || 'none'}\n\nAllow once runs this script with these arguments, once. A bundle script is never allowed for a conversation or always.` };
     }
     const envelope = { command: input.command!, shell: '/bin/bash', cwd, workspace,
       timeoutMs: input.timeoutMs, attachments, outputs: input.outputs, authority: 'host-user-unsandboxed' };
@@ -131,26 +133,77 @@ export class HostService {
       view: {
         bundle: bundle.name, title: bundle.title, script, interpreter, args: skill.args,
         sha256: sha256File(file), reads: bundle.dir, writes: work, files: bundle.files.length,
-        untrusted: false, confinement,
+        untrusted: false, confinement, network: bundle.network === true,
       },
     };
   }
-  /** A plain command may not reach into the skills folder: a bundle's script runs through the `skill` form, asking each time. */
-  #refuseBundleReach(input: Input): void {
+  /**
+   * A plain command may not run anything from the skills folder: a bundle's
+   * script runs through the `skill` form, which asks each time and confines it.
+   * Every path-like word of the command (and its cwd) is resolved against the
+   * cwd and against each `cd` before it, links followed, and the command is
+   * refused when one lands in the skills folder. It reads the command's text,
+   * so a command built to hide a path (a variable, an `eval`) can still get
+   * there: a plain host command runs unsandboxed as the owner's user, as its
+   * own card says.
+   */
+  #refuseBundleReach(input: Input, workspace: string): void {
     const root = this.#bundles()?.root();
     if (!root) return;
     const roots = new Set([path.resolve(root)]);
     try { roots.add(realpathSync(root)); } catch { /* Not there yet. */ }
-    const said = `${input.command ?? ''}\n${input.cwd ?? ''}`;
-    for (const r of roots) {
-      if (said.includes(r)) {
-        throw new ToolRefusal('That command reaches into the skills folder. Run a bundle\'s script with skill: { bundle, script, args } instead; it asks the owner each time.');
+    const real = (p: string): string => {
+      // The longest existing prefix, links followed, with the rest put back.
+      let head = p;
+      const rest: string[] = [];
+      for (;;) {
+        try { return path.join(realpathSync(head), ...rest); } catch { /* climb */ }
+        const up = path.dirname(head);
+        if (up === head) return p;
+        rest.unshift(path.basename(head));
+        head = up;
       }
+    };
+    const under = (p: string): boolean => {
+      for (const candidate of new Set([path.resolve(p), real(path.resolve(p))])) {
+        for (const r of roots) if (candidate === r || candidate.startsWith(r + path.sep)) return true;
+      }
+      return false;
+    };
+    const refuse = (): never => {
+      throw new ToolRefusal('That command reaches into the skills folder. Run a bundle\'s script with skill: { bundle, script, args } instead; it asks the owner each time and runs the script confined.');
+    };
+    const home = process.env.HOME ?? '';
+    const cwd = path.resolve(workspace, input.cwd ?? '.');
+    if (under(cwd)) refuse();
+    const said = input.command ?? '';
+    for (const r of roots) if (said.includes(r)) refuse();
+    // Words, unquoted; a separator, a redirection or a pipe splits them too.
+    const words = said.split(/[\s;&|<>()`]+/).map((w) => w.replace(/^['"]|['"]$/g, '').replace(/^[A-Za-z_][A-Za-z0-9_]*=/, '')).filter((w) => w !== '');
+    const bases = [cwd];
+    for (let i = 0; i < words.length; i += 1) {
+      const raw = words[i]!;
+      const word = raw.startsWith('~/') && home ? path.join(home, raw.slice(2)) : raw;
+      if (word === 'cd' || word === 'pushd') {
+        const next = words[i + 1];
+        if (next && bases.length < 32) bases.push(...bases.map((b) => path.resolve(b, next.startsWith('~/') && home ? path.join(home, next.slice(2)) : next)));
+        continue;
+      }
+      if (word.startsWith('-') && !word.includes('=')) continue;
+      const value = word.includes('=') && word.startsWith('-') ? word.slice(word.indexOf('=') + 1) : word;
+      if (value === '' || /^[a-z]+:\/\//i.test(value)) continue;
+      for (const b of bases) if (under(path.resolve(b, value))) refuse();
     }
   }
   async execute(input: Input, ctx: ToolContext) {
     if (!ctx.actionId || (ctx.delegationDepth ?? 0) > 0) throw new Error('Host execution requires an approved action, not delegated authority.');
     const { envelope } = await this.describe(input, ctx);
+    // A bundle script is bound to the bytes the owner approved: say so plainly
+    // when the file changed since, before the generic envelope check.
+    const approvedRun = (ctx.approvedEffect?.envelope as { skillRun?: SkillRunView } | undefined)?.skillRun;
+    if (envelope.skillRun && (!approvedRun || approvedRun.sha256 !== envelope.skillRun.sha256)) {
+      throw new ToolRefusal(`${envelope.skillRun.script} in ${envelope.skillRun.title} changed after it was approved, so nothing ran. Ask again to run the script as it is now.`);
+    }
     ctx.buddi!.approvals.assert(ctx, envelope);
     if (this.#runs.size >= 4) throw new Error('Four host commands are already running. Wait before starting another.');
     if (this.runs(ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId).length) throw new Error('This conversation already has a running command. Wait or stop it first.');
@@ -179,11 +232,14 @@ export class HostService {
       const skillRun = envelope.skillRun ?? null;
       let confined: { wrap: string[]; extraEnv: NodeJS.ProcessEnv } | null = null;
       if (skillRun) {
-        if (sha256File(path.join(skillRun.reads, skillRun.script)) !== skillRun.sha256) throw new Error('The script changed after it was approved; nothing ran.');
+        // Read once more right before it starts: the file may change while attachments are copied.
+        if (sha256File(path.join(skillRun.reads, skillRun.script)) !== approvedRun!.sha256) {
+          throw new ToolRefusal(`${skillRun.script} in ${skillRun.title} changed after it was approved, so nothing ran. Ask again to run the script as it is now.`);
+        }
         const work = await realpath(envelope.workspace);
         const tmp = path.join(work, '.tmp');
         await mkdir(tmp, { recursive: true, mode: 0o700 });
-        confined = { wrap: confinementArgv(skillRun.confinement, work),
+        confined = { wrap: confinementArgv(skillRun.confinement, work, { bundle: skillRun.reads, interpreter: skillRun.interpreter, network: skillRun.network === true }),
           extraEnv: { TMPDIR: tmp, PYTHONDONTWRITEBYTECODE: '1', PIP_NO_CACHE_DIR: '1', BUDDI_SKILL_DIR: skillRun.reads, BUDDI_SKILL_WORK: work } };
       }
       const result = await runCommand({ command: envelope.command, cwd: envelope.cwd,

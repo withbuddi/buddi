@@ -182,6 +182,24 @@ suite('dates buddi acts on (postgres, fake clock)', () => {
     clock = new Date('2026-10-09T07:00:00Z');
     expect((await prepare(mission))!.appendix).toContain('today');
 
+    // The owner's edits stand: renamed and moved to another agent, a sync keeps them.
+    await pool.query(`update core.missions set name = 'Ben turns 35', agent_id = 'art' where id = $1`, [id]);
+    await sync();
+    expect(await getMission(pool, id)).toMatchObject({ name: 'Ben turns 35', agentId: 'art', enabled: true });
+
+    // A People read that fails is not an empty People: nothing is deleted.
+    const failing = {
+      query: (q: unknown, ...rest: unknown[]) => {
+        const text = typeof q === 'string' ? q : (q as { text?: string }).text ?? '';
+        if (/memory\.people/.test(text)) return Promise.reject(new Error('relation is locked'));
+        return (pool.query as (...a: unknown[]) => unknown)(q, ...rest);
+      },
+    } as unknown as Pool;
+    const lines: string[] = [];
+    expect((await syncDateMissions({ pool: failing, catalog: deskCatalog, now, log: (l) => lines.push(l) })).removed).toEqual([]);
+    expect(await getMission(pool, id)).not.toBeNull();
+    expect(lines.join('\n')).toContain('could not read People');
+
     // Forgetting the person takes the mission with them.
     await forgetPerson(pool, person.id, clock);
     expect((await sync()).removed).toEqual([id]);

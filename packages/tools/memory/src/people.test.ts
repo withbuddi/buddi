@@ -47,7 +47,19 @@ describe('the owner said it', () => {
   const turn = (text: string, extra: Partial<ToolContext> = {}): ToolContext => ({ ownerRequest: { id: 'r', text, expiresAt: now.getTime() + 1000 }, ...extra });
   it('only in an owner turn naming them, with nothing untrusted in view and no delegation', () => {
     expect(ownerStatedIt(turn('Marion is my wife'), 'Marion', now)).toBe(true);
-    expect(ownerStatedIt(turn('marion is my wife'), 'Marion Durand', now)).toBe(true);
+    expect(ownerStatedIt(turn('marion durand is my wife'), 'Marion Durand', now)).toBe(true);
+    expect(ownerStatedIt(turn('marion is my wife'), 'Marion Durand', now)).toBe(false);
+    expect(ownerStatedIt(turn('I also need a gift'), 'Al', now)).toBe(false);
+    expect(ownerStatedIt(turn('Al, my brother, turns 40'), 'Al', now)).toBe(true);
+    expect(ownerStatedIt(turn("Zoë's birthday is in May"), 'Zoë', now)).toBe(true);
+    // The facts saved must be in the owner's words too.
+    expect(ownerStatedIt(turn('Marion is my wife'), 'Marion', now, { name: 'Marion', relationship: 'wife' })).toBe(true);
+    expect(ownerStatedIt(turn('Marion is my wife'), 'Marion', now, { name: 'Marion', relationship: 'sister' })).toBe(false);
+    expect(ownerStatedIt(turn("Marion's birthday is 14 March"), 'Marion', now, { name: 'Marion', birthday: { day: 14, month: 3, year: null } })).toBe(true);
+    expect(ownerStatedIt(turn("Marion's birthday is March 14th"), 'Marion', now, { name: 'Marion', birthday: { day: 14, month: 3, year: null } })).toBe(true);
+    expect(ownerStatedIt(turn("Marion's birthday is 14/03"), 'Marion', now, { name: 'Marion', birthday: { day: 14, month: 3, year: null } })).toBe(true);
+    expect(ownerStatedIt(turn('Marion is coming over'), 'Marion', now, { name: 'Marion', birthday: { day: 14, month: 3, year: null } })).toBe(false);
+    expect(ownerStatedIt(turn("Marion's birthday is 4 March"), 'Marion', now, { name: 'Marion', birthday: { day: 14, month: 3, year: null } })).toBe(false);
     expect(ownerStatedIt(turn('she is my wife'), 'Marion', now)).toBe(false);
     expect(ownerStatedIt({}, 'Marion', now)).toBe(false);
     expect(ownerStatedIt(turn('Marion', { delegationDepth: 1 }), 'Marion', now)).toBe(false);

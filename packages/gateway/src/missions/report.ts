@@ -176,6 +176,7 @@ export function createMissionManifest(sink: DecisionSink, opts: { reportMax?: nu
       'Send this text to the owner as the result of this scheduled run, and finish. Call it once, with the finished message; the text you pass is exactly what is delivered. You may attach a few actions the owner can take about it — they become buttons where the surface has them and a plain list where it does not. ' +
       'You may also give a dashboard link it opens, and the Files id of a voice note you made in this run. If there is nothing worth an interruption, call mission.silent instead.',
     tier: 'auto',
+    sideEffect: true,
     input: reportInputFor(max),
     async execute(input, ctx) {
       const audio = input.audio ? await reportAudio(input.audio, ctx as CoreToolContext) : undefined;

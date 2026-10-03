@@ -104,7 +104,8 @@ async function dropMission(pool: Pool, missionId: string): Promise<void> {
 
 /**
  * Bring the date missions in line with the profile and People. Idempotent:
- * a mission is created once, its switch is the owner's from then on, and its
+ * a mission is created once, its switch, name and agent are the owner's from
+ * then on, a failed People read changes nothing, and its
  * schedule is replaced only when the date or the zone changed. Returns what it
  * changed, for the log.
  */
@@ -121,15 +122,19 @@ export async function syncDateMissions(deps: DatesDeps): Promise<{ created: stri
   const profile = await getOwnerProfile(deps.pool);
   const existing = await getMission(deps.pool, OWNER_BIRTHDAY_MISSION);
   if (profile.birthday) {
-    if (!existing) created.push(OWNER_BIRTHDAY_MISSION);
-    await upsertMission(deps.pool, {
-      id: OWNER_BIRTHDAY_MISSION,
-      name: 'Your birthday',
-      agentId,
-      prompt: OWNER_BIRTHDAY_PROMPT,
-      enabled: existing ? existing.enabled : true,
-      alwaysDeliver: false,
-    });
+    // Created once; after that its name, agent and prompt are the owner's
+    // (moved to another agent, renamed) and only the schedule follows the date.
+    if (!existing) {
+      created.push(OWNER_BIRTHDAY_MISSION);
+      await upsertMission(deps.pool, {
+        id: OWNER_BIRTHDAY_MISSION,
+        name: 'Your birthday',
+        agentId,
+        prompt: OWNER_BIRTHDAY_PROMPT,
+        enabled: true,
+        alwaysDeliver: false,
+      });
+    }
     await scheduleIf(deps.pool, OWNER_BIRTHDAY_MISSION, yearlyCron([profile.birthday], BIRTHDAY_HOUR)!, zone);
   } else if (existing) {
     await dropMission(deps.pool, OWNER_BIRTHDAY_MISSION);
@@ -137,8 +142,15 @@ export async function syncDateMissions(deps: DatesDeps): Promise<{ created: stri
   }
 
   // People with a date: off until the owner turns them on.
-  let people: PersonView[] = [];
-  try { people = await listPeople(deps.pool); } catch { people = []; }
+  // A failed read is not an empty People: reconciling against it would delete
+  // every person's mission (and the owner's switches with them).
+  let people: PersonView[];
+  try {
+    people = await listPeople(deps.pool);
+  } catch (err) {
+    deps.log?.(`dates: could not read People (${err instanceof Error ? err.message : String(err)}); person dates left as they are`);
+    return { created, removed };
+  }
   const wanted = new Set<string>();
   for (const p of people) {
     const cron = personCron(p, year);
@@ -146,15 +158,17 @@ export async function syncDateMissions(deps: DatesDeps): Promise<{ created: stri
     const id = personMissionId(p.id);
     wanted.add(id);
     const mission = await getMission(deps.pool, id);
-    if (!mission) created.push(id);
-    await upsertMission(deps.pool, {
-      id,
-      name: personMissionName(p),
-      agentId,
-      prompt: personPrompt(p.name),
-      enabled: mission ? mission.enabled : false,
-      alwaysDeliver: false,
-    });
+    if (!mission) {
+      created.push(id);
+      await upsertMission(deps.pool, {
+        id,
+        name: personMissionName(p),
+        agentId,
+        prompt: personPrompt(p.name),
+        enabled: false,
+        alwaysDeliver: false,
+      });
+    }
     await scheduleIf(deps.pool, id, cron, zone);
   }
   for (const mission of await listMissions(deps.pool)) {

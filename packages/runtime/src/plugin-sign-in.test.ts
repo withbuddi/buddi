@@ -187,6 +187,26 @@ describe('signing in', () => {
     expect(service.status('calendar', second.id)).toBeUndefined();
     expect(await service.finish('calendar', second.id, 'whatever-code')).toMatchObject({ state: 'expired' });
   });
+
+  it('an exchange still in flight when its sign-in is replaced or cancelled saves nothing', async () => {
+    // A slow token endpoint that does not stop when asked: what matters is that the answer is not kept.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const slow = (async (url: string, init: never) => { await gate; return transport(url, init); }) as unknown as HttpTransport;
+    const service = createPluginSignInService({ transport: slow });
+    const saved: string[] = [];
+    const first = await service.begin({ plugin: 'calendar', provider, clientId: 'client-1', clientSecret: 'shh', scopes: SCOPES, save: async (e) => void saved.push(`first:${e}`) });
+    const pendingFirst = service.finish('calendar', first.id, consent(first.authorizeUrl).code);
+    await new Promise((r) => setTimeout(r, 20));
+    const second = await service.begin({ plugin: 'calendar', provider, clientId: 'client-1', clientSecret: 'shh', scopes: SCOPES, save: async (e) => void saved.push(`second:${e}`) });
+    const pendingSecond = service.finish('calendar', second.id, consent(second.authorizeUrl).code);
+    await new Promise((r) => setTimeout(r, 20));
+    service.cancel('calendar', second.id);
+    release();
+    expect(await pendingFirst).toMatchObject({ state: 'expired', problem: expect.stringMatching(/newer sign-in replaced/) });
+    expect(await pendingSecond).toMatchObject({ state: 'expired', problem: expect.stringMatching(/cancelled/) });
+    expect(saved).toEqual([]);
+  });
 });
 
 describe('fresh', () => {

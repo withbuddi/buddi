@@ -561,6 +561,7 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   untrusted?: UntrustedKind;    // its output is a page, a mail, a file, a chat, a connected service's answer
   sequential?: boolean;         // dependent calls are skipped after it fails
   waitsForOwner?: boolean;      // a success ends the run: the owner decides next
+  sideEffect?: boolean;         // an auto tool that still reaches outside the run (1.28)
   image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
 }
 ```
@@ -3314,6 +3315,7 @@ version each arrived in — is §9b.
 | `timeoutMs` | `number` | no | How long the Executor waits before recording the attempt as `unknown`. `DEFAULT_EFFECT_TIMEOUT_MS` when absent. |
 | `sequential` | `boolean` | no | Dependent calls in the same model turn are skipped after this one fails. |
 | `waitsForOwner` | `boolean` | no | A successful call leaves a decision with the owner: no more tools this run. |
+| `sideEffect` | `boolean` | no | An `auto` tool whose call still reaches outside the run: a message, a report, a saved file. A run interrupted by a restart after such a call is failed, not queued again, so nothing happens twice. Since 1.28. |
 | `image` | `(output, ctx) => Promise<{mime,data}\|undefined>` | no | An ephemeral image for the next model call. Never stored as base64. |
 
 The tiers, as `packages/core/src/registry.ts` enforces them:

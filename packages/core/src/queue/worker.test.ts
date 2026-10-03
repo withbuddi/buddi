@@ -55,6 +55,6 @@ describe('worker cancellation', () => {
     expect(ctx.signal.aborted).toBe(true);
     expect(completeJob).not.toHaveBeenCalled();
     expect(failJob).not.toHaveBeenCalled();
-    expect(interruptLeases).toHaveBeenCalledWith(expect.anything(), { heldBy: 'test' }, 'buddi was stopping');
+    expect(interruptLeases).toHaveBeenCalledWith(expect.anything(), { heldBy: 'test' }, 'buddi was stopping', {});
   });
 });

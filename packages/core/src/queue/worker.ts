@@ -323,15 +323,17 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
         // Bounded: a handler that ignores its signal does not hold the stop
         // past the service manager's grace (launchd's is 20s).
         let grace: NodeJS.Timeout | undefined;
-        await Promise.race([
-          loopExited,
-          new Promise<void>((resolve) => { grace = setTimeout(resolve, opts.stopGraceMs ?? 5_000); grace.unref?.(); }),
+        const exited = await Promise.race([
+          loopExited.then(() => true),
+          new Promise<boolean>((resolve) => { grace = setTimeout(() => resolve(false), opts.stopGraceMs ?? 5_000); grace.unref?.(); }),
         ]);
         clearTimeout(grace);
         // The runs this process was in the middle of are settled now, not left
-        // leased for the next boot to find.
+        // leased for the next boot to find. A handler that ignored the stop is
+        // still running here: its job fails rather than going back on the
+        // queue, or the next start would run it a second time beside it.
         try {
-          const jobs = await interruptLeases(pool, { heldBy: worker }, 'buddi was stopping');
+          const jobs = await interruptLeases(pool, { heldBy: worker }, 'buddi was stopping', exited ? {} : { requeue: false });
           if (jobs.length > 0) onInterrupted(jobs, 'stop');
         } catch (err) {
           onError(err);

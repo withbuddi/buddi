@@ -70,7 +70,7 @@ export interface StagedBundle {
   size: number;
   files: BundleFileRow[];
   scripts: string[];
-  skill: { name: string; title: string; description: string; firstLines: string; body: string };
+  skill: { name: string; title: string; description: string; firstLines: string; body: string; network?: boolean };
   createdAt: string;
 }
 
@@ -361,6 +361,10 @@ function stage(incomingDir: string, zipPath: string, filename: string, now: Date
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
       return refuse(422, { kind: 'damaged', filename }, `“${filename}” lists the same file twice, so it was refused.`);
     }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOTDIR' || code === 'EISDIR') {
+      return refuse(422, { kind: 'damaged', filename }, `“${filename}” holds a file and a folder with the same name, so it was refused.`);
+    }
     throw err;
   }
   if (executables.length > 0) {
@@ -397,7 +401,7 @@ function stage(incomingDir: string, zipPath: string, filename: string, now: Date
     size: unpacked,
     files: rows,
     scripts: rows.filter((r) => r.kind === 'script').map((r) => r.path),
-    skill: { name: named, title, description: description.slice(0, 300), firstLines, body },
+    skill: { name: named, title, description: description.slice(0, 300), firstLines, body, ...(fm.fields.network === 'true' ? { network: true } : {}) },
     createdAt: now.toISOString(),
   };
   writeFileSync(path.join(root, 'meta.json'), JSON.stringify(staged), { mode: 0o600 });

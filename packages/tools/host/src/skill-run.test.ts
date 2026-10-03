@@ -18,12 +18,13 @@ describe('host.exec runs a bundle script', () => {
   let skillsDir: string;
   let service: HostService;
   let trusted: boolean;
+  let networked = false;
   const ctx = (): ToolContext => ({
     agentId: 'dev', conversationId: 'c-1',
     buddi: { owner: { id: 'owner-1' }, dir: { legacyPath: path.join(root, 'data') } },
   }) as unknown as ToolContext;
   const view = (): SkillBundleView => ({
-    name: 'cover-art', title: 'Cover art kit', dir: path.join(skillsDir, 'cover-art'), untrusted: !trusted,
+    name: 'cover-art', title: 'Cover art kit', dir: path.join(skillsDir, 'cover-art'), untrusted: !trusted, network: networked,
     files: ['SKILL.md', 'assets/palette.json', 'scripts/make_cover.py', 'scripts/setup.sh'], scripts: ['scripts/make_cover.py', 'scripts/setup.sh'],
   });
   const bundles: SkillBundles = {
@@ -41,6 +42,7 @@ describe('host.exec runs a bundle script', () => {
     service.useSkillBundles(bundles);
     service.confinement = () => 'macos-sandbox';
     trusted = true;
+    networked = false;
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -85,10 +87,41 @@ describe('host.exec runs a bundle script', () => {
     expect(await refusal({ skill: { bundle: 'cover-art', script: 'scripts/make_cover.py' } })).toMatch(/no way to confine a script/);
   });
 
+  it('refuses to run a script that changed after it was approved', async () => {
+    const raw = { skill: { bundle: 'cover-art', script: 'scripts/make_cover.py' } };
+    const { envelope } = await service.describe(input(raw), ctx());
+    writeFileSync(path.join(skillsDir, 'cover-art', 'scripts', 'make_cover.py'), 'import os; os.system("curl evil")\n');
+    let asserted = false;
+    const approved = {
+      ...ctx(), actionId: 'a-1', approvedEffect: { envelope },
+      buddi: { ...(ctx().buddi as object), approvals: { assert: () => { asserted = true; } } },
+    } as unknown as ToolContext;
+    const err = await service.execute(input(raw), approved).then(() => null, (e: unknown) => e as Error);
+    expect(err && isToolRefusal(err)).toBe(true);
+    expect(err!.message).toMatch(/scripts\/make_cover\.py in Cover art kit changed after it was approved, so nothing ran/);
+    expect(asserted).toBe(false);
+  });
+
+  it('says on the card what the confinement does not hold', async () => {
+    const { preview } = await service.describe(input({ skill: { bundle: 'cover-art', script: 'scripts/make_cover.py' } }), ctx());
+    expect(preview).toContain('none of your own files');
+    expect(preview).toContain('Network: off.');
+    expect(preview).not.toContain('Network as host commands have it');
+    networked = true;
+    const asked = await service.describe(input({ skill: { bundle: 'cover-art', script: 'scripts/make_cover.py' } }), ctx());
+    expect(asked.envelope.skillRun!.network).toBe(true);
+    expect(asked.preview).toContain('Network: on');
+  });
+
   it('refuses both or neither of command and skill, and a plain command reaching into the skills folder', async () => {
     expect(await refusal({ command: 'ls', skill: { bundle: 'cover-art', script: 'scripts/make_cover.py' } })).toMatch(/either a command or skill/);
     expect(await refusal({})).toMatch(/either a command or skill/);
     expect(await refusal({ command: `python3 ${path.join(skillsDir, 'cover-art', 'scripts', 'make_cover.py')}` })).toMatch(/reaches into the skills folder/);
+    // Relative paths, a cd before, a ~ path and a cwd inside the folder are caught as well.
+    expect(await refusal({ command: 'python3 skills/cover-art/scripts/make_cover.py', cwd: root })).toMatch(/reaches into the skills folder/);
+    expect(await refusal({ command: `cd '${root}' && sh ./skills/cover-art/scripts/setup.sh` })).toMatch(/reaches into the skills folder/);
+    expect(await refusal({ command: 'python3 scripts/make_cover.py', cwd: path.join(skillsDir, 'cover-art') })).toMatch(/reaches into the skills folder/);
+    expect(await refusal({ command: `cat "${path.relative(path.join(root, 'data'), skillsDir)}/cover-art/SKILL.md"`, cwd: path.join(root, 'data') })).toMatch(/reaches into the skills folder/);
     const plain = await service.describe(input({ command: 'echo hi' }), ctx());
     expect(plain.envelope.skillRun).toBeUndefined();
   });
@@ -106,11 +139,44 @@ describe.skipIf(detectConfinement() === null)('the confinement a bundle script r
       const kind = detectConfinement()!;
       const result = await runCommand({
         command: `cat '${bundle}/palette.json' > out.json && echo changed > '${bundle}/palette.json'; echo "rc=$?"`,
-        cwd: work, timeoutMs: 10_000, env: process.env, wrap: confinementArgv(kind, work),
+        cwd: work, timeoutMs: 10_000, env: process.env, wrap: confinementArgv(kind, work, { bundle }),
       });
       expect(readFileSync(path.join(work, 'out.json'), 'utf8')).toBe('{"a":1}');
       expect(readFileSync(path.join(bundle, 'palette.json'), 'utf8')).toBe('{"a":1}');
       expect(result.stdout).toContain('rc=1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('runs python, node and sh scripts, and on macOS cannot start open or osascript', async () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'buddi-confine-')));
+    try {
+      const bundle = path.join(root, 'bundle');
+      const work = path.join(root, 'work');
+      mkdirSync(bundle);
+      mkdirSync(work);
+      writeFileSync(path.join(bundle, 'a.py'), 'import json, os\nopen("py.txt", "w").write(json.dumps({"ok": True}))\nprint("py ok")\n');
+      writeFileSync(path.join(bundle, 'a.js'), 'require("fs").writeFileSync("js.txt", "ok"); console.log("node ok");\n');
+      writeFileSync(path.join(bundle, 'a.sh'), 'echo ok > sh.txt; echo sh ok\n');
+      const kind = detectConfinement()!;
+      const run = (command: string, interpreter = 'sh', network = false) =>
+        runCommand({ command, cwd: work, timeoutMs: 20_000, env: process.env, wrap: confinementArgv(kind, work, { bundle, interpreter, network }) });
+      expect((await run(`python3 '${bundle}/a.py'`, 'python3')).stdout).toContain('py ok');
+      expect((await run(`node '${bundle}/a.js'`, 'node')).stdout).toContain('node ok');
+      expect((await run(`sh '${bundle}/a.sh'`)).stdout).toContain('sh ok');
+      // Nothing of the user's is readable: a secret beside the bundle stays unread.
+      writeFileSync(path.join(root, 'secret.txt'), 'hunter2');
+      expect((await run(`cat '${root}/secret.txt'; echo "rc=$?"`)).stdout).not.toContain('hunter2');
+      // No network unless the bundle asked for it.
+      const fetchJs = `require("net").connect(443, "1.1.1.1").on("connect", () => { console.log("net on"); process.exit(0); }).on("error", (e) => { console.log("net off " + e.code); process.exit(0); })`;
+      writeFileSync(path.join(bundle, 'net.js'), fetchJs);
+      expect((await run(`node '${bundle}/net.js'`, 'node')).stdout).toMatch(/net off/);
+      expect(readFileSync(path.join(work, 'py.txt'), 'utf8')).toBe('{"ok": true}');
+      if (kind === 'macos-sandbox') {
+        expect((await run(`/usr/bin/osascript -e 'return 1'; echo "rc=$?"`)).stdout).toContain('rc=126');
+        expect((await run(`/usr/bin/open -g -a Calculator; echo "rc=$?"`)).stdout).toContain('rc=126');
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

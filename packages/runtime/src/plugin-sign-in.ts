@@ -67,6 +67,8 @@ interface Pending {
   save(envelope: string): Promise<void>;
   status: OAuthSignInStatus;
   exchanging?: Promise<OAuthSignInStatus>;
+  /** Aborted when the sign-in is cancelled or replaced: an exchange in flight then saves nothing. */
+  abort: AbortController;
   server?: Server;
   timer?: NodeJS.Timeout;
 }
@@ -164,6 +166,9 @@ export function createPluginSignInService(options: PluginSignInOptions = {}): Pl
   const exchange = (entry: Pending, code: string): Promise<OAuthSignInStatus> => {
     if (entry.status.state !== 'waiting') return Promise.resolve(entry.status);
     entry.exchanging ??= (async (): Promise<OAuthSignInStatus> => {
+      // Cancelled or replaced while this waited: whatever the provider said is
+      // not this sign-in's to keep, and the status it was ended with stands.
+      const obsolete = (): boolean => entry.abort.signal.aborted;
       let res;
       try {
         res = await transport(entry.tokenEndpoint, {
@@ -177,12 +182,14 @@ export function createPluginSignInService(options: PluginSignInOptions = {}): Pl
             client_id: entry.clientId,
             ...(entry.clientSecret ? { client_secret: entry.clientSecret } : {}),
           }).toString(),
-          signal: AbortSignal.timeout(20_000),
+          signal: AbortSignal.any([AbortSignal.timeout(20_000), entry.abort.signal]),
           maxBytes: 65_536,
         });
       } catch {
+        if (obsolete()) return { ...entry.status };
         return end(entry, { state: 'failed', problem: `${entry.label} did not answer the sign-in. Start again.` });
       }
+      if (obsolete()) return { ...entry.status };
       if (!res.ok) {
         const why = await errorCode(res);
         return end(entry, {
@@ -195,6 +202,7 @@ export function createPluginSignInService(options: PluginSignInOptions = {}): Pl
         });
       }
       const tokens = await tokensOf(res, now());
+      if (obsolete()) return { ...entry.status };
       if (tokens === undefined) return end(entry, { state: 'failed', problem: `${entry.label} answered the sign-in with something buddi cannot read. Start again.` });
       if (tokens.refreshToken === undefined) {
         return end(entry, { state: 'failed', problem: `${entry.label} gave buddi no lasting access. Start again, and allow it on ${entry.label}'s page.` });
@@ -254,6 +262,7 @@ export function createPluginSignInService(options: PluginSignInOptions = {}): Pl
       // One waiting sign-in per plugin: a second press replaces the first.
       for (const other of pending.values()) {
         if (other.plugin === input.plugin && other.status.state === 'waiting') {
+          other.abort.abort();
           end(other, { state: 'expired', problem: 'A newer sign-in replaced this one.' });
         }
       }
@@ -271,6 +280,7 @@ export function createPluginSignInService(options: PluginSignInOptions = {}): Pl
         scopes: [...input.scopes],
         save: input.save,
         status: { state: 'waiting' },
+        abort: new AbortController(),
       };
       const server = createServer((req, res) => {
         onCallback(entry, req, res).catch(() => sendPage(res, 500, 'Not signed in', 'Something went wrong. Go back to buddi and start again.'));
@@ -337,6 +347,8 @@ export function createPluginSignInService(options: PluginSignInOptions = {}): Pl
     cancel(plugin, id) {
       const entry = pending.get(id);
       if (!entry || entry.plugin !== plugin) return;
+      entry.abort.abort();
+      if (entry.status.state === 'waiting') entry.status = { state: 'expired', problem: 'The sign-in was cancelled.' };
       close(entry);
       if (entry.timer) clearTimeout(entry.timer);
       pending.delete(id);

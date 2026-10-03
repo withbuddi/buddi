@@ -592,6 +592,23 @@ suite('queue (postgres)', () => {
       expect((await getJob(pool, foreign.id))?.state).toBe('leased');
     }, 20_000);
 
+    it('fails, rather than requeues, a run whose handler ignored the stop and is still going', async () => {
+      const job = await enqueue(pool, { kind: 'mission-run', runAfter: new Date(Date.now() - 60_000) });
+      let release: () => void = () => {};
+      let started = false;
+      const worker = runWorker({
+        pool, worker: 'serve:333:stubborn', kinds: ['mission-run'], now: () => new Date(),
+        pollMs: 5, leaseMs: 5_000, sweepMs: 0, stopGraceMs: 50, recoverOnStart: false,
+        handlers: { 'mission-run': () => { started = true; return new Promise<null>((r) => { release = () => r(null); }); } },
+      });
+      await waitFor(async () => started);
+      await worker.stop();
+      const after = await getJob(pool, job.id);
+      expect(after?.state).toBe('failed');
+      expect(after?.lastError).toMatch(/while it was still running; not run again on its own/);
+      release();
+    }, 20_000);
+
     it('fails, visibly, a restart-interrupted run that had already acted', async () => {
       const job = await enqueue(pool, { kind: 'mission-run', runAfter: new Date(Date.now() - 60_000) });
       await claimJob(pool, { worker: 'serve:111:oldboot', now: new Date(), leaseMs: 10 * 60_000 });
@@ -612,6 +629,46 @@ suite('queue (postgres)', () => {
       // It asks for the owner: Activity → Jobs lists it among the open failures.
       expect((await listJobs(pool, { failed: 'open' })).map((j) => j.id)).toEqual([job.id]);
       expect((await events('job.failed')).at(-1)).toMatchObject({ jobId: job.id, retrying: false, failureClass: 'interrupted' });
+    });
+
+    it('fails a restart-interrupted run that had reported through an auto tool with a side effect', async () => {
+      const job = await enqueue(pool, { kind: 'mission-run', runAfter: new Date(Date.now() - 60_000) });
+      await claimJob(pool, { worker: 'serve:111:oldboot', now: new Date(), leaseMs: 10 * 60_000 });
+      await pool.query(
+        `insert into core.events (kind, payload) values
+           ('tool.called', jsonb_build_object('name', 'web.fetch', 'tier', 'auto', 'jobId', $1::text)),
+           ('tool.called', jsonb_build_object('name', 'mission.report', 'tier', 'auto', 'sideEffect', true, 'jobId', $1::text))`,
+        [job.id],
+      );
+
+      const settled = await interruptLeases(pool, { expiredBy: new Date(), self: 'serve:222:newboot', holderPrefix: 'serve:' });
+      expect(settled.map((j) => [j.id, j.requeued, j.acted])).toEqual([[job.id, false, ['mission.report']]]);
+      const after = await getJob(pool, job.id);
+      expect(after?.state).toBe('failed');
+      expect(after?.lastError).toMatch(/^interrupted by a restart after it had acted \(mission\.report\)/);
+    });
+
+    it('fails, rather than requeues, a run interrupted across the upgrade (calls recorded without job or tier)', async () => {
+      const job = await enqueue(pool, { kind: 'mission-run', runAfter: new Date(Date.now() - 60_000) });
+      await claimJob(pool, { worker: 'serve:111:oldboot', now: new Date(), leaseMs: 10 * 60_000 });
+      await pool.query(`insert into core.events (kind, payload) values ('tool.called', jsonb_build_object('name', 'owner.notify'))`);
+      const settled = await interruptLeases(pool, { expiredBy: new Date(), self: 'serve:222:newboot', holderPrefix: 'serve:' });
+      expect(settled.map((j) => [j.id, j.requeued])).toEqual([[job.id, false]]);
+      expect((await getJob(pool, job.id))?.lastError).toMatch(/recorded by an earlier version/);
+    });
+
+    it('fails a restart-interrupted mission run whose report was already delivered', async () => {
+      const occurrenceId = '00000000-0000-4000-8000-0000000000aa';
+      const job = await enqueue(pool, { kind: 'mission-run', payload: { occurrenceId }, runAfter: new Date(Date.now() - 60_000) });
+      await claimJob(pool, { worker: 'serve:111:oldboot', now: new Date(), leaseMs: 10 * 60_000 });
+      await pool.query(
+        `insert into core.events (kind, payload) values ('mission.delivered', jsonb_build_object('occurrenceId', $1::text))`,
+        [occurrenceId],
+      );
+
+      const settled = await interruptLeases(pool, { expiredBy: new Date(), self: 'serve:222:newboot', holderPrefix: 'serve:' });
+      expect(settled.map((j) => [j.id, j.requeued])).toEqual([[job.id, false]]);
+      expect((await getJob(pool, job.id))?.lastError).toMatch(/after it had acted \(its report was delivered\)/);
     });
 
     it('sweeps a lease whose heartbeat stopped while running, and requeues it only once', async () => {

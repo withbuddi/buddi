@@ -71,6 +71,17 @@ describe('a report’s Markdown as Telegram HTML', () => {
     expect(parts.join('\n\n').match(/Story \d+ headline/g)).toHaveLength(30);
   });
 
+  it('cuts a code line longer than a message into pieces, losing nothing and splitting no entity', () => {
+    const line = 'a<b&'.repeat(1250); // 5,000 characters, 12,500 once escaped
+    const parts = markdownToTelegramHtml(`\`\`\`\n${line}\n\`\`\``);
+    for (const part of parts) {
+      expect(part.length).toBeLessThanOrEqual(4096);
+      expect(part).not.toMatch(/&(?!lt;|gt;|amp;|quot;)/);
+    }
+    const back = parts.join('').replace(/<\/?pre>/g, '').replace(/\n/g, '').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+    expect(back).toBe(line);
+  });
+
   it('cuts one block longer than a message between its lines', () => {
     const long = Array.from({ length: 400 }, (_, i) => `line ${i} with **bold** words`).join('\n');
     const parts = markdownToTelegramHtml(long);

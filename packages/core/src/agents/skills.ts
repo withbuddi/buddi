@@ -78,6 +78,11 @@ export const skillFrontmatterSchema = z
     turn: z.number().int().positive().optional(),
     sources: z.array(z.string()).optional(),
     untrusted: z.boolean().optional(),
+    /*
+     * A bundle whose scripts need the network says so. It grants nothing: every
+     * run still asks, and the card says the script gets the network.
+     */
+    network: z.boolean().optional(),
     proposal: asText.optional(),
     kept_at: asText.optional(),
     version: z.number().int().positive().optional(),
@@ -128,6 +133,8 @@ export interface Skill {
   untrusted: boolean;
   /** Present on a skill kept from a learning proposal. */
   learned?: LearnedSkillMeta;
+  /** `network: true`: a bundle whose scripts need the network (shown on each run's card). */
+  network?: boolean;
   /**
    * A bundle (the Agent Skills format): `<name>/SKILL.md` with its files
    * beside it. `file` is the SKILL.md; the rest are read by path, and its
@@ -310,6 +317,7 @@ export function parseSkillFile(
     scope: opts.scope ?? 'private',
     ...(d.title === undefined ? {} : { title: d.title }),
     untrusted: d.untrusted === true,
+    ...(d.network === true ? { network: true } : {}),
   };
 }
 

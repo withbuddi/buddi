@@ -94,6 +94,26 @@ describe('where the corner button is', () => {
 });
 
 describe('the dock', () => {
+  it('mentions the team with @ and runs / commands, as every chat does', async () => {
+    const navigate = vi.fn();
+    const LEDGER = { ...DESK, id: 'ledger', handle: 'ledger', name: 'Ledger', description: 'Money.' } as ChatAgent;
+    render(
+      <Tooltip.Provider>
+        <AskDock agent={DESK} agents={[DESK, LEDGER]} timezone="UTC" open onOpenChange={() => {}} navigate={navigate} />
+      </Tooltip.Provider>,
+    );
+    const box = screen.getByPlaceholderText('Message Concierge…');
+    fireEvent.change(box, { target: { value: 'ask @' } });
+    expect(within(screen.getByRole('listbox', { name: 'Mention someone' })).getByText(/Ledger/)).toBeInTheDocument();
+    fireEvent.change(box, { target: { value: '/' } });
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.select(box);
+    fireEvent.keyDown(box, { key: 'ArrowDown' });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(navigate).toHaveBeenCalledWith('#/chat/ledger');
+  });
+
   it('starts a conversation with the front desk on the first message and streams the reply in place', async () => {
     const navigate = vi.fn();
     vi.spyOn(chatApi, 'startConversation').mockResolvedValue({ conversationId: 'c-new' });

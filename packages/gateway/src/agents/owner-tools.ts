@@ -457,6 +457,7 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
       'went, in a sentence you can repeat to the owner as it is. Plain text only; it is shown as ' +
       '"@you: title". Limits: 6 urgent messages an hour (more wait for the end of the day) and 20 a day.',
     tier: 'auto',
+    sideEffect: true,
     input: notifyInput,
     async execute(input, ctx: CoreToolContext) {
       const agentId = ctx.agentId ?? '';

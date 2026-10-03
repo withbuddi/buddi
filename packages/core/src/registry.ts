@@ -908,6 +908,11 @@ export class ToolRegistry {
     return tool && tool.tierFor === undefined ? tool.tier : undefined;
   }
 
+  /** Whether a call to this tool reaches outside the run without an approval (`sideEffect`). */
+  hasSideEffect(name: string): boolean {
+    return this.#tools.get(name)?.tool.sideEffect === true;
+  }
+
   /** What kind of untrusted text this tool's output is, when it declares one. */
   untrustedKind(name: string): UntrustedKind | undefined {
     return this.#tools.get(name)?.tool.untrusted;

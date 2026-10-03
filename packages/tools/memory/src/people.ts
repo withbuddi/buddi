@@ -321,17 +321,54 @@ function untrustedInView(ctx: ToolContext): readonly { kind: string; via: string
 
 /**
  * The owner said it himself: an authenticated owner turn (not a mission, a
- * watcher or a delegate), nothing untrusted in view, and the person's name in
- * the owner's own words of this turn.
+ * watcher or a delegate), nothing untrusted in view, and the person's full
+ * name, as whole words, in the owner's own words of this turn, with every
+ * fact being saved said there too (`factsStated`).
  */
-export function ownerStatedIt(ctx: ToolContext, name: string, now: Date): boolean {
+const FILLER = new Set(['my', 'his', 'her', 'their', 'our', 'the', 'a', 'an', 'of', 'and', 'in', 'law', 'to']);
+const hasWord = (said: string, word: string): boolean => {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu').test(said);
+};
+/** "14 March", "March 14th", "14/3", "3-14": the day and the month both said. */
+function dateSaid(said: string, date: DayMonth): boolean {
+  const day = new RegExp(`(?<!\\d)0?${date.day}(st|nd|rd|th)?(?!\\d)`, 'i');
+  if (!day.test(said)) return false;
+  const month = MONTHS[date.month - 1]!;
+  if (hasWord(said, month) || hasWord(said, month.slice(0, 3)) || hasWord(said, `${month.slice(0, 3)}.`)) return true;
+  return new RegExp(`(?<!\\d)0?${date.day}\\s*[./-]\\s*0?${date.month}(?!\\d)|(?<!\\d)0?${date.month}\\s*[./-]\\s*0?${date.day}(?!\\d)`).test(said);
+}
+
+/**
+ * Every fact the patch would set appears in what the owner said: the
+ * relationship (its meaningful words), the form of address, each date (day
+ * and month). Notes are the agent's summary and a cleared field sets nothing,
+ * so neither is checked. A fact the owner did not say goes to a card.
+ */
+export function factsStated(said: string, patch: PersonPatch): boolean {
+  if (patch.relationship) {
+    const words = patch.relationship.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2 && !FILLER.has(w));
+    if (words.length > 0 && !words.every((w) => hasWord(said, w))) return false;
+  }
+  if (patch.addressAs && !hasWord(said, patch.addressAs.trim())) return false;
+  if (patch.birthday && !dateSaid(said, patch.birthday)) return false;
+  if (patch.anniversary && !dateSaid(said, patch.anniversary)) return false;
+  return true;
+}
+
+export function ownerStatedIt(ctx: ToolContext, name: string, now: Date, patch?: PersonPatch): boolean {
   const request = ctx.ownerRequest;
   if (!request || request.expiresAt <= now.getTime()) return false;
   if ((ctx.delegationDepth ?? 0) > 0) return false;
   if (untrustedInView(ctx).length > 0) return false;
-  const said = request.text.toLowerCase();
-  const first = name.trim().split(/\s+/)[0]!.toLowerCase();
-  return first.length >= 2 && said.includes(first);
+  const words = name.trim().split(/\s+/).filter((w) => w !== '');
+  if (words.length === 0 || words.join('').length < 2) return false;
+  // The whole name, as whole words: "Al" is not in "also", and "Marion" alone
+  // does not vouch for "Marion Durand".
+  const escape = (w: string): string => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${words.map(escape).join('\\s+')}(?![\\p{L}\\p{N}])`, 'iu');
+  if (!pattern.test(request.text)) return false;
+  return patch ? factsStated(request.text, patch) : true;
 }
 
 /** The card's one sentence: "Remember Marion: wife, birthday 14 March." */
@@ -379,7 +416,7 @@ export const person: ToolDefinition<z.infer<typeof personInput>, unknown> = {
     catch (err) { if (err instanceof PersonRefusal) return { ok: false, message: err.message }; throw err; }
     const existing = await findPersonByName(buddi.db, checked.name!);
 
-    if (ownerStatedIt(ctx, checked.name!, now)) {
+    if (ownerStatedIt(ctx, checked.name!, now, checked)) {
       const { person: saved, created } = await upsertPerson(buddi.db, checked, { by: ctx.agentId ?? 'unknown', conversationId: ctx.conversationId ?? null, now });
       return { ok: true, kept: true, created, person: saved, message: `${created ? 'Added' : 'Updated'} ${saved.name} in People.` };
     }

@@ -87,7 +87,15 @@ function preUnits(body: string, limit: number): string[] {
     const next = current === '' ? escaped : `${current}\n${escaped}`;
     if (next.length <= room) { current = next; continue; }
     if (current !== '') units.push(`<pre>${current}</pre>`);
-    current = escaped.length <= room ? escaped : escaped.slice(0, room);
+    if (escaped.length <= room) { current = escaped; continue; }
+    // One line longer than a message: cut it into successive pieces, never
+    // inside an entity (each character is escaped on its own), none dropped.
+    current = '';
+    for (const ch of line) {
+      const e = escapeHtml(ch);
+      if (current.length + e.length > room) { units.push(`<pre>${current}</pre>`); current = ''; }
+      current += e;
+    }
   }
   if (current !== '' || units.length === 0) units.push(`<pre>${current}</pre>`);
   return units;

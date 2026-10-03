@@ -74,6 +74,7 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
   description:
     "Save a document into the owner's Files: a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program. Writing the same title again in this conversation saves a new version; the earlier one stays.",
   tier: 'auto',
+  sideEffect: true,
   producesArtifacts: true,
   input: writeInput,
   async execute(input, ctx) {

@@ -30,6 +30,9 @@ import { Composer, type ComposerDraft, type ComposerHandle } from '../chat/Compo
 import { MessageList, type LiveCall, type LiveTurnView } from '../chat/MessageList';
 import { openChatStream } from '../chat/stream';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, UploadedAttachment } from '../chat/types';
+import type { ChatCommandName } from '../chat/commands';
+import { leaveDraft } from '../chat/draft';
+import { ROLE_MAKER } from './roster';
 import { readAloudPreference, saveReadAloud, stopPlayback } from '../chat/voice';
 import { CHAT_ROUTE, HOME_ROUTE, chatRoute, parseWelcomeRoute, placeOf } from '../routes';
 import { Blob, Button, ButtonLink, Dock, ErrorBanner, Mark } from '../ui';
@@ -346,6 +349,29 @@ function DockThread({
     })();
   };
 
+  /** `/` commands, as the full chat runs them; one that changes who you talk to opens that chat. */
+  const runCommand = (name: ChatCommandName, arg: string): void => {
+    setError(null);
+    if (name === 'stop') { stop(); return; }
+    if (name === 'use') {
+      const wanted = arg.replace(/^@/, '').toLowerCase();
+      const target = agents.find((a) => a.handle.toLowerCase() === wanted || a.id === wanted);
+      if (!target) { setVoiceNote(wanted ? `No agent called @${wanted}.` : 'Say who: /use @handle.'); return; }
+      navigate(chatRoute(target.id));
+      return;
+    }
+    if (name === 'new') {
+      const maker = agents.find((a) => a.roles.includes(ROLE_MAKER));
+      if (!maker) { setVoiceNote('There is no agent here that makes agents.'); return; }
+      if (arg.trim()) leaveDraft(maker.id, `I'd like a teammate for this: ${arg.trim()}`);
+      navigate(chatRoute(maker.id));
+      return;
+    }
+    api.quiet(arg)
+      .then((answer) => setVoiceNote(answer.text))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  };
+
   const stop = (): void => {
     if (!conversationId) return;
     chatApi.cancel(conversationId).catch((err: unknown) => setError(String(err))).finally(() => setRunning(false));
@@ -460,6 +486,8 @@ function DockThread({
           conversationId={conversationId}
           readAloud={readAloud}
           onReadAloud={switchReadAloud}
+          team={{ agents, selfId: agent.id }}
+          onCommand={runCommand}
         />
         {voiceNote ? <p className="wb-voice-note" role="status">{voiceNote}</p> : null}
         </div>

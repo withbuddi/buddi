@@ -403,6 +403,14 @@ export interface ToolDefinition<I = unknown, O = unknown> {
    * `DEFAULT_EFFECT_TIMEOUT_MS`.
    */
   timeoutMs?: number;
+  /**
+   * A successful call reaches outside the run even though it needs no
+   * approval: a message to the owner, a report, a saved file. Recorded on the
+   * run's `tool.called` event, so a run cut short by a restart after such a
+   * call is not queued again by itself (core's `interruptLeases`) and nothing
+   * is said or saved twice. Since host API 1.28.
+   */
+  sideEffect?: boolean;
   /** Dependent calls in the same model turn must be skipped after a failure. */
   sequential?: boolean;
   /** A successful call leaves a decision with the owner: no more tools this run. */
