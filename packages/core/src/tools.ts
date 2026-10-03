@@ -8,6 +8,7 @@ import type { ZodType } from 'zod';
 import type { MisfirePolicy } from './scheduler/types.js';
 import type { Sentinel } from './sentinels/types.js';
 import type { SurfaceProfile } from './surfaces.js';
+import type { RouteProvider } from './routes.js';
 import type { ViewDescriptor } from './views.js';
 import type { HomeContribution } from './home.js';
 import type { WidgetDefinition } from './widgets.js';
@@ -48,6 +49,15 @@ export interface ToolContext {
   systemContext?: (run?: { agentId: string; tools: readonly string[] }) => Promise<SystemContext>;
   /** Issued by an authenticated interactive surface, never by a model/tool. */
   ownerRequest?: { id: string; text: string; expiresAt: number };
+  /**
+   * Set by an interactive surface: put one question card with choices in front
+   * of the owner for this run, drawn the way `conversation.ask` is (dashboard,
+   * corner chat, Telegram buttons). A tool that needs the owner — the
+   * browser's sign-in, human check, uncertain input and budget moments — asks
+   * here instead of hoping the model will. Absent on unattended runs. Since
+   * host API 1.29.
+   */
+  ask?: (question: { question: string; options: Array<{ label: string; hint?: string | null; recommended?: boolean }>; allowOther: boolean }) => void;
   /** Runtime-resolved session tool grants. Cannot be inherited by a delegate. */
   sessionTools?: readonly string[];
   /** Cooperative cancellation. Check before each external operation. */
@@ -413,8 +423,18 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   sideEffect?: boolean;
   /** Dependent calls in the same model turn must be skipped after a failure. */
   sequential?: boolean;
-  /** A successful call leaves a decision with the owner: no more tools this run. */
-  waitsForOwner?: boolean;
+  /**
+   * A successful call leaves a decision with the owner: no more tools this run.
+   * A function decides per result (since host API 1.29): `browser.act` waits
+   * only when its result carries `needsOwner`.
+   */
+  waitsForOwner?: boolean | ((output: O) => boolean);
+  /**
+   * This tool's calls are bounded by its own budget (the browser's steps and
+   * minutes), so a turn spent only on them does not count against the run's
+   * `maxTurns`. The runtime still caps such turns. Since host API 1.29.
+   */
+  ownBudget?: boolean;
   /** Optional ephemeral image for the next model call; never stored as base64. */
   image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
 }
@@ -803,6 +823,12 @@ export interface PluginManifest {
    * normal case.
    */
   sentinels?: Sentinel[];
+  /**
+   * Routes this plugin provides to the browser runtime (optional; since host
+   * API 1.29): `[{ kind: 'apps', label, health, look, do }]`. The runtime
+   * picks a route per task; see `routes.ts` and docs/browser.md.
+   */
+  routes?: RouteProvider[];
   /**
    * Sources this plugin ships (optional). A source polls the world on a period
    * and originates runs; see `packages/core/src/sources`. A plugin with none —

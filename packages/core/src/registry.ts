@@ -35,6 +35,7 @@ import { compileJsonSchema, type JsonSchemaValidator } from './json-schema.js';
 import { parsePluginAuthor } from './plugin/author.js';
 import { PluginCallRefusal, exportsProblem, readinessOf, type PluginReadiness } from './plugin/requires.js';
 import { satisfiesRange } from './semver.js';
+import { routeProviderProblem, type RegisteredRouteProvider } from './routes.js';
 import type { HostFacts } from './host/build.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
@@ -343,6 +344,10 @@ export class ToolRegistry {
     const author = parsePluginAuthor(manifest.author, `plugin ${manifest.name}: author`);
     if (!author.ok) throw new Error(author.message);
     const checked = this.#checkTools(manifest.name, manifest.tools);
+    for (const route of manifest.routes ?? []) {
+      const problem = routeProviderProblem(route);
+      if (problem !== undefined) throw new Error(`plugin ${manifest.name}: ${problem}`);
+    }
     // View descriptors are the one contribution that leaves this process and is
     // read by code that cannot check it — the browser draws what it is handed.
     // So they are parsed here, at load, and a bad one is a startup error naming
@@ -894,8 +899,33 @@ export class ToolRegistry {
     return this.#tools.get(name)?.tool.sequential === true;
   }
 
-  waitsForOwner(name: string): boolean {
-    return this.#tools.get(name)?.tool.waitsForOwner === true;
+  /** Whether this call's result leaves a decision with the owner; a function decides per result. */
+  waitsForOwner(name: string, output?: unknown): boolean {
+    const waits = this.#tools.get(name)?.tool.waitsForOwner;
+    if (typeof waits === 'function') {
+      try { return waits(output) === true; } catch { return false; }
+    }
+    return waits === true;
+  }
+
+  /** Whether this tool's calls spend their own budget rather than the run's turns. */
+  hasOwnBudget(name: string): boolean {
+    return this.#tools.get(name)?.tool.ownBudget === true;
+  }
+
+  /** Every route the installed plugins provide, each carrying its plugin, in registration order. */
+  routeProviders(): RegisteredRouteProvider[] {
+    return [...this.#manifests.values()].flatMap((manifest) => (manifest.routes ?? []).map((route): RegisteredRouteProvider => ({
+      kind: route.kind,
+      label: route.label,
+      ...(route.platforms ? { platforms: route.platforms } : {}),
+      ...(route.exclusive !== undefined ? { exclusive: route.exclusive } : {}),
+      health: () => route.health(),
+      look: (session) => route.look(session),
+      do: (session, command) => route.do(session, command),
+      ...(route.release ? { release: (session: string) => route.release!(session) } : {}),
+      plugin: manifest.name,
+    })));
   }
 
   /**

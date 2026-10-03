@@ -21,13 +21,14 @@
  * nothing.
  */
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionResult, type HandFrame } from '@buddi/tool-browser';
+import { BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionEvent, type ExtensionResult, type HandFrame } from '@buddi/tool-browser';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
@@ -168,6 +169,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #pending = new Map<string, { resolve: (value: ExtensionResult) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   /** Screencast listeners, by browser session. Frames are never kept here. */
   #frames = new Map<string, (frame: HandFrame) => void>();
+  #events = new Map<string, Set<(event: ExtensionEvent) => void>>();
   /** Other upgrade paths on this server's one listener; see `attachPath`. */
   #routes = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>();
   /** Commands the extension was told to abandon, until it says it has. */
@@ -260,6 +262,19 @@ export class ExtensionEndpoint implements ExtensionBridge {
     if (frame.type === 'auth') return this.#auth(ws, frame, extensionId);
     if (frame.type === 'result') return this.#result(ws, frame);
     if (frame.type === 'frame') return this.#screencast(ws, frame);
+    if (frame.type === 'event') return this.#event(ws, frame);
+  }
+
+  /**
+   * What the owner did in a tab itself: Take over in the in-tab bar. Handed to
+   * that session's listener (the driver, which tells the browser runtime) and
+   * kept nowhere. Only from the paired socket, only a known event name.
+   */
+  #event(ws: WebSocket, frame: Record<string, unknown>): void {
+    if (ws !== this.#socket || frame.name !== 'takeover' || typeof frame.session !== 'string') return;
+    for (const listener of this.#events.get(frame.session) ?? []) {
+      try { listener('takeover'); } catch { /* a listener never breaks the socket */ }
+    }
   }
 
   /**
@@ -575,6 +590,22 @@ export class ExtensionEndpoint implements ExtensionBridge {
       this.#pending.set(id, { resolve, reject, timer });
       socket.send(JSON.stringify({ type: 'command', id, name: command.name, session: command.session, args: command.args, ...(command.owner ? { owner: true } : {}) }));
     });
+  }
+
+  /** The owner's own actions in a session's tab (the bar's Take over). Returns the unsubscribe. */
+  events(session: string, listener: (event: ExtensionEvent) => void): () => void {
+    const list = this.#events.get(session) ?? new Set<(event: ExtensionEvent) => void>();
+    list.add(listener);
+    this.#events.set(session, list);
+    return () => { list.delete(listener); if (list.size === 0) this.#events.delete(session); };
+  }
+
+  /** A pairing record exists on disk, whether or not Chrome is connected now. */
+  paired(): boolean {
+    try {
+      const parsed = JSON.parse(readFileSync(extensionFile(this.#env()), 'utf8')) as { tokenHash?: unknown };
+      return typeof parsed?.tokenHash === 'string' && parsed.tokenHash !== '';
+    } catch { return false; }
   }
 
   /** One hand per session: a second subscription replaces the first. */

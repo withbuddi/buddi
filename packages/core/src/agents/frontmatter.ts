@@ -221,6 +221,13 @@ export const agentFrontmatterSchema = z
     /** Shared skills to load by name, or `<agent>/<skill>` for another agent's own; private skills are always loaded. */
     skills: z.array(z.string().min(1)).optional(),
     maxTurns: z.number().int().positive().optional(),
+    /**
+     * Where this agent may look (docs/browser.md, "Pins"): `own` keeps it in
+     * buddi's own browser, `chrome` prefers the owner's Chrome, `apps` the
+     * owner's apps; absent or `auto` lets the runtime choose. A pin narrows or
+     * orders; it never allows a route the owner's settings forbid.
+     */
+    browser: z.enum(['auto', 'own', 'chrome', 'apps']).optional(),
     /** Reasoning before answering: `on`, `off`, or absent for the model's default. */
     thinking: z.enum(['on', 'off']).optional(),
     /**

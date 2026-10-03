@@ -127,6 +127,7 @@ import {
   type AskSink,
 } from '../surfaces/pending-question.js';
 import { failedTurnReply } from '../surfaces/failure.js';
+import { askInto, touchBrowser } from '../surfaces/browser-cards.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
 import { transcriptBudget } from '../surfaces/context-budget.js';
 import {
@@ -1118,6 +1119,8 @@ export interface WebChatDeps {
   /** Refuse the turn with this sentence — the global pause, in practice. */
   gate?: (() => Promise<string | null>) | undefined;
   log?: ((line: string) => void) | undefined;
+  /** The browser runtime: told when the owner speaks, so budgets renew and a card tap is answered. */
+  browser?: (Pick<import('@buddi/tool-browser').BrowserController, 'status'> & Partial<Pick<import('@buddi/tool-browser').BrowserController, 'touch'>>) | undefined;
 }
 
 /** The queue a group's runs serialise on: the group, not any one of its conversations. */
@@ -2172,8 +2175,14 @@ export class WebChat {
     const ownerCtx = turn.resume
       ? (turn.approval ? approvalResumeContext(deps.ctx, turn.approval, runId) : deps.ctx)
       : ownerRequestContext(deps.ctx, turn.text, runId);
-    const baseCtx = turn.delegated ? { ...ownerCtx, delegationDepth: turn.delegated.depth } : ownerCtx;
+    // A tool that needs the owner (the browser's four moments, the Stop's
+    // Resume) asks with one card, drawn like any question; delegates never ask.
+    const baseCtx = turn.delegated ? { ...ownerCtx, delegationDepth: turn.delegated.depth } : { ...ownerCtx, ask: askInto(ask) };
     const delegated = turn.delegated !== undefined;
+    // The owner spoke here: the browser's budgets renew and a waiting card is answered.
+    if (!delegated && !turn.resume && !turn.opening) {
+      await touchBrowser(deps.browser, { conversationId, text: turn.offer?.label ?? turn.text }, this.#log);
+    }
     const options: RunAgentOptions = {
       // In a room, delegation is the ask tool and nothing else: an agent
       // that could delegate would reach a non-member, off budget, off record.

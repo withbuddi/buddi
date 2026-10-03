@@ -92,7 +92,7 @@ export type Command =
   | { kind: 'migrate' }
   /** `--yes`: ask nothing, take every default, skip what needs typing. */
   | { kind: 'init'; yes: boolean }
-  | { kind: 'doctor' }
+  | { kind: 'doctor'; browser?: boolean }
   /**
    * `--no-backup`: skip the archive this command otherwise takes before it
    * migrates. There is no `--yes`: the command asks nothing in the first place.
@@ -361,7 +361,8 @@ export function parseArgs(argv: string[]): Command {
     return { kind: 'status' };
   }
   if (head === 'doctor') {
-    if (rest.length > 0) throw new UsageError(`buddi doctor takes no arguments (got ${rest[0]})`);
+    if (rest.length === 1 && rest[0] === 'browser') return { kind: 'doctor', browser: true };
+    if (rest.length > 0) throw new UsageError(`buddi doctor takes no arguments but browser (got ${rest[0]})`);
     return { kind: 'doctor' };
   }
 

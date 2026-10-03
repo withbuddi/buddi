@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-10-02
+updated: 2026-10-03
 ---
 
 # The buddi command line
@@ -1487,7 +1487,7 @@ claude mcp add buddi -- buddi mcp
 
 Keeping buddi running: the service, upgrades, backups, secrets and the work queue.
 
-- [`buddi doctor`](#buddi-doctor): Check every moving part and say what is wrong.
+- [`buddi doctor`](#buddi-doctor): Check every moving part and say what is wrong. `buddi doctor browser`: where agents may look and the last week of browser stops by cause.
 - [`buddi upgrade`](#buddi-upgrade): Back up, move to the new version, migrate, and restart.
 - [`buddi version`](#buddi-version): Print the version, with the commit in a source checkout.
 - [`buddi service status`](#buddi-service-status): Say whether the background service is running.
@@ -1525,7 +1525,13 @@ Keeping buddi running: the service, upgrades, backups, secrets and the work queu
 
 ### buddi doctor
 
-Check every moving part and say what is wrong.
+Check every moving part and say what is wrong. `buddi doctor browser`: where agents may look and the last week of browser stops by cause.
+
+```sh
+buddi doctor [browser]
+```
+
+**Example**
 
 ```sh
 buddi doctor

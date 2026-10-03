@@ -709,8 +709,8 @@ export const COMMANDS: readonly CommandEntry[] = [
   {
     name: 'doctor',
     group: 'Operate',
-    summary: 'Check every moving part and say what is wrong.',
-    usage: 'buddi doctor',
+    summary: 'Check every moving part and say what is wrong. `buddi doctor browser`: where agents may look and the last week of browser stops by cause.',
+    usage: 'buddi doctor [browser]',
     flags: [],
     example: 'buddi doctor',
     exitCodes: [{ code: 1, meaning: 'A critical check failed. Warnings alone exit 0.' }],

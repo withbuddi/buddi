@@ -202,8 +202,22 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     expect(agentTabId).not.toBe(ownerTabId);
     await activate(agentTabId);
     page = await driver.observe();
-    await expect(act({ action: 'click', observation: page.id, target: { ref: page.targets!.find((target) => target.role === 'link')!.ref } }))
-      .rejects.toThrow(/looking at this tab/);
+    // Nothing is typed while they look: the extension waits, shows its bar in
+    // the tab after three seconds, and the owner's Take over there ends it.
+    const clicking = act({ action: 'click', observation: page.id, target: { ref: page.targets!.find((target) => target.role === 'link')!.ref } });
+    void clicking.catch(() => undefined);
+    const barShown = () => worker.evaluate(async (id) => {
+      const api = (globalThis as any).chrome;
+      const [frame] = await api.scripting.executeScript({ target: { tabId: id }, func: () => (globalThis as any).document.getElementById('buddi-working-bar') !== null });
+      return frame?.result === true;
+    }, agentTabId);
+    await vi.waitFor(async () => expect(await barShown()).toBe(true), { timeout: 10_000, interval: 250 });
+    await worker.evaluate(async (id) => {
+      const api = (globalThis as any).chrome;
+      await api.scripting.executeScript({ target: { tabId: id }, func: () => { (globalThis as any).__buddiBar = { choice: 'takeover' }; } });
+    }, agentTabId);
+    await expect(clicking).rejects.toThrow(/took over this tab/);
+    expect(await barShown()).toBe(false);
     await activate(ownerTabId);
 
     // Click by ref, then the same link by role and name.

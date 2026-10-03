@@ -11,7 +11,7 @@ import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api
 import { fmtClock, fmtTime } from '../format';
 import { chatRoute } from '../routes';
 import { InstallProgress } from './parts/InstallProgress';
-import { Avatar, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
+import { Avatar, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Segment, Sheet, Spacer, Stack, Switch, Toolbar, useAsync } from '../ui';
 import { RemoteHand } from './RemoteHand';
 import { useThisMachine } from '../useThisMachine';
 
@@ -33,10 +33,11 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
-  // Off macOS a stored "Use my apps" is the agents' own browser, which is how the host runs it.
-  const settings = data.settings && !macOS && data.settings.mode === 'computer' ? { ...data.settings, mode: 'playwright' as const } : data.settings;
-  const mode = settings?.mode ?? (!macOS && data.mode === 'computer' ? 'playwright' : data.mode);
-  const computer = mode === 'computer';
+  // Where agents may look: permissions, not a mode. The kit-driven redesign of this page is the next step;
+  // until then the three routes are switches here (docs/browser.md).
+  const settings = data.settings;
+  const computer = macOS && settings?.yourApps !== undefined && settings.yourApps !== 'off';
+  const chromeRoute = data.routes?.find((route) => route.kind === 'chrome');
   const sessions = data.sessions?.length ? data.sessions : data.session ? [data] : [];
   const active = sessions.length > 0 || data.busy;
   const run = async (action: () => Promise<unknown>) => {
@@ -44,20 +45,17 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
     try { await action(); } catch (error) { setFailure(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); reload(); }
   };
-  const save = (next: ControlSettings) => void run(() => api.browserSettings(next));
+  const save = (next: Partial<ControlSettings>) => void run(() => api.browserSettings(next));
   const perms = data.permissions;
   // The agents' own browser: none installed, or installed but unable to start, is not ready.
-  const own = mode === 'playwright' ? data.browser : undefined;
+  const own = data.browser;
   const installing = own?.install?.state === 'running';
   const noBrowser = own?.engine === 'none';
   // An install without the native helper (an older npm release): "Use my apps" says so on its card, once.
   const helperMissing = macOS && data.helper?.present === false;
   const helperLine = helperMissing ? data.helper?.message ?? 'The computer helper is missing from this install. Update buddi.' : undefined;
   const ready = !!data.enabled && !noBrowser && !own?.problem && !(computer && helperMissing) && (!computer || !perms?.supported || (perms.accessibility && perms.screenRecording));
-  const readyLine = computer ? 'Ready. Agents can use your computer within the apps you allow below.'
-    : mode === 'extension' ? 'Ready. Agents work in your Chrome, in background tabs, through the buddi extension.'
-    : own?.engine === 'chrome' ? 'Ready. Agents work in their own browser, a separate Google Chrome profile. Your apps are never touched.'
-    : 'Ready. Agents work in their own browser. Your apps are never touched.';
+  const readyLine = 'Ready. Agents look in their own browser, in the background; your Chrome only for sites that need your sign-in, when you allow it.';
 
   return (
     <Stack gap="lg">
@@ -126,7 +124,7 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
         title="Who is driving"
         panel
         actions={sessions.length > 0 ? (
-          <Button variant="danger" size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>{computer ? 'Stop computer control' : 'Stop all browsers'}</Button>
+          <Button variant="danger" size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>Stop agents’ browsing</Button>
         ) : undefined}
       >
         {sessions.length === 0 ? (
@@ -138,7 +136,7 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
                 <Avatar id={s.session!.agentId} name={s.session!.agentId} size="sm" />
                 <span className="ui-list-main">
                   <span className="ui-list-title">{s.session!.task}</span>
-                  <span className="ui-list-sub">{s.session!.agentId}, {s.busy ? 'working' : s.state}, {s.session!.steps} of {s.session!.maxSteps} steps</span>
+                  <span className="ui-list-sub">{s.session!.agentId}, {s.needsOwner ? 'waiting for you' : s.busy ? 'working' : s.state}{s.route === 'chrome' ? ', in your Chrome' : s.route === 'apps' ? ', in your apps' : ''}</span>
                 </span>
                 <span className="ui-list-side">Open the Canvas</span>
               </a>
@@ -149,43 +147,47 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
 
       {settings ? (
         <>
-          <Section title="How agents get a screen" panel>
+          <Section title="Where agents may look" panel>
             <Stack divided>
-            <div className="mode-choice" role="radiogroup" aria-label="Control mode">
+              <div className="ui-list-row">
+                <span className="ui-list-main">
+                  <span className="ui-list-title">Their own browser</span>
+                  <span className="ui-list-sub">Always on. A separate profile, in the background; you watch and take over on the conversation’s Canvas.</span>
+                </span>
+                <Switch checked label="Their own browser" disabled onChange={() => undefined} />
+              </div>
+              <div className="ui-list-row">
+                <span className="ui-list-main">
+                  <span className="ui-list-title">Your Chrome</span>
+                  <span className="ui-list-sub">For sites that need your sign-in, in background tabs, through the buddi extension.{chromeRoute?.message ? ` ${chromeRoute.message}` : ''}</span>
+                </span>
+                <Switch checked={settings.yourChrome} label="Your Chrome" disabled={busy || !data.enabled} onChange={(on) => save({ yourChrome: on })} />
+              </div>
               {macOS ? (
-                <ModeOption
-                  current={settings.mode} value="computer" disabled={busy || active || !data.enabled}
-                  title="Use my apps"
-                  health={helperLine}
-                  body="Agents work in your own windows, signed in as you, in the browser profile you choose below. One agent at a time. Releasing control leaves everything open."
-                  onPick={() => save({ ...settings, mode: 'computer' })}
-                />
+                <div className="ui-list-row">
+                  <span className="ui-list-main">
+                    <span className="ui-list-title">Your apps</span>
+                    <span className="ui-list-sub">{helperLine ?? 'Only for app jobs (“open Numbers”). Off, ask for each app, or on for the apps below.'}</span>
+                  </span>
+                  <Segment label="Your apps" value={settings.yourApps} options={[{ value: 'off', label: 'Off' }, { value: 'ask', label: 'Ask' }, { value: 'on', label: 'On' }]} onChange={(value) => save({ yourApps: value })} />
+                </div>
               ) : null}
-              <ModeOption
-                current={settings.mode} value="playwright" disabled={busy || active || !data.enabled}
-                title="Give agents their own browser"
-                body="A separate browser profile with its own tabs, one per conversation. Your apps are never touched."
-                onPick={() => save({ ...settings, mode: 'playwright' })}
-              />
-              <ModeOption
-                current={settings.mode} value="extension" disabled={busy || active || !data.enabled}
-                title="Your browser"
-                body="Uses the Chrome you are signed in to, in background tabs, through the buddi extension."
-                onPick={() => save({ ...settings, mode: 'extension' })}
-              />
-            </div>
-            {!macOS ? <p className="muted">Using your own apps is macOS-only.</p> : null}
-            {active ? <p className="muted">Finish or stop the current session before changing this.</p> : null}
-            {settings.mode === 'extension' ? <ExtensionPairing busy={busy} timezone={timezone} /> : null}
+              {data.stop ? (
+                <Notice tone="warning" title="Browsing is stopped">
+                  Since {fmtTime(data.stop.at, timezone ?? 'UTC')}{data.stop.until ? `, until ${fmtTime(data.stop.until, timezone ?? 'UTC')}` : ', until you resume it'}.{' '}
+                  <Button size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('resume'))}>Resume</Button>
+                </Notice>
+              ) : null}
+              {settings.yourChrome ? <ExtensionPairing busy={busy} timezone={timezone} /> : null}
             </Stack>
           </Section>
 
           {macOS ? <Section title="Apps agents may use" panel>
             <Stack>
-              {settings.mode !== 'computer' ? (
-                <p className="muted">Only used by “Use my apps”. The list is kept for when you switch back.</p>
+              {settings.yourApps === 'off' ? (
+                <p className="muted">Only used when your apps are on. The list is kept for when you turn them on.</p>
               ) : null}
-              <AppList settings={settings} disabled={busy || active || !data.enabled} onChange={save} onAdd={() => setPicking(true)} />
+              <AppList settings={settings} disabled={busy || !data.enabled} onChange={save} onAdd={() => setPicking(true)} />
               <Details summary="Details">
                 <div className="ui-prose muted">
                   <p>Agents see what is on screen in these apps, and what they see goes to the agent’s model provider. Allow only apps you want operated.</p>
@@ -390,20 +392,6 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
   );
 }
 
-function ModeOption({ current, value, title, body, health, disabled, onPick }: { current: string; value: string; title: string; body: string; health?: string; disabled: boolean; onPick: () => void }): JSX.Element {
-  const on = current === value;
-  return (
-    <button type="button" role="radio" aria-checked={on} className="mode-option" disabled={disabled} onClick={() => { if (!on) onPick(); }}>
-      <span className="mode-option-dot" aria-hidden="true" />
-      <span className="mode-option-text">
-        <span className="mode-option-title">{title}</span>
-        <span className="mode-option-body">{body}</span>
-        {health ? <span className="mode-option-health" role="status">{health}</span> : null}
-      </span>
-    </button>
-  );
-}
-
 function AppList({ settings, disabled, onChange, onAdd }: { settings: ControlSettings; disabled: boolean; onChange: (next: ControlSettings) => void; onAdd: () => void }): JSX.Element {
   const apps = useAsync(() => api.installedApps(), []);
   const nameOf = (id: string): string => apps.data?.apps.find((a) => a.id === id)?.name ?? id;
@@ -432,7 +420,7 @@ function AppList({ settings, disabled, onChange, onAdd }: { settings: ControlSet
         <Button variant="accent" disabled={disabled} onClick={onAdd}>Add an app</Button>
         <span className="muted">The app marked as browser is the one agents open websites in.</span>
       </Toolbar>
-      {settings.mode === 'computer' && CHROMIUM.includes(settings.browserApp) ? <ProfileChoice settings={settings} disabled={disabled} onChange={onChange} /> : null}
+      {settings.yourApps !== 'off' && CHROMIUM.includes(settings.browserApp) ? <ProfileChoice settings={settings} disabled={disabled} onChange={onChange} /> : null}
     </>
   );
 }
@@ -589,8 +577,11 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
     setBusy(true);
     setFailure(null);
     try {
-      if (data.session) await api.browserControl('release', data.session.id);
-      await api.browserSettings({ ...data.settings, mode: 'playwright' });
+      // Not a setting any more: this conversation is pinned to buddi's own browser.
+      if (data.session) {
+        await api.browserPin(data.session.conversationId, 'own');
+        await api.browserControl('release', data.session.id);
+      }
       setOffline(false);
       setDriving(null);
       setHandNote('Switched to buddi\u2019s browser. Send the agent a message and it opens the page there.');

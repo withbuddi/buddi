@@ -763,6 +763,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         now: deps.now,
         get timezone() { return deps.timezone; },
         log,
+        browser: deps.browser ?? browserHost(deps.env ?? process.env),
         ...deps.chat,
       })
     : undefined;
@@ -1852,6 +1853,11 @@ export function createWebApp(deps: WebServerDeps): Server {
         case '/api/browser':
           return sendJson(res, 200, q.has('conversationId') && q.has('agentId')
             ? browser.status({ agentId: q.get('agentId')!, conversationId: q.get('conversationId')! }) : browser.status());
+        case '/api/browser/telemetry': {
+          // Stops by cause, cards and routes over the last week: how flakiness is seen to fall.
+          const summary = (browser as { telemetrySummary?: (days?: number) => unknown }).telemetrySummary?.(Number(q.get('days') ?? '7') || 7);
+          return sendJson(res, 200, summary ?? { days: 7, tasks: 0, stops: 0, cards: 0, byCause: [], routes: {}, stopsPerTask: 0 });
+        }
         case '/api/browser/screenshot': {
           const expectedSession = url.searchParams.get('sessionId');
           const current = browser.status(expectedSession !== null ? { sessionId: expectedSession } : undefined);
@@ -2836,9 +2842,32 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
       }
     }
+    /*
+     * Pin one conversation to a route (the chip under the composer,
+     * `/use browser:chrome`), or clear it with `auto`. A pin narrows; it never
+     * allows a route the owner's switches forbid.
+     */
+    if (path === '/api/browser/pin') {
+      const body = await readJsonBody(req) as { conversationId?: unknown; route?: unknown } | null;
+      if (typeof body?.conversationId !== 'string' || typeof body.route !== 'string') return sendJson(res, 400, { error: 'Expected {conversationId: string, route: auto|own|chrome|apps}' });
+      if (!browser.pin) return sendJson(res, 409, { error: 'This host cannot pin a route.' });
+      try { return sendJson(res, 200, await browser.pin(body.conversationId, body.route)); }
+      catch (error) { return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) }); }
+    }
+    /*
+     * A tap on a browser card (Look, Keep going, Take over, Use my Chrome,
+     * Resume) from a page that draws its own buttons: the same as the owner
+     * sending the label in the chat, without a message.
+     */
+    if (path === '/api/browser/card') {
+      const body = await readJsonBody(req) as { conversationId?: unknown; answer?: unknown } | null;
+      if (typeof body?.conversationId !== 'string' || typeof body.answer !== 'string' || body.answer.length > 80) return sendJson(res, 400, { error: 'Expected {conversationId: string, answer: string}' });
+      const answered = await browser.touch?.({ conversationId: body.conversationId, text: body.answer });
+      return sendJson(res, 200, { ...(answered && 'answered' in answered ? answered : {}), status: browser.status({ conversationId: body.conversationId }) });
+    }
     const control = /^\/api\/browser\/(stop|takeover|resume|release)$/.exec(path);
     if (control) {
-      const body = await readJsonBody(req) as { sessionId?: unknown } | null;
+      const body = await readJsonBody(req) as { sessionId?: unknown; forever?: unknown } | null;
       if (body?.sessionId !== undefined && typeof body.sessionId !== 'string') return sendJson(res, 400, { error: 'sessionId must be a string' });
       const action = control[1] as 'stop' | 'takeover' | 'resume' | 'release';
       const sessionId = body?.sessionId as string | undefined;
@@ -2848,7 +2877,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         // still holding the socket is told rather than left clicking on a
         // frozen picture.
         if (action !== 'takeover') await hand.close(action === 'stop' ? undefined : sessionId, action === 'resume' ? 'You gave the screen back.' : 'That session was released.');
-        const status = await browser.control(action, sessionId);
+        // Stop agents' browsing expires (an hour by default); `forever` is "until I say".
+        const status = await browser.control(action, sessionId, action === 'stop' && body?.forever === true ? { forever: true } : undefined);
         // Whether this screen can be driven from here at all. The dashboard
         // shows the mode's own sentence when it cannot.
         const taken = sessionId ?? status.session?.id;
@@ -2859,7 +2889,7 @@ export function createWebApp(deps: WebServerDeps): Server {
          * as that, with a reason the dashboard offers its ways out on, rather
          * than the mode's "use this conversation's host tab".
          */
-        if (offer && offer.supported && !offer.hand && status.mode === 'extension' && !extension.connected()) {
+        if (offer && offer.supported && !offer.hand && (status.route === 'chrome' || status.mode === 'extension') && !extension.connected()) {
           return sendJson(res, 200, { ...status, hand: false, handReason: 'browser-offline', handMessage: 'Your browser isn’t connected.' });
         }
         return sendJson(res, 200, offer

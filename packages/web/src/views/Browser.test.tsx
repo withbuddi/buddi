@@ -5,11 +5,11 @@ import { api, type BrowserStatus } from '../api';
 import { useAsync } from '../ui';
 import { Browser, BrowserPanel, installTarget, olderExtension, STORE_URL } from './Browser';
 
-vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), browserInstall: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
+vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), computerPermissions: vi.fn(), browserInstall: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
 const status: BrowserStatus = { state: 'running', enabled: true, busy: false, hasScreenshot: true,
   session: { id: 's1', agentId: 'concierge', conversationId: 'c1', requestId: 'r1', task: 'Book a fixture appointment', expiresAt: new Date().toISOString(), steps: 3, maxSteps: 80 },
   page: { id: 'o1', url: '/fixture', title: 'Appointment', capturedAt: new Date().toISOString(), tabs: [] } };
-const settings = { mode: 'computer' as const, browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'] };
+const settings = { version: 2 as const, yourChrome: false, yourApps: 'on' as const, browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto' as const, stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false };
 const CHROME_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 const FIREFOX_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:131.0) Gecko/20100101 Firefox/131.0';
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
@@ -33,7 +33,7 @@ function Panel(): JSX.Element {
 
 describe('computer & browser settings', () => {
   it('says plainly when no browser is installed, installs one on click, and says when it runs headless', async () => {
-    const own = { ...status, mode: 'playwright' as const, session: undefined, settings: { ...settings, mode: 'playwright' as const } };
+    const own = { ...status, mode: 'playwright' as const, session: undefined, settings: { ...settings, yourApps: 'off' as const } };
     vi.mocked(api.browser).mockResolvedValue({ ...own, browser: { engine: 'none', headless: false } });
     vi.mocked(api.browserInstall).mockResolvedValue({ ...own, browser: { engine: 'none', headless: false, install: { state: 'running' } } });
     const { unmount } = render(<Browser />);
@@ -47,44 +47,45 @@ describe('computer & browser settings', () => {
     expect(await screen.findByText(/runs headless on this machine/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Install Chromium' })).not.toBeInTheDocument();
   });
-  it('shows permissions as a checklist, requests them only on click, and switches mode with one choice', async () => {
+  it('shows permissions as a checklist, requests them only on click, and turns routes on and off as switches', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings, permissions: { supported: true, accessibility: false, screenRecording: true } });
     render(<Browser />);
     expect(await screen.findByText('Accessibility')).toBeInTheDocument();
     expect(screen.getAllByText('Needed')).toHaveLength(1);
     expect(api.computerPermissions).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('radio', { name: /Give agents their own browser/ }));
-    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ ...settings, mode: 'playwright' }));
+    expect(screen.queryByRole('radiogroup', { name: 'Control mode' })).not.toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Their own browser' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('switch', { name: 'Your Chrome' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourChrome: true }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Off' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourApps: 'off' }));
     fireEvent.click(screen.getByRole('button', { name: 'Request macOS permissions' }));
     await waitFor(() => expect(api.computerPermissions).toHaveBeenCalledWith(true));
   });
-  it('says a missing computer helper once, as the “Use my apps” health line, with no banner and no permission checklist', async () => {
+  it('says a missing computer helper once, on the Your apps row, with no banner and no permission checklist', async () => {
     const message = 'The computer helper is missing from this install. Update buddi (npm install -g @withbuddi/buddi), or in a checkout run pnpm --filter @buddi/tool-browser build.';
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings, permissions: { supported: false, accessibility: false, screenRecording: false, message }, helper: { present: false, message } });
     render(<Browser />);
-    const card = await screen.findByRole('radio', { name: /Use my apps/ });
-    expect(card).toHaveTextContent(message);
+    expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.getAllByText(message)).toHaveLength(1);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('Accessibility')).not.toBeInTheDocument();
     expect(screen.queryByText(/^Ready\./)).not.toBeInTheDocument();
-    expect(screen.getByText(/cannot run on this install/)).toBeInTheDocument();
   });
-  it('carries no health line when the helper is there, and none in another mode either', async () => {
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'playwright', session: undefined, settings: { ...settings, mode: 'playwright' }, browser: { engine: 'chromium', headless: false }, helper: { present: true } });
-    render(<Browser />);
-    const card = await screen.findByRole('radio', { name: /Use my apps/ });
-    expect(card.querySelector('.mode-option-health')).toBeNull();
-  });
-  it('off macOS, offers no computer control and shows a stored choice of it as the agents\' own browser', async () => {
+  it('off macOS, offers no apps route', async () => {
     vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'linux' });
-    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings, permissions: { supported: false, accessibility: false, screenRecording: false } });
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'playwright', session: undefined, settings: { ...settings, yourApps: 'off' }, browser: { engine: 'chromium', headless: true } });
     render(<Browser />);
-    expect(await screen.findByText('Using your own apps is macOS-only.')).toBeInTheDocument();
-    expect(screen.queryByRole('radio', { name: /Use my apps/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Give agents their own browser/ })).toBeChecked();
-    expect(screen.getByText(/Agents work in their own browser/)).toBeInTheDocument();
+    expect(await screen.findByText('Their own browser')).toBeInTheDocument();
+    expect(screen.queryByText('Your apps')).not.toBeInTheDocument();
     expect(screen.queryByText('Apps agents may use')).not.toBeInTheDocument();
+  });
+  it('shows a Stop that holds, with its expiry and Resume', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...status, session: undefined, settings, stop: { at: '2026-10-03T10:00:00.000Z', until: '2026-10-03T11:00:00.000Z' } });
+    render(<Browser />);
+    expect(await screen.findByText('Browsing is stopped')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume'));
   });
   it('adds an app from the installed list by name, and disables changes during a session', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings });
@@ -92,7 +93,7 @@ describe('computer & browser settings', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Add an app' }));
     fireEvent.change(await screen.findByLabelText('Search apps'), { target: { value: 'text' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Allow' }));
-    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ ...settings, allowedApps: ['com.google.Chrome', 'com.apple.TextEdit'] }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith(expect.objectContaining({ allowedApps: ['com.google.Chrome', 'com.apple.TextEdit'] })));
   });
   it('lets the owner pick which Chrome profile websites open in', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings });
@@ -100,35 +101,35 @@ describe('computer & browser settings', () => {
     const select = await screen.findByLabelText('Browser profile');
     expect(await screen.findByRole('option', { name: 'Work (Profile 2)' })).toBeInTheDocument();
     fireEvent.change(select, { target: { value: 'Profile 2' } });
-    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ ...settings, browserProfile: 'Profile 2' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith(expect.objectContaining({ browserProfile: 'Profile 2' })));
   });
-  it('says who is driving and links to that conversation, with settings locked meanwhile', async () => {
+  it('says who is looking and links to that conversation; settings stay open meanwhile', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', settings });
     render(<Browser />);
     expect(await screen.findByText('Book a fixture appointment')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Book a fixture appointment/ })).toHaveAttribute('href', '#/chat/concierge/c1');
-    expect(screen.getByRole('button', { name: 'Add an app' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Stop computer control' }));
+    expect(screen.queryByText(/of 80 steps/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add an app' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop agents’ browsing' }));
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('stop'));
   });
 });
 
 describe('your own browser', () => {
-  const chosen = { ...settings, mode: 'extension' as const };
-  it('offers the third mode and shows pairing only once it is chosen', async () => {
+  const chosen = { ...settings, yourChrome: true };
+  it('shows pairing only once Your Chrome is on', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings });
     render(<Browser />);
+    expect(await screen.findByText('Your Chrome')).toBeInTheDocument();
     expect(screen.queryByText(/Load unpacked/)).not.toBeInTheDocument();
-    // Saving the mode is what makes the page reload; from then on the host
-    // answers with the new mode, which is when the pairing block appears.
     vi.mocked(api.browserSettings).mockImplementation(async (next) => {
-      vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: next });
-      return { ...status, mode: 'extension', session: undefined, settings: next };
+      vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: { ...settings, ...next } });
+      return { ...status, mode: 'extension', session: undefined, settings: { ...settings, ...next } };
     });
-    fireEvent.click(await screen.findByRole('radio', { name: /Your browser/ }));
-    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith(chosen));
+    fireEvent.click(screen.getByRole('switch', { name: 'Your Chrome' }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourChrome: true }));
     expect(await screen.findByText(/Load unpacked/)).toBeInTheDocument();
-    expect(await screen.findByRole('radio', { name: /Your browser/ })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('switch', { name: 'Your Chrome' })).toBeChecked();
   });
   it('leads with Add to Chrome, the store opening in a new tab, the unpacked folder under Developer install', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
@@ -201,7 +202,7 @@ describe('your own browser', () => {
  * function that answers when the extension is there and rejects when it is not.
  */
 describe('finding the extension from the dashboard', () => {
-  const chosen = { ...settings, mode: 'extension' as const };
+  const chosen = { ...settings, yourChrome: true };
   const EXTENSION_IDS = ['kmbckpnnjfggeffkkbmkggojnolkdokb', 'pbfpjefkiijjgefblpnlnlpmeaddfbah'];
   const answers = (answer: unknown) => {
     const sendMessage = vi.fn(async (id: string, message: unknown) => {

@@ -105,7 +105,7 @@ function flush(open: WebSocket): void {
 
 // Screencast frames are not answers to anything: they arrive while the owner
 // is driving and go straight out, outside the command/result pairing.
-const commands = new BrowserCommands(chrome, { onFrame: send });
+const commands = new BrowserCommands(chrome, { onFrame: send, onEvent: send });
 let attempt = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let silence: ReturnType<typeof setTimeout> | undefined;

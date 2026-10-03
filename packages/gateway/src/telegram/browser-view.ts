@@ -6,12 +6,11 @@
  * was no way in from the phone to stop it or take the wheel. Both halves live
  * here, and both are presentation over facts the gateway already holds:
  *
- *  - **A photo per step.** After every `browser.act` the surface asks the host
- *    controller for the observation it just recorded and sends that screenshot
- *    with a caption — the page's title, the action in words, how far through
- *    the step budget it is, and why it failed when it did. One photo per step,
- *    and none at all when the page did not change, which is what an `observe`
- *    of a page already sent would be.
+ *  - **One photo when the owner is needed.** When a `browser.act` result
+ *    parks the run on a card (sign-in, human check, an uncertain input, the
+ *    budget), the surface sends that page's screenshot with the card's
+ *    question; the card itself follows with its buttons. No photo per step
+ *    and no step counts (docs/browser.md).
  *  - **A "Take over" button** under it, whose URL is this conversation's
  *    Browser tab on the dashboard.
  *
@@ -128,8 +127,6 @@ export function stepCaption(input: {
   title?: string;
   url?: string;
   call: StepCall;
-  steps: number;
-  maxSteps: number;
   error?: string;
   loopback: boolean;
 }): string {
@@ -137,8 +134,6 @@ export function stepCaption(input: {
   return [
     where.slice(0, MAX_TITLE),
     actionWords(input.call),
-    // The budget is said only when it is nearly spent: "1 of 80" is noise on a phone.
-    input.maxSteps - input.steps <= 5 ? `Step ${input.steps} of ${input.maxSteps}` : '',
     input.error ? `It failed: ${input.error.slice(0, MAX_REASON)}` : '',
     input.loopback ? LOOPBACK_CAPTION : '',
   ].filter(Boolean).join('\n');
@@ -208,6 +203,9 @@ export class BrowserPhotos {
     if (!session || session.agentId !== agentId || session.conversationId !== conversationId) return;
     const page = status.page;
     if (!page) return;
+    // One photo, at the moment the run needs the owner (docs/browser.md):
+    // the phone gets the page with the card, not a picture per step.
+    if (!status.needsOwner) return;
     // The same page as the last photo: an observe of what the owner has
     // already been shown is not a step worth a second picture.
     if (this.#sent.get(conversationId) === page.id) return;
@@ -222,17 +220,18 @@ export class BrowserPhotos {
     // is worse than a step the owner has to read about in words.
     this.#sent.set(conversationId, page.id);
     await this.deps.api.sendPhoto(input.chatId, bytes, {
-      caption: stepCaption({
-        ...(page.title ? { title: page.title } : {}),
-        url: page.url,
-        call: this.#calls.get(conversationId) ?? { ...(status.lastAction ? { action: status.lastAction } : {}) },
-        steps: session.steps,
-        maxSteps: session.maxSteps,
-        ...(input.error ? { error: input.error } : {}),
-        loopback: link.loopback,
-      }),
+      caption: [
+        status.needsOwner.question,
+        stepCaption({
+          ...(page.title ? { title: page.title } : {}),
+          url: page.url,
+          call: this.#calls.get(conversationId) ?? { ...(status.lastAction ? { action: status.lastAction } : {}) },
+          ...(input.error ? { error: input.error } : {}),
+          loopback: link.loopback,
+        }),
+      ].join('\n'),
       // The extension captures PNG through the debugger; the other two encode JPEG.
-      ...(status.mode === 'extension'
+      ...(status.route === 'chrome'
         ? { contentType: 'image/png', filename: 'screen.png' }
         : { contentType: 'image/jpeg', filename: 'screen.jpg' }),
       replyMarkup: takeOverKeyboard(link.url),
@@ -262,17 +261,15 @@ export function browserStatusText(status: BrowserStatus): string {
   if (!status.enabled) {
     return 'The host browser is unavailable. Start buddi serve on a machine with a desktop session.';
   }
-  const computer = status.mode === 'computer';
-  const what = computer ? 'Computer control' : status.mode === 'extension' ? 'Your own Chrome' : 'Browser control';
-  const lines = [`${what} — ${status.state}${status.busy ? ', working' : ''}.`];
-  if (status.state === 'stopped') {
-    lines.push('Access is stopped: no agent can drive the screen until you resume it. Send /browser resume.');
+  const where = status.route === 'chrome' ? ' in your Chrome' : status.route === 'apps' ? ' in your apps' : '';
+  const lines: string[] = [];
+  if (status.stop) {
+    lines.push(`Agents' browsing is stopped${status.stop.until ? ` until ${status.stop.until.slice(11, 16)} UTC` : ' until you say'}. Send /browser resume to let them look again.`);
   }
   lines.push(status.session
-    ? `${status.session.agentId} is driving, ${status.session.steps} of ${status.session.maxSteps} steps, on the task “${status.session.task.slice(0, 200)}”.`
-    : computer
-      ? 'No agent is driving. Ask an agent granted browser.* to open a website or an allowed native app.'
-      : 'No agent is driving. Ask an agent granted browser.* to open a website.');
+    ? `${status.session.agentId} is looking at a page${where}${status.state === 'paused' ? ' (you have it)' : ''}, for “${status.session.task.slice(0, 200)}”.`
+    : 'No agent is looking at a page. Ask an agent granted browser.* to look at a website.');
+  if (status.needsOwner) lines.push(`Waiting for you: ${status.needsOwner.question}`);
   if (status.page?.url) lines.push(`Last seen: ${status.page.url}`);
   if (status.message) lines.push(status.message);
   lines.push(BROWSER_COMMAND_HELP);
@@ -281,19 +278,13 @@ export function browserStatusText(status: BrowserStatus): string {
 
 /** What each control says once it has happened. The dashboard's own words. */
 export function browserControlText(word: 'stop' | 'resume' | 'release', status: BrowserStatus): string {
-  const computer = status.mode === 'computer';
   if (word === 'stop') {
-    return `${computer
-      ? 'Computer control stopped: native input is interrupted and access is revoked.'
-      : 'All browsers stopped: every session is closed and access is revoked until you resume.'
-    } Actions already submitted cannot be undone. Send /browser resume to give it back.`;
+    return `Agents' browsing stopped${status.stop?.until ? ` until ${status.stop.until.slice(11, 16)} UTC` : ''}: every page is closed. Actions already submitted cannot be undone. Send /browser resume to let them look again.`;
   }
   if (word === 'resume') {
-    return `Access resumed. ${status.message ?? 'Ready. Send a new message to the agent to continue.'}`;
+    return 'Agents may look at pages again.';
   }
-  return computer
-    ? 'Control released. This conversation no longer drives the screen; your apps are left open.'
-    : 'Released. This conversation’s tabs are closed and it no longer drives the browser.';
+  return 'Released: the page is closed and your apps are left open.';
 }
 
 /**

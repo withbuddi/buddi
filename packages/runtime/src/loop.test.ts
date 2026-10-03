@@ -334,6 +334,60 @@ describe('runAgent', () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it('a tool whose result needs the owner (waitsForOwner as a function) ends the run on that result only', async () => {
+    const db = new FakeDb();
+    const execute = vi.fn(async () => 'done');
+    const registry = new ToolRegistry();
+    let card = false;
+    registry.register({ name: 'page', version: '1', schema: 'page', migrationsDir: '', tools: [
+      { name: 'page.act', description: 'act', tier: 'auto', waitsForOwner: (output: { needsOwner?: unknown }) => output.needsOwner !== undefined, input: z.object({}),
+        execute: async () => (card ? { needsOwner: { kind: 'sign-in' } } : { completed: true }) },
+      { name: 'demo.double', description: 'work', tier: 'auto', input: z.object({}), execute },
+    ] });
+    const call = (id: string, name: string) => ({ type: 'tool_use' as const, id, name, input: {} });
+    const pageAgent = { ...agent, tools: ['page.act', 'demo.double'] };
+    const plain = scriptedProvider([
+      { content: [call('a', 'page.act'), call('b', 'demo.double')], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'Done' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    await runAgent({ agent: pageAgent, provider: plain, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'Look' });
+    expect(execute).toHaveBeenCalledTimes(1);
+    card = true;
+    const parked = scriptedProvider([
+      { content: [call('c', 'page.act'), call('d', 'demo.double')], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'Amazon needs your sign-in.' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    const result = await runAgent({ agent: pageAgent, provider: parked, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'Look again' });
+    expect(result.text).toBe('Amazon needs your sign-in.');
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(parked.calls[1]?.tools).toEqual([]);
+  });
+
+  it('turns spent only on own-budget tools (browser.act) do not count against maxTurns, within a cap', async () => {
+    const db = new FakeDb();
+    const registry = new ToolRegistry();
+    registry.register({ name: 'page', version: '1', schema: 'page', migrationsDir: '', tools: [
+      { name: 'page.act', description: 'act', tier: 'auto', ownBudget: true, input: z.object({}), execute: async () => ({ completed: true }) },
+      { name: 'demo.double', description: 'work', tier: 'auto', input: z.object({}), execute: async () => 'done' },
+    ] });
+    const call = (id: string, name: string) => ({ type: 'tool_use' as const, id, name, input: {} });
+    const pageAgent = { ...agent, maxTurns: 3, tools: ['page.act', 'demo.double'] };
+    const script = [
+      ...Array.from({ length: 6 }, (_, i) => ({ content: [call(`p${i}`, 'page.act')], stopReason: 'tool_use' as const, usage, model: 'test' })),
+      { content: [{ type: 'text' as const, text: 'Read the whole cart.' }], stopReason: 'end_turn' as const, usage, model: 'test' },
+    ];
+    const result = await runAgent({ agent: pageAgent, provider: scriptedProvider(script), registry, ctx, pool: db, conversationId: 'probe', userMessage: 'Read my cart' });
+    expect(result.stopped).toBe('end_turn');
+    expect(result.text).toBe('Read the whole cart.');
+    // Ordinary tools still spend turns.
+    const mixed = [
+      ...Array.from({ length: 4 }, (_, i) => ({ content: [call(`d${i}`, 'demo.double')], stopReason: 'tool_use' as const, usage, model: 'test' })),
+      { content: [{ type: 'text' as const, text: 'never' }], stopReason: 'end_turn' as const, usage, model: 'test' },
+    ];
+    const capped = await runAgent({ agent: pageAgent, provider: scriptedProvider(mixed), registry, ctx, pool: db, conversationId: 'probe2', userMessage: 'Work', budgetNotice: false });
+    expect(capped.stopped).toBe('max_turns');
+  });
+
   it('does not block tools for a failed question or an ordinary pending-shaped tool result', async () => {
     for (const failing of [true, false]) {
       const db = new FakeDb();

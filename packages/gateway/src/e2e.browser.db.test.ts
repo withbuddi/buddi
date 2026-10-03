@@ -76,9 +76,9 @@ suite('browser authority across interactive surfaces', () => {
     } finally { await fixture.browser.shutdown(); }
   });
 
-  it('Telegram size rollover carries the task and existing window; follow-up observes before clicking', async () => {
+  it('Telegram size rollover carries the task and existing window; the next action returns the page', async () => {
     const fixture = await setup();
-    const browser = new BrowserManager(() => fixture.driver, { allowOpen: true, maxSessions: 1 });
+    const browser = new BrowserManager(() => fixture.driver, { allowOpen: true, maxSessions: 1, queueTimeoutMs: 50, idleEvictMs: 60 * 60_000 });
     await browser.enable();
     try {
       const opts = { now: new Date(), onConversationRollover: (agentId: string, previousConversationId: string, conversationId: string, reason: 'size' | 'idle') => continueBrowserTask(pool, browser, { ownerId: 'owner', agentId, previousConversationId, conversationId }, reason) };
@@ -98,13 +98,13 @@ suite('browser authority across interactive surfaces', () => {
       const history = JSON.stringify(copied);
       expect(history).toContain('Spend account'); expect(history).toContain('Find my account transactions');
       expect(history).not.toContain('accessibility-tree'); expect(history.length).toBeLessThan(20_000);
-      expect(history).toContain('observe the existing page');
-      await expect(browser.execute({ action: 'click', target: { ref: 'ax1', frame: 0, by: 'text' }, observation: 'o1' }, context(next.conversationId))).rejects.toThrow('observe the current page');
-      await browser.execute({ action: 'observe' }, context(next.conversationId));
+      expect(history).toContain('returns the page as it is now');
+      // The next action returns the page; nothing is refused and nothing is replayed.
+      await expect(browser.execute({ action: 'observe' }, context(next.conversationId))).resolves.toMatchObject({ completed: true });
       await browser.execute({ action: 'click', target: { ref: 'ax1', frame: 0, by: 'text' }, observation: 'o1' }, context(next.conversationId));
       expect(fixture.driver.close).not.toHaveBeenCalled();
-      // Another tab/chat talking to the same agent is not an automatic continuation.
-      await expect(browser.execute({ action: 'navigate', url: 'https://example.com/' }, context('unrelated'))).rejects.toThrow('Another conversation');
+      // Another tab/chat talking to the same agent is not an automatic continuation: it waits for a page of its own.
+      await expect(browser.execute({ action: 'navigate', url: 'https://example.com/' }, context('unrelated'))).rejects.toThrow('Every page is busy');
     } finally { await browser.shutdown(); await fixture.browser.shutdown(); }
   });
 

@@ -473,7 +473,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.28`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.29`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -756,6 +756,18 @@ changes something, and ships only after one release in which both shapes
 exist and the old one logs its caller. [plugins.md](plugins.md) §9b lists each
 method with the minor that introduced it, and `plugin-reference.test.ts`
 checks that table against the interface as it does for `ToolContext`.
+
+1.29 is routes for the browser runtime ([browser.md](browser.md)): a
+manifest's optional `routes: [{ kind: 'apps', label, health, look, do,
+release?, exclusive? }]` (types `RouteProvider`, `RouteHealth`, `RoutePage`,
+`RouteCommand` in `@buddi/core/plugin`) declares a route the runtime may pick
+for app jobs; core's own computer control is driven through the same
+interface. A tool's `waitsForOwner` may be a function of its result, a tool
+may declare `ownBudget` (its turns do not spend the run's `maxTurns`), and
+`ctx.ask` lets a tool put one question card with choices in front of the
+owner on an interactive surface. An older buddi ignores `routes` and treats
+a function `waitsForOwner` as false, so a plugin that relies on them asks for
+`^1.29`.
 
 ## 8. End to end
 

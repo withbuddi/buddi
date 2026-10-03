@@ -1,18 +1,185 @@
 ---
-title: "Computer and browser control"
+title: "The browser: one page, three routes"
 status: reference
-updated: 2026-09-27
+updated: 2026-10-03
 ---
 
-# Computer and browser control
+# The browser: one page, three routes
 
-## Default: the agents' own browser
+The owner's model is one idea: **an agent is looking at a page**. There are no
+modes to pick, no sessions to manage and no observation ids to copy. The owner
+sees the page on the conversation's Canvas, gets one line in the chat when the
+page was not in buddi's own browser, and is asked only when he is needed.
 
-A new installation starts in **Give agents their own browser** (Playwright) on
-every platform. **Use my apps** (computer control) is offered only on macOS,
-and only when you choose it. An existing `settings.json` keeps the mode it
-holds; on a host that is not a Mac, a stored Use my apps choice runs and reads
-as the agents' own browser, and the file is left as written.
+## Where agents look: routes, not modes
+
+Three routes exist. The runtime picks one per task; the owner's settings are
+permissions, not a choice.
+
+| Route | When | Where it shows |
+| --- | --- | --- |
+| **Their own browser** (Playwright, buddi's profile) | Every page by default | The Canvas only: it runs headless, in the background |
+| **Your Chrome** (the buddi extension) | A site that needs your sign-in, when allowed and connected; or the agent reads the task as yours (`prefer: "yours"`: your cart, your orders) | Background tabs in the **buddi** tab group; the Canvas |
+| **Your apps** (a provided route; core's computer control on macOS) | App jobs only ("open Numbers") | The app window; the Canvas |
+
+**The choice**, in order: an app job goes to your apps; a pin (below) narrows
+or orders; a site on your **sites that need my sign-in** list, a site buddi
+met a login wall on before (remembered in `browser/sign-in-sites.json`), or
+the agent's `prefer: "yours"` goes to your Chrome; everything else to the own
+browser. A run with no owner behind it (a mission) is kept in the own browser.
+
+**Fallback, without a stop.** Your Chrome asked for but not connected, or
+turned off: the own browser, and the chat line says so ("Your Chrome isn't
+connected, so I used my own browser for shop.test."). Chrome going away in the
+middle of a task: the same address re-opens in the own browser. A sign-in wall
+in the own browser with your Chrome allowed and connected: the same address
+re-opens in a background tab of your Chrome, where you are signed in, and the
+site is remembered. Your apps unavailable for an app job: the one sentence
+that names the fix, because no other route opens an app.
+
+**The chat line.** Only when the route was not the own browser or changed:
+"I used your Chrome for amazon.com (sign-in)." Once per site and route in a
+conversation, as `routeNote` on the tool result.
+
+**Pins.** Most specific wins: this conversation (`POST /api/browser/pin`
+`{conversationId, route: own|chrome|apps|auto}`, the chip under the composer in
+the kit's design), the agent (`browser: own|chrome|apps` in its `agent.md`),
+then the global default (`defaultRoute` in Settings). A pin never allows a
+route the switches forbid.
+
+**Several agents at once.** The own browser gives each conversation its own
+page, three at once by default (`maxOwnPages`); a fourth waits its turn, and a
+page nobody touched for two minutes is let go for it and re-opens where it was
+when its conversation comes back. Your Chrome takes several background tabs at
+once, with a per-site lock so two agents never act on the same origin at the
+same time (the second waits). One page is in your hands at a time (take-over),
+and your apps serve one conversation at a time, the next queued.
+
+## Background by default
+
+The own browser runs headless and is seen only through the Canvas screencast
+(`showWindow` in Settings, or `BUDDI_BROWSER_HEADED=1`, shows the window for a
+site that refuses headless browsers; a Linux machine with no display is always
+headless). Your Chrome works in background tabs. **Your active tab is never
+typed into behind your back:** when an agent needs a buddi tab you are looking
+at, the extension waits up to 30 seconds for you to leave it, and after 3
+seconds shows a thin bar in the tab: *buddi is working here · Take over · Let
+it continue*. **Let it continue** lets the agent act in view, in that tab;
+**Take over** is the Canvas button. Taking over is the only foreground moment.
+
+## When you are asked: four cards
+
+Everything else retries or falls back silently. You are asked, with one card
+in the chat, the corner chat and on Telegram (one photo of the page, then the
+card's buttons), on four occasions only:
+
+| Card | When | Buttons |
+| --- | --- | --- |
+| **I'm not sure that went through. Look?** | A click or fill that failed part-way, or a page that did not answer six reads over fifteen seconds | Look (take over) · Carry on |
+| **Keep going?** | The task used its 200 actions or its hour, or eight targeting refusals in a row | Keep going · Stop here |
+| **Sign in** (*amazon.com needs your sign-in* / *asks for a code*) | A login wall with no stored login and no Chrome to move to | Take over · Use my Chrome (or Open Chrome and I'll use it there) · Save a login for next time |
+| **Human check** (*… asks for a human*) | A captcha or "verify you are human" | Take over · Skip it |
+
+The run stops on the card (the tool result carries `needsOwner`) and the page
+stays parked for at least an hour. Your tap is your next message: Look and Take
+over hand you the page, Use my Chrome pins the conversation to your Chrome,
+Keep going renews the budget. After a take-over, **Give it back** renews the
+budget and the agent's next action returns the page as you left it. A stored
+login is used before any card: the agent is pointed at `secret.list` and
+`secret.fill`, and a TOTP secret answers a code.
+
+## Stop agents' browsing
+
+The Stop closes every page and **expires**: an hour by default
+(`stopExpiryMinutes`; 0 is "until I say", and `POST /api/browser/stop
+{forever: true}` asks for that once). While it holds, an agent that needs a
+page gets one card: *Browsing is stopped (by you, 2 minutes ago, until 11:00
+UTC). Resume?* with **Resume**. Telegram keeps `/browser resume`. A Stop kept
+from before expiries counts an hour from when it was written. The per-page
+Stop on the Canvas ends only that page.
+
+## Budgets
+
+Per task: 200 actions and 60 minutes, renewed by any message or card tap of
+yours in that conversation (the owner request lives an hour too). The agent
+run's `maxTurns` does not count `browser.act` turns (`ownBudget`; capped at 240
+extra turns); the browser's budget is the ceiling, and its card is Keep going?.
+
+## Settings: where agents may look
+
+`browser/settings.json` is `{version: 2, yourChrome, yourApps: off|ask|on,
+browserApp, allowedApps, browserProfile?, signInSites, defaultRoute,
+stopExpiryMinutes, maxOwnPages, showWindow}`; `POST /api/browser/settings`
+takes a partial object. No lock: a change applies with pages open, and
+turning a route off closes its pages. **Your apps: ask** asks for every app
+each conversation; **on** opens the listed apps and asks for the rest.
+
+The old `{mode}` file is migrated once, kept beside it as `settings.v1.json`:
+*Your browser* → your Chrome on, apps off; *Use my apps* → your Chrome on when
+a pairing exists, apps on when the helper is installed; *their own browser* →
+your Chrome on when a pairing exists, apps off. The profile and the pairing
+are untouched.
+
+`browser.status` reports `routes`: each one's switch (`allowed`), whether it
+could serve now (`available`), who provides it, and the one fix when it is
+down (`repair`: install, sandbox, pair, permissions, helper).
+
+## A route a plugin provides
+
+A plugin may declare `routes: [{ kind: 'apps', label, health, look, do,
+release?, exclusive? }]` (host API 1.29). The runtime routes app jobs to the
+first one for this platform, ahead of core's computer control, which is itself
+driven through the same interface (`ComputerRouteProvider`) so its move to
+`@withbuddi/plugin-computer` is mechanical.
+
+## The agent's tools
+
+`browser.act` stays one tool. Its description is the owner's model: look at a
+page or act on it; buddi chooses where it opens and says so in `route`; every
+action returns the page afterwards; `observation` is optional; when the result
+has `needsOwner`, say its question in one sentence and stop. Input gains
+`prefer: own|yours`; output gains `route`, `routeNote` and `needsOwner`.
+`browser.status` stays for "is a browser available at all" and is never a
+required first call. The try-first rule says: look with `browser.act`; buddi
+picks the browser and signs in with a stored login or asks once with a card.
+
+## Telemetry: stop causes
+
+Every stop is counted (`browser/telemetry.jsonl`, host only, never a URL),
+with every route choice and every finished task. `buddi doctor` has a browser
+row; `buddi doctor browser` and `GET /api/browser/telemetry` give the last
+week's stops by cause, cards and routes, and stops per task (the target is
+under 0.2).
+
+| Cause | Now | What it was |
+| --- | --- | --- |
+| start-with-navigate | removed | An action before any page was open |
+| slot-limit | removed | All pages in use; now a queue |
+| mode-lock | removed | Settings locked while a page was open |
+| controls-changing | removed | Owner controls changing during an action |
+| access-changed-opening | removed | Access changed while a page opened |
+| request-ended | removed | A request ended after a close, sweep or rollover; the next action re-opens |
+| never-switch-modes | removed | The prompt rule against switching modes |
+| status-first | removed | `browser.status` as a required first call |
+| owner-watching | removed | "You are looking at this tab"; now wait, then the bar |
+| route-unavailable | removed | A route down with another able to serve; now fallback |
+| page-not-answered | retry | Re-read at 0.5, 1, 2, 4 and 8 s |
+| observation-failures | retry | Six reads, then the Look? card |
+| stale-ref, redirect, stale-observation | retry | Re-observed; the fresh page comes back, nothing dispatched |
+| not-connected | retry | Your Chrome gone; the own browser |
+| screen-gone, app-behind | retry | A closed tab re-opened at its address; an app brought forward again |
+| uncertain-input | card | Look? |
+| budget, targeting-cap | card | Keep going? |
+| sign-in | card | Sign in |
+| human-check | card | Human check |
+| owner-stop, session-stop, takeover | kept | The owner's own stops |
+| no-owner-request, no-browser, apps-unavailable | kept | No authority, nothing installed, no apps route |
+
+# Technical appendix
+
+The sections below describe each route's machinery. Where they say "mode",
+read the route: *Use my apps* is the apps route, *Your browser* the owner's
+Chrome, *Playwright / their own browser* buddi's own browser.
 
 ## Computer control: Use my apps
 
@@ -614,16 +781,17 @@ it does not relax uniqueness or observation checks. The driver
 checks that the element is still connected and its identifying attributes and
 form destination have not changed. Unrelated ticker/text changes do not stale
 a ref. Legacy semantic targets still require an unchanged accessibility tree.
-A mutating call must use the latest observation ID. A precondition failure
-dispatches no input and returns fresh recovery evidence instead of retrying the
-action. After three consecutive targeting failures the session pauses for owner
-inspection. Uncertain input failures also pause the
-controller for owner inspection, rather than automatically retrying a possible
-submission. No arbitrary JavaScript, OS-wide input, file upload or automatic
+A mutating call uses the latest observation (filled in when the agent leaves
+it out). A precondition failure dispatches no input and returns the fresh page
+instead of retrying the action; eight in a row ask the owner Keep going?. An
+input that may have landed part-way is the Look? card, never an automatic
+retry of a possible submission. No arbitrary JavaScript, OS-wide input, file upload or automatic
 download capability is exposed.
 
-This version accepts authenticated interactive dashboard/Telegram requests.
-Scheduled/source jobs and delegated agent runs cannot create browser authority.
+Pages are opened for authenticated interactive dashboard/Telegram requests.
+The route chooser keeps an unattended run (a mission) in buddi's own browser,
+never the owner's Chrome; core's session tier still decides whether such a run
+may call `browser.act` at all, and today it does not, nor does a delegate.
 A standalone CLI process does not launch a second controller: use the dashboard
 or Telegram served by `buddi serve`.
 

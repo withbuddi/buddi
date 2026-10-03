@@ -349,6 +349,9 @@ export interface ApprovalResume {
  * it ends with the way out, because "continue" is what they were going to
  * type anyway.
  */
+/** The most turns a run may spend on own-budget tools beyond its maxTurns (the browser's 200 steps, and some). */
+export const MAX_EXEMPT_TURNS = 240;
+
 export function maxTurnsNotice(maxTurns: number): string {
   return `Stopped after ${maxTurns} steps; the work above is where I got to. Say "continue" to go on.`;
 }
@@ -1064,6 +1067,8 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
   // Run-local: only a successful declared question tool can close dispatch.
   // The next owner turn starts with a fresh boundary, not a permanent grant.
   let waitingForOwner = false;
+  /** Turns spent only on own-budget tools: not counted against maxTurns. */
+  let exemptTurns = 0;
   /**
    * What the owner added, leased for the step that has not happened yet.
    *
@@ -1088,7 +1093,7 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
   };
 
   try {
-  while (turns < agent.maxTurns) {
+  while (turns - exemptTurns < agent.maxTurns && turns < agent.maxTurns + MAX_EXEMPT_TURNS) {
     ctx.signal?.throwIfAborted();
     turns++;
     /*
@@ -1280,7 +1285,7 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
         } catch { /* a surface's drawing never decides a run */ }
       }
       if (outcome.ok) {
-        if (registry.waitsForOwner(call.name)) waitingForOwner = true;
+        if (registry.waitsForOwner(call.name, outcome.output)) waitingForOwner = true;
         // A tool that declares it saves files, and names them in its output,
         // has each one recorded as produced here by this agent — with the
         // result row, in one statement. A tool that merely returns files does not.
@@ -1378,7 +1383,11 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
      * run is stopping on an approval: there is no model step left to show it
      * to, and a line nobody will see must stay queued for the next turn.
      */
-    const lastTurn = turns >= agent.maxTurns || pendingActionId !== undefined || ctx.signal?.aborted === true;
+    // A turn spent only on tools with their own budget (browser.act: 200
+    // steps and an hour, renewed by the owner) does not spend the run's
+    // maxTurns; the browser's budget is the ceiling. Capped all the same.
+    if (toolUses.length > 0 && toolUses.every((call) => registry.hasOwnBudget(call.name))) exemptTurns++;
+    const lastTurn = turns - exemptTurns >= agent.maxTurns || turns >= agent.maxTurns + MAX_EXEMPT_TURNS || pendingActionId !== undefined || ctx.signal?.aborted === true;
     const leased = lastTurn ? [] : ((await opts.interjections?.lease()) ?? []).filter((item) => item.text.trim() !== '');
     // What the model is shown, and what the transcript keeps: the framing is
     // for the model — the record holds the owner's own words.

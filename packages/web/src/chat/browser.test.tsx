@@ -251,7 +251,7 @@ describe('conversation browser canvas', () => {
 });
 
 describe('Take over with no browser connected', () => {
-  const extension: BrowserStatus = { ...status, mode: 'extension', settings: { mode: 'extension', browserApp: '', allowedApps: [] } };
+  const extension: BrowserStatus = { ...status, mode: 'extension', route: 'chrome', settings: { version: 2, yourChrome: true, yourApps: 'off', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } };
   const offline: BrowserStatus = { ...extension, state: 'paused', hand: false, handReason: 'browser-offline', handMessage: 'Your browser isn\u2019t connected.' };
   beforeEach(() => { vi.spyOn(api, 'session').mockResolvedValue({ platform: 'darwin' } as never); });
 
@@ -268,13 +268,13 @@ describe('Take over with no browser connected', () => {
     expect(api.browserControl).toHaveBeenLastCalledWith('takeover', 's1');
   });
 
-  it('switches to buddi\u2019s browser, releasing this session first', async () => {
+  it('switches this conversation to buddi\u2019s browser (a pin, not a setting), releasing this session first', async () => {
     vi.mocked(api.browserControl).mockResolvedValue(offline);
-    const settings = vi.spyOn(api, 'browserSettings').mockResolvedValue({ ...status, mode: 'playwright' });
+    const pin = vi.spyOn(api, 'browserPin').mockResolvedValue({ ...status, mode: 'playwright' });
     render(<BrowserPanel data={extension} error={null} reload={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Switch to buddi\u2019s browser' }));
-    await waitFor(() => expect(settings).toHaveBeenCalledWith({ mode: 'playwright', browserApp: '', allowedApps: [] }));
+    await waitFor(() => expect(pin).toHaveBeenCalledWith('c1', 'own'));
     expect(api.browserControl).toHaveBeenCalledWith('release', 's1');
     expect(await screen.findByText(/Switched to buddi\u2019s browser/)).toBeInTheDocument();
   });

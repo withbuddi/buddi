@@ -70,6 +70,7 @@ import { runDashboard } from './dashboard-cmd.js';
 import { runDb } from './db-cmd.js';
 import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js';
 import { createProbes } from './doctor-probes.js';
+import { browserDoctor } from '@buddi/gateway';
 import { runInit } from './init.js';
 import { CATALOGUE_ACTIONS, parseCatalogueArgs } from './agents-catalogue-cmd.js';
 import { jobsCancel, jobsDismiss, jobsDismissAll, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './jobs-cmd.js';
@@ -104,6 +105,14 @@ export async function migrate(): Promise<number> {
   } finally {
     await pool.end();
   }
+}
+
+/** `buddi doctor browser`: where agents may look, and the last week's stops by cause. */
+export async function doctorBrowser(): Promise<number> {
+  const facts = await browserDoctor(process.env);
+  console.log(`Where agents may look: ${facts.routes}.`);
+  for (const line of facts.lines) console.log(line);
+  return 0;
 }
 
 export async function doctor(): Promise<number> {
@@ -271,7 +280,7 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       return runInit({ yes: command.yes });
     case 'doctor':
       await loadEnvironment();
-      return doctor();
+      return command.browser ? doctorBrowser() : doctor();
     case 'upgrade': {
       await loadEnvironment();
       const manager = createServiceManager();

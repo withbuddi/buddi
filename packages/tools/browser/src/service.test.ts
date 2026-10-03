@@ -1,11 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core/testing';
-import { browserPausedMessage, browserStoppedMessage, BrowserService, OWNER_WATCHING_MESSAGE, type BrowserController } from './service.js';
-import { createBrowserManifest } from './index.js';
+import { browserStoppedMessage, BrowserService, MAX_TARGETING_FAILURES, OWNER_WATCHING_MESSAGE, RETRY_DELAYS_MS, type BrowserServiceOptions } from './service.js';
+import { BROWSER_ACT_DESCRIPTION, createBrowserManifest } from './index.js';
 import { BrowserPreconditionError, commandSchema, MAILED_CODE, OBSERVE_AGAIN, UNTRUSTED, type BrowserDriver, type Observation } from './types.js';
+import { BrowserTelemetry } from './telemetry.js';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
@@ -14,239 +12,95 @@ const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: 
 const observation: Observation = { id: 'o1', url: 'https://example.com/', title: 'Fixture', tree: '- button "Book"', tabs: [], capturedAt: new Date().toISOString() };
 const navigate = commandSchema.parse({ action: 'navigate', url: 'https://example.com/' });
 const observe = commandSchema.parse({ action: 'observe' });
-const contexts = (): CoreToolContext => hosted({ db: {} as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC',
+const click = (observation?: string) => commandSchema.parse({ action: 'click', target: { ref: 'e1' }, ...(observation ? { observation } : {}) });
+const contexts = (request = 'request1'): CoreToolContext => hosted({ db: {} as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC',
   agentId: 'concierge', conversationId: 'c1', sessionTools: ['browser.act'],
-  ownerRequest: { id: 'request1', text: 'Book the appointment', expiresAt: Date.now() + 60_000 } });
+  ownerRequest: { id: request, text: 'Book the appointment', expiresAt: Date.now() + 60_000 } });
 function fake(): BrowserDriver {
   return { start: vi.fn(async () => {}), perform: vi.fn(async () => {}), observe: vi.fn(async () => observation),
     screenshot: vi.fn(async () => Buffer.from('image')), close: vi.fn(async () => {}) };
 }
 const services: BrowserService[] = [];
-async function setup(options: ConstructorParameters<typeof BrowserService>[1] = {}) {
+/** Backoff that does not wait, recording the delays it was asked for. */
+function setupOptions(options: BrowserServiceOptions = {}) {
+  const slept: number[] = [];
+  const telemetry = new BrowserTelemetry();
+  return { slept, telemetry, options: { sleep: async (ms: number) => { slept.push(ms); }, telemetry, ...options } };
+}
+async function setup(options: BrowserServiceOptions = {}) {
   const driver = fake();
-  const service = new BrowserService(driver, options);
+  const { slept, telemetry, options: full } = setupOptions(options);
+  const service = new BrowserService(driver, full);
   services.push(service);
   await service.enable();
-  return { driver, service, ctx: contexts() };
+  return { driver, service, ctx: contexts(), slept, telemetry };
 }
+const causes = (telemetry: BrowserTelemetry) => telemetry.events.filter((event) => event.type === 'browser.stop').map((event) => (event as { cause: string }).cause);
 afterEach(async () => { await Promise.all(services.splice(0).map((s) => s.shutdown())); });
 
-describe('host browser authority and lifecycle', () => {
-  it('normalizes the observed by:link mistake without guessing a target or dropping observation checks', () => {
-    const command = commandSchema.parse({ action: 'click', observation: 'o1', target: { by: 'link', name: 'Article' } });
-    expect(command.target).toMatchObject({ by: 'role', role: 'link', name: 'Article' });
-    expect(commandSchema.safeParse({ action: 'click', target: { ref: 'e1' } }).success).toBe(false);
-    expect(commandSchema.safeParse({ action: 'click', observation: 'o1', target: { by: 'link', role: 'button', name: 'Article' } }).success).toBe(false);
-  });
-  it('returns fresh recovery evidence for safe failures and clears it on release', async () => {
-    const { service, driver, ctx } = await setup();
-    await service.execute(navigate, ctx);
-    vi.mocked(driver.perform).mockRejectedValue(new BrowserPreconditionError('Target is ambiguous'));
-    vi.mocked(driver.observe).mockResolvedValue({ ...observation, id: 'fresh', targets: [{ ref: 'e1', role: 'link', name: 'Repeated', frame: 0 }] });
-    const click = commandSchema.parse({ action: 'click', observation: 'old', target: { ref: 'e1' } });
-    await expect(service.execute(click, ctx)).rejects.toThrow('"dispatched":false');
-    expect(service.status().page?.id).toBe('fresh');
-    expect(driver.perform).toHaveBeenCalledTimes(2); // No automatic replay.
-    await service.control('release');
-    expect(service.status()).toMatchObject({ state: 'idle', hasScreenshot: false });
-    expect(service.status().message).toBeUndefined(); expect(service.status().lastAction).toBeUndefined();
-  });
-  it('tells the model to ask the owner once when they are looking at the tab, without pausing or inviting a retry', async () => {
-    const { service, driver, ctx } = await setup(); await service.execute(navigate, ctx);
-    const watched = 'You are looking at this tab. buddi only acts in background tabs; observe again to continue in a new one.';
-    vi.mocked(driver.perform).mockRejectedValueOnce(new BrowserPreconditionError(watched));
-    vi.mocked(driver.observe).mockClear();
-    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
-    const error = await service.execute(click, ctx).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(BrowserPreconditionError);
-    const result = JSON.parse((error as Error).message);
-    expect(result).toMatchObject({ error: OWNER_WATCHING_MESSAGE, dispatched: false });
-    expect(result.error).toBe('The owner is looking at that tab. Ask them to switch to another tab or window, then try once more.');
-    expect((error as Error).message).not.toContain('observe again');
-    expect(driver.observe).not.toHaveBeenCalled();
-    expect(service.status().state).toBe('running');
-    // The model cannot retry by itself: the next action must be a fresh look.
-    await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation is required');
-    await service.execute(observe, ctx);
-    await expect(service.execute(click, ctx)).resolves.toMatchObject({ completed: true });
-  });
-  it('stamps every observation with when it was taken, and says so, so old evidence reads as old', async () => {
+describe('the page and its lifecycle', () => {
+  it('returns the page after every action, stamped with when it was seen', async () => {
     let now = Date.parse('2026-09-26T12:04:35.250Z');
-    const { service, driver, ctx } = await setup({ now: () => now });
+    const { service, ctx } = await setup({ now: () => now });
     const first = await service.execute(navigate, ctx) as { observation: Observation; message: string; notice: string };
     expect(first.observation.observedAt).toBe('2026-09-26T12:04:35.250Z');
     expect(first.message).toBe('Observed 12:04:35 UTC.');
     expect(first.notice).toBe(UNTRUSTED);
-    expect(UNTRUSTED).toContain('After a click that submits or navigates, observe once more before concluding; judge from the newest observation only.');
-    expect(service.status().page?.observedAt).toBe('2026-09-26T12:04:35.250Z');
-
-    // A recovery observation carries its own, newer stamp.
     now += 7_000;
-    vi.mocked(driver.perform).mockRejectedValueOnce(new BrowserPreconditionError('Target is ambiguous'));
-    vi.mocked(driver.observe).mockResolvedValue({ ...observation, id: 'fresh' });
-    const error = await service.execute(commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } }), ctx).catch((e: unknown) => e);
-    const recovery = JSON.parse((error as Error).message);
-    expect(recovery).toMatchObject({ dispatched: false, message: 'Observed 12:04:42 UTC.', observation: { id: 'fresh', observedAt: '2026-09-26T12:04:42.250Z' } });
+    const second = await service.execute(click(), ctx) as { completed: boolean; observation: Observation };
+    expect(second).toMatchObject({ completed: true, observation: { observedAt: '2026-09-26T12:04:42.250Z' } });
   });
-  it('tells the model in browser.act to observe once more before concluding', () => {
-    const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;
-    expect(act.description).toContain(OBSERVE_AGAIN);
-    expect(act.description).toContain('Each result says when it was observed');
-  });
-  it('tells the model it may open an app by name, and that an app the owner has not allowed asks them', async () => {
-    const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;
-    expect(act.description).toContain('{action:"open",app:"Voicito"}');
-    expect(act.description).toContain('asks them with a decision card (Once or Always)');
-    expect(act.description).toContain('do not ask again in this conversation');
-    // Wired to the controller: a card for an unallowed app, the session grant otherwise.
-    const tierFor = vi.fn(async () => ({ tier: 'gated' as const }));
-    const describeCard = vi.fn(async () => ({ envelope: {}, preview: 'Use Voicito on your computer?' }));
-    const wired = createBrowserManifest({ tierFor, describe: describeCard } as unknown as BrowserController).tools.find((tool) => tool.name === 'browser.act')!;
-    const open = commandSchema.parse({ action: 'open', app: 'Voicito' });
-    await expect(wired.tierFor!(open, {} as never)).resolves.toEqual({ tier: 'gated' });
-    await expect(Promise.resolve(wired.describe!(open, {} as never))).resolves.toMatchObject({ preview: 'Use Voicito on your computer?' });
-    const plain = createBrowserManifest({} as BrowserController).tools.find((tool) => tool.name === 'browser.act')!;
-    await expect(plain.tierFor!(open, {} as never)).resolves.toEqual({ tier: 'session' });
-  });
-  it('tells the model to read a mailed one-time code from the inbox before asking the owner', () => {
-    expect(MAILED_CODE).toBe("A one-time code a site just mailed is read from the owner's inbox with email tools when you have them, before asking the owner: the newest message from that site, arrived in the last ten minutes; never stored, never reused.");
-    expect(UNTRUSTED).toContain(MAILED_CODE);
-    expect(createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!.description).toContain(MAILED_CODE);
-  });
-  describe('an app the owner\'s own window pushed behind (computer mode)', () => {
-    const behind = 'Vocito is no longer in front (Google Chrome is). Call open with the same app to bring it forward, then observe again. No input was sent.';
-    const openVocito = commandSchema.parse({ action: 'open', appId: 'co.applex.vocito' });
-    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'ax1' } });
-    it('tells the agent to open it again, never pauses, and lets that open through without a card or a fresh look first', async () => {
-      const { service, driver, ctx } = await setup({ allowOpen: true }); await service.execute(openVocito, ctx);
-      vi.mocked(driver.perform).mockRejectedValue(new BrowserPreconditionError(behind));
-      vi.mocked(driver.observe).mockClear();
-      for (let i = 0; i < 4; i++) {
-        const error = await service.execute(click, ctx).catch((e: unknown) => e);
-        if (i === 0) {
-          const result = JSON.parse((error as Error).message);
-          expect(result).toMatchObject({ error: behind, dispatched: false });
-          expect(result.recovery).toContain('open with the same app');
-          expect((error as Error).message).not.toMatch(/Take over|resume/i);
-        } else expect((error as Error).message).toContain('fresh observation is required');
-      }
-      expect(driver.observe).not.toHaveBeenCalled();
-      expect(service.status().state).toBe('running');
-      vi.mocked(driver.perform).mockReset().mockResolvedValue(undefined);
-      await expect(service.execute(openVocito, ctx)).resolves.toMatchObject({ completed: true, observation: expect.objectContaining({ id: 'o1' }) });
-      expect(driver.perform).toHaveBeenLastCalledWith(openVocito);
-      await expect(service.execute(click, ctx)).resolves.toMatchObject({ completed: true });
-    });
-    it('an observation refused the same way says the same, and does not count toward a pause', async () => {
-      const { service, driver, ctx } = await setup({ allowOpen: true }); await service.execute(openVocito, ctx);
-      vi.mocked(driver.observe).mockRejectedValue(new BrowserPreconditionError(behind));
-      for (let i = 0; i < 4; i++) {
-        const error = await service.execute(observe, ctx).catch((e: unknown) => e);
-        expect(JSON.parse((error as Error).message)).toMatchObject({ observed: false, recovery: '', message: `Observation failed: ${behind.replace(/\.$/, '')}.` });
-      }
-      expect(service.status().state).toBe('running');
-    });
-    it('keeps the owner\'s sentence while the owner has taken over: the agent waits', async () => {
-      const { service, driver, ctx } = await setup({ allowOpen: true }); await service.execute(openVocito, ctx);
-      await service.control('takeover');
-      vi.mocked(driver.perform).mockClear();
-      await expect(service.execute(openVocito, ctx)).rejects.toThrow('Browser is under human control or needs inspection. Wait for the owner to resume in the dashboard, then observe.');
-      await expect(service.execute(click, ctx)).rejects.toThrow('human control');
-      expect(driver.perform).not.toHaveBeenCalled();
-    });
-  });
-  it('bounds repeated targeting failures and permits close without stale evidence', async () => {
-    const { service, driver, ctx } = await setup(); await service.execute(navigate, ctx);
-    vi.mocked(driver.perform).mockRejectedValue(new BrowserPreconditionError('Stale page observation'));
-    const click = commandSchema.parse({ action: 'click', observation: 'old', target: { ref: 'e1' } });
-    for (let i = 0; i < 3; i++) await expect(service.execute(click, ctx)).rejects.toThrow('dispatched');
-    expect(service.status().state).toBe('paused');
-    await expect(service.execute(click, ctx)).rejects.toThrow('human control');
-    await service.execute(commandSchema.parse({ action: 'close' }), ctx);
-    expect(service.status().message).toBeUndefined();
-  });
-  it('refuses stale canvas controls, including controls queued behind a release', async () => {
+  it('fills a missing observation with the latest page, so the agent never copies ids', async () => {
     const { service, driver, ctx } = await setup();
     await service.execute(navigate, ctx);
-    const id = service.status().session!.id;
-    await expect(service.control('stop', 'another-session')).rejects.toThrow('session changed');
-    expect(driver.close).not.toHaveBeenCalled();
-    const release = service.control('release', id);
-    const staleStop = service.control('stop', id);
-    await release;
-    await expect(staleStop).rejects.toThrow('session changed');
-    expect(service.status().state).toBe('idle');
+    await service.execute(click(), ctx);
+    expect(driver.perform).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'click', observation: 'o1' }));
+    expect(commandSchema.safeParse({ action: 'click', target: { ref: 'e1' } }).success).toBe(true);
   });
-  it('status never launches a browser, and a separate process defaults to unavailable', async () => {
+  it('status never launches a browser, and a separate process is unavailable', async () => {
     const driver = fake();
     const service = new BrowserService(driver);
     expect(service.status()).toMatchObject({ state: 'unavailable', enabled: false });
     await expect(service.execute(navigate, contexts())).rejects.toThrow('buddi serve');
     expect(driver.start).not.toHaveBeenCalled();
   });
-  it.each(['absent', 'expired', 'delegate', 'no-conversation'] as const)('refuses %s authority before launch', async (kind) => {
-    const { driver, service, ctx } = await setup();
-    if (kind === 'absent') delete ctx.ownerRequest;
-    if (kind === 'expired') ctx.ownerRequest!.expiresAt = 0;
-    if (kind === 'delegate') ctx.delegationDepth = 1;
-    if (kind === 'no-conversation') delete ctx.conversationId;
-    await expect(service.execute(navigate, ctx)).rejects.toThrow('authenticated');
-    expect(driver.start).not.toHaveBeenCalled();
-  });
-  it('executes a granted session tool without per-action approval', async () => {
+  it('executes a granted session tool without per-action approval, and core still guards the grant', async () => {
     const { service, ctx } = await setup();
     const registry = new ToolRegistry(); registry.register(createBrowserManifest(service));
-    expect(registry.list().find((t) => t.name === 'browser.act')?.inputSchema.type).toBe('object');
     await expect(registry.invoke('browser.act', navigate, ctx)).resolves.toMatchObject({ ok: true });
     expect(service.status()).toMatchObject({ state: 'running', session: { agentId: 'concierge', steps: 1 } });
     await expect(registry.invoke('browser.act', navigate, { ...ctx, sessionTools: [] })).resolves.toMatchObject({ reason: 'session-not-authorized' });
   });
-  it('refuses a second agent or conversation without touching the driver', async () => {
+  it('refuses another conversation on the same page without touching the driver', async () => {
     const { service, driver, ctx } = await setup();
     await service.execute(navigate, ctx);
     for (const other of [{ agentId: 'other' }, { conversationId: 'other' }, { ownerId: 'other' }]) {
-      await expect(service.execute(observe, hosted({ ...ctx, ...other }))).rejects.toThrow('Another agent');
+      await expect(service.execute(observe, hosted({ ...ctx, ...other }))).rejects.toThrow('Another conversation');
     }
     expect(driver.perform).toHaveBeenCalledTimes(1);
   });
-  it('refuses concurrent commands and interrupts an in-flight action on Stop', async () => {
+  it('queues a second action behind the first instead of refusing it (busy is gone)', async () => {
     const { service, driver, ctx } = await setup();
     let finish!: () => void;
-    vi.mocked(driver.perform).mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    vi.mocked(driver.perform).mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
     const first = service.execute(navigate, ctx);
-    await vi.waitFor(() => expect(driver.perform).toHaveBeenCalled());
-    await expect(service.execute(observe, ctx)).rejects.toThrow('busy');
-    await service.control('stop');
+    await vi.waitFor(() => expect(driver.perform).toHaveBeenCalledTimes(1));
+    const second = service.execute(observe, ctx);
     finish();
-    await expect(first).rejects.toThrow('stopped');
-    expect(driver.close).toHaveBeenCalled();
-    expect(service.status()).toMatchObject({ state: 'stopped', hasScreenshot: false });
-    expect(service.status().session).toBeUndefined();
-    await expect(service.execute(navigate, { ...ctx, ownerRequest: { ...ctx.ownerRequest!, id: 'new' } })).rejects.toThrow('owner stopped');
+    await expect(first).resolves.toMatchObject({ completed: true });
+    await expect(second).resolves.toMatchObject({ completed: true });
   });
-  it('cancels on run abort; model arguments cannot restart access', async () => {
+  it('a cancelled run lets the page go without stopping anyone\'s browsing', async () => {
     const { service, driver, ctx } = await setup();
     const controller = new AbortController();
     vi.mocked(driver.perform).mockImplementation(async () => { controller.abort(new Error('cancelled')); });
     await expect(service.execute(navigate, { ...ctx, signal: controller.signal })).rejects.toThrow('cancelled');
-    expect(service.status().state).toBe('stopped');
+    expect(service.status().state).toBe('idle');
     expect(driver.close).toHaveBeenCalled();
-    expect(commandSchema.safeParse({ action: 'resume' }).success).toBe(false);
-  });
-  it('preserves the idle browser during takeover and requires owner resume', async () => {
-    const { service, driver, ctx } = await setup();
-    await service.execute(navigate, ctx);
-    await service.control('takeover');
-    expect(driver.close).not.toHaveBeenCalled();
-    await expect(service.execute(observe, ctx)).rejects.toThrow('human control');
-    await service.control('resume');
-    await service.execute(observe, ctx);
   });
   it('keeps the page when the owner takes over mid-action, and offers a hand on it', async () => {
     const driver = fake();
     let release = () => {};
-    // An agent part-way through a navigation, as it is when the owner gives up
-    // waiting and presses Take over.
     driver.perform = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
     driver.interrupt = vi.fn(async () => {});
     driver.handReady = () => true;
@@ -254,186 +108,239 @@ describe('host browser authority and lifecycle', () => {
     const service = new BrowserService(driver);
     services.push(service);
     await service.enable();
-    const ctx = contexts();
-    const working = service.execute(navigate, ctx).catch((error: Error) => error);
+    const working = service.execute(navigate, contexts()).catch((error: Error) => error);
     await vi.waitFor(() => expect(service.status().busy).toBe(true));
-
     await service.control('takeover');
-    // The action was abandoned; the tab it was in was not.
     expect(driver.interrupt).toHaveBeenCalled();
     expect(driver.close).not.toHaveBeenCalled();
     expect(service.status().state).toBe('paused');
     expect(service.hand().hand).toBe(driver.hand);
-    expect(service.status().message).toContain('still open');
-
-    // And the interrupted command cannot drag the state back out of paused.
     release();
     await working;
     expect(service.status().state).toBe('paused');
   });
-
-  it('closes the screen, and says so, when the interrupted driver has none left', async () => {
+  it('take-over is the one pause: the agent waits, and giving it back renews the budget and returns the page', async () => {
+    const { service, driver, ctx } = await setup({ maxSteps: 3 });
+    await service.execute(navigate, ctx);
+    await service.execute(observe, ctx);
+    await service.control('takeover');
+    await expect(service.execute(observe, ctx)).rejects.toThrow('give it back');
+    await service.control('resume');
+    expect(service.status().session!.steps).toBe(0);
+    await expect(service.execute(click('o1'), ctx)).resolves.toMatchObject({ completed: true });
+    expect(driver.close).not.toHaveBeenCalled();
+  });
+  it('the bar\'s Take over in the page asks the controller, which decides', async () => {
     const driver = fake();
-    let release = () => {};
-    driver.perform = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
-    driver.interrupt = vi.fn(async () => { throw new Error('The browser tab is closed.'); });
-    driver.hand = { start: async () => {}, input: async () => {}, stop: async () => {} };
-    const service = new BrowserService(driver);
+    let pressed: () => void = () => {};
+    driver.onOwnerTakeover = (listener) => { pressed = listener; };
+    const requestTakeover = vi.fn();
+    const service = new BrowserService(driver, { requestTakeover });
     services.push(service);
     await service.enable();
-    const ctx = contexts();
-    const working = service.execute(navigate, ctx).catch((error: Error) => error);
-    await vi.waitFor(() => expect(service.status().busy).toBe(true));
-
-    await service.control('takeover');
-    expect(driver.close).toHaveBeenCalled();
-    // No hand over nothing: the owner is told what to do instead of watching a
-    // live view that never draws.
-    expect(service.hand().hand).toBeUndefined();
-    expect(service.hand().message).toContain('window closed');
-    release();
-    await working;
+    await service.execute(navigate, contexts());
+    pressed();
+    expect(requestTakeover).toHaveBeenCalledWith(service.status().session!.id);
   });
-
-  it('enforces a request budget even when the agent tries close/reopen', async () => {
-    const { service, ctx } = await setup({ maxSteps: 1 });
-    await service.execute(navigate, ctx);
-    await expect(service.execute(observe, ctx)).rejects.toThrow('limit');
-    await expect(service.execute(navigate, ctx)).rejects.toThrow('ended');
-    await service.execute(navigate, { ...ctx, ownerRequest: { ...ctx.ownerRequest!, id: 'new-owner-message' } });
-    expect(service.status().session?.steps).toBe(1);
-  });
-  it('treats observation loss after a successful action as completed, not retryable', async () => {
-    const { service, driver, ctx } = await setup();
-    vi.mocked(driver.observe).mockRejectedValue(new Error('page vanished'));
-    await expect(service.execute(navigate, ctx)).resolves.toMatchObject({ completed: true, observed: false, state: 'running',
-      recovery: 'The page has not answered yet. Wait a few seconds and observe again.', message: expect.stringContaining('Do not repeat') });
-    expect(driver.perform).toHaveBeenCalledTimes(1);
-    expect(service.status()).toMatchObject({ state: 'running', hasScreenshot: false, message: expect.stringContaining('page vanished') });
-    await expect(service.execute(navigate, ctx)).rejects.toThrow('fresh observation');
-    expect(driver.perform).toHaveBeenCalledTimes(1);
-  });
-  it('keeps control after a click whose observation failed, and says not to repeat the click', async () => {
+  it('refuses stale canvas controls, including controls queued behind a release', async () => {
     const { service, driver, ctx } = await setup();
     await service.execute(navigate, ctx);
-    vi.mocked(driver.observe).mockRejectedValue(new BrowserPreconditionError('The page has not answered after three tries. Wait a few seconds and observe again.'));
-    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
-    const result = await service.execute(click, ctx);
-    expect(result).toMatchObject({ completed: true, observed: false, state: 'running' });
-    expect((result as { message: string }).message).toBe('Action completed, but observation failed: The page has not answered after three tries. Wait a few seconds and observe again. Do not repeat the action; its effect may already have happened.');
-    expect(service.status().state).toBe('running');
-    await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation');
-    expect(driver.perform).toHaveBeenCalledTimes(2);
-  });
-  it.each(['The tab closed while it was loading.', 'Target page, context or browser has been closed'])('pauses when the screen is gone: %s', async (cause) => {
-    const { service, driver, ctx } = await setup();
-    await service.execute(navigate, ctx);
-    vi.mocked(driver.observe).mockRejectedValue(new Error(cause));
-    const registry = new ToolRegistry(); registry.register(createBrowserManifest(service));
-    const failed = await registry.invoke('browser.act', observe, ctx);
-    if (!failed.ok) expect(JSON.parse(failed.message)).toMatchObject({ state: 'paused', recovery: browserPausedMessage(undefined) });
-    expect(service.status().state).toBe('paused');
-    await expect(service.execute(observe, ctx)).rejects.toThrow('human control');
-  });
-  it.each(['observe', 'screenshot'] as const)('surfaces %s failure as a failed observation, clears evidence and stops blind retries', async (method) => {
-    const { service, driver, ctx } = await setup();
-    await service.execute(navigate, ctx);
-    vi.mocked(driver[method]).mockRejectedValue(new BrowserPreconditionError('The selected app is no longer in front'));
-    const registry = new ToolRegistry(); registry.register(createBrowserManifest(service));
-    const failed = await registry.invoke('browser.act', observe, ctx);
-    expect(failed).toMatchObject({ ok: false, reason: 'tool-error', message: expect.stringContaining('no longer in front') });
-    // Once is a page to wait for: control stays, and the next step is a fresh look.
-    if (!failed.ok) expect(JSON.parse(failed.message)).toMatchObject({ completed: false, observed: false, state: 'running',
-      recovery: 'The page has not answered yet. Wait a few seconds and observe again.' });
-    expect(service.status()).toMatchObject({ state: 'running', hasScreenshot: false });
-    expect(service.status().page).toBeUndefined();
-    expect(service.screenshot()).toBeUndefined();
-    expect(driver.observe).toHaveBeenCalledTimes(2); // No hidden recovery retry.
-    await expect(service.execute(commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } }), ctx)).rejects.toThrow('fresh observation');
-    // Three in a row is not a slow page any more.
-    await expect(service.execute(observe, ctx)).rejects.toThrow('no longer in front');
-    expect(service.status().state).toBe('running');
-    const third = await registry.invoke('browser.act', observe, ctx);
-    if (!third.ok) expect(JSON.parse(third.message)).toMatchObject({ state: 'paused', recovery: browserPausedMessage(undefined) });
-    expect(service.status()).toMatchObject({ state: 'paused', hasScreenshot: false });
-    await expect(service.execute(observe, ctx)).rejects.toThrow('human control');
-    expect(driver.perform).toHaveBeenCalledTimes(4);
-
-    vi.mocked(driver.observe).mockResolvedValue({ ...observation, id: 'fresh' });
-    vi.mocked(driver.screenshot).mockResolvedValue(Buffer.from('new screenshot'));
-    await service.control('resume');
-    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
-    await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation');
-    await expect(service.execute(observe, ctx)).resolves.toMatchObject({ completed: true, observation: { id: 'fresh' } });
-    expect(service.status()).toMatchObject({ state: 'running', hasScreenshot: true });
-    expect(service.status().message).toBeUndefined();
-  });
-  it('keeps release available after observation fails', async () => {
-    const { service, driver, ctx } = await setup();
-    await service.execute(navigate, ctx);
-    vi.mocked(driver.observe).mockRejectedValue(new Error('capture unavailable'));
-    await expect(service.execute(observe, ctx)).rejects.toThrow('capture unavailable');
-    await expect(service.execute(commandSchema.parse({ action: 'close' }), ctx)).resolves.toMatchObject({ closed: true });
-    expect(service.status()).toMatchObject({ state: 'idle', hasScreenshot: false });
-  });
-  it('does not claim fresh evidence when precondition recovery also fails', async () => {
-    const { service, driver, ctx } = await setup();
-    await service.execute(navigate, ctx);
-    vi.mocked(driver.perform).mockRejectedValue(new BrowserPreconditionError('Focus changed'));
-    vi.mocked(driver.observe).mockRejectedValue(new Error('Cannot uniquely identify the focused native window'));
-    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
-    await expect(service.execute(click, ctx)).rejects.toThrow('Cannot uniquely identify');
-    expect(service.status()).toMatchObject({ state: 'running', hasScreenshot: false });
-    expect(service.status().page).toBeUndefined();
-    await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation');
-  });
-  it('pauses after an uncertain submission and does not retry it', async () => {
-    const { service, driver, ctx } = await setup();
-    await service.execute(navigate, ctx);
-    vi.mocked(driver.perform).mockRejectedValue(new Error('timeout after click'));
-    const click = commandSchema.parse({ action: 'click', target: { role: 'button', name: 'Book' }, observation: 'o1' });
-    await expect(service.execute(click, ctx)).rejects.toThrow('timeout');
-    expect(service.status().state).toBe('paused');
-    await expect(service.execute(click, ctx)).rejects.toThrow('human control');
-    expect(driver.perform).toHaveBeenCalledTimes(2);
-  });
-  it('enforces wall-clock expiry', async () => {
-    let now = Date.now();
-    const { service, ctx } = await setup({ now: () => now, lifetimeMs: 100 });
-    await service.execute(navigate, ctx);
-    now += 200;
-    await expect(service.execute(observe, ctx)).rejects.toThrow('limit');
-    expect(service.status().state).toBe('expired');
-  });
-  it('keeps owner Stop across a host service restart', async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-browser-stop-'));
-    try {
-      const { service } = await setup({ controlFile: path.join(dir, 'control.json') });
-      await service.control('stop');
-      await service.shutdown();
-      const { service: restarted, ctx } = await setup({ controlFile: path.join(dir, 'control.json') });
-      expect(restarted.status().state).toBe('stopped');
-      await restarted.control('release');
-      expect(restarted.status().state).toBe('stopped');
-      await restarted.control('resume');
-      await restarted.execute(navigate, ctx);
-    } finally { await rm(dir, { recursive: true, force: true }); }
+    const id = service.status().session!.id;
+    await expect(service.control('stop', 'another-session')).rejects.toThrow('page changed');
+    expect(driver.close).not.toHaveBeenCalled();
+    const release = service.control('release', id);
+    const staleStop = service.control('stop', id);
+    await release;
+    await expect(staleStop).rejects.toThrow('page changed');
   });
 });
 
-describe('the stopped refusal says where the owner can undo it', () => {
-  it('names /browser resume on Telegram and the Settings page elsewhere', async () => {
-    const { service, ctx } = await setup();
-    await service.control('stop');
-    await expect(service.execute(navigate, { ...ctx, surface: TELEGRAM_SURFACE }))
-      .rejects.toThrow('send /browser resume here');
-    await expect(service.execute(navigate, { ...ctx, surface: WEB_SURFACE }))
-      .rejects.toThrow('in the dashboard, on the Settings page');
-    // No surface declared is the dashboard's wording, not Telegram's: a
-    // command nobody can type is worse than a page anybody can open.
-    await expect(service.execute(navigate, ctx)).rejects.toThrow('Settings page');
+describe('the paths that disappear', () => {
+  it('start-with-navigate: an action with no page says what to do, without an error', async () => {
+    const { service, telemetry, ctx } = await setup();
+    await expect(service.execute(click(), ctx)).resolves.toMatchObject({ completed: false, message: expect.stringContaining('Navigate to the website first') });
+    expect(causes(telemetry)).toContain('start-with-navigate');
+  });
+  it('request-ended: after a close or a new request, the next action re-opens the page where it was', async () => {
+    const { service, driver, telemetry, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    await service.execute(commandSchema.parse({ action: 'close' }), ctx);
+    const result = await service.execute(click('o1'), contexts('request2')) as { completed: boolean; dispatched: boolean; observation: Observation; message: string };
+    expect(result).toMatchObject({ completed: false, dispatched: false, observation: { url: 'https://example.com/' } });
+    expect(result.message).toContain('opened example.com again');
+    expect(driver.perform).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'navigate', url: 'https://example.com/' }));
+    expect(causes(telemetry)).toContain('request-ended');
+  });
+  it('a new owner message continues the same page with a fresh budget, and an older request still works', async () => {
+    const { service, ctx } = await setup({ maxSteps: 2 });
+    await service.execute(navigate, ctx);
+    const id = service.status().session!.id;
+    await service.execute(observe, contexts('request2'));
+    expect(service.status().session).toMatchObject({ id, steps: 1, requestId: 'request2' });
+    await expect(service.execute(observe, ctx)).resolves.toMatchObject({ completed: true });
+  });
+  it('owner-watching: the tab the owner is looking at is not a stop; the agent is told the bar asks them', async () => {
+    const { service, driver, telemetry, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.perform).mockRejectedValueOnce(new BrowserPreconditionError('You are looking at this tab. buddi waited and asked in the tab; nothing was done.'));
+    const error = await service.execute(click(), ctx).catch((e: unknown) => e) as Error;
+    expect(JSON.parse(error.message)).toEqual({ error: OWNER_WATCHING_MESSAGE, dispatched: false });
+    expect(service.status().state).toBe('running');
+    expect(service.card).toBeUndefined();
+    await expect(service.execute(click(), ctx)).resolves.toMatchObject({ completed: true });
+    expect(causes(telemetry)).toContain('owner-watching');
+  });
+});
+
+describe('the paths retried inside the tool', () => {
+  it('page-not-answered: re-reads at 0.5, 1, 2, 4 and 8 seconds and answers with the page', async () => {
+    const { service, driver, slept, telemetry, ctx } = await setup();
+    vi.mocked(driver.observe)
+      .mockRejectedValueOnce(new Error('The page has not answered yet. observe again.'))
+      .mockRejectedValueOnce(new Error('Timeout 8000ms exceeded'))
+      .mockRejectedValueOnce(new Error('Timeout 8000ms exceeded'))
+      .mockResolvedValue(observation);
+    await expect(service.execute(navigate, ctx)).resolves.toMatchObject({ completed: true, observation: { id: 'o1' } });
+    expect(slept).toEqual([500, 1_000, 2_000]);
+    expect(causes(telemetry)).toEqual(['page-not-answered']);
+  });
+  it('observation-failures: six reads, then exactly one card (Look?), never a pause', async () => {
+    const { service, driver, slept, telemetry, ctx } = await setup();
+    vi.mocked(driver.observe).mockRejectedValue(new Error('Timeout 8000ms exceeded'));
+    const result = await service.execute(navigate, ctx) as { needsOwner: { kind: string; question: string } };
+    expect(driver.observe).toHaveBeenCalledTimes(RETRY_DELAYS_MS.length + 1);
+    expect(slept).toEqual([...RETRY_DELAYS_MS]);
+    expect(result.needsOwner).toMatchObject({ kind: 'uncertain', question: "I'm not sure that went through. Look?" });
+    expect(service.status().state).toBe('running');
+    expect(causes(telemetry)).toEqual(['page-not-answered', 'observation-failures']);
+  });
+  it.each([
+    ['stale-observation', 'Stale page observation. Use the latest observation.id and target ref.'],
+    ['redirect', 'This page has changed since that observation. Observe again.'],
+    ['stale-ref', 'That ref no longer matches an element on the page.'],
+  ])('%s: re-observes and answers with the fresh page, nothing dispatched, no pause', async (cause, sentence) => {
+    const { service, driver, telemetry, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.perform).mockRejectedValueOnce(new BrowserPreconditionError(sentence));
+    vi.mocked(driver.observe).mockResolvedValue({ ...observation, id: 'fresh' });
+    const error = await service.execute(click('old'), ctx).catch((e: unknown) => e) as Error;
+    const answer = JSON.parse(error.message);
+    expect(answer).toMatchObject({ dispatched: false, observation: { id: 'fresh' } });
+    expect(answer.message).toContain('The page changed; here it is now.');
+    expect(service.status().state).toBe('running');
+    expect(causes(telemetry)).toContain(cause);
+  });
+  it('targeting failures no longer pause at three; at eight the task asks Keep going?', async () => {
+    const { service, driver, telemetry, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.perform).mockRejectedValue(new BrowserPreconditionError('That ref no longer matches an element on the page.'));
+    for (let i = 1; i < MAX_TARGETING_FAILURES; i++) await expect(service.execute(click(), ctx)).rejects.toThrow('dispatched');
+    expect(service.status().state).toBe('running');
+    await expect(service.execute(click(), ctx)).resolves.toMatchObject({ needsOwner: { kind: 'budget' } });
+    expect(causes(telemetry)).toContain('targeting-cap');
+  });
+  it('screen-gone: a closed tab is opened again at its last address once, silently', async () => {
+    const { service, driver, telemetry, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.observe).mockRejectedValueOnce(new Error('Target page, context or browser has been closed')).mockResolvedValue(observation);
+    await expect(service.execute(observe, ctx)).resolves.toMatchObject({ completed: true });
+    expect(driver.perform).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'navigate', url: 'https://example.com/' }));
+    expect(causes(telemetry)).toContain('screen-gone');
+  });
+  it('an app behind the owner\'s window says open it again, at once, without waiting or counting', async () => {
+    const behind = 'Vocito is no longer in front (Google Chrome is). Call open with the same app to bring it forward, then observe again. No input was sent.';
+    const { service, driver, slept, ctx } = await setup({ allowOpen: true });
+    await service.execute(commandSchema.parse({ action: 'open', appId: 'co.applex.vocito' }), ctx);
+    vi.mocked(driver.perform).mockRejectedValueOnce(new BrowserPreconditionError(behind));
+    const error = await service.execute(click(), ctx).catch((e: unknown) => e) as Error;
+    expect(JSON.parse(error.message)).toMatchObject({ error: behind, dispatched: false, recovery: expect.stringContaining('open with the same app') });
+    expect(slept).toEqual([]);
+    expect(service.status().state).toBe('running');
+  });
+});
+
+describe('the four owner cards', () => {
+  it('uncertain-input: a click that failed part-way is one card, Look / Carry on; the page stays parked', async () => {
+    const { service, driver, telemetry, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.perform).mockRejectedValueOnce(new Error('Element detached mid-click'));
+    const result = await service.execute(click(), ctx) as { completed: boolean; dispatched: boolean; needsOwner: { kind: string; options: Array<{ label: string }> } };
+    expect(result).toMatchObject({ completed: false, dispatched: true, needsOwner: { kind: 'uncertain' } });
+    expect(result.needsOwner.options.map((option) => option.label)).toEqual(['Look', 'Carry on']);
+    // Parked: the next call answers the same card and does nothing.
+    vi.mocked(driver.perform).mockClear();
+    await expect(service.execute(click(), ctx)).resolves.toMatchObject({ needsOwner: { kind: 'uncertain' }, dispatched: false });
+    expect(driver.perform).not.toHaveBeenCalled();
+    expect(service.status()).toMatchObject({ state: 'running', needsOwner: { kind: 'uncertain' } });
+    // The owner's answer (a touch) clears it; the agent carries on.
+    expect(service.renew()?.kind).toBe('uncertain');
+    await expect(service.execute(observe, ctx)).resolves.toMatchObject({ completed: true });
+    expect(causes(telemetry)).toContain('uncertain-input');
+  });
+  it('budget: 200 actions by default; the ceiling is Keep going?, and an owner touch renews 200 and an hour', async () => {
+    const { service, ctx, telemetry } = await setup();
+    await service.execute(navigate, ctx);
+    expect(service.status().session!.maxSteps).toBe(200);
+    const small = await setup({ maxSteps: 2 });
+    await small.service.execute(navigate, small.ctx);
+    await small.service.execute(observe, small.ctx);
+    const result = await small.service.execute(observe, small.ctx) as { needsOwner: { kind: string; question: string; options: Array<{ label: string }> } };
+    expect(result.needsOwner).toMatchObject({ kind: 'budget', question: "I've used this task's steps and time. Keep going?" });
+    expect(result.needsOwner.options.map((option) => option.label)).toEqual(['Keep going', 'Stop here']);
+    small.service.renew();
+    expect(small.service.status().session!.steps).toBe(0);
+    await expect(small.service.execute(observe, small.ctx)).resolves.toMatchObject({ completed: true });
+    expect(causes(small.telemetry)).toContain('budget');
+    expect(causes(telemetry)).not.toContain('budget');
+  });
+  it('budget: an hour of wall clock is the other ceiling, renewed by the owner, never a released page', async () => {
+    let now = 0;
+    const { service, driver, ctx } = await setup({ now: () => now });
+    await service.execute(navigate, ctx);
+    now += 60 * 60_000 + 1;
+    await expect(service.execute(observe, ctx)).resolves.toMatchObject({ needsOwner: { kind: 'budget' } });
+    expect(driver.close).not.toHaveBeenCalled();
+    service.renew();
+    await expect(service.execute(observe, ctx)).resolves.toMatchObject({ completed: true });
+  });
+  it('a parked page waits at least an hour for the owner before it is let go', async () => {
+    vi.useFakeTimers();
+    try {
+      const driver = fake();
+      const service = new BrowserService(driver, { maxSteps: 1, sleep: async () => {} });
+      services.push(service);
+      await service.enable();
+      await service.execute(navigate, contexts());
+      await service.execute(observe, contexts());
+      expect(service.card?.kind).toBe('budget');
+      await vi.advanceTimersByTimeAsync(119 * 60_000);
+      expect(service.status().session).toBeDefined();
+      await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
+      expect(service.status().session).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('what the model reads', () => {
+  it('browser.act is the owner\'s model: look at or act on a page, the route underneath, what to do on a card', () => {
+    const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;
+    expect(act.description).toBe(BROWSER_ACT_DESCRIPTION);
+    expect(act.description).toContain('buddi chooses where it opens');
+    expect(act.description).toContain('needsOwner');
+    expect(act.description).toContain('routeNote');
+    expect(act.description).not.toMatch(/browser\.status first|never switch modes|PLAYWRIGHT mode|COMPUTER mode|EXTENSION mode/);
+    expect(UNTRUSTED).toContain(OBSERVE_AGAIN);
+    expect(act.description).toContain(MAILED_CODE);
+  });
+  it('a result with needsOwner leaves the decision with the owner; browser turns do not spend maxTurns', () => {
+    const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;
+    const waits = act.waitsForOwner as (output: unknown) => boolean;
+    expect(waits({ needsOwner: { kind: 'budget' } })).toBe(true);
+    expect(waits({ completed: true })).toBe(false);
+    expect(act.ownBudget).toBe(true);
+  });
+  it('the Stop sentence names the Resume card, and /browser resume on Telegram', () => {
     expect(browserStoppedMessage(TELEGRAM_SURFACE)).toContain('/browser resume');
-    expect(browserPausedMessage(TELEGRAM_SURFACE)).toContain('/browser resume');
-    expect(browserPausedMessage(undefined)).toContain('Resume access');
+    expect(browserStoppedMessage(WEB_SURFACE)).toContain('Tap Resume on the card');
   });
 });

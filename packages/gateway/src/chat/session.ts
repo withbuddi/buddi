@@ -110,6 +110,7 @@ import {
 } from '../surfaces/offered-actions.js';
 import { failedTurnReply } from '../surfaces/failure.js';
 import { approvalResumeContext, ownerRequestContext, type ApprovalResumption } from '../surfaces/owner-request.js';
+import { askInto } from '../surfaces/browser-cards.js';
 import { conversationForTurn } from '../surfaces/conversation-lifetime.js';
 
 /** The chat id this surface books its inline mission runs against. */
@@ -1127,11 +1128,14 @@ export class ChatSession {
       // A line typed at the prompt is the owner asking, exactly as a line typed
       // into the dashboard is, and a decided approval is the owner acting too.
       // Anything else — nothing today — gets the bare context.
-      ctx: turn.approval
-        ? approvalResumeContext(deps.ctx, turn.approval)
-        : turn.userMessage !== undefined
-          ? ownerRequestContext(deps.ctx, turn.userMessage)
-          : deps.ctx,
+      ctx: {
+        ...(turn.approval
+          ? approvalResumeContext(deps.ctx, turn.approval)
+          : turn.userMessage !== undefined
+            ? ownerRequestContext(deps.ctx, turn.userMessage)
+            : deps.ctx),
+        ask: askInto(sink),
+      },
       pool: deps.pool,
       // The provider's own web search leaves the same audit row `web.search`
       // does; see @buddi/tool-web's native.ts.

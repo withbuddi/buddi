@@ -10,7 +10,7 @@ import type { BuddiHost, SecretListing, SecretUseResult, SecretsArea, ToolContex
 import { registerSecretDestination, resetSecretDestinations } from '@buddi/core/testing';
 import { commandSchema, BrowserPreconditionError, type BrowserDriver, type Observation } from './types.js';
 import { BrowserManager } from './manager.js';
-import { BrowserService } from './service.js';
+import { BrowserService, OWNER_WATCHING_MESSAGE } from './service.js';
 import { FIELD_KIND, FORM_KIND, NATIVE_KIND, fieldDestination, formDataDestination, nativeTypeDestination } from './secrets.js';
 
 const observation: Observation = { id: 'o1', url: 'https://bank.test/', title: 'Fixture', tree: '- textbox "Card number"', tabs: [], capturedAt: new Date().toISOString() };
@@ -90,7 +90,7 @@ describe('secret.fill', () => {
   it('sends the backend-reported origin and field to use(), fills, and answers filled', async () => {
     const { service, driver, calls, secrets } = await setup();
     const result = await service.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(secrets) as never);
-    expect(result).toEqual({ filled: true });
+    expect(result).toMatchObject({ filled: true });
     expect(calls).toEqual([{ name: 'PNC password', kind: FORM_KIND, target: { origin: 'https://bank.test', field: 'Card number' } }]);
     expect(driver.secretFillField).toHaveBeenCalledWith('o1', 'e7', VALUE, 'https://bank.test');
     expect(JSON.stringify(result)).not.toContain(VALUE);
@@ -100,7 +100,7 @@ describe('secret.fill', () => {
     const password = await setup({
       driver: driver({ secretFieldInfo: vi.fn(async () => ({ origin: 'https://bank.test', password: true, name: 'Password' })) }),
     });
-    await expect(password.service.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(password.secrets) as never)).resolves.toEqual({ filled: true });
+    await expect(password.service.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(password.secrets) as never)).resolves.toMatchObject({ filled: true });
     expect(password.calls[0]).toMatchObject({ kind: FIELD_KIND, target: 'https://bank.test' });
 
     const otp = await setup({ listing: listing(true) });
@@ -113,7 +113,7 @@ describe('secret.fill', () => {
       bindings: [{ kind: FIELD_KIND, target: 'https://auth.wikimedia.org', rule: 'pre-approved', firstApprovedAt: null, heldByPlugin: false }] }];
     const username = () => driver({ secretFieldInfo: vi.fn(async () => ({ origin: 'https://auth.wikimedia.org', password: false, name: 'Username' })) });
     const visible = await setup({ listing: bound, driver: username() });
-    await expect(visible.service.secretFill({ name: 'Wikipedia_Username', ref: 'e3', observation: 'o1' }, ctx(visible.secrets) as never)).resolves.toEqual({ filled: true });
+    await expect(visible.service.secretFill({ name: 'Wikipedia_Username', ref: 'e3', observation: 'o1' }, ctx(visible.secrets) as never)).resolves.toMatchObject({ filled: true });
     expect(visible.calls).toEqual([{ name: 'Wikipedia_Username', kind: FIELD_KIND, target: { origin: 'https://auth.wikimedia.org', field: 'Username' } }]);
     expect(visible.driver.secretFillField).toHaveBeenCalledWith('o1', 'e3', VALUE, 'https://auth.wikimedia.org');
     expect(fieldDestination.describe(visible.calls[0]!.target)).toBe('the Username field on https://auth.wikimedia.org');
@@ -138,7 +138,7 @@ describe('secret.fill', () => {
     const bound: SecretListing[] = [{ name: 'Wikipedia_Username', totp: false, lastUse: null,
       bindings: [{ kind: FIELD_KIND, target: 'https://*.wikimedia.org', rule: 'pre-approved', firstApprovedAt: null, heldByPlugin: false }] }];
     const run = await setup({ listing: bound, driver: driver({ secretFieldInfo: vi.fn(async () => ({ origin: 'https://auth.wikimedia.org', password: false, name: 'Username' })) }) });
-    await expect(run.service.secretFill({ name: 'Wikipedia_Username', ref: 'e3', observation: 'o1' }, ctx(run.secrets) as never)).resolves.toEqual({ filled: true });
+    await expect(run.service.secretFill({ name: 'Wikipedia_Username', ref: 'e3', observation: 'o1' }, ctx(run.secrets) as never)).resolves.toMatchObject({ filled: true });
     expect(run.calls).toEqual([{ name: 'Wikipedia_Username', kind: FIELD_KIND, target: { origin: 'https://auth.wikimedia.org', field: 'Username' } }]);
     expect(fieldDestination.checkTarget(run.calls[0]!.target, 'https://*.wikimedia.org', host())).toBe(true);
     expect(fieldDestination.describe(run.calls[0]!.target)).toBe('the Username field on https://auth.wikimedia.org');
@@ -175,7 +175,7 @@ describe('secret.fill', () => {
       driver: driver({ secretFieldInfo: vi.fn(async () => { throw new BrowserPreconditionError('You are looking at this tab. buddi only acts in background tabs; observe again to continue in a new one.'); }) }),
     });
     const error = await watched.service.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(watched.secrets) as never).catch((e: unknown) => e);
-    expect(JSON.parse((error as Error).message)).toMatchObject({ dispatched: false, error: 'The owner is looking at that tab. Ask them to switch to another tab or window, then try once more.' });
+    expect(JSON.parse((error as Error).message)).toMatchObject({ dispatched: false, error: OWNER_WATCHING_MESSAGE });
     expect(watched.calls).toEqual([]);
     expect(watched.service.status().state).toBe('running');
   });
@@ -190,7 +190,7 @@ describe('secret.fill', () => {
   it('refuses a mode with no page fields, naming what is needed', async () => {
     const bare = await setup({ driver: driver({ secretFieldInfo: undefined, secretFillField: undefined }) });
     await expect(bare.service.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(bare.secrets) as never))
-      .rejects.toThrow(/Playwright browser automation or in the buddi extension mode/);
+      .rejects.toThrow(/works on web pages/);
     expect(bare.calls).toEqual([]);
   });
 });
@@ -199,7 +199,7 @@ describe('secret.type', () => {
   it('targets the bundle id the backend reported, types on approval, and answers typed', async () => {
     const { service, driver, calls, secrets } = await setup();
     const result = await service.secretType({ name: 'PNC password' }, ctx(secrets) as never);
-    expect(result).toEqual({ typed: true });
+    expect(result).toMatchObject({ typed: true });
     expect(calls).toEqual([{ name: 'PNC password', kind: NATIVE_KIND, target: 'com.apple.keynote' }]);
     expect(driver.nativeType).toHaveBeenCalledWith(VALUE);
     expect(JSON.stringify(result)).not.toContain(VALUE);
@@ -220,7 +220,7 @@ describe('secret.type', () => {
     const unfocused = await setup({ driver: driver({ focusedBundleId: vi.fn(async () => undefined) }) });
     await expect(unfocused.service.secretType({ name: 'PNC password' }, ctx(unfocused.secrets) as never)).rejects.toThrow(/no focused application/);
     const bare = await setup({ driver: driver({ focusedBundleId: undefined, nativeType: undefined }) });
-    await expect(bare.service.secretType({ name: 'PNC password' }, ctx(bare.secrets) as never)).rejects.toThrow(/Computer mode/);
+    await expect(bare.service.secretType({ name: 'PNC password' }, ctx(bare.secrets) as never)).rejects.toThrow(/types into an app/);
   });
 });
 
@@ -232,8 +232,8 @@ describe('the route through the manager', () => {
     const { area } = fakeSecrets(listing(false), { done: true, use: 'u1' });
     await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://bank.test/' }), ctx(area) as never);
     await expect(manager.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(area) as never))
-      .resolves.toEqual({ filled: true });
+      .resolves.toMatchObject({ filled: true });
     const other = { ...ctx(area), agentId: 'other', ownerRequest: { id: 'r2', text: 'Sign in to the bank', expiresAt: Date.now() + 60_000 } } as never;
-    await expect(manager.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, other)).rejects.toThrow('Start with navigate');
+    await expect(manager.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, other)).rejects.toThrow('Open the page with browser.act navigate');
   });
 });

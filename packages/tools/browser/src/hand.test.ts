@@ -9,7 +9,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ExtensionDriver, type ExtensionBridge, type ExtensionCommand } from './extension.js';
 import { PlaywrightDriver } from './driver.js';
-import { ComputerDriver, settingsSchema } from './computer.js';
+import { ComputerDriver } from './computer.js';
+import { settingsSchema } from './settings.js';
 import { BrowserService } from './service.js';
 import type { HandFrame } from './types.js';
 
@@ -228,6 +229,6 @@ describe('computer mode', () => {
     const service = new BrowserService(driver);
     await service.enable();
     // Nobody is driving: supported, but there is nothing to take over.
-    expect(service.hand()).toEqual({ supported: true, message: 'No agent is driving this screen.' });
+    expect(service.hand()).toEqual({ supported: true, message: 'No agent is looking at this page.' });
   });
 });

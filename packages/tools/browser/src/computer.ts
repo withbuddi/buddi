@@ -9,15 +9,8 @@ import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type
 export const browserApps = ['com.google.Chrome', 'com.apple.Safari', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser', 'org.mozilla.firefox'] as const;
 /** The browsers that keep several profiles and accept `--profile-directory`. */
 export const chromiumApps: readonly string[] = ['com.google.Chrome', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser'];
-export const settingsSchema = z.object({
-  /** A separate browser by default on every platform; "Use my apps" is an explicit, macOS-only choice. */
-  mode: z.enum(['computer', 'playwright', 'extension']).default('playwright'),
-  browserApp: z.enum(browserApps).default('com.google.Chrome'),
-  allowedApps: z.array(z.string().min(3).max(200).regex(/^[A-Za-z0-9.-]+$/)).min(1).max(32).default(['com.google.Chrome', 'com.apple.Safari']),
-  /** A Chromium profile directory ("Default", "Profile 2"). Absent: whatever window is in front. */
-  browserProfile: z.string().min(1).max(100).regex(/^[A-Za-z0-9 ._-]+$/).optional(),
-}).strict().refine((value) => value.allowedApps.includes(value.browserApp), 'The selected browser must also be in allowedApps');
-export type ControlSettings = z.infer<typeof settingsSchema>;
+/** What computer control reads from the owner's settings: the browser app, the allowed apps, the Chromium profile. */
+export interface AppSettings { browserApp: string; allowedApps: string[]; browserProfile?: string | undefined }
 export interface ComputerPermissions { supported: boolean; accessibility: boolean; screenRecording: boolean; message?: string }
 export interface ComputerBridge {
   run(input: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -211,7 +204,7 @@ export class ComputerDriver implements BrowserDriver {
    * app the owner allowed once for the conversation acting now. Without it,
    * the settings' list alone.
    */
-  constructor(readonly settings: ControlSettings, readonly bridge: ComputerBridge = new NativeComputerBridge(), readonly allowedHosts?: readonly string[],
+  constructor(readonly settings: AppSettings, readonly bridge: ComputerBridge = new NativeComputerBridge(), readonly allowedHosts?: readonly string[],
     readonly allows: (appId: string) => boolean = (appId) => settings.allowedApps.includes(appId),
     /** An app's display name for the agent's sentences. Absent or unknown: the bundle id. */
     readonly nameOf: (appId: string) => Promise<string | undefined> = async () => undefined) {}

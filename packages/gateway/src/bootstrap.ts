@@ -60,6 +60,7 @@ import { bindOwnerTools } from './agents/owner-tools.js';
 import { bindPlatformTools } from './agents/platform.js';
 import type { CatalogueService } from './agents/platform-catalogue.js';
 import { createCatalogueService } from './web/catalogue-source.js';
+import { browserHost } from './browser-host.js';
 import { loadDefaultAgentRecord, writeDefaultAgentRecord } from './agents/default-agent.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 import { loadPluginsOnce } from './plugins/load.js';
@@ -348,6 +349,11 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   let accounts: ProviderAccounts | undefined;
   const catalog = reloadableCatalog(() => loadGatewayCatalog({ env, registry, providerSelection: accounts?.selection }));
   adoptProcessCatalog(env, catalog);
+  // The browser runtime picks a route per task: plugin-provided routes come
+  // from this registry, and an agent's pin from its agent.md (docs/browser.md).
+  const browser = browserHost(env);
+  browser.useRouteProviders(() => registry.routeProviders());
+  browser.useAgentPins((agentId) => catalog.get(agentId)?.browserRoute);
   /*
    * A plugin may add or remove tools while buddi runs (`ctx.buddi.tools`,
    * host API 1.6): a connection made at 3pm brings `mcp.github.*`. The

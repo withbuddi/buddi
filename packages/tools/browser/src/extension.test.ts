@@ -87,23 +87,22 @@ describe('the extension driver', () => {
   });
 });
 
-describe('the mode choice', () => {
-  it('drives the owner’s Chrome only once the owner has chosen "Your browser"', async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-mode-'));
+describe('the owner\'s Chrome as a route', () => {
+  it('is used for a site that needs the owner\'s sign-in only once Your Chrome is allowed', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-route-'));
     dirs.push(dir);
     const { fake, sent } = bridge({ observe: page, screenshot: shot });
-    const controller = new HostController(dir, { extensionBridge: () => fake });
+    const controller = new HostController(dir, { extensionBridge: () => fake, platform: 'linux', drivers: { own: () => ({ start: async () => {}, perform: async () => {}, observe: async () => ({ id: 'own', url: 'https://example.com/', title: 'Own', tree: '', tabs: [], capturedAt: '' }), screenshot: async () => undefined, close: async () => {} }) } });
     controllers.push(controller);
     await controller.enable();
-    expect(controller.status().mode).toBe('playwright');
+    await controller.configure({ signInSites: ['example.com'] });
+    // Not allowed yet: the own browser serves, and the owner's Chrome is never touched.
+    await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx())).resolves.toMatchObject({ completed: true, route: 'own' });
+    expect(sent).toEqual([]);
 
-    const settings = { ...controller.status().settings!, mode: 'extension' as const };
-    expect((await controller.configure(settings)).mode).toBe('extension');
-    expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8')).mode).toBe('extension');
-    // The two things this mode refuses, exactly as Playwright mode does.
-    await expect(controller.execute(command({ action: 'open', appId: 'com.apple.Safari' }), ctx())).rejects.toThrow('require Computer mode');
-
-    await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx())).resolves.toMatchObject({ completed: true });
+    expect((await controller.configure({ yourChrome: true })).settings).toMatchObject({ yourChrome: true });
+    expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8'))).toMatchObject({ version: 2, yourChrome: true });
+    await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('b'))).resolves.toMatchObject({ completed: true, route: 'chrome', routeNote: 'I used your Chrome for example.com (sign-in).' });
     expect(sent.map((c) => c.name)).toEqual(['navigate', 'observe', 'screenshot']);
   });
 });

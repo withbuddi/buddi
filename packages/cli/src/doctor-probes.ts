@@ -36,6 +36,7 @@ import {
   createToolRegistry,
   dataDir,
   readExtensionRecord,
+  browserDoctor,
   computerHelperFacts,
   defaultHttpTransport,
   describeDatabaseError,
@@ -753,24 +754,11 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
      * instead of guessing.
      */
     async browser(): Promise<ProbeResult> {
-      let mode = 'computer';
-      try {
-        const settings = JSON.parse(await readFile(path.join(dataDir(env), 'browser', 'settings.json'), 'utf8')) as { mode?: unknown };
-        if (typeof settings.mode === 'string') mode = settings.mode;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          return { status: 'warn', detail: `browser settings will not read: ${err instanceof Error ? err.message : String(err)}` };
-        }
-      }
-      if (mode !== 'extension') {
-        return { status: 'ok', detail: `mode=${mode}${mode === 'computer' && process.platform !== 'darwin' ? ' — computer mode needs macOS; switch to a browser mode in Computer & browser' : ''}` };
-      }
-      const record = await readExtensionRecord(env);
-      if (!record) {
-        return { status: 'warn', detail: 'mode=extension, no browser paired — open the buddi extension in Chrome and pair it in Computer & browser' };
-      }
-      const seen = record.lastSeenAt === '' ? 'never seen' : `last seen ${record.lastSeenAt}`;
-      return { status: 'ok', detail: `mode=extension, paired ${record.pairedAt || 'at an unknown time'}${record.extension ? `, extension ${record.extension}` : ''}, ${seen} (the running gateway holds the live connection)` };
+      // Where agents may look, and the last week of stops (docs/browser.md).
+      const facts = await browserDoctor(env);
+      const week = facts.summary.tasks === 0 && facts.summary.stops === 0 ? 'no browser tasks this week'
+        : `${facts.summary.tasks} task(s), ${facts.summary.stops} stop(s) (${facts.summary.stopsPerTask} per task), ${facts.summary.cards} card(s) this week — buddi doctor browser for causes`;
+      return { status: facts.warn ? 'warn' : 'ok', detail: `${facts.routes}; ${week}` };
     },
 
     /**

@@ -6,8 +6,12 @@
  * address guard for Playwright mode's proxy. Every caller in the gateway goes
  * through here, so the first one to build the controller builds it whole.
  */
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { guardedLookup, pluginDir } from '@buddi/core';
-import { hostBrowser, type ExtensionBridge, type HostController } from '@buddi/tool-browser';
+import { hostBrowser, migrateSettings, readTelemetry, summarize, telemetryLines, type ExtensionBridge, type HostController, type TelemetrySummary } from '@buddi/tool-browser';
+import { dataDir } from './web/config.js';
+import { readExtensionRecord } from './web/extension.js';
 
 export function browserHost(
   env: NodeJS.ProcessEnv = process.env,
@@ -17,4 +21,32 @@ export function browserHost(
     ...options,
     lookup: (policy) => guardedLookup(undefined, policy),
   });
+}
+
+/**
+ * What `buddi doctor` says about the browser, read from disk without the
+ * running gateway: which routes the owner allows, and the last week of stops
+ * by cause (docs/browser.md, "Telemetry"). Whether Chrome is connected right
+ * now only the gateway knows, so the pairing's last-seen time stands in.
+ */
+export async function browserDoctor(env: NodeJS.ProcessEnv = process.env, days = 7): Promise<{ routes: string; lines: string[]; summary: TelemetrySummary; warn: boolean }> {
+  const dir = path.join(dataDir(env), 'browser');
+  const record = await readExtensionRecord(env).catch(() => undefined);
+  let routes = 'own browser';
+  let warn = false;
+  try {
+    const raw = JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8')) as unknown;
+    const { settings } = migrateSettings(raw, { paired: record !== undefined, helperPresent: process.platform === 'darwin' });
+    const parts = ['own browser'];
+    if (settings.yourChrome) {
+      parts.push(record ? `your Chrome (paired${record.lastSeenAt ? `, last seen ${record.lastSeenAt}` : ''})` : 'your Chrome (on, not paired)');
+      if (!record) warn = true;
+    }
+    if (settings.yourApps !== 'off') parts.push(`your apps (${settings.yourApps})`);
+    routes = parts.join(', ');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') { routes = `settings will not read: ${err instanceof Error ? err.message : String(err)}`; warn = true; }
+  }
+  const summary = summarize(readTelemetry(path.join(dir, 'telemetry.jsonl')), Date.now(), days);
+  return { routes, lines: telemetryLines(summary), summary, warn };
 }

@@ -18,6 +18,7 @@
 import type { TabInfo, WorkerChrome } from './chrome.js';
 import { Cancellation, PreconditionError, type Command, type CommandResult, type FieldFacts, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
+import { hideBar, readBar, showBar, waitForOwner, type BarChoice, type OwnerEventMessage } from './bar.js';
 
 interface Session {
   groupId: number;
@@ -39,7 +40,9 @@ interface Ref {
 const TAKEN = 'The owner took this tab; observe again to continue in a new one.';
 /** The page under a ref is not the page the ref was read from. */
 const MOVED = 'This page has changed since that observation. Observe again.';
-const WATCHED = 'You are looking at this tab. buddi only acts in background tabs; observe again to continue in a new one.';
+const WATCHED = 'You are looking at this tab. buddi waited and asked in the tab; nothing was done.';
+/** The owner pressed Take over in the bar. */
+const TAKEN_IN_TAB = 'The owner took over this tab from the bar in it.';
 
 interface FrameObservation {
   url: string; title: string; tree: string; elements: CollectedElement[]; scroll: { x: number; y: number };
@@ -266,15 +269,21 @@ export class BrowserCommands implements Executor {
   #uuid: () => string;
   #contentFile: string;
   #onFrame: (frame: FrameMessage) => void;
+  #onEvent: (event: OwnerEventMessage) => void;
+  /** Sessions the owner let carry on in a tab they are looking at, by tab id. */
+  #inView = new Map<string, number>();
   #now: () => number;
   #wait: (ms: number) => Promise<void>;
   /** How many things want the debugger on this tab. A screencast is one of them, and it outlives a command. */
   #attached = new Map<number, number>();
   #casts = new Map<string, Screencast>();
   #castsByTab = new Map<number, Screencast>();
+  #ownerWaitMs: number | undefined;
 
-  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; now?: () => number; wait?: (ms: number) => Promise<void> } = {}) {
+  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; now?: () => number; wait?: (ms: number) => Promise<void>; ownerWaitMs?: number } = {}) {
     this.#chrome = chrome;
+    this.#onEvent = options.onEvent ?? (() => undefined);
+    this.#ownerWaitMs = options.ownerWaitMs;
     this.#wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#onFrame = options.onFrame ?? (() => undefined);
     this.#now = options.now ?? (() => Date.now());
@@ -325,6 +334,7 @@ export class BrowserCommands implements Executor {
     for (const session of [...this.#casts.keys()]) void this.#stopScreencast(session).catch(() => undefined);
     this.#sessions.clear();
     this.#refs.clear();
+    this.#inView.clear();
   }
 
   /* ---- sessions and tabs ---- */
@@ -368,13 +378,44 @@ export class BrowserCommands implements Executor {
    * Reading a tab is harmless; typing into one the owner is reading is not.
    *
    * Unless the typing is theirs: a command marked `owner` came from the hand on
-   * the dashboard, and refusing it would refuse the owner their own browser.
+   * the dashboard. Otherwise, a tab the owner is looking at is waited on: up to
+   * thirty seconds for them to leave it, with the bar in the tab after three
+   * (Take over · Let it continue). Let it continue lets the agent act in view
+   * for as long as that tab stays the one; Take over tells the gateway, which
+   * hands the page to the owner exactly like the Canvas button.
    */
-  async #background(tab: TabInfo, owner = false): Promise<void> {
-    if (owner) return;
-    if (tab.active !== true || tab.windowId === undefined) return;
+  async #background(tab: TabInfo, command: Pick<Command, 'session' | 'owner'>): Promise<void> {
+    if (command.owner) return;
+    if (tab.id === undefined || !(await this.#watched(tab.id))) return;
+    if (this.#inView.get(command.session) === tab.id) return;
+    const tabId = tab.id;
+    const outcome = await waitForOwner({
+      watched: () => this.#watched(tabId),
+      show: async () => { await this.#chrome.scripting.executeScript<[string], void>({ target: { tabId }, func: showBar, args: ['buddi'] }); },
+      hide: async () => { await this.#chrome.scripting.executeScript({ target: { tabId }, func: hideBar }); },
+      choice: async () => {
+        const [frame] = await this.#chrome.scripting.executeScript<[], string | undefined>({ target: { tabId }, func: readBar });
+        const choice = frame?.result;
+        return choice === 'continue' || choice === 'takeover' ? choice as BarChoice : undefined;
+      },
+      wait: (ms) => this.#wait(ms),
+      now: () => this.#now(),
+    }, this.#ownerWaitMs !== undefined ? { waitMs: this.#ownerWaitMs } : {});
+    if (outcome === 'left') return;
+    if (outcome === 'continue') { this.#inView.set(command.session, tabId); return; }
+    if (outcome === 'takeover') {
+      this.#onEvent({ type: 'event', name: 'takeover', session: command.session });
+      throw new PreconditionError(TAKEN_IN_TAB);
+    }
+    throw new PreconditionError(WATCHED);
+  }
+
+  /** Is the owner looking at this tab right now: active, in a focused window? */
+  async #watched(tabId: number): Promise<boolean> {
+    const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
+    if (!tab || tab.active !== true || tab.windowId === undefined) return false;
     const window = await this.#chrome.windows.get(tab.windowId).catch(() => undefined);
-    if (window?.focused) throw new PreconditionError(WATCHED);
+    return window?.focused === true;
   }
 
   /** Where the tab actually is now, which a redirect may have changed. */
@@ -475,6 +516,7 @@ export class BrowserCommands implements Executor {
 
   /** Closes this session's own tabs, and only the ones still in its group. */
   async #close(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    this.#inView.delete(command.session);
     const session = this.#sessions.get(command.session);
     if (!session) return {};
     const ids: number[] = [];
@@ -647,7 +689,7 @@ export class BrowserCommands implements Executor {
     // observation is visible from here. A subframe's is not, and the page side
     // refuses a ref whose element no longer matches what was observed.
     if (ref.frameId === 0 && this.#liveUrl(tab) !== ref.docUrl) throw new PreconditionError(MOVED);
-    await this.#background(tab, command.owner);
+    await this.#background(tab, command);
     cancel.check();
     return { ref, tab };
   }
@@ -834,7 +876,7 @@ export class BrowserCommands implements Executor {
     const tab = await this.#chrome.tabs.get(cast.tabId).catch(() => undefined);
     if (!tab) { await this.#stopScreencast(command.session); throw new PreconditionError('That tab is gone. Observe again to continue in a new one.'); }
     if (session.groupId >= 0 && tab.groupId !== session.groupId) { await this.#stopScreencast(command.session); throw new PreconditionError(TAKEN); }
-    await this.#background(tab, command.owner);
+    await this.#background(tab, command);
     const event = inputEvent(command.args);
     cancel.check();
     cancel.dispatch();
@@ -896,7 +938,7 @@ export class BrowserCommands implements Executor {
     const ref = this.#ref(command.session, session, { ref: str(command.args, 'ref') });
     const tab = await this.#ownTab(session, ref.tabKey);
     if (ref.frameId === 0 && this.#liveUrl(tab) !== ref.docUrl) throw new PreconditionError(MOVED);
-    await this.#background(tab, command.owner);
+    await this.#background(tab, command);
     cancel.check();
     const [frame] = await this.#chrome.scripting.executeScript<[string], FieldRead>({
       target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: readFieldRef, args: [ref.local],
@@ -923,7 +965,7 @@ export class BrowserCommands implements Executor {
     if (value === '') throw new PreconditionError('The fill arrived with nothing in it.');
     const tab = await this.#ownTab(session, ref.tabKey);
     if (ref.frameId === 0 && this.#liveUrl(tab) !== ref.docUrl) throw new PreconditionError(MOVED);
-    await this.#background(tab, command.owner);
+    await this.#background(tab, command);
     cancel.check();
     // Focusing and clearing the field is already a change to the page.
     cancel.dispatch();
@@ -985,7 +1027,7 @@ export class BrowserCommands implements Executor {
     if (!observed || observed.generation !== session.generation) throw new PreconditionError('Stale page observation. Observe again before scrolling.');
     const tab = await this.#ownTab(session, observed.tabKey);
     if (this.#liveUrl(tab) !== observed.url) throw new PreconditionError(MOVED);
-    await this.#background(tab, command.owner);
+    await this.#background(tab, command);
     const tabId = tab.id!;
     const direction = str(command.args, 'direction') === 'up' ? 'up' : 'down';
     cancel.check();

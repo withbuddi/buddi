@@ -95,24 +95,23 @@ export function resourcefulLines(tools: readonly string[]): string {
   const lines = ['Before you say you cannot do something, use what you can reach:'];
   if (has('browser.act')) {
     const login = has('secret.fill') && has('secret.list')
-      ? "In buddi's own browser, sign in with a login the owner stored: secret.list for one bound to that site, then secret.fill. " +
-        'If a code or challenge appears and no TOTP secret is stored, ask the owner to press Take over, then carry on.'
-      : "In buddi's own browser, ask the owner to sign in with Take over, then carry on.";
+      ? 'it signs in with a login the owner stored (secret.list, then secret.fill) or asks the owner once with a card.'
+      : 'it asks the owner once with a card when a page needs their sign-in.';
     lines.push(
-      '- A website the owner uses (an account page, a cart, an order, a statement): read browser.status, then look with browser.act; ' +
-        "the owner approves the session. In the owner's own browser they are usually signed in already. " + login,
+      '- A website the owner uses (an account page, a cart, an order, a statement): look with browser.act; buddi picks the browser ' +
+        "(the owner's Chrome where they are signed in, when allowed) and " + login,
     );
   } else {
     lines.push(
       "- A website the owner uses: you cannot open a browser. Say you could look if the owner gives you browser control " +
-        "(your agent page, Tools) and pairs a browser in Settings → Browser.",
+        '(your agent page, Tools).',
     );
   }
   if (has('agent.delegate')) {
     lines.push('- A question that belongs to a colleague you can hand work to: delegate it and relay the answer, credited by handle. Never tell the owner to go ask them.');
   }
   lines.push(
-    '- Only then say exactly what you lack, with one concrete next step (grant a tool, pair a browser, link an account). ' +
+    '- Only then say exactly what you lack, with one concrete next step (grant a tool, link an account). ' +
       (has('browser.act') ? 'Never tell the owner to open the app or site themselves while a browser is available.' : ''),
   );
   return lines.join('\n').trimEnd();

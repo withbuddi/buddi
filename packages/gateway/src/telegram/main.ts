@@ -44,6 +44,7 @@ import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { carryOverDeps } from '../surfaces/carry-over.js';
 import { browserTabUrl, webConfig } from '../web/config.js';
 import { BROWSER_ACT, BrowserPhotos, runBrowserCommand } from './browser-view.js';
+import { askInto, touchBrowser } from '../surfaces/browser-cards.js';
 import { approvalResumeContext, ownerRequestContext } from '../surfaces/owner-request.js';
 import {
   ASK_POLICY_SUFFIX,
@@ -542,6 +543,8 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       // button in this conversation can still fire an hour and three subjects
       // later.
       await withdrawTurnOffers(pool, conversationId, new Date(now()), log);
+      // The owner spoke here: the browser's budgets renew and a card tap is answered.
+      if (!resume) await touchBrowser(browserHost(env), { conversationId, text }, log);
 
       // What this turn made besides its words, gathered as it goes: the files
       // its tools saved (the list the dashboard shows under an answer) and
@@ -562,9 +565,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         // this chat: it is an owner request too, so a `session` tool still
         // works on the other side of an approval. A resume for any other
         // reason — there is none today — would not get one.
-        ctx: resume
-          ? (approval ? approvalResumeContext(deps.ctx, approval) : deps.ctx)
-          : ownerRequestContext(deps.ctx, text),
+        ctx: {
+          ...(resume
+            ? (approval ? approvalResumeContext(deps.ctx, approval) : deps.ctx)
+            : ownerRequestContext(deps.ctx, text)),
+          // The browser's owner moments and the Stop's Resume: one card with buttons.
+          ask: askInto(sink),
+        },
         pool,
         conversationId,
         ...(resume ? { resume } : { userMessage: text }),

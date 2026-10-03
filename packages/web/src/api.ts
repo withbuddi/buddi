@@ -2523,7 +2523,9 @@ export const api = {
   installedApps: () => get<{ apps: Array<{ id: string; name: string; path: string }> }>('/host/apps'),
   browser: (scope?: { agentId: string; conversationId: string }) => get<BrowserStatus>(`/browser${scope ? `?agentId=${encodeURIComponent(scope.agentId)}&conversationId=${encodeURIComponent(scope.conversationId)}` : ''}`),
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
-  browserSettings: (settings: ControlSettings) => post<BrowserStatus>('/browser/settings', settings),
+  browserSettings: (settings: Partial<ControlSettings>) => post<BrowserStatus>('/browser/settings', settings),
+  browserPin: (conversationId: string, route: 'auto' | BrowserRoute) => post<BrowserStatus>('/browser/pin', { conversationId, route }),
+  browserCard: (conversationId: string, answer: string) => post<{ answered?: string; status: BrowserStatus }>('/browser/card', { conversationId, answer }),
   computerPermissions: (prompt = false) => post<BrowserStatus>('/browser/permissions', { prompt }),
   browserInstall: () => post<BrowserStatus>('/browser/install', {}),
   /** Launch the agents' browser once and close it: does it start here? */
@@ -3101,7 +3103,40 @@ export interface HostState {
 }
 
 export type BrowserMode = 'computer' | 'playwright' | 'extension';
-export interface ControlSettings { mode: BrowserMode; browserApp: string; allowedApps: string[]; browserProfile?: string }
+/** Where agents may look: permissions, not a mode (docs/browser.md). The own browser is always allowed. */
+export interface ControlSettings {
+  version: 2;
+  yourChrome: boolean;
+  yourApps: 'off' | 'ask' | 'on';
+  browserApp: string;
+  allowedApps: string[];
+  browserProfile?: string;
+  signInSites: string[];
+  defaultRoute: 'auto' | 'own' | 'chrome' | 'apps';
+  stopExpiryMinutes: number;
+  maxOwnPages: number;
+  showWindow: boolean;
+}
+export type BrowserRoute = 'own' | 'chrome' | 'apps';
+/** One route's switch and health. */
+export interface BrowserRouteStatus {
+  kind: BrowserRoute;
+  allowed: boolean;
+  available: boolean;
+  provider: string;
+  message?: string;
+  repair?: 'install' | 'permissions' | 'pair' | 'helper' | 'sandbox';
+  paired?: boolean;
+  connected?: boolean;
+  mode?: 'off' | 'ask' | 'on';
+}
+/** A browser card the run is parked on, waiting for the owner. */
+export interface BrowserOwnerCard {
+  kind: 'uncertain' | 'budget' | 'sign-in' | 'code' | 'human' | 'stopped';
+  question: string;
+  options: Array<{ label: string; hint?: string; recommended?: boolean }>;
+  site?: string;
+}
 /** "Your browser": the Chrome extension, as the gateway sees it. */
 export interface ExtensionState {
   connected: boolean;
@@ -3119,6 +3154,13 @@ export interface ExtensionState {
 }
 export interface BrowserStatus {
   mode?: BrowserMode;
+  /** Where the selected page looks. */
+  route?: BrowserRoute;
+  routes?: BrowserRouteStatus[];
+  needsOwner?: BrowserOwnerCard;
+  /** A global Stop that holds. */
+  stop?: { at: string; until?: string };
+  pin?: string;
   settings?: ControlSettings;
   permissions?: { supported: boolean; accessibility: boolean; screenRecording: boolean; message?: string };
   /** macOS only: whether this install has the native computer helper, and the fix when it does not. */

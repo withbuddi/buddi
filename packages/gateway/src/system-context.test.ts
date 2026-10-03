@@ -26,21 +26,22 @@ describe('shared platform context', () => {
     const { ctx } = fixture();
     const full = resourcefulLines(['browser.status', 'browser.act', 'secret.list', 'secret.fill', 'agent.delegate']);
     expect(full).toMatch(/^Before you say you cannot do something/);
-    expect(full).toContain('look with browser.act');
-    expect(full).toContain('secret.list for one bound to that site, then secret.fill');
-    expect(full).toContain('Take over');
+    expect(full).toContain('look with browser.act; buddi picks the browser');
+    expect(full).toContain('secret.list, then secret.fill');
+    expect(full).toContain('asks the owner once with a card');
+    expect(full).not.toMatch(/read browser\.status|mode/);
     expect(full).toContain('delegate it and relay the answer');
     expect(full).toContain('Never tell the owner to open the app or site themselves');
-    // No secrets: the owner signs in with Take over instead.
+    // No secrets: the owner is asked once with a card.
     const noSecrets = resourcefulLines(['browser.status', 'browser.act']);
     expect(noSecrets).not.toContain('secret.');
-    expect(noSecrets).toContain('sign in with Take over');
+    expect(noSecrets).toContain('asks the owner once with a card when a page needs their sign-in');
     expect(noSecrets).not.toContain('delegate');
     // No browser.act: never told to use it, told what to ask for instead.
     const bare = resourcefulLines(['browser.status', 'memory.recall']);
     expect(bare).not.toContain('browser.act');
     expect(bare).toContain('you cannot open a browser');
-    expect(bare).toContain('Settings → Browser');
+    expect(bare).toContain('your agent page, Tools');
     expect(bare).toContain('one concrete next step');
     expect(bare).not.toContain('open the app or site themselves');
     expect((await systemContext(ctx, { agentId: 'home', tools: ['browser.act'] })).prompt).toContain('look with browser.act');

@@ -8,6 +8,7 @@ import { BrowserCommands } from './commands.js';
 import type { WorkerChrome } from './chrome.js';
 import { Cancellation, CancelledError, PreconditionError, type Command, type FrameMessage } from './protocol.js';
 import type { CollectedElement } from './tree.js';
+import type { OwnerEventMessage } from './bar.js';
 
 interface FrameResult { url: string; title: string; tree: string; elements: CollectedElement[]; scroll: { x: number; y: number } }
 
@@ -47,6 +48,8 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     origin: 'https://example.test', password: false, name: 'Email' };
   /* What the next reads of the page answer, in turn, before falling back to `frames`; and its load state. */
   const page = { answers: [] as Array<Array<{ frameId: number; result: FrameResult | null }>>, readyState: 'complete' };
+  /** The in-tab bar: what was drawn, and the owner's tap the next read returns. */
+  const bar = { calls: [] as string[], choice: undefined as string | undefined };
   let nextTabId = 100;
   const chrome = {
     storage: { local: { async get() { return {}; }, async set() {}, async remove() {} } },
@@ -70,6 +73,8 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
       async executeScript(injection: { target: { frameIds?: number[]; allFrames?: boolean }; files?: string[]; func?: { name: string } }) {
         if (injection.files) { injected.push(injection.files.join(',')); return []; }
         if (injection.func?.name === 'readReadyState') return [{ frameId: 0, result: page.readyState }];
+        if (injection.func?.name === 'showBar' || injection.func?.name === 'hideBar') { bar.calls.push(injection.func.name); return [{ frameId: 0, result: undefined }]; }
+        if (injection.func?.name === 'readBar') { const choice = bar.choice; bar.choice = undefined; return [{ frameId: 0, result: choice }]; }
         if (injection.func?.name === 'readObservation' && page.answers.length > 0) return page.answers.shift()!;
         if (injection.target.frameIds) {
           located.push(String(injection.target.frameIds[0]));
@@ -92,15 +97,17 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     alarms: { create() {}, onAlarm: { addListener() {} } },
     runtime: { getManifest: () => ({ version: '0.1.0' }), onMessage: { addListener() {} }, async sendMessage() { return undefined; } },
   } as unknown as WorkerChrome;
-  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page };
+  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar };
 }
 
 const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
 
-async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>, options: { onFrame?: (frame: FrameMessage) => void; now?: () => number } = {}) {
+async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>, options: { onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; now?: () => number } = {}) {
   const fake = fakeChrome(frames);
   const waits: number[] = [];
-  const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value', wait: async (ms) => { waits.push(ms); }, ...options });
+  // A clock the waits move, so waiting thirty seconds for the owner takes no time.
+  let clock = 0;
+  const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value', now: () => clock, wait: async (ms) => { waits.push(ms); clock += ms; }, ...options });
   await commands.run(command('navigate', { url: 'https://example.test/' }));
   return { ...fake, commands, waits };
 }
@@ -230,11 +237,50 @@ describe('the owner’s tabs', () => {
     expect(tabs.size).toBe(1);
   });
 
-  it('refuses input while the owner is looking at the tab', async () => {
-    const { commands, tabs, dispatched } = await opened();
+  it('waits for the owner to leave the tab they are looking at, shows the bar after 3 s, and never types meanwhile', async () => {
+    const { commands, tabs, dispatched, bar, waits } = await opened();
     await commands.run(command('observe'));
     [...tabs.values()][0]!.active = true;
-    await expect(commands.run(command('click', { target: { ref: 'e1' } }))).rejects.toThrow(/only acts in background tabs/);
+    await expect(commands.run(command('click', { target: { ref: 'e1' } }))).rejects.toThrow(/You are looking at this tab/);
+    expect(dispatched).toEqual([]);
+    expect(bar.calls).toEqual(['showBar', 'hideBar']);
+    expect(waits.reduce((sum, ms) => sum + ms, 0)).toBe(30_000);
+  });
+
+  it('carries on as soon as the owner leaves the tab', async () => {
+    const { commands, tabs, dispatched, bar, waits } = await opened();
+    await commands.run(command('observe'));
+    const tab = [...tabs.values()][0]!;
+    // Looking at it for the first few reads, then gone to another tab.
+    let reads = 0;
+    Object.defineProperty(tab, 'active', { configurable: true, get: () => reads++ < 4, set: () => {} });
+    await expect(commands.run(command('click', { target: { ref: 'e1' } }))).resolves.toEqual({});
+    expect(dispatched).toContain('Input.dispatchMouseEvent');
+    expect(waits.reduce((sum, ms) => sum + ms, 0)).toBeLessThan(3_000);
+    expect(bar.calls).toEqual([]);
+  });
+
+  it('Let it continue: the agent acts in view, and keeps doing so in that tab', async () => {
+    const { commands, tabs, dispatched, bar } = await opened();
+    await commands.run(command('observe'));
+    [...tabs.values()][0]!.active = true;
+    bar.choice = 'continue';
+    await expect(commands.run(command('click', { target: { ref: 'e1' } }))).resolves.toEqual({});
+    expect(dispatched).toContain('Input.dispatchMouseEvent');
+    const before = bar.calls.length;
+    await commands.run(command('observe'));
+    await expect(commands.run(command('click', { target: { ref: 'e1' } }))).resolves.toEqual({});
+    expect(bar.calls.length).toBe(before);
+  });
+
+  it('Take over in the bar tells the gateway, and nothing is typed', async () => {
+    const events: OwnerEventMessage[] = [];
+    const { commands, tabs, dispatched, bar } = await opened(undefined, { onEvent: (event) => events.push(event) });
+    await commands.run(command('observe'));
+    [...tabs.values()][0]!.active = true;
+    bar.choice = 'takeover';
+    await expect(commands.run(command('click', { target: { ref: 'e1' } }))).rejects.toThrow('The owner took over this tab');
+    expect(events).toEqual([{ type: 'event', name: 'takeover', session: 's1' }]);
     expect(dispatched).toEqual([]);
   });
 
@@ -600,7 +646,7 @@ describe('the owner’s input', () => {
     const { input, tabs } = await casting(false);
     [...tabs.values()][0]!.active = true;
     await expect(input({ kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA', text: 'a' }))
-      .rejects.toThrow(/only acts in background tabs/);
+      .rejects.toThrow(/You are looking at this tab/);
   });
 
   it('refuses input into a tab the owner took out of the group, and ends the screencast', async () => {
@@ -637,7 +683,7 @@ describe('the owner’s secret', () => {
     const watched = await opened();
     await watched.commands.run(command('observe'));
     [...watched.tabs.values()][0]!.active = true;
-    await expect(watched.commands.run(command('fieldInfo', { ref: 'e3' }))).rejects.toThrow(/only acts in background tabs/);
+    await expect(watched.commands.run(command('fieldInfo', { ref: 'e3' }))).rejects.toThrow(/You are looking at this tab/);
     expect(watched.dispatched).toEqual([]);
 
     const opaque = await opened();

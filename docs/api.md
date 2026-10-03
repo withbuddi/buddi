@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-306 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+309 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -3722,9 +3722,12 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | GET | `/api/browser/screenshot` | The browser’s current screen, as JPEG. | yes |
 | POST | `/api/browser/install` | Download the browser agents use (about 150 MB); follow on GET /api/browser. | no |
 | POST | `/api/browser/check` | Launch the browser once to see it starts. | yes |
-| POST | `/api/browser/settings` | Change the browser control modes. | no |
+| POST | `/api/browser/settings` | Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window. A partial object. | no |
+| POST | `/api/browser/pin` | Pin one conversation to a route, or clear it. | yes |
+| POST | `/api/browser/card` | Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) without a chat message. | yes |
+| GET | `/api/browser/telemetry` | Browser stops by cause, cards and routes over the last days. | yes |
 | POST | `/api/browser/permissions` | Check (and optionally ask for) the operating system’s permissions. | yes |
-| POST | `/api/browser/stop` | Stop the browser session. | yes |
+| POST | `/api/browser/stop` | Stop one page, or with no session stop agents' browsing (expires after the set time unless forever). | yes |
 | POST | `/api/browser/takeover` | Take over the screen from the agent. | yes |
 | POST | `/api/browser/resume` | Give the screen back to the agent. | yes |
 | POST | `/api/browser/release` | Release the session. | yes |
@@ -3854,7 +3857,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/che
 
 #### `POST /api/browser/settings`
 
-Change the browser control modes.
+Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window. A partial object.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes what an agent may do without asking.
 - **Answer:** JSON
@@ -3863,6 +3866,47 @@ Change the browser control modes.
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/browser/settings"
+```
+
+#### `POST /api/browser/pin`
+
+Pin one conversation to a route, or clear it.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ conversationId: string, route: auto|own|chrome|apps }`
+- **Answer:** JSON
+- **Errors:** 400; 409
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"conversationId":"…","route":"…"}' "$BUDDI_URL/api/browser/pin"
+```
+
+#### `POST /api/browser/card`
+
+Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) without a chat message.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ conversationId: string, answer: string }`
+- **Answer:** `{ answered?, status }`
+- **Errors:** 400
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"conversationId":"…","answer":"…"}' "$BUDDI_URL/api/browser/card"
+```
+
+#### `GET /api/browser/telemetry`
+
+Browser stops by cause, cards and routes over the last days.
+
+- **Auth:** Session or API token.
+- **Query:** `days?: number`
+- **Answer:** `{ days, tasks, stops, cards, byCause, routes, stopsPerTask }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/telemetry"
 ```
 
 #### `POST /api/browser/permissions`
@@ -3881,10 +3925,10 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `POST /api/browser/stop`
 
-Stop the browser session.
+Stop one page, or with no session stop agents' browsing (expires after the set time unless forever).
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ sessionId?: string }`
+- **Body:** `{ sessionId?: string, forever?: boolean }`
 - **Answer:** JSON
 - **Since:** 0.1.0-pre.15
 

@@ -89,6 +89,8 @@ function fakeApi(): { api: TelegramApi; sent: Sent[] } {
 function status(over: Partial<BrowserStatus> = {}): BrowserStatus {
   return {
     state: 'running', enabled: true, busy: false, hasScreenshot: true, mode: 'playwright',
+    // A photo goes out only when the run needs the owner (docs/browser.md).
+    needsOwner: { kind: 'sign-in', question: 'example.com needs your sign-in.', options: [{ label: 'Take over' }] },
     session: { id: 's-1', agentId: AGENT, conversationId: CONVERSATION, requestId: 'r', task: 'Book the fixture', expiresAt: '2026-09-21T12:00:00.000Z', steps: 3, maxSteps: 80 },
     page: { id: 'p-1', url: 'https://example.com/book', title: 'Book a fixture', tabs: [], capturedAt: '2026-09-21T11:00:00.000Z' },
     ...over,
@@ -114,8 +116,13 @@ const step = { chatId: OWNER_CHAT, agentId: AGENT, conversationId: CONVERSATION 
 
 /* ---------------- the photo ---------------- */
 
-describe('a photo per browser step', () => {
-  it('sends the observation once, with the page, the action and the step count', async () => {
+describe('one photo when the run needs the owner', () => {
+  it('sends nothing for an ordinary step: no photo per step', async () => {
+    const { photos, sent } = photosOn({ value: status({ needsOwner: undefined }) });
+    await photos.step(step);
+    expect(sent).toHaveLength(0);
+  });
+  it('sends the page once with the card\'s question, the action and Take over', async () => {
     const current = { value: status() };
     const { photos, sent } = photosOn(current);
     photos.noteCall(CONVERSATION, { action: 'click', target: { name: 'Book now' } });
@@ -124,7 +131,7 @@ describe('a photo per browser step', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.method).toBe('sendPhoto');
     expect(sent[0]!.photo!.toString()).toBe('JPEGBYTES');
-    expect(sent[0]!.body.caption).toBe(`Book a fixture\nClicked “Book now”\n${LOOPBACK_CAPTION}`);
+    expect(sent[0]!.body.caption).toBe(`example.com needs your sign-in.\nBook a fixture\nClicked “Book now”\n${LOOPBACK_CAPTION}`);
     expect(JSON.parse(sent[0]!.body.reply_markup)).toEqual({
       inline_keyboard: [[{ text: TAKE_OVER_LABEL, url: `http://127.0.0.1:4317/#/chat/${AGENT}/${CONVERSATION}?tab=browser` }]],
     });
@@ -167,7 +174,7 @@ describe('a photo per browser step', () => {
     // bundle ID is what has to be on the owner's list.
     const app = { value: status({
       mode: 'computer',
-      settings: { mode: 'computer', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'] },
+      settings: { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } as const,
       page: { id: 'p-a', url: 'app://com.apple.Notes', title: 'Notes', appId: 'com.apple.Notes', tabs: [], capturedAt: 'x' } as any,
     }) };
     const second = photosOn(app);
@@ -176,7 +183,7 @@ describe('a photo per browser step', () => {
 
     const allowed = { value: status({
       mode: 'computer',
-      settings: { mode: 'computer', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'] },
+      settings: { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } as const,
       page: { id: 'p-b', url: 'app://com.google.Chrome', title: 'Chrome', appId: 'com.google.Chrome', tabs: [], capturedAt: 'x' } as any,
     }) };
     const third = photosOn(allowed);
@@ -185,7 +192,7 @@ describe('a photo per browser step', () => {
   });
 
   it('sends an app the owner allowed Once for this conversation, and only that one', () => {
-    const settings = { mode: 'computer' as const, browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'] };
+    const settings: NonNullable<BrowserStatus['settings']> = { version: 2, yourChrome: false, yourApps: 'on', browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'], signInSites: [], defaultRoute: 'auto', stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false } satisfies NonNullable<BrowserStatus['settings']>;
     const session = { id: 's', agentId: 'a', conversationId: 'c', requestId: 'r', task: 't', expiresAt: 'x', steps: 1, maxSteps: 10 };
     const page = (appId: string) => ({ id: 'p', url: `app://${appId}`, title: '', appId, tabs: [], capturedAt: 'x' }) as any;
     expect(screenshotAllowed(status({ mode: 'computer', settings, session: { ...session, allowedOnce: ['com.example.voicito'] }, page: page('com.example.voicito') }))).toBe(true);
@@ -232,7 +239,7 @@ describe('the Take over button', () => {
   });
 
   it('keeps the caption inside Telegram’s cap even for a page with a long title', () => {
-    const caption = stepCaption({ title: 'x'.repeat(500), url: 'https://example.com', call: { action: 'observe' }, steps: 1, maxSteps: 80, loopback: true });
+    const caption = stepCaption({ title: 'x'.repeat(500), url: 'https://example.com', call: { action: 'observe' }, loopback: true });
     expect(caption.length).toBeLessThan(1024);
   });
 });
@@ -251,14 +258,15 @@ describe('/browser', () => {
     expect(parseBrowserCommand('what is /browser')).toBeUndefined();
   });
 
-  it('says the mode, who is driving and whether access is stopped', () => {
-    expect(browserStatusText(status())).toContain('Browser control — running');
-    expect(browserStatusText(status())).toContain('concierge is driving, 3 of 80 steps');
-    const stopped = browserStatusText(status({ state: 'stopped', session: undefined, page: undefined }));
-    expect(stopped).toContain('Access is stopped');
+  it('says who is looking at a page, where, and whether browsing is stopped — never a step count', () => {
+    expect(browserStatusText(status())).toContain('concierge is looking at a page, for “Book the fixture”');
+    expect(browserStatusText(status())).not.toContain('of 80 steps');
+    expect(browserStatusText(status({ route: 'chrome' }))).toContain('in your Chrome');
+    expect(browserStatusText(status())).toContain('Waiting for you: example.com needs your sign-in.');
+    const stopped = browserStatusText(status({ state: 'stopped', session: undefined, page: undefined, needsOwner: undefined, stop: { at: '2026-10-03T10:00:00.000Z', until: '2026-10-03T11:00:00.000Z' } }));
+    expect(stopped).toContain("Agents' browsing is stopped until 11:00 UTC");
     expect(stopped).toContain('/browser resume');
-    expect(stopped).toContain('No agent is driving');
-    expect(browserStatusText(status({ mode: 'computer', session: undefined }))).toContain('Computer control');
+    expect(stopped).toContain('No agent is looking at a page');
     expect(browserStatusText({ state: 'unavailable', enabled: false, busy: false, hasScreenshot: false }))
       .toContain('Start buddi serve');
   });
@@ -267,13 +275,12 @@ describe('/browser', () => {
     const calls: string[] = [];
     const browser = {
       status: () => status(),
-      control: vi.fn(async (action: string) => { calls.push(action); return status({ state: action === 'stop' ? 'stopped' : 'running', message: 'Ready. Send a new message to the agent to continue.' }); }),
+      control: vi.fn(async (action: string) => { calls.push(action); return status({ state: action === 'stop' ? 'stopped' : 'running', ...(action === 'stop' ? { stop: { at: '2026-10-03T10:00:00.000Z', until: '2026-10-03T11:00:00.000Z' } } : {}) }); }),
     };
-    expect(await runBrowserCommand(browser as any, 'stop')).toContain('All browsers stopped');
-    expect(await runBrowserCommand(browser as any, 'resume')).toContain('Access resumed');
+    expect(await runBrowserCommand(browser as any, 'stop')).toContain("Agents' browsing stopped until 11:00 UTC");
+    expect(await runBrowserCommand(browser as any, 'resume')).toContain('Agents may look at pages again');
     expect(await runBrowserCommand(browser as any, 'release')).toContain('Released');
     expect(calls).toEqual(['stop', 'resume', 'release']);
-    // Status never touches the controls.
     await runBrowserCommand(browser as any, 'status');
     expect(calls).toEqual(['stop', 'resume', 'release']);
   });
@@ -330,11 +337,9 @@ function fakeCatalog(): AgentCatalog {
   };
 }
 
-describe('the step budget in a caption', () => {
-  it('is said only when five or fewer steps are left', () => {
-    const early = stepCaption({ title: 'A page', call: { action: 'observe' }, steps: 1, maxSteps: 80, loopback: false });
-    expect(early).not.toContain('Step');
-    const late = stepCaption({ title: 'A page', call: { action: 'observe' }, steps: 76, maxSteps: 80, loopback: false });
-    expect(late).toContain('Step 76 of 80');
+describe('no step counts in a caption', () => {
+  it('never says how many steps are left', () => {
+    const late = stepCaption({ title: 'A page', call: { action: 'observe' }, loopback: false });
+    expect(late).not.toContain('Step');
   });
 });

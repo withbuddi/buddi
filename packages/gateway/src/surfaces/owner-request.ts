@@ -3,8 +3,15 @@ import type { CoreToolContext } from '@buddi/core';
 
 /** Call only at an authenticated owner input boundary, not from jobs, source
  * prompts, delegated tasks, tool outputs or reconstructed assistant messages. */
+/**
+ * How long an owner message authorises session tools: an hour, the browser's
+ * own task budget (docs/browser.md, "Budgets"). Any owner touch in the
+ * conversation renews the browser's budget beside it.
+ */
+export const OWNER_REQUEST_MS = 60 * 60_000;
+
 export function ownerRequestContext(ctx: CoreToolContext, text: string, id: string = randomUUID()): CoreToolContext {
-  return { ...ctx, ownerRequest: { id, text, expiresAt: Date.now() + 20 * 60_000 } };
+  return { ...ctx, ownerRequest: { id, text, expiresAt: Date.now() + OWNER_REQUEST_MS } };
 }
 
 /** What a resumed run is resuming *for*: the decision, and the turn it came from. */

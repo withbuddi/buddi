@@ -1,109 +1,214 @@
+import { existsSync, statSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ToolRefusal, type EffectDescription, type ToolContext } from '@buddi/core/plugin';
-import { BrowserManager } from './manager.js';
-import { PlaywrightHost, type LaunchProblem } from './host.js';
+import { ToolRefusal, type EffectDescription, type RegisteredRouteProvider, type RouteProvider, type ToolContext } from '@buddi/core/plugin';
+import { BrowserManager, type BrowserManagerOptions } from './manager.js';
+import { PlaywrightHost, type DriverOptions, type LaunchProblem } from './host.js';
 import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
-import { COMPUTER_HELPER_MISSING, ComputerDriver, computerHelperPresent, NativeComputerBridge, resolveApp, settingsSchema, spotlightApps, type AppResolver, type ComputerBridge, type ComputerPermissions, type ControlSettings, type InstalledApp } from './computer.js';
+import { COMPUTER_HELPER_MISSING, ComputerDriver, computerHelperPresent, NativeComputerBridge, resolveApp, spotlightApps, type AppResolver, type ComputerBridge, type ComputerPermissions, type InstalledApp } from './computer.js';
+import { ComputerRouteProvider } from './computer-route.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
-import type { BrowserController, BrowserEngineStatus, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover, SecretFillInput, SecretTypeInput } from './service.js';
-import { BrowserPreconditionError, type BrowserCommand } from './types.js';
+import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngineStatus, type BrowserHandOffer, type BrowserScope, type BrowserServiceOptions, type BrowserStatus, type BrowserRollover, type BrowserTouch, type CardResult, type RouteStatus, type SecretFillInput, type SecretTypeInput } from './service.js';
+import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
+import { applySettingsChange, migrateSettings, PIN_VALUES, settingsSchema, type ControlSettings, type RouteKind, type RoutePin } from './settings.js';
+import { agoText, cardAnswer, chooseRoute, detectWall, ownerCard, RouteProviderDriver, routeNote, siteListed, siteOf, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
+import { BrowserTelemetry, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
+import { canonicalOrigin, fieldBoundTo } from './secrets.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The one control an app card carries: how long the yes lasts. */
 const REMEMBER = { key: 'remember', label: 'Allow', options: ['Once', 'Always'], default: 'Once' };
-/** What an app card's envelope says, read back from the ledger. */
 interface AppEnvelope { tool: 'browser.act'; allowApp: string; name: string }
 function isAppEnvelope(value: unknown): value is AppEnvelope {
   return typeof value === 'object' && value !== null && typeof (value as AppEnvelope).allowApp === 'string';
 }
+/** What the agent is told when an app job has no route: the one fix, never a mode. */
+export const APPS_UNAVAILABLE = 'Your apps are not available to agents right now. The owner can turn them on, or repair them, in Settings → Where agents may look.';
 
-/** Owner-only mode switch. No automatic fallback and no model-selected driver. */
+/** The global Stop as it is kept on disk. */
+interface StopRecord { at: number; until?: number }
+
+const ROUTES: readonly RouteKind[] = ['own', 'chrome', 'apps'];
+
+/**
+ * Where agents may look, and the runtime that picks for them
+ * (docs/browser.md).
+ *
+ * Three routes, one manager each: buddi's own browser (headless, shown in the
+ * Canvas), the owner's Chrome (background tabs through the extension) and the
+ * owner's apps (a provided route; core's computer control by default). The
+ * settings are permissions; per task the runtime chooses, falls back
+ * silently when a route cannot serve, and says one line when the route was
+ * not its own browser. The owner is asked on four occasions only, by card.
+ */
 export class HostController implements BrowserController {
-  #manager: BrowserManager;
   #settings: ControlSettings = settingsSchema.parse({});
   #permissions?: ComputerPermissions;
   #enabled = false;
-  #changing = false;
-  #requests = new Map<string, { expiresAt: number; revoked: boolean }>();
   #extension?: () => ExtensionBridge;
+  #providers?: () => readonly RegisteredRouteProvider[];
   #problem?: LaunchProblem;
   #install?: NonNullable<BrowserEngineStatus['install']>;
-  /** Apps the owner allowed Once, by conversation. Memory only: the ledger answers again after a restart. */
   #once = new Map<string, Set<string>>();
-  /** The conversation whose `browser.act` is running, for the driver's app check. */
   #acting?: string;
+  #names = new Map<string, string>();
+  #managers: Record<RouteKind, BrowserManager>;
+  #ownOptions: BrowserManagerOptions;
+  #host: PlaywrightHost;
+  #stop?: StopRecord;
+  #pins = new Map<string, RoutePin>();
+  #learned = new Set<string>();
+  /** The route each conversation's page is on: `[owner, agent, conversation]`. */
+  #current = new Map<string, RouteKind>();
+  /** Notes already said, so the chat line comes once per site and route. */
+  #noted = new Set<string>();
+  /** Stop cards shown, by conversation, so a Resume tap is understood. */
+  #stopCards = new Map<string, OwnerCard>();
+  /** Cards already handed to a surface, so one moment is one card. */
+  #asked = new WeakSet<OwnerCard>();
+  readonly telemetry: BrowserTelemetry;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
     bridge?: () => ComputerBridge;
     extensionBridge?: () => ExtensionBridge;
-    manager?: (settings: ControlSettings) => BrowserManager;
+    /** Test seam: a driver per route instead of the real ones. */
+    drivers?: Partial<Record<RouteKind, () => BrowserDriver>>;
     lookup?: GuardedLookup;
-    /** Defaults to this process's platform. Computer control exists only on darwin. */
     platform?: NodeJS.Platform;
-    /** Read for DISPLAY and WAYLAND_DISPLAY. Defaults to this process's. */
     env?: NodeJS.ProcessEnv;
-    /** Which browser exists here. Defaults to looking on disk. */
     detect?: () => BrowserAvailability;
-    /** Playwright's Chromium installer. Injectable for tests. */
     installer?: (onLine: (line: string) => void) => Promise<InstallOutcome>;
-    /** How the launch check launches. Injectable, so a test never opens a browser. */
     launch?: ProbeDeps['launch'];
-    /** How an app name or bundle id is found on this Mac. Defaults to Spotlight. Injectable for tests. */
     resolveApp?: AppResolver;
-    /** Whether the native computer helper is on disk. Defaults to a stat of `dist/native/buddi-computer`. */
     helperPresent?: () => boolean;
-  } = {}) { this.#extension = options.extensionBridge; this.#manager = this.#create(); }
-  /**
-   * The gateway hands its WebSocket endpoint over once it exists.
-   *
-   * Late rather than through the constructor because `hostBrowser` is a
-   * singleton per data dir and the module that reads its manifest builds it
-   * before the gateway has a server to attach a socket to. Only the composition
-   * root calls this, and only before `enable`.
-   */
-  useExtension(bridge: () => ExtensionBridge): void { this.#extension = bridge; }
-  #create(): BrowserManager {
-    if (this.options.manager) return this.options.manager(this.#settings);
-    if (this.#settings.mode === 'extension') {
-      // Never silently fall back to another browser: with no endpoint wired,
-      // the mode the owner chose simply says it is not connected.
-      const offline: ExtensionBridge = { connected: () => false, send: () => Promise.reject(new Error(NOT_CONNECTED)), close: () => {} };
-      return new BrowserManager(() => new ExtensionDriver(this.#extension?.() ?? offline, this.options.allowedHosts), { controlFile: path.join(this.dir, 'control.json') });
-    }
-    if (this.#settings.mode === 'computer') return new BrowserManager(() => new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts,
-      (appId) => this.#allowed(appId, this.#acting), (appId) => this.#nameOf(appId)), {
-      controlFile: path.join(this.dir, 'control.json'), maxSessions: 1, allowOpen: true,
-    });
-    const host = new PlaywrightHost({ profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts, ...(this.options.lookup ? { lookup: this.options.lookup } : {}),
-      headless: this.#headless, detect: () => this.#detect(), report: (problem) => { this.#problem = problem; } });
-    return new BrowserManager(() => new PlaywrightDriver(host.options, host), { controlFile: path.join(this.dir, 'control.json'), closeHost: () => host.close() });
+    /** The pin an agent's `agent.md` declares (`browser:`). */
+    agentPin?: (agentId: string) => RoutePin | undefined;
+    /** Passed to every page: budgets, clock, backoff. Tests shorten them. */
+    service?: BrowserServiceOptions;
+    /** Pages per route beyond the settings (tests). */
+    limits?: Partial<Record<RouteKind, number>>;
+    idleEvictMs?: number;
+    queueTimeoutMs?: number;
+  } = {}) {
+    this.#extension = options.extensionBridge;
+    this.telemetry = new BrowserTelemetry(path.join(dir, 'telemetry.jsonl'), options.service?.now);
+    const self = this;
+    const hostOptions: DriverOptions = {
+      profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts,
+      ...(this.options.lookup ? { lookup: this.options.lookup } : {}),
+      detect: () => this.#detect(), report: (problem) => { this.#problem = problem; },
+    };
+    // Read at launch, so Show the window applies to the next launch without a restart.
+    Object.defineProperty(hostOptions, 'headless', { enumerable: true, get: () => self.#headless });
+    this.#host = new PlaywrightHost(hostOptions);
+    const base: BrowserServiceOptions = { ...options.service, telemetry: this.telemetry, requestTakeover: (sessionId) => { void this.control('takeover', sessionId).catch(() => undefined); } };
+    this.#ownOptions = { ...base, route: 'own', maxSessions: options.limits?.own ?? this.#settings.maxOwnPages, closeHost: () => this.#host.close(),
+      ...(options.idleEvictMs !== undefined ? { idleEvictMs: options.idleEvictMs } : {}), ...(options.queueTimeoutMs !== undefined ? { queueTimeoutMs: options.queueTimeoutMs } : {}) };
+    this.#managers = {
+      own: new BrowserManager(() => this.options.drivers?.own?.() ?? new PlaywrightDriver(this.#host.options, this.#host), this.#ownOptions),
+      chrome: new BrowserManager(() => this.options.drivers?.chrome?.() ?? new ExtensionDriver(this.#bridge(), this.options.allowedHosts),
+        { ...base, route: 'chrome', siteLocks: true, maxSessions: options.limits?.chrome ?? 8,
+          ...(options.idleEvictMs !== undefined ? { idleEvictMs: options.idleEvictMs } : {}), ...(options.queueTimeoutMs !== undefined ? { queueTimeoutMs: options.queueTimeoutMs } : {}) }),
+      apps: new BrowserManager(() => this.#appsDriver(), { ...base, route: 'apps', allowOpen: true, maxSessions: options.limits?.apps ?? 1,
+        ...(options.idleEvictMs !== undefined ? { idleEvictMs: options.idleEvictMs } : {}), ...(options.queueTimeoutMs !== undefined ? { queueTimeoutMs: options.queueTimeoutMs } : {}) }),
+    };
   }
-  get #headless(): boolean { return needsHeadless(this.options.platform ?? process.platform, this.options.env ?? process.env); }
+  /** The gateway hands its WebSocket endpoint over once it exists. */
+  useExtension(bridge: () => ExtensionBridge): void { this.#extension = bridge; }
+  /** The routes plugins provide (core's registry), read on every choice. */
+  useRouteProviders(providers: () => readonly RegisteredRouteProvider[]): void { this.#providers = providers; }
+  /** The agents' pins from their `agent.md`. */
+  useAgentPins(pin: (agentId: string) => RoutePin | undefined): void { this.options.agentPin = pin; }
+  #bridge(): ExtensionBridge {
+    const offline: ExtensionBridge = { connected: () => false, send: () => Promise.reject(new Error(NOT_CONNECTED)), close: () => {} };
+    return this.#extension?.() ?? offline;
+  }
+  get #macOS(): boolean { return (this.options.platform ?? process.platform) === 'darwin'; }
+  get #env(): NodeJS.ProcessEnv { return this.options.env ?? process.env; }
+  /** Headless unless the owner asked to see the window (or BUDDI_BROWSER_HEADED=1); always headless with no display. */
+  get #headless(): boolean {
+    if (needsHeadless(this.options.platform ?? process.platform, this.#env)) return true;
+    return !(this.#settings.showWindow || this.#env.BUDDI_BROWSER_HEADED === '1');
+  }
   #detect(): BrowserAvailability { return (this.options.detect ?? detectBrowser)(); }
-  /** The agents' own browser, said for the owner and the model alike. */
   #engine(): BrowserEngineStatus {
     const found = this.#detect();
     const headless = this.#headless;
     const problem = found.engine === 'none' ? undefined : this.#problem;
+    const forced = needsHeadless(this.options.platform ?? process.platform, this.#env);
     const message = found.engine === 'none' ? NO_BROWSER_STATUS
       : problem === 'missing-libraries' ? missingLibrariesMessage()
       : problem === 'no-sandbox' ? noSandboxMessage()
-      : headless ? HEADLESS_NOTE : undefined;
+      : forced ? HEADLESS_NOTE : undefined;
     return { engine: found.engine, headless, ...(problem ? { problem } : {}), ...(message ? { message } : {}), ...(this.#install ? { install: { ...this.#install } } : {}) };
   }
-  /**
-   * Playwright's Chromium, downloaded where `PLAYWRIGHT_BROWSERS_PATH` points (the data directory's `browser/engines` in a packaged install). Started here and
-   * followed through the status: an install takes a minute or more, far
-   * longer than a request should wait.
-   */
+
+  /* ---------------- the apps route ---------------- */
+
+  /** A plugin's apps route for this platform, when one is installed; it wins over core's. */
+  #pluginApps(): RegisteredRouteProvider | undefined {
+    const platform = this.options.platform ?? process.platform;
+    return this.#providers?.().find((provider) => provider.kind === 'apps' && (!provider.platforms || provider.platforms.includes(platform)));
+  }
+  #helperPresent(): boolean { return this.options.bridge !== undefined || (this.options.helperPresent ?? computerHelperPresent)(); }
+  #coreAppsHealth(): { ok: boolean; message?: string; repair?: 'permissions' | 'helper' } {
+    if (!this.#macOS) return { ok: false, message: 'Your apps can be used on macOS.' };
+    if (!this.#helperPresent()) return { ok: false, message: COMPUTER_HELPER_MISSING, repair: 'helper' };
+    if (this.#permissions && (!this.#permissions.accessibility || !this.#permissions.screenRecording)) {
+      return { ok: false, message: 'Your apps need macOS Accessibility and Screen Recording permission.', repair: 'permissions' };
+    }
+    return { ok: true };
+  }
+  #appsDriver(): BrowserDriver {
+    const test = this.options.drivers?.apps;
+    if (test) return test();
+    const plugin = this.#pluginApps();
+    if (plugin) return new RouteProviderDriver(plugin, randomUUID());
+    const computer = new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts,
+      (appId) => this.#allowed(appId, this.#acting), (appId) => this.#nameOf(appId));
+    const provider: RouteProvider = new ComputerRouteProvider(computer, () => this.#coreAppsHealth());
+    return new RouteProviderDriver(provider, randomUUID());
+  }
+
+  /* ---------------- routes and their health ---------------- */
+
+  #chromeConnected(): boolean { try { return this.#bridge().connected(); } catch { return false; } }
+  #chromePaired(): boolean { try { return this.#bridge().paired?.() ?? this.#chromeConnected(); } catch { return false; } }
+  routes(): RouteStatus[] {
+    const engine = this.#engine();
+    const ownOk = engine.engine !== 'none' && !engine.problem;
+    const own: RouteStatus = { kind: 'own', allowed: true, available: ownOk || this.options.drivers?.own !== undefined, provider: 'core',
+      ...(engine.message ? { message: engine.message } : {}),
+      ...(engine.engine === 'none' ? { repair: 'install' as const } : engine.problem === 'no-sandbox' ? { repair: 'sandbox' as const } : engine.problem ? { repair: 'install' as const } : {}) };
+    const connected = this.#chromeConnected();
+    const paired = this.#chromePaired();
+    const chrome: RouteStatus = { kind: 'chrome', allowed: this.#settings.yourChrome, available: this.#settings.yourChrome && connected, provider: 'core', paired, connected,
+      ...(!paired ? { message: 'Add buddi to Chrome and pair it to let agents use your Chrome.', repair: 'pair' as const }
+        : !connected ? { message: 'Your Chrome is paired but not connected right now: open Chrome.' } : {}) };
+    const plugin = this.#pluginApps();
+    let health: { ok: boolean; message?: string; repair?: string };
+    if (this.options.drivers?.apps) health = { ok: true };
+    else if (plugin) { try { const answered = plugin.health(); health = answered instanceof Promise ? this.#lastPluginHealth : answered; if (answered instanceof Promise) void answered.then((value) => { this.#lastPluginHealth = value; }, () => undefined); } catch (error) { health = { ok: false, message: error instanceof Error ? error.message : String(error) }; } }
+    else health = this.#coreAppsHealth();
+    const apps: RouteStatus = { kind: 'apps', allowed: this.#settings.yourApps !== 'off', available: this.#settings.yourApps !== 'off' && health.ok, provider: plugin?.plugin ?? 'core', mode: this.#settings.yourApps,
+      ...(health.message ? { message: health.message } : {}), ...(health.repair ? { repair: health.repair as RouteStatus['repair'] } : {}) };
+    return [own, chrome, apps];
+  }
+  #lastPluginHealth: { ok: boolean; message?: string } = { ok: true };
+  #usable(): { allowed: Record<RouteKind, boolean>; available: Record<RouteKind, boolean> } {
+    const list = this.routes();
+    const allowed = Object.fromEntries(list.map((route) => [route.kind, route.allowed])) as Record<RouteKind, boolean>;
+    const available = Object.fromEntries(list.map((route) => [route.kind, route.available])) as Record<RouteKind, boolean>;
+    return { allowed, available };
+  }
+
+  /* ---------------- install and launch ---------------- */
+
   installBrowser(): BrowserStatus {
     if (this.#install?.state === 'running') return this.status();
-    // The installer's lines are read into numbers here and go no further: the
-    // page draws a bar and says it in buddi's words, never the installer's.
     const reader = new InstallProgressReader();
     const install: NonNullable<BrowserEngineStatus['install']> = { state: 'running', progress: reader.progress };
     this.#install = install;
@@ -121,15 +226,8 @@ export class HostController implements BrowserController {
     });
     return this.status();
   }
-  /**
-   * Launch the agents' browser once and close it, headed or headless as this
-   * machine dictates. Only the agents' own browser has a binary to start; the
-   * other modes answer ok, since there is nothing of buddi's to launch.
-   * A missing-libraries or no-sandbox failure is remembered as the status's problem, as a
-   * failed launch from a real session would be.
-   */
+  /** Launch the agents' own browser once and close it: does it start on this machine? */
   async checkLaunch(): Promise<LaunchCheck> {
-    if (this.#settings.mode !== 'playwright') return { ok: true };
     const check = await probeLaunch({
       headless: this.#headless,
       detect: () => this.#detect(),
@@ -140,44 +238,110 @@ export class HostController implements BrowserController {
     else if (check.problem === 'missing-libraries' || check.problem === 'no-sandbox') this.#problem = check.problem;
     return check;
   }
-  get #macOS(): boolean { return (this.options.platform ?? process.platform) === 'darwin'; }
+
+  /* ---------------- lifecycle and persistence ---------------- */
+
+  async #readJson(name: string): Promise<unknown> {
+    try { return JSON.parse(await readFile(path.join(this.dir, name), 'utf8')); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+  }
+  async #writeJson(name: string, value: unknown): Promise<void> {
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    const file = path.join(this.dir, name); const temp = `${file}.${randomUUID()}.tmp`;
+    await writeFile(temp, JSON.stringify(value), { mode: 0o600 }); await rename(temp, file);
+  }
   async enable(): Promise<void> {
     if (this.#enabled) return;
-    try {
-      const stored = settingsSchema.parse(JSON.parse(await readFile(path.join(this.dir, 'settings.json'), 'utf8')));
-      // Computer control is macOS-only: elsewhere a stored choice of it runs, and reads, as the agents' own browser.
-      // The file keeps what the owner chose.
-      this.#settings = stored.mode === 'computer' && !this.#macOS ? { ...stored, mode: 'playwright' } : stored;
+    const raw = await this.#readJson('settings.json');
+    if (raw !== undefined) {
+      const { settings, migrated } = migrateSettings(raw, { paired: this.#chromePaired(), helperPresent: this.#macOS && this.#helperPresent() });
+      this.#settings = settings;
+      if (migrated) {
+        await this.#writeJson('settings.v1.json', raw).catch(() => undefined);
+        await this.#writeJson('settings.json', settings);
+      }
     }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    this.#manager = this.#create(); await this.#manager.enable(); this.#enabled = true;
+    this.#ownOptions.maxSessions = this.options.limits?.own ?? this.#settings.maxOwnPages;
+    const control = await this.#readJson('control.json') as { stopped?: boolean; at?: number; until?: number | null } | undefined;
+    if (control?.stopped) {
+      // A Stop from before expiries: it held from when it was written, for the default hour.
+      let at = typeof control.at === 'number' ? control.at : undefined;
+      if (at === undefined) { try { at = statSync(path.join(this.dir, 'control.json')).mtimeMs; } catch { at = this.#now(); } }
+      const until = control.until === null ? undefined : typeof control.until === 'number' ? control.until : at + 60 * 60_000;
+      this.#stop = { at, ...(until !== undefined ? { until } : {}) };
+    }
+    const pins = await this.#readJson('pins.json') as Record<string, string> | undefined;
+    for (const [conversation, pin] of Object.entries(pins ?? {})) if ((PIN_VALUES as readonly string[]).includes(pin)) this.#pins.set(conversation, pin as RoutePin);
+    const learned = await this.#readJson('sign-in-sites.json') as string[] | undefined;
+    for (const site of Array.isArray(learned) ? learned.slice(-500) : []) if (typeof site === 'string') this.#learned.add(site);
+    await Promise.all(ROUTES.map((route) => this.#managers[route].enable()));
+    this.#enabled = true;
+  }
+  #now(): number { return this.options.service?.now?.() ?? Date.now(); }
+  /** The global Stop, if it still holds; an expired one is cleared here. */
+  #activeStop(): StopRecord | undefined {
+    if (this.#stop?.until !== undefined && this.#now() >= this.#stop.until) {
+      this.#stop = undefined;
+      this.#later(this.#writeJson('control.json', { stopped: false }));
+    }
+    return this.#stop;
+  }
+
+  /* ---------------- status ---------------- */
+
+  #key(ownerId: string, agentId: string, conversationId: string): string { return JSON.stringify([ownerId, agentId, conversationId]); }
+  #pageOf(scope: BrowserScope): { route: RouteKind; manager: BrowserManager } | undefined {
+    for (const route of ROUTES) {
+      const manager = this.#managers[route];
+      if (manager.child(scope)) return { route, manager };
+    }
+    return undefined;
   }
   status(scope?: BrowserScope): BrowserStatus {
-    const status = this.#manager.status(scope);
-    // On macOS, whether "Use my apps" can run at all: an install without the helper says so on that card.
-    const helper = this.#macOS ? { helper: (this.options.helperPresent ?? computerHelperPresent)() ? { present: true } : { present: false, message: COMPUTER_HELPER_MISSING } } : {};
-    const metadata = { mode: this.#settings.mode, settings: { ...this.#settings, allowedApps: [...this.#settings.allowedApps] }, permissions: this.#permissions, ...helper,
-      ...(this.#settings.mode === 'playwright' ? { browser: this.#engine() } : {}) };
+    const found = scope ? this.#pageOf(scope) : undefined;
+    let status: BrowserStatus;
+    if (scope) status = found ? found.manager.status(scope) : { state: this.#enabled ? 'idle' : 'unavailable', enabled: this.#enabled, busy: false, hasScreenshot: false };
+    else {
+      const sessions = ROUTES.flatMap((route) => this.#managers[route].status().sessions ?? []);
+      const latest = sessions.at(-1) ?? { state: this.#enabled ? 'idle' as const : 'unavailable' as const, enabled: this.#enabled, busy: false, hasScreenshot: false };
+      status = { ...latest, busy: sessions.some((session) => session.busy), sessions };
+    }
+    const stop = this.#activeStop();
+    if (stop && !status.session) status = { ...status, state: 'stopped' };
+    const helper = this.#macOS ? { helper: this.#helperPresent() ? { present: true } : { present: false, message: COMPUTER_HELPER_MISSING } } : {};
+    const metadata = {
+      settings: { ...this.#settings, allowedApps: [...this.#settings.allowedApps], signInSites: [...this.#settings.signInSites] },
+      permissions: this.#permissions, ...helper, browser: this.#engine(), routes: this.routes(),
+      ...(stop ? { stop: { at: new Date(stop.at).toISOString(), ...(stop.until !== undefined ? { until: new Date(stop.until).toISOString() } : {}) } } : {}),
+      ...(scope?.conversationId && this.#pins.has(scope.conversationId) ? { pin: this.#pins.get(scope.conversationId)! } : {}),
+    };
     const once = (entry: BrowserStatus): BrowserStatus => {
       const allowed = entry.session ? this.#once.get(entry.session.conversationId) : undefined;
-      return allowed?.size && entry.session ? { ...entry, session: { ...entry.session, allowedOnce: [...allowed] } } : entry;
+      const withMode = { ...entry, mode: entry.mode ?? 'playwright' as const };
+      return allowed?.size && withMode.session ? { ...withMode, session: { ...withMode.session, allowedOnce: [...allowed] } } : withMode;
     };
     return once({ ...status, ...metadata, ...(status.sessions ? { sessions: status.sessions.map((session) => once({ ...session, ...metadata })) } : {}) });
   }
-  /** On the owner's list, or allowed Once in this conversation. */
-  #allowed(appId: string, conversationId: string | undefined): boolean {
-    return this.#settings.allowedApps.includes(appId) || (conversationId !== undefined && this.#once.get(conversationId)?.has(appId) === true);
+  /** `buddi doctor browser`: the last week of stops, cards and routes. */
+  telemetrySummary(days = 7): TelemetrySummary {
+    const file = this.telemetry.file;
+    const events = file && existsSync(file) ? readTelemetry(file) : this.telemetry.events;
+    return summarize(events, this.#now(), days);
   }
-  /** Display names already looked up, by bundle id, for the agent's sentences. */
-  #names = new Map<string, string>();
+
+  /* ---------------- apps: names, cards, Once / Always ---------------- */
+
+  #allowed(appId: string, conversationId: string | undefined): boolean {
+    const once = conversationId !== undefined && this.#once.get(conversationId)?.has(appId) === true;
+    if (this.#settings.yourApps === 'ask') return once;
+    return this.#settings.allowedApps.includes(appId) || once;
+  }
   #remember(app: InstalledApp): InstalledApp { if (app.name !== app.bundleId) this.#names.set(app.bundleId, app.name); return app; }
-  /** An app's display name, from an earlier lookup or Spotlight. Undefined when not found. */
   async #nameOf(appId: string): Promise<string | undefined> {
     const known = this.#names.get(appId);
     if (known) return known;
     try { return this.#remember(await resolveApp({ bundleId: appId }, this.options.resolveApp ?? spotlightApps)).name; } catch { return undefined; }
   }
-  /** The app an `open` names, as found on this Mac. An allowed bundle id needs no lookup. */
   async #resolve(command: BrowserCommand, conversationId: string | undefined): Promise<InstalledApp> {
     const resolver = this.options.resolveApp ?? spotlightApps;
     if (command.app !== undefined) return this.#remember(await resolveApp({ name: command.app }, resolver));
@@ -185,21 +349,13 @@ export class HostController implements BrowserController {
     if (this.#allowed(appId, conversationId)) return { bundleId: appId, name: this.#names.get(appId) ?? appId };
     return this.#remember(await resolveApp({ bundleId: appId }, resolver));
   }
-  /** `#resolve`, with its refusal said as the tool's own sentence. */
   async #resolveOrRefuse(command: BrowserCommand, conversationId: string | undefined): Promise<InstalledApp> {
     try { return await this.#resolve(command, conversationId); }
     catch (error) { throw error instanceof BrowserPreconditionError ? new ToolRefusal(error.message) : error; }
   }
-  /**
-   * Session for everything but an `open`, in computer mode, of an app the
-   * owner has not allowed: that one is gated, so the owner gets a card.
-   *
-   * Asked once per app and conversation, from core's own ledger: a yes Once
-   * lets it through (remembered here, too, for the screen guards), a no is
-   * refused without a second card, and a card still waiting is not doubled.
-   */
+  /** Session for everything but an `open` of an app the owner has not allowed: that one asks with a card. */
   async tierFor(command: BrowserCommand, ctx: ToolContext): Promise<{ tier: 'session' | 'gated'; reason?: string }> {
-    if (command.action !== 'open' || this.#settings.mode !== 'computer') return { tier: 'session' };
+    if (command.action !== 'open' || this.#settings.yourApps === 'off') return { tier: 'session' };
     const app = await this.#resolveOrRefuse(command, ctx.conversationId);
     if (this.#allowed(app.bundleId, ctx.conversationId)) return { tier: 'session' };
     const conversationId = ctx.conversationId;
@@ -217,8 +373,6 @@ export class HostController implements BrowserController {
     return { tier: 'gated' };
   }
   async describe(command: BrowserCommand, ctx: ToolContext): Promise<EffectDescription> {
-    // Always looked up, never read from an allowance: the executor describes
-    // again before it runs, and the card must say the same both times.
     const app = await this.#resolveOrRefuse(command, undefined);
     const agent = ctx.agentId ?? 'An agent';
     const envelope: AppEnvelope = { tool: 'browser.act', allowApp: app.bundleId, name: app.name };
@@ -232,14 +386,8 @@ export class HostController implements BrowserController {
     const apps = this.#once.get(conversationId) ?? new Set<string>();
     apps.add(appId); this.#once.set(conversationId, apps);
   }
-  /**
-   * The owner said yes on the card. Once: this conversation. Always: the
-   * owner's list, written the way Settings writes it — without restarting
-   * the driver, since the agent's session is usually live. A full list falls
-   * back to Once and says so.
-   */
   async #grant(command: BrowserCommand, ctx: ToolContext): Promise<unknown> {
-    if (this.#settings.mode !== 'computer') throw new BrowserPreconditionError('Computer control is no longer on, so there is no app to allow. Ask the owner.');
+    if (this.#settings.yourApps === 'off') throw new BrowserPreconditionError('Your apps are off, so there is no app to allow. Ask the owner.');
     if (!ctx.conversationId) throw new Error('An app is allowed for a conversation, and this call has none.');
     const app = await this.#resolve(command, undefined);
     let remember = ctx.choices?.remember === 'Always' ? 'Always' : 'Once';
@@ -258,98 +406,343 @@ export class HostController implements BrowserController {
   }
   async #writeSettings(next: ControlSettings): Promise<void> {
     const parsed = settingsSchema.parse(next);
-    await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    const file = path.join(this.dir, 'settings.json'); const temp = `${file}.${randomUUID()}.tmp`;
-    await writeFile(temp, JSON.stringify(parsed), { mode: 0o600 }); await rename(temp, file);
+    await this.#writeJson('settings.json', parsed);
     this.#settings = parsed;
+    this.#ownOptions.maxSessions = this.options.limits?.own ?? parsed.maxOwnPages;
   }
-  screenshot(sessionId?: string): Buffer | undefined { return this.#manager.screenshot(sessionId); }
+
+  /* ---------------- pages ---------------- */
+
+  screenshot(sessionId?: string): Buffer | undefined {
+    if (sessionId) return this.#pageOf({ sessionId })?.manager.screenshot(sessionId);
+    const latest = this.status().session?.id;
+    return latest ? this.#pageOf({ sessionId: latest })?.manager.screenshot(latest) : undefined;
+  }
   hand(scope?: BrowserScope): BrowserHandOffer {
-    if (this.#changing) return { supported: true, message: 'Control settings are changing. Wait before driving.' };
-    return this.#manager.hand(scope);
+    const found = scope ? this.#pageOf(scope) : undefined;
+    if (!found) return { supported: true, message: 'That page changed. Refresh before driving it.' };
+    return found.manager.hand(scope);
   }
   rollover(input: BrowserRollover): boolean {
-    if (this.#changing) throw new Error('Control settings are changing. Wait before continuing.');
-    const moved = this.#manager.rollover(input);
+    let moved = false;
+    for (const route of ROUTES) moved = this.#managers[route].rollover(input) || moved;
+    const oldKey = this.#key(input.ownerId, input.agentId, input.previousConversationId);
+    const current = this.#current.get(oldKey);
+    if (moved && current) { this.#current.delete(oldKey); this.#current.set(this.#key(input.ownerId, input.agentId, input.conversationId), current); }
     const once = this.#once.get(input.previousConversationId);
     if (moved && once) { this.#once.delete(input.previousConversationId); this.#once.set(input.conversationId, once); }
+    const pin = this.#pins.get(input.previousConversationId);
+    if (pin) { this.#pins.set(input.conversationId, pin); this.#later(this.#savePins()); }
     return moved;
   }
+
+  /** The owner's own sign-in list, plus the sites buddi met a login wall on. */
+  #signInSite(site: string | undefined): boolean {
+    return siteListed(site, this.#settings.signInSites) || siteListed(site, this.#learned);
+  }
+  #learn(site: string | undefined): void {
+    if (!site || this.#learned.has(site)) return;
+    this.#learned.add(site);
+    this.#later(this.#writeJson('sign-in-sites.json', [...this.#learned].slice(-500)));
+  }
+  async #storedLogin(ctx: ToolContext, url: string | undefined): Promise<boolean> {
+    const origin = canonicalOrigin(url);
+    if (!origin || !ctx.buddi?.secrets) return false;
+    try { return (await ctx.buddi.secrets.list()).some((secret) => fieldBoundTo(secret.bindings, origin)); } catch { return false; }
+  }
+  #pinFor(ctx: ToolContext): RouteInputPins {
+    return {
+      conversation: ctx.conversationId ? this.#pins.get(ctx.conversationId) : undefined,
+      agent: ctx.agentId ? this.options.agentPin?.(ctx.agentId) : undefined,
+      global: this.#settings.defaultRoute,
+    };
+  }
+
+  /** Hand a card to the surface once, as a question with choices. */
+  #ask(ctx: ToolContext, card: OwnerCard): void {
+    if (this.#asked.has(card)) return;
+    this.#asked.add(card);
+    try { ctx.ask?.({ question: card.question, options: card.options.map((option) => ({ label: option.label, ...(option.hint ? { hint: option.hint } : {}), ...(option.recommended ? { recommended: true } : {}) })), allowOther: false }); }
+    catch { /* a surface's drawing never decides a run */ }
+  }
+
   async execute(command: BrowserCommand, ctx: ToolContext): Promise<unknown> {
-    if (this.#changing) throw new Error('Computer/browser settings are changing. Wait for the owner.');
-    for (const [id, record] of this.#requests) if (record.expiresAt <= Date.now()) this.#requests.delete(id);
-    if (ctx.ownerRequest) {
-      if (this.#requests.get(ctx.ownerRequest.id)?.revoked) throw new Error('Control settings changed. A new owner request is required.');
-      this.#requests.set(ctx.ownerRequest.id, { expiresAt: ctx.ownerRequest.expiresAt, revoked: false });
+    ctx.signal?.throwIfAborted();
+    if (!this.#enabled) throw new Error('Browser driving is available through buddi serve.');
+    if (!ctx.agentId || !ctx.conversationId || !ctx.buddi) throw new Error('A browser action belongs to an agent and a conversation.');
+    const unattended = !ctx.ownerRequest;
+    // The owner's Stop: one card with Resume, never a Settings trip.
+    const stop = this.#activeStop();
+    if (stop && command.action !== 'close') {
+      this.telemetry.stop('owner-stop', { route: 'own', agent: ctx.agentId, ...(ctx.surface?.id ? { surface: ctx.surface.id } : {}) });
+      const card = ownerCard('stopped', { stoppedAgo: agoText(this.#now() - stop.at), ...(stop.until !== undefined ? { until: new Date(stop.until).toISOString().slice(11, 16) + ' UTC' } : {}) });
+      this.#stopCards.set(ctx.conversationId, card);
+      this.#ask(ctx, card);
+      return { completed: false, dispatched: false, needsOwner: card, message: `${browserStoppedMessage(ctx.surface)} Say that in one sentence and stop.` } satisfies Omit<CardResult, 'notice'>;
     }
-    if (this.#settings.mode !== 'computer' && (command.action === 'open' || command.target?.x !== undefined)) throw new Error('Native apps and coordinate targets require Computer mode. Only the owner can change modes.');
     // The owner's yes on an app card, run by core's executor: record it; the agent opens next.
     if (ctx.actionId !== undefined && command.action === 'open') return this.#grant(command, ctx);
+    const key = this.#key(ctx.buddi.owner.id, ctx.agentId, ctx.conversationId);
+    if (command.action === 'close') {
+      for (const route of ROUTES) await this.#managers[route].execute(command, ctx);
+      this.#current.delete(key);
+      return { closed: true };
+    }
+    if (command.target?.x !== undefined && this.#current.get(key) !== 'apps') {
+      throw new BrowserPreconditionError('Coordinates are for an app window. On a web page, use a ref from the page.');
+    }
     let run = command;
+    let appName: string | undefined;
     if (command.action === 'open') {
+      if (this.#settings.yourApps === 'off') {
+        this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId });
+        throw new Error(APPS_UNAVAILABLE);
+      }
       const app = await this.#resolve(command, ctx.conversationId);
       if (!this.#allowed(app.bundleId, ctx.conversationId)) throw new BrowserPreconditionError(`${app.name} is not allowed yet. Ask to open it again so the owner gets a card.`);
       run = { ...command, appId: app.bundleId, app: undefined };
+      appName = app.name;
+    }
+    let route = this.#current.get(key);
+    let choice: RouteChoice = { route, reason: 'continuing' };
+    const site = siteOf(command.url);
+    if (!route || command.action === 'navigate' || command.action === 'open') {
+      const { allowed, available } = this.#usable();
+      choice = chooseRoute({ command: run, prefer: command.prefer, pins: this.#pinFor(ctx), allowed, available, signInSite: this.#signInSite(site), unattended });
+      // A task already in the owner's Chrome stays there for its next page (a checkout on
+      // another domain keeps his sign-in), unless something asked for another route.
+      if (route === 'chrome' && command.action === 'navigate' && choice.route === 'own' && choice.reason === 'default' && allowed.chrome && available.chrome) {
+        choice = { route: 'chrome', reason: 'continuing' };
+      }
+      if (!choice.route) {
+        this.telemetry.stop('apps-unavailable', { route: 'apps', agent: ctx.agentId });
+        throw new Error(unattended ? 'An unattended task looks only in buddi\'s own browser; apps need the owner.' : APPS_UNAVAILABLE);
+      }
+      if (choice.fallbackFrom) this.telemetry.stop('route-unavailable', { route: choice.route, agent: ctx.agentId, ...(site ? { host: site } : {}) });
+      if (route && route !== choice.route) await this.#managers[route].release(ctx.conversationId, ctx.agentId);
+      if (route !== choice.route) this.telemetry.record({ type: 'browser.route', chosen: choice.route, reason: choice.reason, ...(choice.fallbackFrom ? { fallbackFrom: choice.fallbackFrom } : {}), agent: ctx.agentId, ...(site ? { host: site } : {}) });
+      route = choice.route;
+      this.#current.set(key, route);
     }
     this.#acting = ctx.conversationId;
-    try { return await this.#manager.execute(run, ctx); }
-    finally { if (this.#acting === ctx.conversationId) this.#acting = undefined; }
+    let result: unknown;
+    try {
+      try { result = await this.#managers[route].execute(run, ctx); }
+      catch (error) {
+        // The owner's Chrome went away: the same page in buddi's own browser, silently.
+        if (route !== 'chrome' || !(error instanceof Error) || !error.message.includes(NOT_CONNECTED.slice(0, 30))) throw error;
+        this.telemetry.stop('not-connected', { route: 'chrome', agent: ctx.agentId, ...(site ? { host: site } : {}) });
+        const last = this.#managers.chrome.child({ agentId: ctx.agentId, conversationId: ctx.conversationId })?.lastUrl;
+        await this.#managers.chrome.release(ctx.conversationId, ctx.agentId);
+        route = 'own';
+        this.#current.set(key, route);
+        choice = { route, reason: 'chrome-unavailable', fallbackFrom: 'chrome' };
+        const url = run.action === 'navigate' ? run.url : last;
+        if (!url) throw error;
+        result = await this.#managers.own.execute({ action: 'navigate', url } as BrowserCommand, ctx);
+      }
+      ({ result, route, choice } = await this.#walls(result, route, choice, ctx, unattended));
+    } finally { if (this.#acting === ctx.conversationId) this.#acting = undefined; }
+    return this.#annotate(result, route, choice, ctx, appName);
   }
+
   /**
-   * The gates `execute` runs before anything reaches a manager, secret uses
-   * included: settings are not changing mid-flight, and a request the owner
-   * revoked while changing them is not one a secret can ride.
+   * A login wall or a human check on the page just returned. In buddi's own
+   * browser a sign-in moves to the owner's Chrome when it is allowed and
+   * connected (the site is remembered as one that needs his sign-in); a
+   * stored login is pointed at; otherwise one Sign in card. A captcha is a
+   * Human check card wherever it appears.
    */
-  #secret(run: (manager: BrowserManager) => Promise<unknown>, ctx: ToolContext): Promise<unknown> {
-    if (this.#changing) throw new Error('Computer/browser settings are changing. Wait for the owner.');
-    for (const [id, record] of this.#requests) if (record.expiresAt <= Date.now()) this.#requests.delete(id);
-    if (ctx.ownerRequest) {
-      if (this.#requests.get(ctx.ownerRequest.id)?.revoked) throw new Error('Control settings changed. A new owner request is required.');
-      this.#requests.set(ctx.ownerRequest.id, { expiresAt: ctx.ownerRequest.expiresAt, revoked: false });
+  async #walls(result: unknown, route: RouteKind, choice: RouteChoice, ctx: ToolContext, unattended: boolean): Promise<{ result: unknown; route: RouteKind; choice: RouteChoice }> {
+    const observation = (result as { observation?: Observation; needsOwner?: unknown } | undefined);
+    if (!observation?.observation || observation.needsOwner) return { result, route, choice };
+    const wall = detectWall(observation.observation);
+    if (!wall) return { result, route, choice };
+    const scope = { agentId: ctx.agentId!, conversationId: ctx.conversationId! };
+    const child = this.#managers[route].child(scope);
+    if (!child) return { result, route, choice };
+    const url = observation.observation.url;
+    const site = siteOf(url);
+    if (wall === 'human') {
+      this.telemetry.stop('human-check', { route, agent: ctx.agentId!, ...(site ? { host: site } : {}) });
+      const card = child.park('human');
+      return { result: { ...observation, completed: false, needsOwner: card, message: `${site ?? 'This page'} asks for a human. Say so in one sentence and stop; the card asks the owner to take over.` }, route, choice };
     }
-    return run(this.#manager);
+    this.#learn(site);
+    const { allowed, available } = this.#usable();
+    const chromeUsable = allowed.chrome && available.chrome && !unattended;
+    if (route === 'own' && chromeUsable) {
+      // The owner is signed in there: the same address, in a background tab of his Chrome.
+      await this.#managers.own.release(ctx.conversationId!, ctx.agentId!);
+      const key = this.#key(ctx.buddi!.owner.id, ctx.agentId!, ctx.conversationId!);
+      this.#current.set(key, 'chrome');
+      this.telemetry.record({ type: 'browser.route', chosen: 'chrome', reason: 'sign-in-fallback', fallbackFrom: 'own', agent: ctx.agentId!, ...(site ? { host: site } : {}) });
+      const moved = await this.#managers.chrome.execute({ action: 'navigate', url } as BrowserCommand, ctx);
+      return this.#walls(moved, 'chrome', { route: 'chrome', reason: 'sign-in-fallback', fallbackFrom: 'own' }, ctx, unattended);
+    }
+    if (await this.#storedLogin(ctx, url)) {
+      return { result: { ...observation, message: `${(observation as { message?: string }).message ?? ''} This is a sign-in page and the owner keeps a login for it: secret.list, then secret.fill (a TOTP secret answers a code).`.trim() }, route, choice };
+    }
+    if (unattended) return { result, route, choice };
+    this.telemetry.stop('sign-in', { route, agent: ctx.agentId!, ...(site ? { host: site } : {}) });
+    const card = child.park(wall === 'code' ? 'code' : 'sign-in', { chrome: route === 'chrome' ? 'none' : chromeUsable ? 'usable' : allowed.chrome && !available.chrome ? 'offline' : 'none', storedLogin: false });
+    return { result: { ...observation, completed: false, needsOwner: card, message: `${card.question} Say that in one sentence and stop; the card has Take over. You continue when the owner gives the page back.` }, route, choice };
+  }
+
+  #annotate(result: unknown, route: RouteKind, choice: RouteChoice, ctx: ToolContext, appName?: string): unknown {
+    if (!result || typeof result !== 'object') return result;
+    const value = result as Record<string, unknown> & { observation?: Observation; needsOwner?: OwnerCard };
+    const site = siteOf(value.observation?.url) ?? undefined;
+    let note: string | undefined;
+    const reason: RouteReason = choice.reason;
+    if (route !== 'own' || choice.fallbackFrom) {
+      const candidate = routeNote(route, reason, site, appName);
+      const said = `${ctx.conversationId}|${route}|${site ?? appName ?? ''}`;
+      if (candidate && !this.#noted.has(said) && reason !== 'continuing') { this.#noted.add(said); note = candidate; }
+    }
+    if (value.needsOwner) this.#ask(ctx, value.needsOwner);
+    return { ...value, route, ...(note ? { routeNote: note } : {}) };
+  }
+
+  /** The secret tools act on the page the conversation is already on, whichever route it is. */
+  async #secretRoute(ctx: ToolContext): Promise<BrowserManager> {
+    if (!this.#enabled) throw new Error('Browser driving is available through buddi serve.');
+    if (this.#activeStop()) throw new Error(browserStoppedMessage(ctx.surface));
+    const found = ctx.agentId && ctx.conversationId ? this.#pageOf({ agentId: ctx.agentId, conversationId: ctx.conversationId }) : undefined;
+    return found?.manager ?? this.#managers.own;
   }
   async secretFill(input: SecretFillInput, ctx: ToolContext): Promise<unknown> {
-    return this.#secret((manager) => manager.secretFill(input, ctx), ctx);
+    const manager = await this.#secretRoute(ctx);
+    const result = await manager.secretFill(input, ctx);
+    const card = (result as { needsOwner?: OwnerCard } | undefined)?.needsOwner;
+    if (card) this.#ask(ctx, card);
+    return result;
   }
   async secretType(input: SecretTypeInput, ctx: ToolContext): Promise<unknown> {
-    return this.#secret((manager) => manager.secretType(input, ctx), ctx);
+    const manager = await this.#secretRoute(ctx);
+    const result = await manager.secretType(input, ctx);
+    const card = (result as { needsOwner?: OwnerCard } | undefined)?.needsOwner;
+    if (card) this.#ask(ctx, card);
+    return result;
   }
-  async control(action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string): Promise<BrowserStatus> {
-    if (this.#changing) throw new Error('Wait for the settings change to finish.');
-    await this.#manager.control(action, sessionId); return this.status();
+
+  /**
+   * The owner spoke or tapped in a conversation. Every page there gets a
+   * fresh budget and its card is answered: Look / Take over hands the page
+   * over, Use my Chrome pins the conversation to it, Resume lifts the Stop.
+   */
+  async touch(input: BrowserTouch): Promise<{ answered?: string }> {
+    const text = input.text ?? '';
+    let answered: string | undefined;
+    const stopCard = this.#stopCards.get(input.conversationId);
+    if (stopCard) {
+      const answer = cardAnswer(stopCard, text);
+      if (answer) this.#stopCards.delete(input.conversationId);
+      if (answer === 'resume') { await this.control('resume'); answered = 'resume'; }
+    }
+    for (const route of ROUTES) {
+      for (const { child, card } of this.#managers[route].renew(input.conversationId, input.agentId)) {
+        if (!card) continue;
+        const answer = cardAnswer(card, text);
+        if (answer === 'takeover') {
+          const id = child.status().session?.id;
+          if (id) { await this.control('takeover', id).catch(() => undefined); answered = 'takeover'; }
+        } else if (answer === 'chrome') {
+          this.#pins.set(input.conversationId, 'chrome'); this.#later(this.#savePins());
+          const session = child.status().session;
+          const last = child.lastUrl;
+          if (session && route !== 'chrome') {
+            await this.#managers[route].release(input.conversationId, session.agentId);
+            for (const [key] of this.#current) if (key.endsWith(JSON.stringify(input.conversationId) + ']')) this.#current.delete(key);
+            if (last) this.#managers.chrome.remember(session.agentId, input.conversationId, last);
+          }
+          answered = 'chrome';
+        } else if (answer) answered = answer;
+      }
+    }
+    return answered ? { answered } : {};
   }
-  async configure(input: unknown): Promise<BrowserStatus> {
-    const next = settingsSchema.parse(input);
-    if (next.mode === 'computer' && !this.#macOS) throw new Error('Computer control is macOS-only. Choose another mode.');
-    if (!this.#enabled) throw new Error('Host control is unavailable. Start buddi serve.');
-    if (this.#changing) throw new Error('Settings are already changing.');
-    const current = this.#manager.status();
-    if (current.busy || current.sessions?.length) throw new Error('Release all active sessions before changing control settings.');
-    this.#changing = true;
-    try {
-      await mkdir(this.dir, { recursive: true, mode: 0o700 });
-      const file = path.join(this.dir, 'settings.json'); const temp = `${file}.${randomUUID()}.tmp`;
-      await writeFile(temp, JSON.stringify(next), { mode: 0o600 }); await rename(temp, file);
-      for (const record of this.#requests.values()) record.revoked = true;
-      await this.#manager.shutdown(); this.#settings = next; this.#manager = this.#create(); await this.#manager.enable();
+
+  /** Writes nobody waits for, finished before shutdown so a closing process loses none. */
+  #pending = new Set<Promise<unknown>>();
+  #later(work: Promise<unknown>): void {
+    const tracked = work.catch(() => undefined).finally(() => { this.#pending.delete(tracked); });
+    this.#pending.add(tracked);
+  }
+  async #savePins(): Promise<void> { await this.#writeJson('pins.json', Object.fromEntries(this.#pins)).catch(() => undefined); }
+  /** Pin a conversation to a route (`/use browser:chrome`), or clear it with `auto`. */
+  async pin(conversationId: string, pin: string): Promise<BrowserStatus> {
+    if (!(PIN_VALUES as readonly string[]).includes(pin)) throw new Error(`A pin is one of ${PIN_VALUES.join(', ')}.`);
+    if (pin === 'auto') this.#pins.delete(conversationId); else this.#pins.set(conversationId, pin as RoutePin);
+    await this.#savePins();
+    return this.status({ conversationId });
+  }
+
+  async control(action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string, options: { forever?: boolean } = {}): Promise<BrowserStatus> {
+    if (!this.#enabled) throw new Error('The host browser service is unavailable.');
+    if (!sessionId && action === 'stop') {
+      // Stop agents' browsing: every page closes, and it expires (an hour by default) unless "until I say".
+      const minutes = options.forever ? 0 : this.#settings.stopExpiryMinutes;
+      const at = this.#now();
+      this.#stop = { at, ...(minutes > 0 ? { until: at + minutes * 60_000 } : {}) };
+      await this.#writeJson('control.json', { stopped: true, at, until: this.#stop.until ?? null });
+      await Promise.all(ROUTES.map((route) => this.#managers[route].control('stop')));
+      this.#current.clear();
       return this.status();
-    } finally { this.#changing = false; }
+    }
+    if (!sessionId && action === 'resume') {
+      this.#stop = undefined;
+      this.#stopCards.clear();
+      await this.#writeJson('control.json', { stopped: false });
+      return this.status();
+    }
+    if (!sessionId) {
+      const pages = ROUTES.flatMap((route) => this.#managers[route].pages());
+      if (pages.length === 0 && action === 'release') return this.status();
+      throw new Error('Select a page before using this control.');
+    }
+    const found = this.#pageOf({ sessionId });
+    if (!found) throw new Error('That page changed. Refresh before controlling it.');
+    if (action === 'takeover') {
+      // One page in the owner's hands at a time.
+      const held = ROUTES.flatMap((route) => this.#managers[route].pages()).find((page) => page.status().state === 'paused' && page.status().session?.id !== sessionId);
+      if (held) throw new Error('You already have a page in your hands. Give it back first.');
+    }
+    await found.manager.control(action, sessionId);
+    return this.status();
+  }
+
+  /**
+   * Change what agents may use. No lock: a page already open keeps working,
+   * and turning a route off closes its pages.
+   */
+  async configure(input: unknown): Promise<BrowserStatus> {
+    if (!this.#enabled) throw new Error('Host control is unavailable. Start buddi serve.');
+    const next = applySettingsChange(this.#settings, input);
+    if (next.yourApps !== 'off' && !this.#macOS && !this.#pluginApps() && !this.options.drivers?.apps) throw new Error('Your apps can be used on macOS only.');
+    const chromeOff = this.#settings.yourChrome && !next.yourChrome;
+    const appsOff = this.#settings.yourApps !== 'off' && next.yourApps === 'off';
+    await this.#writeSettings(next);
+    if (chromeOff) await this.#managers.chrome.control('stop');
+    if (appsOff) await this.#managers.apps.control('stop');
+    for (const [key, route] of this.#current) if ((chromeOff && route === 'chrome') || (appsOff && route === 'apps')) this.#current.delete(key);
+    return this.status();
   }
   async checkPermissions(prompt = false): Promise<BrowserStatus> {
-    if (this.#changing || this.#manager.status().busy || this.#manager.status().sessions?.length) throw new Error('Release computer/browser sessions before checking permissions.');
-    this.#changing = true;
-    try {
-    if (!this.#macOS) this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: 'Computer mode requires macOS 14+. Browser automation remains an explicit alternative.' };
-    // No helper on disk: a fact the "Use my apps" card already shows, not a failure to shout about.
-    else if (!this.options.bridge && !(this.options.helperPresent ?? computerHelperPresent)()) this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: COMPUTER_HELPER_MISSING };
+    if (!this.#macOS) this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: 'Your apps can be used on macOS 14+.' };
+    else if (!this.#helperPresent()) this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: COMPUTER_HELPER_MISSING };
     else {
       const bridge = this.options.bridge?.() ?? new NativeComputerBridge();
       const result = await bridge.run({ operation: 'permissions', prompt });
       this.#permissions = { supported: result.supported === true, accessibility: result.accessibility === true, screenRecording: result.screenRecording === true };
     }
     return this.status();
-    } finally { this.#changing = false; }
   }
-  async shutdown(): Promise<void> { this.#enabled = false; await this.#manager.shutdown(); }
+  async shutdown(): Promise<void> {
+    this.#enabled = false;
+    await Promise.all(ROUTES.map((route) => this.#managers[route].shutdown()));
+    await Promise.all([...this.#pending]);
+  }
 }
+
+type RouteInputPins = { conversation?: RoutePin | undefined; agent?: RoutePin | undefined; global?: RoutePin | undefined };

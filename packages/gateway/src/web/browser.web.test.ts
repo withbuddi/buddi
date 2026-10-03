@@ -314,8 +314,29 @@ describe('browser dashboard endpoints', () => {
     expect((await fetch(`${origin}/api/browser/screenshot?sessionId=current&v=old`, { headers })).status).toBe(404);
     const control = vi.spyOn(browser, 'control').mockRejectedValue(new Error('The browser session changed.'));
     expect((await fetch(`${origin}/api/browser/stop`, { method: 'POST', headers, body: JSON.stringify({ sessionId: 'old' }) })).status).toBe(409);
-    expect(control).toHaveBeenCalledWith('stop', 'old');
+    expect(control).toHaveBeenCalledWith('stop', 'old', undefined);
     expect((await fetch(`${origin}/api/browser/stop`, { method: 'POST', headers, body: JSON.stringify({ sessionId: 42 }) })).status).toBe(400);
+  });
+  it('pins a conversation, answers a card without a message, stops until I say, and reports stops by cause', async () => {
+    const pin = vi.fn(async () => ({ state: 'idle', enabled: true, busy: false, hasScreenshot: false, pin: 'chrome' }));
+    const touch = vi.fn(async () => ({ answered: 'resume' }));
+    const control = vi.fn(async () => ({ state: 'stopped', enabled: true, busy: false, hasScreenshot: false }));
+    const fake = { enable: async () => {}, shutdown: async () => {}, status: () => ({ state: 'idle', enabled: true, busy: false, hasScreenshot: false }), screenshot: () => undefined,
+      execute: async () => ({}), secretFill: async () => ({}), secretType: async () => ({}), control, pin, touch,
+      telemetrySummary: () => ({ days: 7, tasks: 3, stops: 1, cards: 1, byCause: [{ cause: 'sign-in', count: 1, outcome: 'card' }], routes: { own: 3 }, stopsPerTask: 0.33 }) } as unknown as BrowserController;
+    const { origin } = await setup(true, fake);
+    const headers = await session(origin);
+    const pinned = await fetch(`${origin}/api/browser/pin`, { method: 'POST', headers, body: JSON.stringify({ conversationId: 'c1', route: 'chrome' }) });
+    expect(pinned.status).toBe(200);
+    expect(pin).toHaveBeenCalledWith('c1', 'chrome');
+    expect((await fetch(`${origin}/api/browser/pin`, { method: 'POST', headers, body: JSON.stringify({ conversationId: 'c1' }) })).status).toBe(400);
+    const card = await fetch(`${origin}/api/browser/card`, { method: 'POST', headers, body: JSON.stringify({ conversationId: 'c1', answer: 'Resume' }) });
+    expect(await card.json()).toMatchObject({ answered: 'resume' });
+    expect(touch).toHaveBeenCalledWith({ conversationId: 'c1', text: 'Resume' });
+    await fetch(`${origin}/api/browser/stop`, { method: 'POST', headers, body: JSON.stringify({ forever: true }) });
+    expect(control).toHaveBeenLastCalledWith('stop', undefined, { forever: true });
+    const telemetry = await fetch(`${origin}/api/browser/telemetry`, { headers });
+    expect(await telemetry.json()).toMatchObject({ tasks: 3, byCause: [{ cause: 'sign-in', count: 1 }] });
   });
   it('status is read-only and control needs CSRF plus same origin', async () => {
     const { origin, driver, browser } = await setup();

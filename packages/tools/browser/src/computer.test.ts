@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ComputerDriver, computerEnvironment, isNearName, resolveApp, settingsSchema, type AppQuery, type ComputerBridge } from './computer.js';
+import { ComputerDriver, computerEnvironment, isNearName, resolveApp, type AppQuery, type ComputerBridge } from './computer.js';
+import { settingsSchema } from './settings.js';
 import { BrowserPreconditionError, commandSchema } from './types.js';
 
 const node = { path: [0, 1], role: 'AXButton', name: 'Continue', value: '', secure: false, enabled: true, bounds: { x: 10, y: 20, width: 100, height: 30 } };
@@ -18,8 +19,8 @@ describe('native computer driver', () => {
   it('does not pass application credentials or loader overrides to the helper', () => {
     expect(computerEnvironment({ HOME: '/owner', PATH: '/bin', BUDDI_VAULT_KEY: 'secret', DATABASE_URL: 'secret', OPENAI_API_KEY: 'secret', DYLD_INSERT_LIBRARIES: 'unsafe' })).toEqual({ HOME: '/owner', PATH: '/bin' });
   });
-  it('defaults to the agents\' own browser and requires a permitted browser', () => {
-    expect(settingsSchema.parse({}).mode).toBe('playwright');
+  it('defaults to the agents\' own browser only, and requires a permitted browser app', () => {
+    expect(settingsSchema.parse({})).toMatchObject({ version: 2, yourChrome: false, yourApps: 'off' });
     expect(settingsSchema.safeParse({ browserApp: 'com.google.Chrome', allowedApps: ['com.apple.TextEdit'] }).success).toBe(false);
     expect(settingsSchema.safeParse({ mode: 'stealth' }).success).toBe(false);
   });

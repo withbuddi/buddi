@@ -195,6 +195,8 @@ export interface CatalogAgent extends AgentSummary {
    */
   tools: string[];
   maxTurns: number;
+  /** The agent's browser pin from `agent.md` (`browser:`), when it has one. */
+  browserRoute?: 'auto' | 'own' | 'chrome' | 'apps';
   thinking?: ThinkingSetting;
   /** Idle time before a fresh conversation, when the file says; absent is `3h`. */
   idleRollover?: IdleRollover;
@@ -990,6 +992,7 @@ function buildAgent(
     model: provider.model,
     tools,
     maxTurns,
+    ...(frontmatter.browser === undefined ? {} : { browserRoute: frontmatter.browser }),
     ...(frontmatter.thinking === undefined ? {} : { thinking: frontmatter.thinking }),
     ...(frontmatter.idleRollover === undefined ? {} : { idleRollover: frontmatter.idleRollover }),
     language,

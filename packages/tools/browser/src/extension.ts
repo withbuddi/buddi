@@ -70,7 +70,17 @@ export interface ExtensionBridge {
    * answer to a command. Returns the unsubscribe.
    */
   frames?(session: string, onFrame: (frame: HandFrame) => void): () => void;
+  /** A pairing record exists, whether or not Chrome is connected right now. */
+  paired?(): boolean;
+  /**
+   * What the owner did in the page itself, for one session: `takeover` from the
+   * in-tab bar's Take over. Returns the unsubscribe. Since extension protocol
+   * "bar" (docs/browser.md, "Work in view").
+   */
+  events?(session: string, listener: (event: ExtensionEvent) => void): () => void;
 }
+/** An unsolicited event from the extension about one session. */
+export type ExtensionEvent = 'takeover';
 
 export const NOT_CONNECTED = 'Your browser is not connected. Open the buddi extension in Chrome and press Connect.';
 
@@ -110,6 +120,13 @@ export class ExtensionDriver implements BrowserDriver {
 
   async start(): Promise<void> {
     if (!this.bridge.connected()) throw new Error(NOT_CONNECTED);
+  }
+
+  #events?: () => void;
+  /** The in-tab bar's Take over: the service treats it as the Canvas button. */
+  onOwnerTakeover(listener: () => void): void {
+    this.#events?.();
+    this.#events = this.bridge.events?.(this.session, (event) => { if (event === 'takeover') listener(); });
   }
 
   #invalidate(): void { this.#observation = undefined; this.#picture = undefined; }
@@ -285,6 +302,7 @@ export class ExtensionDriver implements BrowserDriver {
 
   async close(): Promise<void> {
     this.#invalidate();
+    // The listener lives as long as the driver: a page re-opened in the same session keeps its bar.
     this.#frames?.();
     this.#frames = undefined;
     // A closed socket has already forgotten the session; nothing to close.
