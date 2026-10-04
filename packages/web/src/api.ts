@@ -2010,6 +2010,22 @@ export type BackupPhase =
   | 'failed'
   | 'rolled-back';
 
+/** Remove buddi from this Mac: what goes, and the token the next two calls bring back. */
+export type UninstallPlan =
+  | { available: false; reason: string }
+  | { available: true; data: string; keychain?: string; service?: string; app?: string; backups: string; appFinishes: boolean; token: string };
+
+export interface UninstallJob {
+  id: string;
+  kind: 'uninstall-backup';
+  phase: string;
+  detail?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+  report?: { archive: string; passphraseFile?: string; passphrase?: string };
+}
+
 export interface BackupJob {
   id: string;
   kind: string;
@@ -3013,6 +3029,11 @@ export const api = {
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
   /** The passphrase behind the lock-screen PIN (none needed when no PIN is set). */
   revealBackupPassphrase: (pin?: string) => post<{ passphrase: string }>('/backups/passphrase/reveal', pin === undefined ? {} : { pin }),
+  /* ---- remove buddi from this Mac ---- */
+  uninstallPlan: () => get<UninstallPlan>('/system/uninstall'),
+  uninstallBackup: (token: string) => post<{ job: UninstallJob }>('/system/uninstall/backup', { token }),
+  uninstallJob: (id: string) => get<UninstallJob>(`/system/uninstall/jobs/${encodeURIComponent(id)}`),
+  uninstall: (body: { token: string; wroteItDown: true; keepData: boolean }) => post<{ accepted: true }>('/system/uninstall', body),
   /** Home's card after the first encrypted backup, until "I saved it". */
   passphraseNotice: () => get<{ show: false } | { show: true; passphrase: string }>('/backups/passphrase/notice'),
   acknowledgePassphrase: () => post<{ acknowledgedAt: string }>('/backups/passphrase/notice', {}),

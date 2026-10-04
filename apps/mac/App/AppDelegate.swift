@@ -33,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             statusChanged?()
             window?.supervisorChanged()
         }
+        // Settings → System's "Remove buddi from this Mac" ends here: the app finishes it.
+        supervisor.onUninstall = { [weak self] keepData in
+            guard let self else { return }
+            Uninstall.finish(supervisor: self.supervisor, keepData: keepData)
+        }
         // First run (and anything else that opens the dashboard) lands in the window.
         supervisor.presentDashboard = { [weak window] url in window?.present(link: url) }
         window.present()
@@ -83,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc func checkForUpdatesFromMenu() { statusItemController?.checkForUpdates() }
+    @objc func uninstallBuddi() { Uninstall.run(supervisor: supervisor) }
 
     @objc func openSettings() { mainWindow?.present(); mainWindow?.go(to: DashboardRoutes.settings) }
     @objc func lockDashboard() { mainWindow?.lock() }

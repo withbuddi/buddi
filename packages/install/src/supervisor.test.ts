@@ -42,6 +42,37 @@ async function serve(action = vi.fn(async (_name: string) => {})): Promise<{ soc
 }
 
 describe('the supervisor', () => {
+  test('serves uninstall from the product: the plan, the last backup as a job, and the removal', async () => {
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
+    const socket = supervisorSocket(data);
+    const job = { id: '00000000-0000-4000-8000-000000000001', kind: 'uninstall-backup' as const, phase: 'starting', phases: ['starting'], startedAt: 'now' };
+    const started: boolean[] = [];
+    const server = controlSocket({
+      status: () => STATUS, action: vi.fn(async () => {}),
+      uninstall: {
+        plan: () => ({ data, backups: '/Users/owner/buddi-backups', appFinishes: true }),
+        keepLast: () => job,
+        job: id => (id === job.id ? job : undefined),
+        start: ({ keepData }) => { started.push(keepData); return { status: 202 }; },
+        busy: () => false,
+      },
+    });
+    servers.push(server);
+    await listenOnSocket(server, socket);
+    expect(await call(socket, '/uninstall')).toEqual({ status: 200, body: { data, backups: '/Users/owner/buddi-backups', appFinishes: true } });
+    expect(await call(socket, '/uninstall/backup', 'POST')).toEqual({ status: 202, body: { job } });
+    expect(await call(socket, `/jobs/${job.id}`)).toEqual({ status: 200, body: job });
+    expect((await call(socket, '/uninstall', 'POST', { host: 'localhost' }, { keepData: 'yes' })).status).toBe(400);
+    expect(await call(socket, '/uninstall', 'POST', { host: 'localhost' }, { keepData: true })).toEqual({ status: 202, body: { accepted: true } });
+    expect(started).toEqual([true]);
+  });
+
+  test('has no uninstall verbs without an installation behind it', async () => {
+    const { socket } = await serve();
+    expect((await call(socket, '/uninstall')).status).toBe(404);
+    expect((await call(socket, '/uninstall', 'POST')).status).toBe(404);
+  });
+
   test('serves status and the three actions on an owner-only socket', async () => {
     const { socket, action } = await serve();
     expect(path.basename(socket)).toBe('supervisor.sock');

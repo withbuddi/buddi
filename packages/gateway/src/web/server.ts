@@ -325,6 +325,7 @@ import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
 import { LOCKED_BODY, LockUnavailable, allowedWhileLocked, clientOf, createLock } from './lock.js';
 import { acknowledgePassphrase, passphraseNotice, type PassphraseNoticeDeps } from './passphrase-notice.js';
+import { createTokenStore, uninstallBackupRoute, uninstallJobRoute, uninstallPlanRoute, uninstallRoute as removeBuddiRoute, withoutPassphrase } from './uninstall.js';
 import { matchApiRoute, TOKEN_REFUSALS } from './api-routes.js';
 import { QUIET_UNAVAILABLE_TEXT, pluginCommands } from './composer.js';
 import { createEngagementHooks } from '../missions/engagement.js';
@@ -721,6 +722,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       },
       recoveryActive: () => inRecovery(deps.pool),
     });
+  /** Remove buddi from this Mac: the token its plan mints (web/uninstall.ts). */
+  const uninstallTokens = createTokenStore();
   const lock = createLock({ pool: deps.pool, sessions, now: deps.now, get timezone() { return deps.timezone; }, widgets, needsYou, log });
   const openStreams = new Map<string, { session: Session; responses: Set<ServerResponse> }>();
   /*
@@ -2417,7 +2420,18 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (upgradeJob) return reply(res, await upgradeJobRoute(versionDeps(), upgradeJob[1] as string));
 
       const backupJob = /^\/api\/backups\/jobs\/([0-9a-f-]{36})$/i.exec(path);
-      if (backupJob) return reply(res, await backupJobRoute(backupDeps(), backupJob[1] as string));
+      if (backupJob) return reply(res, withoutPassphrase(await backupJobRoute(backupDeps(), backupJob[1] as string)));
+
+      /* Remove buddi from this Mac: the plan (with its token) and the last backup's job, from this computer only. */
+      if (path === '/api/system/uninstall') {
+        if (session.via !== 'local') return sendJson(res, 403, { error: 'Remove buddi from the computer it runs on.' });
+        return reply(res, await uninstallPlanRoute({ env: deps.env ?? process.env, now: deps.now }, uninstallTokens));
+      }
+      const uninstallJob = /^\/api\/system\/uninstall\/jobs\/([0-9a-f-]{36})$/i.exec(path);
+      if (uninstallJob) {
+        if (session.via !== 'local') return sendJson(res, 403, { error: 'Remove buddi from the computer it runs on.' });
+        return reply(res, await uninstallJobRoute({ env: deps.env ?? process.env }, uninstallJob[1] as string));
+      }
 
       const catalogueJob = /^\/api\/catalogue\/jobs\/([0-9a-f-]{36})$/i.exec(path);
       if (catalogueJob) return reply(res, catalogueJobRoute(catalogueJob[1] as string));
@@ -3658,6 +3672,13 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     if (path === '/api/backups') return reply(res, await createBackupRoute(backupDeps(), body));
     if (path === '/api/backups/passphrase/notice') return sendJson(res, 200, await acknowledgePassphrase({ pool: deps.pool, now: deps.now }));
+    if (path === '/api/system/uninstall/backup' || path === '/api/system/uninstall') {
+      if (session.via !== 'local') return sendJson(res, 403, { error: 'Remove buddi from the computer it runs on.' });
+      const uninstallDeps = { env: deps.env ?? process.env, now: deps.now };
+      return reply(res, path === '/api/system/uninstall/backup'
+        ? await uninstallBackupRoute(uninstallDeps, uninstallTokens, body)
+        : await removeBuddiRoute(uninstallDeps, uninstallTokens, body));
+    }
     if (path === '/api/backups/passphrase/reveal') {
       const allowed = await lock.verify((body as { pin?: unknown }).pin);
       if (!allowed.ok) return sendJson(res, allowed.status, allowed.body);

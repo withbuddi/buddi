@@ -39,3 +39,35 @@ final class SupervisorPolicyTests: XCTestCase {
         XCTAssertFalse(SupervisorPolicy.runsOtherRelease(installRoot: bundled, chosen: bundled))
     }
 }
+
+final class UninstallPolicyTests: XCTestCase {
+    func testTheLauncherRunsWithTheBackupAndTheWordsAlreadyTakenCareOf() {
+        XCTAssertEqual(UninstallPolicy.launcherArguments(keepData: false), ["uninstall", "--yes", "--no-backup", "--i-have-the-passphrase"])
+        XCTAssertEqual(UninstallPolicy.launcherArguments(keepData: true).last, "--keep-data")
+    }
+
+    func testTheRequestSaysWhetherToKeepTheData() {
+        XCTAssertEqual(UninstallPolicy.keepData(fromRequest: Data(#"{"keepData":true,"at":"x"}"#.utf8)), true)
+        XCTAssertEqual(UninstallPolicy.keepData(fromRequest: Data(#"{"at":"x"}"#.utf8)), false)
+        XCTAssertNil(UninstallPolicy.keepData(fromRequest: Data("nope".utf8)))
+    }
+
+    func testTheBackupJobIsReadAsRunningDoneOrFailed() {
+        XCTAssertEqual(UninstallPolicy.jobState(from: Data(#"{"phase":"backup","detail":"dumping"}"#.utf8)), .running("dumping"))
+        XCTAssertEqual(UninstallPolicy.jobState(from: Data(#"{"phase":"failed","error":"disk full","finishedAt":"t"}"#.utf8)), .failed("disk full"))
+        let done = UninstallPolicy.jobState(from: Data(#"{"phase":"done","finishedAt":"t","report":{"archive":"/a.age","passphraseFile":"/a.age.passphrase.txt","passphrase":"six words"}}"#.utf8))
+        XCTAssertEqual(done, .done(.init(archive: "/a.age", passphraseFile: "/a.age.passphrase.txt", passphrase: "six words")))
+    }
+
+    func testRemoveWaitsForIWroteItDownWhenThereAreWords() {
+        let locked = UninstallPolicy.BackupReport(archive: "/a.age", passphraseFile: nil, passphrase: "six words")
+        XCTAssertFalse(UninstallPolicy.mayRemove(report: locked, wroteItDown: false))
+        XCTAssertTrue(UninstallPolicy.mayRemove(report: locked, wroteItDown: true))
+        XCTAssertTrue(UninstallPolicy.mayRemove(report: .init(archive: "/a", passphraseFile: nil, passphrase: nil), wroteItDown: false))
+    }
+
+    func testTheUninstallExitIsNotTheUpgradeExit() {
+        XCTAssertEqual(UninstallPolicy.exitStatus, 76)
+        XCTAssertNotEqual(UninstallPolicy.exitStatus, 75)
+    }
+}

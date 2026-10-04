@@ -33,6 +33,8 @@ final class Supervisor {
     private(set) var foreign: ControlSocket.Status?
     private(set) var version: ControlSocket.Version?
     var onChange: (() -> Void)?
+    /// The supervisor left with `UninstallPolicy.exitStatus`: finish the uninstall (keep the data?).
+    var onUninstall: ((Bool) -> Void)?
 
     private var child: Process?
     private var spawnedAt: Date?
@@ -251,6 +253,16 @@ final class Supervisor {
         if let child, child.processIdentifier != pid { return }
         child = nil
         guard !stopping else { health = .stopped; return }
+        // The owner removed buddi from Settings → System: the supervisor wrote
+        // what they chose and left for the app to finish (product-uninstall.ts).
+        if status == UninstallPolicy.exitStatus, let keepData = Uninstall.pendingRequest(data: data) {
+            NSLog("buddi: the supervisor left for the uninstall; finishing it")
+            stopping = true
+            poller?.invalidate()
+            health = .stopped
+            onUninstall?(keepData)
+            return
+        }
         // An upgrade switched `<data>/releases/current` and handed over to us
         // (APP_RESTART_EXIT in app-layout.ts): start the new release now.
         // Twice within a minute is not an upgrade but a release that exits 75 as
@@ -315,6 +327,8 @@ final class Supervisor {
             if let value = source[key] { env[key] = value }
         }
         env["BUDDI_DATA_DIR"] = data.path
+        // Named in Settings → System's "Remove buddi from this Mac" as what goes to the Trash.
+        env["BUDDI_APP_BUNDLE"] = Bundle.main.bundlePath
         // Upgrades go to `<data>/releases`, never into the signed bundle.
         env["BUDDI_APP_LAYOUT"] = BundleLayout.releases(for: data).path
         if forService, let port = source["BUDDI_WEB_PORT"], !port.isEmpty { env["BUDDI_WEB_PORT"] = port }
@@ -505,6 +519,17 @@ final class Supervisor {
             self.start()
             then(problem)
         }
+    }
+
+    /// The launcher's `buddi uninstall`, with the backup and the words already
+    /// taken care of. Run once the supervisor has stopped.
+    func runUninstall(keepData: Bool) async -> (status: Int32, output: String) {
+        guard let layout else { return (-1, layoutProblem ?? "buddi.app is incomplete.") }
+        let env = environment(forService: false)
+        return await Task.detached {
+            Self.runLauncher(layout: layout, env: env, cwd: FileManager.default.homeDirectoryForCurrentUser,
+                             args: UninstallPolicy.launcherArguments(keepData: keepData), timeout: 600)
+        }.value
     }
 
     nonisolated private static func runLauncher(layout: BundleLayout, env: [String: String], cwd: URL,

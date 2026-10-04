@@ -36,6 +36,7 @@ import { Proposals } from './Proposals';
 import { PLUGINS_LEDE, Plugins } from './Plugins';
 import { Notifications, TelegramSettings } from './Notifications';
 import { AppInstallSection } from './parts/KeepClose';
+import { RemoveBuddi } from './parts/RemoveBuddi';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 import { CONNECTION_DOT } from '../shell/Rail';
 import { UPGRADE_PATIENCE_MS, cancelRestart, restartWhile, updateRestart } from '../shell/restart';
@@ -355,6 +356,8 @@ function System({ timezone }: { timezone: string }): JSX.Element {
           />
         )}
       </Section>
+      {/* The last row, on purpose: nothing here is something to do often. */}
+      <RemoveBuddi />
     </Stack>
   );
 }

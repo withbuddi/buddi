@@ -938,6 +938,10 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'GET', path: '/api/backups/passphrase/notice', area: 'system', token: 'secret', summary: 'Home\'s passphrase card: the six words once an encrypted backup exists, until they are acknowledged.', answer: '{ show: false } or { show: true, passphrase }' },
   { method: 'POST', path: '/api/backups/passphrase/notice', area: 'system', summary: '"I saved it": the passphrase card goes for good.', answer: '{ acknowledgedAt }' },
   { method: 'PUT', path: '/api/backups/passphrase', area: 'system', token: 'secret', summary: 'Set the backup passphrase.', body: '{ passphrase: string }', errors: '400' },
+  { method: 'GET', path: '/api/system/uninstall', area: 'system', token: 'access', summary: 'Remove buddi from this Mac: what goes, and a confirmation token for the next two calls. This computer only.', answer: '{ available, data, keychain?, service?, app?, backups, appFinishes, token } or { available: false, reason }', errors: '403 not this computer' },
+  { method: 'POST', path: '/api/system/uninstall/backup', area: 'system', token: 'secret', summary: 'The last backup, moved to ~/buddi-backups with <archive>.passphrase.txt beside it.', body: '{ token: string }', answer: '202 { job }', errors: '403 expired token or not this computer; 409 a checkout, a restore or an upgrade' },
+  { method: 'GET', path: '/api/system/uninstall/jobs/:id', area: 'system', token: 'secret', summary: 'Where the last backup has got to; when done, its report has the archive, the passphrase file and the six words.', answer: '{ phase, finishedAt?, error?, report?: { archive, passphraseFile?, passphrase? } }' },
+  { method: 'POST', path: '/api/system/uninstall', area: 'system', token: 'access', summary: 'Remove buddi: the supervisor runs buddi uninstall (buddi.app finishes it and moves itself to the Trash). Needs the last backup taken first.', body: '{ token: string, wroteItDown: true, keepData?: boolean }', answer: '202 { accepted: true }', errors: '400 not ticked; 403 expired token or not this computer; 409 no backup yet' },
   { method: 'GET', path: '/api/recovery', area: 'system', summary: 'After a restore: the checklist to get through (active: false otherwise).' },
   {
     method: 'POST', path: '/api/recovery/leave', area: 'system', token: 'grants', summary: 'Leave recovery: drop pending work, keep the grants listed, restart.',
@@ -1262,6 +1266,10 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'GET /api/system/uninstall': '0.1.0-pre.41',
+  'POST /api/system/uninstall/backup': '0.1.0-pre.41',
+  'GET /api/system/uninstall/jobs/:id': '0.1.0-pre.41',
+  'POST /api/system/uninstall': '0.1.0-pre.41',
   'POST /api/backups/passphrase/reveal': '0.1.0-pre.41',
   'GET /api/backups/passphrase/notice': '0.1.0-pre.41',
   'POST /api/backups/passphrase/notice': '0.1.0-pre.41',

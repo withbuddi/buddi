@@ -11,12 +11,15 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, existsSync, openSync, closeSync, mkdirSync } from 'node:fs';
 import type { WriteStream } from 'node:fs';
-import { readFile, chmod, unlink, lstat } from 'node:fs/promises';
+import { readFile, chmod, unlink, lstat, mkdir, rename, copyFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { acquireLock, initialize, atomicJson, stopChild } from './environment.js';
+import { acquireLock, initialize, atomicJson, stopChild, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
+import { APP_UNINSTALL_EXIT, UNINSTALL_REQUEST, createProductUninstall } from './product-uninstall.js';
+import type { ProductUninstall } from './product-uninstall.js';
 import type { InstallContext, ReadyContext } from './environment.js';
 import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule, sweepIncoming } from './backup.js';
 import type { BackupControl } from './backup.js';
@@ -80,6 +83,8 @@ export interface ControlSocketOptions {
   upgrade?: UpgradeControl | undefined;
   /** The data directory, for the one path clients may name: `<data>/incoming/`. */
   data?: string | undefined;
+  /** Uninstall from the product (product-uninstall.ts). */
+  uninstall?: ProductUninstall | undefined;
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -132,7 +137,7 @@ function optionalString(value: unknown): string | undefined {
  * `<data>/incoming/`, and that is checked to be under that directory, resolved,
  * before it is passed on.
  */
-export function controlSocket({ status, action, backup, upgrade, data }: ControlSocketOptions): Server {
+export function controlSocket({ status, action, backup, upgrade, data, uninstall }: ControlSocketOptions): Server {
   return createServer((req, res) => {
     void handle(req, res).catch(() => send(res, 500, { error: 'The supervisor could not complete that action.' }));
   });
@@ -261,12 +266,34 @@ export function controlSocket({ status, action, backup, upgrade, data }: Control
       if ('status' in outcome) return send(res, outcome.status, { error: outcome.error });
       return send(res, 202, { job: outcome });
     }
+    if (route === '/uninstall' && method === 'GET') {
+      if (!uninstall) return send(res, 404, { error: 'no such endpoint' });
+      return send(res, 200, uninstall.plan());
+    }
+    if (route === '/uninstall/backup' && method === 'POST') {
+      if (!uninstall) return send(res, 404, { error: 'no such endpoint' });
+      if (backup?.busy()) return send(res, 409, { error: 'A restore is running.' });
+      if (upgrade?.busy()) return send(res, 409, { error: 'An upgrade is running.' });
+      const started = uninstall.keepLast();
+      if ('status' in started) return send(res, started.status, { error: started.error });
+      return send(res, 202, { job: started });
+    }
+    if (route === '/uninstall' && method === 'POST') {
+      if (!uninstall) return send(res, 404, { error: 'no such endpoint' });
+      if (backup?.busy()) return send(res, 409, { error: 'A restore is running.' });
+      if (upgrade?.busy()) return send(res, 409, { error: 'An upgrade is running.' });
+      const body = await readBody(req);
+      if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+      if (body.keepData !== undefined && typeof body.keepData !== 'boolean') return send(res, 400, { error: '"keepData" must be true or false.' });
+      const outcome = uninstall.start({ keepData: body.keepData === true });
+      return send(res, outcome.status, outcome.error === undefined ? { accepted: true } : { error: outcome.error });
+    }
     const jobRoute = /^\/jobs\/([0-9a-f-]{36})$/i.exec(route);
     if (jobRoute && method === 'GET') {
-      if (!backup && !upgrade) return send(res, 404, { error: 'no such endpoint' });
-      // One job route for both stores: a client that was handed an id polls it
+      if (!backup && !upgrade && !uninstall) return send(res, 404, { error: 'no such endpoint' });
+      // One job route for every store: a client that was handed an id polls it
       // without having to remember which verb produced it.
-      const job = backup?.job(jobRoute[1] as string) ?? upgrade?.job(jobRoute[1] as string);
+      const job = backup?.job(jobRoute[1] as string) ?? upgrade?.job(jobRoute[1] as string) ?? uninstall?.job(jobRoute[1] as string);
       return job ? send(res, 200, job) : send(res, 404, { error: 'no such job' });
     }
     if (route === '/schedule') {
@@ -348,6 +375,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   let database: ManagedDatabase | undefined, server: Server | undefined, child: ChildProcess | undefined, retry: NodeJS.Timeout | undefined, log: WriteStream | undefined;
   let backup: BackupControl | undefined, scheduleTick: NodeJS.Timeout | undefined;
   let upgrade: UpgradeControl | undefined, upgradeTick: NodeJS.Timeout | undefined, handingOver = false;
+  let uninstall: ProductUninstall | undefined, leavingForUninstall = false;
   /** Has a pending upgrade been written into the history yet? */
   let resolved = false, pending: UpgradeInProgress | undefined;
   let desired = true, closing = false, chain: Promise<void> = Promise.resolve();
@@ -471,12 +499,56 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       http: gateway.defaultHttpTransport,
       log: line => console.error(line),
     });
+    // Uninstall from the product: the last backup and its words first, then the removal (product-uninstall.ts).
+    const home = os.homedir();
+    const appFinishes = appLayout(process.env) !== undefined;
+    uninstall = createProductUninstall({
+      data: ready.data, home, backup, appFinishes,
+      plan: () => {
+        const unit = process.platform === 'darwin' ? launchAgentPlist(ready.data, home) : process.platform === 'linux' ? systemdUnitPath(ready.data, ready.env, home) : undefined;
+        const bundle = process.env.BUDDI_APP_BUNDLE?.trim();
+        return {
+          data: ready.data,
+          ...(core.vaultSelection({ env: ready.env }) === 'keychain' && ready.env.BUDDI_VAULT_SERVICE ? { keychain: ready.env.BUDDI_VAULT_SERVICE } : {}),
+          ...(unit !== undefined && existsSync(unit) ? { service: process.platform === 'darwin' ? `launchd agent ${launchAgentLabel(ready.data)}` : `systemd user unit ${launchAgentLabel(ready.data)}.service` } : {}),
+          ...(appFinishes && bundle ? { app: bundle } : {}),
+          backups: path.join(home, 'buddi-backups'),
+          appFinishes,
+        };
+      },
+      exists: existsSync,
+      move: async (from, to) => {
+        await mkdir(path.dirname(to), { recursive: true, mode: 0o700 });
+        try { await rename(from, to); } catch { await copyFile(from, to); await rm(from, { force: true }); }
+      },
+      writePrivate: async (file, text) => {
+        await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+        await writeFile(file, text, { mode: 0o600 });
+        await chmod(file, 0o600);
+      },
+      writeRequest: request => atomicJson(path.join(ready.data, UNINSTALL_REQUEST), request),
+      exitForApp: () => { console.error('supervisor: stopping so buddi.app can remove buddi.'); leavingForUninstall = true; onSignal(); },
+      spawnUninstall: (argv, logFile) => {
+        mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
+        const fd = openSync(logFile, 'a', 0o600);
+        const env = { ...nativeEnvironment(startEnv), BUDDI_DATA_DIR: ready.data,
+          ...Object.fromEntries(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(key => typeof startEnv[key] === 'string').map(key => [key, startEnv[key] as string])) };
+        // systemd stops every process in the unit's cgroup with it: the uninstall runs in a transient scope of its own.
+        const [command, args] = startEnv[SERVICE_UNIT_VAR]
+          ? ['systemd-run', ['--user', '--collect', '--quiet', '--scope', process.execPath, LAUNCHER, ...argv]]
+          : [process.execPath, [LAUNCHER, ...argv]];
+        console.error(`supervisor: removing buddi; the account is in ${logFile}.`);
+        const child = spawn(command as string, args as string[], { detached: true, stdio: ['ignore', fd, fd], env, cwd: home });
+        child.unref();
+        closeSync(fd);
+      },
+    });
     server = controlSocket({
       status: () => ({ phase: ready.state.phase, supervisorPid: process.pid, installRoot: ready.root, nodePath: process.execPath, database: database!.pid ? (database!.alive ? 'running' : 'failed') : 'external', databasePid: database!.pid,
         gateway: child && child.exitCode === null && child.signalCode === null ? 'running' : 'stopped', gatewayPid: child?.pid ?? null,
         current, upgrading: upgrade!.busy() }),
       action: name => { console.error(`supervisor: ${name} asked for on the control socket.`); chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
-      backup, upgrade, data: ready.data,
+      backup, upgrade, data: ready.data, uninstall,
     });
     await listenOnSocket(server, supervisorSocket(ready.data));
     if (migrationFailure === undefined) start();
@@ -530,6 +602,13 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       log?.end(); await release();
       process.removeListener('SIGINT', onSignal); process.removeListener('SIGTERM', onSignal);
     }
+  }
+  // buddi.app finishes an uninstall the owner started in Settings → System (product-uninstall.ts).
+  if (leavingForUninstall) {
+    process.exitCode = APP_UNINSTALL_EXIT;
+    const grace = setTimeout(() => process.exit(APP_UNINSTALL_EXIT), HANDOVER_GRACE_MS);
+    grace.unref?.();
+    return;
   }
   /*
    * The hand-over, after everything above has let go: the lock, the socket,

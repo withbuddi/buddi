@@ -35,3 +35,52 @@ struct RestartExitThrottle {
     /// buddi ran: the next exit 75 is an upgrade again.
     mutating func reset() { recent = [] }
 }
+
+/// Uninstall from the product (packages/install/src/product-uninstall.ts): the
+/// supervisor exits with `exitStatus` after writing `<data>/uninstall.json`, and
+/// the app runs the launcher's `buddi uninstall` with `launcherArguments`, then
+/// moves itself to the Trash and quits. The native menu item goes the same way.
+enum UninstallPolicy {
+    /// `APP_UNINSTALL_EXIT` in product-uninstall.ts.
+    static let exitStatus: Int32 = 76
+    static let requestFile = "uninstall.json"
+
+    /// The backup and the passphrase are taken care of before this runs.
+    static func launcherArguments(keepData: Bool) -> [String] {
+        ["uninstall", "--yes", "--no-backup", "--i-have-the-passphrase"] + (keepData ? ["--keep-data"] : [])
+    }
+
+    /// `{ keepData, at }` as the supervisor writes it; nil when it is not one.
+    static func keepData(fromRequest data: Data) -> Bool? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["keepData"] as? Bool ?? false
+    }
+
+    /// The supervisor's last-backup job, as `/jobs/<id>` reports it.
+    struct BackupReport: Equatable, Sendable {
+        let archive: String
+        let passphraseFile: String?
+        let passphrase: String?
+    }
+
+    enum JobState: Equatable, Sendable {
+        case running(String)
+        case done(BackupReport)
+        case failed(String)
+    }
+
+    static func jobState(from data: Data) -> JobState? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let phase = object["phase"] as? String else { return nil }
+        guard object["finishedAt"] is String else { return .running((object["detail"] as? String) ?? phase) }
+        guard phase == "done", let report = object["report"] as? [String: Any], let archive = report["archive"] as? String else {
+            return .failed((object["error"] as? String) ?? "no reason given")
+        }
+        return .done(BackupReport(archive: archive, passphraseFile: report["passphraseFile"] as? String, passphrase: report["passphrase"] as? String))
+    }
+
+    /// "Remove buddi" is offered only once the words are with the owner: ticked, or there were none.
+    static func mayRemove(report: BackupReport, wroteItDown: Bool) -> Bool {
+        report.passphrase == nil || wroteItDown
+    }
+}

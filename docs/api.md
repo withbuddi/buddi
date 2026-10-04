@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-316 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+320 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -4202,6 +4202,10 @@ curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/telegram/
 | GET | `/api/backups/passphrase/notice` | Home's passphrase card: the six words once an encrypted backup exists, until they are acknowledged. | no |
 | POST | `/api/backups/passphrase/notice` | "I saved it": the passphrase card goes for good. | yes |
 | PUT | `/api/backups/passphrase` | Set the backup passphrase. | no |
+| GET | `/api/system/uninstall` | Remove buddi from this Mac: what goes, and a confirmation token for the next two calls. This computer only. | no |
+| POST | `/api/system/uninstall/backup` | The last backup, moved to ~/buddi-backups with <archive>.passphrase.txt beside it. | no |
+| GET | `/api/system/uninstall/jobs/:id` | Where the last backup has got to; when done, its report has the archive, the passphrase file and the six words. | no |
+| POST | `/api/system/uninstall` | Remove buddi: the supervisor runs buddi uninstall (buddi.app finishes it and moves itself to the Trash). Needs the last backup taken first. | no |
 | GET | `/api/recovery` | After a restore: the checklist to get through (active: false otherwise). | yes |
 | POST | `/api/recovery/leave` | Leave recovery: drop pending work, keep the grants listed, restart. | no |
 
@@ -4478,6 +4482,59 @@ Set the backup passphrase.
 
 ```sh
 curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"passphrase":"…"}' "$BUDDI_URL/api/backups/passphrase"
+```
+
+#### `GET /api/system/uninstall`
+
+Remove buddi from this Mac: what goes, and a confirmation token for the next two calls. This computer only.
+
+- **Auth:** Dashboard session only. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Answer:** `{ available, data, keychain?, service?, app?, backups, appFinishes, token } or { available: false, reason }`
+- **Errors:** 403 not this computer
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -b cookies.txt "$BUDDI_URL/api/system/uninstall"
+```
+
+#### `POST /api/system/uninstall/backup`
+
+The last backup, moved to ~/buddi-backups with <archive>.passphrase.txt beside it.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It reads or stores a secret.
+- **Body:** `{ token: string }`
+- **Answer:** `202 { job }`
+- **Errors:** 403 expired token or not this computer; 409 a checkout, a restore or an upgrade
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"token":"…"}' "$BUDDI_URL/api/system/uninstall/backup"
+```
+
+#### `GET /api/system/uninstall/jobs/:id`
+
+Where the last backup has got to; when done, its report has the archive, the passphrase file and the six words.
+
+- **Auth:** Dashboard session only. It reads or stores a secret.
+- **Answer:** `{ phase, finishedAt?, error?, report?: { archive, passphraseFile?, passphrase? } }`
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -b cookies.txt "$BUDDI_URL/api/system/uninstall/jobs/<id>"
+```
+
+#### `POST /api/system/uninstall`
+
+Remove buddi: the supervisor runs buddi uninstall (buddi.app finishes it and moves itself to the Trash). Needs the last backup taken first.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Body:** `{ token: string, wroteItDown: true, keepData?: boolean }`
+- **Answer:** `202 { accepted: true }`
+- **Errors:** 400 not ticked; 403 expired token or not this computer; 409 no backup yet
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"token":"…","wroteItDown":"…"}' "$BUDDI_URL/api/system/uninstall"
 ```
 
 #### `GET /api/recovery`
