@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.42 — 2026-10-04
+
 - buddi.app: the Dock icon and the menu-bar glyph are the Blob now, not a "b". The menu-bar Blob is dimmed while buddi starts or updates and carries a dot when it needs attention.
 - Pairing Chrome no longer goes stale half a minute in. Chrome put the extension to sleep while it waited for you to type its code, so the popup kept showing a code buddi was no longer waiting for ("No browser is waiting to be paired"). buddi now keeps the waiting extension awake, the extension keeps itself awake too, and the popup picks up a fresh code if the old one went.
 - Settings → Your Chrome always offers "Enter the code" until Chrome is paired: open the buddi icon in Chrome and type its six digits here, which is how you pair from the buddi.app window. Typing the code just as the page paired this Chrome by itself no longer shows an error. "Install unpacked…" shows only when buddi runs from a source checkout.
