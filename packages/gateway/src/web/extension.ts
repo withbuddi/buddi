@@ -40,6 +40,8 @@ export const EXTENSION_SOCKET_PATH = '/api/extension/socket';
 /** A Chrome extension ID: thirty-two letters, a to p. */
 const EXTENSION_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
 const PAIR_TTL_MS = 5 * 60_000;
+/** The least time between two new pairing codes for one extension id. */
+export const PAIR_THROTTLE_MS = 2_000;
 /** Six digits are guessable; five tries are not enough to guess them. */
 const MAX_PAIR_ATTEMPTS = 5;
 /** A hello answered with a challenge that is never answered back. */
@@ -228,9 +230,13 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #logger?: (line: string) => void;
   /** Keeps a socket waiting for its code alive (see `#hello`). */
   #pairPing?: NodeJS.Timeout;
+  /** Sockets that have said hello; a second one is refused unless this buddi asked for it (`rehello`). */
+  #greeted = new WeakSet<WebSocket>();
+  /** When each extension id last got a new pairing code (`PAIR_THROTTLE_MS`). */
+  #lastPair = new Map<string, number>();
   /** The three intervals are options so a test does not have to wait a minute. */
   constructor(readonly options: { env?: NodeJS.ProcessEnv; now?: () => number; log?: (line: string) => void;
-    pingMs?: number; commandTimeoutMs?: number; helloTimeoutMs?: number; authTimeoutMs?: number; cancelGraceMs?: number } = {}) {
+    pingMs?: number; commandTimeoutMs?: number; helloTimeoutMs?: number; authTimeoutMs?: number; cancelGraceMs?: number; pairThrottleMs?: number } = {}) {
     this.#logger = options.log;
   }
 
@@ -316,7 +322,19 @@ export class ExtensionEndpoint implements ExtensionBridge {
     // Liveness belongs to one socket: a pong from anything else says nothing
     // about whether the browser this buddi is talking to is still there.
     if (frame.type === 'pong') { if (ws === this.#socket) this.#missed = 0; return; }
-    if (frame.type === 'hello') return this.#hello(ws, frame, extensionId);
+    if (frame.type === 'hello') {
+      // One hello per connection: the handshake starts over on a new socket,
+      // or on this one only after this buddi sent `rehello`.
+      if (this.#greeted.has(ws)) {
+        this.#log(`extension: ${extensionId} said hello twice on one connection; closed`);
+        if (this.#pair?.socket === ws) this.#clearPair();
+        if (this.#challenge?.socket === ws) this.#clearChallenge();
+        ws.close(1008, 'one hello per connection');
+        return;
+      }
+      this.#greeted.add(ws);
+      return this.#hello(ws, frame, extensionId);
+    }
     if (frame.type === 'auth') return this.#auth(ws, frame, extensionId);
     if (frame.type === 'result') return this.#result(ws, frame);
     if (frame.type === 'frame') return this.#screencast(ws, frame);
@@ -429,6 +447,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
         this.#clearChallenge();
         // It saw the proof and said nothing: start the handshake over rather
         // than leave a half-open socket nobody can use.
+        this.#greeted.delete(ws);
         ws.send(JSON.stringify({ type: 'rehello', reason: 'That handshake went unanswered.' }));
       }, this.options.authTimeoutMs ?? AUTH_TIMEOUT_MS);
       timer.unref?.();
@@ -438,6 +457,17 @@ export class ExtensionEndpoint implements ExtensionBridge {
       return;
     }
     // No pairing, or one this buddi has forgotten: ask for the owner instead.
+    // At most one new code every two seconds per extension: a reconnect loop
+    // must not churn through codes (and the owner's screen).
+    const now = this.#now(), throttle = this.options.pairThrottleMs ?? PAIR_THROTTLE_MS;
+    const last = this.#lastPair.get(extensionId);
+    if (last !== undefined && now - last < throttle) {
+      this.#log(`extension: ${extensionId} asked for a new pairing code too soon; closed`);
+      ws.close(1008, 'too many pairing requests; try again in a moment');
+      return;
+    }
+    for (const [id, at] of this.#lastPair) if (now - at >= throttle) this.#lastPair.delete(id);
+    this.#lastPair.set(extensionId, now);
     const code = pairCode();
     const timer = setTimeout(() => {
       if (this.#pair?.socket !== ws) return;
@@ -675,6 +705,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
       if (pending.attempts >= MAX_PAIR_ATTEMPTS) {
         const socket = pending.socket;
         this.#clearPair();
+        this.#greeted.delete(socket);
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'rehello', reason: 'Too many wrong pairing codes.' }));
         return { status: 429, body: { error: 'Too many wrong codes. Press Connect in the buddi extension for a new one.' } };
       }

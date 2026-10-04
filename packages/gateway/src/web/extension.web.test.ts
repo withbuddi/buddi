@@ -30,7 +30,7 @@ afterEach(async () => {
 const proofOf = (token: string, nonce: unknown) =>
   createHmac('sha256', createHash('sha256').update(token).digest('hex')).update(String(nonce)).digest('hex');
 
-async function setup(options: { pingMs?: number; commandTimeoutMs?: number; cancelGraceMs?: number; authTimeoutMs?: number; log?: (line: string) => void } = {}) {
+async function setup(options: { pingMs?: number; commandTimeoutMs?: number; cancelGraceMs?: number; authTimeoutMs?: number; pairThrottleMs?: number; now?: () => number; log?: (line: string) => void } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-'));
   dirs.push(dir);
   const env = { BUDDI_DATA_DIR: dir, BUDDI_EXTENSION_DIR: path.join(dir, 'extension') };
@@ -215,6 +215,53 @@ describe('the browser extension endpoint', () => {
     expect(extension.connected()).toBe(false);
     await expect(extension.send({ name: 'observe', session: 's1', args: {} })).rejects.toThrow(/not connected/i);
     expect(half.seen.some((frame) => frame['type'] === 'command')).toBe(false);
+  });
+
+  it('closes a socket that says hello twice, unless buddi asked it to start over', async () => {
+    const { socketUrl, origin } = await setup({ pairThrottleMs: 0 });
+    const twice = connect(socketUrl);
+    await twice.open;
+    await twice.hello(null);
+    await twice.next('pair');
+    const closed = new Promise<number>((resolve) => twice.socket.once('close', (code) => resolve(code)));
+    await twice.hello(null);
+    expect(await closed).toBe(1008);
+    expect(twice.seen.filter((frame) => frame.type === 'pair')).toHaveLength(1);
+
+    // After a rehello (five wrong codes) the same socket may say hello again.
+    const headers = await session(origin);
+    const client = connect(socketUrl);
+    await client.open;
+    await client.hello(null);
+    const code = String((await client.next('pair')).code);
+    const wrong = code === '000 000' ? '111 111' : '000 000';
+    for (let i = 0; i < 5; i++) await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code: wrong }) });
+    await client.next('rehello');
+    await client.hello(null);
+    for (let i = 0; i < 100 && client.seen.filter((frame) => frame.type === 'pair').length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(client.seen.filter((frame) => frame.type === 'pair')).toHaveLength(2);
+    expect(client.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('hands one extension id at most one new pairing code every two seconds', async () => {
+    let clock = 1_000_000;
+    const { socketUrl } = await setup({ now: () => clock });
+    const first = connect(socketUrl);
+    await first.open;
+    await first.hello(null);
+    await first.next('pair');
+    clock += 1_500;
+    const soon = connect(socketUrl);
+    await soon.open;
+    const closed = new Promise<number>((resolve) => soon.socket.once('close', (code) => resolve(code)));
+    await soon.hello(null);
+    expect(await closed).toBe(1008);
+    expect(soon.seen.some((frame) => frame.type === 'pair')).toBe(false);
+    clock += 600;
+    const later = connect(socketUrl);
+    await later.open;
+    await later.hello(null);
+    expect(await later.next('pair')).toMatchObject({ code: expect.any(String) });
   });
 
   it('pairs with one extension id and refuses another', async () => {
