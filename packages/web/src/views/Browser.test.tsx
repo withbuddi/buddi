@@ -77,6 +77,15 @@ describe('Where agents may look: one row per route, no radio buttons', () => {
     expect(await screen.findByText('Chrome closed')).toBeInTheDocument();
     expect(screen.getByText(/Chrome isn’t open on this Mac; agents wait or use their own browser/)).toBeInTheDocument();
   });
+  it('offers to pair again when buddi moved port since the pairing', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ ...paired, connected: false, portMoved: { from: 4317, to: 4391 } });
+    vi.mocked(api.forgetExtension).mockResolvedValue({ ok: true } as never);
+    render(<Browser />);
+    const chrome = await row('Your Chrome');
+    expect(await within(chrome).findByText(/Port 4317 was taken by another program, so buddi now listens on 4391\. .*http:\/\/127\.0\.0\.1:4391/)).toBeInTheDocument();
+    fireEvent.click(within(chrome).getByRole('button', { name: 'Pair again' }));
+    await waitFor(() => expect(api.forgetExtension).toHaveBeenCalled());
+  });
   it('lists the sign-in sites under your Chrome', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...base, settings: { ...settings, signInSites: ['amazon.com', 'chase.com'] } });
     render(<Browser />);

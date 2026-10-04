@@ -89,6 +89,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         case .running(let since):
             running = true
             statusLine.title = "Running since \(Self.format(since))"
+            if let notice = supervisor.portNotice {
+                detailLine.title = notice
+                detailLine.isHidden = false
+            }
         case .attention(let reason):
             statusLine.title = "Needs attention"
             detailLine.title = reason

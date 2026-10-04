@@ -90,6 +90,27 @@ export interface ExtensionView {
   buddi: string;
   /** {@link MIN_EXTENSION_VERSION}: the page asks for an update only when the extension is older. */
   extensionMinimum: string;
+  /**
+   * The dashboard moved to another port after this pairing (another program
+   * had taken the recorded one), so the extension is looking in the wrong
+   * place until it is paired again with the new address.
+   */
+  portMoved?: { from: number; to: number };
+}
+
+/** `installation.json`'s moved web port, when it moved after `pairedAt`. */
+export function portMovedSincePairing(env: NodeJS.ProcessEnv, pairedAt: string | undefined): { from: number; to: number } | undefined {
+  const data = env.BUDDI_DATA_DIR?.trim();
+  if (!data || !pairedAt) return undefined;
+  try {
+    const state = JSON.parse(readFileSync(path.join(data, 'installation.json'), 'utf8')) as { portMoved?: { web?: { from?: unknown; to?: unknown }; at?: unknown } };
+    const web = state.portMoved?.web;
+    const at = typeof state.portMoved?.at === 'string' ? Date.parse(state.portMoved.at) : NaN;
+    if (!web || typeof web.from !== 'number' || typeof web.to !== 'number' || !(at > Date.parse(pairedAt))) return undefined;
+    return { from: web.from, to: web.to };
+  } catch {
+    return undefined;
+  }
 }
 
 export function extensionFile(env: NodeJS.ProcessEnv = process.env): string {
@@ -573,7 +594,11 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const pending = !!this.#pair && this.#pair.expiresAt > this.#now();
     this.#buddiVersion ??= currentVersion(this.#env()).then((version) => version.split(' ')[0] || version);
     return { connected: this.connected(), pending, path: await extensionDir(this.#env()), buddi: await this.#buddiVersion, extensionMinimum: MIN_EXTENSION_VERSION,
-      ...(record ? { pairedAt: record.pairedAt, extension: record.extension, lastSeenAt: record.lastSeenAt } : {}) };
+      ...(record ? { pairedAt: record.pairedAt, extension: record.extension, lastSeenAt: record.lastSeenAt } : {}),
+      ...((): { portMoved?: { from: number; to: number } } => {
+        const moved = portMovedSincePairing(this.#env(), record?.pairedAt);
+        return moved ? { portMoved: moved } : {};
+      })() };
   }
 
   /** The owner typed the code the popup showed. Spaces and dashes are theirs. */

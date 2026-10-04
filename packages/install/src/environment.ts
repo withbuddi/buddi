@@ -10,7 +10,7 @@
  */
 import { mkdir, readFile, writeFile, rename, open, stat, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { existsSync, readdirSync, constants } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, constants } from 'node:fs';
 import { randomBytes, createHash, createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,6 +41,76 @@ export interface InstallationState {
   kind?: 'packaged';
   dataDir?: string;
   vaultService?: string;
+  /**
+   * A recorded port another program had taken at a start, and where buddi
+   * moved: said once in the app, the CLI and Settings (the extension has to
+   * be paired again with the new address). `at` is when.
+   */
+  portMoved?: { web?: { from: number; to: number }; db?: { from: number; to: number }; at: string };
+}
+
+/** The one line the app and the CLI say about a moved port. */
+export function portMovedLines(moved: InstallationState['portMoved']): string[] {
+  if (!moved) return [];
+  const lines: string[] = [];
+  if (moved.web) lines.push(`Port ${moved.web.from} was taken by another program; buddi now listens on ${moved.web.to}.`);
+  if (moved.db) lines.push(`Port ${moved.db.from} was taken by another program; buddi's database now uses ${moved.db.to}.`);
+  return lines;
+}
+
+/** Is this port free to listen on at 127.0.0.1 right now? */
+export async function portFree(port: number): Promise<boolean> {
+  const server = net.createServer();
+  try {
+    await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => resolve()); });
+    return true;
+  } catch (error) {
+    if (errorCode(error) === 'EADDRINUSE' || errorCode(error) === 'EACCES') return false;
+    throw error;
+  } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); }
+}
+
+export interface PortMoveDeps {
+  free: (port: number) => Promise<boolean>;
+  pick: () => Promise<number>;
+  /** The port our own cluster's `postmaster.pid` records, when there is one (an orphan we will stop, not a stranger). */
+  ownClusterPort: () => number | undefined;
+  sleep: (ms: number) => Promise<void>;
+  now: () => Date;
+  /** How many times a taken port is looked at again before it is given up: a gateway that just died lets go in a moment. */
+  tries?: number;
+}
+
+/**
+ * The recorded ports, checked at a start: one another program has taken is
+ * replaced with a free one, and the state says so. Returns the state to
+ * write, or undefined when nothing moved.
+ */
+export async function movePortsIfTaken(state: InstallationState, deps: PortMoveDeps): Promise<InstallationState | undefined> {
+  const tries = deps.tries ?? 5;
+  const taken = async (port: number): Promise<boolean> => {
+    for (let i = 0; i < tries; i++) {
+      if (await deps.free(port)) return false;
+      if (i < tries - 1) await deps.sleep(1000);
+    }
+    return true;
+  };
+  const moved: NonNullable<InstallationState['portMoved']> = { at: deps.now().toISOString() };
+  let webPort = state.webPort, dbPort = state.dbPort;
+  if (await taken(webPort)) {
+    let to = await deps.pick();
+    while (to === dbPort) to = await deps.pick();
+    moved.web = { from: webPort, to };
+    webPort = to;
+  }
+  if (state.database === 'managed' && deps.ownClusterPort() !== dbPort && await taken(dbPort)) {
+    let to = await deps.pick();
+    while (to === webPort) to = await deps.pick();
+    moved.db = { from: dbPort, to };
+    dbPort = to;
+  }
+  if (!moved.web && !moved.db) return undefined;
+  return { ...state, webPort, dbPort, portMoved: moved };
 }
 
 /** The keychain namespace of the installation in `data`: `buddi.install.<sha256(data)[:20]>`. */
@@ -377,7 +447,26 @@ export async function initialize(ctx: InstallContext): Promise<void> {
     while (dbPort === webPort) dbPort = await freePort();
     ctx.state = { version: 1, database: ctx.env.DATABASE_URL ? 'external' : 'managed', webPort, dbPort, phase: 'provisioning', ...identity(ctx.data) };
     await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
-  } else if (ctx.state.kind === undefined || ctx.state.dataDir === undefined || ctx.state.vaultService === undefined) {
+  } else {
+    // A recorded port another program took since: moved, and said (portMovedLines).
+    const movedState = await movePortsIfTaken(ctx.state, {
+      free: portFree,
+      pick: () => freePort(),
+      ownClusterPort: () => {
+        const pid = (() => { try { return readFileSync(path.join(ctx.data, 'postgres', 'postmaster.pid'), 'utf8'); } catch { return ''; } })();
+        const port = Number(pid.split('\n')[3]);
+        return Number.isInteger(port) && port > 0 ? port : undefined;
+      },
+      sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      now: () => new Date(),
+    });
+    if (movedState) {
+      ctx.state = movedState;
+      await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
+      for (const line of portMovedLines(movedState.portMoved)) console.error(`supervisor: ${line}`);
+    }
+  }
+  if (ctx.state.kind === undefined || ctx.state.dataDir === undefined || ctx.state.vaultService === undefined) {
     // An installation provisioned before the file said who it is: said now, once.
     ctx.state = { ...ctx.state, ...identity(ctx.data) };
     await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);

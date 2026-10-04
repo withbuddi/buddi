@@ -22,6 +22,8 @@ enum ControlSocket {
         let gatewayPid: Int?
         let current: String?
         let upgrading: Bool?
+        /// "Port 4317 was taken by another program; buddi now listens on 4391.", for a day after a move.
+        let portNotice: String?
     }
 
     /// What `/version` and `/version/check` answer (`VersionView` in upgrade.ts).

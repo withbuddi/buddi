@@ -15,7 +15,7 @@ import { open, mkdir, writeFile, rm, rename, copyFile, chmod } from 'node:fs/pro
 import os from 'node:os';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { environment, identityMismatch, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
+import { environment, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
 import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
@@ -524,6 +524,7 @@ async function run(): Promise<void> {
     }
     // `--json`: the supervisor's own answer, for scripts (and the release smoke).
     console.log(serviceJson ? JSON.stringify(status, null, 2) : serviceLine(status));
+    if (!serviceJson && status.portNotice) console.log(status.portNotice);
     if (status.gateway !== 'running' && args[1] !== 'stop') process.exitCode = 1;
     return;
   }
@@ -674,6 +675,10 @@ async function run(): Promise<void> {
       } catch { /* startup */ }
       if (Date.now() > deadline) throw new Error(`Gateway did not become ready. Inspect ${path.join(ctx.data, 'logs/gateway.log')}`);
       await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    // A recorded port another program took was moved at the last start: said here, once a day at most.
+    if (ctx.state?.portMoved && Date.now() - Date.parse(ctx.state.portMoved.at) < 24 * 60 * 60_000) {
+      for (const line of portMovedLines(ctx.state.portMoved)) console.log(line);
     }
     console.log(`Dashboard: ${terminalLink(url)}`);
     console.log('The link is good for five minutes. Run buddi again for a fresh one.');

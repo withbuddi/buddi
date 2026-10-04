@@ -17,7 +17,7 @@ import { readFile, chmod, unlink, lstat, mkdir, rename, copyFile, rm, writeFile 
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { acquireLock, initialize, atomicJson, stopChild, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
+import { acquireLock, initialize, atomicJson, stopChild, portMovedLines, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
 import { APP_UNINSTALL_EXIT, UNINSTALL_REQUEST, createProductUninstall } from './product-uninstall.js';
 import type { ProductUninstall } from './product-uninstall.js';
 import { installShim, shimsFor } from './cli-shim.js';
@@ -51,6 +51,13 @@ export function pendingUpgrade(marker: UpgradeInProgress | undefined): UpgradeIn
 /** The control socket of the installation whose data directory this is. */
 export function supervisorSocket(data: string): string {
   return path.join(data, 'supervisor.sock');
+}
+
+/** The moved-port line for `/status`, for a day after the move. */
+function portNotice(moved: { at: string } | undefined): { portNotice?: string } {
+  if (!moved || Date.now() - Date.parse(moved.at) > 24 * 60 * 60_000) return {};
+  const lines = portMovedLines(moved as Parameters<typeof portMovedLines>[0]);
+  return lines.length === 0 ? {} : { portNotice: lines.join(' ') };
 }
 
 /** Single quotes for sh. */
@@ -91,6 +98,8 @@ export interface SupervisorStatus {
   /** The installed product version, and whether it is being replaced. */
   current?: string;
   upgrading?: boolean;
+  /** A recorded port another program took, moved within the last day: the app says it once. */
+  portNotice?: string;
 }
 
 export interface ControlSocketOptions {
@@ -604,7 +613,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     server = controlSocket({
       status: () => ({ phase: ready.state.phase, supervisorPid: process.pid, installRoot: ready.root, nodePath: process.execPath, database: database!.pid ? (database!.alive ? 'running' : 'failed') : 'external', databasePid: database!.pid,
         gateway: child && child.exitCode === null && child.signalCode === null ? 'running' : 'stopped', gatewayPid: child?.pid ?? null,
-        current, upgrading: upgrade!.busy() }),
+        current, upgrading: upgrade!.busy(), ...portNotice(ready.state.portMoved) }),
       action: name => { console.error(`supervisor: ${name} asked for on the control socket.`); chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
       backup, upgrade, data: ready.data, uninstall, cli,
     });

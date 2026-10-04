@@ -3245,6 +3245,8 @@ export interface ExtensionState {
   buddi?: string;
   /** The oldest extension this buddi works with, in Chrome's numeric scheme (`0.1.0.24`). Optional: an older gateway does not send it. */
   extensionMinimum?: string;
+  /** The dashboard moved port after this pairing (another program took the old one): pair again with the new address. */
+  portMoved?: { from: number; to: number };
 }
 export interface BrowserStatus {
   mode?: BrowserMode;

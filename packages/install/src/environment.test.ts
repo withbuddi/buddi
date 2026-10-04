@@ -16,6 +16,9 @@ import {
   reloadLaunchAgent,
   identityMismatch,
   initialize,
+  freePort,
+  movePortsIfTaken,
+  portMovedLines,
   vaultServiceFor,
 } from './environment.js';
 
@@ -134,7 +137,7 @@ describe('installation.json says who the installation is', () => {
 
   test('an older file is completed at the next start, keeping what it had', async () => {
     const data = await mkdtemp(path.join(os.tmpdir(), 'buddi-identity-'));
-    const old = { version: 1, database: 'managed' as const, webPort: 4317, dbPort: 5555, phase: 'ready' };
+    const old = { version: 1, database: 'managed' as const, webPort: await freePort(), dbPort: await freePort(), phase: 'ready' };
     await writeFile(path.join(data, 'installation.json'), JSON.stringify(old));
     const ctx = { root: '/opt/buddi', data, env: { BUDDI_VAULT: 'memory', BUDDI_ENV_FILE: path.join(data, '.env') } as NodeJS.ProcessEnv, state: { ...old } };
     await initialize(ctx);
@@ -149,5 +152,45 @@ describe('installation.json says who the installation is', () => {
     expect(identityMismatch({ version: 1, database: 'managed', webPort: 1, dbPort: 2, dataDir: data, vaultService: vaultServiceFor(data) }, data, vaultServiceFor(data))).toBeUndefined();
     expect(identityMismatch({ version: 1, database: 'managed', webPort: 1, dbPort: 2, dataDir: '/elsewhere' }, data, undefined)).toMatch(/written for the installation in \/elsewhere/);
     expect(identityMismatch({ version: 1, database: 'managed', webPort: 1, dbPort: 2, dataDir: data, vaultService: 'buddi' }, data, vaultServiceFor(data))).toMatch(/keychain namespace buddi/);
+  });
+});
+
+describe('a recorded port another program took', () => {
+  const state = { version: 1, database: 'managed' as const, webPort: 4317, dbPort: 5555, phase: 'ready' };
+  const deps = (taken: number[], own?: number) => {
+    let next = 4391;
+    const looked: number[] = [];
+    return {
+      looked,
+      free: async (port: number) => { looked.push(port); return !taken.includes(port); },
+      pick: async () => next++,
+      ownClusterPort: () => own,
+      sleep: async () => {},
+      now: () => new Date('2026-10-04T10:00:00Z'),
+    };
+  };
+
+  test('nothing moves when both are free', async () => {
+    expect(await movePortsIfTaken(state, deps([]))).toBeUndefined();
+  });
+
+  test('the web port moves to a free one, after looking again a few times, and says so', async () => {
+    const d = deps([4317]);
+    const moved = await movePortsIfTaken(state, d);
+    expect(moved).toMatchObject({ webPort: 4391, dbPort: 5555, portMoved: { web: { from: 4317, to: 4391 }, at: '2026-10-04T10:00:00.000Z' } });
+    expect(d.looked.filter(port => port === 4317)).toHaveLength(5);
+    expect(portMovedLines(moved!.portMoved)).toEqual(['Port 4317 was taken by another program; buddi now listens on 4391.']);
+  });
+
+  test('the database port moves too, but not when our own orphaned cluster holds it', async () => {
+    expect(await movePortsIfTaken(state, deps([5555]))).toMatchObject({ dbPort: 4391, portMoved: { db: { from: 5555, to: 4391 } } });
+    expect(await movePortsIfTaken(state, deps([5555], 5555))).toBeUndefined();
+    expect(await movePortsIfTaken({ ...state, database: 'external' }, deps([5555]))).toBeUndefined();
+  });
+
+  test('two moved ports never land on each other', async () => {
+    const d = deps([4317, 5555]);
+    const moved = await movePortsIfTaken(state, d);
+    expect(moved!.webPort).not.toBe(moved!.dbPort);
   });
 });

@@ -323,13 +323,19 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   const outdated = probe && ext.data?.extensionMinimum && olderExtension(probe.version, ext.data.extensionMinimum)
     ? `This extension is ${probe.version}; this buddi needs ${ext.data.extensionMinimum} or later. Update it from chrome://extensions or the store.` : null;
   const elsewhere = probe && !sameGateway(probe.gateway) ? `The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in its popup.` : null;
+  // The dashboard moved port since the pairing: the extension looks in the old place until it is paired again.
+  const moved = ext.data?.portMoved && state !== 'pair'
+    ? `Port ${ext.data.portMoved.from} was taken by another program, so buddi now listens on ${ext.data.portMoved.to}. Pair the extension again: in its popup set the address to http://127.0.0.1:${ext.data.portMoved.to} and press Connect.` : null;
+  if (moved && state !== 'broken' && state !== 'none') {
+    side = <><Button size="sm" variant="accent" disabled={disabled} onClick={() => void act(() => api.forgetExtension())}>Pair again</Button>{more}</>;
+  }
   return (
     <>
       <div className="ui-list-row">
         <Glyph kind="chrome" />
         <span className="ui-list-main">
           <span className="ui-list-title">Your Chrome</span>
-          <span className="ui-list-sub">{sub}{outdated ? <span className="pl-row-status" data-tone="warning">{outdated}</span> : null}{elsewhere ? <span className="pl-row-status" data-tone="warning">{elsewhere}</span> : null}{failure ?? ext.error ? <span className="pl-row-status" data-tone="critical">{failure ?? ext.error}</span> : null}</span>
+          <span className="ui-list-sub">{sub}{outdated ? <span className="pl-row-status" data-tone="warning">{outdated}</span> : null}{elsewhere ? <span className="pl-row-status" data-tone="warning">{elsewhere}</span> : null}{moved ? <span className="pl-row-status" data-tone="warning">{moved}</span> : null}{failure ?? ext.error ? <span className="pl-row-status" data-tone="critical">{failure ?? ext.error}</span> : null}</span>
         </span>
         <span className="ui-list-side"><span className="br-side">{side}</span></span>
       </div>

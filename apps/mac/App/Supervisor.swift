@@ -32,6 +32,8 @@ final class Supervisor {
     /// (an npm install's service, say). The app never starts a second one.
     private(set) var foreign: ControlSocket.Status?
     private(set) var version: ControlSocket.Version?
+    /// A recorded port another program took was moved at this start: the menu says it in one line.
+    private(set) var portNotice: String?
     var onChange: (() -> Void)?
     /// The supervisor left with `UninstallPolicy.exitStatus`: finish the uninstall (keep the data?).
     var onUninstall: ((Bool) -> Void)?
@@ -374,6 +376,11 @@ final class Supervisor {
             return
         }
         foreign = nil
+        if portNotice != status.portNotice {
+            portNotice = status.portNotice
+            if let notice = status.portNotice { NSLog("buddi: \(notice)") }
+            onChange?()
+        }
         if status.upgrading == true {
             health = .updating
         } else if status.gateway == "running" {
