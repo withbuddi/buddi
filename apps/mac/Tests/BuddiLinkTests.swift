@@ -36,4 +36,47 @@ final class BuddiLinkTests: XCTestCase {
             XCTAssertNil(parse(text), text)
         }
     }
+
+    func testAtMostEightQueryItems() {
+        let eight = (1...8).map { "k\($0)=v" }.joined(separator: "&")
+        XCTAssertNotNil(parse("buddi://settings/plugins?" + eight))
+        XCTAssertNil(parse("buddi://settings/plugins?" + eight + "&k9=v"))
+        XCTAssertEqual(BuddiLink.maxQueryItems, 8)
+    }
+
+    func testASavedRouteLosesItsPairingCode() {
+        XCTAssertEqual(BuddiLink.routeWithoutCode("#/settings/browser?code=123456"), "#/settings/browser")
+        XCTAssertEqual(BuddiLink.routeWithoutCode("#/settings/computer?x=1&code=123456"), "#/settings/computer?x=1")
+        XCTAssertEqual(BuddiLink.routeWithoutCode("#/settings/plugins?tab=browse"), "#/settings/plugins?tab=browse")
+        XCTAssertEqual(BuddiLink.routeWithoutCode("#/chat"), "#/chat")
+    }
+}
+
+final class PendingRouteTests: XCTestCase {
+    func testARouteAskedBeforeTheLoadGoesIntoTheURL() {
+        var pending = PendingRoute()
+        pending.ask("#/settings/browser?code=123456")
+        XCTAssertEqual(pending.takeForLoad(), "#/settings/browser?code=123456")
+        XCTAssertNil(pending.takeOnReveal())
+    }
+
+    func testALinkArrivingDuringTheLoadIsAppliedWhenItFinishes() {
+        var pending = PendingRoute()
+        XCTAssertNil(pending.takeForLoad())
+        pending.ask("#/settings/browser?code=123456")
+        XCTAssertEqual(pending.takeOnReveal(), "#/settings/browser?code=123456")
+        XCTAssertNil(pending.takeOnReveal())
+    }
+
+    func testTheSavedRouteKeepsAnAskedOneAndDropsTheCode() {
+        var pending = PendingRoute()
+        pending.remember("#/settings/browser?code=123456")
+        XCTAssertEqual(pending.route, "#/settings/browser")
+        pending.remember("#/chat")
+        XCTAssertEqual(pending.route, "#/settings/browser")
+        var asked = PendingRoute()
+        asked.ask("#/chat")
+        asked.remember("#/settings")
+        XCTAssertEqual(asked.takeForLoad(), "#/chat")
+    }
 }

@@ -4,7 +4,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserRouteStatus, type BrowserStatus } from '../api';
 import { pluginSettingsRoute } from '../routes';
-import { appsProvided, appWord, Browser, chromeState, installTarget, lookingLine, olderExtension, SANDBOX_COMMAND, STORE_URL } from './Browser';
+import { appsProvided, appWord, Browser, chromeState, installTarget, lookingLine, olderExtension, pairWithCode, SANDBOX_COMMAND, SELF_PAIRED_WINDOW_MS, STORE_URL } from './Browser';
 
 vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), browserCheck: vi.fn(), browserInstall: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn(), agents: vi.fn(), setAgentEngine: vi.fn() }, ApiError: class extends Error {} }));
 
@@ -176,6 +176,33 @@ describe('your Chrome: Add to Chrome, the code, Pair again', () => {
       expect(api.pairExtension).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
       await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482913'));
+    } finally { window.location.hash = ''; }
+  });
+  it('a linked code leaves the address once Pair worked, so a reload does not type it in again', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/x' });
+    answers(new Error('none'));
+    vi.mocked(api.pairExtension).mockResolvedValue(paired);
+    window.history.replaceState(null, '', '/?from=extension#/settings/computer?code=482913&x=1');
+    try {
+      render(<Browser />);
+      await screen.findByText('Type the six digits the extension shows.');
+      expect(window.location.hash).toBe('#/settings/computer?code=482913&x=1');
+      fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
+      await waitFor(() => expect(window.location.hash).toBe('#/settings/computer?x=1'));
+      expect(window.location.search).toBe('?from=extension');
+    } finally { window.history.replaceState(null, '', '/'); }
+  });
+  it('a failed Pair keeps the linked code in the address', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/x' });
+    answers(new Error('none'));
+    vi.mocked(api.pairExtension).mockRejectedValue(Object.assign(new Error('No browser is waiting to be paired'), { status: 409 }));
+    window.location.hash = '#/settings/computer?code=482913';
+    try {
+      render(<Browser />);
+      await screen.findByText('Type the six digits the extension shows.');
+      fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
+      expect(await screen.findByText(/No browser is waiting to be paired/)).toBeInTheDocument();
+      expect(window.location.hash).toBe('#/settings/computer?code=482913');
     } finally { window.location.hash = ''; }
   });
   it('unpaired, extension found but not connected: the field is there too', async () => {
@@ -368,5 +395,30 @@ describe('the words', () => {
     expect(lookingLine({ ...base, page: { ...page, appId: 'com.apple.iWork.Numbers' }, route: 'apps' })).toBe('Working in Numbers · its own window');
     expect(lookingLine({ ...base, page, needsOwner: { kind: 'sign-in', question: 'x', options: [] } })).toBe('Waiting for you · it asks for your sign-in');
     expect(appWord('com.google.Chrome')).toBe('Chrome');
+  });
+});
+
+describe('pairWithCode: a typed code racing the page\'s own pairing', () => {
+  const conflict = () => Object.assign(new Error('This buddi is already paired'), { status: 409 });
+  const NOW = Date.parse('2026-10-04T12:00:00Z');
+  it('swallows a 409 when the extension was paired within the last ten seconds', async () => {
+    const extension = vi.fn(async () => ({ pairedAt: new Date(NOW - 4_000).toISOString() }));
+    await expect(pairWithCode('482913', { pair: async () => { throw conflict(); }, extension, now: () => NOW })).resolves.toBeUndefined();
+    expect(extension).toHaveBeenCalledOnce();
+    expect(SELF_PAIRED_WINDOW_MS).toBe(10_000);
+  });
+  it('keeps the 409 when the pairing is older, absent, or unreadable', async () => {
+    for (const extension of [
+      async () => ({ pairedAt: new Date(NOW - 60_000).toISOString() }),
+      async () => ({}),
+      async () => { throw new Error('offline'); },
+    ]) {
+      await expect(pairWithCode('482913', { pair: async () => { throw conflict(); }, extension, now: () => NOW })).rejects.toThrow('already paired');
+    }
+  });
+  it('never looks again for any other failure', async () => {
+    const extension = vi.fn(async () => ({ pairedAt: new Date(NOW).toISOString() }));
+    await expect(pairWithCode('482913', { pair: async () => { throw Object.assign(new Error('Wrong code'), { status: 400 }); }, extension, now: () => NOW })).rejects.toThrow('Wrong code');
+    expect(extension).not.toHaveBeenCalled();
   });
 });

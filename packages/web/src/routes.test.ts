@@ -4,6 +4,7 @@ import {
   legacyRedirect,
   parseConnectionRoute,
   parsePairingCode,
+  withoutPairingCode,
   parsePluginsInstall,
   parsePluginsTab,
   parseSecretRoute,
@@ -24,6 +25,10 @@ describe('buddi.app links to Browser & apps', () => {
     expect(legacyRedirect('#/settings/browser?code=482913')).toBe('#/settings/computer?code=482913');
     expect(legacyRedirect('#/settings/browserx')).toBeNull();
     expect(parsePairingCode('#/settings/computer?code=482913')).toBe('482913');
+    expect(withoutPairingCode('#/settings/computer?code=482913')).toBe('#/settings/computer');
+    expect(withoutPairingCode('#/settings/browser?a=1&code=482913')).toBe('#/settings/browser?a=1');
+    expect(withoutPairingCode('#/settings/computer')).toBe('#/settings/computer');
+    expect(withoutPairingCode('#/chat?code=482913')).toBe('#/chat?code=482913');
     expect(parsePairingCode('#/settings/browser?code=482%20913')).toBe('482913');
     expect(parsePairingCode('#/settings/computer?code=48291')).toBeNull();
     expect(parsePairingCode('#/settings/computer?code=abcdef')).toBeNull();

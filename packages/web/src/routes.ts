@@ -302,6 +302,23 @@ export function parsePairingCode(hash: string): string | null {
   return /^\d{6}$/.test(code) ? code : null;
 }
 
+/**
+ * The same hash without its pairing code (`#/settings/computer?code=482913` →
+ * `#/settings/computer`), other parameters kept; any other hash unchanged. A
+ * used code must not stay in the address, where a reload (or buddi.app's
+ * restored route) would type a dead code in again.
+ */
+export function withoutPairingCode(hash: string): string {
+  const match = /^(#\/settings\/(?:computer|browser))\?(.*)$/.exec(hash);
+  if (!match) return hash;
+  let params: URLSearchParams;
+  try { params = new URLSearchParams(match[2]); } catch { return hash; }
+  if (!params.has('code')) return hash;
+  params.delete('code');
+  const rest = params.toString();
+  return rest ? `${match[1]}?${rest}` : match[1] as string;
+}
+
 /** The connection a connections hash opens, or null. */
 export function parseConnectionRoute(hash: string): string | null {
   return settingsParam(hash, 'connections', 'connection');

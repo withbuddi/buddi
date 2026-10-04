@@ -1142,7 +1142,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       ...(tailscaleRefusal?.kind === 'login' ? { tailscaleRefusal: tailscaleRefusal.sentence } : {}),
       ...(tailscaleRefusal?.kind === 'unanswered' ? { tailscaleUnanswered: true } : {}),
       // From the Chrome extension's popup, on this computer: offer buddi.app first.
-      ...(arrived === 'local' && appLinkFor(search) ? { appLink: appLinkFor(search) } : {}),
+      ...((link) => arrived === 'local' && link ? { appLink: link } : {})(appLinkFor(search, first(req.headers['user-agent']) ?? '', req.headers.host ?? '')),
       ...locked,
     };
   };

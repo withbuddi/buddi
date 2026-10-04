@@ -91,25 +91,85 @@ describe('the signed-out page', () => {
     expect(html).not.toContain(process.env.HOME ?? '/Users/');
   });
 
-  it('from the Chrome extension, leads with Open buddi.app and holds the Terminal line back until it did not answer', async () => {
+  const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+  const LINUX_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+  const AT_APP = { ...NAVIGATE, Host: '127.0.0.1:4317', 'User-Agent': MAC_UA };
+
+  it('from the Chrome extension on a Mac at buddi.app\'s address, leads with Open buddi.app and holds the Terminal line back until it did not answer', async () => {
     const { origin } = await setup(false);
-    const res = await hostFetch(`${origin}/?from=extension&code=482913`, { headers: NAVIGATE });
+    const res = await hostFetch(`${origin}/?from=extension`, { headers: AT_APP });
     expect(res.status).toBe(401);
     const html = await res.text();
-    expect(html).toContain('<a class="button accent" href="buddi://settings/browser?code=482913" data-app-link>Open buddi.app</a>');
+    // The bare link: the code never reaches the server; the page's script adds it from the fragment.
+    expect(html).toContain('<a class="button accent" href="buddi://settings/browser" data-app-link>Open buddi.app</a>');
     // Above the Terminal line, which the script hides until the link did not answer.
     expect(html.indexOf('Open buddi.app')).toBeLessThan(html.indexOf('Run this in Terminal'));
     expect(html).toContain('<div data-app-wait><p>buddi.app didn’t open. Run this in Terminal on this computer');
     expect(html.match(/<script/g)).toHaveLength(2);
-    expect(res.headers.get('content-security-policy')).toMatch(/script-src 'sha256-[A-Za-z0-9+/=]+' 'sha256-[A-Za-z0-9+/=]+';/);
-    // A code that is not six digits is left off; anything else in the query never reaches the link.
-    const odd = await (await hostFetch(`${origin}/?from=extension&code=%22%3E%3Cb%3E`, { headers: NAVIGATE })).text();
-    expect(odd).toContain('href="buddi://settings/browser" data-app-link');
-    expect(odd).not.toContain('<b>');
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toMatch(/script-src 'sha256-[A-Za-z0-9+/=]+' 'sha256-[A-Za-z0-9+/=]+';/);
+    expect(csp).not.toContain('unsafe-inline\'; base');
+    expect(csp).toMatch(/default-src 'none'/);
+    // A code in the query string (an older popup) never reaches the link.
+    const queried = await (await hostFetch(`${origin}/?from=extension&code=482913`, { headers: AT_APP })).text();
+    expect(queried).toContain('href="buddi://settings/browser" data-app-link');
+    expect(queried).not.toContain('browser?code=482913');
     // Not from the extension: the page as it was, one script.
-    const plain = await (await hostFetch(`${origin}/?code=482913`, { headers: NAVIGATE })).text();
+    const plain = await (await hostFetch(`${origin}/?code=482913`, { headers: AT_APP })).text();
     expect(plain).not.toContain('Open buddi.app');
     expect(plain.match(/<script/g)).toHaveLength(1);
+  });
+
+  it('off a Mac, or on another port, the page from the extension is the ordinary one', async () => {
+    const { origin } = await setup(false);
+    for (const headers of [{ ...AT_APP, 'User-Agent': LINUX_UA }, { ...AT_APP, Host: '127.0.0.1:4327' }, { ...NAVIGATE, 'User-Agent': MAC_UA }]) {
+      const html = await (await hostFetch(`${origin}/?from=extension`, { headers })).text();
+      expect(html).toContain('You’re signed out of this buddi');
+      expect(html).not.toContain('Open buddi.app');
+      expect(html.match(/<script/g)).toHaveLength(1);
+    }
+  });
+
+  it('the app script takes the code from the fragment only when it is six digits, and shows the Terminal line when the focus comes back', async () => {
+    const { origin } = await setup(false);
+    const html = await (await hostFetch(`${origin}/?from=extension`, { headers: AT_APP })).text();
+    const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!).find((text) => text.includes('data-app-link'))!;
+    const run = (hash: string) => {
+      const wait = { hidden: false };
+      const link = { href: 'buddi://settings/browser', listeners: {} as Record<string, () => void>, addEventListener(type: string, fn: () => void) { this.listeners[type] = fn; } };
+      const on: Record<string, Array<() => void>> = {};
+      const add = (type: string, fn: () => void) => { (on[type] ??= []).push(fn); };
+      const fire = (type: string) => { const fns = on[type] ?? []; on[type] = []; fns.forEach((fn) => fn()); };
+      const timers: Array<() => void> = [];
+      let focused = true;
+      const document = {
+        querySelectorAll: (selector: string) => selector === '[data-app-wait]' ? [wait] : selector === '[data-app-link]' ? [link] : [],
+        addEventListener: add, hasFocus: () => focused,
+      };
+      const window = { addEventListener: add };
+      new Function('document', 'window', 'location', 'setTimeout', script)(document, window, { hash }, (fn: () => void) => { timers.push(fn); });
+      return { wait, link, fire, timers, blur: () => { focused = false; fire('blur'); }, focus: () => { focused = true; fire('focus'); } };
+    };
+    const good = run('#/settings/computer?code=482913');
+    expect(good.link.href).toBe('buddi://settings/browser?code=482913');
+    expect(good.wait.hidden).toBe(true);
+    for (const hash of ['#/settings/computer?code=48291', '#/settings/computer?code=%22%3E%3Cb%3E', '#/settings/computer?code=4829131', '']) {
+      expect(run(hash).link.href).toBe('buddi://settings/browser');
+    }
+    // Chrome's "Open buddi.app?" dialog blurs the page; Cancel gives the focus back after the 1.5 s check.
+    good.link.listeners.click!();
+    good.blur();
+    good.timers.forEach((fn) => fn());
+    expect(good.wait.hidden).toBe(true);
+    good.focus();
+    expect(good.wait.hidden).toBe(false);
+    // The page went away (navigated): a later focus shows nothing.
+    const left = run('#/settings/computer?code=482913');
+    left.link.listeners.click!();
+    left.blur();
+    left.fire('pagehide');
+    left.focus();
+    expect(left.wait.hidden).toBe(true);
   });
 
   it('keeps the empty 401 for API calls, scripts and fetches', async () => {

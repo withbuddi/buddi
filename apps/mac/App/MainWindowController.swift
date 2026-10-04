@@ -27,7 +27,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     private var loading = false
     private var retry: DispatchWorkItem?
     /// The route to come back to after a reload, or one a menu item asked for before the page was up.
-    private var pendingRoute: String?
+    private var pending = PendingRoute()
     private var popups: [NSWindow] = []
     private var downloads: [ObjectIdentifier: URL] = [:]
 
@@ -172,8 +172,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
 
     /// The gateway is not answering: placeholder up, and the next running loads again on this route.
     private func goneAway(_ mode: MainWindowPlaceholder.Mode) {
-        if revealed, let fragment = webView.url?.fragment, !fragment.isEmpty, pendingRoute == nil {
-            pendingRoute = "#" + fragment
+        if revealed, let fragment = webView.url?.fragment, !fragment.isEmpty {
+            pending.remember("#" + fragment)
         }
         revealed = false
         retry?.cancel()
@@ -203,7 +203,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     private func open(link: URL) {
         var components = URLComponents(url: link, resolvingAgainstBaseURL: false)
         origin = Self.origin(of: link)
-        if let route = pendingRoute { components?.fragment = String(route.dropFirst()) }
+        if let route = pending.takeForLoad() { components?.fragment = String(route.dropFirst()) }
         loading = true
         webView.load(URLRequest(url: components?.url ?? link))
     }
@@ -218,10 +218,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     private func reveal() {
         loading = false
         revealed = true
-        pendingRoute = nil
         placeholder.isHidden = true
         webView.isHidden = false
         window?.makeFirstResponder(webView)
+        // A link that arrived after the load started (buddi://settings/browser?code=…) is applied now, not lost.
+        if let route = pending.takeOnReveal() { go(to: route) }
     }
 
     /// The gateway answered "running" but the page did not load: try again shortly.
@@ -241,14 +242,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     // MARK: - Menu commands
 
     func go(to route: String) {
-        guard revealed else { pendingRoute = route; return }
+        guard revealed else { pending.ask(route); return }
         evaluate("location.hash = \(Self.jsString(route));")
     }
 
     /// A fresh conversation with the agent on screen, or with the default agent
     /// (`#/chat/<agent>/new`, the route ChatPage opens fresh).
     func newConversation() {
-        guard revealed else { pendingRoute = "#/chat"; return }
+        guard revealed else { pending.ask("#/chat"); return }
         evaluate("""
         (async () => {
           const on = /^#\\/chat\\/(?!g\\/)([^/?]+)/.exec(location.hash);
@@ -382,7 +383,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard webView === self.webView else { return }
-        if let fragment = webView.url?.fragment { pendingRoute = "#" + fragment }
+        if let fragment = webView.url?.fragment, !fragment.isEmpty { pending.remember("#" + fragment) }
         goneAway(.starting("Starting buddi…"))
         if case .running = supervisor.health { load() }
     }

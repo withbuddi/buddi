@@ -206,14 +206,15 @@ describe('Open buddi settings: buddi.app first, the dashboard otherwise', () => 
     expect(launch).toHaveBeenCalledOnce();
     expect(openTab).not.toHaveBeenCalled();
     fire();
-    expect(openTab).toHaveBeenCalledWith('http://127.0.0.1:4317/?from=extension&code=482913#/settings/computer?code=482913');
+    expect(openTab).toHaveBeenCalledWith('http://127.0.0.1:4317/?from=extension#/settings/computer?code=482913');
   });
 
   it('goes straight to the dashboard off a Mac, or for a buddi on another address', () => {
     for (const [gateway, agent] of [['http://127.0.0.1:4317', LINUX], ['http://127.0.0.1:4327', MAC]] as const) {
       const { launch, openTab } = run(gateway, agent, false, null);
       expect(launch).not.toHaveBeenCalled();
-      expect(openTab).toHaveBeenCalledWith(`${gateway}/?from=extension#/settings/computer`);
+      // No `from=extension` where buddi.app could not have answered: the signed-out page won't lead with it.
+      expect(openTab).toHaveBeenCalledWith(`${gateway}/#/settings/computer`);
     }
   });
 
@@ -223,5 +224,16 @@ describe('Open buddi settings: buddi.app first, the dashboard otherwise', () => 
     expect(settingsWebUrl('not a url', '482913')).toBeNull();
     expect(triesApp('http://localhost:4317', MAC)).toBe(true);
     expect(triesApp('https://example.com:4317', MAC)).toBe(false);
+  });
+
+  it('never puts the code in the query string, and marks from=extension only where the app could answer', () => {
+    const mac = settingsWebUrl('http://127.0.0.1:4317', '482 913', MAC) as string;
+    expect(new URL(mac).search).toBe('?from=extension');
+    expect(new URL(mac).hash).toBe('#/settings/computer?code=482913');
+    for (const [gateway, agent] of [['http://127.0.0.1:4317', LINUX], ['http://127.0.0.1:4391', MAC]] as const) {
+      const url = new URL(settingsWebUrl(gateway, '482913', agent) as string);
+      expect(url.search).toBe('');
+      expect(url.hash).toBe('#/settings/computer?code=482913');
+    }
   });
 });

@@ -48,18 +48,24 @@ export function retryHref(pathname: string, search: string): string {
   return `${path}${search}`;
 }
 
+/** The port buddi.app's own buddi listens on; the app answers `buddi://` only for that one. */
+export const APP_PORT = 4317;
+
 /**
- * `buddi://settings/browser`, with the pairing code when the popup sent a
- * valid one, for a page the Chrome extension opened (`?from=extension`, set by
- * `packages/extension/src/popup.ts`). Undefined for any other request. Built
- * from six digits and fixed text only, never from what the request said.
+ * `buddi://settings/browser`, for a page the Chrome extension opened
+ * (`?from=extension`, set by `packages/extension/src/popup.ts`) in a Mac's
+ * browser at buddi.app's own address. Undefined for any other request: Linux,
+ * Windows, a checkout on another port. Fixed text only; the pairing code never
+ * reaches the server (it rides in the fragment, and the page's script adds it).
  */
-export function appLinkFor(search: string): string | undefined {
+export function appLinkFor(search: string, userAgent = '', host = ''): string | undefined {
   let params: URLSearchParams;
   try { params = new URLSearchParams(search); } catch { return undefined; }
   if (params.get('from') !== 'extension') return undefined;
-  const code = (params.get('code') ?? '').replace(/[\s-]/g, '');
-  return /^\d{6}$/.test(code) ? `buddi://settings/browser?code=${code}` : 'buddi://settings/browser';
+  if (!/Macintosh|Mac OS X/.test(userAgent)) return undefined;
+  let port: string;
+  try { port = new URL(`http://${host}`).port || '80'; } catch { return undefined; }
+  return port === String(APP_PORT) ? 'buddi://settings/browser' : undefined;
 }
 
 export interface SignedOutOptions {
@@ -112,13 +118,19 @@ const COPY_SCRIPT_HASH = `sha256-${createHash('sha256').update(COPY_SCRIPT, 'utf
 
 /** How long "Open buddi.app" waits for the app to take over before the Terminal line shows. */
 export const APP_LINK_WAIT_MS = 1500;
+/** Focus coming back to the page this soon after the click, with the page still here, is a "no" (Chrome's own dialog, Cancel). */
+export const APP_LINK_RETURN_MS = 30_000;
 /**
- * "Open buddi.app": follow the link, and if this page still has the focus
- * after a second and a half, buddi.app did not answer (not installed, or the
- * owner said no), so the Terminal line shows. Without the script the line is
- * never hidden. Allowed by hash, like the copy script.
+ * "Open buddi.app": the pairing code is read from the fragment the extension
+ * put it in (`#/settings/computer?code=123456`), checked for exactly six
+ * digits and added to the link; nothing else from the address is used. Then
+ * the link is followed, and the Terminal line shows when buddi.app did not
+ * answer: the page still has the focus after a second and a half, or the
+ * focus comes back without the page having gone (Chrome's first-time "Open
+ * buddi.app?" dialog blurs the page, and Cancel returns it). Without the
+ * script the line is never hidden. Allowed by hash, like the copy script.
  */
-const APP_SCRIPT = `document.querySelectorAll('[data-app-wait]').forEach(function(w){w.hidden=true});document.querySelectorAll('[data-app-link]').forEach(function(a){a.addEventListener('click',function(){var gone=false;function away(){gone=true}window.addEventListener('blur',away,{once:true});document.addEventListener('visibilitychange',away,{once:true});setTimeout(function(){if(gone&&!document.hasFocus())return;document.querySelectorAll('[data-app-wait]').forEach(function(w){w.hidden=false})},${APP_LINK_WAIT_MS})})})`;
+const APP_SCRIPT = `document.querySelectorAll('[data-app-wait]').forEach(function(w){w.hidden=true});var m=/[?&]code=([^&]*)/.exec(location.hash);var code=m&&/^\\d{6}$/.test(m[1])?m[1]:'';function show(){document.querySelectorAll('[data-app-wait]').forEach(function(w){w.hidden=false})}document.querySelectorAll('[data-app-link]').forEach(function(a){if(code)a.href='buddi://settings/browser?code='+code;a.addEventListener('click',function(){var gone=false,left=false,at=Date.now();function away(){gone=true}window.addEventListener('blur',away,{once:true});document.addEventListener('visibilitychange',away,{once:true});window.addEventListener('pagehide',function(){left=true},{once:true});window.addEventListener('focus',function(){if(!left&&Date.now()-at<${APP_LINK_RETURN_MS})show()},{once:true});setTimeout(function(){if(gone&&!document.hasFocus())return;show()},${APP_LINK_WAIT_MS})})})`;
 const APP_SCRIPT_HASH = `sha256-${createHash('sha256').update(APP_SCRIPT, 'utf8').digest('base64')}`;
 
 interface Copy {
@@ -220,9 +232,9 @@ function providerCopy(provider: NonNullable<SignedOutOptions['provider']>): Copy
   };
 }
 
-/** Only a `buddi://settings/browser` link with at most a six-digit code is ever drawn. */
+/** Only the bare `buddi://settings/browser` link is ever drawn; the page's script adds the code from the fragment. */
 function appLinkHref(link: string | undefined): string | undefined {
-  return link && /^buddi:\/\/settings\/browser(\?code=\d{6})?$/.test(link) ? link : undefined;
+  return link === 'buddi://settings/browser' ? link : undefined;
 }
 
 /** The page itself. Exported for tests; the server calls `sendSignedOut`. */

@@ -131,15 +131,17 @@ export function appSettingsLink(code: string | null | undefined): string {
 }
 
 /**
- * The dashboard's Browser & apps page in a tab, as before, now saying it came
- * from here (`?from=extension`, so a signed-out page can offer buddi.app) and
- * carrying the code so the page can fill it in.
+ * The dashboard's Browser & apps page in a tab, as before. The code rides only
+ * in the fragment (`#/settings/computer?code=…`, which the dashboard's router
+ * reads and no server ever sees). `?from=extension` is added only where
+ * buddi.app could have answered (`triesApp`), so the signed-out page offers
+ * the app only there.
  */
-export function settingsWebUrl(gateway: string, code: string | null | undefined): string | null {
+export function settingsWebUrl(gateway: string, code: string | null | undefined, userAgent = ''): string | null {
   const digits = digitsOf(code);
   const base = dashboardUrl(gateway);
   if (!base) return null;
-  const search = digits ? `?from=extension&code=${digits}` : '?from=extension';
+  const search = triesApp(gateway, userAgent) ? '?from=extension' : '';
   return `${base}${search}${SETTINGS_HASH}${digits ? `?code=${digits}` : ''}`;
 }
 
@@ -169,7 +171,7 @@ export function openSettings(options: {
   launch(url: string): void; openTab(url: string): void; focusLost(): boolean;
   wait?: (ms: number, then: () => void) => void;
 }): void {
-  const web = settingsWebUrl(options.gateway, options.code);
+  const web = settingsWebUrl(options.gateway, options.code, options.userAgent);
   const fallback = () => { if (web) options.openTab(web); };
   if (!triesApp(options.gateway, options.userAgent)) { fallback(); return; }
   try { options.launch(appSettingsLink(options.code)); } catch { fallback(); return; }

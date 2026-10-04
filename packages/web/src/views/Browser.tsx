@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type AgentEngine, type BrowserRoute, type BrowserRouteStatus, type BrowserStatus, type ControlSettings, type ExtensionState } from '../api';
 import { fmtClock, fmtTime } from '../format';
-import { chatRoute, parsePairingCode, pluginSettingsRoute } from '../routes';
+import { chatRoute, parsePairingCode, pluginSettingsRoute, withoutPairingCode } from '../routes';
 import { ActionMenu, Avatar, Icon, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, Panel, Pill, Segment, Sheet, Spacer, Switch, Toolbar, useAsync } from '../ui';
 import { useThisMachine } from '../useThisMachine';
 
@@ -240,6 +240,39 @@ function OwnRow({ data, busy, run }: { data: BrowserStatus; busy: boolean; run: 
 
 /* ---- your Chrome: the switch once paired; Add to Chrome, the code, Pair again otherwise ---- */
 
+/** How recent a pairing counts as the one this page just made by itself, when a typed code then gets a 409. */
+export const SELF_PAIRED_WINDOW_MS = 10_000;
+
+/**
+ * Pair with a typed (or linked) code. The page may already have paired this
+ * very browser by itself from the popup's code a moment earlier; the gateway
+ * then answers the typed code with a 409. That is no failure: when a fresh
+ * look at `/api/extension` shows a pairing made within the last ten seconds,
+ * the 409 is swallowed. Any other failure is thrown as it came.
+ */
+export async function pairWithCode(code: string, deps: { pair: (code: string) => Promise<unknown>; extension: () => Promise<{ pairedAt?: string | null }>; now?: () => number } = { pair: (c) => api.pairExtension(c), extension: () => api.extension() }): Promise<void> {
+  try {
+    await deps.pair(code);
+  } catch (error) {
+    if ((error as { status?: unknown } | null)?.status !== 409) throw error;
+    const now = (deps.now ?? Date.now)();
+    const state = await deps.extension().catch(() => undefined);
+    const at = state?.pairedAt ? Date.parse(state.pairedAt) : NaN;
+    if (!(Number.isFinite(at) && now - at >= -SELF_PAIRED_WINDOW_MS && now - at <= SELF_PAIRED_WINDOW_MS)) throw error;
+  }
+  forgetLinkedCode();
+}
+
+/** Take a used pairing code out of the address without a navigation (`history.replaceState`). */
+export function forgetLinkedCode(): void {
+  if (typeof window === 'undefined') return;
+  const hash = window.location.hash;
+  const clean = withoutPairingCode(hash);
+  if (clean === hash) return;
+  try { window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${clean}`); } catch { /* the address keeps it; harmless */ }
+}
+
+
 /** A settings change, or the removal of one sign-in site from both lists (the owner's and the learned). */
 type SettingsChange = Partial<ControlSettings> & { forgetSignInSite?: string };
 
@@ -276,7 +309,7 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   useEffect(() => {
     if (!offered || tried.current === offered || working) return;
     tried.current = offered;
-    void act(() => api.pairExtension(offered));
+    void act(async () => { await api.pairExtension(offered); forgetLinkedCode(); });
   }, [offered]);
   const disabled = busy || working;
   const paired = ext.data?.pairedAt ? `paired ${fmtTime(ext.data.pairedAt, zone)}` : null;
@@ -299,8 +332,8 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   const codeField = (
     <span className="br-pair">
       <input aria-label="Pairing code" inputMode="numeric" autoComplete="one-time-code" maxLength={7} placeholder="482 913" value={code} onChange={(e) => setCode(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && code.replace(/[^0-9]/g, '').length === 6 && !disabled) void act(async () => { await api.pairExtension(code); setCode(''); }); }} />
-      <Button size="sm" variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void act(async () => { await api.pairExtension(code); setCode(''); })}>Pair</Button>
+        onKeyDown={(e) => { if (e.key === 'Enter' && code.replace(/[^0-9]/g, '').length === 6 && !disabled) void act(async () => { await pairWithCode(code); setCode(''); }); }} />
+      <Button size="sm" variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void act(async () => { await pairWithCode(code); setCode(''); })}>Pair</Button>
     </span>
   );
   const enterCode = (
