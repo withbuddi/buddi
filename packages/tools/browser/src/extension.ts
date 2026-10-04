@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { checkUrl } from '@buddi/core/plugin';
 import { fieldOrigin } from './secrets.js';
-import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation } from './types.js';
+import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type SeenLoginReport } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */
 export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot', 'fieldInfo', 'secretFill'] as const;
@@ -80,7 +80,19 @@ export interface ExtensionBridge {
    * "bar" (docs/browser.md, "Work in view").
    */
   events?(session: string, listener: (event: ExtensionEvent) => void): () => void;
+  /**
+   * A sign-in the owner answered in a tab they hold (the waiting bar's "Save
+   * this login?"), for one session: Save with the pair, Never with the site.
+   * Only from the paired socket. Returns the unsubscribe.
+   */
+  logins?(session: string, listener: (login: ExtensionLogin) => void): () => void;
 }
+/** What the extension sends when the owner answers the save prompt in a held tab. The password only with Save. */
+export interface ExtensionLogin { decision: 'save' | 'never'; origin: string; username: string; password?: string }
+/** What the extension needs before it asks: sites never to ask about, and logins already kept. */
+export interface ExtensionLoginFacts { never: string[]; saved: Array<{ site: string; username: string }> }
+/** How long after Give it back a Save tapped in the tab still counts. */
+const LOGIN_GRACE_MS = 2 * 60_000;
 /**
  * An unsolicited event from the extension about one session: `takeover` from
  * the working bar, `giveback` from the bar a held tab shows (extension
@@ -122,7 +134,7 @@ export class ExtensionDriver implements BrowserDriver {
   #picture?: Buffer;
   /** Set when a command failed: the next one waits for the browser to settle. */
   #settling?: Promise<void>;
-  constructor(readonly bridge: ExtensionBridge, readonly allowedHosts?: readonly string[]) {}
+  constructor(readonly bridge: ExtensionBridge, readonly allowedHosts?: readonly string[], readonly options: { logins?: () => ExtensionLoginFacts; now?: () => number } = {}) {}
 
   async start(): Promise<void> {
     if (!this.bridge.connected()) throw new Error(NOT_CONNECTED);
@@ -144,6 +156,25 @@ export class ExtensionDriver implements BrowserDriver {
   onOwnerGiveBack(listener: () => void): void { this.#onGiveBack = listener; this.#listen(); }
   /** Take-over brings the tab forward in the owner's Chrome; nothing is streamed. */
   readonly holdsInPlace = 'chrome' as const;
+
+  /** Whether the owner holds this session's tab, and until when a Save tapped there still counts after they gave it back. */
+  #held = false;
+  #heldUntil = 0;
+  #logins?: () => void;
+  /**
+   * A sign-in the owner answered in the tab they hold. Only while they hold it
+   * (or just gave it back): a Save from a tab buddi is driving is not the
+   * owner's. The pair goes to the listener and nowhere else.
+   */
+  onLoginSeen(listener: (login: SeenLoginReport) => void): void {
+    this.#logins?.();
+    this.#logins = this.bridge.logins?.(this.session, (login) => {
+      const now = this.options.now?.() ?? Date.now();
+      if (!this.#held && now >= this.#heldUntil) return;
+      if (login.decision === 'save' && !login.password) return;
+      try { listener({ origin: login.origin, username: login.username, password: login.password ?? '', decision: login.decision }); } catch { /* the keeper decides */ }
+    });
+  }
 
   #invalidate(): void { this.#observation = undefined; this.#picture = undefined; }
 
@@ -273,7 +304,10 @@ export class ExtensionDriver implements BrowserDriver {
   async takeover(): Promise<void> {
     this.#invalidate();
     if (!this.bridge.connected()) throw new Error(NOT_CONNECTED);
-    await this.bridge.send({ name: 'hold', session: this.session, args: {}, owner: true });
+    // What the tab needs to ask about a sign-in: the sites never to ask about, the logins already kept.
+    const logins = this.options.logins?.();
+    await this.bridge.send({ name: 'hold', session: this.session, args: logins ? { logins } : {}, owner: true });
+    this.#held = true;
   }
   /**
    * The owner took over mid-action: the command is abandoned, the tab is not.
@@ -291,6 +325,8 @@ export class ExtensionDriver implements BrowserDriver {
   /** Given back: the waiting bar goes, and the agent may act in that tab although the owner is looking at it. */
   resume(): void {
     this.#invalidate();
+    if (this.#held) this.#heldUntil = (this.options.now?.() ?? Date.now()) + LOGIN_GRACE_MS;
+    this.#held = false;
     if (!this.bridge.connected()) return;
     void this.bridge.send({ name: 'unhold', session: this.session, args: {}, owner: true }).catch(() => undefined);
   }

@@ -187,6 +187,29 @@ describe('the groups and their rows', { timeout: 180_000 }, () => {
     expect(screen.getByRole('link', { name: 'Set password' })).toHaveAttribute('href', `#/settings/p.email.settings?account=${MAILBOX_ID}&set=password`);
   });
 
+  it('lists a login buddi kept from your sign-in as whose and when, with Remove', async () => {
+    const LOGIN: SecretListingView = {
+      name: 'login · amazon.com', totp: false, hasValue: true,
+      bindings: [binding('browser.field', 'https://www.amazon.com', 'first-time')],
+      lastUse: null, usedBy: [], unused: false,
+      login: { site: 'amazon.com', username: 'sam.smith@example.com', savedAt: '2026-10-03T09:00:00Z' },
+    };
+    vi.mocked(api.secretsAct).mockResolvedValue({ result: { deleted: true } });
+    await openPage({ ...VIEW, secrets: [...VIEW.secrets, LOGIN] });
+    const mine = group('Your secrets');
+    expect(within(mine).getByText('Login · amazon.com')).toBeInTheDocument();
+    expect(within(mine).getByText('for sam.smith@… · saved 3 Oct')).toBeInTheDocument();
+    expect(within(mine).queryByText(/example\.com/)).toBeNull();
+    const rows = within(mine).getAllByRole('button', { name: 'Remove…' });
+    expect(rows).toHaveLength(1);
+    fireEvent.click(rows[0]!);
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Remove “Login · amazon.com”?');
+    expect(dialog).toHaveTextContent('Agents can no longer fill it on amazon.com.');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(api.secretsAct).toHaveBeenCalledWith('secrets.delete', { name: 'login · amazon.com' }));
+  });
+
   it('marks a secret nothing uses any more, quietly, and removes it only when asked', async () => {
     vi.mocked(api.secretsAct).mockResolvedValue({ result: { deleted: true } });
     await openPage();

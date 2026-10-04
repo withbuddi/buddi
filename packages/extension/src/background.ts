@@ -14,7 +14,7 @@
  */
 
 import { BrowserCommands } from './commands.js';
-import { GIVE_BACK_MESSAGE } from './bar.js';
+import { GIVE_BACK_MESSAGE, LOGIN_MESSAGE, loginFrame } from './bar.js';
 import type { WorkerChrome } from './chrome.js';
 import { handleExternal, type ExtensionStatus } from './external.js';
 import { Protocol, type ClientState } from './protocol.js';
@@ -217,6 +217,18 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (request.type === GIVE_BACK_MESSAGE) {
     const tabId = (sender as { tab?: { id?: number } } | undefined)?.tab?.id;
     if (typeof request.session === 'string') safely(() => commands.giveBack(request.session!, tabId).then(() => undefined));
+    return;
+  }
+  /*
+   * "Save this login?" answered in a held tab's bar: Save with the pair, Never
+   * with the site. Only from the tab that session holds, with the origin
+   * Chrome reports for the sender, straight to buddi on this worker's
+   * authenticated socket — never logged, never kept. Not now sends nothing,
+   * so it never arrives here.
+   */
+  if (request.type === LOGIN_MESSAGE) {
+    const frame = loginFrame(message, sender as { tab?: { id?: number }; url?: string } | undefined, typeof request.session === 'string' ? commands.heldTab(request.session) : undefined);
+    if (frame) send(frame);
     return;
   }
   if (request.type === 'buddi-get-state') { respond({ state: last }); return; }

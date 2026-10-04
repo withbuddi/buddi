@@ -233,7 +233,17 @@ export interface BrowserDriver {
   holdsInPlace?: 'chrome';
   /** The owner pressed Give it back in the page itself (the bar a held tab shows). Treated as the Canvas's Give it back. */
   onOwnerGiveBack?(listener: () => void): void;
+  /**
+   * A sign-in went out on a page the owner holds (docs/browser.md, "Saving a
+   * sign-in"). buddi's own browser reports what it saw and the owner is asked
+   * afterwards; the owner's Chrome asks in the tab, so its report carries the
+   * owner's answer (`save` with the pair, `never` with no password). The
+   * password goes to the browser host's login keeper and nowhere else.
+   */
+  onLoginSeen?(listener: (login: SeenLoginReport) => void): void;
 }
+/** What a backend reports about a sign-in the owner made: the frame's origin, the pair, and the answer when the owner already gave it. */
+export interface SeenLoginReport { origin: string; username: string; password: string; decision?: 'save' | 'never' }
 /** "Observed 12:04:35 UTC." — the line a result opens with, so the model can tell old evidence from new. */
 export function observedLine(iso: string): string {
   return `Observed ${iso.slice(11, 19)} UTC.`;

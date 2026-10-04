@@ -1,7 +1,7 @@
 ---
 title: Secrets the agent can use but never see
 status: reference
-updated: 2026-09-28
+updated: 2026-10-03
 ---
 
 # Secrets the agent can use but never see
@@ -296,6 +296,15 @@ keeps are theirs to change.
 - **Add**: name, value (a password field), TOTP (off), and the places it may
   go, each a kind of place, the place and when it asks you; a new place
   starts at "the first time" where the kind allows it.
+- **A login buddi saved for you**: when you sign in on a page you hold
+  (take-over in buddi's browser or a held tab in your Chrome) and press Save on
+  "Save this login for amazon.com?", buddi's browser host hands the password to
+  `secrets.put` as the owner — the same store and the same scrubber rebuild as
+  Add — named `login · amazon.com`, bound as `browser.field` to the sign-in's
+  origin, first time asks. The user name is a label beside it, not a secret.
+  Its row says "Login · amazon.com · for sam@… · saved 3 Oct" and offers
+  Remove, which takes the secret and the label. No model, transcript or tool
+  result ever carries the pair ([browser.md](browser.md), "Saving a sign-in").
 - Changing where a value may go to a looser rule or a new place is the owner's
   own action on the page, never a tool.
 - The value is **never shown again** after save. "Replace value" is the only

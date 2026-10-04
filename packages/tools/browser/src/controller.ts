@@ -15,6 +15,8 @@ import { applySettingsChange, migrateSettings, PIN_VALUES, settingsSchema, type 
 import { agoText, cardAnswer, ownerClock, chooseRoute, detectSignedOut, detectWall, ownerCard, RouteProviderDriver, routeNote, siteListed, siteOf, type ChromeLink, type ChromeMiss, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
 import { BrowserTelemetry, missionMark, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
 import { canonicalOrigin, fieldBoundTo } from './secrets.js';
+import { LoginKeeper } from './logins.js';
+import type { SeenLoginReport } from './types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The one control an app card carries: how long the yes lasts. */
@@ -81,6 +83,8 @@ export class HostController implements BrowserController {
   /** Who hears that the owner gave a page back (the gateway continues the run that waited on it). */
   #giveBack = new Set<(info: BrowserGiveBack) => void>();
   readonly telemetry: BrowserTelemetry;
+  /** Sign-ins the owner made on a page they held: asked about, kept or refused here, never by a model. */
+  readonly logins: LoginKeeper;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
     extensionBridge?: () => ExtensionBridge;
@@ -102,6 +106,7 @@ export class HostController implements BrowserController {
     queueTimeoutMs?: number;
   } = {}) {
     this.#extension = options.extensionBridge;
+    this.logins = new LoginKeeper(path.join(dir, 'logins.json'), options.service?.now ? { now: options.service.now } : {});
     this.telemetry = new BrowserTelemetry(path.join(dir, 'telemetry.jsonl'), options.service?.now);
     const self = this;
     const hostOptions: DriverOptions = {
@@ -113,17 +118,32 @@ export class HostController implements BrowserController {
     Object.defineProperty(hostOptions, 'headless', { enumerable: true, get: () => self.#headless });
     this.#host = new PlaywrightHost(hostOptions);
     const base: BrowserServiceOptions = { ...options.service, telemetry: this.telemetry, requestTakeover: (sessionId) => { void this.control('takeover', sessionId).catch(() => undefined); },
-      requestResume: (sessionId) => { void this.control('resume', sessionId).catch(() => undefined); } };
+      requestResume: (sessionId) => { void this.control('resume', sessionId).catch(() => undefined); },
+      loginSeen: (sessionId, login) => this.#loginSeen(sessionId, login) };
     this.#ownOptions = { ...base, route: 'own', maxSessions: options.limits?.own ?? this.#settings.maxOwnPages, closeHost: () => this.#host.close(),
       ...(options.idleEvictMs !== undefined ? { idleEvictMs: options.idleEvictMs } : {}), ...(options.queueTimeoutMs !== undefined ? { queueTimeoutMs: options.queueTimeoutMs } : {}) };
     this.#managers = {
       own: new BrowserManager(() => this.options.drivers?.own?.() ?? new PlaywrightDriver(this.#host.options, this.#host), this.#ownOptions),
-      chrome: new BrowserManager(() => this.options.drivers?.chrome?.() ?? new ExtensionDriver(this.#bridge(), this.options.allowedHosts),
+      chrome: new BrowserManager(() => this.options.drivers?.chrome?.() ?? new ExtensionDriver(this.#bridge(), this.options.allowedHosts, { logins: () => this.#loginFacts() }),
         { ...base, route: 'chrome', siteLocks: true, maxSessions: options.limits?.chrome ?? 8,
           ...(options.idleEvictMs !== undefined ? { idleEvictMs: options.idleEvictMs } : {}), ...(options.queueTimeoutMs !== undefined ? { queueTimeoutMs: options.queueTimeoutMs } : {}) }),
       apps: new BrowserManager(() => this.#appsDriver(), { ...base, route: 'apps', allowOpen: true, maxSessions: options.limits?.apps ?? 1,
         ...(options.idleEvictMs !== undefined ? { idleEvictMs: options.idleEvictMs } : {}), ...(options.queueTimeoutMs !== undefined ? { queueTimeoutMs: options.queueTimeoutMs } : {}) }),
     };
+  }
+  /**
+   * A sign-in on a page the owner holds. Answered in the owner's Chrome
+   * already (Save or Never in the tab), or asked about in the Page tab. The
+   * password stops at the keeper; whatever goes wrong is dropped without a
+   * word, because a word here could carry it.
+   */
+  #loginSeen(sessionId: string, login: SeenLoginReport): void {
+    const work = login.decision ? this.logins.decided(login, login.decision) : this.logins.seen(sessionId, login);
+    void work.catch(() => undefined);
+  }
+  /** What the owner's Chrome needs to know before it asks: the sites never to ask about, and the logins already kept. */
+  #loginFacts(): { never: string[]; saved: Array<{ site: string; username: string }> } {
+    return { never: this.logins.never(), saved: this.logins.saved().map(({ site, username }) => ({ site, username })) };
   }
   /** The gateway hands its WebSocket endpoint over once it exists. */
   useExtension(bridge: () => ExtensionBridge): void { this.#extension = bridge; }
@@ -262,6 +282,7 @@ export class HostController implements BrowserController {
   }
   async enable(): Promise<void> {
     if (this.#enabled) return;
+    void this.logins.load();
     const raw = await this.#readJson('settings.json');
     if (raw !== undefined) {
       const { settings, migrated } = migrateSettings(raw, { paired: this.#chromePaired() });
@@ -853,6 +874,7 @@ export class HostController implements BrowserController {
   }
   async shutdown(): Promise<void> {
     this.#enabled = false;
+    this.logins.clear();
     await Promise.all(ROUTES.map((route) => this.#managers[route].shutdown()));
     await Promise.all([...this.#pending]);
   }

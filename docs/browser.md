@@ -586,6 +586,36 @@ directory accordingly. No tool exports passwords, cookies or profile files.
 - **Close & release** ends only the selected conversation's task and closes its
   tabs. Other conversations keep working. It does not undo a global Stop.
 
+### Saving a sign-in
+
+While you hold a page, buddi itself — never a model — watches for a sign-in
+going out: a form with a filled password field submitted (Enter or a click on
+its button; not a show-password eye, Forgot or Cancel), or a fetch right after
+the password changed that left the field gone. In buddi's own browser the watch
+runs over the remote hand's CDP session in an isolated world the page's scripts
+cannot see, reporting through a binding exposed to that world alone; the user
+name and the password stop in the browser host's login keeper
+(`packages/tools/browser/src/logins.ts`), held in memory for two minutes. The
+hand socket says `{ type: "loginSeen", id, site, username }` — never the
+password — and the Page tab shows "Save this login for amazon.com?" above the
+window: **Save**, **Not now**, **Never for this site** (`POST
+/api/browser/login { id, decision }`, the dashboard session and CSRF only).
+In your Chrome the same watch runs in a tab you hold (injected beside the
+"buddi is waiting" bar, which asks the question itself); Save sends the pair
+from the tab to the worker and on to buddi over the extension's paired socket
+(a `login` frame, believed only from the held tab, with the origin Chrome
+reports for it), Never sends the site alone, Not now sends nothing. Save hands
+the pair to the owner-secret store through core's `secrets.put`, as the owner:
+the password becomes the secret `login · amazon.com`, bound as `browser.field`
+to the origin the form sat on and asking the first time, exactly the binding
+the sign-in card's "Save a login for next time" makes, so `secret.fill` finds
+it; the user name is kept beside it as a label (`<data>/browser/logins.json`,
+with the never-list), and `secret.list` tells the agent that user name so it
+can type it. Nothing of this passes through a model, a transcript, a tool
+result or a log line, and the scrubber covers the value from the moment it is
+stored. Settings → Keys and secrets lists it as "Login · amazon.com · for sam@…
+· saved 3 Oct" with Remove.
+
 ### The remote hand: driving from the dashboard
 
 **Take over** now offers more than a pause. In buddi's own browser the Page

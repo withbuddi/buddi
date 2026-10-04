@@ -5310,6 +5310,8 @@ button.br-address:hover:not(:disabled) { border-color: var(--line-strong); }
 .br-shot { display: block; width: 100%; height: auto; }
 .br-frame .hand[data-bare='true'] .hand-screen { border: 0; border-radius: 0; }
 .br-hand-said { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+/* "Save this login for amazon.com?" above the window: the question and, under it, a refusal if one came back. */
+.br-login { display: flex; flex-direction: column; gap: var(--space-2); }
 .br-ended { margin: 0; font-size: var(--text-xs); color: var(--text-faint); }
 
 /* In the chat: the card. The question's frame, hairline-parted like the approval dock. */

@@ -18,7 +18,7 @@
 import type { TabInfo, WorkerChrome } from './chrome.js';
 import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type CommandResult, type FieldFacts, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
-import { hideBar, hideHeldBar, readBar, showBar, showHeldBar, waitForOwner, type BarChoice, type OwnerEventMessage } from './bar.js';
+import { hideBar, hideHeldBar, readBar, showBar, showHeldBar, waitForOwner, watchHeldLogins, type BarChoice, type HeldLoginFacts, type OwnerEventMessage } from './bar.js';
 
 interface Session {
   groupId: number;
@@ -283,6 +283,8 @@ export class BrowserCommands implements Executor {
   #inView = new Map<string, number>();
   /** Sessions whose tab the owner holds (taken over in place), by tab id. */
   #held = new Map<string, number>();
+  /** What a held tab need not ask about before offering to save a sign-in, as buddi said at the hold. */
+  #heldLogins = new Map<string, HeldLoginFacts>();
   #now: () => number;
   #wait: (ms: number) => Promise<void>;
   /** How many things want the debugger on this tab. A screencast is one of them, and it outlives a command. */
@@ -312,7 +314,7 @@ export class BrowserCommands implements Executor {
     chrome.tabs.onUpdated?.addListener((tabId, change) => {
       if (change.status !== 'complete' || ![...this.#held.values()].includes(tabId)) return;
       const session = [...this.#held].find(([, held]) => held === tabId)?.[0];
-      if (session) void this.#chrome.scripting.executeScript<[string], void>({ target: { tabId }, func: showHeldBar, args: [session] }).catch(() => undefined);
+      if (session) void this.#drawHeld(tabId, session);
     });
     this.#uuid = options.uuid ?? (() => crypto.randomUUID());
     this.#contentFile = options.contentFile ?? 'content.js';
@@ -355,6 +357,7 @@ export class BrowserCommands implements Executor {
     this.#refs.clear();
     this.#inView.clear();
     this.#held.clear();
+    this.#heldLogins.clear();
   }
 
   /* ---- take-over in place ---- */
@@ -373,10 +376,26 @@ export class BrowserCommands implements Executor {
     await this.#chrome.tabs.update(tabId, { active: true });
     if (tab.windowId !== undefined) await this.#chrome.windows.update?.(tab.windowId, { focused: true });
     this.#held.set(command.session, tabId);
+    const logins = heldLoginFacts(command.args.logins);
+    if (logins) this.#heldLogins.set(command.session, logins); else this.#heldLogins.delete(command.session);
     // A page buddi cannot draw on (a chrome:// error page) still comes forward; only the bar is missing.
-    await this.#chrome.scripting.executeScript<[string], void>({ target: { tabId }, func: showHeldBar, args: [command.session] }).catch(() => undefined);
+    await this.#drawHeld(tabId, command.session);
     return {};
   }
+
+  /**
+   * The waiting bar in a held tab, and the watch that offers to save a sign-in
+   * the owner makes there (docs/browser.md, "Saving a sign-in"). Drawn again on
+   * every page the tab loads while it is held.
+   */
+  async #drawHeld(tabId: number, session: string): Promise<void> {
+    await this.#chrome.scripting.executeScript<[string], void>({ target: { tabId }, func: showHeldBar, args: [session] }).catch(() => undefined);
+    const facts = this.#heldLogins.get(session) ?? null;
+    await this.#chrome.scripting.executeScript<[string, HeldLoginFacts | null], void>({ target: { tabId }, func: watchHeldLogins, args: [session, facts] }).catch(() => undefined);
+  }
+
+  /** The tab a session holds, when the owner holds one: where a save-prompt answer may come from. */
+  heldTab(session: string): number | undefined { return this.#held.get(session); }
 
   /**
    * Given back (from the Canvas, or the bar): the bar goes, and the agent may
@@ -386,6 +405,7 @@ export class BrowserCommands implements Executor {
   async #unhold(session: string): Promise<CommandResult> {
     const tabId = this.#held.get(session);
     this.#held.delete(session);
+    this.#heldLogins.delete(session);
     if (tabId === undefined) return {};
     this.#inView.set(session, tabId);
     await this.#chrome.scripting.executeScript({ target: { tabId }, func: hideHeldBar }).catch(() => undefined);
@@ -1297,4 +1317,16 @@ function pressRef(ref: string, key: string, code: string, keyCode: number): void
   for (const type of ['keydown', 'keypress', 'keyup']) {
     element.dispatchEvent(new KeyboardEvent(type, { key, code, keyCode, bubbles: true, cancelable: true } as KeyboardEventInit));
   }
+}
+
+/** The hold's `logins` argument, read strictly: sites never to ask about, and logins already kept. */
+function heldLoginFacts(raw: unknown): HeldLoginFacts | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { never, saved } = raw as { never?: unknown; saved?: unknown };
+  const sites = Array.isArray(never) ? never.filter((site): site is string => typeof site === 'string' && site.length <= 253).slice(0, 500) : [];
+  const kept = Array.isArray(saved)
+    ? saved.filter((login): login is { site: string; username: string } => typeof (login as { site?: unknown })?.site === 'string' && typeof (login as { username?: unknown })?.username === 'string')
+      .slice(0, 500).map(({ site, username }) => ({ site, username }))
+    : [];
+  return { never: sites, saved: kept };
 }

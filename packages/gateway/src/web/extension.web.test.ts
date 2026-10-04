@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { BrowserOpenedError, BrowserService, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import WebSocket from 'ws';
-import { ExtensionEndpoint, MIN_EXTENSION_VERSION } from './extension.js';
+import { ExtensionEndpoint, MIN_EXTENSION_VERSION, readExtensionLogin } from './extension.js';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName, portOf } from './http.js';
 
@@ -354,6 +354,36 @@ describe('the browser extension endpoint', () => {
     stop();
   });
 
+  it('hands a sign-in answered in a held tab to that session, only from the paired socket, and logs none of it', async () => {
+    const lines: string[] = [];
+    const { socketUrl, origin, extension } = await setup({ log: (line: string) => lines.push(line) } as never);
+    const headers = await session(origin);
+    const heard: unknown[] = [];
+    const stop = extension.logins('s1', (login) => heard.push(login));
+    // A socket that never paired is not believed.
+    const stranger = connect(socketUrl);
+    await stranger.open;
+    stranger.send({ type: 'login', session: 's1', decision: 'save', origin: 'https://www.amazon.com', username: 'sam', password: 'stranger-pass' });
+    const client = connect(socketUrl);
+    await client.open;
+    await client.hello(null);
+    const code = String((await client.next('pair')).code);
+    await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    await client.next('paired');
+    client.send({ type: 'login', session: 's1', decision: 'save', origin: 'https://www.amazon.com/ap/signin', username: 'sam', password: 'fixture-pass-7Qz!' });
+    client.send({ type: 'login', session: 's1', decision: 'save', origin: 'https://www.amazon.com', username: 'sam' });
+    client.send({ type: 'login', session: 's1', decision: 'never', origin: 'https://bank.test', username: 'sam', password: 'never-carries-one' });
+    client.send({ type: 'login', session: 's1', decision: 'never', origin: 'https://bank.test', username: 'sam' });
+    client.send({ type: 'login', session: 's1', decision: 'save', origin: 'chrome://settings', username: 'sam', password: 'x' });
+    client.send({ type: 'login', session: 'someone-else', decision: 'never', origin: 'https://bank.test', username: 'sam' });
+    await vi.waitFor(() => expect(heard).toEqual([
+      { decision: 'save', origin: 'https://www.amazon.com', username: 'sam', password: 'fixture-pass-7Qz!' },
+      { decision: 'never', origin: 'https://bank.test', username: 'sam' },
+    ]));
+    expect(lines.join('\n')).not.toContain('fixture-pass');
+    stop();
+  });
+
   it('counts pongs only from the browser it is talking to', async () => {
     const { socketUrl, origin, extension } = await setup({ pingMs: 30 });
     const headers = await session(origin);
@@ -393,5 +423,15 @@ describe('the browser extension endpoint', () => {
     });
     expect(await refused('203.0.113.7', {})).toContain('403');
     expect(await refused('127.0.0.1', { 'x-forwarded-for': '203.0.113.7' })).toContain('403');
+  });
+});
+
+describe('a login frame, read strictly', () => {
+  it('takes an http(s) origin, the password only with Save, and nothing longer than a form field', () => {
+    expect(readExtensionLogin({ session: 's', decision: 'save', origin: 'https://a.test/x', username: 'u', password: 'p' })).toEqual({ session: 's', login: { decision: 'save', origin: 'https://a.test', username: 'u', password: 'p' } });
+    expect(readExtensionLogin({ session: 's', decision: 'save', origin: 'https://a.test', username: 'u', password: 'p'.repeat(2000) })).toBeUndefined();
+    expect(readExtensionLogin({ session: 's', decision: 'later', origin: 'https://a.test', username: 'u' })).toBeUndefined();
+    expect(readExtensionLogin({ session: 's', decision: 'never', origin: 'file:///etc', username: 'u' })).toBeUndefined();
+    expect(readExtensionLogin({ session: 's', decision: 'never', origin: 'https://a.test', username: 'u' })).toEqual({ session: 's', login: { decision: 'never', origin: 'https://a.test', username: 'u' } });
   });
 });

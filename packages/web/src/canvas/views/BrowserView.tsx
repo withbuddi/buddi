@@ -33,13 +33,14 @@
  * window over the whole dashboard, header and all; Esc closes it.
  */
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { api, csrfToken, type BrowserStatus } from '../../api';
+import { api, csrfToken, type BrowserStatus, type LoginSeen } from '../../api';
 import { fmtClock } from '../../format';
 import { ActionMenu, Button, Icon, Notice, Toolbar } from '../../ui';
 import { RemoteHand, type HandNav, type RemoteHandHandle } from '../../views/RemoteHand';
 import { useMediaQuery } from '../../useMediaQuery';
 import { appWord, lookingLine, siteOfUrl } from '../../views/Browser';
 import { useThisMachine } from '../../useThisMachine';
+import { SaveLoginCard } from './SaveLoginCard';
 
 /** How often the last observation is re-requested while a page is open. */
 export const BROWSER_POLL_MS = 2000;
@@ -185,6 +186,8 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   const machine = useThisMachine();
   const touch = useMediaQuery(TOUCH_QUERY);
   const handRef = useRef<RemoteHandHandle | null>(null);
+  /** A sign-in the owner just made on the page they hold, waiting for their word. */
+  const [login, setLogin] = useState<LoginSeen | null>(null);
   /** The page asked for its hand already, so a reload asks once and never loops. */
   const asked = useRef<string | null>(null);
   const session = shown?.session;
@@ -324,6 +327,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
           {`Open Chrome on ${machine} and try again, or let this conversation use buddi’s own browser.`}
         </Notice>
       ) : null}
+      {login ? <SaveLoginCard login={login} onDone={() => setLogin(null)} /> : null}
       {paused ? (
         <div className="br-frame br-frame-empty"><p className="ui-empty">{`No page is open. Agents look again when you resume${paused.until ? `, or by themselves at ${fmtClock(new Date(paused.until), zone)}` : ''}.`}</p></div>
       ) : (
@@ -339,7 +343,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
           />
           {hand ? (
             <div className="br-frame" data-state="yours">
-              <RemoteHand ref={handRef} sessionId={hand} csrf={csrfToken()} onGiveBack={giveBack} bare typing={typing} onTyping={setTyping} onLocation={onLocation} />
+              <RemoteHand ref={handRef} sessionId={hand} csrf={csrfToken()} onGiveBack={giveBack} bare typing={typing} onTyping={setTyping} onLocation={onLocation} onLoginSeen={setLogin} />
             </div>
           ) : (
         <div className="br-frame" data-state={waiting ? 'waiting' : done ? 'done' : 'live'}>

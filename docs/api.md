@@ -3815,7 +3815,8 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | POST | `/api/browser/takeover` | Take over the screen from the agent. | yes |
 | POST | `/api/browser/resume` | Give the screen back to the agent. | yes |
 | POST | `/api/browser/release` | Release the session. | yes |
-| GET | `/api/browser/hand` | WebSocket: drive the taken-over screen (the CSRF value is the first frame). | no |
+| GET | `/api/browser/hand` | WebSocket: drive the taken-over screen (the CSRF value is the first frame). Also says { type: "loginSeen", id, site, username } when the owner signs in on the page they hold. | no |
+| POST | `/api/browser/login` | Answer "Save this login?" for a sign-in the owner made on a page they held: save keeps it as an owner secret, never stops asking for that site. | no |
 | GET | `/api/extension` | The browser extension: paired or not, connected or not. | yes |
 | POST | `/api/extension/pair` | Pair the extension with the code it shows. | no |
 | DELETE | `/api/extension/pair` | Forget the paired extension. | yes |
@@ -4022,12 +4023,26 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/browser/hand`
 
-WebSocket: drive the taken-over screen (the CSRF value is the first frame).
+WebSocket: drive the taken-over screen (the CSRF value is the first frame). Also says { type: "loginSeen", id, site, username } when the owner signs in on the page they hold.
 
 - **Auth:** Dashboard session only. A socket with its own gate: the browser extension pairs, the remote hand needs the dashboard session.
 - **Kind:** a WebSocket upgrade
 - **Answer:** JSON
 - **Since:** 0.1.0-pre.15
+
+#### `POST /api/browser/login`
+
+Answer "Save this login?" for a sign-in the owner made on a page they held: save keeps it as an owner secret, never stops asking for that site.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It reads or stores a secret.
+- **Body:** `{ id: string, decision: save|later|never }`
+- **Answer:** `{ outcome: saved|dismissed|never|gone, saved?: { name, site, username, savedAt } }`
+- **Errors:** 400; 409
+- **Since:** 0.1.0-pre.39
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"id":"…","decision":"…"}' "$BUDDI_URL/api/browser/login"
+```
 
 #### `GET /api/extension`
 

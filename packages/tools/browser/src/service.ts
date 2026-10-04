@@ -2,7 +2,8 @@ import type { InstallProgress, LaunchCheck } from './availability.js';
 import { randomUUID } from 'node:crypto';
 import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core/plugin';
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
-import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
+import type { LoginKeeper } from './logins.js';
+import type { BrowserCommand, BrowserDriver, BrowserHand, Observation, SeenLoginReport } from './types.js';
 import { APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
 import { ownerCard, siteOf, type ChromeLink, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
@@ -150,6 +151,8 @@ export interface BrowserTouch { conversationId: string; agentId?: string; text?:
 /** The owner gave back a page they held: whose it was. */
 export interface BrowserGiveBack { sessionId: string; agentId: string; conversationId: string }
 export interface BrowserController {
+  /** Sign-ins the owner made on a page they held, waiting for their word or already kept (docs/browser.md, "Saving a sign-in"). */
+  readonly logins?: LoginKeeper;
   enable(): Promise<void>;
   shutdown(): Promise<void>;
   status(scope?: BrowserScope): BrowserStatus;
@@ -192,6 +195,8 @@ export interface BrowserServiceOptions {
   requestTakeover?: (sessionId: string) => void;
   /** The owner pressed Give it back in the page itself: the controller resumes it, so the waiting run hears of it. */
   requestResume?: (sessionId: string) => void;
+  /** A sign-in went out on this page while the owner held it: to the host's login keeper, and nowhere else. */
+  loginSeen?: (sessionId: string, login: SeenLoginReport) => void;
 }
 
 /** A result that carries a card: the run stops and the surface draws it. */
@@ -251,6 +256,12 @@ export class BrowserService {
       if (!id || this.#state !== 'paused') return;
       if (this.options.requestResume) this.options.requestResume(id);
       else void this.control('resume').catch(() => undefined);
+    });
+    // A sign-in the owner made on the page they hold: the keeper asks them, never a model.
+    this.driver.onLoginSeen?.((login) => {
+      const id = this.#session?.id;
+      if (!id || this.#state !== 'paused') return;
+      this.options.loginSeen?.(id, login);
     });
     this.#state = 'idle';
     this.#enabled = true;

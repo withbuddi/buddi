@@ -142,12 +142,193 @@ export function showHeldBar(session: string): void {
   bar.append(label, give);
   root.append(bar);
   (doc.documentElement ?? doc.body).append(host);
+  /*
+   * The bar asks a question in place of "buddi is waiting" (the save-login
+   * prompt, `watchHeldLogins`): the question, its buttons, and back to waiting
+   * once one is pressed. Kept on this world's global, which only buddi's own
+   * injected scripts share.
+   */
+  const asking: HTMLButtonElement[] = [];
+  const restore = (): void => {
+    for (const button of asking.splice(0)) button.remove();
+    label.textContent = 'buddi is waiting';
+    give.style.display = '';
+  };
+  (globalThis as unknown as Record<string, unknown>)['__buddiHeldAsk'] = (question: string, choices: Array<{ label: string; primary?: boolean; pick: () => void }>): () => void => {
+    restore();
+    label.textContent = question;
+    give.style.display = 'none';
+    for (const choice of choices) {
+      const b = doc.createElement('button');
+      b.type = 'button';
+      b.textContent = choice.label;
+      b.setAttribute('style', `font:inherit;cursor:pointer;border-radius:6px;padding:3px 10px;border:1px solid #fff;${choice.primary ? 'background:#fff;color:#1f2a44;' : 'background:transparent;color:#fff;'}`);
+      b.addEventListener('click', () => { restore(); choice.pick(); });
+      asking.push(b);
+      bar.insertBefore(b, give);
+    }
+    return restore;
+  };
 }
 
 export function hideHeldBar(): void {
   const doc = (globalThis as unknown as { document?: Document }).document;
   doc?.getElementById('buddi-held-bar')?.remove();
+  // A tab given back asks nothing more: the save prompt has no bar to ask in.
+  delete (globalThis as unknown as Record<string, unknown>)['__buddiHeldAsk'];
 }
 
 /** The frame the worker sends the gateway when the owner pressed Take over in the working bar, or Give it back in the held one. */
 export interface OwnerEventMessage { type: 'event'; name: 'takeover' | 'giveback'; session: string }
+
+/** What the worker sends the gateway when the owner answers the save prompt: the password only with Save. */
+export const LOGIN_MESSAGE = 'buddi-login';
+/** How long the tab holds a seen sign-in waiting for Save; then the pair is dropped and the bar goes back to waiting. */
+export const LOGIN_PROMPT_MS = 2 * 60_000;
+/** What the gateway says the tab need not ask about. */
+export interface HeldLoginFacts { never: string[]; saved: Array<{ site: string; username: string }> }
+
+/**
+ * Watch a held tab for a sign-in going out, and ask in its bar: "Save this
+ * login for amazon.com?" Save · Not now · Never for this site
+ * (docs/browser.md, "Saving a sign-in").
+ *
+ * Serialised into the tab beside `showHeldBar`, in the same isolated world,
+ * so it is self-contained; the detection is the browser plugin's
+ * `watchLogins`, written out again here because a serialised function can
+ * call nothing outside itself. The pair stays in this closure: Save sends it
+ * to the worker (a runtime message only this extension's scripts can send),
+ * which sends it to buddi on its authenticated socket; Never sends the site
+ * alone; Not now sends nothing. Nothing is logged, and two minutes after the
+ * sign-in the pair is dropped whatever happened.
+ */
+export function watchHeldLogins(session: string, facts: HeldLoginFacts | null): void {
+  const holder = globalThis as unknown as Record<string, unknown>;
+  const known: HeldLoginFacts = { never: [...(facts?.never ?? [])], saved: [...(facts?.saved ?? [])] };
+  const existing = holder['__buddiHeldLogins'] as { session: string; facts: HeldLoginFacts } | undefined;
+  if (existing) { existing.session = session; existing.facts = known; return; }
+  const doc = (globalThis as unknown as { document?: Document }).document;
+  if (!doc) return;
+  const state = { session, facts: known, last: '', lastAt: 0, typedAt: 0, cached: undefined as { username: string; password: string } | undefined, timer: undefined as ReturnType<typeof setTimeout> | undefined, drop: undefined as ReturnType<typeof setTimeout> | undefined };
+  holder['__buddiHeldLogins'] = state;
+  const runtime = (): { sendMessage(message: unknown): Promise<unknown> } | undefined =>
+    (globalThis as unknown as { chrome?: { runtime?: { sendMessage(message: unknown): Promise<unknown> } } }).chrome?.runtime;
+  const post = (message: unknown): void => {
+    try { void runtime()?.sendMessage(message)?.catch?.(() => undefined); } catch { /* the worker is gone; nothing is kept */ }
+  };
+  const site = (): string => ((globalThis as unknown as { location?: Location }).location?.hostname ?? '').toLowerCase().replace(/^www\./, '');
+  const listed = (where: string): boolean => state.facts.never.some((entry) => { const bare = entry.toLowerCase().replace(/^www\./, ''); return where === bare || where.endsWith(`.${bare}`); });
+  const ask = (found: { username: string; password: string }): void => {
+    const where = site();
+    if (where === '' || listed(where)) return;
+    if (state.facts.saved.some((login) => login.site === where && login.username === found.username)) return;
+    const question = holder['__buddiHeldAsk'] as ((question: string, choices: Array<{ label: string; primary?: boolean; pick: () => void }>) => () => void) | undefined;
+    if (typeof question !== 'function') return;
+    let pair: { username: string; password: string } | undefined = found;
+    if (state.drop) clearTimeout(state.drop);
+    const restore = question(`Save this login for ${where}?`, [
+      { label: 'Save', primary: true, pick: () => {
+        const held = pair; pair = undefined;
+        if (held) post({ type: 'buddi-login', session: state.session, decision: 'save', username: held.username, password: held.password });
+      } },
+      { label: 'Not now', pick: () => { pair = undefined; } },
+      { label: 'Never for this site', pick: () => {
+        const held = pair; pair = undefined;
+        state.facts.never.push(where);
+        post({ type: 'buddi-login', session: state.session, decision: 'never', username: held?.username ?? '' });
+      } },
+    ]);
+    state.drop = setTimeout(() => { pair = undefined; restore(); }, 2 * 60_000);
+  };
+  const NOT_SUBMIT = /\b(show|hide|reveal|toggle|eye|forgot|reset|cancel|back|close|sign ?up|register|create)\b/i;
+  const USER = /user|email|login|account|ident|phone|mail/i;
+  const passwords = (root: ParentNode): HTMLInputElement[] => Array.from(root.querySelectorAll('input[type="password" i]')) as HTMLInputElement[];
+  const usernameFor = (password: HTMLInputElement): string => {
+    const scope: ParentNode = password.form ?? doc;
+    const inputs = (Array.from(scope.querySelectorAll('input')) as HTMLInputElement[])
+      .filter((input) => ['text', 'email', 'tel', ''].includes((input.getAttribute('type') ?? '').toLowerCase()) && input.value.trim() !== '');
+    const marked = inputs.find((input) => (input.getAttribute('autocomplete') ?? '').toLowerCase().includes('username') || (input.getAttribute('type') ?? '').toLowerCase() === 'email');
+    if (marked) return marked.value.trim();
+    const before = inputs.filter((input) => (input.compareDocumentPosition(password) & 4) !== 0);
+    const pick = before[before.length - 1] ?? inputs.find((input) => USER.test(`${input.name} ${input.id} ${input.getAttribute('autocomplete') ?? ''}`));
+    return pick ? pick.value.trim() : '';
+  };
+  const read = (scope: ParentNode | null | undefined): { username: string; password: string } | undefined => {
+    const field = passwords(scope ?? doc).find((input) => input.value !== '');
+    return field ? { username: usernameFor(field), password: field.value } : undefined;
+  };
+  const send = (found: { username: string; password: string } | undefined): void => {
+    // A watch that was replaced (the page's world reset under it) goes quiet.
+    if (holder['__buddiHeldLogins'] !== state) return;
+    if (!found || found.password === '') return;
+    const key = `${found.username}\u0000${found.password}`;
+    const now = Date.now();
+    if (key === state.last && now - state.lastAt < 5_000) return;
+    state.last = key;
+    state.lastAt = now;
+    state.cached = undefined;
+    ask(found);
+  };
+  doc.addEventListener('submit', (event) => { send(read(event.target as HTMLFormElement | null) ?? state.cached); }, true);
+  doc.addEventListener('keydown', (event) => {
+    if ((event as KeyboardEvent).key !== 'Enter') return;
+    const target = event.target as HTMLInputElement | null;
+    if (!target || target.tagName !== 'INPUT') return;
+    send(read(target.form ?? doc));
+  }, true);
+  doc.addEventListener('click', (event) => {
+    const target = event.target as Element | null;
+    const button = target?.closest?.('button, input[type="submit" i], input[type="image" i], input[type="button" i], [role="button"]') as HTMLButtonElement | null | undefined;
+    if (!button) return;
+    const words = `${button.textContent ?? ''} ${button.getAttribute('aria-label') ?? ''} ${button.getAttribute('value') ?? ''} ${button.getAttribute('title') ?? ''}`;
+    if (NOT_SUBMIT.test(words)) return;
+    send(read(button.form ?? doc));
+  }, true);
+  doc.addEventListener('input', (event) => {
+    const target = event.target as HTMLInputElement | null;
+    if ((target?.getAttribute?.('type') ?? '').toLowerCase() !== 'password') return;
+    state.typedAt = Date.now();
+    state.cached = read(target!.form ?? doc);
+  }, true);
+  const Observer = (globalThis as unknown as { PerformanceObserver?: typeof PerformanceObserver }).PerformanceObserver;
+  if (typeof Observer === 'function') {
+    try {
+      new Observer((list) => {
+        if (!state.cached || Date.now() - state.typedAt > 10_000) return;
+        const fetched = list.getEntries().some((entry) => ['fetch', 'xmlhttprequest'].includes((entry as PerformanceResourceTiming).initiatorType));
+        if (!fetched) return;
+        if (state.timer) clearTimeout(state.timer);
+        state.timer = setTimeout(() => {
+          const still = passwords(doc).some((input) => input.isConnected && input.value !== '' && input.getClientRects().length > 0);
+          if (!still) send(state.cached);
+        }, 1_500);
+      }).observe({ type: 'resource', buffered: false });
+    } catch { /* no resource timing here */ }
+  }
+}
+
+/** The frame the worker sends the gateway when the owner answered the save prompt in a held tab. The password only with Save. */
+export interface LoginFrame { type: 'login'; session: string; decision: 'save' | 'never'; origin: string; username: string; password?: string }
+
+/**
+ * A save-prompt answer from a tab, as the worker passes it on: only from the
+ * tab the session holds, with the origin Chrome reports for the frame that
+ * sent it (never the page's claim), the password only with Save. Undefined
+ * for anything else.
+ */
+export function loginFrame(message: unknown, sender: { tab?: { id?: number }; url?: string } | undefined, heldTab: number | undefined): LoginFrame | undefined {
+  const request = message as { type?: unknown; session?: unknown; decision?: unknown; username?: unknown; password?: unknown } | null;
+  if (!request || request.type !== LOGIN_MESSAGE || typeof request.session !== 'string') return undefined;
+  if (heldTab === undefined || sender?.tab?.id !== heldTab) return undefined;
+  if (request.decision !== 'save' && request.decision !== 'never') return undefined;
+  let origin: string;
+  try {
+    const parsed = new URL(sender.url ?? '');
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined;
+    origin = parsed.origin;
+  } catch { return undefined; }
+  const username = typeof request.username === 'string' ? request.username.slice(0, 200) : '';
+  if (request.decision === 'never') return { type: 'login', session: request.session, decision: 'never', origin, username };
+  if (typeof request.password !== 'string' || request.password === '' || request.password.length > 1024) return undefined;
+  return { type: 'login', session: request.session, decision: 'save', origin, username, password: request.password };
+}

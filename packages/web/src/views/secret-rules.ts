@@ -320,7 +320,37 @@ export function secretTitle(secret: SecretListingView, accounts: ReadonlyMap<str
     const words = /^[^:]{1,40}:\s+(.+)$/.exec(secret.name);
     return words ? words[1]! : secret.name;
   }
+  if (secret.login) return `Login · ${secret.login.site}`;
   return secret.name;
+}
+
+/** A user name as the page says it: an address's mailbox and "@…", anything long cut short. Not a secret, but not shouted either. */
+export function shortUsername(username: string): string {
+  const at = username.indexOf('@');
+  if (at > 0) return `${username.slice(0, Math.min(at, 24))}@…`;
+  return username.length > 24 ? `${username.slice(0, 23)}…` : username;
+}
+
+/** "3 Oct": the day a login was saved, as a row says it. */
+export function savedDay(iso: string, timezone?: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', ...(timezone ? { timeZone: timezone } : {}) }).format(at);
+  } catch {
+    return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' }).format(at);
+  }
+}
+
+/**
+ * A login buddi kept from the owner's own sign-in (docs/browser.md, "Saving a
+ * sign-in"): "for sam@… · saved 3 Oct". Null for any other secret.
+ */
+export function loginLine(secret: SecretListingView, timezone?: string): string | null {
+  const login = secret.login;
+  if (!login) return null;
+  const day = savedDay(login.savedAt, timezone);
+  return [login.username ? `for ${shortUsername(login.username)}` : null, day ? `saved ${day}` : null].filter(Boolean).join(' · ');
 }
 
 /** A model account's provider beside its name ("Anthropic"), when the account is known. */

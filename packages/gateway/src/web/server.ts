@@ -110,7 +110,7 @@ import {
   runPageQuery,
   type PagesDeps,
 } from './pages.js';
-import { listSecrets, secretUses, secretsAct, type SecretsDeps } from './secrets.js';
+import { listSecrets, ownerLoginStore, secretUses, secretsAct, type SecretsDeps } from './secrets.js';
 import { sayRoute, transcribeRoute, type SpeechRouteDeps } from './speech.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -815,6 +815,12 @@ export function createWebApp(deps: WebServerDeps): Server {
       await chat?.continueAfterGiveBack({ conversationId: info.conversationId, agentId: info.agentId });
     })().catch((err: unknown) => log(`browser: carrying on after the page was given back failed: ${err instanceof Error ? err.message : String(err)}`));
   });
+  /*
+   * A sign-in the owner made on a page they held, kept when they say Save
+   * (docs/browser.md, "Saving a sign-in"): the browser host's keeper hands the
+   * pair to core's owner-secret store, as the owner, and to nothing else.
+   */
+  (deps.browser ?? browserHost(deps.env ?? process.env)).logins?.useStore(ownerLoginStore({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now }));
   const streams = new StreamBudget();
   // A bundle script's run asks every time: its card offers no standing permission (`asksEachTime`).
   const permissionScopes = (tool: string, envelope?: unknown): Record<string, unknown> => deps.registry.lookup(tool)?.reusableApproval && !asksEachTime(envelope)
@@ -1568,7 +1574,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       agentIds: () => deps.catalog.list().map((a) => a.id),
     });
     /** The Keys and secrets page (docs/owner-secrets.md §6): core's own queries and ownerOnly tools. */
-    const secretsDeps = (): SecretsDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
+    const secretsDeps = (): SecretsDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, ...(browser.logins ? { logins: browser.logins } : {}) });
     /** Talking to buddi on the dashboard: the speech plugin's two tools, as the owner. */
     const speechDeps = (): SpeechRouteDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, agents: () => deps.catalog.list() });
     /** The same, for the version and upgrade routes. */
@@ -3083,6 +3089,28 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (typeof body?.conversationId !== 'string' || typeof body.answer !== 'string' || body.answer.length > 80) return sendJson(res, 400, { error: 'Expected {conversationId: string, answer: string}' });
       const answered = await browser.touch?.({ conversationId: body.conversationId, text: body.answer });
       return sendJson(res, 200, { ...(answered && 'answered' in answered ? answered : {}), status: browser.status({ conversationId: body.conversationId }) });
+    }
+    /*
+     * "Save this login for amazon.com?" answered in the Page tab: Save, Not
+     * now or Never for this site. The owner's session and CSRF, like every
+     * write here; the body names the question, never a password — that is in
+     * the browser host's keeper, which hands it to the owner-secret store on
+     * Save and drops it otherwise.
+     */
+    if (path === '/api/browser/login') {
+      const body = await readJsonBody(req) as { id?: unknown; decision?: unknown } | null;
+      const decision = body?.decision;
+      if (typeof body?.id !== 'string' || body.id.length > 80 || (decision !== 'save' && decision !== 'later' && decision !== 'never')) {
+        return sendJson(res, 400, { error: 'Expected {id: string, decision: save|later|never}' });
+      }
+      if (!browser.logins) return sendJson(res, 409, { error: 'This host keeps no sign-ins.' });
+      try {
+        const answer = await browser.logins.decide(body.id, decision);
+        return sendJson(res, 200, { outcome: answer.outcome, ...(answer.saved ? { saved: { name: answer.saved.name, site: answer.saved.site, username: answer.saved.username, savedAt: answer.saved.savedAt } } : {}) });
+      } catch {
+        // Never the error's own words: they are the store's, and the store had the password.
+        return sendJson(res, 409, { error: 'buddi could not keep that login. Add it in Settings → Keys and secrets.' });
+      }
     }
     const control = /^\/api\/browser\/(stop|takeover|resume|release)$/.exec(path);
     if (control) {

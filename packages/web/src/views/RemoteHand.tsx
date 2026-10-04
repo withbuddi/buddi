@@ -23,6 +23,7 @@
  * 1280-wide page in a 380-wide column still clicks the right link.
  */
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import type { LoginSeen } from '../api';
 import { Button, Notice, Toolbar } from '../ui';
 
 /** Where a frame came from, as the host browser measured it. */
@@ -154,6 +155,8 @@ export interface RemoteHandProps {
   onTyping?: (typing: boolean) => void;
   /** The page's address as the frames report it, for the window's address field. */
   onLocation?: (url: string) => void;
+  /** The owner signed in on the page: the site and the user name to ask "Save this login?" about. Never the password. */
+  onLoginSeen?: (login: LoginSeen) => void;
 }
 
 /** The window's buttons, sent down the same socket as the clicks. */
@@ -167,7 +170,7 @@ export interface RemoteHandHandle {
 
 type Phase = 'connecting' | 'driving' | 'lost' | 'refused';
 
-export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false, typing: typingProp, onTyping, onLocation }, handle): JSX.Element {
+export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false, typing: typingProp, onTyping, onLocation, onLoginSeen }, handle): JSX.Element {
   const [phase, setPhase] = useState<Phase>('connecting');
   const [refusal, setRefusal] = useState<string | null>(null);
   /** Whether any picture has arrived. The picture itself lives on the canvas. */
@@ -178,6 +181,9 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
   const setTyping = (next: boolean) => { if (onTyping) onTyping(next); else setTypingOwn(next); };
   const [attempt, setAttempt] = useState(0);
   const socket = useRef<HandSocket | null>(null);
+  /** The latest listener, so a new one does not reconnect the socket. */
+  const loginSeen = useRef(onLoginSeen);
+  loginSeen.current = onLoginSeen;
   const picture = useRef<HTMLCanvasElement | null>(null);
   const keyboard = useRef<HTMLInputElement | null>(null);
   /** The last pointer position sent, and the one waiting for the throttle. */
@@ -219,8 +225,12 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
         }).catch(() => { /* a frame that will not decode is a frame not drawn */ });
         return;
       }
-      const message = JSON.parse(event.data) as { type?: string; error?: string };
+      const message = JSON.parse(event.data) as { type?: string; error?: string; id?: unknown; site?: unknown; username?: unknown };
       if (message.type === 'driving') { setPhase('driving'); setRefusal(null); return; }
+      if (message.type === 'loginSeen') {
+        if (typeof message.id === 'string' && typeof message.site === 'string' && typeof message.username === 'string') loginSeen.current?.({ id: message.id, site: message.site, username: message.username });
+        return;
+      }
       if (message.type === 'refused' || message.type === 'ended') {
         setRefusal(message.error ?? 'The screen cannot be driven from here.');
         setPhase('refused');

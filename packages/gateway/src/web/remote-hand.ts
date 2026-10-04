@@ -25,7 +25,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HAND_QUALITY, HAND_QUALITY_LOW, type BrowserController, type BrowserHand, type HandFrame, type HandInput, type HandQuality } from '@buddi/tool-browser';
+import { HAND_QUALITY, HAND_QUALITY_LOW, type BrowserController, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type LoginPrompt } from '@buddi/tool-browser';
 import { SessionStore, type Session } from './sessions.js';
 
 /** The dashboard's half of the take-over, on the same upgrade listener. */
@@ -274,6 +274,8 @@ interface Live {
   draining?: Promise<void>;
   /** True while that drain runs, so ending from inside it cannot await itself. */
   inDrain: boolean;
+  /** Stops telling this socket about sign-ins on its page. */
+  offLogins?: () => void;
 }
 
 /**
@@ -530,6 +532,27 @@ export class RemoteHandEndpoint {
     live.timer = setInterval(() => this.#tick(live), this.deps.pingMs ?? PING_MS);
     live.timer.unref?.();
     ws.send(JSON.stringify({ type: 'driving', sessionId }));
+    this.#watchLogins(live, browser);
+  }
+
+  /**
+   * "Save this login for amazon.com?" — a sign-in the owner made on the page
+   * they drive (docs/browser.md, "Saving a sign-in"). The keeper holds the
+   * password in the browser host; this socket carries the question's id, the
+   * site and the user name, and never the password. A question still open
+   * when the hand reattaches (a reload) is asked again.
+   */
+  #watchLogins(live: Live, browser: BrowserController): void {
+    const keeper = browser.logins;
+    if (!keeper) return;
+    const tell = (prompt: LoginPrompt): void => {
+      if (this.#live !== live || live.closing || prompt.sessionId !== live.sessionId) return;
+      const ws = live.ws;
+      if (ws.readyState !== ws.OPEN) return;
+      try { ws.send(JSON.stringify({ type: 'loginSeen', id: prompt.id, site: prompt.site, username: prompt.username })); } catch { /* the close handler says so */ }
+    };
+    live.offLogins = keeper.onSeen(tell);
+    for (const prompt of keeper.pending(live.sessionId)) tell(prompt);
   }
 
   /**
@@ -668,6 +691,7 @@ export class RemoteHandEndpoint {
       live.latest = undefined;
       await this.#letGo(live);
       await live.hand.stop().catch(() => this.#say('screencast did not stop cleanly'));
+      live.offLogins?.();
       clearInterval(live.timer);
       if (this.#live === live) this.#live = undefined;
       const ws = live.ws;

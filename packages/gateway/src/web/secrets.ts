@@ -13,6 +13,7 @@
 import type { Pool } from 'pg';
 import { OWNER_AGENT_ID, SECRETS_QUERIES, type ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { listAccounts } from '@buddi/tool-email';
+import type { LoginKeeper, LoginStore } from '@buddi/tool-browser';
 import { LEGACY_PASSWORD_VAR } from '../owner-secrets.js';
 import { mailProvider } from './recovery.js';
 
@@ -21,6 +22,8 @@ export interface SecretsDeps {
   registry: ToolRegistry;
   ctx: Omit<CoreToolContext, 'db'>;
   now?: () => Date;
+  /** The browser host's login keeper: the labels of logins buddi kept from the owner's own sign-ins. */
+  logins?: Pick<LoginKeeper, 'saved' | 'forget'>;
 }
 
 export interface RouteReply {
@@ -177,6 +180,8 @@ export async function listSecrets(deps: SecretsDeps): Promise<RouteReply> {
   };
   const { users, complete } = await readSecretUsers(deps.pool);
   const registered = new Set(result.destinations.map((d) => d.kind));
+  // A login buddi kept from the owner's own sign-in: its site, the user name and when (labels, never the password).
+  const logins = new Map((deps.logins?.saved() ?? []).map((login) => [login.name, { site: login.site, username: login.username, savedAt: login.savedAt }] as const));
   return reply(200, {
     ...result,
     secrets: result.secrets.map((secret) => {
@@ -184,7 +189,8 @@ export async function listSecrets(deps: SecretsDeps): Promise<RouteReply> {
       // `usageUnknown`: it would read as unused, but a lookup failed — the page
       // says it couldn't check instead of offering Remove.
       const usageUnknown = !complete && isUnused(secret, usedBy, registered, true);
-      return { ...secret, usedBy, unused: isUnused(secret, usedBy, registered, complete), ...(usageUnknown ? { usageUnknown } : {}) };
+      const login = logins.get(secret.name);
+      return { ...secret, usedBy, unused: isUnused(secret, usedBy, registered, complete), ...(usageUnknown ? { usageUnknown } : {}), ...(login ? { login } : {}) };
     }),
   });
 }
@@ -208,6 +214,28 @@ export async function secretsAct(
   if (typeof tool !== 'string' || !SETTINGS_TOOLS.has(tool)) {
     return reply(404, { error: 'That is not a write the Keys and secrets page makes.' });
   }
-  return invoke(deps, tool, args, session.id);
+  const answer = await invoke(deps, tool, args, session.id);
+  // A kept login removed or renamed here: its label goes with it.
+  const name = (args as { name?: unknown } | null | undefined)?.name;
+  if (answer.status === 200 && (tool === 'secrets.delete' || tool === 'secrets.rename') && typeof name === 'string') await deps.logins?.forget(name).catch(() => false);
+  return answer;
+}
+
+/**
+ * The owner-secret store the browser host's login keeper hands a saved sign-in
+ * to (docs/browser.md, "Saving a sign-in"): core's own `secrets.put`, invoked
+ * as the owner exactly as the Keys and secrets page invokes it, so the value
+ * goes to the vault, the scrubber is rebuilt for it before anything else is
+ * written, and the save-time look runs. No model sees this call, no event
+ * records its arguments, and a refusal says only that it was refused — the
+ * tool's own words are not passed on, because they are not this caller's to
+ * vouch for.
+ */
+export function ownerLoginStore(deps: SecretsDeps): LoginStore {
+  return async ({ name, value, bindings }) => {
+    const now = deps.now ?? (() => new Date());
+    const result = await deps.registry.invoke('secrets.put', { name, value, bindings }, { ...deps.ctx, agentId: OWNER_AGENT_ID, db: deps.pool, now } as CoreToolContext);
+    if (!result.ok) throw new Error('buddi could not keep that login.');
+  };
 }
 

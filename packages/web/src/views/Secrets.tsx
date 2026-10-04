@@ -62,6 +62,7 @@ import {
   isManagedElsewhere,
   kindWords,
   lastUsedLine,
+  loginLine,
   managedHref,
   mailboxPasswordHref,
   parseTargetInput,
@@ -217,6 +218,7 @@ export function Secrets({
                         secret={secret}
                         group={group}
                         accounts={accounts}
+                        timezone={timezone}
                         onOpen={(what) => setOpen({ what, name: secret.name })}
                       />
                     ))}
@@ -324,16 +326,21 @@ function SecretRow({
   secret,
   group,
   accounts,
+  timezone,
   onOpen,
 }: {
   secret: SecretListingView;
   group: SecretGroupId;
   accounts: ReadonlyMap<string, AccountName>;
+  timezone?: string;
   onOpen: (what: 'sheet' | 'replace' | 'rename' | 'places' | 'delete') => void;
 }): JSX.Element {
   const title = secretTitle(secret, accounts);
   const tag = secretTag(secret, accounts);
-  const line = [whereLine(secret), lastUsedLine(secret)].filter(Boolean).join(' · ');
+  // A login buddi kept from your own sign-in says whose and when: "for sam@… · saved 3 Oct".
+  const login = loginLine(secret, timezone);
+  // "Never used" adds nothing to "saved 3 Oct"; a use since does.
+  const line = [login ?? whereLine(secret), login && !secret.lastUse ? null : lastUsedLine(secret)].filter(Boolean).join(' · ');
   const problem = secretProblem(secret);
   const unused = unusedLine(secret);
   const unchecked = uncheckedLine(secret);
@@ -364,7 +371,7 @@ function SecretRow({
       side={
         <span className="secrets-side">
           {problem?.fix ? <FixButton fix={problem.fix} onOpen={onOpen} /> : null}
-          {unused && offersRemove(secret) ? (
+          {(unused && offersRemove(secret)) || (secret.login && group === 'mine') ? (
             <Button size="sm" variant="ghost" onClick={stop(() => onOpen('delete'))}>
               Remove…
             </Button>
@@ -940,7 +947,8 @@ function PlacesSheet({
 function DeleteModal({ secret, title, onClose, onChanged }: { secret: SecretListingView; title: string; onClose: () => void; onChanged: () => void }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const removing = Boolean(secret.unused);
+  // A login buddi kept from your sign-in is removed, the word its row uses.
+  const removing = Boolean(secret.unused || secret.login);
   const del = async (): Promise<void> => {
     const result = await writeSecret('secrets.delete', { name: secret.name }, setBusy, setFailure);
     if (result !== null) {

@@ -139,18 +139,24 @@ export interface SecretForAgent {
   name: string;
   totp: boolean;
   bindings: Array<{ kind: string; target: unknown }>;
+  /** A login buddi kept for the owner: the user name it signs in with, which is not a secret (type it, fill the password with secret.fill). */
+  username?: string;
 }
 
 /**
  * What `secret.list` answers: each field copied by name, so nothing the
  * listing ever grows (last use, rules, approvals) reaches a model by accident.
  */
-export function secretsForAgent(listing: ReadonlyArray<{ name: string; totp: boolean; bindings: ReadonlyArray<{ kind: string; target: unknown }> }>): SecretForAgent[] {
-  return listing.map((secret) => ({
-    name: secret.name,
-    totp: secret.totp === true,
-    bindings: secret.bindings.map((binding) => ({ kind: binding.kind, target: binding.target })),
-  }));
+export function secretsForAgent(listing: ReadonlyArray<{ name: string; totp: boolean; bindings: ReadonlyArray<{ kind: string; target: unknown }> }>, usernames: ReadonlyMap<string, string> = new Map()): SecretForAgent[] {
+  return listing.map((secret) => {
+    const username = usernames.get(secret.name);
+    return {
+      name: secret.name,
+      totp: secret.totp === true,
+      bindings: secret.bindings.map((binding) => ({ kind: binding.kind, target: binding.target })),
+      ...(username ? { username } : {}),
+    };
+  });
 }
 
 /** Values delivered and not yet taken, by use id — `email`'s credentials pattern. */

@@ -83,11 +83,13 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
       { name: 'browser.status', tier: 'auto', description: 'Whether agents can look at pages at all, and where: `routes` lists buddi\'s own browser, the owner\'s Chrome and the owner\'s apps, each with allowed, available and the one fix when it is down; `page` is this conversation\'s page. You do not need it before browser.act. Does not open anything.',
         input: z.object({}).strict(), execute: async (_input, ctx) => service().status({ agentId: ctx.agentId, conversationId: ctx.conversationId }) },
       { name: 'secret.list', tier: 'auto', input: z.object({}).strict(),
-        description: "The owner's secrets this browser may fill, by name, with where each may go. Never a value.",
+        description: "The owner's secrets this browser may fill, by name, with where each may go. Never a value. A login buddi saved from the owner's own sign-in also says its username: type that, and fill the password with secret.fill.",
         execute: async (_input, ctx) => {
           const secrets = ctx.buddi?.secrets;
           if (secrets === undefined) throw new Error('This plugin has no secrets area; the owner updates the browser plugin to one that declares it.');
-          return secretsForAgent(await secrets.list());
+          // A login buddi kept from the owner's own sign-in carries its user name, which is not a secret.
+          const usernames = new Map((hosted?.logins?.saved() ?? []).map((login) => [login.name, login.username] as const));
+          return secretsForAgent(await secrets.list(), usernames);
         } },
       { name: 'secret.fill', tier: 'auto', sequential: true, input: secretFillInput,
         description: `Fill one field with the owner's own secret, by name, without ever seeing the value. Input { name, ref }: a ref from the latest page (observation optional); works on web pages, in buddi's own browser and in the owner's Chrome. The backend reads which page the field really sits on and the owner's binding must name that origin, or a wildcard over it like https://*.wikimedia.org — a look-alike site is refused before anything is asked. A password field takes only a secret bound to the page; a visible field (a username) takes one too when the owner bound it to that page, and otherwise fills as form data, which asks the owner every time; a TOTP secret's current code fills any field. The result is {filled:true} — the value never appears anywhere — or {pending:true,actionId} when the owner has a decision card: tell the owner and wait. The result carries the page after the fill.`,
@@ -138,11 +140,13 @@ export { BrowserTelemetry, STOP_CAUSES, summarize, readTelemetry, telemetryLines
 export type { StopCause, TelemetryEvent, TelemetrySummary } from './telemetry.js';
 export { APPS_UNAVAILABLE, APPS_NOT_INSTALLED } from './controller.js';
 export { BrowserManager } from './manager.js';
+export { LoginKeeper, LOGIN_HOLD_MS, LOGIN_RULE, loginName, shortUsername, watchLogins } from './logins.js';
+export type { LoginDecision, LoginOutcome, LoginPrompt, LoginStore, LoginStoreInput, SavedLogin, SeenLogin } from './logins.js';
 export { PlaywrightHost } from './host.js';
 export type { GuardedLookup } from './proxy.js';
 export { PlaywrightDriver } from './driver.js';
 export { HostController } from './controller.js';
 export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED } from './extension.js';
-export type { ExtensionBridge, ExtensionCommand, ExtensionCommandName, ExtensionEvent, ExtensionResult } from './extension.js';
+export type { ExtensionBridge, ExtensionCommand, ExtensionCommandName, ExtensionEvent, ExtensionLogin, ExtensionLoginFacts, ExtensionResult } from './extension.js';
 export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, BrowserOpenedError, HAND_QUALITY, HAND_QUALITY_LOW } from './types.js';
-export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandQuality, Observation, ObservedTarget } from './types.js';
+export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandQuality, Observation, ObservedTarget, SeenLoginReport } from './types.js';

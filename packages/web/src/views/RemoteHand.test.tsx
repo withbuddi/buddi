@@ -89,6 +89,20 @@ describe('driving the host browser', () => {
     expect(await screen.findByLabelText('The host browser, live')).toBeInTheDocument();
   });
 
+  it('hands a sign-in the owner just made to the Page tab: the site and the user name, nothing else', () => {
+    const wire = fakeSocket();
+    const onLoginSeen = vi.fn();
+    render(<RemoteHand sessionId="s1" csrf="csrf-token" onGiveBack={vi.fn()} connect={() => wire.socket} onLoginSeen={onLoginSeen} />);
+    wire.open();
+    wire.say({ type: 'driving', sessionId: 's1' });
+    wire.say({ type: 'loginSeen', id: 'q1', site: 'amazon.com', username: 'sam@example.com' });
+    wire.say({ type: 'loginSeen', id: 7, site: 'amazon.com', username: 'sam@example.com' });
+    expect(onLoginSeen).toHaveBeenCalledTimes(1);
+    expect(onLoginSeen).toHaveBeenCalledWith({ id: 'q1', site: 'amazon.com', username: 'sam@example.com' });
+    // The question changes nothing about driving: the panel still says what it was saying.
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain('Nothing you type here is kept');
+  });
+
   it('reads a frame out of the one message the gateway sends', () => {
     const read = readFrame(packFrame('jpeg-bytes', { ...metadata, offsetTop: 40 }));
     expect(read?.metadata.offsetTop).toBe(40);

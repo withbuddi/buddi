@@ -53,7 +53,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
   /* What the next reads of the page answer, in turn, before falling back to `frames`; and its load state. */
   const page = { answers: [] as Array<Array<{ frameId: number; result: FrameResult | null }>>, readyState: 'complete' };
   /** The in-tab bar: what was drawn, and the owner's tap the next read returns. */
-  const bar = { calls: [] as string[], choice: undefined as string | undefined };
+  const bar = { calls: [] as string[], choice: undefined as string | undefined, watched: [] as unknown[][] };
   /** Tabs activated and windows focused, in order. */
   const focuses: string[] = [];
   let nextTabId = 100;
@@ -106,6 +106,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
       async executeScript(injection: { target: { frameIds?: number[]; allFrames?: boolean }; files?: string[]; func?: { name: string } }) {
         if (injection.files) { injected.push(injection.files.join(',')); return []; }
         if (injection.func?.name === 'readReadyState') return [{ frameId: 0, result: page.readyState }];
+        if (injection.func?.name === 'watchHeldLogins') { bar.watched.push((injection as { args?: unknown[] }).args ?? []); return [{ frameId: 0, result: undefined }]; }
         if (injection.func?.name === 'showHeldBar' || injection.func?.name === 'hideHeldBar') { bar.calls.push(injection.func.name); return [{ frameId: 0, result: undefined }]; }
         if (injection.func?.name === 'showBar' || injection.func?.name === 'hideBar') { bar.calls.push(injection.func.name); return [{ frameId: 0, result: undefined }]; }
         if (injection.func?.name === 'readBar') { const choice = bar.choice; bar.choice = undefined; return [{ frameId: 0, result: choice }]; }
@@ -341,6 +342,17 @@ describe('the owner’s tabs', () => {
     await commands.run(command('observe'));
     await expect(commands.run(command('click', { target: { ref: 'e1' } }))).resolves.toEqual({});
     expect(bar.calls).toEqual(['showHeldBar', 'hideHeldBar']);
+  });
+
+  it('a held tab watches for a sign-in with what buddi said not to ask about, and a save-prompt answer is believed only from that tab', async () => {
+    const { commands, tabs, bar } = await opened();
+    const tab = [...tabs.values()][0]!;
+    expect(commands.heldTab('s1')).toBeUndefined();
+    await commands.run(command('hold', { logins: { never: ['bank.test', 42], saved: [{ site: 'amazon.com', username: 'sam' }, { site: 1 }] } }, true));
+    expect(bar.watched).toEqual([['s1', { never: ['bank.test'], saved: [{ site: 'amazon.com', username: 'sam' }] }]]);
+    expect(commands.heldTab('s1')).toBe(tab.id);
+    await commands.run(command('unhold', {}, true));
+    expect(commands.heldTab('s1')).toBeUndefined();
   });
 
   it('unhold (Give it back from the Canvas) takes the waiting bar down', async () => {

@@ -28,7 +28,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionEvent, type ExtensionResult, type HandFrame } from '@buddi/tool-browser';
+import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionEvent, type ExtensionLogin, type ExtensionResult, type HandFrame } from '@buddi/tool-browser';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
@@ -170,6 +170,8 @@ export class ExtensionEndpoint implements ExtensionBridge {
   /** Screencast listeners, by browser session. Frames are never kept here. */
   #frames = new Map<string, (frame: HandFrame) => void>();
   #events = new Map<string, Set<(event: ExtensionEvent) => void>>();
+  /** Who hears a sign-in the owner answered in a held tab, by browser session. The pair is never kept here. */
+  #logins = new Map<string, (login: ExtensionLogin) => void>();
   /** Other upgrade paths on this server's one listener; see `attachPath`. */
   #routes = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>();
   /** Commands the extension was told to abandon, until it says it has. */
@@ -263,6 +265,24 @@ export class ExtensionEndpoint implements ExtensionBridge {
     if (frame.type === 'result') return this.#result(ws, frame);
     if (frame.type === 'frame') return this.#screencast(ws, frame);
     if (frame.type === 'event') return this.#event(ws, frame);
+    if (frame.type === 'login') return this.#login(ws, frame);
+  }
+
+  /**
+   * A sign-in the owner answered in a tab they hold: Save with the pair, or
+   * Never with the site (docs/browser.md, "Saving a sign-in"). Only from the
+   * paired, authenticated socket, only for a session someone listens for, only
+   * a frame of exactly this shape — and never a word of it in a log line,
+   * because a word of it could be the password. The browser host's keeper
+   * stores it; this endpoint keeps nothing.
+   */
+  #login(ws: WebSocket, frame: Record<string, unknown>): void {
+    if (ws !== this.#socket || !this.#live) return;
+    const login = readExtensionLogin(frame);
+    if (!login) return;
+    const listener = this.#logins.get(login.session);
+    if (!listener) return;
+    try { listener(login.login); } catch { /* a listener never breaks the socket */ }
   }
 
   /**
@@ -613,6 +633,12 @@ export class ExtensionEndpoint implements ExtensionBridge {
     return () => { list.delete(listener); if (list.size === 0) this.#events.delete(session); };
   }
 
+  /** A sign-in the owner answered in one session's held tab. One listener per session. Returns the unsubscribe. */
+  logins(session: string, listener: (login: ExtensionLogin) => void): () => void {
+    this.#logins.set(session, listener);
+    return () => { if (this.#logins.get(session) === listener) this.#logins.delete(session); };
+  }
+
   /**
    * A pairing record exists on disk, whether or not Chrome is connected now.
    * Read on every status poll, so the answer is kept until the file's
@@ -658,11 +684,37 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#cancelling.clear();
     for (const waiter of this.#idle.splice(0)) waiter();
     this.#frames.clear();
+    this.#logins.clear();
     this.#routes.clear();
     for (const client of this.#wss.clients) client.terminate();
     this.#wss.close();
     this.#server = undefined;
   }
+}
+
+/** The longest user name and password a login frame may carry; a form field, never a file. */
+const MAX_LOGIN_USERNAME = 200;
+const MAX_LOGIN_PASSWORD = 1024;
+
+/**
+ * A `login` frame, read strictly: `{ type, session, decision, origin, username, password? }`,
+ * an http(s) origin, the password only with Save. Anything else is nothing.
+ */
+export function readExtensionLogin(frame: Record<string, unknown>): { session: string; login: ExtensionLogin } | undefined {
+  const { session, decision, origin, username, password } = frame;
+  if (typeof session !== 'string' || session === '' || session.length > 80) return undefined;
+  if (decision !== 'save' && decision !== 'never') return undefined;
+  if (typeof origin !== 'string' || origin.length > 2048) return undefined;
+  let parsed: URL;
+  try { parsed = new URL(origin); } catch { return undefined; }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined;
+  if (typeof username !== 'string' || username.length > MAX_LOGIN_USERNAME) return undefined;
+  if (decision === 'save') {
+    if (typeof password !== 'string' || password === '' || password.length > MAX_LOGIN_PASSWORD) return undefined;
+    return { session, login: { decision, origin: parsed.origin, username, password } };
+  }
+  if (password !== undefined) return undefined;
+  return { session, login: { decision, origin: parsed.origin, username } };
 }
 
 const endpoints = new Map<string, ExtensionEndpoint>();

@@ -2,7 +2,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import type { Page, Locator, ElementHandle, CDPSession } from 'playwright';
 import { PlaywrightHost, type DriverOptions, type TabOwner } from './host.js';
 import { checkSecretOrigin, fieldOrigin } from './secrets.js';
-import { HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type ObservedTarget } from './types.js';
+import { LOGIN_BINDING, LOGIN_WORLD, loginWatchSource, readLoginPayload } from './logins.js';
+import { HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type ObservedTarget, type SeenLoginReport } from './types.js';
 import { BrowserPreconditionError } from './types.js';
 export type { DriverOptions } from './host.js';
 
@@ -295,6 +296,7 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
       try {
         await cdp.send('Page.startScreencast', { format: 'jpeg', quality: quality.quality, maxWidth: quality.maxWidth, maxHeight: quality.maxHeight, everyNthFrame: 1 });
       } catch (error) { await this.hand.stop(); throw error; }
+      await this.#watchLogins(cdp);
     },
     /**
      * The same page, painted smaller.
@@ -356,6 +358,40 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
       await cdp.detach().catch(() => {});
     },
   };
+  #loginSeen?: (login: SeenLoginReport) => void;
+  /** A sign-in the owner made while holding the page (docs/browser.md, "Saving a sign-in"). */
+  onLoginSeen(listener: (login: SeenLoginReport) => void): void { this.#loginSeen = listener; }
+  /**
+   * Watch the held page for a sign-in going out, on the hand's own CDP session.
+   *
+   * The watcher runs in an isolated world: it shares the page's DOM, so it sees
+   * the form and the field, and the page's scripts cannot see it or the binding
+   * it reports through (the binding is exposed to that world alone). Every new
+   * document in the page gets it again; the one already loaded gets it now. When
+   * the hand stops its session detaches, and the script and the binding go with
+   * it. What the binding carries goes to the listener and nowhere else — not a
+   * log line, not an error.
+   */
+  async #watchLogins(cdp: CDPSession): Promise<void> {
+    if (!this.#loginSeen) return;
+    cdp.on('Runtime.bindingCalled', (event: { name?: string; payload?: unknown }) => {
+      if (this.#cdp !== cdp || event.name !== LOGIN_BINDING) return;
+      const login = readLoginPayload(event.payload);
+      if (!login) return;
+      try { this.#loginSeen?.(login); } catch { /* the keeper decides; a failure there is not the page's */ }
+    });
+    try {
+      await cdp.send('Runtime.enable');
+      await cdp.send('Runtime.addBinding', { name: LOGIN_BINDING, executionContextName: LOGIN_WORLD });
+      const source = loginWatchSource();
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source, worldName: LOGIN_WORLD });
+      const tree = await cdp.send('Page.getFrameTree') as { frameTree?: { frame?: { id?: string } } } | undefined;
+      const frameId = tree?.frameTree?.frame?.id;
+      if (!frameId) return;
+      const world = await cdp.send('Page.createIsolatedWorld', { frameId, worldName: LOGIN_WORLD }) as { executionContextId?: number } | undefined;
+      if (typeof world?.executionContextId === 'number') await cdp.send('Runtime.evaluate', { expression: source, contextId: world.executionContextId });
+    } catch { /* a page that will not take the watch is a page where buddi does not offer to save */ }
+  }
   /**
    * The window's buttons on the held page: back, forward, reload, an address.
    *

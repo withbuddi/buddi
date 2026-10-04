@@ -2444,7 +2444,14 @@ export interface SecretListingView {
   unused?: boolean;
   /** Whether anything holds it could not be checked (a lookup failed): never offered for removal. */
   usageUnknown?: boolean;
+  /** A login buddi kept from the owner's own sign-in: the site, the user name (not a secret) and when. */
+  login?: { site: string; username: string; savedAt: string };
 }
+
+/** A sign-in the owner just made on a page they hold, waiting for Save, Not now or Never. Never the password. */
+export interface LoginSeen { id: string; site: string; username: string }
+export type LoginDecision = 'save' | 'later' | 'never';
+export interface LoginAnswer { outcome: 'saved' | 'dismissed' | 'never' | 'gone'; saved?: { name: string; site: string; username: string; savedAt: string } }
 
 export interface SecretsView {
   secrets: SecretListingView[];
@@ -2559,6 +2566,8 @@ export const api = {
   /** `forgetSignInSite` removes one site from the owner's list and the learned one alike. */
   browserSettings: (settings: Partial<ControlSettings> & { forgetSignInSite?: string }) => post<BrowserStatus>('/browser/settings', settings),
   browserPin: (conversationId: string, route: 'auto' | BrowserRoute) => post<BrowserStatus>('/browser/pin', { conversationId, route }),
+  /** "Save this login?" answered: the question's id and the owner's word. The password never leaves the host. */
+  browserLogin: (id: string, decision: LoginDecision) => post<LoginAnswer>('/browser/login', { id, decision }),
   browserCard: (conversationId: string, answer: string) => post<{ answered?: string; status: BrowserStatus }>('/browser/card', { conversationId, answer }),
   browserInstall: () => post<BrowserStatus>('/browser/install', {}),
   /** Launch the agents' browser once and close it: does it start here? */
