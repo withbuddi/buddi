@@ -7,6 +7,16 @@ enum SupervisorPolicy {
     /// such process"). Anything else and the npm service may still be running.
     static func bootoutStopped(_ status: Int32) -> Bool { status == 0 || status == 3 }
 
+    /// The window's words while npm's buddi holds the data folder: what is going
+    /// on, that nothing is lost by waiting, and what Take Over does.
+    static func anotherBuddi(canTakeOver: Bool) -> (title: String, detail: String) {
+        let meanwhile = "Until then, the npm copy keeps running buddi; your agents and chats are the same either way."
+        guard canTakeOver else {
+            return ("Another buddi is already running", "A buddi started outside the app holds this Mac's buddi folder. Stop it (buddi service stop in Terminal), then restart the app. " + meanwhile)
+        }
+        return ("Another buddi is already running", "buddi from npm runs in the background on this Mac with the same data. Take Over stops that service and runs buddi from the app. " + meanwhile)
+    }
+
     /// A supervisor already answering runs a different release than the one this
     /// app chose (a newer bundle's first launch moved `current`): replace it.
     static func runsOtherRelease(installRoot: String, chosen: String) -> Bool {

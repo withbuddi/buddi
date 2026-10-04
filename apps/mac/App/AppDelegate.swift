@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard let self else { return }
             Uninstall.finish(supervisor: self.supervisor, keepData: keepData)
         }
+        window.onTakeOver = { [weak self] in self?.takeOverFromNpm() }
         // First run (and anything else that opens the dashboard) lands in the window.
         supervisor.presentDashboard = { [weak window] url in window?.present(link: url) }
         window.present()

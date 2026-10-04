@@ -8,10 +8,13 @@ final class MainWindowPlaceholder: NSView {
     enum Mode: Equatable {
         case starting(String)
         case attention(String, canRestart: Bool)
+        /// Another installation's supervisor holds the data folder (npm's service).
+        case anotherBuddi(canTakeOver: Bool)
     }
 
     var onRestart: (() -> Void)?
     var onShowLogs: (() -> Void)?
+    var onTakeOver: (() -> Void)?
 
     private let face = NSImageView()
     private let title = NSTextField(labelWithString: "")
@@ -19,6 +22,7 @@ final class MainWindowPlaceholder: NSView {
     private let spinner = NSProgressIndicator()
     private let restartButton = NSButton(title: "Restart buddi", target: nil, action: nil)
     private let logsButton = NSButton(title: "Show Logs", target: nil, action: nil)
+    private let takeOverButton = NSButton(title: "Take Over", target: nil, action: nil)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -48,9 +52,12 @@ final class MainWindowPlaceholder: NSView {
         logsButton.target = self
         logsButton.action = #selector(showLogs)
         logsButton.bezelStyle = .push
+        takeOverButton.target = self
+        takeOverButton.action = #selector(takeOver)
+        takeOverButton.bezelStyle = .push
 
         // Actions on the right, the primary one last (the kit's rule and macOS's).
-        let buttons = NSStackView(views: [logsButton, restartButton])
+        let buttons = NSStackView(views: [logsButton, restartButton, takeOverButton])
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
@@ -92,6 +99,18 @@ final class MainWindowPlaceholder: NSView {
             spinner.isHidden = false
             spinner.startAnimation(nil)
             restartButton.superview?.isHidden = true
+        case .anotherBuddi(let canTakeOver):
+            let words = SupervisorPolicy.anotherBuddi(canTakeOver: canTakeOver)
+            title.stringValue = words.title
+            detail.stringValue = words.detail
+            detail.isHidden = false
+            spinner.stopAnimation(nil)
+            spinner.isHidden = true
+            restartButton.superview?.isHidden = false
+            restartButton.isHidden = true
+            restartButton.keyEquivalent = ""
+            takeOverButton.isHidden = !canTakeOver
+            takeOverButton.keyEquivalent = canTakeOver ? "\r" : ""
         case .attention(let reason, let canRestart):
             title.stringValue = "buddi needs attention"
             detail.stringValue = reason
@@ -100,10 +119,14 @@ final class MainWindowPlaceholder: NSView {
             spinner.isHidden = true
             restartButton.superview?.isHidden = false
             restartButton.isHidden = !canRestart
+            restartButton.keyEquivalent = "\r"
+            takeOverButton.isHidden = true
+            takeOverButton.keyEquivalent = ""
         }
         needsDisplay = true
     }
 
     @objc private func restart() { onRestart?() }
     @objc private func showLogs() { onShowLogs?() }
+    @objc private func takeOver() { onTakeOver?() }
 }

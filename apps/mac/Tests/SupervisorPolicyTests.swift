@@ -40,6 +40,18 @@ final class SupervisorPolicyTests: XCTestCase {
     }
 }
 
+final class AnotherBuddiTests: XCTestCase {
+    func testTheWindowOffersTakeOverAndSaysTheNpmCopyKeepsRunning() {
+        let words = SupervisorPolicy.anotherBuddi(canTakeOver: true)
+        XCTAssertEqual(words.title, "Another buddi is already running")
+        XCTAssertTrue(words.detail.contains("Take Over"))
+        XCTAssertTrue(words.detail.contains("the npm copy keeps running buddi"))
+        let stuck = SupervisorPolicy.anotherBuddi(canTakeOver: false)
+        XCTAssertFalse(stuck.detail.contains("Take Over"))
+        XCTAssertTrue(stuck.detail.contains("the npm copy keeps running buddi"))
+    }
+}
+
 final class UninstallPolicyTests: XCTestCase {
     func testTheLauncherRunsWithTheBackupAndTheWordsAlreadyTakenCareOf() {
         XCTAssertEqual(UninstallPolicy.launcherArguments(keepData: false), ["uninstall", "--yes", "--no-backup", "--i-have-the-passphrase"])

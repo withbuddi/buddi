@@ -11,7 +11,12 @@ import Foundation
 /// the owner can see what it was). Nothing in the data directory is touched.
 @MainActor
 enum Adoption {
+    /// Before pre.41 a "Not Now" was kept for good in this defaults key, and the
+    /// offer never came back at launch. It is cleared now, and read no more.
     private static let declinedKey = "declinedNpmTakeover"
+
+    /// "Not Now" holds for this launch only: the next launch asks again.
+    private static var declinedThisLaunch = false
 
     /// The npm install's LaunchAgent for this data directory, when there is one
     /// and it is not this app's.
@@ -26,11 +31,12 @@ enum Adoption {
         return plist
     }
 
-    static var declined: Bool { UserDefaults.standard.bool(forKey: declinedKey) }
+    static var declined: Bool { declinedThisLaunch }
 
     /// The one dialog. Asked once on launch; afterwards the menu offers it.
     /// Returns true when the owner chose to take over (and it worked).
     static func offer(data: URL, plist: URL, fromMenu: Bool = false) -> Bool {
+        UserDefaults.standard.removeObject(forKey: declinedKey)
         if !fromMenu && declined { return false }
         let alert = NSAlert()
         alert.messageText = "Run your buddi from the app?"
@@ -41,17 +47,19 @@ enum Adoption {
 
             Afterwards, the npm copy is unused. You can remove it whenever you like with:
             npm rm -g @withbuddi/buddi
+
+            Not Now leaves the npm copy running buddi as it is; the app asks again next time it opens.
             """
         alert.addButton(withTitle: "Take Over")
         alert.addButton(withTitle: "Not Now")
         NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else {
-            UserDefaults.standard.set(true, forKey: declinedKey)
+            declinedThisLaunch = true
             return false
         }
         do {
             try takeOver(data: data, plist: plist)
-            UserDefaults.standard.removeObject(forKey: declinedKey)
+            declinedThisLaunch = false
             return true
         } catch {
             let failed = NSAlert()

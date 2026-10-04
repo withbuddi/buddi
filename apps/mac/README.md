@@ -142,8 +142,10 @@ The app is one more packaged installation, the same as `npm install -g @withbudd
 folder, the first launch asks once whether to take over. Yes runs `launchctl bootout`
 on it, moves its plist to `<data>/launchagent-from-npm.plist`, waits for the old
 supervisor to stop, and starts buddi from the app. Data is never touched. The dialog
-says `npm rm -g @withbuddi/buddi` can be run later. No starts the app in "Needs
-attention" (another buddi holds the folder), and the menu offers Take Over until it's done.
+says `npm rm -g @withbuddi/buddi` can be run later. Not Now holds for this launch only:
+the window shows "Another buddi is already running" with Take Over right there and a line
+saying the npm copy keeps running buddi meanwhile, the menu offers it too, and the next
+launch asks again.
 
 ## Versions
 

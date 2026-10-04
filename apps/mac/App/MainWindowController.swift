@@ -16,6 +16,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     private let supervisor: Supervisor
     private let webView: WKWebView
     private let placeholder = MainWindowPlaceholder(frame: .zero)
+    /// "Another buddi is already running" → Take Over (AppDelegate.takeOverFromNpm).
+    var onTakeOver: (() -> Void)?
     private let findBar: MainWindowFindBar
     private let notifications = MainWindowNotifications()
 
@@ -85,6 +87,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         layout(in: window)
 
         placeholder.onRestart = { [weak self] in self?.supervisor.restart() }
+        placeholder.onTakeOver = { [weak self] in self?.onTakeOver?() }
         placeholder.onShowLogs = { [weak self] in
             guard let self else { return }
             NSWorkspace.shared.open(DataDirectory.logs(for: self.supervisor.data))
@@ -158,7 +161,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         case .updating:
             goneAway(.starting("Updating buddi…"))
         case .attention(let reason):
-            goneAway(.attention(reason, canRestart: supervisor.layout != nil && supervisor.foreign == nil))
+            if supervisor.foreign != nil {
+                // Take Over is offered right here, not only in the menu.
+                goneAway(.anotherBuddi(canTakeOver: Adoption.npmService(data: supervisor.data) != nil))
+            } else {
+                goneAway(.attention(reason, canRestart: supervisor.layout != nil && supervisor.foreign == nil))
+            }
         }
     }
 
