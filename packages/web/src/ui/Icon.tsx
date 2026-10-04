@@ -121,6 +121,8 @@ const GLYPHS = {
   // ---- the roster ----
   // A struck-through circle: out of service, not merely quiet.
   out: [12, 1.6, <><circle cx="6" cy="6" r="4.4" /><path d="M3.4 8.6 8.6 3.4" /></>, 11],
+  // An arrow up and out of a corner: this opens another site, in a new tab or the default browser.
+  external: [12, 1.6, <path d="M4.5 3H9v4.5M9 3 3 9" />, 11],
   'chevron-left': [14, 1.6, <path d="M9 2.5 4.5 7 9 11.5" />],
   'chevron-right': [14, 1.6, <path d="M5 2.5 9.5 7 5 11.5" />],
   plus: [14, 1.6, <path d="M7 2.5v9M2.5 7h9" />],

@@ -320,6 +320,13 @@ interface SignInRow {
 /** How often the Google sign-in is asked how it stands: the settings page's own two seconds. */
 export const SIGN_IN_POLL_MS = 2000;
 
+/**
+ * A Google sign-in prepared when the sheet opens is started again this often,
+ * inside the ten minutes the host keeps one, so the address a press opens is
+ * never one that has run out.
+ */
+export const SIGN_IN_PREPARE_MS = 8 * 60_000;
+
 /** The name a pasted link is kept under, from where it points: never one already taken. */
 export function nameForLink(link: string, taken: readonly string[]): string {
   let host = '';
@@ -397,7 +404,60 @@ export function CalendarSheet({ onClose, onLinked }: { onClose: () => void; onLi
       .catch((err: unknown) => setState({ kind: 'bad', line: reason(err) }));
   };
 
-  /* ---- Google: start, wait for the owner's yes on Google's page, finish ---- */
+  /*
+   * ---- Google: prepared on open, so one press opens Google's page ----
+   *
+   * The sign-in is started as soon as the sheet knows Google is offered (and
+   * again before it runs out), and its address kept: the press is then a
+   * plain link to it, opened at once — fetching the address after the press
+   * trips the browser's popup rule and took a second press. buddi.app hands
+   * the new window to the default browser.
+   */
+  const [prepared, setPrepared] = useState<{ id: string; url: string } | null>(null);
+  const [prepareFailed, setPrepareFailed] = useState(false);
+  const [round, setRound] = useState(0);
+  /** Pressed: the prepared sign-in is the owner's now, never replaced underneath them. */
+  const opened = useRef(false);
+  const refresher = useRef<number | undefined>(undefined);
+  const googleAvailable = settings?.googleAvailable === true;
+  useEffect(() => {
+    if (!googleAvailable) return undefined;
+    let stopped = false;
+    const prepare = async (): Promise<void> => {
+      if (stopped || opened.current) return;
+      try {
+        await api.pageAct('calendar', { tool: 'calendar.google_sign_in', args: {} });
+        const answer = await api.pageQuery<{ rows?: SignInRow[] }>('calendar', 'sign_in');
+        if (stopped || opened.current) return;
+        const row = answer.data?.rows?.[0];
+        if (!row || row.state !== 'waiting' || !row.url) throw new Error('no address to open');
+        setPrepared({ id: row.id, url: row.url });
+        setPrepareFailed(false);
+        refresher.current = window.setTimeout(() => void prepare(), SIGN_IN_PREPARE_MS);
+      } catch {
+        // The press starts it instead, the slower way.
+        if (!stopped) {
+          setPrepared(null);
+          setPrepareFailed(true);
+        }
+      }
+    };
+    void prepare();
+    return () => {
+      stopped = true;
+      window.clearTimeout(refresher.current);
+    };
+  }, [googleAvailable, round]);
+
+  /** A sign-in that failed on Google's side: a fresh one is prepared for Try again. */
+  const failed = (line: string): void => {
+    setState({ kind: 'bad', line });
+    opened.current = false;
+    setPrepared(null);
+    setRound((n) => n + 1);
+  };
+
+  /* ---- Google: wait for the owner's yes on Google's page, finish ---- */
   const [attempt, setAttempt] = useState(0);
   const waitingId = state.kind === 'google' ? (state.signIn?.id ?? null) : null;
   useEffect(() => {
@@ -424,7 +484,7 @@ export function CalendarSheet({ onClose, onLinked }: { onClose: () => void; onLi
           }
           if (row.state === 'failed') {
             stop();
-            setState({ kind: 'bad', line: row.problem || row.note });
+            failed(row.problem || row.note);
             return;
           }
           stop();
@@ -440,7 +500,7 @@ export function CalendarSheet({ onClose, onLinked }: { onClose: () => void; onLi
         })
         .catch((err: unknown) => {
           stop();
-          setState({ kind: 'bad', line: reason(err) });
+          failed(reason(err));
         })
         .finally(() => {
           inFlight = false;
@@ -456,7 +516,19 @@ export function CalendarSheet({ onClose, onLinked }: { onClose: () => void; onLi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempt]);
 
+  /** The press on a prepared sign-in: the link opens Google's page by itself; this only starts waiting. */
+  const openGoogle = (): void => {
+    if (!prepared || state.kind === 'google') return;
+    opened.current = true;
+    window.clearTimeout(refresher.current);
+    setState({ kind: 'google', signIn: { id: prepared.id, url: prepared.url, state: 'waiting', note: '', problem: '' } });
+    setAttempt((n) => n + 1);
+  };
+
+  /** No prepared sign-in (preparing it failed): start one now; its link is a second press. */
   const google = (): void => {
+    opened.current = true;
+    window.clearTimeout(refresher.current);
     setState({ kind: 'busy', line: SHEETS.calendar.starting });
     void Promise.resolve()
       .then(() => api.pageAct('calendar', { tool: 'calendar.google_sign_in', args: {} }))
@@ -464,17 +536,26 @@ export function CalendarSheet({ onClose, onLinked }: { onClose: () => void; onLi
         setState({ kind: 'google', signIn: null });
         setAttempt((n) => n + 1);
       })
-      .catch((err: unknown) => setState({ kind: 'bad', line: reason(err) }));
+      .catch((err: unknown) => failed(reason(err)));
   };
 
-  /** Closed while Google was still being waited for: that sign-in is dropped, as Cancel on the settings page does. */
+  /**
+   * Closed while Google was still being waited for, or with a prepared
+   * sign-in never pressed: that sign-in is dropped, as Cancel on the settings
+   * page does.
+   */
   const close = (): void => {
-    if (waitingId) void api.pageAct('calendar', { tool: 'calendar.google_cancel', args: { id: waitingId } }).catch(() => undefined);
+    const drop = waitingId ?? (state.kind !== 'good' ? prepared?.id : undefined);
+    window.clearTimeout(refresher.current);
+    if (drop) void api.pageAct('calendar', { tool: 'calendar.google_cancel', args: { id: drop } }).catch(() => undefined);
     onClose();
   };
 
-  const signInUrl = state.kind === 'google' ? state.signIn?.url : undefined;
   const busy = state.kind === 'busy' || state.kind === 'google' || state.kind === 'good';
+  /** The address the Google button opens: the one being waited for, else the prepared one. */
+  const googleUrl = state.kind === 'google' ? state.signIn?.url : state.kind === 'busy' || state.kind === 'good' ? undefined : prepared?.url;
+  /** Started by the press (nothing was prepared): its link is the second step, and says so. */
+  const secondStep = state.kind === 'google' && prepared === null;
   return (
     <Sheet title={SHEETS.calendar.sheet} onClose={close}>
       <div className="wiz-sheet-body">
@@ -482,14 +563,15 @@ export function CalendarSheet({ onClose, onLinked }: { onClose: () => void; onLi
         {settings?.googleAvailable ? (
           <>
             <div className="frs-google">
-              {signInUrl ? (
-                <ButtonLink variant="accent" size="lg" href={signInUrl} target="_blank" rel="noreferrer">
-                  {SHEETS.calendar.continue}
-                  <Icon name="out" />
+              {googleUrl ? (
+                <ButtonLink variant="accent" size="lg" href={googleUrl} target="_blank" rel="noreferrer" onClick={openGoogle}>
+                  {secondStep ? SHEETS.calendar.continue : SHEETS.calendar.google}
+                  <Icon name="external" />
                 </ButtonLink>
               ) : (
-                <Button variant="accent" size="lg" disabled={busy} onClick={google}>
+                <Button variant="accent" size="lg" disabled={busy || !prepareFailed} onClick={google}>
                   {SHEETS.calendar.google}
+                  <Icon name="external" />
                 </Button>
               )}
               <span className="wiz-opt-line">{SHEETS.calendar.googleLine}</span>

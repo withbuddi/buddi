@@ -4,9 +4,9 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiError, api } from '../../api';
-import { BankSheet, CalendarSheet, MailboxSheet, SHEETS, nameForLink } from './FirstRunSheets';
+import { BankSheet, CalendarSheet, MailboxSheet, SHEETS, SIGN_IN_PREPARE_MS, nameForLink } from './FirstRunSheets';
 
 vi.mock('../../api', async (load) => {
   const real = await load<typeof import('../../api')>();
@@ -115,42 +115,91 @@ describe('the calendar sheet', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('puts Google\'s sign-in first, waits for Google, finishes, and counts the calendars', async () => {
-    let signIn: { id: string; url: string; state: string; note: string; problem: string } = { id: 's1', url: 'https://accounts.google.com/o/x', state: 'waiting', note: '', problem: '' };
-    let found = 0;
+  /** The calendar plugin as the sheet sees it: each google_sign_in makes a new waiting sign-in with its own address. */
+  function googlePlugin() {
+    const plugin = { started: 0, found: 0, row: null as null | { id: string; url: string; state: string; note: string; problem: string }, failStart: false };
     vi.mocked(api.pageQuery).mockImplementation(async (_plugin: string, query: string) => {
-      if (query === 'sign_in') return { data: { rows: [signIn] } } as never;
-      return { data: { googleAvailable: true, calendars: Array.from({ length: found }, (_, i) => ({ id: `c${i}`, name: `C${i}` })) } } as never;
+      if (query === 'sign_in') return { data: { rows: plugin.row ? [plugin.row] : [] } } as never;
+      return { data: { googleAvailable: true, calendars: Array.from({ length: plugin.found }, (_, i) => ({ id: `c${i}`, name: `C${i}` })) } } as never;
     });
     vi.mocked(api.pageAct).mockImplementation(async (_plugin, body) => {
-      if (body.tool === 'calendar.google_finish') found = 3;
+      if (body.tool === 'calendar.google_sign_in') {
+        if (plugin.failStart) throw new ApiError(500, 'Google is not set up on this buddi');
+        plugin.started += 1;
+        plugin.row = { id: `s${plugin.started}`, url: `https://accounts.google.com/o/${plugin.started}`, state: 'waiting', note: '', problem: '' };
+      }
+      if (body.tool === 'calendar.google_finish') plugin.found = 3;
       return { result: { note: '' } };
     });
+    return plugin;
+  }
+
+  it('prepares Google\'s sign-in when the sheet opens, so one press opens Google\'s page, then finishes and counts the calendars', async () => {
+    const plugin = googlePlugin();
     const onClose = vi.fn();
     render(<CalendarSheet onClose={onClose} onLinked={vi.fn()} />);
     const s = await sheet(SHEETS.calendar.sheet);
-    fireEvent.click(await within(s).findByRole('button', { name: SHEETS.calendar.google }));
-    expect(await within(s).findByRole('link', { name: SHEETS.calendar.continue })).toHaveAttribute('href', 'https://accounts.google.com/o/x');
-    expect(within(s).getByText(SHEETS.calendar.waiting)).toBeInTheDocument();
-    signIn = { ...signIn, state: 'received' };
+    // Ready before any press: a link to the prepared address, opened in a new tab by the press itself.
+    const link = await within(s).findByRole('link', { name: SHEETS.calendar.google });
+    expect(link).toHaveAttribute('href', 'https://accounts.google.com/o/1');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.querySelector('[data-icon="external"]')).not.toBeNull();
+    expect(plugin.started).toBe(1);
+    fireEvent.click(link);
+    expect(await within(s).findByText(SHEETS.calendar.waiting)).toBeInTheDocument();
+    expect(within(s).queryByRole('link', { name: SHEETS.calendar.continue })).not.toBeInTheDocument();
+    plugin.row = { ...plugin.row!, state: 'received' };
     expect(await within(s).findByText(SHEETS.calendar.found(3), {}, { timeout: 5_000 })).toBeInTheDocument();
-    expect(api.pageAct).toHaveBeenCalledWith('calendar', { tool: 'calendar.google_sign_in', args: {} });
     expect(api.pageAct).toHaveBeenCalledWith('calendar', { tool: 'calendar.google_finish', args: { id: 's1' } });
+    // The press opened the prepared sign-in; it never started another.
+    expect(plugin.started).toBe(1);
     await waitFor(() => expect(onClose).toHaveBeenCalled(), { timeout: 4_000 });
   });
 
-  it('drops a Google sign-in still waiting when the sheet is closed', async () => {
-    vi.mocked(api.pageQuery).mockImplementation(async (_plugin: string, query: string) =>
-      (query === 'sign_in'
-        ? { data: { rows: [{ id: 's2', url: 'https://accounts.google.com/o/y', state: 'waiting', note: '', problem: '' }] } }
-        : { data: { googleAvailable: true, calendars: [] } }) as never,
-    );
-    vi.mocked(api.pageAct).mockResolvedValue({ result: { note: '' } });
+  it('prepares it again before the host\'s ten minutes run out, and not once it was pressed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const plugin = googlePlugin();
+      render(<CalendarSheet onClose={vi.fn()} onLinked={vi.fn()} />);
+      const s = await sheet(SHEETS.calendar.sheet);
+      expect(await within(s).findByRole('link', { name: SHEETS.calendar.google })).toHaveAttribute('href', 'https://accounts.google.com/o/1');
+      expect(SIGN_IN_PREPARE_MS).toBeLessThan(10 * 60_000);
+      await act(async () => { await vi.advanceTimersByTimeAsync(SIGN_IN_PREPARE_MS); });
+      await waitFor(() => expect(within(s).getByRole('link', { name: SHEETS.calendar.google })).toHaveAttribute('href', 'https://accounts.google.com/o/2'));
+      fireEvent.click(within(s).getByRole('link', { name: SHEETS.calendar.google }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(SIGN_IN_PREPARE_MS * 2); });
+      expect(plugin.started).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts it on the press when preparing failed, its link then the second step', async () => {
+    const plugin = googlePlugin();
+    plugin.failStart = true;
+    render(<CalendarSheet onClose={vi.fn()} onLinked={vi.fn()} />);
+    const s = await sheet(SHEETS.calendar.sheet);
+    const button = await within(s).findByRole('button', { name: SHEETS.calendar.google });
+    await waitFor(() => expect(button).toBeEnabled());
+    plugin.failStart = false;
+    fireEvent.click(button);
+    expect(await within(s).findByRole('link', { name: SHEETS.calendar.continue })).toHaveAttribute('href', 'https://accounts.google.com/o/1');
+  });
+
+  it('drops a Google sign-in still waiting when the sheet is closed, and a prepared one never pressed', async () => {
+    googlePlugin();
+    const first = render(<CalendarSheet onClose={vi.fn()} onLinked={vi.fn()} />);
+    let s = await sheet(SHEETS.calendar.sheet);
+    await within(s).findByRole('link', { name: SHEETS.calendar.google });
+    fireEvent.click(within(s).getByRole('button', { name: 'Close' }));
+    expect(api.pageAct).toHaveBeenCalledWith('calendar', { tool: 'calendar.google_cancel', args: { id: 's1' } });
+    first.unmount();
+
     const onClose = vi.fn();
     render(<CalendarSheet onClose={onClose} onLinked={vi.fn()} />);
-    const s = await sheet(SHEETS.calendar.sheet);
-    fireEvent.click(await within(s).findByRole('button', { name: SHEETS.calendar.google }));
-    await within(s).findByRole('link', { name: SHEETS.calendar.continue });
+    s = await sheet(SHEETS.calendar.sheet);
+    fireEvent.click(await within(s).findByRole('link', { name: SHEETS.calendar.google }));
+    await within(s).findByText(SHEETS.calendar.waiting);
     fireEvent.click(within(s).getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalled();
     expect(api.pageAct).toHaveBeenCalledWith('calendar', { tool: 'calendar.google_cancel', args: { id: 's2' } });
