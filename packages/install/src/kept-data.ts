@@ -17,7 +17,9 @@ export interface KeptEntry {
 
 /** The line, or null when nothing waits. Pure: the row's own wording. */
 export async function keptPluginDataLine(read: () => Promise<readonly KeptEntry[]>): Promise<string | null> {
-  const { checkPendingPluginData } = await import('@buddi/cli');
+  // The doctor's wording module alone: it has no imports, while the package
+  // root pulls the whole CLI and gateway (seconds cold, which timed CI out).
+  const { checkPendingPluginData } = await import('@buddi/cli/doctor');
   let entries: readonly KeptEntry[];
   try {
     entries = await read();

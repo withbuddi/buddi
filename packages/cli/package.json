@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./doctor": {
+      "types": "./dist/doctor.d.ts",
+      "default": "./dist/doctor.js"
     }
   },
   "bin": {
