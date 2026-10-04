@@ -28,6 +28,10 @@
 	<string>Apache-2.0</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>buddi listens when you hold the microphone button, to turn what you say into a message.</string>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>

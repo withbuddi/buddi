@@ -39,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             Uninstall.finish(supervisor: self.supervisor, keepData: keepData)
         }
         window.onTakeOver = { [weak self] in self?.takeOverFromNpm() }
+        // A newer buddi: one quiet alert per version, then the menu item (UpdatePolicy).
+        supervisor.onVersion = { [weak self] view in self?.statusItemController?.offerUpdateOnce(view) }
         // First run (and anything else that opens the dashboard) lands in the window.
         supervisor.presentDashboard = { [weak window] url in window?.present(link: url) }
         window.present()
@@ -58,9 +60,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    /// Sparkle only ever offers a new app shell (apps/mac/SHELL_VERSION); asked
+    /// in the background, it says nothing unless there is one.
     func checkForAppUpdates() {
         guard AppDelegate.sparkleConfigured else { return }
-        updaterController.checkForUpdates(nil)
+        updaterController.updater.checkForUpdatesInBackground()
     }
 
     /// The dock icon with the window hidden (⌘W) brings it back.

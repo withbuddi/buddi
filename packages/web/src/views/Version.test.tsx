@@ -40,6 +40,23 @@ beforeEach(() => { vi.clearAllMocks(); resetRestart(); vi.stubGlobal('fetch', vi
 afterEach(() => { resetRestart(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('the version panel', () => {
+  it('in buddi.app, says Update to … as the menu does, starts the same upgrade, and asks the supervisor again every minute', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.version).mockResolvedValueOnce({ ...AVAILABLE, app: true, updateAvailable: false, latest: '0.1.0' }).mockResolvedValue({ ...AVAILABLE, app: true });
+    vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'u1', phase: 'starting', startedAt: new Date().toISOString() } } as never);
+    vi.mocked(api.upgradeJob).mockReturnValue(new Promise(() => {}));
+    render(<Version />);
+    expect(await screen.findByRole('button', { name: 'Update' })).toBeDisabled();
+    await act(async () => {});
+    // The app learned of 0.1.1; a minute later the panel says it too.
+    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    await waitFor(() => expect(vi.mocked(api.version).mock.calls.length).toBeGreaterThanOrEqual(2));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update to 0.1.1' }));
+    expect(screen.getByText(/buddi takes a backup first, installs 0\.1\.1 and restarts; it takes a minute or two\./)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Update to 0.1.1' }).at(-1)!);
+    await waitFor(() => expect(api.startUpgrade).toHaveBeenCalledWith('0.1.1'));
+  });
+
   it('offers a checkout the command instead of a button', async () => {
     vi.mocked(api.version).mockResolvedValue({
       current: '0.1.0 (v0.1.0-3-gabc1234-dirty)',

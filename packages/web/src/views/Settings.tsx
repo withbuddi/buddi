@@ -492,6 +492,16 @@ const CHECK_DISCLOSURE = 'The check asks the npm registry for the newest version
 const UPGRADE_WARNING =
   'This takes a backup, installs the new version and restarts buddi. This page waits for it and comes back by itself.';
 
+/** How often buddi.app's panel asks the supervisor again (cheap: its cached answer). */
+const APP_VERSION_POLL_MS = 60_000;
+
+/** buddi.app's words for the same upgrade, as its menu's "Update to …" says them. */
+export function updateWords(app: boolean, latest: string | undefined): { button: string; warning: string } {
+  return app
+    ? { button: latest ? `Update to ${latest}` : 'Update', warning: `buddi takes a backup first, installs ${latest ?? 'the new version'} and restarts; it takes a minute or two. This page waits for it and comes back by itself.` }
+    : { button: latest ? `Upgrade to ${latest}` : 'Upgrade', warning: UPGRADE_WARNING };
+}
+
 /** The one line a checkout gets instead of an upgrade button. */
 const CHECKOUT_UPGRADE_LINE = 'A checkout upgrades with git pull, then buddi upgrade in a terminal.';
 
@@ -602,7 +612,14 @@ function useUpgrade(id: string | null, onFailed?: (job: UpgradeJob) => void): Up
  * then waits to be replaced. A checkout has neither, and gets the command.
  */
 export function Version(): JSX.Element {
-  const view = useAsync(() => api.version(), []);
+  /*
+   * In buddi.app the app reads the same supervisor answer for its menu and
+   * its one alert; asked again every minute here, the panel never says
+   * "latest" while the menu says "Update to …".
+   */
+  const [inApp, setInApp] = useState(false);
+  const view = useAsync(() => api.version(), [], inApp ? APP_VERSION_POLL_MS : undefined);
+  useEffect(() => { if (view.data?.app === true) setInApp(true); }, [view.data?.app]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -724,7 +741,7 @@ export function Version(): JSX.Element {
             ) : null}
             {asking ? (
               <Notice tone="warning" role="alert">
-                {UPGRADE_WARNING}
+                {updateWords(data?.app === true, data?.latest).warning}
               </Notice>
             ) : null}
             <Toolbar align="end">
@@ -734,7 +751,7 @@ export function Version(): JSX.Element {
                     Cancel
                   </Button>
                   <Button variant="accent" disabled={busy} onClick={start}>
-                    Upgrade to {data?.latest}
+                    {updateWords(data?.app === true, data?.latest).button}
                   </Button>
                 </>
               ) : data?.processing && jobId === null ? null : (
@@ -743,7 +760,7 @@ export function Version(): JSX.Element {
                   disabled={busy || jobId !== null || !data?.updateAvailable}
                   onClick={() => setAsking(true)}
                 >
-                  {data?.updateAvailable && data.latest ? `Upgrade to ${data.latest}` : 'Upgrade'}
+                  {updateWords(data?.app === true, data?.updateAvailable ? data.latest : undefined).button}
                 </Button>
               )}
             </Toolbar>

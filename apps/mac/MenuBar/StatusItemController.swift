@@ -20,6 +20,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var advancedItem: NSMenuItem!
     private var previousItem: NSMenuItem!
     private var browserItem: NSMenuItem!
+    /// Check for Updates… is asking: its answer is the alert, not the quiet one.
+    private var checking = false
 
     init(supervisor: Supervisor, appDelegate: AppDelegate) {
         self.supervisor = supervisor
@@ -166,13 +168,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         NSWorkspace.shared.open(DataDirectory.logs(for: supervisor.data))
     }
 
-    /// Both layers: Sparkle for the app binary (its own window), and buddi's
-    /// own check — the supervisor's `/version/check`, the call behind Settings →
-    /// System's "Check now".
+    /// buddi's own check — the supervisor's `/version/check`, the call behind
+    /// Settings → System's "Check now" — and Sparkle in the background, which
+    /// says something only when there is a new app shell.
     @objc func checkForUpdates() {
         appDelegate?.checkForAppUpdates()
         guard case .running = supervisor.health else { return }
-        supervisor.refreshVersion(check: true) { view in
+        checking = true
+        supervisor.refreshVersion(check: true) { [weak self] view in
+            self?.checking = false
             let alert = NSAlert()
             if let view, view.updateAvailable, let latest = view.latest {
                 alert.messageText = "buddi \(latest) is available"
@@ -186,6 +190,40 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             }
             NSApp.activate()
             alert.runModal()
+        }
+    }
+
+    /// The one quiet alert per buddi version (UpdatePolicy): the same upgrade
+    /// as the menu's "Update to …" and Settings → System's button. Later
+    /// leaves the menu item; the alert does not come back for this version.
+    func offerUpdateOnce(_ view: ControlSocket.Version) {
+        let defaults = UserDefaults.standard
+        guard UpdatePolicy.shouldAlert(updateAvailable: view.updateAvailable, latest: view.latest,
+                                       alerted: defaults.string(forKey: UpdatePolicy.alertedKey)),
+              let latest = view.latest else { return }
+        defaults.set(latest, forKey: UpdatePolicy.alertedKey)
+        // Check for Updates… answers with its own alert: one is enough.
+        guard !checking else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "buddi \(latest) is available"
+        var text = "You have \(view.current). Update takes a backup first, installs \(latest) and restarts buddi; it takes a minute or two. You can also do it later from the menu."
+        if let notes = view.latestNotes, !notes.isEmpty { text += "\n\nWhat changes:\n" + String(notes.prefix(1200)) }
+        alert.informativeText = text
+        alert.addButton(withTitle: "Update")
+        alert.addButton(withTitle: "Later")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        startUpdate(to: latest)
+    }
+
+    private func startUpdate(to latest: String) {
+        supervisor.startUpgrade(to: latest) { refusal in
+            guard let refusal else { return }
+            let failed = NSAlert()
+            failed.messageText = "buddi did not update"
+            failed.informativeText = refusal
+            NSApp.activate()
+            failed.runModal()
         }
     }
 
@@ -206,14 +244,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        supervisor.startUpgrade(to: latest) { refusal in
-            guard let refusal else { return }
-            let failed = NSAlert()
-            failed.messageText = "buddi did not update"
-            failed.informativeText = refusal
-            NSApp.activate()
-            failed.runModal()
-        }
+        startUpdate(to: latest)
     }
 
     /// Advanced → Restart with the Previous Version: back to the release that

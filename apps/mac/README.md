@@ -159,7 +159,26 @@ both; `make version` prints them. The release workflow uses the same script, and
 
 ## Updates
 
-Two layers, as in the spec.
+One update path for each thing that changes, so the owner is never offered the same
+release twice:
+
+- **buddi** (every release) comes only from the in-app updater. The app reads the
+  supervisor's cached `/version` when buddi starts running and every six hours, and
+  for a version it has not mentioned before it shows one quiet alert ("buddi X is
+  available", Update / Later, `UpdatePolicy` in `App/SupervisorPolicy.swift`); the menu
+  bar's "Update to X" stays until it is done. Settings → System's version panel asks
+  the same supervisor (every minute inside the app, so it never says "latest" while
+  the menu says otherwise), and its "Update to X" button starts the same `/upgrade`
+  as the menu item. Check for Updates… is buddi's own check plus a background
+  Sparkle check that speaks only when there is a new app.
+- **The app shell** (anything under `apps/mac`) comes from Sparkle, and only when
+  `apps/mac/SHELL_VERSION` was bumped. Bump it by hand in the commit that changes
+  the app. The release job reads the live feed's `<buddi:shell>` and writes a new
+  `appcast.xml` only when it differs (`scripts/release/appcast.mjs --shell
+  --previous`); otherwise the feed keeps the item of the last shell change and only
+  `latest.json` (the download link) moves to the new DMG. Sparkle never downloads or
+  installs by itself (`SUAutomaticallyUpdate` and `SUAllowsAutomaticUpdates` are off);
+  it asks.
 
 **buddi itself**, from inside the app. The app starts its supervisor with
 `BUDDI_APP_LAYOUT=<data>/releases`, and an upgrade (Settings → System, the menu's
@@ -198,8 +217,8 @@ touched; if the newer version already migrated the database, the older one refus
 to start, and the backup the upgrade took is what goes back with it (Settings →
 Backups).
 
-**The app**: Sparkle, with the feed at `https://withbuddi.com/appcast.xml`. It stays
-off until `SUPublicEDKey` in `project.yml` holds a real key. Generate the key pair once:
+**The app**: Sparkle, with the feed at `https://withbuddi.com/appcast.xml`, for a new
+shell only (see above). It stays off until `SUPublicEDKey` in `project.yml` holds a real key. Generate the key pair once:
 `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys` (after a build, which
 resolves the Sparkle package). It stores the private key in your login keychain and
 prints the public key. Then export the private key with `generate_keys -x <file>` into
@@ -210,9 +229,10 @@ the `SPARKLE_PRIVATE_KEY` secret.
 The `mac-app` job in `.github/workflows/release.yml` runs after the npm publish of a
 tag: it waits until npm serves the tarball, `make fetch VERSION=<tag>`, imports the
 Developer ID certificate, `make notarize`, `make dmg`, signs the DMG with Sparkle's
-`sign_update`, writes `appcast.xml` and `latest.json` (`{version, file, url, sha256,
-bundleVersion}`, `scripts/release/appcast.mjs`), attaches all three to the GitHub
-release (`--clobber`) and uploads the two small ones to R2. The DMG is served from
+`sign_update`, writes `latest.json` (`{version, file, url, sha256, bundleVersion}`)
+and, when `SHELL_VERSION` differs from the live feed's, `appcast.xml`
+(`scripts/release/appcast.mjs`), attaches them to the GitHub release (`--clobber`)
+and uploads the small ones to R2. The DMG is served from
 the GitHub release asset, `https://github.com/withbuddi/buddi/releases/download/v<version>/buddi-<version>.dmg`
 (Wrangler caps R2 uploads at 300 MiB and the DMG is larger); that URL is the
 appcast enclosure and `latest.json`'s `url`. The npm release is out by then, so a

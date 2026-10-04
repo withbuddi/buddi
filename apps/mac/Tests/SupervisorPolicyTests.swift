@@ -83,3 +83,13 @@ final class UninstallPolicyTests: XCTestCase {
         XCTAssertNotEqual(UninstallPolicy.exitStatus, 75)
     }
 }
+
+final class UpdatePolicyTests: XCTestCase {
+    func testANewerBuddiIsSaidOncePerVersion() {
+        XCTAssertTrue(UpdatePolicy.shouldAlert(updateAvailable: true, latest: "0.1.0-pre.41", alerted: nil))
+        XCTAssertFalse(UpdatePolicy.shouldAlert(updateAvailable: true, latest: "0.1.0-pre.41", alerted: "0.1.0-pre.41"))
+        XCTAssertTrue(UpdatePolicy.shouldAlert(updateAvailable: true, latest: "0.1.0-pre.42", alerted: "0.1.0-pre.41"))
+        XCTAssertFalse(UpdatePolicy.shouldAlert(updateAvailable: false, latest: "0.1.0-pre.42", alerted: nil))
+        XCTAssertFalse(UpdatePolicy.shouldAlert(updateAvailable: true, latest: nil, alerted: nil))
+    }
+}

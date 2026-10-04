@@ -94,3 +94,15 @@ enum UninstallPolicy {
         report.passphrase == nil || wroteItDown
     }
 }
+
+/// buddi's own releases, offered by the in-app updater: one quiet alert per
+/// version (the menu's "Update to …" stays until it is done), never Sparkle.
+enum UpdatePolicy {
+    static let alertedKey = "alertedBuddiVersion"
+
+    /// Say it once: a newer buddi the owner has not been told about yet.
+    static func shouldAlert(updateAvailable: Bool, latest: String?, alerted: String?) -> Bool {
+        guard updateAvailable, let latest, !latest.isEmpty else { return false }
+        return latest != alerted
+    }
+}

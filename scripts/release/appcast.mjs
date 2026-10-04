@@ -3,10 +3,17 @@
  * buddi.app's Sparkle feed and the download pointer, written by the `mac-app`
  * job in .github/workflows/release.yml after the DMG is notarized and signed.
  *
- *   node scripts/release/appcast.mjs <version> <dmg> "<sign_update output>" <out-dir>
+ *   node scripts/release/appcast.mjs <version> <dmg> "<sign_update output>" <out-dir> [--shell <n>] [--previous <appcast.xml>]
  *
- * writes `<out-dir>/appcast.xml` (one item: this release, its notes as simple
- * HTML for Sparkle's dialog) and `<out-dir>/latest.json`
+ * writes `<out-dir>/latest.json` always, and `<out-dir>/appcast.xml` (one
+ * item: this release, its notes as simple HTML for Sparkle's dialog) only when
+ * the app itself changed: `--shell` is `apps/mac/SHELL_VERSION` (bumped by
+ * hand when anything under apps/mac changes), and `--previous` the feed that
+ * is live now. The same shell means the same app with a newer buddi inside,
+ * and buddi updates itself from inside the app — a Sparkle item for it would
+ * be a second update path offering the same thing. So the live feed keeps its
+ * item (the DMG of the last shell change) and only `latest.json` moves, so a
+ * new download still gets the newest buddi. And `<out-dir>/latest.json`
  * (`{ version, file, url, sha256, bundleVersion }`, what withbuddi.com/download/mac
  * redirects to). The DMG itself is served from the GitHub release asset (`url`,
  * also the enclosure); R2 holds only these two files. The notes are the
@@ -67,9 +74,25 @@ export function signatureAttributes(output) {
   return `sparkle:edSignature="${signature}" length="${length}"`;
 }
 
-export function appcast({ version, file, signature, notes, pubDate = new Date().toUTCString() }) {
+/** The namespace of buddi's own element in the feed: the app shell's version. */
+export const BUDDI_NS = 'https://withbuddi.com/xml/appcast';
+
+/** The shell version an appcast's item carries, or undefined (a feed from before it did). */
+export function shellOf(xml) {
+  const found = /<buddi:shell>\s*(\d+)\s*<\/buddi:shell>/.exec(xml ?? '');
+  return found ? Number(found[1]) : undefined;
+}
+
+/** Does this release get a new appcast item? Only when the app shell changed (or the live feed cannot say). */
+export function publishesAppcast(shell, previousXml) {
+  if (shell === undefined) return true;
+  const live = shellOf(previousXml);
+  return live === undefined || live !== shell;
+}
+
+export function appcast({ version, file, signature, notes, shell, pubDate = new Date().toUTCString() }) {
   return `<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:buddi="${BUDDI_NS}">
   <channel>
     <title>buddi</title>
     <link>${SITE}/appcast.xml</link>
@@ -77,7 +100,8 @@ export function appcast({ version, file, signature, notes, pubDate = new Date().
       <title>buddi ${escape(version)}</title>
       <sparkle:version>${bundleVersion(version)}</sparkle:version>
       <sparkle:shortVersionString>${escape(version)}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>${MINIMUM_SYSTEM}</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>${MINIMUM_SYSTEM}</sparkle:minimumSystemVersion>${shell === undefined ? '' : `
+      <buddi:shell>${Number(shell)}</buddi:shell>`}
       <pubDate>${pubDate}</pubDate>
       <description><![CDATA[
 ${notes.replace(/]]>/g, ']]&gt;')}
@@ -90,18 +114,36 @@ ${notes.replace(/]]>/g, ']]&gt;')}
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [version, dmg, signature, outDir] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  const option = (name) => {
+    const at = argv.indexOf(`--${name}`);
+    if (at === -1) return undefined;
+    const value = argv[at + 1];
+    argv.splice(at, 2);
+    return value;
+  };
+  const shellText = option('shell');
+  const previousFile = option('previous');
+  const [version, dmg, signature, outDir] = argv;
   if (!version || !dmg || !signature || !outDir) {
-    console.error('usage: appcast.mjs <version> <dmg> "<sign_update output>" <out-dir>');
+    console.error('usage: appcast.mjs <version> <dmg> "<sign_update output>" <out-dir> [--shell <n>] [--previous <appcast.xml>]');
     process.exit(2);
   }
+  const shell = shellText === undefined ? undefined : Number(shellText.trim());
+  if (shell !== undefined && !(Number.isInteger(shell) && shell > 0)) { console.error(`--shell must be a whole number, not ${shellText}`); process.exit(2); }
+  let previous;
+  try { previous = previousFile ? readFileSync(previousFile, 'utf8') : undefined; } catch { previous = undefined; }
   let section;
   try { section = sectionOf(readFileSync(CHANGELOG, 'utf8'), version); }
   catch { section = `- The notes are on https://github.com/withbuddi/buddi/releases/tag/v${version}`; }
   const bytes = readFileSync(dmg);
   const file = path.basename(dmg);
-  writeFileSync(path.join(outDir, 'appcast.xml'), appcast({ version, file, signature, notes: notesHtml(section) }));
   const latest = { version, file, url: releaseUrl(version, file), sha256: createHash('sha256').update(bytes).digest('hex'), bundleVersion: bundleVersion(version) };
   writeFileSync(path.join(outDir, 'latest.json'), JSON.stringify(latest, null, 2) + '\n');
-  console.log(`appcast.xml and latest.json for ${version} (${file}, sha256 ${latest.sha256})`);
+  if (publishesAppcast(shell, previous)) {
+    writeFileSync(path.join(outDir, 'appcast.xml'), appcast({ version, file, signature, notes: notesHtml(section), shell }));
+    console.log(`appcast.xml and latest.json for ${version} (${file}, sha256 ${latest.sha256}, shell ${shell ?? 'unnamed'})`);
+  } else {
+    console.log(`latest.json for ${version} (${file}, sha256 ${latest.sha256}); no appcast.xml: the app shell is still ${shell}, and buddi updates itself inside the app`);
+  }
 }

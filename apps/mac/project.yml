@@ -58,6 +58,11 @@ targets:
         # Sparkle EdDSA public key for buddi (keychain account "buddi" on Amen's Mac); the private half is the SPARKLE_PRIVATE_KEY secret.
         SUPublicEDKey: "jBAeEEwStNtRScUv07ddeqG+Bn4OanHAwd4gkPLD6/Q="
         SUEnableAutomaticChecks: true
+        # Sparkle offers new app shells only (apps/mac/SHELL_VERSION); it never
+        # downloads or installs one by itself. buddi's own releases come from the
+        # in-app updater (the menu's "Update to …" and Settings → System).
+        SUAutomaticallyUpdate: false
+        SUAllowsAutomaticUpdates: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.withbuddi.app

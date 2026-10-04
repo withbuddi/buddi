@@ -37,6 +37,12 @@ final class Supervisor {
     var onChange: (() -> Void)?
     /// The supervisor left with `UninstallPolicy.exitStatus`: finish the uninstall (keep the data?).
     var onUninstall: ((Bool) -> Void)?
+    /// A fresh `/version` view: the one quiet "buddi X is available" (UpdatePolicy).
+    var onVersion: ((ControlSocket.Version) -> Void)?
+    /// Asks the supervisor's cached `/version` while buddi runs: at the first
+    /// running, then every six hours (the supervisor's own daily check is what
+    /// reaches npm; this only reads its answer).
+    private var versionTimer: Timer?
 
     private var child: Process?
     private var spawnedAt: Date?
@@ -388,6 +394,12 @@ final class Supervisor {
             runningSince = since
             if Date().timeIntervalSince(since) > 60 { failures = 0; restartExits.reset() }
             health = .running(since: since)
+            if versionTimer == nil {
+                refreshVersion()
+                versionTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.refreshVersion() }
+                }
+            }
             if firstRun && !openedFirstRun {
                 // First launch asks nothing: it opens the first-run chapters.
                 openedFirstRun = true
@@ -473,7 +485,7 @@ final class Supervisor {
         Task.detached {
             let view = ControlSocket.version(socket, check: check)
             await MainActor.run {
-                if let view { self.version = view; self.onChange?() }
+                if let view { self.version = view; self.onChange?(); self.onVersion?(view) }
                 then?(view)
             }
         }

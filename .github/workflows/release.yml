@@ -277,7 +277,11 @@ jobs:
           printf '%s' "$SPARKLE_PRIVATE_KEY" > "$key"
           signature=$("$SIGN_UPDATE" --ed-key-file "$key" "build/buddi-$VERSION.dmg")
           rm -f "$key"
-          node ../../scripts/release/appcast.mjs "$VERSION" "build/buddi-$VERSION.dmg" "$signature" build
+          # A new appcast item only when the app shell changed (apps/mac/SHELL_VERSION,
+          # bumped by hand): a buddi-only release is offered by the in-app updater.
+          curl -fsSL https://withbuddi.com/appcast.xml -o "$RUNNER_TEMP/live-appcast.xml" || rm -f "$RUNNER_TEMP/live-appcast.xml"
+          node ../../scripts/release/appcast.mjs "$VERSION" "build/buddi-$VERSION.dmg" "$signature" build \
+            --shell "$(cat SHELL_VERSION)" --previous "$RUNNER_TEMP/live-appcast.xml"
 
       - name: Attach to the GitHub release
         env:
@@ -287,7 +291,9 @@ jobs:
           # The publish job creates the release; a run on its own may come first.
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "buddi $VERSION" \
             --notes "buddi $VERSION. npm: \`npm install -g @withbuddi/buddi@$VERSION\`."
-          gh release upload "$tag" "build/buddi-$VERSION.dmg" build/appcast.xml build/latest.json --clobber
+          files=("build/buddi-$VERSION.dmg" build/latest.json)
+          [ -f build/appcast.xml ] && files+=(build/appcast.xml)
+          gh release upload "$tag" "${files[@]}" --clobber
 
       # Only the feed and the pointer go to R2; both point at the DMG on the
       # GitHub release attached above.
@@ -303,7 +309,8 @@ jobs:
           fi
           put() { npx --yes wrangler@4 r2 object put "$R2_BUCKET/$1" --file "$2" --content-type "$3" --remote; }
           if [ "$LATEST" = "true" ]; then
-            put mac/appcast.xml build/appcast.xml application/xml
+            if [ -f build/appcast.xml ]; then put mac/appcast.xml build/appcast.xml application/xml
+            else echo "::notice::The app shell did not change; the Sparkle feed stays as it is and buddi.app offers $VERSION itself."; fi
             put mac/latest.json build/latest.json application/json
           else
             echo "::notice::$VERSION is not npm's latest; withbuddi.com/download/mac and the feed stay where they are."

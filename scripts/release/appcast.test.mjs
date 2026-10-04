@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { appcast, notesHtml, signatureAttributes } from './appcast.mjs';
+import { appcast, notesHtml, publishesAppcast, shellOf, signatureAttributes } from './appcast.mjs';
 
 describe('the appcast', () => {
   test('carries the display version, the Sparkle number and the signed enclosure', () => {
@@ -22,5 +22,22 @@ describe('the appcast', () => {
     expect(notesHtml('### Added\n\n- A **Mac** app\n  that updates `buddi`.\n- Two & <three>\n\nA line.')).toBe(
       '<h3>Added</h3>\n<ul>\n<li>A <b>Mac</b> app that updates <code>buddi</code>.</li>\n<li>Two &amp; &lt;three&gt;</li>\n</ul>\n<p>A line.</p>',
     );
+  });
+
+  test('names the app shell, and a new item only goes out when the shell changed', () => {
+    const live = appcast({ version: '0.1.0-pre.40', file: 'buddi-0.1.0-pre.40.dmg', signature: 'sparkle:edSignature="a" length="1"', notes: '', shell: 1 });
+    expect(live).toContain('xmlns:buddi="https://withbuddi.com/xml/appcast"');
+    expect(live).toContain('<buddi:shell>1</buddi:shell>');
+    expect(shellOf(live)).toBe(1);
+    // pre.41 changed only buddi: the live feed stays, the in-app updater offers it.
+    expect(publishesAppcast(1, live)).toBe(false);
+    // The app itself changed: a Sparkle item.
+    expect(publishesAppcast(2, live)).toBe(true);
+    // A feed from before the shell was named, or none at all: published, once.
+    const old = appcast({ version: '0.1.0-pre.39', file: 'b.dmg', signature: 'sparkle:edSignature="a" length="1"', notes: '' });
+    expect(shellOf(old)).toBeUndefined();
+    expect(publishesAppcast(1, old)).toBe(true);
+    expect(publishesAppcast(1, undefined)).toBe(true);
+    expect(publishesAppcast(undefined, live)).toBe(true);
   });
 });
