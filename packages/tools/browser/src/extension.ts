@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { checkUrl } from '@buddi/core/plugin';
 import { fieldOrigin } from './secrets.js';
-import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type LoginAck, type LoginSeenListener, LOGIN_GONE, LOGIN_GRACE_MS } from './types.js';
+import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type LoginAck, type LoginCheck, type LoginSeenListener, LOGIN_GONE, LOGIN_GRACE_MS } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */
 export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot', 'fieldInfo', 'secretFill'] as const;
@@ -86,10 +86,10 @@ export interface ExtensionBridge {
    * Only from the paired socket. A Save is answered with what became of it
    * (the bar says Saved, or why not). Returns the unsubscribe.
    */
-  logins?(session: string, listener: (login: ExtensionLogin) => Promise<LoginAck> | void): () => void;
+  logins?(session: string, listener: (login: ExtensionLogin) => Promise<LoginAck | LoginCheck> | void): () => void;
 }
 /** What the extension sends when the owner answers the save prompt in a held tab. The password only with Save. */
-export interface ExtensionLogin { decision: 'save' | 'never'; origin: string; username: string; password?: string }
+export interface ExtensionLogin { decision: 'save' | 'never' | 'check'; origin: string; username: string; password?: string }
 /** What the extension needs before it asks: sites never to ask about, and logins already kept. */
 export interface ExtensionLoginFacts { never: string[]; saved: Array<{ site: string; username: string }> }
 /** How long after Give it back a Save tapped in the tab still counts. */
@@ -171,8 +171,9 @@ export class ExtensionDriver implements BrowserDriver {
     this.#logins?.();
     this.#logins = this.bridge.logins?.(this.session, (login) => {
       const now = this.options.now?.() ?? Date.now();
+      if (login.decision === 'check' && !this.#held) return Promise.resolve({ ask: 'none' as const });
       if (!this.#held && now >= this.#heldUntil) return Promise.resolve({ saved: false, reason: LOGIN_GONE });
-      if (login.decision === 'save' && !login.password) return Promise.resolve({ saved: false, reason: LOGIN_GONE });
+      if ((login.decision === 'save' || login.decision === 'check') && !login.password) return Promise.resolve({ saved: false, reason: LOGIN_GONE });
       try { return listener({ origin: login.origin, username: login.username, password: login.password ?? '', decision: login.decision }); }
       catch { return Promise.resolve({ saved: false, reason: LOGIN_GONE }); }
     });

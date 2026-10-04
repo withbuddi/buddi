@@ -410,6 +410,13 @@ describe('the browser extension endpoint', () => {
     // Nobody holds that page any more: the tab is told the question is gone.
     client.send({ type: 'login', session: 's1', decision: 'save', origin: 'https://www.amazon.com', username: 'sam', password: 'fixture-pass-7Qz!', id: 'ack-3' });
     expect(await ackFor('ack-3')).toMatchObject({ id: 'ack-3', saved: false, reason: expect.stringContaining('That question is gone') });
+    // A check (should the tab ask at all?) is answered with the keeper's word; with nobody listening, nothing to ask.
+    const stopCheck = extension.logins('s1', async (login) => (login.decision === 'check' ? { ask: 'update' as const } : { saved: true as const }));
+    client.send({ type: 'login', session: 's1', decision: 'check', origin: 'https://www.amazon.com', username: 'sam', password: 'fixture-pass-7Qz!', id: 'check-1' });
+    expect(await ackFor('check-1')).toEqual({ type: 'loginAck', id: 'check-1', ask: 'update' });
+    stopCheck();
+    client.send({ type: 'login', session: 's1', decision: 'check', origin: 'https://www.amazon.com', username: 'sam', password: 'fixture-pass-7Qz!', id: 'check-2' });
+    expect(await ackFor('check-2')).toEqual({ type: 'loginAck', id: 'check-2', ask: 'none' });
   });
 
   it('counts pongs only from the browser it is talking to', async () => {

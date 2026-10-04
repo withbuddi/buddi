@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core/plugin';
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { LoginKeeper } from './logins.js';
-import type { BrowserCommand, BrowserDriver, BrowserHand, LoginAck, Observation, SeenLoginReport } from './types.js';
+import type { BrowserCommand, BrowserDriver, BrowserHand, LoginAck, LoginCheck, Observation, SeenLoginReport } from './types.js';
 import { LOGIN_GONE, LOGIN_GRACE_MS, APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
 import { ownerCard, siteOf, type ChromeLink, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
@@ -196,7 +196,7 @@ export interface BrowserServiceOptions {
   /** The owner pressed Give it back in the page itself: the controller resumes it, so the waiting run hears of it. */
   requestResume?: (sessionId: string) => void;
   /** A sign-in went out on this page while the owner held it: to the host's login keeper, and nowhere else. */
-  loginSeen?: (sessionId: string, login: SeenLoginReport) => Promise<LoginAck> | void;
+  loginSeen?: (sessionId: string, login: SeenLoginReport) => Promise<LoginAck | LoginCheck> | void;
 }
 
 /** A result that carries a card: the run stops and the surface draws it. */
@@ -265,6 +265,7 @@ export class BrowserService {
     // A Save the owner tapped in their Chrome a beat after Give it back still counts, for the page they held, within the driver's grace.
     this.driver.onLoginSeen?.((login) => {
       const live = this.#state === 'paused' ? this.#session?.id : undefined;
+      if (login.decision === 'check' && !live) return Promise.resolve({ ask: 'none' } as const);
       const recent = !live && login.decision && this.#lastHeld && this.#now() < this.#lastHeld.until ? this.#lastHeld.id : undefined;
       const id = live ?? recent;
       if (!id) return login.decision ? Promise.resolve({ saved: false, reason: LOGIN_GONE } as const) : undefined;

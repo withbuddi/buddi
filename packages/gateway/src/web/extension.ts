@@ -28,7 +28,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionEvent, type ExtensionLogin, type ExtensionResult, type HandFrame, type LoginAck, LOGIN_GONE, LOGIN_NOT_KEPT } from '@buddi/tool-browser';
+import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionEvent, type ExtensionLogin, type ExtensionResult, type HandFrame, type LoginAck, type LoginCheck, LOGIN_GONE, LOGIN_NOT_KEPT } from '@buddi/tool-browser';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
@@ -171,7 +171,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #frames = new Map<string, (frame: HandFrame) => void>();
   #events = new Map<string, Set<(event: ExtensionEvent) => void>>();
   /** Who hears a sign-in the owner answered in a held tab, by browser session. The pair is never kept here. */
-  #logins = new Map<string, (login: ExtensionLogin) => Promise<LoginAck> | void>();
+  #logins = new Map<string, (login: ExtensionLogin) => Promise<LoginAck | LoginCheck> | void>();
   /** Other upgrade paths on this server's one listener; see `attachPath`. */
   #routes = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>();
   /** Commands the extension was told to abandon, until it says it has. */
@@ -283,17 +283,21 @@ export class ExtensionEndpoint implements ExtensionBridge {
     /*
      * A Save carries an id, and is answered on this socket with what became of
      * it — kept, or one plain sentence why not — so the bar can say Saved or
-     * offer to try again. Never the store's own words.
+     * offer to try again. Never the store's own words. A check (should the tab
+     * ask at all?) is answered with the keeper's word: save, update or none.
      */
-    const ack = (answer: LoginAck): void => {
+    const ack = (answer: LoginAck | LoginCheck): void => {
       if (!login.id || ws.readyState !== ws.OPEN) return;
       try { ws.send(JSON.stringify({ type: 'loginAck', id: login.id, ...answer })); } catch { /* the close handler says so */ }
     };
+    const check = login.login.decision === 'check';
     const listener = this.#logins.get(login.session);
-    if (!listener) { ack({ saved: false, reason: LOGIN_GONE }); return; }
-    let answer: LoginAck;
-    try { answer = (await listener(login.login)) ?? { saved: false, reason: LOGIN_GONE }; }
-    catch { answer = { saved: false, reason: LOGIN_NOT_KEPT }; }
+    if (!listener) { ack(check ? { ask: 'none' } : { saved: false, reason: LOGIN_GONE }); return; }
+    let answer: LoginAck | LoginCheck | void;
+    try { answer = await listener(login.login); }
+    catch { answer = check ? { ask: 'save' } : { saved: false, reason: LOGIN_NOT_KEPT }; }
+    if (check) { ack(answer && 'ask' in answer ? { ask: answer.ask } : { ask: 'none' }); return; }
+    if (!answer || 'ask' in answer) { ack({ saved: false, reason: LOGIN_GONE }); return; }
     ack(answer.saved ? { saved: true } : { saved: false, reason: answer.reason });
   }
 
@@ -646,7 +650,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
   }
 
   /** A sign-in the owner answered in one session's held tab. One listener per session. Returns the unsubscribe. */
-  logins(session: string, listener: (login: ExtensionLogin) => Promise<LoginAck> | void): () => void {
+  logins(session: string, listener: (login: ExtensionLogin) => Promise<LoginAck | LoginCheck> | void): () => void {
     this.#logins.set(session, listener);
     return () => { if (this.#logins.get(session) === listener) this.#logins.delete(session); };
   }
@@ -719,13 +723,14 @@ export function readExtensionLogin(frame: Record<string, unknown>): { session: s
   if (rawId !== undefined && (typeof rawId !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(rawId))) return undefined;
   const id = rawId as string | undefined;
   const withId = <T extends { session: string; login: ExtensionLogin }>(read: T): T & { id?: string } => (id ? { ...read, id } : read);
-  if (decision !== 'save' && decision !== 'never') return undefined;
+  if (decision !== 'save' && decision !== 'never' && decision !== 'check') return undefined;
+  if (decision === 'check' && !id) return undefined;
   if (typeof origin !== 'string' || origin.length > 2048) return undefined;
   let parsed: URL;
   try { parsed = new URL(origin); } catch { return undefined; }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined;
   if (typeof username !== 'string' || username.length > MAX_LOGIN_USERNAME) return undefined;
-  if (decision === 'save') {
+  if (decision === 'save' || decision === 'check') {
     if (typeof password !== 'string' || password === '' || password.length > MAX_LOGIN_PASSWORD) return undefined;
     return withId({ session, login: { decision, origin: parsed.origin, username, password } });
   }

@@ -243,7 +243,13 @@ export interface BrowserDriver {
   onLoginSeen?(listener: LoginSeenListener): void;
 }
 /** What a backend reports about a sign-in the owner made: the frame's origin, the pair, and the answer when the owner already gave it. */
-export interface SeenLoginReport { origin: string; username: string; password: string; decision?: 'save' | 'never' }
+export interface SeenLoginReport { origin: string; username: string; password: string; decision?: 'save' | 'never' | 'check' }
+/**
+ * The keeper's word on a sign-in the owner's Chrome is about to ask about
+ * (`check`): ask to save it, ask to update the kept one, or say nothing (the
+ * kept password again, a never-listed site).
+ */
+export interface LoginCheck { ask: 'save' | 'update' | 'none' }
 /**
  * What became of a decision-bearing report (a Save tapped in the owner's
  * Chrome): kept, or not with one plain sentence why. Never the store's own
@@ -257,7 +263,7 @@ export const LOGIN_GONE = 'That question is gone; add the login in Settings → 
 /** What the bar says when the store would not keep a login. */
 export const LOGIN_NOT_KEPT = 'buddi could not keep that login. Try again, or add it in Settings → Keys and secrets.';
 /** Hears a sign-in report; for one that carries the owner's answer, says what became of it. */
-export type LoginSeenListener = (login: SeenLoginReport) => Promise<LoginAck> | void;
+export type LoginSeenListener = (login: SeenLoginReport) => Promise<LoginAck | LoginCheck> | void;
 /** "Observed 12:04:35 UTC." — the line a result opens with, so the model can tell old evidence from new. */
 export function observedLine(iso: string): string {
   return `Observed ${iso.slice(11, 19)} UTC.`;

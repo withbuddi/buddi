@@ -63,6 +63,13 @@ export interface SavedLogin {
   origin: string;
   username: string;
   savedAt: string;
+  /**
+   * HMAC-SHA256 of the password, hex, under this install's key (`LoginStoreKey`):
+   * on disk beside the label, so a sign-in with the same password stays quiet
+   * across restarts and a new one asks to update. Never the password; the key
+   * lives in the vault, not in this file. Absent on a login saved before it existed.
+   */
+  mark?: string;
 }
 
 /** What the store gets: the secret's name and value, and where it may go. */
@@ -75,6 +82,10 @@ export interface LoginStoreInput {
 export type LoginStore = (input: LoginStoreInput) => Promise<void>;
 /** The names the owner-secret store holds now (names only), so a new login never takes one already there. */
 export type LoginStoreNames = () => Promise<readonly string[]>;
+/** This install's key for the saved passwords' marks, from the vault (made once). Null when there is no vault to keep one. */
+export type LoginStoreKey = () => Promise<Buffer | null>;
+/** What a sign-in seen in the owner's Chrome should be asked about, if anything. */
+export type LoginAsk = 'save' | 'update' | 'none';
 
 export type LoginOutcome = 'saved' | 'dismissed' | 'never' | 'gone';
 
@@ -139,23 +150,61 @@ export class LoginKeeper {
   #writing: Promise<unknown> = Promise.resolve();
   /** One save at a time per site: the name is picked and stored before the next save there looks. */
   #saving = new Map<string, Promise<unknown>>();
+  #keyFor?: LoginStoreKey;
+  /** The install's key once read; a key that could not be read is not remembered, so the next sign-in tries again. */
+  #key?: Buffer;
   /**
-   * What each kept login's password was when this process last saw it, as a
-   * keyed hash whose key never leaves this process's memory (and so never
-   * matches across a restart). Only to tell "the same password again" from "a
-   * new one worth an Update question"; never written anywhere.
+   * Marks made with a key of this process's own, when the vault had none to
+   * give: in memory only, so they never pass for the install's.
    */
-  #marks = new Map<string, Buffer>();
-  readonly #markKey = randomBytes(32);
+  #fallbackMarks = new Map<string, Buffer>();
+  readonly #fallbackKey = randomBytes(32);
   constructor(readonly file: string | undefined, readonly options: { holdMs?: number; now?: () => number } = {}) {}
 
-  /** The gateway's owner-secret store, and the names it holds; without a store, Save says so. */
-  useStore(store: LoginStore, names?: LoginStoreNames): void { this.#store = store; this.#names = names; }
+  /** The gateway's owner-secret store, the names it holds, and the install's key for the marks; without a store, Save says so. */
+  useStore(store: LoginStore, names?: LoginStoreNames, key?: LoginStoreKey): void { this.#store = store; this.#names = names; this.#keyFor = key; this.#key = undefined; }
 
-  #mark(password: string): Buffer { return createHmac('sha256', this.#markKey).update(password).digest(); }
-  #sameAsKept(name: string, password: string): boolean {
-    const kept = this.#marks.get(name);
-    return kept !== undefined && timingSafeEqual(kept, this.#mark(password));
+  async #installKey(): Promise<Buffer | undefined> {
+    if (this.#key) return this.#key;
+    try {
+      const key = await this.#keyFor?.();
+      if (key && key.length >= 16) this.#key = key;
+    } catch { /* no vault right now: this process's own key, in memory */ }
+    return this.#key;
+  }
+
+  /** The password's mark: the install's (kept on disk) when there is a key, else this process's (memory only). */
+  async #markOf(password: string): Promise<{ mark: Buffer; durable: boolean }> {
+    const key = await this.#installKey();
+    return { mark: createHmac('sha256', key ?? this.#fallbackKey).update(password).digest(), durable: key !== undefined };
+  }
+
+  /** True when this password is the one kept for the login, as far as its mark says; undefined when no mark says either way. */
+  async #samePassword(kept: SavedLogin, password: string): Promise<boolean | undefined> {
+    const { mark, durable } = await this.#markOf(password);
+    const known = durable && typeof kept.mark === 'string' && /^[0-9a-f]{64}$/.test(kept.mark) ? Buffer.from(kept.mark, 'hex') : !durable ? this.#fallbackMarks.get(kept.name) : undefined;
+    if (!known) return undefined;
+    return timingSafeEqual(known, mark);
+  }
+
+  /**
+   * What to ask about a sign-in: nothing (no password, a never-listed site,
+   * the kept password again), Save (no login kept for this user name), or
+   * Update (a kept login whose password differs, or one saved before marks
+   * existed — asked once, then its mark is kept on Save).
+   */
+  async #assess(login: SeenLogin): Promise<{ facts: { origin: string; site: string; username: string }; ask: Exclude<LoginAsk, 'none'> } | undefined> {
+    const facts = usable(login);
+    if (!facts || siteListed(facts.site, this.#state.never)) return undefined;
+    const kept = this.#kept(facts.site, facts.username);
+    if (!kept) return { facts, ask: 'save' };
+    return (await this.#samePassword(kept, login.password)) === true ? undefined : { facts, ask: 'update' };
+  }
+
+  /** The owner's Chrome asking before it asks the owner: what this sign-in is worth asking. The password is compared, never kept. */
+  async check(login: SeenLogin): Promise<LoginAsk> {
+    await this.load();
+    return (await this.#assess(login))?.ask ?? 'none';
   }
   get canSave(): boolean { return this.#store !== undefined; }
 
@@ -197,7 +246,7 @@ export class LoginKeeper {
   /** Sites the owner said Never for. */
   never(): string[] { return [...this.#state.never]; }
   /** Logins buddi kept, labels only. */
-  saved(): SavedLogin[] { return this.#state.saved.map((login) => ({ ...login })); }
+  saved(): SavedLogin[] { return this.#state.saved.map(({ mark: _mark, ...login }) => ({ ...login })); }
 
   /** The questions still open, for one page or all. */
   pending(sessionId?: string): LoginPrompt[] {
@@ -219,16 +268,16 @@ export class LoginKeeper {
    * The owner's own browser saw a sign-in go out. Held for two minutes; the
    * listeners hear the site and the user name. Undefined when there is
    * nothing to ask: no password, a site on the never-list, or a login kept
-   * with this user name and, as far as this process knows, this password. A
-   * kept login whose password differs (or is not known since a restart) is
-   * asked about as an update.
+   * with this user name and this password (its mark says so). A kept login
+   * whose password differs, or one saved before marks existed, is asked about
+   * as an update.
    */
   async seen(sessionId: string, login: SeenLogin): Promise<LoginPrompt | undefined> {
     await this.load();
-    const facts = usable(login);
-    if (!facts || siteListed(facts.site, this.#state.never)) return undefined;
-    const kept = this.#kept(facts.site, facts.username);
-    if (kept && this.#sameAsKept(kept.name, login.password)) return undefined;
+    const assessed = await this.#assess(login);
+    if (!assessed) return undefined;
+    const { facts } = assessed;
+    const kept = assessed.ask === 'update';
     // The same sign-in again (a second click on the button): one question, the newest password, two fresh minutes.
     const again = [...this.#pending.values()].find((entry) => entry.prompt.sessionId === sessionId && entry.prompt.site === facts.site && entry.prompt.username === facts.username);
     if (again) {
@@ -299,11 +348,13 @@ export class LoginKeeper {
       const existing = new Set(this.#names ? await this.#names() : []);
       const name = loginName(site, username, this.#state.saved, existing);
       await store({ name, value: password, bindings: [{ kind: FIELD_KIND, target: origin, rule: LOGIN_RULE }] });
-      this.#marks.set(name, this.#mark(password));
-      const saved: SavedLogin = { name, site, origin, username, savedAt: new Date(this.options.now?.() ?? Date.now()).toISOString() };
+      const { mark, durable } = await this.#markOf(password);
+      if (!durable) this.#fallbackMarks.set(name, mark);
+      const saved: SavedLogin = { name, site, origin, username, savedAt: new Date(this.options.now?.() ?? Date.now()).toISOString(), ...(durable ? { mark: mark.toString('hex') } : {}) };
       this.#state.saved = [...this.#state.saved.filter((login) => login.name !== name), saved].slice(-500);
       await this.#persist();
-      return { outcome: 'saved' as const, saved: { ...saved } };
+      const { mark: _mark, ...label } = saved;
+      return { outcome: 'saved' as const, saved: label };
     });
     this.#saving.set(site, run);
     try { return await run; }
@@ -315,7 +366,7 @@ export class LoginKeeper {
     await this.load();
     const before = this.#state.saved.length;
     this.#state.saved = this.#state.saved.filter((login) => login.name !== name);
-    this.#marks.delete(name);
+    this.#fallbackMarks.delete(name);
     if (this.#state.saved.length === before) return false;
     await this.#persist();
     return true;
@@ -327,9 +378,9 @@ export class LoginKeeper {
     const login = this.#state.saved.find((entry) => entry.name === from);
     if (!login || from === to) return false;
     this.#state.saved = [...this.#state.saved.filter((entry) => entry.name !== from && entry.name !== to), { ...login, name: to }];
-    const mark = this.#marks.get(from);
-    this.#marks.delete(from);
-    if (mark) this.#marks.set(to, mark);
+    const mark = this.#fallbackMarks.get(from);
+    this.#fallbackMarks.delete(from);
+    if (mark) this.#fallbackMarks.set(to, mark);
     await this.#persist();
     return true;
   }

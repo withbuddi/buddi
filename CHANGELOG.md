@@ -4,7 +4,7 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
-- Logins: signing in again with a new password on a site where buddi keeps your login asks "Update the login for amazon.com?"; Update replaces the password it keeps. Saving two accounts on one site at once keeps both.
+- Logins: signing in again with a new password on a site where buddi keeps your login asks "Update the login for amazon.com?"; Update replaces the password it keeps. Signing in with the password it already keeps asks nothing, also after a restart and in your Chrome (a login saved before this release is asked about once). Saving two accounts on one site at once keeps both.
 - Logins: Save says "Saved" for two seconds once the login is really kept, or why it couldn't be kept with Try again — in the Page tab and in your Chrome's bar. In your Chrome the question survives the sign-in page moving on (a redirect to another page of the same site asks again there), and a Save pressed just after Give it back still counts.
 - Missions: a mission asks you one question at a time; asking the same unanswered question again within a day doesn't interrupt you (it leaves one quiet line under Needs you), and the "needed you" line for the same question is sent once a day at most.
 - Missions: when a mission running while you're away gets stuck, it asks you once on Telegram (with its choices as buttons) and carries on with your answer, instead of ending without a word; no answer within the wait (an hour by default) and you get one line saying it needed you.

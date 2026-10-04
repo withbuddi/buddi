@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { OWNER_AGENT_ID } from '@buddi/core';
-import { isUnused, listSecrets, readSecretUsers, secretUsers, secretsAct } from './secrets.js';
+import { isUnused, listSecrets, LOGINS_HMAC_KEY, ownerLoginKey, readSecretUsers, secretUsers, secretsAct } from './secrets.js';
 
 describe('secretsAct', () => {
   it('invokes the write tool as the owner', async () => {
@@ -25,6 +25,18 @@ describe('secretsAct', () => {
     expect(logins.forget).not.toHaveBeenCalled();
     expect((await secretsAct(deps as never, { tool: 'secrets.delete', args: { name: 'Amazon' } }, { id: 'delete-session' })).status).toBe(200);
     expect(logins.forget).toHaveBeenCalledWith('Amazon');
+  });
+
+  it('the logins’ mark key is made once in the vault under buddi’s own name, and read back after', async () => {
+    const entries = new Map<string, string>();
+    const vault = { get: vi.fn(async (name: string) => entries.get(name) ?? null), set: vi.fn(async (name: string, value: string) => { entries.set(name, value); }) };
+    const first = await ownerLoginKey({}, () => vault as never)();
+    expect(first).toHaveLength(32);
+    expect([...entries.keys()]).toEqual([LOGINS_HMAC_KEY]);
+    const again = await ownerLoginKey({}, () => vault as never)();
+    expect(again!.equals(first!)).toBe(true);
+    expect(vault.set).toHaveBeenCalledTimes(1);
+    expect(await ownerLoginKey({}, () => undefined)()).toBeNull();
   });
 
   it('refuses a tool that is not a secrets write', async () => {

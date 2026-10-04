@@ -271,9 +271,13 @@ export function watchHeldLogins(session: string, facts: HeldLoginFacts | null): 
     const where = site();
     if (where === '' || listed(where) || !bar()) return;
     const update = state.facts.saved.some((login) => login.site === where && login.username === found.username);
-    // The pair goes to the worker now: the form's navigation is about to take this page away.
-    void call({ type: 'buddi-login-seen', session: state.session, username: found.username, password: found.password, update });
-    prompt(where, update);
+    // The pair goes to the worker now (the form's navigation is about to take this page away), and buddi
+    // says whether it is worth asking: nothing for the password it keeps already, Update for a new one.
+    void call({ type: 'buddi-login-seen', session: state.session, username: found.username, password: found.password, update }).then((reply) => {
+      const asked = reply as { update?: unknown } | null | undefined;
+      if (holder['__buddiHeldLogins'] !== state || !asked || typeof asked !== 'object') return;
+      prompt(where, asked.update === true);
+    });
   };
   // A page the tab landed on after the form went out: the question the worker still holds, asked again here.
   void call({ type: 'buddi-login-pending', session: state.session }).then((reply) => {
@@ -353,7 +357,7 @@ export function watchHeldLogins(session: string, facts: HeldLoginFacts | null): 
  * prompt in a held tab. The password only with Save, which carries an id the
  * gateway's `loginAck` names.
  */
-export interface LoginFrame { type: 'login'; session: string; decision: 'save' | 'never'; origin: string; username: string; password?: string; id?: string }
+export interface LoginFrame { type: 'login'; session: string; decision: 'save' | 'never' | 'check'; origin: string; username: string; password?: string; id?: string }
 
 /** The tab told the worker a sign-in went out: kept in the worker until the owner answers. */
 export const LOGIN_SEEN_MESSAGE = 'buddi-login-seen';

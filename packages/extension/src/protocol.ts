@@ -147,7 +147,7 @@ export interface ProtocolOptions {
   /** A socket that ends drops this browser's sessions and refs with it. */
   onReset?(): void;
   /** buddi's answer to a Save from a held tab: kept, or why not. */
-  onLoginAck?(id: string, answer: { saved: true } | { saved: false; reason: string }): void;
+  onLoginAck?(id: string, answer: { saved: true } | { saved: false; reason: string } | { ask: 'save' | 'update' | 'none' }): void;
 }
 
 const TOKEN_KEY = 'token';
@@ -296,6 +296,9 @@ export class Protocol {
         // Only from the buddi this browser proved itself to; a short plain sentence at most.
         const id = message['id'];
         if (!this.#authenticated || typeof id !== 'string' || id.length > 64) return;
+        // The answer to a check: whether the tab should ask at all, and what.
+        const ask = message['ask'];
+        if (ask === 'save' || ask === 'update' || ask === 'none') { this.#options.onLoginAck?.(id, { ask }); return; }
         const reason = typeof message['reason'] === 'string' ? message['reason'].slice(0, 300) : '';
         this.#options.onLoginAck?.(id, message['saved'] === true ? { saved: true } : { saved: false, reason: reason || 'buddi could not keep that login.' });
         return;

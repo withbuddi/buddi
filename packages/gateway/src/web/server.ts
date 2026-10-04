@@ -110,7 +110,7 @@ import {
   runPageQuery,
   type PagesDeps,
 } from './pages.js';
-import { listSecrets, ownerLoginNames, ownerLoginStore, secretUses, secretsAct, type SecretsDeps } from './secrets.js';
+import { listSecrets, ownerLoginKey, ownerLoginNames, ownerLoginStore, secretUses, secretsAct, type SecretsDeps } from './secrets.js';
 import { sayRoute, transcribeRoute, type SpeechRouteDeps } from './speech.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -822,7 +822,7 @@ export function createWebApp(deps: WebServerDeps): Server {
    */
   {
     const loginDeps = { pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now };
-    (deps.browser ?? browserHost(deps.env ?? process.env)).logins?.useStore(ownerLoginStore(loginDeps), ownerLoginNames(loginDeps));
+    (deps.browser ?? browserHost(deps.env ?? process.env)).logins?.useStore(ownerLoginStore(loginDeps), ownerLoginNames(loginDeps), ownerLoginKey(deps.env ?? process.env));
   }
   const streams = new StreamBudget();
   // A bundle script's run asks every time: its card offers no standing permission (`asksEachTime`).

@@ -360,12 +360,28 @@ describe('the owner’s tabs', () => {
 
   it('a sign-in seen in a held tab waits in the worker across the form’s navigation, and Save sends it with the original origin', async () => {
     const frames: LoginFrame[] = [];
-    const { commands, tabs, closers } = await opened(undefined, { onLogin: (frame) => frames.push(frame) });
+    const checks: LoginFrame[] = [];
+    // buddi's keeper answers each check: worth asking (a new login), unless the test says otherwise.
+    let word: 'save' | 'update' | 'none' = 'save';
+    const keeper: { commands?: BrowserCommands } = {};
+    const { commands, tabs, closers } = await opened(undefined, { onLogin: (frame) => {
+      if (frame.decision !== 'check') { frames.push(frame); return; }
+      checks.push(frame);
+      const said = word;
+      queueMicrotask(() => keeper.commands!.logins.ack(frame.id!, { ask: said }));
+    } });
+    keeper.commands = commands;
     const tab = [...tabs.values()][0]!;
     await commands.run(command('hold', {}, true));
     const from = (url: string, id = tab.id) => ({ tab: { id }, url });
+    // The kept password again: buddi says there is nothing to ask, and nothing is kept.
+    word = 'none';
+    await expect(commands.loginMessage({ type: 'buddi-login-seen', session: 's1', username: 'sam', password: 'fixture-pass', update: true }, from('https://www.example.com/signin'))).resolves.toBeNull();
+    expect(commands.logins.size).toBe(0);
+    expect(checks[0]).toMatchObject({ decision: 'check', origin: 'https://www.example.com', username: 'sam' });
+    word = 'save';
     // The form goes out on www.example.com: the pair is kept here, with the origin Chrome reports.
-    await expect(commands.loginMessage({ type: 'buddi-login-seen', session: 's1', username: 'sam', password: 'fixture-pass', update: false }, from('https://www.example.com/signin'))).resolves.toEqual({ ok: true });
+    await expect(commands.loginMessage({ type: 'buddi-login-seen', session: 's1', username: 'sam', password: 'fixture-pass', update: false }, from('https://www.example.com/signin'))).resolves.toEqual({ site: 'example.com', username: 'sam', update: false });
     // Another tab is not believed.
     expect(commands.loginMessage({ type: 'buddi-login-pending', session: 's1' }, from('https://www.example.com/', 999))).toBeUndefined();
     // The redirect lands on another host of the same site: the question is asked again, naming the site the form sat on.

@@ -11,9 +11,10 @@
  * boundary — this route's body — into the tool that stores it.
  */
 import type { Pool } from 'pg';
-import { OWNER_AGENT_ID, SECRETS_QUERIES, type ToolRegistry, type CoreToolContext } from '@buddi/core';
+import { randomBytes } from 'node:crypto';
+import { OWNER_AGENT_ID, SECRETS_QUERIES, createVault, type ToolRegistry, type CoreToolContext, type Vault } from '@buddi/core';
 import { listAccounts } from '@buddi/tool-email';
-import type { LoginKeeper, LoginStore, LoginStoreNames } from '@buddi/tool-browser';
+import type { LoginKeeper, LoginStore, LoginStoreKey, LoginStoreNames } from '@buddi/tool-browser';
 import { LEGACY_PASSWORD_VAR } from '../owner-secrets.js';
 import { mailProvider } from './recovery.js';
 
@@ -239,6 +240,31 @@ export function ownerLoginStore(deps: SecretsDeps): LoginStore {
     const now = deps.now ?? (() => new Date());
     const result = await deps.registry.invoke('secrets.put', { name, value, bindings }, { ...deps.ctx, agentId: OWNER_AGENT_ID, db: deps.pool, now } as CoreToolContext);
     if (!result.ok) throw new Error('buddi could not keep that login.');
+  };
+}
+
+/**
+ * The vault entry holding this install's key for the saved logins' marks
+ * (HMAC-SHA256 of each password, kept beside its label). A vault entry of
+ * buddi's own like `BUDDI_WEB_TOKEN`, not an owner secret row, so Settings →
+ * Keys and secrets never lists it.
+ */
+export const LOGINS_HMAC_KEY = 'BUDDI_LOGINS_HMAC_KEY';
+
+/** The install's mark key: read from the vault, made once when absent. Null with no vault. Never logged. */
+export function ownerLoginKey(env: NodeJS.ProcessEnv, vaultOf: () => Vault | null | undefined = () => createVault({ env })): LoginStoreKey {
+  let making: Promise<Buffer | null> | undefined;
+  return () => {
+    making ??= (async () => {
+      const vault = vaultOf();
+      if (!vault) return null;
+      const kept = await vault.get(LOGINS_HMAC_KEY);
+      if (kept && /^[A-Za-z0-9+/=]{40,}$/.test(kept.trim())) return Buffer.from(kept.trim(), 'base64');
+      const made = randomBytes(32);
+      await vault.set(LOGINS_HMAC_KEY, made.toString('base64'));
+      return made;
+    })().catch((error: unknown) => { making = undefined; throw error; });
+    return making;
   };
 }
 

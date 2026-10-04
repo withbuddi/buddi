@@ -413,11 +413,9 @@ export class BrowserCommands implements Executor {
     const session = (message as { session?: unknown } | null)?.session;
     const request = heldLoginRequest(message, sender, typeof session === 'string' ? this.#held.get(session) : undefined);
     if (!request) return undefined;
-    if (request.kind === 'seen') {
-      const asked = this.logins.capture(request.tabId, request.session, request.url, request);
-      return Promise.resolve(asked ? { ok: true } : null);
-    }
-    if (request.kind === 'pending') return Promise.resolve(this.logins.pending(request.tabId, request.session, request.url) ?? null);
+    // The question to draw, once buddi said the sign-in is worth one; null when it is not (the kept password again).
+    if (request.kind === 'seen') return this.logins.capture(request.tabId, request.session, request.url, request).then((asked) => asked ?? null);
+    if (request.kind === 'pending') return this.logins.pending(request.tabId, request.session, request.url).then((asked) => asked ?? null);
     if (request.decision === 'save') return this.logins.save(request.tabId, request.session);
     if (request.decision === 'never') return Promise.resolve({ ok: this.logins.never(request.tabId, request.session) });
     this.logins.dismiss(request.tabId, request.session);

@@ -6,7 +6,7 @@
  * asks with the site and the user name — never the password — then hands the
  * pair to the owner-secret store on Save, or remembers the site on Never.
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -286,6 +286,56 @@ describe('the keeper asks the owner, and keeps what they say', () => {
     // After a restart buddi cannot tell, so a kept login is asked about as an update rather than never.
     const reopened = new LoginKeeper(keeper.file);
     expect(await reopened.seen('s2', { origin: 'https://www.amazon.com', username: 'sam', password: 'new-one' })).toMatchObject({ update: true });
+  });
+
+  describe('the saved password’s mark, under the install’s key', () => {
+    const KEY = Buffer.alloc(32, 7);
+    const keyed = (file: string, key: Buffer = KEY) => {
+      const keeper = new LoginKeeper(file, { now: () => Date.parse('2026-10-03T09:00:00Z') });
+      const stored: string[] = [];
+      keeper.useStore(async ({ value }) => { stored.push(value); }, async () => [], async () => key);
+      return { keeper, stored };
+    };
+
+    it('the same password after a restart is quiet; a changed one asks to update; the mark is on disk, the password is not', async () => {
+      const { file } = await keeperIn();
+      const first = keyed(file);
+      await first.keeper.decided({ origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD }, 'save');
+      const disk = await readFile(file, 'utf8');
+      expect(disk).not.toContain(PASSWORD);
+      expect(JSON.parse(disk).saved[0].mark).toMatch(/^[0-9a-f]{64}$/);
+      expect(first.keeper.saved()[0]).not.toHaveProperty('mark');
+      // A new process, the same install key from the vault.
+      const restarted = keyed(file);
+      expect(await restarted.keeper.seen('s1', { origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD })).toBeUndefined();
+      expect(await restarted.keeper.check({ origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD })).toBe('none');
+      expect(await restarted.keeper.seen('s1', { origin: 'https://www.amazon.com', username: 'sam', password: 'changed-1' })).toMatchObject({ update: true });
+      expect(await restarted.keeper.check({ origin: 'https://www.amazon.com', username: 'sam', password: 'changed-1' })).toBe('update');
+      expect(await restarted.keeper.check({ origin: 'https://www.amazon.com', username: 'other', password: PASSWORD })).toBe('save');
+      // Another install's key does not match: it asks rather than staying quiet.
+      expect(await keyed(file, Buffer.alloc(32, 9)).keeper.check({ origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD })).toBe('update');
+    });
+
+    it('a login saved before marks existed asks once, and keeps the mark on Update', async () => {
+      const { file } = await keeperIn();
+      await writeFile(file, JSON.stringify({ saved: [{ name: 'login · amazon.com', site: 'amazon.com', origin: 'https://www.amazon.com', username: 'sam', savedAt: '2026-10-01T09:00:00.000Z' }], never: [] }));
+      const { keeper, stored } = keyed(file);
+      const legacy = await keeper.seen('s1', { origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD });
+      expect(legacy).toMatchObject({ update: true });
+      await keeper.decide(legacy!.id, 'save');
+      expect(stored).toEqual([PASSWORD]);
+      expect(await keeper.seen('s1', { origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD })).toBeUndefined();
+      expect(await keyed(file).keeper.check({ origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD })).toBe('none');
+    });
+
+    it('with no vault key it still works, remembering marks for this process only', async () => {
+      const { file } = await keeperIn();
+      const keeper = new LoginKeeper(file);
+      keeper.useStore(async () => {}, async () => [], async () => null);
+      await keeper.decided({ origin: 'https://example.org', username: 'u', password: PASSWORD }, 'save');
+      expect(JSON.parse(await readFile(file, 'utf8')).saved[0].mark).toBeUndefined();
+      expect(await keeper.check({ origin: 'https://example.org', username: 'u', password: PASSWORD })).toBe('none');
+    });
   });
 
   it('a Save the store refuses stays open for another try', async () => {
