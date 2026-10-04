@@ -13,7 +13,7 @@ import type { InstallContext } from './environment.js';
 
 /** The line, from the Profile's zone (null: none or unreadable) and the environment. Pure but for the import. */
 export async function timezoneLine(readProfileZone: () => Promise<string | null>, env: NodeJS.ProcessEnv): Promise<string> {
-  const { checkTimezone, systemTimezone } = await import('@buddi/cli');
+  const { checkTimezone, systemTimezone } = await import('@buddi/cli/doctor');
   let profile: string | null = null;
   let unread = false;
   try {
