@@ -147,6 +147,13 @@ within an hour, so it ended there.* Never silently. The parking time is
 page is kept at least an hour, so after a longer wait the next action re-opens
 the last address.
 
+**Any mission may ask, not only one that browses.** An unattended run is told
+it runs while you are away and may ask once (`conversation.ask`) when it is
+stuck; its question parks the run the same way, with the question's choices
+as the Telegram buttons, the same wait and the same *needed you* line. A
+second question in the same turn is dropped (logged); `/recap` in an open
+chat is not offered the tool.
+
 Which lineup missions opt in (buddi-market): Travel planner's **Trip check**
 (check-in windows and booking pages that do not read as plain pages).
 Researcher's **Pages I'm watching** reads pages with `web.read` and Anchor's

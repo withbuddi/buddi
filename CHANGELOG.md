@@ -4,6 +4,7 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- Missions: when a mission running while you're away gets stuck, it asks you once on Telegram (with its choices as buttons) and carries on with your answer, instead of ending without a word; no answer within the wait (an hour by default) and you get one line saying it needed you.
 - Chat: the round Send button is back at the right of the composer when Use my Chrome sits beside the model and Thinking; in a narrow box (the corner chat, a squeezed column) the model chip steps aside and the chip says just "Chrome".
 - Your Chrome: a page opens in an ordinary Chrome window, in the background, even when the window you last used is a popup or an installed app; when Chrome won't group the tab there, the page still opens (the "buddi" group is skipped), and with no ordinary window it opens in a new one that doesn't take the focus, with one line in the chat saying so.
 - Your Chrome: when the page opened and a later step failed, the agent gets the page and "opened, then this failed" instead of "I couldn't open it"; the same failure twice in a row is said plainly once rather than tried a third time.

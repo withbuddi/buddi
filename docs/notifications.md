@@ -18,7 +18,7 @@ a channel only carries it.
 | Kind | What it is | Urgency |
 | --- | --- | --- |
 | `approval` | A run that nobody is watching wants to do something gated, and waits for you. | `now` |
-| `question` | A run asked you something and waits for the answer. Questions are asked inside a conversation you are in today, so none arrive here yet. | `now` |
+| `question` | A run asked you something and waits for the answer: a mission running while you are away (its own question, or a browser moment), parked until you answer or its wait runs out. | `now` |
 | `watcher` | A watcher or a source found something: a wake-up, a mail worth reading. | `now` |
 | `reminder` | A reminder an agent promised you came due. | `now` |
 | `failure` | Background jobs died and will not be retried. | `now` |

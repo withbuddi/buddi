@@ -59,8 +59,30 @@ import {
 import { findingsOf, renderFindings, type FindingPayload } from './sentinel-wake.js';
 import { missionOwnerAgent } from './reminders.js';
 import { askInto } from '../surfaces/browser-cards.js';
-import type { AskSink } from '../surfaces/pending-question.js';
+import { ASK_TOOL, createAskManifest, type AskSink } from '../surfaces/pending-question.js';
 import { DEFAULT_MISSION_WAIT_MS, isCardQuestion, neededYouLine, parkForHandback, parkMissionRun, type ParkedRun } from './parked.js';
+
+/**
+ * What an unattended run is told about asking (docs/browser.md, "Any mission
+ * may ask"). Agent-facing: the tool is named once so the run can pick it.
+ */
+export const MISSION_ASK_LINE = `You run while the owner is away. If you are stuck, ask once (${ASK_TOOL}): the owner gets it on Telegram and your run continues with the answer. Otherwise decide, or report what you could not do.`;
+
+/**
+ * One run's ask sink, where the first question wins: the run parks on it, and
+ * a second question in the same turn is dropped with a log line.
+ */
+export function firstQuestionSink(onDropped: (question: string) => void): AskSink {
+  let first: AskSink['asked'];
+  return {
+    get asked() { return first; },
+    set asked(value) {
+      if (!value) return;
+      if (first) { onDropped(value.question); return; }
+      first = value;
+    },
+  };
+}
 
 /** The tools an opted-in mission (`browser: own`) may call with nobody there (docs/browser.md, "Missions"). */
 export const UNATTENDED_BROWSER_TOOLS: readonly string[] = ['browser.act'];
@@ -304,10 +326,12 @@ export interface MissionRunResult {
  * bound to *this* run's decision. Built per run on purpose — a decision is run
  * state, and the process-wide registry must never carry it.
  */
-function registryForRun(base: ToolRegistry, sink: DecisionSink, reportMax?: number | null): ToolRegistry {
+function registryForRun(base: ToolRegistry, sink: DecisionSink, reportMax?: number | null, ask?: AskSink): ToolRegistry {
   const registry = new ToolRegistry();
   for (const manifest of base.manifests()) registry.register(manifest);
   registry.register(createMissionManifest(sink, { reportMax }));
+  // Unattended: the run may ask the owner once, and parks on the question.
+  if (ask) registry.register(createAskManifest(ask));
   return registry;
 }
 
@@ -460,11 +484,14 @@ export function createMissionExecutor(
     const ownMission = missionOwnerAgent(mission.id) === agentId;
     // The mission tools exist for this run only; the agent's own file never
     // needs to know about them, and nothing outside a mission run can call them.
+    // Unattended (not `/recap` in an open chat): the run may ask the owner, and parks on the question.
+    const unattended = notifyPolicy;
     const agent = {
       ...base,
       tools: [
         ...base.tools,
         ...MISSION_TOOLS,
+        ...(unattended && !base.tools.includes(ASK_TOOL) ? [ASK_TOOL] : []),
         ...(ownMission ? OWN_MISSION_TOOLS.filter((t) => !base.tools.includes(t) && deps.registry.has(t)) : []),
       ],
     };
@@ -490,7 +517,9 @@ export function createMissionExecutor(
     }
 
     const sink: DecisionSink = {};
-    const registry = registryForRun(deps.registry, sink, mission.reportMax);
+    // The owner's question, from the run's own ask or a browser moment: one per turn, the first wins.
+    const asked: AskSink = firstQuestionSink((question) => log(`mission ${mission.id}: a second question in the same turn was dropped: "${question.slice(0, 120)}"`));
+    const registry = registryForRun(deps.registry, sink, mission.reportMax, unattended ? asked : undefined);
 
     const prepared = deps.prepare ? await deps.prepare(mission, finding) : null;
     // Not one of its days (a yearly date's superset cron): no run, no model call.
@@ -507,6 +536,7 @@ export function createMissionExecutor(
       findings.length > 0 ? renderFindings(findings) : '',
       prepared?.appendix ?? '',
       missionSelfContext(mission, ownMission),
+      unattended ? MISSION_ASK_LINE : '',
     ]
       .filter((part) => part.trim() !== '')
       .join('\n\n');
@@ -526,7 +556,6 @@ export function createMissionExecutor(
     // Opted in (`browser: own`): browser.act with nobody there, in buddi's own
     // browser only, and the browser's owner moments are caught as one card.
     const browses = mission.browser === 'own';
-    const asked: AskSink = {};
     // The owner's answer is a touch on the page: the card is answered (Take over, Keep going) and the budget renews.
     let touched: string | undefined;
     if (control?.answer && browses && deps.browser?.touch) {
@@ -556,7 +585,7 @@ export function createMissionExecutor(
       ...deps.ctx,
       ...(control?.jobId ? { jobId: control.jobId } : {}),
       ...(control?.signal ? { signal: control.signal } : {}),
-      ...(browses ? { unattendedSession: UNATTENDED_BROWSER_TOOLS, ask: askInto(asked) } : {}),
+      ...(browses ? { unattendedSession: UNATTENDED_BROWSER_TOOLS, ask: askVia(asked) } : {}),
     };
 
     /*
@@ -599,7 +628,7 @@ export function createMissionExecutor(
       ...(control?.resume
         ? { resume: control.resume.approval }
         : control?.answer
-          ? { userMessage: answeredMessage(control.answer.parked.question, control.answer.text ?? '') }
+          ? { userMessage: answeredMessage(control.answer.parked.question, control.answer.text ?? '', browses) }
           : { userMessage }),
       surface: scheduledSurface(reportMaxOf(mission.reportMax)),
       systemSuffix: SCHEDULED_RUN_SUFFIX,
@@ -638,16 +667,17 @@ export function createMissionExecutor(
       };
     }
 
-    // A browser moment needed the owner (Look? / Keep going? / Sign in / Human check): park on the card.
+    // The run asked the owner, or a browser moment needed them (Look? / Keep going? / Sign in / Human check): park on the card.
     // Whatever the run decided after the card is held back (it was told to stop); the answer brings it back here.
-    if (browses && asked.asked) {
-      if (sink.decision) log(`mission ${mission.id}: the run decided (${sink.decision.kind}) after a browser card; parking on the card instead`);
+    if (asked.asked) {
+      if (sink.decision) log(`mission ${mission.id}: the run decided (${sink.decision.kind}) after asking the owner; parking on the card instead`);
       const parked = await parkMissionRun({ pool: deps.pool, now: deps.now, timezone: deps.ctx.timezone, log }, {
         missionId: mission.id,
         missionName: mission.name,
         agentId,
         conversationId,
         asked: asked.asked,
+        browser: browses,
         waitMs: deps.browser?.missionWaitMs?.() ?? DEFAULT_MISSION_WAIT_MS,
         ...(control?.jobId ? { jobId: control.jobId } : {}),
       });
@@ -785,9 +815,19 @@ export function createMissionExecutor(
 export type { FindingPayload };
 
 /** The opening turn of a run the owner's answer brought back. */
-export function answeredMessage(question: string, answer: string): string {
+export function answeredMessage(question: string, answer: string, browses = true): string {
   const said = answer.trim() || '(no words)';
-  return `The owner answered your card "${question.trim()}": ${said}. Carry on with the task from where you stopped; the page is as you left it, or as the owner left it if they took over. End with mission.report or mission.silent as before.`;
+  const page = browses ? '; the page is as you left it, or as the owner left it if they took over' : '';
+  return `The owner answered your card "${question.trim()}": ${said}. Carry on with the task from where you stopped${page}. End with mission.report or mission.silent as before.`;
+}
+
+/** `ctx.ask` into a first-question sink: the browser's card goes through the same one-per-turn rule. */
+function askVia(sink: AskSink): NonNullable<CoreToolContext['ask']> {
+  return (question) => {
+    const one: AskSink = {};
+    askInto(one)(question);
+    sink.asked = one.asked;
+  };
 }
 
 /**

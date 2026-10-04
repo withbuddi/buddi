@@ -451,7 +451,7 @@ export function createMissionJobHandler(deps: {
       }
       // Parked on a browser card: the answer, or the parking time running out, brings it back.
       if (result.parked) {
-        log(`mission ${mission.id}: parked on a browser card (question ${result.parked.questionId}) — waiting for the owner until ${result.parked.until}`);
+        log(`mission ${mission.id}: parked on the owner's card (question ${result.parked.questionId}) — waiting for the owner until ${result.parked.until}`);
         return {
           suspended: `${PARKED_REASON_PREFIX}${result.parked.questionId}`,
           // No `answer: null` here: the run cleared it when it tied the job to the card, and

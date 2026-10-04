@@ -28,6 +28,10 @@
  * lands while the worker is still suspending the job is kept there, and the
  * suspension wakes the job when it finds one (`wakeIf`).
  *
+ * A mission's own question parks the same way (docs/browser.md, "Any mission
+ * may ask"): an unattended run may call `conversation.ask` once, and its
+ * question becomes the card, with its choices as the buttons.
+ *
  * Take over is a wait of its own: the run parks again, on the page rather
  * than a card (`page:<conversation>`), until the owner gives the page back.
  */
@@ -150,6 +154,8 @@ export async function parkMissionRun(
     agentId: string;
     conversationId: string;
     asked: { question: string; options: Array<Omit<QuestionOption, 'id'>>; allowOther: boolean };
+    /** A browser moment (the run is in buddi's own browser), rather than the run's own question. */
+    browser?: boolean;
     waitMs: number;
     /** The queue job this run is: tied to the question before the card goes out. */
     jobId?: string;
@@ -182,7 +188,9 @@ export async function parkMissionRun(
       kind: 'question',
       urgency: 'now',
       title: `${input.missionName}: ${question.question}`,
-      text: `It is running while you are away, in buddi's own browser, and needs you here. It waits ${waitWords(input.waitMs)}, then stops and tells you.`,
+      text: input.browser === false
+        ? `It is running while you are away and needs your answer to carry on. It waits ${waitWords(input.waitMs)}, then stops and tells you.`
+        : `It is running while you are away, in buddi's own browser, and needs you here. It waits ${waitWords(input.waitMs)}, then stops and tells you.`,
       action: question.question,
       link: { route: `#/chat/${encodeURIComponent(input.agentId)}/${encodeURIComponent(input.conversationId)}` },
       agentId: input.agentId,

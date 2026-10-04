@@ -18,7 +18,7 @@ import { createDelegationManifest } from '../agents/delegation.js';
 import { createReminderManifest, createScheduleManifest } from './reminders.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
 import { SCHEDULED_SURFACE, surfaceSection } from '@buddi/core';
-import { createMissionExecutor, missionContextBlock, MISSION_CONTEXT_ERROR_MAX, SCHEDULED_RUN_SUFFIX, UnknownAgentError, type DeliverContext } from './execute.js';
+import { createMissionExecutor, missionContextBlock, MISSION_ASK_LINE, MISSION_CONTEXT_ERROR_MAX, SCHEDULED_RUN_SUFFIX, UnknownAgentError, type DeliverContext } from './execute.js';
 import { createMissionManifest, reportMaxOf, type DecisionSink } from './report.js';
 import { z } from 'zod';
 
@@ -271,7 +271,7 @@ describe('createMissionExecutor', () => {
     expect(delivered).toEqual([result.text]);
     expect(db.messages[0]).toMatchObject({ role: 'user' });
     expect(db.messages[0]?.content).toEqual([
-      { type: 'text', text: 'Produce the weekly recap.\n\nThis run is mission "Friday recap" (id friday-recap).' },
+      { type: 'text', text: `Produce the weekly recap.\n\nThis run is mission "Friday recap" (id friday-recap).\n\n${MISSION_ASK_LINE}` },
     ]);
   });
 
