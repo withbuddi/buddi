@@ -2,8 +2,9 @@ import AppKit
 import Sparkle
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItemController: StatusItemController?
+    private var mainWindow: MainWindowController?
     let supervisor = Supervisor()
 
     // Sparkle updates the app binary itself (rarely); buddi's own releases are the
@@ -20,7 +21,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if AppDelegate.sparkleConfigured { _ = updaterController }
+        NSApp.mainMenu = MainMenu.build(target: self)
         statusItemController = StatusItemController(supervisor: supervisor, appDelegate: self)
+
+        // The window opens at launch with its placeholder and follows the
+        // supervisor from there, next to the status item.
+        let window = MainWindowController(supervisor: supervisor)
+        mainWindow = window
+        let statusChanged = supervisor.onChange
+        supervisor.onChange = { [weak window] in
+            statusChanged?()
+            window?.supervisorChanged()
+        }
+        window.present()
+        window.supervisorChanged()
 
         if let plist = Adoption.npmService(data: supervisor.data) {
             _ = Adoption.offer(data: supervisor.data, plist: plist)
@@ -39,6 +53,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func checkForAppUpdates() {
         guard AppDelegate.sparkleConfigured else { return }
         updaterController.checkForUpdates(nil)
+    }
+
+    /// The dock icon with the window hidden (⌘W) brings it back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { mainWindow?.present() }
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    // MARK: - Menu commands
+
+    @objc func showMainWindow() { mainWindow?.present() }
+
+    @objc func showAbout() {
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [:]
+        // The bundle carries one buddi; after an in-app update the running one is newer.
+        if let running = supervisor.version?.current,
+           running != Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+            options[.credits] = NSAttributedString(
+                string: "Running buddi \(running)",
+                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        }
+        NSApp.orderFrontStandardAboutPanel(options: options)
+        NSApp.activate()
+    }
+
+    @objc func checkForUpdatesFromMenu() { statusItemController?.checkForUpdates() }
+
+    @objc func openSettings() { mainWindow?.present(); mainWindow?.go(to: DashboardRoutes.settings) }
+    @objc func lockDashboard() { mainWindow?.lock() }
+    @objc func newConversation() { mainWindow?.present(); mainWindow?.newConversation() }
+    @objc func openInBrowser() { supervisor.openDashboard() }
+    @objc func showFind() { mainWindow?.present(); mainWindow?.showFind() }
+    @objc func findNext() { mainWindow?.findNext() }
+    @objc func findPrevious() { mainWindow?.findPrevious() }
+    @objc func reloadDashboard() { mainWindow?.reload() }
+    @objc func zoomActual() { mainWindow?.zoom(0) }
+    @objc func zoomIn() { mainWindow?.zoom(1) }
+    @objc func zoomOut() { mainWindow?.zoom(-1) }
+    @objc func openHelp() { NSWorkspace.shared.open(DashboardRoutes.docs) }
+    @objc func reportProblem() { NSWorkspace.shared.open(DashboardRoutes.reportProblem) }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        let shown = mainWindow?.isShowingDashboard ?? false
+        var running = false
+        if case .running = supervisor.health { running = true }
+        switch item.action {
+        case #selector(lockDashboard), #selector(showFind), #selector(findNext), #selector(findPrevious):
+            return shown
+        case #selector(openInBrowser):
+            return running
+        case #selector(zoomIn): return shown && (mainWindow?.canZoomIn ?? false)
+        case #selector(zoomOut): return shown && (mainWindow?.canZoomOut ?? false)
+        case #selector(zoomActual): return shown
+        default: return true
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

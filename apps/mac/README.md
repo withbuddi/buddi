@@ -1,9 +1,9 @@
 # buddi.app (macOS)
 
-A small native menu-bar app that runs buddi with nothing to install: it carries
+A small native Mac app that runs buddi with nothing to install: it carries
 Node, the `@withbuddi/buddi` release from npm and the embedded Postgres, and
-supervises them. No Electron and no window: the dashboard opens in the default
-browser. Spec: `buddi-planning/specs/distribution.md`. The recipe (XcodeGen,
+supervises them. The dashboard lives in the app's own window (WKWebView, what
+Tauri does, without a second runtime); the menu-bar glyph shows the state. No Electron. Spec: `buddi-planning/specs/distribution.md`. The recipe (XcodeGen,
 Makefile, signing, notarizing, Sparkle) is copied from Shotcrisp.
 
 **Phase 2**: buddi updates itself from inside the app (outside the signed bundle), and
@@ -37,6 +37,52 @@ the folder), so its keychain items stay behind after you delete the folder.
 
 `make help` lists every target. `make release`, `make notarize` and `make dmg` need
 the signing environment below.
+
+## The window
+
+**Phase 3** (open question 4 in the spec): a regular app with a dock icon, the menu
+bar and a main window that hosts the dashboard (`App/MainWindow*.swift`, `App/MainMenu.swift`).
+
+- **What it loads**: the same five-minute sign-in link Open in Browser uses (`buddi
+  --no-service --no-open`, `DashboardLink` in `App/MainWindowKit.swift`), so first run
+  and the lock screen are simply pages in it. The session cookie lives in WebKit's
+  default data store, as in a browser.
+- **Startup**: the window opens at launch on a native placeholder (the kit's `--bg`,
+  the mascot from `packages/web/public/mascot/core.png`, "Starting buddi…") and loads
+  the dashboard once the gateway answers. When the gateway goes away (a restart, an
+  update) the placeholder comes back and the page reloads on the same route; "Needs
+  attention" says why in a sentence, with Show Logs and Restart buddi.
+- **The window**: title "buddi", full-size content view with the standard traffic
+  lights over a strip of the kit's ground (the page starts below it), size and position
+  remembered (`buddi.main` autosave), minimum 721 × 560 (one pixel above the dashboard's
+  phone breakpoint, so it always gets the desktop layout), light and dark from the
+  system. ⌘W and the close button hide it; the dock icon, the glyph's Open buddi and
+  Window → buddi bring it back. Quit is in the app menu and the glyph.
+- **The menu bar**: buddi (About, Check for Updates…, Settings… ⌘, → `#/settings`,
+  Lock ⌃⌘L → the page's own lock shortcut, Services, Hide, Quit); File (New Conversation
+  ⌘N → `#/chat/<agent>/new` for the agent on screen or the default one, Open in Browser
+  ⌥⌘O); Edit (undo, cut/copy/paste, select all, Find ⌘F / ⌘G / ⇧⌘G, a native find bar
+  over WKWebView's `find`); View (Reload ⌘R, Actual Size / Zoom In / Zoom Out, Enter
+  Full Screen); Window (Minimize, Zoom, Bring All to Front); Help (buddi Help →
+  withbuddi.com/docs, Report a Problem → GitHub issues).
+- **The web view**: microphone and camera prompts (granted for the dashboard's origin;
+  macOS asks once, with the usage strings in `project.yml`, and the hardened runtime
+  needs `com.apple.security.device.audio-input` / `camera` in `App/buddi.entitlements`);
+  downloads land in `~/Downloads` (a second copy is `name 2.ext`) and are shown in
+  Finder; `<input type=file>` opens the standard panel; `alert`/`confirm`/`prompt` are
+  sheets; `window.open` and links off the dashboard's origin open in the default browser
+  (the dashboard's own popups get a plain window); the clipboard is WebKit's; page zoom
+  is kept across launches. `window.Notification` is replaced by a small bridge to
+  UNUserNotificationCenter (banners only while the window is not in front). The
+  dashboard does not use Web Notifications today (it draws its own toasts, and a hidden
+  window reads as away, so news goes to the channel), so the bridge is there for when it does.
+- **The glyph**: still the state; Open buddi focuses the window, Advanced → Open in
+  Browser opens the dashboard in the default browser as before.
+
+What stays in Chrome by nature: the "your Chrome" route and its extension, and
+third-party sign-ins (they open in the default browser).
+
+Screenshots: `docs/window-*.png` (light and dark).
 
 ## Environment
 
@@ -85,9 +131,10 @@ The app is one more packaged installation, the same as `npm install -g @withbudd
   keeps the supervisor running: it restarts it after a crash with the supervisor's
   own backoff (4 s, 8 s, 16 s, then every 30 s) and reads `/status` from
   `<data>/supervisor.sock` every two seconds for the menu.
-- **Open buddi** asks the same launcher for the dashboard link (`buddi --no-open
-  --no-service`, the five-minute sign-in link `buddi` prints) and opens it. On a first
-  run it opens by itself as soon as buddi is up, so the first-run chapters appear.
+- **Open buddi** brings the window forward (see "The window"); Advanced → **Open in
+  Browser** asks the same launcher for the dashboard link (`buddi --no-open
+  --no-service`, the five-minute sign-in link `buddi` prints) and opens it in the
+  default browser.
 - **Quit** sends SIGTERM, the supervisor's orderly shutdown (gateway, then Postgres).
 
 **Taking over from npm.** If the npm install's LaunchAgent exists for the same data

@@ -21,9 +21,13 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSUIElement</key>
-	<true/>
+	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>buddi uses the camera when a page in it asks to take a picture.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Apache-2.0</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>buddi listens when you hold the microphone button, to turn what you say into a message.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>

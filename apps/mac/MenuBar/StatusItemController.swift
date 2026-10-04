@@ -1,7 +1,7 @@
 import AppKit
 
 /// The menu-bar item: a status line and the handful of things an owner does
-/// with a background service. Everything else lives in the dashboard.
+/// with a background service. Everything else lives in the window.
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
@@ -19,6 +19,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var logsItem: NSMenuItem!
     private var advancedItem: NSMenuItem!
     private var previousItem: NSMenuItem!
+    private var browserItem: NSMenuItem!
 
     init(supervisor: Supervisor, appDelegate: AppDelegate) {
         self.supervisor = supervisor
@@ -53,6 +54,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         logsItem = add(menu, "Show Logs", #selector(showLogs))
         let advanced = NSMenu()
         advanced.autoenablesItems = false
+        browserItem = add(advanced, "Open in Browser", #selector(openInBrowser))
+        advanced.addItem(.separator())
         previousItem = add(advanced, "Restart with the Previous Version…", #selector(restartWithPrevious))
         advancedItem = menu.addItem(withTitle: "Advanced", action: nil, keyEquivalent: "")
         advancedItem.submenu = advanced
@@ -91,7 +94,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             detailLine.title = reason
             detailLine.isHidden = false
         }
-        openItem.isEnabled = running
+        // The window is there whatever the state: it says why when buddi is not up.
+        openItem.isEnabled = true
+        browserItem.isEnabled = running
         restartItem.isEnabled = supervisor.layout != nil && supervisor.foreign == nil
         loginItem.state = LaunchAtLogin.isEnabled ? .on : .off
         takeOverItem.isHidden = Adoption.npmService(data: supervisor.data) == nil
@@ -139,7 +144,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Actions
 
-    @objc private func openBuddi() { supervisor.openDashboard() }
+    @objc private func openBuddi() { appDelegate?.showMainWindow() }
+
+    /// Advanced → Open in Browser: the dashboard in the default browser, as before the window.
+    @objc private func openInBrowser() { supervisor.openDashboard() }
 
     @objc private func restart() { supervisor.restart() }
 
@@ -157,7 +165,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// Both layers: Sparkle for the app binary (its own window), and buddi's
     /// own check — the supervisor's `/version/check`, the call behind Settings →
     /// System's "Check now".
-    @objc private func checkForUpdates() {
+    @objc func checkForUpdates() {
         appDelegate?.checkForAppUpdates()
         guard case .running = supervisor.health else { return }
         supervisor.refreshVersion(check: true) { view in

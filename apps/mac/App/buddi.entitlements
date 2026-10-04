@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The app itself only starts processes and reads a socket: no entitlements. -->
+<!-- Not sandboxed: the app starts processes and reads a socket. Under the hardened
+     runtime the window's web view needs these two for voice and the camera button
+     (macOS still asks the owner, with the usage strings in Info.plist). -->
 <plist version="1.0">
-<dict/>
+<dict>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+</dict>
 </plist>

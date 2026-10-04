@@ -34,7 +34,13 @@ targets:
     info:
       path: App/Info.plist
       properties:
-        LSUIElement: true
+        # A regular app since phase 3: a dock icon, the menu bar and the window.
+        LSUIElement: false
+        # The dashboard in the window asks for these: voice (the composer's
+        # microphone button) and the camera, for a page that takes a picture.
+        # macOS asks the owner once, with these sentences.
+        NSMicrophoneUsageDescription: "buddi listens when you hold the microphone button, to turn what you say into a message."
+        NSCameraUsageDescription: "buddi uses the camera when a page in it asks to take a picture."
         LSApplicationCategoryType: public.app-category.productivity
         NSHumanReadableCopyright: "Apache-2.0"
         # The app is versioned as the buddi release it carries (Payload/buddi/current).
