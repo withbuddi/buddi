@@ -25,7 +25,9 @@ import { integrityOfFile, rejectStaged, stagePlugin } from '../plugins/stage.js'
 import type { NpmRunner } from '../plugins/npm.js';
 import {
   autoApprovalRefusal,
+  offeredTiles,
   parseTiles,
+  readTakeOnOffers,
   readTakeOn,
   resetTakeOn,
   startTakeOn,
@@ -174,6 +176,31 @@ describe('the tiles', () => {
     expect(pool.row.steps_done).toContain('take-on');
     expect(pool.row.details.takeOn).toEqual([]);
     expect((await readTakeOn(deps(pool))).tiles).toEqual([]);
+  });
+});
+
+describe('the tiles offered', () => {
+  it('drops My code while withbuddi.com does not list the developer plugin, and keeps My mail', async () => {
+    expect(await readTakeOnOffers({ env, log: (line) => void logs.push(line) })).toEqual(['days', 'mail', 'money', 'voice', 'pictures']);
+  });
+
+  it('offers My code once the developer plugin is listed, and drops a tile whose plugin is missing', async () => {
+    index = () => ({ status: 200, body: { plugins: [listing('weather'), listing('finance'), listing('developer')] } });
+    expect(await readTakeOnOffers({ env, log: () => {} })).toEqual(['mail', 'money', 'code']);
+  });
+
+  it('falls back to the plugins known published, never developer, when withbuddi.com cannot be reached', async () => {
+    index = () => ({ status: 503, body: {} });
+    expect(await readTakeOnOffers({ env, log: () => {} })).toEqual(['days', 'mail', 'money', 'voice', 'pictures']);
+    expect(offeredTiles(undefined)).not.toContain('code');
+  });
+
+  it('does not wait on a slow withbuddi.com, and never reaches it when asked for the kept copy only', async () => {
+    const fetch = vi.fn(() => new Promise<Response>(() => {}));
+    expect(await readTakeOnOffers({ env, log: () => {}, fetch: fetch as never }, { timeoutMs: 20 })).toEqual(['days', 'mail', 'money', 'voice', 'pictures']);
+    const never = vi.fn();
+    expect(await readTakeOnOffers({ env, log: () => {}, fetch: never as never }, { cachedOnly: true })).not.toContain('code');
+    expect(never).not.toHaveBeenCalled();
   });
 });
 

@@ -1099,6 +1099,19 @@ describe('chapter 3: what I take on', () => {
     expect(mapRows()[2]).toHaveTextContent('My days, my mail, my money');
   });
 
+  it('draws only the tiles the gateway offers: no My code while its plugin is not listed', async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(
+      view({ stepsDone: ['you', 'model'], details: { accountId: 'a0' }, needs: { owner: false, model: false, agent: true }, offers: ['days', 'mail', 'money', 'voice', 'pictures'] }),
+    );
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}]));
+    render(meet());
+    await screen.findByText(SCRIPT.takeOn.title);
+    const tiles = within(screen.getByRole('group', { name: SCRIPT.takeOn.title })).getAllByRole('button');
+    expect(tiles.map((tile) => tile.querySelector('.wiz-opt-title')?.textContent)).toEqual(['My days', 'My mail', 'My money', 'Voice', 'Pictures']);
+    expect(screen.queryByText('My code')).not.toBeInTheDocument();
+  });
+
   it('stays a plain assistant with "Just an assistant for now"', async () => {
     atTakeOn();
     render(meet());

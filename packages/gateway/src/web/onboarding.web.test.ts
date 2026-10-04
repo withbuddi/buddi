@@ -5,7 +5,9 @@
  * write, and one property that matters more than any of them: an owner who
  * finished or skipped the wizard here is never interviewed again on Telegram.
  */
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,13 +22,39 @@ import { shouldStartFirstRun } from '../agents/first-run.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 import { FIRST_AGENT_OPENING } from '../agents/opening.js';
 import type { LoadAgentCatalogOptions } from '@buddi/core';
+import { resetMarketCache } from './market.js';
 
 /** `res.json()` is `unknown`; every body here is a small object we assert on. */
 const json = async (res: Response): Promise<any> => res.json();
 
 const servers: WebServer[] = [];
 const dirs: string[] = [];
+
+/**
+ * withbuddi.com, stood in for: its plugin list, which chapter 3's tiles are
+ * read against. Listed today: everything but developer, unless a test says.
+ */
+let market: Server;
+let marketOrigin: string;
+let listed: string[] | null = ['weather', 'calendar', 'finance', 'speech', 'image'];
+beforeAll(async () => {
+  market = createServer((req, res) => {
+    if (req.url !== '/plugins/index.json' || listed === null) return void res.writeHead(503).end();
+    const plugins = listed.map((name) => ({
+      name, npm: `@withbuddi/plugin-${name}`, version: '0.1.0', title: name, summary: '', category: 'days', trust: 'by-buddi', pricing: { kind: 'free' },
+    }));
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ plugins }));
+  });
+  await new Promise<void>((resolve) => market.listen(0, '127.0.0.1', resolve));
+  marketOrigin = `http://127.0.0.1:${(market.address() as AddressInfo).port}`;
+});
+afterAll(async () => {
+  await new Promise<void>((resolve) => market.close(() => resolve()));
+});
+
 afterEach(async () => {
+  resetMarketCache();
+  listed = ['weather', 'calendar', 'finance', 'speech', 'image'];
   await Promise.all(servers.splice(0).map((s) => s.close()));
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -163,7 +191,13 @@ async function boot(opts: {
       'utf8',
     );
   }
-  const env = { ...process.env, BUDDI_AGENTS_DIR: opts.agentsDir, BUDDI_SKILLS_DIR: path.join(opts.agentsDir, '..', 'skills') };
+  const env = {
+    ...process.env,
+    BUDDI_AGENTS_DIR: opts.agentsDir,
+    BUDDI_SKILLS_DIR: path.join(opts.agentsDir, '..', 'skills'),
+    BUDDI_DATA_DIR: path.join(opts.agentsDir, '..', 'data'),
+    BUDDI_MARKET_URL: marketOrigin,
+  };
   const registry = new ToolRegistry();
   // `shipped` builds the catalog the way the gateway does — the owner's
   // directory *and* the examples tree, with the held-back rule over it — which
@@ -211,8 +245,26 @@ it('answers what first run still needs, and creates nothing by being read', asyn
   const pool = fakePool();
   const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: accounts([]) });
   const view = await json(await fetch(`${origin}/api/onboarding`, { headers }));
-  expect(view).toEqual({ state: 'pending', stepsDone: [], details: {}, needs: { owner: true, model: true, agent: true } });
+  expect(view).toEqual({
+    state: 'pending',
+    stepsDone: [],
+    details: {},
+    needs: { owner: true, model: true, agent: true },
+    offers: ['days', 'mail', 'money', 'voice', 'pictures'],
+  });
   expect(pool.row.state).toBe('pending');
+});
+
+it('offers in chapter 3 only the tiles whose plugins withbuddi.com lists: no developer, no My code', async () => {
+  listed = ['weather', 'calendar', 'finance'];
+  const { origin, headers } = await boot({ pool: fakePool(), agentsDir: agentsDir(), providerAccounts: accounts([]) });
+  expect((await json(await fetch(`${origin}/api/onboarding`, { headers }))).offers).toEqual(['days', 'mail', 'money']);
+});
+
+it('offers the plugins known published when withbuddi.com does not answer, and never My code', async () => {
+  listed = null;
+  const { origin, headers } = await boot({ pool: fakePool(), agentsDir: agentsDir(), providerAccounts: accounts([]) });
+  expect((await json(await fetch(`${origin}/api/onboarding`, { headers }))).offers).toEqual(['days', 'mail', 'money', 'voice', 'pictures']);
 });
 
 it('counts only an enabled account with a credential as a model', async () => {

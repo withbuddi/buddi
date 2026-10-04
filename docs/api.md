@@ -4468,7 +4468,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
-| GET | `/api/onboarding` | Where first run stands and what it still needs. | yes |
+| GET | `/api/onboarding` | Where first run stands and what it still needs, with the chapter 3 tiles withbuddi.com lists plugins for. | yes |
 | POST | `/api/onboarding/step` | Record a step done. | yes |
 | POST | `/api/onboarding/complete` | Finish first run. | yes |
 | POST | `/api/onboarding/skip` | Skip first run. | yes |
@@ -4486,10 +4486,10 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 
 #### `GET /api/onboarding`
 
-Where first run stands and what it still needs.
+Where first run stands and what it still needs, with the chapter 3 tiles withbuddi.com lists plugins for.
 
 - **Auth:** Session or API token.
-- **Answer:** JSON
+- **Answer:** `{ state, stepsDone, details, needs, offers: string[] }`
 - **Since:** 0.1.0-pre.15
 
 ```sh

@@ -26,7 +26,7 @@ import type { Pool } from 'pg';
 import { beginOnboarding, getOnboarding, markStepDone, setOnboardingDetails, type Queryable } from '@buddi/core';
 import type { LiveRegistry } from '../plugins/live.js';
 import type { StagePhase } from '../plugins/index.js';
-import { loadMarketIndex, type MarketDeps, type MarketEntry } from './market.js';
+import { loadMarketIndex, type MarketDeps, type MarketEntry, type MarketIndex } from './market.js';
 import { installedRecord, startJob, type PluginsEngine, type StageJob } from './plugins.js';
 import * as engine from '../plugins/index.js';
 
@@ -35,15 +35,15 @@ export const TAKE_ON_TILES = ['days', 'mail', 'money', 'voice', 'code', 'picture
 export type TakeOnTile = (typeof TAKE_ON_TILES)[number];
 
 /**
- * The plugins each outcome brings, by their buddi names. Mail and code bring
- * none: Mail Triage and the developer tools are built in.
+ * The plugins each outcome brings, by their buddi names. Mail brings none:
+ * Mail Triage is the built-in email plugin's agent.
  */
 export const TILE_PLUGINS: Readonly<Record<TakeOnTile, readonly string[]>> = {
   days: ['weather', 'calendar'],
   mail: [],
   money: ['finance'],
   voice: ['speech'],
-  code: [],
+  code: ['developer'],
   pictures: ['image'],
 };
 
@@ -63,7 +63,58 @@ const TITLES: Readonly<Record<string, string>> = {
   finance: 'Finance',
   speech: 'Speech',
   image: 'Image',
+  developer: 'Developer',
 };
+
+/**
+ * The plugins known to be on npm and listed today, for when withbuddi.com
+ * cannot be asked. Developer is not one: it is held back from npm, so a tile
+ * that needs it is never offered on a guess.
+ */
+export const KNOWN_PUBLISHED: readonly string[] = ['weather', 'calendar', 'finance', 'speech', 'image'];
+
+/** How long the chapter waits for withbuddi.com before offering the known set. */
+export const OFFERS_TIMEOUT_MS = 3_000;
+
+/**
+ * The tiles chapter 3 may offer: each one whose plugins are all listed, by
+ * name or by their `@withbuddi/plugin-<name>` package. Without a list (the
+ * market unreachable, nothing kept), the plugins known published today stand
+ * in. A tile that brings no plugin (My mail) is always offered.
+ */
+export function offeredTiles(index: MarketIndex | undefined): TakeOnTile[] {
+  const listed = (plugin: string): boolean =>
+    index === undefined
+      ? KNOWN_PUBLISHED.includes(plugin)
+      : index.plugins.some((entry) => entry.name === plugin || entry.npm === `@withbuddi/plugin-${plugin}`);
+  return TAKE_ON_TILES.filter((tile) => TILE_PLUGINS[tile].every(listed));
+}
+
+/**
+ * The tiles to offer, read from the market index Browse keeps (an hour's
+ * copy in memory and on disk). `cachedOnly` never reaches withbuddi.com; a
+ * fetch is given `OFFERS_TIMEOUT_MS` before the known set answers instead, so
+ * an offline first run is never held up by the list.
+ */
+export async function readTakeOnOffers(
+  deps: Pick<MarketDeps, 'env' | 'log' | 'fetch' | 'now'>,
+  opts: { cachedOnly?: boolean; timeoutMs?: number } = {},
+): Promise<TakeOnTile[]> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), opts.timeoutMs ?? OFFERS_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try {
+    const loaded = await Promise.race([
+      loadMarketIndex(deps, opts.cachedOnly === true ? { cachedOnly: true } : {}).catch(() => undefined),
+      timeout,
+    ]);
+    return offeredTiles(loaded && !('unavailable' in loaded) ? loaded.index : undefined);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export type TakeOnState = 'fetching' | 'reading' | 'installing' | 'ready' | 'failed';
 

@@ -90,7 +90,7 @@ import {
   withFirstRunFacts,
   type OnboardingDeps, readFirstAgentPersona } from './onboarding.js';
 import type { LiveRegistry as LiveRegistryShape } from '../plugins/live.js';
-import { TakeOnRefusal, readTakeOn, startTakeOn, type TakeOnDeps } from './take-on.js';
+import { TakeOnRefusal, readTakeOn, readTakeOnOffers, startTakeOn, type TakeOnDeps } from './take-on.js';
 import {
   TelegramWebError,
   saveTelegramToken,
@@ -1564,6 +1564,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       examplesDir: EXAMPLES_AGENTS_DIR,
       reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
       registry: deps.registry,
+      offers: (opts) => readTakeOnOffers({ env: deps.env ?? process.env, log }, opts),
     });
     /** What the backup routes need: the environment, and somewhere to log. */
     const backupDeps = (): { env: NodeJS.ProcessEnv; log: (line: string) => void } => ({
@@ -2321,7 +2322,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         case '/api/secrets/uses':
           return reply(res, await secretUses(secretsDeps(), url));
         case '/api/onboarding':
-          return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+          return sendJson(res, 200, await readOnboarding(onboardingDeps(), { withOffers: true }));
         /*
          * Is Ollama running on this machine? Asked from here, never from the
          * page: the dashboard bundle reaches no host but its own, and the

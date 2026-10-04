@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- First run: "What should I take on for you?" only offers what buddi can actually install today. My code is gone until the Developer plugin is published, so ticking it no longer ends in a failed install; if withbuddi.com can't be reached, you're offered the plugins known to be published.
+
 ## 0.1.0-pre.40 — 2026-10-04
 
 - buddi.app for Mac: the DMG downloads from the GitHub release (withbuddi.com/download/mac and the update feed point there), so a release larger than 300 MiB still publishes.

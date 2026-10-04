@@ -163,7 +163,11 @@ it('is the first-run restore only while nothing has been answered and no agent e
 
   // A teammate a plugin proposed is not an assistant, but it is a private
   // file a restore would overwrite: that needs the confirmation too.
-  const withTeammate = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket }, { proposed: ['mail-triage'] });
+  // Its own data folder and an unreachable market: the read below asks for chapter 3's tiles.
+  const withTeammate = await dashboard(
+    { BUDDI_SUPERVISOR_SOCKET: socket, BUDDI_DATA_DIR: await mkdtemp(path.join(tmpdir(), 'buddi-restore-data-')), BUDDI_MARKET_URL: 'http://127.0.0.1:9' },
+    { proposed: ['mail-triage'] },
+  );
   expect(((await (await fetch(`${withTeammate.origin}/api/onboarding`, { headers: withTeammate.headers })).json()) as any).needs.agent).toBe(true);
   const refusedTeammate = await fetch(`${withTeammate.origin}/api/onboarding/restore`, { method: 'POST', headers: json(withTeammate.headers), body });
   expect(refusedTeammate.status).toBe(409);

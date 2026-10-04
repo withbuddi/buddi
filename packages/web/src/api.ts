@@ -1067,6 +1067,11 @@ export interface OnboardingView {
     reach?: OnboardingReach;
   };
   needs: { owner: boolean; model: boolean; agent: boolean };
+  /**
+   * The tiles chapter 3 offers, as the gateway decided: only those whose
+   * plugins withbuddi.com lists (My mail always). The page draws these alone.
+   */
+  offers?: string[];
 }
 
 /** Chapter 4 of first run, as the record keeps it. */

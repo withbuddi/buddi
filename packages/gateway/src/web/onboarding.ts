@@ -41,6 +41,7 @@ import { FIRST_AGENT_OPENING, defaultThinkingFor } from '../agents/opening.js';
 import { recordedDefaultAgent, writeDefaultAgentRecord } from '../agents/default-agent.js';
 import { PROVENANCE_FILE } from '../plugins/provenance.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
+import { offeredTiles } from './take-on.js';
 
 /** The surface recorded against everything the wizard writes. */
 export const WEB_ONBOARDING_SURFACE = 'web';
@@ -84,7 +85,7 @@ export type WebOnboardingStep = (typeof WEB_ONBOARDING_STEPS)[number];
  * which `firstAgentTools` writes only when this machine provides them. What is left out, on purpose: the platform
  * tools that write agents and grants (Agent Father's), and the interview's
  * owner tools (below). Optional plugins (finance, developer, image) are the
- * owner's to add.
+ * owner's to add; chapter 3 offers only those withbuddi.com lists (`readTakeOnOffers`).
  *
  * It lives here rather than in the dashboard bundle because a tool name is the
  * server's vocabulary — the page names no tool.
@@ -157,6 +158,13 @@ export interface OnboardingView {
   /** What the steps do not say: the handover conversation, the account chosen. */
   details: OnboardingDetails;
   needs: OnboardingNeeds;
+  /**
+   * The tiles chapter 3 offers, in its order: only those whose plugins
+   * withbuddi.com lists (`readTakeOnOffers`). The page draws these and no
+   * others. Read for `GET /api/onboarding` alone (`withOffers`): the writes'
+   * answers never wait on withbuddi.com.
+   */
+  offers?: string[];
 }
 
 export interface OnboardingDeps {
@@ -170,6 +178,12 @@ export interface OnboardingDeps {
   reload: () => void;
   /** What is installed here; an optional family of the first agent's grant is written only when it resolves. */
   registry?: ToolNameSource;
+  /**
+   * Chapter 3's tiles, as the market allows. `cachedOnly` when first run is
+   * finished: nothing then waits on withbuddi.com. Absent (tests), the
+   * plugins known published today decide.
+   */
+  offers?: (opts: { cachedOnly: boolean }) => Promise<string[]>;
 }
 
 type RosterEntry = ReturnType<AgentCatalog['list']>[number];
@@ -252,9 +266,14 @@ export function hasUsableModel(accounts: ProviderAccounts | undefined): boolean 
 }
 
 /** The record and what is still missing, in one read. Nothing here writes. */
-export async function readOnboarding(deps: OnboardingDeps): Promise<OnboardingView> {
+export async function readOnboarding(deps: OnboardingDeps, opts: { withOffers?: boolean } = {}): Promise<OnboardingView> {
   const record = await getOnboarding(deps.pool);
   const profile = await getOwnerProfile(deps.pool);
+  const offers = opts.withOffers !== true
+    ? undefined
+    : deps.offers
+      ? await deps.offers({ cachedOnly: record.state === 'done' }).catch(() => offeredTiles(undefined))
+      : offeredTiles(undefined);
   return {
     state: record.state,
     stepsDone: record.stepsDone,
@@ -264,6 +283,7 @@ export async function readOnboarding(deps: OnboardingDeps): Promise<OnboardingVi
       model: !hasUsableModel(deps.providerAccounts),
       agent: !hasAssistant(deps.catalog),
     },
+    ...(offers ? { offers } : {}),
   };
 }
 

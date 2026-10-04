@@ -942,7 +942,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
 
   /* ---------------- first run ---------------- */
-  { method: 'GET', path: '/api/onboarding', area: 'onboarding', summary: 'Where first run stands and what it still needs.' },
+  { method: 'GET', path: '/api/onboarding', area: 'onboarding', summary: 'Where first run stands and what it still needs, with the chapter 3 tiles withbuddi.com lists plugins for.', answer: '{ state, stepsDone, details, needs, offers: string[] }' },
   { method: 'POST', path: '/api/onboarding/step', area: 'onboarding', summary: 'Record a step done.', body: '{ step: string, conversationId?, accountId?, reach?: { phone?, mailbox?, app?, browser?: boolean } }', errors: '400' },
   { method: 'POST', path: '/api/onboarding/complete', area: 'onboarding', summary: 'Finish first run.', errors: '409 still needs a model account or an agent' },
   { method: 'POST', path: '/api/onboarding/skip', area: 'onboarding', summary: 'Skip first run.' },

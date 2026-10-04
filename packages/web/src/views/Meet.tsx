@@ -338,6 +338,8 @@ interface QuestionProps {
   existing: ExistingAssistant | null;
   /** Chapter 3's progress, as the server last said it. */
   progress: TakeOnView | null;
+  /** The tiles chapter 3 may draw, as `GET /api/onboarding` said; null before it answered. */
+  offers: readonly string[] | null;
   /** Read chapter 3's progress again now. */
   onProgress: () => void;
   navigate: (next: string, replace?: boolean) => void;
@@ -405,6 +407,8 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   const lastBrain = useRef<BrainAnswer | undefined>(undefined);
   /** Chapter 3's progress, read from the server and read again while it runs. */
   const [progress, setProgress] = useState<TakeOnView | null>(null);
+  /** Chapter 3's tiles, as the gateway decided them (only plugins withbuddi.com lists). */
+  const [offers, setOffers] = useState<readonly string[] | null>(null);
   const readProgress = useCallback((): void => {
     void Promise.resolve()
       .then(() => api.takeOnProgress())
@@ -451,6 +455,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       api.providers().catch(() => undefined),
     ]);
     setAccounts(accountView);
+    if (Array.isArray(onboarding?.offers)) setOffers(onboarding.offers);
     const anthropicDefault = providers?.providers.find((provider) => provider.kind === 'anthropic')?.defaultModel?.trim();
     setClaudeModel(anthropicDefault ? anthropicDefault : undefined);
     setZones(owner?.zones ?? []);
@@ -636,6 +641,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
     onMet: setMet,
     existing,
     progress,
+    offers,
     onProgress: readProgress,
     navigate,
     onSettled: (next) => open && settle(open, next),
@@ -2640,10 +2646,12 @@ function progressLine(progress: TakeOnView | null): { line: string; done: boolea
   return { line: SCRIPT.takeOn.ready(titles), done: true };
 }
 
-function TakeOnChapter({ answers, progress, onProgress, onSettled, onBack, onTrouble }: QuestionProps): JSX.Element {
+function TakeOnChapter({ answers, progress, offers, onProgress, onSettled, onBack, onTrouble }: QuestionProps): JSX.Element {
+  // Only the tiles the gateway offers: one whose plugin withbuddi.com does not list would only fail to install.
+  const shown = offers ? TAKE_ON.filter((tile) => offers.includes(tile.id)) : TAKE_ON;
   const [tiles, setTiles] = useState<string[]>(() => answers.takeOn ?? [...TAKE_ON_DEFAULT]);
   const [sending, setSending] = useState(false);
-  const picked = TAKE_ON.filter((tile) => tiles.includes(tile.id));
+  const picked = shown.filter((tile) => tiles.includes(tile.id));
   const toggle = (id: string): void => setTiles((current) => (current.includes(id) ? current.filter((t) => t !== id) : [...current, id]));
   /*
    * Recorded, and the installs started behind the answer: the route answers
@@ -2675,14 +2683,14 @@ function TakeOnChapter({ answers, progress, onProgress, onSettled, onBack, onTro
             <Button variant="ghost" size="lg" disabled={sending} onClick={() => send([])}>
               {SCRIPT.takeOn.none}
             </Button>
-            <Primary onClick={() => send(TAKE_ON.filter((t) => tiles.includes(t.id)).map((t) => t.id))} disabled={sending || tiles.length === 0}>
+            <Primary onClick={() => send(picked.map((t) => t.id))} disabled={sending || picked.length === 0}>
               {SCRIPT.takeOn.submit}
             </Primary>
           </>
         }
       >
         <div className="wiz-grid" data-cols="3" role="group" aria-label={SCRIPT.takeOn.title}>
-          {TAKE_ON.map((tile) => {
+          {shown.map((tile) => {
             const on = tiles.includes(tile.id);
             return (
               <button key={tile.id} type="button" className="wiz-opt" data-tile="true" aria-pressed={on} onClick={() => toggle(tile.id)}>
