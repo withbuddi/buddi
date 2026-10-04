@@ -113,6 +113,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
     method: 'GET', path: '/api/lock/screen', area: 'session', whileLocked: true,
     summary: 'What the lock screen draws: the time, counts waiting (approvals, and everything else that needs the owner as `needs`), the focus line, its widgets.',
     query: 'hour?: number',
+    answer: "{ timezone, clockView, background, image, focus, approvals, needs, widgets: [{ key, id, title, size, view: { state: 'ok'|'stale'|'empty', body, updatedAt?: string, error?: string } }], … }",
   },
   {
     method: 'POST', path: '/api/lock/unlock', area: 'session', whileLocked: true, token: 'access',
@@ -900,7 +901,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'POST', path: '/api/browser/release', area: 'computer', summary: 'Release the session.', body: '{ sessionId?: string }' },
   { method: 'GET', path: '/api/browser/hand', area: 'computer', kind: 'socket', token: 'socket', summary: 'WebSocket: drive the taken-over screen (the CSRF value is the first frame). Also says { type: "loginSeen", id, site, username } when the owner signs in on the page they hold.' },
   { method: 'POST', path: '/api/browser/login', area: 'computer', token: 'secret', summary: 'Answer "Save this login?" for a sign-in the owner made on a page they held: save keeps it as an owner secret, never stops asking for that site.', body: '{ id: string, decision: save|later|never }', answer: '{ outcome: saved|dismissed|never|gone, saved?: { name, site, username, savedAt } }', errors: '400; 409' },
-  { method: 'GET', path: '/api/extension', area: 'computer', summary: 'The browser extension: paired or not, connected or not.' },
+  { method: 'GET', path: '/api/extension', area: 'computer', summary: 'The browser extension: paired or not, connected or not.',
+    answer: '{ connected: boolean, pending: boolean, path: string, checkout: boolean, buddi: string, extensionMinimum: string, pairedAt?: string, extension?: string, lastSeenAt?: string, portMoved?: { from: number, to: number } }' },
   { method: 'POST', path: '/api/extension/pair', area: 'computer', token: 'access', summary: 'Pair the extension with the code it shows.', body: '{ code: string }', errors: '400; 429 five tries in five minutes' },
   { method: 'DELETE', path: '/api/extension/pair', area: 'computer', summary: 'Forget the paired extension.' },
   { method: 'GET', path: '/api/extension/socket', area: 'computer', kind: 'socket', token: 'socket', summary: "WebSocket: the paired extension's own connection." },

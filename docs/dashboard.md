@@ -608,6 +608,14 @@ browser's. On a phone the glance comes first and **Enter
 PIN** opens a pad. While it shows, nothing of the dashboard is in the page:
 the app is not drawn underneath, so there is nothing to blur or read.
 
+A widget that could not refresh keeps its last good answer. In
+`GET /api/lock/screen` each widget's `view` is `{ state, body, updatedAt?,
+error? }`: `state` is `ok`, `stale` (the refresh failed; `body` is the last
+good one) or `empty`, and `updatedAt` is when that body was made (ISO time;
+absent when there never was one). A stale widget's title says it in the lock's
+time zone and format: "Top stories · from 9:12", "from yesterday 9:12", "from
+Mon 9:12" within the week, else the date.
+
 It is off until you set a PIN in **Settings → Lock screen** (four to eight
 digits). Then the dashboard locks when nobody has used it for a while — 5
 minutes unless you pick 1, 15 or 60, or Never — and whenever you lock it:

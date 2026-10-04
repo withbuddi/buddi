@@ -257,7 +257,7 @@ What the lock screen draws: the time, counts waiting (approvals, and everything 
 
 - **Auth:** Session or API token; answered while locked.
 - **Query:** `hour?: number`
-- **Answer:** JSON
+- **Answer:** `{ timezone, clockView, background, image, focus, approvals, needs, widgets: [{ key, id, title, size, view: { state: 'ok'|'stale'|'empty', body, updatedAt?: string, error?: string } }], … }`
 - **Since:** 0.1.0-pre.29
 
 ```sh
@@ -4049,7 +4049,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 The browser extension: paired or not, connected or not.
 
 - **Auth:** Session or API token.
-- **Answer:** JSON
+- **Answer:** `{ connected: boolean, pending: boolean, path: string, checkout: boolean, buddi: string, extensionMinimum: string, pairedAt?: string, extension?: string, lastSeenAt?: string, portMoved?: { from: number, to: number } }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
