@@ -24,6 +24,35 @@ export const SHIM_MARKER = '# buddi-shim: installed by buddi.app (Install Comman
 
 export const SYSTEM_SHIM = '/usr/local/bin/buddi';
 
+/** Set by the shim to the app it runs: the launcher was started from a terminal through buddi.app's command line tool. */
+export const SHIM_VAR = 'BUDDI_VIA_APP_SHIM';
+
+/** buddi.app's bundle identifier, for `open -b`. */
+export const APP_BUNDLE_ID = 'com.withbuddi.app';
+
+/**
+ * What the launcher does with a command that came through the shim. buddi.app
+ * is the one that runs buddi on this Mac, so:
+ *  - `open-app`: starting buddi (`buddi`, `buddi service start|restart`) opens
+ *    the app when its supervisor is not answering, then talks to it;
+ *  - `refuse`: anything that would run a supervisor or a service of its own
+ *    (`supervise`, `--no-service`, `service install|uninstall`) is refused;
+ *  - `pass`: everything else talks to the app's supervisor over its socket, or
+ *    needs none, as it always does.
+ * Never a LaunchAgent or a systemd unit beside the app.
+ */
+export type ShimAction = 'open-app' | 'refuse' | 'pass';
+
+export function shimAction(args: readonly string[]): ShimAction {
+  if (args[0] === 'supervise' || args.includes('--no-service')) return 'refuse';
+  if (args[0] === 'service' && (args[1] === 'install' || args[1] === 'uninstall')) return 'refuse';
+  if (args.length === 0 || args.every((a) => a === '--no-open')) return 'open-app';
+  if (args[0] === 'service' && (args[1] === 'start' || args[1] === 'restart')) return 'open-app';
+  return 'pass';
+}
+
+export const SHIM_REFUSAL = 'buddi.app runs buddi on this Mac, so this command does not start a service of its own. Open buddi.app (or run buddi, which opens it); quit it from its menu.';
+
 export function userShim(home: string): string {
   return path.join(home, '.local', 'bin', 'buddi');
 }
@@ -55,7 +84,8 @@ export function shimScript({ app, data }: ShimTarget): string {
     // An update buddi installed for itself, else the copy the app carries.
     'ROOT="$DATA/releases/current"',
     '[ -f "$ROOT/packages/install/dist/launcher.js" ] || ROOT="$APP/Contents/Resources/buddi/current"',
-    'BUDDI_DATA_DIR="$DATA" exec "$NODE" "$ROOT/packages/install/dist/launcher.js" "$@"',
+    // Said to the launcher, so `buddi` with the app quit opens the app rather than installing a service of its own.
+    `BUDDI_DATA_DIR="$DATA" ${SHIM_VAR}="$APP" exec "$NODE" "$ROOT/packages/install/dist/launcher.js" "$@"`,
     '',
   ].join('\n');
 }
@@ -104,18 +134,59 @@ export function npmCandidates(home: string): string[] {
   return ['/opt/homebrew/bin', '/usr/local/bin', path.join(home, '.npm-global', 'bin'), path.join(home, '.volta', 'bin'), path.join(home, '.local', 'bin')];
 }
 
+const NPM_PACKAGE = path.join('node_modules', '@withbuddi', 'buddi');
+
+/**
+ * Is this `buddi` npm's, seen through a version manager's shim? Volta's and
+ * asdf's resolve to the manager's own binary or script, never into the
+ * package, so the package is looked for where the manager keeps it.
+ */
+function managedNpmBuddi(file: string, real: string | undefined, deps: Pick<ShimDeps, 'exists' | 'home'> & { read?: ShimDeps['read'] }): boolean {
+  const unix = (real ?? file).split(path.sep).join('/');
+  if (path.basename(real ?? '') === 'volta-shim' || unix.includes('/.volta/bin/')) {
+    return deps.exists(path.join(deps.home, '.volta', 'tools', 'image', 'packages', '@withbuddi', 'buddi'));
+  }
+  if (unix.includes('/.asdf/shims/')) {
+    const text = deps.read?.(file) ?? '';
+    for (const match of text.matchAll(/^# asdf-plugin: nodejs (\S+)/gm)) {
+      if (deps.exists(path.join(deps.home, '.asdf', 'installs', 'nodejs', match[1] as string, 'lib', NPM_PACKAGE))) return true;
+    }
+  }
+  return false;
+}
+
 /** An npm `buddi` anywhere it would be found; the path a terminal would run. */
-export function findNpmBuddi(deps: Pick<ShimDeps, 'searchPath' | 'exists' | 'realPath' | 'home'>): string | undefined {
+export function findNpmBuddi(deps: Pick<ShimDeps, 'searchPath' | 'exists' | 'realPath' | 'home'> & { read?: ShimDeps['read'] }): string | undefined {
   const seen = new Set<string>();
-  for (const dir of [...deps.searchPath, ...npmCandidates(deps.home)]) {
+  for (const dir of [...deps.searchPath, ...npmCandidates(deps.home), path.join(deps.home, '.asdf', 'shims')]) {
     if (dir === '' || seen.has(dir)) continue;
     seen.add(dir);
     const file = path.join(dir, 'buddi');
     if (!deps.exists(file)) continue;
     const real = deps.realPath(file);
-    if (real !== undefined && isNpmBuddi(real)) return file;
+    if ((real !== undefined && isNpmBuddi(real)) || managedNpmBuddi(file, real, deps)) return file;
   }
   return undefined;
+}
+
+/**
+ * The first `buddi` on PATH, when it comes before `installed` and is not one
+ * of our shims: a terminal would run that one instead.
+ */
+export function shadowingBuddi(installed: string, deps: Pick<ShimDeps, 'searchPath' | 'exists' | 'read'>): string | undefined {
+  for (const dir of deps.searchPath) {
+    if (dir === '') continue;
+    if (path.resolve(dir) === path.resolve(path.dirname(installed))) return undefined;
+    const file = path.join(dir, 'buddi');
+    if (!deps.exists(file)) continue;
+    if (readShim(deps.read(file) ?? '') === undefined) return file;
+  }
+  return undefined;
+}
+
+function shadowLines(installed: string, deps: Pick<ShimDeps, 'searchPath' | 'exists' | 'read'>): string[] {
+  const other = shadowingBuddi(installed, deps);
+  return other === undefined ? [] : [`Warning: another buddi comes first on your PATH, at ${other}; a terminal runs that one, not buddi.app's. Remove it, or put ${path.dirname(installed)} before ${path.dirname(other)} in PATH.`];
 }
 
 /** Install (or refresh) the shim for this app and data directory. */
@@ -134,11 +205,11 @@ export async function installShim(target: ShimTarget, deps: ShimDeps): Promise<S
   }
   try {
     await deps.write(SYSTEM_SHIM, script);
-    return { ok: true, file: SYSTEM_SHIM, lines: [`buddi is at ${SYSTEM_SHIM}. Open a new terminal and run buddi status.`] };
+    return { ok: true, file: SYSTEM_SHIM, lines: [`buddi is at ${SYSTEM_SHIM}. Open a new terminal and run buddi status.`, ...shadowLines(SYSTEM_SHIM, deps)] };
   } catch { /* /usr/local/bin is root's: ask once. */ }
   try {
     await deps.writeAsAdmin(SYSTEM_SHIM, script);
-    return { ok: true, file: SYSTEM_SHIM, lines: [`buddi is at ${SYSTEM_SHIM}. Open a new terminal and run buddi status.`] };
+    return { ok: true, file: SYSTEM_SHIM, lines: [`buddi is at ${SYSTEM_SHIM}. Open a new terminal and run buddi status.`, ...shadowLines(SYSTEM_SHIM, deps)] };
   } catch { /* Declined, or no administrator: the owner's own folder. */ }
   const own = userShim(deps.home);
   await deps.write(own, script);
@@ -150,6 +221,7 @@ export async function installShim(target: ShimTarget, deps: ShimDeps): Promise<S
     lines: [
       `buddi is at ${own}.`,
       ...(onPath ? [] : [`That folder is not on your PATH yet. Add it with: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile, then open a new terminal.`]),
+      ...shadowLines(own, deps),
     ],
   };
 }

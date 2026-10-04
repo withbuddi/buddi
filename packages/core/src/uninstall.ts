@@ -171,3 +171,23 @@ export async function clearTelegramMenu(token: string, chatIds: readonly string[
     if (!response.ok) throw new Error(`Telegram answered ${response.status}`);
   }
 }
+
+/**
+ * The backup passphrase, read just before the vault that keeps it goes.
+ * `read` answers undefined only when the vault confirms there is none; a read
+ * that failed (a locked keychain, a vault that would not open) throws, and
+ * this stops the uninstall with nothing removed, unless the owner said
+ * `--i-have-the-passphrase`. A failure is never taken for "no passphrase".
+ */
+export async function passphraseBeforeRemoval(read: () => Promise<string | undefined>, havePassphrase: boolean): Promise<string | undefined> {
+  try {
+    return await read();
+  } catch (error) {
+    if (havePassphrase) return undefined;
+    const why = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `The backup passphrase could not be read from the vault (${why.replace(/[.\s]+$/, '')}), and the vault is about to go with it. ` +
+        'Unlock or fix the vault and run buddi uninstall again, or pass --i-have-the-passphrase when you already have the six words written down.',
+    );
+  }
+}

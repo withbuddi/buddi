@@ -133,22 +133,32 @@ enum Uninstall {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// Stop buddi, run the launcher's uninstall, move the app to the Trash, quit.
+    /// Stop buddi, run the launcher's uninstall; when it all went, move the app
+    /// to the Trash and quit. When it did not, the app stays (it is the way to
+    /// try again), says why, and offers Retry.
     static func finish(supervisor: Supervisor, keepData: Bool) {
+        supervisor.shutdown { runLauncherUninstall(supervisor: supervisor, keepData: keepData) }
+    }
+
+    private static func runLauncherUninstall(supervisor: Supervisor, keepData: Bool) {
         let progress = ProgressPanel(title: "Uninstalling buddi…")
         progress.show()
-        supervisor.shutdown {
-            Task.detached {
-                let result = await supervisor.runUninstall(keepData: keepData)
-                await MainActor.run {
-                    progress.close()
-                    if result.status != 0 {
-                        let failed = NSAlert()
-                        failed.messageText = "Not everything was removed"
-                        failed.informativeText = String(result.output.suffix(1200))
-                        NSApp.activate()
-                        failed.runModal()
+        Task.detached {
+            let result = await supervisor.runUninstall(keepData: keepData)
+            await MainActor.run {
+                progress.close()
+                switch UninstallPolicy.afterwards(status: result.status, output: result.output) {
+                case .keepApp(let reason):
+                    let failed = NSAlert()
+                    failed.messageText = "buddi was not completely uninstalled"
+                    failed.informativeText = reason + "\n\nbuddi.app stays so you can try again."
+                    failed.addButton(withTitle: "Retry")
+                    failed.addButton(withTitle: "Close")
+                    NSApp.activate()
+                    if failed.runModal() == .alertFirstButtonReturn {
+                        runLauncherUninstall(supervisor: supervisor, keepData: keepData)
                     }
+                case .trashAndQuit:
                     if LaunchAtLogin.isEnabled { LaunchAtLogin.setEnabled(false) }
                     let bundle = Bundle.main.bundleURL
                     NSWorkspace.shared.recycle([bundle]) { _, error in
@@ -160,10 +170,13 @@ enum Uninstall {
         }
     }
 
-    /// The supervisor left for the app to finish (Settings → System): read what the owner chose.
+    /// The supervisor left for the app to finish (Settings → System): read what
+    /// the owner chose, and delete the request at once. Left behind (with Keep
+    /// my data, the folder stays), a later exit 76 would run it again.
     static func pendingRequest(data: URL) -> Bool? {
         let file = data.appendingPathComponent(UninstallPolicy.requestFile)
         guard let contents = try? Data(contentsOf: file) else { return nil }
+        try? FileManager.default.removeItem(at: file)
         return UninstallPolicy.keepData(fromRequest: contents)
     }
 }

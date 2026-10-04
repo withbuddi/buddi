@@ -16,7 +16,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { passphraseFileFor, passphraseFileText, runUninstallPlan } from '@buddi/core/uninstall';
+import { passphraseBeforeRemoval, passphraseFileFor, passphraseFileText, runUninstallPlan } from '@buddi/core/uninstall';
 import type { RemovalStep, UninstallIo } from '@buddi/core/uninstall';
 
 export interface CheckoutUninstallOptions {
@@ -149,11 +149,11 @@ export async function uninstallCheckout(options: CheckoutUninstallOptions, deps:
           lines.push(`A copy is ${copy}.`);
         }
         if (secretsGo && (archive === undefined || archive.endsWith('.age'))) {
-          const phrase = await deps.passphrase().catch(() => undefined);
+          const phrase = await passphraseBeforeRemoval(deps.passphrase, options.havePassphrase === true);
           if (phrase !== undefined) await keepPhrase(phrase, archives.map(passphraseFileFor), archive);
         }
       } else if (secretsGo && !options.havePassphrase) {
-        const phrase = await deps.passphrase().catch(() => undefined);
+        const phrase = await passphraseBeforeRemoval(deps.passphrase, false);
         if (phrase !== undefined) {
           const stamp = (deps.now ?? (() => new Date()))().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
           await keepPhrase(phrase, [path.join(options.copyTo ?? deps.backupDir, `buddi-passphrase-${stamp}.txt`)]);

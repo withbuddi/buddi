@@ -122,17 +122,35 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     argv.splice(at, 2);
     return value;
   };
+  const flag = (name) => {
+    const at = argv.indexOf(`--${name}`);
+    if (at === -1) return false;
+    argv.splice(at, 1);
+    return true;
+  };
   const shellText = option('shell');
   const previousFile = option('previous');
+  const firstFeed = flag('first-feed');
   const [version, dmg, signature, outDir] = argv;
   if (!version || !dmg || !signature || !outDir) {
-    console.error('usage: appcast.mjs <version> <dmg> "<sign_update output>" <out-dir> [--shell <n>] [--previous <appcast.xml>]');
+    console.error('usage: appcast.mjs <version> <dmg> "<sign_update output>" <out-dir> [--shell <n> (--previous <appcast.xml> | --first-feed)]');
     process.exit(2);
   }
   const shell = shellText === undefined ? undefined : Number(shellText.trim());
   if (shell !== undefined && !(Number.isInteger(shell) && shell > 0)) { console.error(`--shell must be a whole number, not ${shellText}`); process.exit(2); }
+  // With a shell, the live feed decides whether a Sparkle item goes out: it is
+  // read, or said to be the first one. An unreadable feed is never "no feed".
+  if (shell !== undefined && previousFile === undefined && !firstFeed) {
+    console.error('--shell needs the live feed: --previous <appcast.xml>, or --first-feed when there is none yet');
+    process.exit(2);
+  }
   let previous;
-  try { previous = previousFile ? readFileSync(previousFile, 'utf8') : undefined; } catch { previous = undefined; }
+  if (previousFile !== undefined) {
+    try { previous = readFileSync(previousFile, 'utf8'); } catch (error) {
+      console.error(`could not read the live feed ${previousFile}: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  }
   let section;
   try { section = sectionOf(readFileSync(CHANGELOG, 'utf8'), version); }
   catch { section = `- The notes are on https://github.com/withbuddi/buddi/releases/tag/v${version}`; }

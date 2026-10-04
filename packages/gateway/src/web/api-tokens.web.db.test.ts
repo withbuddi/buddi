@@ -107,7 +107,7 @@ suite('owner API tokens', () => {
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
     await ensureOwner(pool, 'owner');
     const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
-    common = { pool, registry: new ToolRegistry(), catalog, ctx, timezone: 'UTC', now, token: TOKEN, log: () => {}, config: { enabled: true, host: '127.0.0.1', port: 0 } };
+    common = { pool, registry: new ToolRegistry(), catalog, ctx, timezone: 'UTC', now, token: TOKEN, log: () => {}, config: { enabled: true, host: '127.0.0.1', port: 0 }, env: { ...process.env, BUDDI_VAULT: 'memory', BUDDI_SUPERVISOR_SOCKET: '' } };
     // The open loopback binding, where the dashboard mints a session; and one that asks for sign-in, as an install does.
     open = await startWebServer(common);
     openBase = `http://127.0.0.1:${open.port}`;

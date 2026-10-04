@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { mkdtemp, readFile, writeFile, readdir, symlink, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, readdir, symlink, chmod } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,7 +19,9 @@ import {
   initialize,
   freePort,
   movePortsIfTaken,
+  movedHere,
   portMovedLines,
+  stopOrphanGateway,
   vaultServiceFor,
 } from './environment.js';
 
@@ -145,6 +148,33 @@ describe('installation.json says who the installation is', () => {
     expect(state).toEqual({ ...old, kind: 'packaged', dataDir: data, vaultService: vaultServiceFor(data) });
   });
 
+  test('a folder moved or restored to a new path takes its identity along, when it has the cluster and this supervisor holds its lock', async () => {
+    const data = await mkdtemp(path.join(os.tmpdir(), 'buddi-moved-'));
+    const old = { version: 1, database: 'managed' as const, webPort: await freePort(), dbPort: await freePort(), phase: 'ready', kind: 'packaged' as const, dataDir: '/Volumes/Old/buddi', vaultService: vaultServiceFor('/Volumes/Old/buddi') };
+    await writeFile(path.join(data, 'installation.json'), JSON.stringify(old));
+    // Not yet: no cluster here, so a stray installation.json does not take the identity.
+    await writeFile(path.join(data, 'supervisor.lock'), String(process.pid));
+    expect(movedHere(old, data)).toBe(false);
+    await mkdir(path.join(data, 'postgres'));
+    await writeFile(path.join(data, 'postgres', 'PG_VERSION'), '16\n');
+    // Nor when another process holds the lock.
+    expect(movedHere(old, data, process.pid + 1)).toBe(false);
+    expect(movedHere(old, data)).toBe(true);
+    const ctx = { root: '/opt/buddi', data, env: { BUDDI_VAULT: 'memory', BUDDI_ENV_FILE: path.join(data, '.env') } as NodeJS.ProcessEnv, state: { ...old } };
+    await initialize(ctx);
+    const state = JSON.parse(await readFile(path.join(data, 'installation.json'), 'utf8')) as Record<string, unknown>;
+    expect(state).toMatchObject({ dataDir: data, vaultService: vaultServiceFor(data), webPort: old.webPort });
+    expect(identityMismatch(state as never, data, vaultServiceFor(data))).toBeUndefined();
+  });
+
+  test('a stale uninstall.json is deleted at start, so a later exit 76 cannot act on it', async () => {
+    const data = await mkdtemp(path.join(os.tmpdir(), 'buddi-request-'));
+    await writeFile(path.join(data, 'uninstall.json'), JSON.stringify({ keepData: true, at: '2026-10-01T10:00:00Z' }));
+    const ctx = { root: '/opt/buddi', data, env: { BUDDI_VAULT: 'memory', BUDDI_ENV_FILE: path.join(data, '.env') } as NodeJS.ProcessEnv };
+    await initialize(ctx);
+    expect(existsSync(path.join(data, 'uninstall.json'))).toBe(false);
+  });
+
   test('a mismatch is said; a match or an older file is not', () => {
     const data = '/Users/me/Library/Application Support/buddi';
     expect(identityMismatch(undefined, data, 'x')).toBeUndefined();
@@ -188,9 +218,61 @@ describe('a recorded port another program took', () => {
     expect(await movePortsIfTaken({ ...state, database: 'external' }, deps([5555]))).toBeUndefined();
   });
 
+  test('the web port held by this installation\'s own orphaned gateway is taken back, not moved', async () => {
+    const taken = [4317];
+    const d = { ...deps(taken), stopOwnGateway: async () => { taken.length = 0; return true; } };
+    expect(await movePortsIfTaken(state, d)).toBeUndefined();
+    // No gateway of ours to stop: a stranger's, and it moves.
+    expect(await movePortsIfTaken(state, { ...deps([4317]), stopOwnGateway: async () => false })).toMatchObject({ webPort: 4391 });
+  });
+
   test('two moved ports never land on each other', async () => {
     const d = deps([4317, 5555]);
     const moved = await movePortsIfTaken(state, d);
     expect(moved!.webPort).not.toBe(moved!.dbPort);
+  });
+});
+
+describe('an orphaned gateway of this installation', () => {
+  const orphan = (over: { pid?: string; command?: string; dies?: 'term' | 'kill' | 'never' } = {}) => {
+    const signals: string[] = [];
+    let alive = true;
+    let removed = false;
+    return {
+      signals,
+      removed: () => removed,
+      deps: {
+        read: () => over.pid ?? '4242',
+        alive: () => alive,
+        command: () => over.command ?? '/Applications/buddi.app/Contents/Resources/node /x/launcher.js __gateway',
+        signal: (_pid: number, signal: NodeJS.Signals) => {
+          signals.push(signal);
+          if ((signal === 'SIGTERM' && (over.dies ?? 'term') === 'term') || signal === 'SIGKILL') alive = false;
+        },
+        remove: () => { removed = true; },
+        sleep: async () => {},
+        graceMs: 1000,
+      },
+    };
+  };
+
+  test('is stopped when gateway.pid names a live buddi gateway', async () => {
+    const o = orphan();
+    expect(await stopOrphanGateway('/d', o.deps)).toBe(true);
+    expect(o.signals).toEqual(['SIGTERM']);
+    expect(o.removed()).toBe(true);
+    const stubborn = orphan({ dies: 'kill' });
+    stubborn.deps.signal = (_pid, signal) => { stubborn.signals.push(signal); if (signal === 'SIGKILL') stubborn.deps.alive = () => false; };
+    expect(await stopOrphanGateway('/d', stubborn.deps)).toBe(true);
+    expect(stubborn.signals).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  test('a reused pid or no file stops nothing', async () => {
+    const reused = orphan({ command: '/usr/bin/vim notes.txt' });
+    expect(await stopOrphanGateway('/d', reused.deps)).toBe(false);
+    expect(reused.signals).toEqual([]);
+    const none = orphan({ pid: '' });
+    expect(await stopOrphanGateway('/d', none.deps)).toBe(false);
+    expect(none.signals).toEqual([]);
   });
 });

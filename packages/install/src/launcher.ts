@@ -23,7 +23,7 @@ import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
 import { APP_RUNNING_LINE, appLayout, insideAppBundle, runsAppCopy } from './app-layout.js';
-import { shimDoctorLines, shimsFor } from './cli-shim.js';
+import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
 
 const entry = fileURLToPath(import.meta.url);
@@ -489,6 +489,12 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
 
 async function run(): Promise<void> {
   let ctx = await environment(root);
+  // A supervisor started through buddi.app's command line tool would compete with the app's own (cli-shim.ts).
+  if (args[0] === 'supervise' && process.platform === 'darwin' && (process.env[SHIM_VAR] ?? '').trim() !== '') {
+    console.error(`buddi: ${SHIM_REFUSAL}`);
+    process.exitCode = 2;
+    return;
+  }
   if (args[0] === 'supervise') return supervise(ctx);
   if (args[0] === '__gateway') {
     // Parent death must not leave two gateways claiming jobs on the next boot.
@@ -510,6 +516,30 @@ async function run(): Promise<void> {
     console.error("Run this from the app's menu, or set BUDDI_DATA_DIR to the installation you mean.");
     process.exitCode = 2;
     return;
+  }
+  /*
+   * Through buddi.app's command line tool (cli-shim.ts): the app runs buddi
+   * here. Starting it opens the app (and waits for its supervisor) instead of
+   * installing a LaunchAgent that would compete with it; a service of its own
+   * is refused; everything else talks to the app's supervisor as usual.
+   */
+  const viaShim = process.platform === 'darwin' && (process.env[SHIM_VAR] ?? '').trim() !== '';
+  if (viaShim && !wantsHelp) {
+    const action = shimAction(args);
+    if (action === 'refuse') { console.error(`buddi: ${SHIM_REFUSAL}`); process.exitCode = 2; return; }
+    if (action === 'open-app' && !(await control(ctx).then(() => true, () => false))) {
+      console.log('Opening buddi.app.');
+      const app = (process.env[SHIM_VAR] ?? '').trim();
+      await exec('open', ['-b', APP_BUNDLE_ID], { env: nativeEnvironment(ctx.env) })
+        .catch(() => exec('open', [app], { env: nativeEnvironment(ctx.env) }));
+      const deadline = Date.now() + 120_000;
+      for (;;) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        ctx = await environment(root);
+        if (await control(ctx).then(() => true, () => false)) break;
+        if (Date.now() > deadline) throw new Error(`buddi.app did not start buddi within two minutes. Open it from ${app}, and inspect ${path.join(ctx.data, 'logs/supervisor.log')}.`);
+      }
+    }
   }
   if (!wantsHelp && args[0] === 'uninstall') { process.exitCode = await uninstall(ctx, args.slice(1)); return; }
   const serviceJson = args.slice(2).every(arg => arg === '--json') && (args.includes('--json') || process.env.BUDDI_JSON === '1');
@@ -643,13 +673,15 @@ async function run(): Promise<void> {
         if (status.installRoot === root && status.nodePath === process.execPath) {
           if (status.gateway === 'stopped') await control(ctx, 'start');
           running = true;
-        } else if (runsFromApp(status, ctx) && !isAppInstall(ctx)) {
+        } else if (runsFromApp(status, ctx) && (!isAppInstall(ctx) || viaShim)) {
           // npm's buddi, with buddi.app running this installation: install no service, talk to the app's.
           console.log(APP_RUNNING_LINE);
           running = true;
         }
       } catch { /* A missing supervisor is normal on first run. */ }
     }
+    // The shim never installs a service beside buddi.app (it opened the app above).
+    if (!running && viaShim) throw new Error('buddi.app is not running buddi. Open buddi.app, then run buddi again.');
     if (!running) {
       if (!relaunched) {
         console.log('Starting Buddi. First run provisions a private Postgres cluster.');

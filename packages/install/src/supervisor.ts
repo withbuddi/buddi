@@ -11,13 +11,13 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, openSync, closeSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { createWriteStream, existsSync, openSync, closeSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import { readFile, chmod, unlink, lstat, mkdir, rename, copyFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { acquireLock, initialize, atomicJson, stopChild, portMovedLines, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
+import { GATEWAY_PID_FILE, acquireLock, initialize, atomicJson, stopChild, portMovedLines, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
 import { APP_UNINSTALL_EXIT, UNINSTALL_REQUEST, createProductUninstall } from './product-uninstall.js';
 import type { ProductUninstall } from './product-uninstall.js';
 import { installShim, shimsFor } from './cli-shim.js';
@@ -501,9 +501,15 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       const started = Date.now();
       child = spawn(process.execPath, [LAUNCHER, '__gateway'], { env: ready.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
       console.error(`supervisor: gateway started (pid ${child.pid}).`);
+      // Recorded, so a supervisor that dies and leaves it running is not taken
+      // for a stranger holding the web port at the next start (environment.ts).
+      const pidFile = path.join(ready.data, GATEWAY_PID_FILE);
+      const pid = child.pid;
+      if (pid !== undefined) void writeFile(pidFile, String(pid), { mode: 0o600 }).catch(() => {});
       child.stdout!.pipe(log!, { end: false }); child.stderr!.pipe(log!, { end: false });
       child.once('error', () => console.error('Gateway could not start; check the installed Node executable.'));
       child.once('close', () => {
+        if (pid !== undefined && (() => { try { return readFileSync(pidFile, 'utf8'); } catch { return ''; } })() === String(pid)) rmSync(pidFile, { force: true });
         if (Date.now() - started >= 60_000) failures = 0;
         if (desired && !closing && database!.alive) retry = setTimeout(start, restartDelay(failures++));
       });

@@ -17,9 +17,21 @@ import { config as loadDotenv, parse as parseDotenv } from 'dotenv';
 /** `packages/cli/dist` at runtime, `packages/cli/src` under vitest. */
 export const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
-/** A directory is the repo root when it holds the workspace manifest. */
+/**
+ * A directory is buddi's repo root when it holds the workspace manifest, its
+ * package.json is buddi's (`"name": "buddi"`) and it has `packages/cli`. A
+ * manifest alone is any pnpm monorepo: `npx @withbuddi/buddi` run inside
+ * someone else's would otherwise take itself for a checkout (the class of the
+ * 2026-10-04 keychain purge).
+ */
 export function isRepoRoot(dir: string): boolean {
-  return existsSync(path.join(dir, 'pnpm-workspace.yaml'));
+  if (!existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return false;
+  if (!existsSync(path.join(dir, 'packages', 'cli', 'package.json'))) return false;
+  try {
+    return (JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: unknown }).name === 'buddi';
+  } catch {
+    return false;
+  }
 }
 
 /**

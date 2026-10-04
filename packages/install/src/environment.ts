@@ -10,12 +10,12 @@
  */
 import { mkdir, readFile, writeFile, rename, open, stat, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { existsSync, readdirSync, readFileSync, constants } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, constants } from 'node:fs';
 import { randomBytes, createHash, createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import type { ChildProcess } from 'node:child_process';
+import { execFileSync, type ChildProcess } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 
 /** What a packaged installation persists in `installation.json`. */
@@ -75,6 +75,12 @@ export interface PortMoveDeps {
   pick: () => Promise<number>;
   /** The port our own cluster's `postmaster.pid` records, when there is one (an orphan we will stop, not a stranger). */
   ownClusterPort: () => number | undefined;
+  /**
+   * Stop this installation's own gateway left running by a supervisor that
+   * died (`gateway.pid`): true when one was stopped. Its web port is ours, not
+   * a stranger's, and is looked at again rather than given up.
+   */
+  stopOwnGateway?: () => Promise<boolean>;
   sleep: (ms: number) => Promise<void>;
   now: () => Date;
   /** How many times a taken port is looked at again before it is given up: a gateway that just died lets go in a moment. */
@@ -97,7 +103,7 @@ export async function movePortsIfTaken(state: InstallationState, deps: PortMoveD
   };
   const moved: NonNullable<InstallationState['portMoved']> = { at: deps.now().toISOString() };
   let webPort = state.webPort, dbPort = state.dbPort;
-  if (await taken(webPort)) {
+  if (await taken(webPort) && !(deps.stopOwnGateway && await deps.stopOwnGateway() && !(await taken(webPort)))) {
     let to = await deps.pick();
     while (to === dbPort) to = await deps.pick();
     moved.web = { from: webPort, to };
@@ -111,6 +117,54 @@ export async function movePortsIfTaken(state: InstallationState, deps: PortMoveD
   }
   if (!moved.web && !moved.db) return undefined;
   return { ...state, webPort, dbPort, portMoved: moved };
+}
+
+/** Where the supervisor records its gateway's pid while it runs, beside `supervisor.lock`. */
+export const GATEWAY_PID_FILE = 'gateway.pid';
+
+export interface OrphanGatewayDeps {
+  read: () => string | undefined;
+  alive: (pid: number) => boolean;
+  /** The process's command line, or undefined when it cannot be read. */
+  command: (pid: number) => string | undefined;
+  signal: (pid: number, signal: NodeJS.Signals) => void;
+  remove: () => void;
+  sleep: (ms: number) => Promise<void>;
+  /** How long a SIGTERM is given before SIGKILL. */
+  graceMs?: number;
+}
+
+function defaultOrphanDeps(data: string): OrphanGatewayDeps {
+  const file = path.join(data, GATEWAY_PID_FILE);
+  return {
+    read: () => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } },
+    alive: pid => { try { process.kill(pid, 0); return true; } catch (e) { return errorCode(e) === 'EPERM'; } },
+    command: pid => {
+      if (process.platform === 'win32') return undefined;
+      try { return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return undefined; }
+    },
+    signal: (pid, signal) => { try { process.kill(pid, signal); } catch { /* gone already */ } },
+    remove: () => { rmSync(file, { force: true }); },
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+  };
+}
+
+/**
+ * This installation's gateway, still running after its supervisor died: the
+ * pid `gateway.pid` records, if it is alive and still a buddi gateway (the
+ * pid was not reused). Stopped (SIGTERM, then SIGKILL) so the next start can
+ * have its port back. True when one was stopped.
+ */
+export async function stopOrphanGateway(data: string, deps: OrphanGatewayDeps = defaultOrphanDeps(data)): Promise<boolean> {
+  const pid = Number((deps.read() ?? '').trim());
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  if (!deps.alive(pid) || !(deps.command(pid) ?? '').includes('__gateway')) { deps.remove(); return false; }
+  deps.signal(pid, 'SIGTERM');
+  const grace = deps.graceMs ?? 10_000;
+  for (let waited = 0; waited < grace && deps.alive(pid); waited += 250) await deps.sleep(250);
+  if (deps.alive(pid)) deps.signal(pid, 'SIGKILL');
+  deps.remove();
+  return true;
 }
 
 /** The keychain namespace of the installation in `data`: `buddi.install.<sha256(data)[:20]>`. */
@@ -424,6 +478,21 @@ export async function acquireLock(data: string): Promise<() => Promise<void>> {
   throw new Error('Could not acquire the installation lock.');
 }
 
+/** `uninstall.json` (product-uninstall.ts's UNINSTALL_REQUEST), named here so this module imports nothing of buddi's. */
+export const UNINSTALL_REQUEST_FILE = 'uninstall.json';
+
+/**
+ * Has the installation in `data` been moved here from the folder its
+ * `installation.json` names? Only when the folder holds a managed cluster
+ * (`postgres/PG_VERSION`) and this process holds its `supervisor.lock`: a
+ * stray file in some other folder never takes the identity.
+ */
+export function movedHere(state: InstallationState, data: string, pid: number = process.pid): boolean {
+  if (state.dataDir === undefined || path.resolve(state.dataDir) === path.resolve(data)) return false;
+  if (!existsSync(path.join(data, 'postgres', 'PG_VERSION'))) return false;
+  try { return readFileSync(path.join(data, 'supervisor.lock'), 'utf8').trim() === String(pid); } catch { return false; }
+}
+
 function identity(data: string): Pick<InstallationState, 'kind' | 'dataDir' | 'vaultService'> {
   return { kind: 'packaged', dataDir: path.resolve(data), vaultService: vaultServiceFor(path.resolve(data)) };
 }
@@ -457,6 +526,11 @@ export async function initialize(ctx: InstallContext): Promise<void> {
         const port = Number(pid.split('\n')[3]);
         return Number.isInteger(port) && port > 0 ? port : undefined;
       },
+      stopOwnGateway: async () => {
+        const stopped = await stopOrphanGateway(ctx.data);
+        if (stopped) console.error('supervisor: stopped a gateway of this installation left running by a supervisor that did not exit cleanly.');
+        return stopped;
+      },
       sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
       now: () => new Date(),
     });
@@ -466,6 +540,16 @@ export async function initialize(ctx: InstallContext): Promise<void> {
       for (const line of portMovedLines(movedState.portMoved)) console.error(`supervisor: ${line}`);
     }
   }
+  if (movedHere(ctx.state, ctx.data)) {
+    // The folder was moved or restored to a new path: it has this installation's
+    // cluster and this supervisor holds its lock, so it is this installation.
+    // The identity follows it (or uninstall would refuse it for ever).
+    console.error(`supervisor: ${path.join(ctx.data, 'installation.json')} was written for ${ctx.state.dataDir}; this folder is now at ${path.resolve(ctx.data)}, so it says so from now on (keychain namespace ${vaultServiceFor(path.resolve(ctx.data))}).`);
+    ctx.state = { ...ctx.state, ...identity(ctx.data) };
+    await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
+  }
+  // A Remove buddi request the app did not read (it deletes it when it does) is never acted on later.
+  rmSync(path.join(ctx.data, UNINSTALL_REQUEST_FILE), { force: true });
   if (ctx.state.kind === undefined || ctx.state.dataDir === undefined || ctx.state.vaultService === undefined) {
     // An installation provisioned before the file said who it is: said now, once.
     ctx.state = { ...ctx.state, ...identity(ctx.data) };

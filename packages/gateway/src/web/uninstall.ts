@@ -91,20 +91,32 @@ export async function uninstallJobRoute(deps: UninstallDeps, id: string): Promis
   return reply;
 }
 
-/** The removal, once the owner said they wrote the words down. The token is spent either way. */
+/**
+ * The removal, once the owner said they wrote the words down. The token is
+ * spent only when the supervisor accepted (202): a 409 (no backup yet, a
+ * restore running) or a 503 leaves it good for the owner's next try.
+ */
 export async function uninstallRoute(deps: UninstallDeps, tokens: TokenStore, body: Record<string, unknown>): Promise<RouteReply> {
   const socket = supervisorSocket(deps.env);
   if (!socket) return { status: 409, body: { error: CHECKOUT_UNINSTALL } };
   if (!tokens.check(body.token, (deps.now ?? (() => new Date()))().getTime())) return REFUSED;
   if (body.wroteItDown !== true) return { status: 400, body: { error: 'Tick "I wrote it down" first: the passphrase is the only thing that opens your backups.' } };
   if (body.keepData !== undefined && typeof body.keepData !== 'boolean') return { status: 400, body: { error: '"keepData" must be true or false.' } };
-  tokens.spend();
-  return forward(socket, '/uninstall', 'POST', { keepData: body.keepData === true });
+  const answer = await forward(socket, '/uninstall', 'POST', { keepData: body.keepData === true });
+  if (answer.status === 202) tokens.spend();
+  return answer;
 }
 
-/** A backups job as the backups page sees it: an uninstall's words are not for that route. */
+/**
+ * A supervisor job as a generic job route (`/api/backups/jobs/:id`,
+ * `/api/upgrade/jobs/:id`) sees it. Both forward the same jobs map, so an
+ * uninstall's job is not theirs (404: only the local, token-guarded
+ * `/api/system/uninstall/jobs/:id` shows it), and no report's `passphrase`
+ * ever leaves through them.
+ */
 export function withoutPassphrase(reply: RouteReply): RouteReply {
-  const body = reply.body as { report?: { passphrase?: unknown } } | null;
+  const body = reply.body as { kind?: unknown; report?: { passphrase?: unknown } } | null;
+  if (reply.status === 200 && body?.kind === 'uninstall-backup') return { status: 404, body: { error: 'no such job' } };
   if (reply.status !== 200 || !body?.report || body.report.passphrase === undefined) return reply;
   const { passphrase: _gone, ...report } = body.report;
   return { status: 200, body: { ...body, report } };

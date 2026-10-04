@@ -1,3 +1,8 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { appcast, notesHtml, publishesAppcast, shellOf, signatureAttributes } from './appcast.mjs';
 
@@ -39,5 +44,24 @@ describe('the appcast', () => {
     expect(publishesAppcast(1, old)).toBe(true);
     expect(publishesAppcast(1, undefined)).toBe(true);
     expect(publishesAppcast(undefined, live)).toBe(true);
+  });
+
+  test('never decides blind: an unreadable live feed fails, only --first-feed means there is none', () => {
+    const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'appcast.mjs');
+    const dir = mkdtempSync(path.join(tmpdir(), 'appcast-'));
+    const dmg = path.join(dir, 'buddi-0.1.0-pre.41.dmg');
+    writeFileSync(dmg, 'dmg');
+    const run = (...extra) => spawnSync(process.execPath, [script, '0.1.0-pre.41', dmg, 'sparkle:edSignature="a" length="3"', dir, '--shell', '1', ...extra], { encoding: 'utf8' });
+    const missing = run('--previous', path.join(dir, 'not-there.xml'));
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toMatch(/could not read the live feed/);
+    expect(existsSync(path.join(dir, 'appcast.xml'))).toBe(false);
+    expect(run().status).toBe(2);
+    const live = path.join(dir, 'live.xml');
+    writeFileSync(live, appcast({ version: '0.1.0-pre.40', file: 'b.dmg', signature: 'sparkle:edSignature="a" length="1"', notes: '', shell: 1 }));
+    expect(run('--previous', live).status).toBe(0);
+    expect(existsSync(path.join(dir, 'appcast.xml'))).toBe(false);
+    expect(run('--first-feed').status).toBe(0);
+    expect(existsSync(path.join(dir, 'appcast.xml'))).toBe(true);
   });
 });

@@ -109,8 +109,12 @@ function RemoveDialog({ plan, onClose }: { plan: UninstallPlan; onClose: () => v
     api
       .uninstall({ token: plan.token, wroteItDown: true, keepData })
       .catch((error: unknown) => {
-        // The gateway going away mid-answer is the removal under way.
-        if (error instanceof ApiError && error.status !== 0 && error.status < 500) { setFailed(error.message); setStep('words'); }
+        // Only the connection dropping mid-answer (status 0) is the removal under
+        // way: the supervisor took the gateway down. Any answer that came back
+        // — a 409, a 503 "not answering on its control socket" — removed nothing.
+        if (error instanceof ApiError && error.status === 0) return;
+        setFailed(error instanceof ApiError ? error.message : String(error));
+        setStep('words');
       });
   };
 

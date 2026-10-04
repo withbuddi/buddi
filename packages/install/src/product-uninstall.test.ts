@@ -1,6 +1,6 @@
 /** Uninstall from the product, against a fake machine: nothing is moved, written or spawned for real. */
 import { describe, expect, it } from 'vitest';
-import { createProductUninstall } from './product-uninstall.js';
+import { createProductUninstall, PASSPHRASE_HELD_MS } from './product-uninstall.js';
 import type { ProductUninstallDeps } from './product-uninstall.js';
 
 const home = '/Users/owner';
@@ -104,5 +104,34 @@ describe('uninstall from the product', () => {
     expect(m.requests).toEqual([{ keepData: false, at: '2026-10-04T10:00:00.000Z' }]);
     expect(m.exited()).toBe(1);
     expect(m.spawned).toEqual([]);
+  });
+
+  it('holds the six words only while the page needs them: dropped on start, on a new plan, or after 30 minutes', async () => {
+    const PHRASE = 'able acid actor adult afraid agent';
+    // On start.
+    const a = machine();
+    const one = a.uninstall.keepLast();
+    if ('status' in one) throw new Error(one.error);
+    expect((await finished(a, one.id)).report?.passphrase).toBe(PHRASE);
+    a.uninstall.start({ keepData: false });
+    expect(a.uninstall.job(one.id)?.report).toEqual({ archive: `${home}/buddi-backups/${NAME}`, passphraseFile: `${home}/buddi-backups/${NAME}.passphrase.txt` });
+    // On a new plan (the dialog cancelled and opened again): the backup still counts.
+    const b = machine();
+    const two = b.uninstall.keepLast();
+    if ('status' in two) throw new Error(two.error);
+    await finished(b, two.id);
+    b.uninstall.plan();
+    expect(b.uninstall.job(two.id)?.report?.passphrase).toBeUndefined();
+    expect(b.uninstall.start({ keepData: false })).toEqual({ status: 202 });
+    // After the hold.
+    let clock = new Date('2026-10-04T10:00:00Z');
+    const c = machine({ now: () => clock });
+    const three = c.uninstall.keepLast();
+    if ('status' in three) throw new Error(three.error);
+    expect((await finished(c, three.id)).report?.passphrase).toBe(PHRASE);
+    clock = new Date(clock.getTime() + PASSPHRASE_HELD_MS - 1);
+    expect(c.uninstall.job(three.id)?.report?.passphrase).toBe(PHRASE);
+    clock = new Date(clock.getTime() + 1);
+    expect(c.uninstall.job(three.id)?.report?.passphrase).toBeUndefined();
   });
 });

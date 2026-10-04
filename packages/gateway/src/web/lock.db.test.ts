@@ -54,6 +54,8 @@ suite('the lock screen', () => {
       token: TOKEN,
       openAccess: true,
       log: () => {},
+      // The passphrase routes read the vault: an in-memory one, never the owner's keychain, and no supervisor.
+      env: { ...process.env, BUDDI_VAULT: 'memory', BUDDI_SUPERVISOR_SOCKET: '' },
     });
   }, 60_000);
 

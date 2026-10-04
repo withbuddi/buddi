@@ -27,12 +27,13 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { passphraseFileFor, passphraseFileText } from '@buddi/core/uninstall';
 import { keptBackupsDir } from './uninstall.js';
+import { UNINSTALL_REQUEST_FILE } from './environment.js';
 
 /** buddi.app reads this exit status as "run the uninstall, trash yourself, quit". */
 export const APP_UNINSTALL_EXIT = 76;
 
 /** The file that tells buddi.app what the owner chose, beside `installation.json`. */
-export const UNINSTALL_REQUEST = 'uninstall.json';
+export const UNINSTALL_REQUEST = UNINSTALL_REQUEST_FILE;
 
 export interface UninstallPlanView {
   data: string;
@@ -91,6 +92,9 @@ export interface ProductUninstall {
   busy(): boolean;
 }
 
+/** How long a finished job keeps the six words for the page to show: as long as the plan's token. */
+export const PASSPHRASE_HELD_MS = 30 * 60_000;
+
 function stamp(now: Date): string {
   return now.toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
 }
@@ -139,10 +143,31 @@ export function createProductUninstall(deps: ProductUninstallDeps): ProductUnins
     }
   };
 
+  /*
+   * The words live in a job's report only while the page needs them: until
+   * the removal starts, a new plan is asked for (the dialog opened again, or
+   * closed and reopened), or PASSPHRASE_HELD_MS after the job finished. They
+   * are in <archive>.passphrase.txt beside the archive after that.
+   */
+  const forgetWords = (job: UninstallJob): void => {
+    if (job.report?.passphrase !== undefined) delete job.report.passphrase;
+  };
+  const forgetAllWords = (): void => { for (const job of jobs.values()) forgetWords(job); };
+  const expire = (job: UninstallJob): UninstallJob => {
+    if (job.finishedAt !== undefined && now().getTime() - Date.parse(job.finishedAt) >= PASSPHRASE_HELD_MS) forgetWords(job);
+    return job;
+  };
+
   return {
-    plan: deps.plan,
+    plan() {
+      forgetAllWords();
+      return deps.plan();
+    },
     busy: () => removing || (running !== undefined && running.finishedAt === undefined),
-    job: id => jobs.get(id),
+    job: id => {
+      const job = jobs.get(id);
+      return job === undefined ? undefined : expire(job);
+    },
     keepLast() {
       if (removing) return { status: 409, error: 'buddi is being removed.' };
       if (running && running.finishedAt === undefined) return running;
@@ -150,7 +175,11 @@ export function createProductUninstall(deps: ProductUninstallDeps): ProductUnins
       jobs.set(job.id, job);
       running = job;
       void run(job).then(
-        () => { phase(job, 'done'); job.finishedAt = now().toISOString(); },
+        () => {
+          phase(job, 'done');
+          job.finishedAt = now().toISOString();
+          setTimeout(() => forgetWords(job), PASSPHRASE_HELD_MS).unref?.();
+        },
         (error: unknown) => { job.error = error instanceof Error ? error.message : String(error); phase(job, 'failed'); job.finishedAt = now().toISOString(); },
       );
       return job;
@@ -160,6 +189,7 @@ export function createProductUninstall(deps: ProductUninstallDeps): ProductUnins
       const kept = running?.phase === 'done' ? running.report : undefined;
       if (kept === undefined) return { status: 409, error: 'Take the last backup first: the passphrase has to be with you before anything is deleted.' };
       removing = true;
+      forgetAllWords();
       const args = ['uninstall', '--yes', '--no-backup', '--i-have-the-passphrase', ...(keepData ? ['--keep-data'] : [])];
       if (deps.appFinishes) {
         void deps.writeRequest({ keepData, at: now().toISOString() }).then(() => deps.exitForApp(), () => { removing = false; });

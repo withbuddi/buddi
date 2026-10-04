@@ -297,6 +297,24 @@ describe('uninstallPackaged: the passphrase leaves with the owner', () => {
     expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(0);
     expect(m.written.size).toBe(0);
   });
+
+  it('a failed passphrase read is not "none": nothing is removed, with or without the last backup', async () => {
+    for (const backup of [true, false]) {
+      const m = machine();
+      m.deps.passphrase = async () => { throw new Error('the keychain is locked'); };
+      expect(await uninstallPackaged({ ...defaults, yes: true, backup }, m.deps), `backup ${backup}`).toBe(1);
+      expect(m.err[0]).toMatch(/could not be read from the vault \(the keychain is locked\).*--i-have-the-passphrase.*Nothing was removed\.$/);
+      expect(m.removed).toEqual([]);
+      expect(m.purged).toEqual([]);
+    }
+  });
+
+  it('--i-have-the-passphrase goes ahead past a failed read', async () => {
+    const m = machine();
+    m.deps.passphrase = async () => { throw new Error('the keychain is locked'); };
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
+    expect(m.purged.length).toBeGreaterThan(0);
+  });
 });
 
 describe('uninstallPackaged: buddi.app\'s command line tool', () => {

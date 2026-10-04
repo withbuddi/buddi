@@ -872,10 +872,11 @@ class OpenAiStreamAssembly {
    * of each side is emitted, so a tag that arrives in pieces — and a block
    * that is still open — can never leak a word into the answer. A content
    * head that might still turn out to be an opening tag is held back until it
-   * is one or is not.
+   * is one or is not — or until the stream ends (`final`): a whole answer
+   * that is such a head ("a", "An", "Ana") is the answer, and is handed on.
    */
-  #emit(): void {
-    if (mightOpenThought(this.#content)) return;
+  #emit(final = false): void {
+    if (!final && mightOpenThought(this.#content)) return;
     const split = splitThought(this.#content);
     // A closing tag that arrives after its thought was already handed out as
     // answer text (no opening tag to warn us) cannot take those words back on
@@ -894,6 +895,8 @@ class OpenAiStreamAssembly {
 
   finish(): WireResponse {
     for (const frame of this.#parser.end()) this.#frame(frame);
+    // Whatever was held back as a possible thought opener is said now the stream is over.
+    this.#emit(true);
     const toolCalls = [...this.#calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call);
     return {
       ...(this.#model ? { model: this.#model } : {}),

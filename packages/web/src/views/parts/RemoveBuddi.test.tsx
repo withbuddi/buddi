@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { api } from '../../api';
+import { ApiError, api } from '../../api';
 import { RemoveBuddi, removalLines } from './RemoveBuddi';
 
 vi.mock('../../api', async (importOriginal) => {
@@ -62,6 +62,24 @@ describe('RemoveBuddi', { timeout: 180_000 }, () => {
     expect(remove).toBeEnabled();
     await user.click(remove);
     expect(api.uninstall).toHaveBeenCalledWith({ token: 'tok', wroteItDown: true, keepData: true });
+    expect(await screen.findByText(/The app quits when it is done/)).toBeInTheDocument();
+  });
+
+  it('an error answer goes back to the words with the reason; only a dropped connection is the hand-off', async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(api.uninstall).mockRejectedValueOnce(new ApiError(503, 'The supervisor is not answering on its control socket. Run buddi in a terminal.'));
+    render(<RemoveBuddi />);
+    await user.click(screen.getByRole('button', { name: 'Remove buddi from this Mac…' }));
+    await user.click(await screen.findByRole('button', { name: 'Take the last backup' }));
+    expect(await screen.findByText(PHRASE)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('I wrote it down'));
+    await user.click(screen.getByRole('button', { name: 'Remove buddi' }));
+    expect(await screen.findByText(/not answering on its control socket/)).toBeInTheDocument();
+    expect(screen.getByText(PHRASE)).toBeInTheDocument();
+    expect(screen.queryByText(/The app quits when it is done/)).not.toBeInTheDocument();
+    // Again, and this time the gateway goes away mid-answer: that is the removal under way.
+    vi.mocked(api.uninstall).mockRejectedValueOnce(new ApiError(0, 'unreachable'));
+    await user.click(screen.getByRole('button', { name: 'Remove buddi' }));
     expect(await screen.findByText(/The app quits when it is done/)).toBeInTheDocument();
   });
 

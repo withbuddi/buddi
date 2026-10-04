@@ -11,7 +11,7 @@
  * What was said and acknowledged is one dashboard setting; the words
  * themselves are never written anywhere but the vault and that one message.
  */
-import { readWebSetting, writeWebSetting, type Queryable } from '@buddi/core';
+import { readWebSetting, type Queryable } from '@buddi/core';
 import type { RouteReply } from './backups.js';
 
 export const PASSPHRASE_NOTICE_KEY = 'backup.passphraseNotice';
@@ -52,8 +52,24 @@ export async function readNoticeState(pool: Queryable): Promise<PassphraseNotice
   return value !== null && typeof value === 'object' ? value : {};
 }
 
-async function writeNoticeState(pool: Queryable, state: PassphraseNoticeState): Promise<void> {
-  await writeWebSetting(pool, PASSPHRASE_NOTICE_KEY, state);
+/**
+ * Merge `patch` into the stored state in one statement, so "I saved it" and
+ * the Telegram delivery (which waits on a send in between) never write back
+ * a stale copy of each other's fields. `keep: true` lets a field already
+ * stored win (the first acknowledgement stays the one recorded).
+ */
+async function mergeNoticeState(pool: Queryable, patch: PassphraseNoticeState, options: { keep?: boolean } = {}): Promise<PassphraseNoticeState> {
+  const stored = `(case when jsonb_typeof(core.web_settings.value) = 'object' then core.web_settings.value else '{}'::jsonb end)`;
+  const merged = options.keep ? `excluded.value || ${stored}` : `${stored} || excluded.value`;
+  const { rows } = await pool.query(
+    `insert into core.web_settings (key, value, updated_at)
+     values ($1, $2::jsonb, now())
+     on conflict (key) do update set value = ${merged}, updated_at = now()
+     returning value`,
+    [PASSPHRASE_NOTICE_KEY, JSON.stringify(patch)],
+  );
+  const value = rows[0]?.value as PassphraseNoticeState | undefined;
+  return value !== null && typeof value === 'object' ? value : patch;
 }
 
 /** Is there a backup locked with the passphrase yet? */
@@ -70,21 +86,25 @@ async function words(deps: PassphraseNoticeDeps): Promise<string | undefined> {
   return typeof phrase === 'string' && phrase.trim() !== '' ? phrase : undefined;
 }
 
-/** What Home's card shows: the words, until they are acknowledged. */
-export async function passphraseNotice(deps: PassphraseNoticeDeps): Promise<{ show: false } | { show: true; passphrase: string }> {
+export type PassphraseNotice = { show: false } | { show: true; passphrase: string } | { show: true; needsPin: true };
+
+/**
+ * What Home's card shows: the words, until they are acknowledged. With
+ * `words: false` (a PIN is set) the card is due but the words are not sent:
+ * it asks for the PIN and reveals them through POST …/passphrase/reveal.
+ */
+export async function passphraseNotice(deps: PassphraseNoticeDeps, options: { words?: boolean } = {}): Promise<PassphraseNotice> {
   const state = await readNoticeState(deps.pool);
   if (state.acknowledgedAt !== undefined) return { show: false };
   if (!(await hasEncryptedBackup(deps))) return { show: false };
   const phrase = await words(deps);
-  return phrase === undefined ? { show: false } : { show: true, passphrase: phrase };
+  if (phrase === undefined) return { show: false };
+  return options.words === false ? { show: true, needsPin: true } : { show: true, passphrase: phrase };
 }
 
 /** "I saved it": the card goes, for good. */
 export async function acknowledgePassphrase(deps: Pick<PassphraseNoticeDeps, 'pool' | 'now'>): Promise<PassphraseNoticeState> {
-  const state = await readNoticeState(deps.pool);
-  const next = { ...state, acknowledgedAt: state.acknowledgedAt ?? (deps.now ?? (() => new Date()))().toISOString() };
-  await writeNoticeState(deps.pool, next);
-  return next;
+  return await mergeNoticeState(deps.pool, { acknowledgedAt: (deps.now ?? (() => new Date()))().toISOString() }, { keep: true });
 }
 
 /**
@@ -99,18 +119,18 @@ export async function telegramPassphraseOnce(deps: PassphraseNoticeDeps): Promis
   if (!(await hasEncryptedBackup(deps))) return 'waiting';
   const at = (deps.now ?? (() => new Date()))().toISOString();
   if (!deps.sendTelegram) {
-    await writeNoticeState(deps.pool, { ...state, telegramAt: at, telegram: 'not-paired' });
+    await mergeNoticeState(deps.pool, { telegramAt: at, telegram: 'not-paired' });
     return 'not-paired';
   }
   const phrase = await words(deps);
   if (phrase === undefined) return 'waiting';
   try {
     await deps.sendTelegram(passphraseTelegramText(phrase));
-    await writeNoticeState(deps.pool, { ...state, telegramAt: at, telegram: 'sent' });
+    await mergeNoticeState(deps.pool, { telegramAt: at, telegram: 'sent' });
     return 'sent';
   } catch (error) {
     const notPaired = (error as { code?: unknown } | null)?.code === 'owner-not-paired' || (error as { code?: unknown } | null)?.code === 'telegram-not-configured';
-    await writeNoticeState(deps.pool, { ...state, telegramAt: at, telegram: notPaired ? 'not-paired' : 'failed' });
+    await mergeNoticeState(deps.pool, { telegramAt: at, telegram: notPaired ? 'not-paired' : 'failed' });
     if (!notPaired) deps.log?.(`backup passphrase: the Telegram message did not go: ${error instanceof Error ? error.message : String(error)}`);
     return notPaired ? 'not-paired' : 'failed';
   }

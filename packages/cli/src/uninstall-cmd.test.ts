@@ -83,6 +83,18 @@ describe('buddi uninstall in a checkout', () => {
     expect(quiet.out.some((l) => l.includes('one two three'))).toBe(false);
   });
 
+  it('stops with nothing removed when the passphrase cannot be read, unless --i-have-the-passphrase', async () => {
+    for (const backup of [true, false]) {
+      const c = checkout({ passphrase: async () => { throw new Error('the keychain is locked'); } });
+      expect(await uninstallCheckout({ ...defaults, yes: true, backup }, c.deps), `backup ${backup}`).toBe(1);
+      expect(c.did.filter((d) => !d.startsWith('backup'))).toEqual([]);
+      expect(c.err[0]).toMatch(/could not be read from the vault \(the keychain is locked\).*Nothing was removed\.$/);
+    }
+    const sure = checkout({ passphrase: async () => { throw new Error('the keychain is locked'); } });
+    expect(await uninstallCheckout({ ...defaults, yes: true, backup: false, havePassphrase: true }, sure.deps)).toBe(0);
+    expect(sure.did.some((d) => d.startsWith('purge'))).toBe(true);
+  });
+
   it('removes nothing when the answer is not yes', async () => {
     const c = checkout({}, 'nope');
     expect(await uninstallCheckout(defaults, c.deps)).toBe(1);

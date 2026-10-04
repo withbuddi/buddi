@@ -561,6 +561,26 @@ describe('createOpenAiProvider — thinking and streaming', () => {
     ]);
   });
 
+  it('hands on a one-word answer that is the start of a thought opener once the stream ends', async () => {
+    for (const word of ['a', 'An', 'Ana', 'analysis', '<thi']) {
+      const chunks = [
+        { model: 'gpt-oss', choices: [{ delta: { role: 'assistant', content: word } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ];
+      const wire = `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`;
+      const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+        init.onChunk(wire, 200);
+        return new Response(wire, { status: 200 });
+      });
+      const provider = createOpenAiProvider({ ...resolved(), compatible: true, baseUrl: 'http://localhost:11434/v1' }, { fetch: fetchMock as unknown as typeof fetch });
+      const deltas: any[] = [];
+      const res = await provider.complete({ ...request, thinking: 'off', onDelta: (d) => deltas.push(d) });
+      expect(deltas.filter((d) => d.kind === 'text').map((d) => d.text).join(''), word).toBe(word);
+      expect(deltas.filter((d) => d.kind === 'thinking'), word).toEqual([]);
+      expect(res.content, word).toEqual([{ type: 'text', text: word }]);
+    }
+  });
+
   it('takes everything before a lone closing tag as thought, the way Ollama Cloud sends glm', async () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, okBody({ choices: [{ finish_reason: 'stop', message: { content: 'Let me check the mail first.</think>\n\nHi Doe, I am buddi.' } }] })));
     const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch });

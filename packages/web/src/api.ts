@@ -3038,7 +3038,7 @@ export const api = {
   uninstallJob: (id: string) => get<UninstallJob>(`/system/uninstall/jobs/${encodeURIComponent(id)}`),
   uninstall: (body: { token: string; wroteItDown: true; keepData: boolean }) => post<{ accepted: true }>('/system/uninstall', body),
   /** Home's card after the first encrypted backup, until "I saved it". */
-  passphraseNotice: () => get<{ show: false } | { show: true; passphrase: string }>('/backups/passphrase/notice'),
+  passphraseNotice: () => get<{ show: false } | { show: true; passphrase: string } | { show: true; needsPin: true }>('/backups/passphrase/notice'),
   acknowledgePassphrase: () => post<{ acknowledgedAt: string }>('/backups/passphrase/notice', {}),
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
   /* ---- plugins ---- */

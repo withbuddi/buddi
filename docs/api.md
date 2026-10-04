@@ -4199,12 +4199,12 @@ curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/telegram/
 | PUT | `/api/backups/schedule` | Change the backup schedule. | yes |
 | GET | `/api/backups/passphrase` | The backup passphrase. Refused while a lock-screen PIN is set: use POST …/reveal. | no |
 | POST | `/api/backups/passphrase/reveal` | The backup passphrase, behind the lock-screen PIN when there is one (counted like an unlock try). | no |
-| GET | `/api/backups/passphrase/notice` | Home's passphrase card: the six words once an encrypted backup exists, until they are acknowledged. | no |
+| GET | `/api/backups/passphrase/notice` | Home's passphrase card: the six words once an encrypted backup exists, until they are acknowledged. With a lock-screen PIN set the words stay back (needsPin) and the card reveals them with POST …/reveal. | no |
 | POST | `/api/backups/passphrase/notice` | "I saved it": the passphrase card goes for good. | yes |
 | PUT | `/api/backups/passphrase` | Set the backup passphrase. | no |
-| GET | `/api/system/cli` | buddi.app's command line tool: whether this buddi offers it and where it is installed. This computer only. | yes |
+| GET | `/api/system/cli` | buddi.app's command line tool: whether this buddi offers it and where it is installed. | yes |
 | POST | `/api/system/cli` | Install buddi.app's command line tool: /usr/local/bin/buddi (an administrator prompt), else ~/.local/bin/buddi. | no |
-| GET | `/api/system/uninstall` | Remove buddi from this Mac: what goes, and a confirmation token for the next two calls. This computer only. | no |
+| GET | `/api/system/uninstall` | Remove buddi from this Mac: what goes, and a confirmation token for the next two calls. | no |
 | POST | `/api/system/uninstall/backup` | The last backup, moved to ~/buddi-backups with <archive>.passphrase.txt beside it. | no |
 | GET | `/api/system/uninstall/jobs/:id` | Where the last backup has got to; when done, its report has the archive, the passphrase file and the six words. | no |
 | POST | `/api/system/uninstall` | Remove buddi: the supervisor runs buddi uninstall (buddi.app finishes it and moves itself to the Trash). Needs the last backup taken first. | no |
@@ -4450,10 +4450,11 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 
 #### `GET /api/backups/passphrase/notice`
 
-Home's passphrase card: the six words once an encrypted backup exists, until they are acknowledged.
+Home's passphrase card: the six words once an encrypted backup exists, until they are acknowledged. With a lock-screen PIN set the words stay back (needsPin) and the card reveals them with POST …/reveal.
 
-- **Auth:** Dashboard session only. It reads or stores a secret.
-- **Answer:** `{ show: false } or { show: true, passphrase }`
+- **Auth:** Dashboard session only; from the computer buddi runs on. It reads or stores a secret.
+- **Answer:** `{ show: false } or { show: true, passphrase } or { show: true, needsPin: true }`
+- **Errors:** 403 not this computer
 - **Since:** 0.1.0-pre.41
 
 ```sh
@@ -4488,9 +4489,9 @@ curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "
 
 #### `GET /api/system/cli`
 
-buddi.app's command line tool: whether this buddi offers it and where it is installed. This computer only.
+buddi.app's command line tool: whether this buddi offers it and where it is installed.
 
-- **Auth:** Session or API token.
+- **Auth:** Session or API token; from the computer buddi runs on.
 - **Answer:** `{ available, installed: string[], reason? }`
 - **Since:** 0.1.0-pre.41
 
@@ -4502,7 +4503,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/system/cli"
 
 Install buddi.app's command line tool: /usr/local/bin/buddi (an administrator prompt), else ~/.local/bin/buddi.
 
-- **Auth:** Dashboard session only (a session adds CSRF + Origin). It installs or runs code buddi has not run before.
+- **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It installs or runs code buddi has not run before.
 - **Answer:** `{ file, lines: string[] }`
 - **Errors:** 409 npm's buddi is on PATH, another program's buddi is there, or this is not buddi.app
 - **Since:** 0.1.0-pre.41
@@ -4513,9 +4514,9 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$B
 
 #### `GET /api/system/uninstall`
 
-Remove buddi from this Mac: what goes, and a confirmation token for the next two calls. This computer only.
+Remove buddi from this Mac: what goes, and a confirmation token for the next two calls.
 
-- **Auth:** Dashboard session only. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Auth:** Dashboard session only; from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Answer:** `{ available, data, keychain?, service?, app?, backups, appFinishes, token } or { available: false, reason }`
 - **Errors:** 403 not this computer
 - **Since:** 0.1.0-pre.41
@@ -4528,7 +4529,7 @@ curl -b cookies.txt "$BUDDI_URL/api/system/uninstall"
 
 The last backup, moved to ~/buddi-backups with <archive>.passphrase.txt beside it.
 
-- **Auth:** Dashboard session only (a session adds CSRF + Origin). It reads or stores a secret.
+- **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It reads or stores a secret.
 - **Body:** `{ token: string }`
 - **Answer:** `202 { job }`
 - **Errors:** 403 expired token or not this computer; 409 a checkout, a restore or an upgrade
@@ -4542,7 +4543,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 
 Where the last backup has got to; when done, its report has the archive, the passphrase file and the six words.
 
-- **Auth:** Dashboard session only. It reads or stores a secret.
+- **Auth:** Dashboard session only; from the computer buddi runs on. It reads or stores a secret.
 - **Answer:** `{ phase, finishedAt?, error?, report?: { archive, passphraseFile?, passphrase? } }`
 - **Since:** 0.1.0-pre.41
 
@@ -4554,7 +4555,7 @@ curl -b cookies.txt "$BUDDI_URL/api/system/uninstall/jobs/<id>"
 
 Remove buddi: the supervisor runs buddi uninstall (buddi.app finishes it and moves itself to the Trash). Needs the last backup taken first.
 
-- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Body:** `{ token: string, wroteItDown: true, keepData?: boolean }`
 - **Answer:** `202 { accepted: true }`
 - **Errors:** 400 not ticked; 403 expired token or not this computer; 409 no backup yet

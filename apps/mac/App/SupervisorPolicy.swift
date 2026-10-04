@@ -93,6 +93,20 @@ enum UninstallPolicy {
     static func mayRemove(report: BackupReport, wroteItDown: Bool) -> Bool {
         report.passphrase == nil || wroteItDown
     }
+
+    /// What the app does once the launcher's `buddi uninstall` has returned.
+    enum Afterwards: Equatable {
+        /// Everything went: stop starting at login, move the app to the Trash, quit.
+        case trashAndQuit
+        /// Something did not: the app stays (it is the way to retry), says why, offers Retry.
+        case keepApp(reason: String)
+    }
+
+    static func afterwards(status: Int32, output: String) -> Afterwards {
+        if status == 0 { return .trashAndQuit }
+        let tail = String(output.trimmingCharacters(in: .whitespacesAndNewlines).suffix(1200))
+        return .keepApp(reason: tail.isEmpty ? "buddi uninstall stopped with status \(status) and said nothing." : tail)
+    }
 }
 
 /// buddi's own releases, offered by the in-app updater: one quiet alert per

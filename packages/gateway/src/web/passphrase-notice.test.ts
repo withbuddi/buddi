@@ -23,8 +23,13 @@ function settings(): Queryable & { rows: Map<string, unknown> } {
         return { rows: rows.has(key) ? [{ value: rows.get(key) }] : [] };
       }
       if (/insert into core\.web_settings/.test(text)) {
-        rows.set(values?.[0] as string, JSON.parse(values?.[1] as string));
-        return { rows: [] };
+        // The merge the real statement does in one step: stored || patch, or patch || stored when the stored fields win.
+        const key = values?.[0] as string;
+        const patch = JSON.parse(values?.[1] as string) as Record<string, unknown>;
+        const stored = (rows.get(key) ?? {}) as Record<string, unknown>;
+        const value = /excluded\.value \|\|/.test(text) ? { ...patch, ...stored } : { ...stored, ...patch };
+        rows.set(key, value);
+        return { rows: [{ value }] };
       }
       throw new Error(`unexpected query: ${text}`);
     }) as Queryable['query'],
@@ -67,6 +72,29 @@ describe('Home\'s passphrase card', () => {
     await acknowledgePassphrase(d);
     await acknowledgePassphrase({ ...d, now: () => new Date('2026-10-05T10:00:00Z') });
     expect((await readNoticeState(d.pool)).acknowledgedAt).toBe('2026-10-04T10:00:00.000Z');
+    expect(await passphraseNotice(d)).toEqual({ show: false });
+  });
+
+  it('with a PIN set, says the card is due without sending the words', async () => {
+    expect(await passphraseNotice(deps(), { words: false })).toEqual({ show: true, needsPin: true });
+    const d = deps();
+    await acknowledgePassphrase(d);
+    expect(await passphraseNotice(d, { words: false })).toEqual({ show: false });
+  });
+
+  it('"I saved it" pressed while the Telegram message is on its way is not lost', async () => {
+    const pool = settings();
+    let d: PassphraseNoticeDeps;
+    d = deps({
+      pool,
+      sendTelegram: async () => {
+        // The owner acknowledges on Home while the send is in flight.
+        await acknowledgePassphrase(d);
+      },
+    });
+    expect(await telegramPassphraseOnce(d)).toBe('sent');
+    const state = await readNoticeState(pool);
+    expect(state).toMatchObject({ acknowledgedAt: '2026-10-04T10:00:00.000Z', telegram: 'sent' });
     expect(await passphraseNotice(d)).toEqual({ show: false });
   });
 

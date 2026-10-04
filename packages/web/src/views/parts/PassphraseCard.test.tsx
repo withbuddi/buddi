@@ -10,7 +10,7 @@ import { PASSPHRASE_CARD_LINE, PassphraseCard } from './PassphraseCard';
 
 vi.mock('../../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../api')>();
-  return { ...original, api: { ...original.api, passphraseNotice: vi.fn(), acknowledgePassphrase: vi.fn() } };
+  return { ...original, api: { ...original.api, passphraseNotice: vi.fn(), acknowledgePassphrase: vi.fn(), revealBackupPassphrase: vi.fn() } };
 });
 
 const PHRASE = 'able acid actor adult afraid agent';
@@ -59,5 +59,19 @@ describe('PassphraseCard', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
     expect(writeText).toHaveBeenCalledWith(PHRASE);
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+  });
+
+  it('with a PIN set, asks for it and shows the words it reveals', async () => {
+    vi.mocked(api.passphraseNotice).mockResolvedValue({ show: true, needsPin: true });
+    vi.mocked(api.revealBackupPassphrase).mockResolvedValue({ passphrase: PHRASE });
+    render(<PassphraseCard />);
+    const field = await screen.findByLabelText(/Your PIN/);
+    expect(screen.queryByText(PHRASE)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'I saved it' })).not.toBeInTheDocument();
+    fireEvent.change(field, { target: { value: '2468' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Show the words' }));
+    expect(await screen.findByText(PHRASE)).toBeInTheDocument();
+    expect(api.revealBackupPassphrase).toHaveBeenCalledWith('2468');
+    expect(screen.getByRole('button', { name: 'I saved it' })).toBeInTheDocument();
   });
 });

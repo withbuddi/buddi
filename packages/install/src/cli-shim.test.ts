@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { findNpmBuddi, installShim, readShim, shimDoctorLines, shimScript, shimsFor, SYSTEM_SHIM, userShim } from './cli-shim.js';
+import { findNpmBuddi, installShim, readShim, shadowingBuddi, SHIM_VAR, shimAction, shimDoctorLines, shimScript, shimsFor, SYSTEM_SHIM, userShim } from './cli-shim.js';
 import type { ShimDeps } from './cli-shim.js';
 
 const home = '/Users/owner';
@@ -70,6 +70,40 @@ describe('the shim', () => {
     expect(m.written).toEqual([]);
   });
 
+  it('finds npm\'s buddi behind a Volta or an asdf shim, which resolve to the manager, not the package', () => {
+    const volta = machine({
+      path: [`${home}/.volta/bin`, '/usr/bin'],
+      links: { [`${home}/.volta/bin/buddi`]: `${home}/.volta/bin/volta-shim` },
+      files: { [NODE]: '', [`${home}/.volta/tools/image/packages/@withbuddi/buddi`]: '' },
+    });
+    expect(findNpmBuddi(volta.deps)).toBe(`${home}/.volta/bin/buddi`);
+    // Volta with some other tool named buddi: not npm's.
+    const otherVolta = machine({ path: [`${home}/.volta/bin`], links: { [`${home}/.volta/bin/buddi`]: `${home}/.volta/bin/volta-shim` } });
+    expect(findNpmBuddi(otherVolta.deps)).toBeUndefined();
+    const asdfShim = `${home}/.asdf/shims/buddi`;
+    const asdf = machine({
+      path: [`${home}/.asdf/shims`, '/usr/bin'],
+      files: {
+        [NODE]: '',
+        [asdfShim]: '#!/usr/bin/env bash\n# asdf-plugin: nodejs 20.11.0\nexec asdf exec "buddi" "$@"\n',
+        [`${home}/.asdf/installs/nodejs/20.11.0/lib/node_modules/@withbuddi/buddi`]: '',
+      },
+    });
+    expect(findNpmBuddi(asdf.deps)).toBe(asdfShim);
+  });
+
+  it('warns when another buddi comes first on PATH', async () => {
+    const other = '/opt/tools/bin/buddi';
+    const m = machine({ path: ['/opt/tools/bin', '/usr/local/bin', '/usr/bin'], files: { [NODE]: '', [other]: '#!/bin/sh\necho not ours\n' } });
+    expect(shadowingBuddi(SYSTEM_SHIM, m.deps)).toBe(other);
+    const outcome = await installShim({ app, data }, m.deps);
+    expect(outcome).toMatchObject({ ok: true, file: SYSTEM_SHIM });
+    expect((outcome as { lines: string[] }).lines.join('\n')).toMatch(/another buddi comes first on your PATH, at \/opt\/tools\/bin\/buddi/);
+    // After the install location, or one of ours: nothing to say.
+    expect(shadowingBuddi(SYSTEM_SHIM, machine({ path: ['/usr/local/bin', '/opt/tools/bin'], files: { [other]: 'x' } }).deps)).toBeUndefined();
+    expect(shadowingBuddi(SYSTEM_SHIM, machine({ path: ['/opt/tools/bin', '/usr/local/bin'], files: { [other]: shimScript({ app, data }) } }).deps)).toBeUndefined();
+  });
+
   it('leaves another program\'s buddi alone', async () => {
     const m = machine({ files: { [NODE]: '', [SYSTEM_SHIM]: '#!/bin/sh\necho somebody else\n' } });
     const refused = await installShim({ app, data }, m.deps);
@@ -133,11 +167,34 @@ describe('the shim, run', () => {
     expect(updated.stdout).toContain(`data=${dataDir} launcher=${dataDir}/releases/current/packages/install/dist/launcher.js`);
   });
 
+  it('tells the launcher it came through the shim, and which app', () => {
+    const { app: appDir, shim } = fakeApp('three');
+    writeFileSync(path.join(appDir, 'Contents', 'Resources', 'runtime', 'node'), `#!/bin/sh\necho "via=$${SHIM_VAR}"\n`);
+    const run = spawnSync(shim, [], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
+    expect(run.stdout.trim()).toBe(`via=${appDir}`);
+  });
+
   it('says so when the app is gone', () => {
     const { app: appDir, shim } = fakeApp('two');
     rmSync(appDir, { recursive: true, force: true });
     const gone = spawnSync(shim, ['status'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
     expect(gone.status).toBe(127);
     expect(gone.stderr).toMatch(/buddi\.app is no longer at/);
+  });
+});
+
+describe('a command through the shim', () => {
+  it('opens buddi.app to start buddi, refuses a service of its own, and passes the rest to the app\'s supervisor', () => {
+    expect(shimAction([])).toBe('open-app');
+    expect(shimAction(['--no-open'])).toBe('open-app');
+    expect(shimAction(['service', 'start'])).toBe('open-app');
+    expect(shimAction(['service', 'restart'])).toBe('open-app');
+    expect(shimAction(['--no-service'])).toBe('refuse');
+    expect(shimAction(['supervise'])).toBe('refuse');
+    expect(shimAction(['service', 'install'])).toBe('refuse');
+    expect(shimAction(['service', 'uninstall'])).toBe('refuse');
+    for (const args of [['status'], ['service', 'status'], ['service', 'stop'], ['doctor'], ['backup', 'create'], ['uninstall'], ['version']]) {
+      expect(shimAction(args), args.join(' ')).toBe('pass');
+    }
   });
 });

@@ -18,6 +18,7 @@ const dir = mkdtempSync(path.join(tmpdir(), 'bu-'));
 const socket = path.join(dir, 's.sock');
 const asked: Array<{ method: string; url: string; body: string }> = [];
 let server: Server;
+let removeStatus = 202;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -28,7 +29,10 @@ beforeAll(async () => {
       res.setHeader('content-type', 'application/json');
       if (req.url === '/uninstall' && req.method === 'GET') return res.end(JSON.stringify({ data: '/d', backups: '/h/buddi-backups', appFinishes: true }));
       if (req.url === '/uninstall/backup') { res.statusCode = 202; return res.end(JSON.stringify({ job: { id: 'j' } })); }
-      if (req.url === '/uninstall') { res.statusCode = 202; return res.end(JSON.stringify({ accepted: true })); }
+      if (req.url === '/uninstall') {
+        res.statusCode = removeStatus;
+        return res.end(JSON.stringify(removeStatus === 202 ? { accepted: true } : { error: 'Take the last backup first.' }));
+      }
       if (req.url?.startsWith('/jobs/u')) return res.end(JSON.stringify({ kind: 'uninstall-backup', phase: 'done', report: { archive: '/a', passphrase: 'six words' } }));
       if (req.url?.startsWith('/jobs/b')) return res.end(JSON.stringify({ kind: 'backup', phase: 'done', report: { archive: 'x' } }));
       res.statusCode = 404;
@@ -93,7 +97,26 @@ describe('the routes', () => {
   it('the words travel only on the uninstall job route', async () => {
     expect((await uninstallJobRoute({ env }, 'u1')).body).toMatchObject({ report: { passphrase: 'six words' } });
     expect((await uninstallJobRoute({ env }, 'b1')).status).toBe(404);
+    // The generic job routes never show an uninstall's job, and never a report's words.
     expect(withoutPassphrase({ status: 200, body: { kind: 'uninstall-backup', report: { archive: '/a', passphrase: 'six words' } } }))
-      .toEqual({ status: 200, body: { kind: 'uninstall-backup', report: { archive: '/a' } } });
+      .toEqual({ status: 404, body: { error: 'no such job' } });
+    expect(withoutPassphrase({ status: 200, body: { kind: 'upgrade', report: { archive: '/a', passphrase: 'six words' } } }))
+      .toEqual({ status: 200, body: { kind: 'upgrade', report: { archive: '/a' } } });
+    expect(withoutPassphrase({ status: 200, body: { kind: 'backup', report: { archive: 'x' } } }))
+      .toEqual({ status: 200, body: { kind: 'backup', report: { archive: 'x' } } });
+  });
+
+  it('a removal the supervisor refuses leaves the token good for the next try', async () => {
+    const tokens = createTokenStore();
+    const { token } = (await uninstallPlanRoute({ env, now: () => T }, tokens)).body as { token: string };
+    removeStatus = 409;
+    try {
+      expect((await uninstallRoute({ env, now: () => T }, tokens, { token, wroteItDown: true })).status).toBe(409);
+      expect(tokens.check(token, T.getTime())).toBe(true);
+    } finally {
+      removeStatus = 202;
+    }
+    expect((await uninstallRoute({ env, now: () => T }, tokens, { token, wroteItDown: true })).status).toBe(202);
+    expect(tokens.check(token, T.getTime())).toBe(false);
   });
 });

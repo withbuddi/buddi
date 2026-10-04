@@ -53,6 +53,16 @@ final class AnotherBuddiTests: XCTestCase {
 }
 
 final class UninstallPolicyTests: XCTestCase {
+    func testOnlyACleanUninstallTrashesTheAppAndQuits() {
+        XCTAssertEqual(UninstallPolicy.afterwards(status: 0, output: "Removed."), .trashAndQuit)
+        XCTAssertEqual(UninstallPolicy.afterwards(status: 1, output: "Could not remove the keychain entries.\n"),
+                       .keepApp(reason: "Could not remove the keychain entries."))
+        XCTAssertEqual(UninstallPolicy.afterwards(status: -1, output: ""),
+                       .keepApp(reason: "buddi uninstall stopped with status -1 and said nothing."))
+        guard case .keepApp(let long) = UninstallPolicy.afterwards(status: 1, output: String(repeating: "x", count: 5000)) else { return XCTFail() }
+        XCTAssertEqual(long.count, 1200)
+    }
+
     func testTheLauncherRunsWithTheBackupAndTheWordsAlreadyTakenCareOf() {
         XCTAssertEqual(UninstallPolicy.launcherArguments(keepData: false), ["uninstall", "--yes", "--no-backup", "--i-have-the-passphrase"])
         XCTAssertEqual(UninstallPolicy.launcherArguments(keepData: true).last, "--keep-data")

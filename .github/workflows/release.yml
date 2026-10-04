@@ -279,9 +279,18 @@ jobs:
           rm -f "$key"
           # A new appcast item only when the app shell changed (apps/mac/SHELL_VERSION,
           # bumped by hand): a buddi-only release is offered by the in-app updater.
-          curl -fsSL https://withbuddi.com/appcast.xml -o "$RUNNER_TEMP/live-appcast.xml" || rm -f "$RUNNER_TEMP/live-appcast.xml"
+          # The live feed decides it, so it must be read: a 200 is compared, a 404 is
+          # the first feed ever; anything else (a timeout, a 5xx) fails the step
+          # rather than republishing the Sparkle item for an unchanged shell.
+          live="$RUNNER_TEMP/live-appcast.xml"
+          code=$(curl -sSL --retry 3 --retry-all-errors --max-time 30 -o "$live" -w '%{http_code}' https://withbuddi.com/appcast.xml) || code=000
+          case "$code" in
+            200) previous=(--previous "$live") ;;
+            404) previous=(--first-feed) ;;
+            *) echo "::error::Could not read the live appcast (HTTP $code); not deciding the Sparkle item blind. Re-run the job."; exit 1 ;;
+          esac
           node ../../scripts/release/appcast.mjs "$VERSION" "build/buddi-$VERSION.dmg" "$signature" build \
-            --shell "$(cat SHELL_VERSION)" --previous "$RUNNER_TEMP/live-appcast.xml"
+            --shell "$(cat SHELL_VERSION)" "${previous[@]}"
 
       - name: Attach to the GitHub release
         env:

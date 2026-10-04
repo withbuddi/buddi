@@ -18,7 +18,7 @@
  * leaf `@buddi/core/uninstall` (see the note at the top of environment.ts).
  */
 import path from 'node:path';
-import { passphraseFileFor, passphraseFileText, runUninstallPlan } from '@buddi/core/uninstall';
+import { passphraseBeforeRemoval, passphraseFileFor, passphraseFileText, runUninstallPlan } from '@buddi/core/uninstall';
 import type { RemovalStep, UninstallIo, UninstallPlan } from '@buddi/core/uninstall';
 import { identityMismatch, launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
 import type { InstallationState } from './environment.js';
@@ -84,7 +84,7 @@ export interface PackagedUninstallDeps {
     /** The supervisor's backup, followed to the end: the archive's full path. */
     backup: () => Promise<string>;
   };
-  /** The backup passphrase the vault keeps, read without making one; undefined when there is none. */
+  /** The backup passphrase the vault keeps, read without making one; undefined only when the vault confirms there is none, and throws when the read failed. */
   passphrase: () => Promise<string | undefined>;
   /** Write a private (0600) file, creating its folder. */
   writePrivate: (file: string, text: string) => Promise<void>;
@@ -327,12 +327,12 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
           lines.push(`A copy is ${copy}.`);
         }
         if (archive.endsWith('.age') && vaultGoes) {
-          const phrase = await deps.passphrase().catch(() => undefined);
+          const phrase = await passphraseBeforeRemoval(deps.passphrase, options.havePassphrase === true);
           if (phrase !== undefined) await keepPhrase(phrase, [kept, ...copies]);
         }
       } else if (vaultGoes && !options.havePassphrase) {
         // No last backup, but older ones may be locked with the words the vault is about to lose.
-        const phrase = await deps.passphrase().catch(() => undefined);
+        const phrase = await passphraseBeforeRemoval(deps.passphrase, false);
         if (phrase !== undefined) {
           await keepPhrase(phrase, [], loosePassphraseFile(options.copyTo ?? keptBackupsDir(home), now()));
           lines.push('Pass --i-have-the-passphrase with --no-backup when you already have them.');

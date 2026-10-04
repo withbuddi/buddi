@@ -2299,8 +2299,12 @@ export function createWebApp(deps: WebServerDeps): Server {
           return reply(res, await passphraseRoute(backupDeps(), 'GET'));
         }
         /* Home's card after the first encrypted backup, until "I saved it" (web/passphrase-notice.ts). */
-        case '/api/backups/passphrase/notice':
-          return sendJson(res, 200, await passphraseNotice(noticeDeps()));
+        /* The words, so from this computer only, and behind the PIN when there is one (the card then reveals with POST …/reveal). */
+        case '/api/backups/passphrase/notice': {
+          if (session.via !== 'local') return sendJson(res, 403, { error: 'The passphrase shows on the computer buddi runs on.' });
+          const allowed = await lock.verify(undefined);
+          return sendJson(res, 200, await passphraseNotice(noticeDeps(), { words: allowed.ok }));
+        }
         /*
          * Plugins: what is installed, what is staged and waiting to be read,
          * and the trust sentence the page shows above the install field. A
@@ -2418,7 +2422,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
 
       const upgradeJob = /^\/api\/upgrade\/jobs\/([0-9a-f-]{36})$/i.exec(path);
-      if (upgradeJob) return reply(res, await upgradeJobRoute(versionDeps(), upgradeJob[1] as string));
+      if (upgradeJob) return reply(res, withoutPassphrase(await upgradeJobRoute(versionDeps(), upgradeJob[1] as string)));
 
       const backupJob = /^\/api\/backups\/jobs\/([0-9a-f-]{36})$/i.exec(path);
       if (backupJob) return reply(res, withoutPassphrase(await backupJobRoute(backupDeps(), backupJob[1] as string)));
