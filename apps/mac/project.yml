@@ -1,0 +1,85 @@
+name: buddi
+options:
+  bundleIdPrefix: com.withbuddi
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: NO
+    # The payload step below copies into the bundle with rsync.
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
+
+targets:
+  buddi:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        excludes:
+          - "*.entitlements"
+      - path: MenuBar
+      - path: Resources
+    dependencies:
+      - package: Sparkle
+    info:
+      path: App/Info.plist
+      properties:
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.productivity
+        NSHumanReadableCopyright: "Apache-2.0"
+        # The app's own version, not buddi's: the buddi release inside is whatever
+        # `make fetch VERSION=...` put in Resources/buddi/current. Sparkle compares
+        # CFBundleVersion, which must be numbers and dots (no "-pre.38"), so phase 2
+        # decides how it follows releases; keep BOTH in lockstep like Shotcrisp.
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "0.1.0"
+        SUFeedURL: "https://withbuddi.com/appcast.xml"
+        # Placeholder: generate the key pair once with Sparkle's tool —
+        #   build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys
+        # (it stores the private key in the login keychain and prints the public
+        # one). Paste the public key here; export the private key with
+        # `generate_keys -x sparkle_private.key` into the SPARKLE_PRIVATE_KEY secret.
+        # The app does not start Sparkle while this still says REPLACE.
+        SUPublicEDKey: "REPLACE_WITH_generate_keys_PUBLIC_KEY"
+        SUEnableAutomaticChecks: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.withbuddi.app
+        PRODUCT_NAME: buddi
+        CODE_SIGN_ENTITLEMENTS: App/buddi.entitlements
+        CODE_SIGN_STYLE: Manual
+        # DEVELOPMENT_TEAM is not written here: the Makefile passes it from the
+        # environment (as CI does from secrets.DEVELOPMENT_TEAM).
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        # Debug signs to run locally (ad-hoc) unless the Makefile passes the
+        # Developer ID identity because DEVELOPMENT_TEAM is set.
+        Debug:
+          CODE_SIGN_IDENTITY: "-"
+        Release:
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+    # The Node runtime and the buddi release (fetched into Payload/ by `make fetch`)
+    # go into Contents/Resources as they are: rsync keeps the `current` link and
+    # the Postgres dylib links. Runs before Xcode signs the bundle.
+    postBuildScripts:
+      - name: Embed runtime and buddi release
+        script: |
+          if [ ! -x "$SRCROOT/Payload/runtime/node" ] || [ ! -e "$SRCROOT/Payload/buddi/current" ]; then
+            echo "warning: Payload/ is empty; run 'make fetch' first. The app will report itself incomplete."
+            exit 0
+          fi
+          mkdir -p "$CODESIGNING_FOLDER_PATH/Contents/Resources"
+          rsync -a --delete "$SRCROOT/Payload/runtime/" "$CODESIGNING_FOLDER_PATH/Contents/Resources/runtime/"
+          rsync -a --delete "$SRCROOT/Payload/buddi/" "$CODESIGNING_FOLDER_PATH/Contents/Resources/buddi/"
+        basedOnDependencyAnalysis: false
