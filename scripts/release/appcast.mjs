@@ -7,9 +7,10 @@
  *
  * writes `<out-dir>/appcast.xml` (one item: this release, its notes as simple
  * HTML for Sparkle's dialog) and `<out-dir>/latest.json`
- * (`{ version, file, sha256, bundleVersion }`, what withbuddi.com/download/mac
- * redirects by). The notes are the version's CHANGELOG.md section, the same
- * text the GitHub release carries.
+ * (`{ version, file, url, sha256, bundleVersion }`, what withbuddi.com/download/mac
+ * redirects to). The DMG itself is served from the GitHub release asset (`url`,
+ * also the enclosure); R2 holds only these two files. The notes are the
+ * version's CHANGELOG.md section, the same text the GitHub release carries.
  */
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -18,8 +19,13 @@ import { fileURLToPath } from 'node:url';
 import { bundleVersion } from './bundle-version.mjs';
 import { CHANGELOG, sectionOf } from './changelog.mjs';
 
-/** Where the site serves what this job uploads to R2 (buddi-site's worker). */
+/** Where the site serves the feed this job uploads to R2 (buddi-site's worker). */
 export const SITE = 'https://withbuddi.com';
+/** The public repository whose releases carry the DMG (over Wrangler's 300 MiB R2 upload cap). */
+export const REPO = 'https://github.com/withbuddi/buddi';
+
+/** The DMG as the GitHub release v<version> serves it: a stable URL that 302s to the asset. */
+export const releaseUrl = (version, file) => `${REPO}/releases/download/v${encodeURIComponent(version)}/${encodeURIComponent(file)}`;
 /** The oldest macOS buddi.app runs on (project.yml's deploymentTarget). */
 export const MINIMUM_SYSTEM = '14.0';
 
@@ -76,7 +82,7 @@ export function appcast({ version, file, signature, notes, pubDate = new Date().
       <description><![CDATA[
 ${notes.replace(/]]>/g, ']]&gt;')}
       ]]></description>
-      <enclosure url="${SITE}/download/mac/${encodeURIComponent(file)}" ${signatureAttributes(signature)} type="application/octet-stream"/>
+      <enclosure url="${releaseUrl(version, file)}" ${signatureAttributes(signature)} type="application/octet-stream"/>
     </item>
   </channel>
 </rss>
@@ -95,7 +101,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const bytes = readFileSync(dmg);
   const file = path.basename(dmg);
   writeFileSync(path.join(outDir, 'appcast.xml'), appcast({ version, file, signature, notes: notesHtml(section) }));
-  const latest = { version, file, sha256: createHash('sha256').update(bytes).digest('hex'), bundleVersion: bundleVersion(version) };
+  const latest = { version, file, url: releaseUrl(version, file), sha256: createHash('sha256').update(bytes).digest('hex'), bundleVersion: bundleVersion(version) };
   writeFileSync(path.join(outDir, 'latest.json'), JSON.stringify(latest, null, 2) + '\n');
   console.log(`appcast.xml and latest.json for ${version} (${file}, sha256 ${latest.sha256})`);
 }

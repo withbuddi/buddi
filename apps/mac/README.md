@@ -208,10 +208,13 @@ the `SPARKLE_PRIVATE_KEY` secret.
 The `mac-app` job in `.github/workflows/release.yml` runs after the npm publish of a
 tag: it waits until npm serves the tarball, `make fetch VERSION=<tag>`, imports the
 Developer ID certificate, `make notarize`, `make dmg`, signs the DMG with Sparkle's
-`sign_update`, writes `appcast.xml` and `latest.json` (`{version, file, sha256,
+`sign_update`, writes `appcast.xml` and `latest.json` (`{version, file, url, sha256,
 bundleVersion}`, `scripts/release/appcast.mjs`), attaches all three to the GitHub
-release and uploads them to R2. The npm release is out by then, so a failed run is
-repeated on its own: Actions → release → Run workflow, with the version.
+release (`--clobber`) and uploads the two small ones to R2. The DMG is served from
+the GitHub release asset, `https://github.com/withbuddi/buddi/releases/download/v<version>/buddi-<version>.dmg`
+(Wrangler caps R2 uploads at 300 MiB and the DMG is larger); that URL is the
+appcast enclosure and `latest.json`'s `url`. The npm release is out by then, so a
+failed run is repeated on its own: Actions → release → Run workflow, with the version.
 
 | Secret | What |
 | --- | --- |
@@ -219,21 +222,20 @@ repeated on its own: Actions → release → Run workflow, with the version.
 | `MACOS_CERTIFICATE_PASSWORD` | its password |
 | `APPLE_ID`, `DEVELOPMENT_TEAM`, `NOTARIZE_PASSWORD` | as in the table above |
 | `SPARKLE_PRIVATE_KEY` | `generate_keys -x` output |
-| `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | R2 write on the bucket; without them the DMG is on the GitHub release only |
+| `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | R2 write on the bucket; without them the feed is on the GitHub release only |
 
 Variable `R2_BUCKET` (optional, `buddi-releases` by default). Without the first six
 secrets the job is skipped with a notice. In the bucket:
 
 ```
-mac/buddi-<version>.dmg   every release
 mac/latest.json           the newest one npm calls latest
 mac/appcast.xml           its Sparkle feed
 ```
 
-buddi-site's worker serves them: `withbuddi.com/download/mac` redirects to
-`/download/mac/buddi-<version>.dmg` (from `latest.json`), and `/appcast.xml` is the
-feed. A pre-release that npm puts under `next` (once a stable release exists) is
-uploaded and attached, and neither pointer moves.
+buddi-site's worker serves them: `withbuddi.com/download/mac` redirects to the
+GitHub release asset (`url` in `latest.json`), and `/appcast.xml` is the feed. A
+pre-release that npm puts under `next` (once a stable release exists) is attached to
+its GitHub release, and neither pointer moves.
 
 ## Not built yet
 

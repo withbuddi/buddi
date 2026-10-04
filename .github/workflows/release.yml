@@ -115,14 +115,17 @@ jobs:
   #   NOTARIZE_PASSWORD           an app-specific password for that Apple ID
   #   SPARKLE_PRIVATE_KEY         `generate_keys -x` output; signs the appcast item
   #
-  # and, to publish at withbuddi.com (buddi-site's worker serves the bucket):
+  # and, to publish the feed at withbuddi.com (buddi-site's worker serves the
+  # bucket; the DMG itself stays a GitHub release asset, Wrangler caps R2
+  # uploads at 300 MiB and the DMG is larger):
   #
   #   CLOUDFLARE_API_TOKEN        R2 object write on the bucket
   #   CLOUDFLARE_ACCOUNT_ID
   #   vars.R2_BUCKET              optional; `buddi-releases` by default
   #
   # Same secret names as Shotcrisp. Without the Cloudflare pair the DMG and
-  # the feed are still attached to the GitHub release.
+  # the feed are still attached to the GitHub release; appcast.xml and
+  # latest.json point at the release asset either way.
   mac-check:
     needs: [publish]
     if: always() && (github.event_name == 'workflow_dispatch' || needs.publish.result == 'success')
@@ -264,19 +267,19 @@ jobs:
             --notes "buddi $VERSION. npm: \`npm install -g @withbuddi/buddi@$VERSION\`."
           gh release upload "$tag" "build/buddi-$VERSION.dmg" build/appcast.xml build/latest.json --clobber
 
-      - name: Publish at withbuddi.com (R2)
+      # Only the feed and the pointer go to R2; both point at the DMG on the
+      # GitHub release attached above.
+      - name: Publish the feed at withbuddi.com (R2)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           LATEST: ${{ steps.v.outputs.latest }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
-            echo "::notice title=buddi.app not on withbuddi.com::No CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID; the DMG is on the GitHub release only."
+            echo "::notice title=buddi.app not on withbuddi.com::No CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID; the feed is on the GitHub release only."
             exit 0
           fi
           put() { npx --yes wrangler@4 r2 object put "$R2_BUCKET/$1" --file "$2" --content-type "$3" --remote; }
-          # The versioned DMG first; the feed and the pointer only once it is there.
-          put "mac/buddi-$VERSION.dmg" "build/buddi-$VERSION.dmg" application/x-apple-diskimage
           if [ "$LATEST" = "true" ]; then
             put mac/appcast.xml build/appcast.xml application/xml
             put mac/latest.json build/latest.json application/json

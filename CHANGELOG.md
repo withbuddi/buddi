@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- buddi.app for Mac: the DMG downloads from the GitHub release (withbuddi.com/download/mac and the update feed point there), so a release larger than 300 MiB still publishes.
+
 ## 0.1.0-pre.39 — 2026-10-04
 
 - Logins: signing in again with a new password on a site where buddi keeps your login asks "Update the login for amazon.com?"; Update replaces the password it keeps. Signing in with the password it already keeps asks nothing, also after a restart and in your Chrome (a login saved before this release is asked about once). Saving two accounts on one site at once keeps both.

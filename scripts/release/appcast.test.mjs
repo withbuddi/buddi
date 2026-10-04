@@ -10,7 +10,7 @@ describe('the appcast', () => {
     expect(xml).toContain('<sparkle:version>0.1.0.39</sparkle:version>');
     expect(xml).toContain('<sparkle:shortVersionString>0.1.0-pre.39</sparkle:shortVersionString>');
     expect(xml).toContain('<sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>');
-    expect(xml).toContain('<enclosure url="https://withbuddi.com/download/mac/buddi-0.1.0-pre.39.dmg" sparkle:edSignature="abc+/=" length="123456" type="application/octet-stream"/>');
+    expect(xml).toContain('<enclosure url="https://github.com/withbuddi/buddi/releases/download/v0.1.0-pre.39/buddi-0.1.0-pre.39.dmg" sparkle:edSignature="abc+/=" length="123456" type="application/octet-stream"/>');
   });
 
   test('takes only the signature and length from sign_update', () => {
