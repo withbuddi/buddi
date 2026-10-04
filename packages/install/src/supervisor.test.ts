@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { controlSocket, listenOnSocket, pendingUpgrade, restartDelay, supervisorSocket, type SupervisorStatus } from './supervisor.js';
+import { BRIEF_SUPERVISOR_VAR, briefParent, briefSupervisorEnv, controlSocket, listenOnSocket, pendingUpgrade, restartDelay, supervisorSocket, watchBriefParent, type SupervisorStatus } from './supervisor.js';
+import { SHIM_VAR, shimRefusesSupervise } from './cli-shim.js';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -234,5 +235,60 @@ describe('the supervisor', () => {
 
   test('gateway restart backoff is exponential and bounded', () => {
     expect([0, 1, 2, 3, 4, 1000].map(restartDelay)).toEqual([2000, 4000, 8000, 16000, 30000, 30000]);
+  });
+});
+
+describe('the brief supervisor (buddi uninstall\'s last backup)', () => {
+  test('starts through the app\'s command line tool: the shim marker is not inherited, so supervise is not refused', () => {
+    const shimmed = { PATH: '/bin', [SHIM_VAR]: '/Applications/buddi.app' };
+    expect(shimRefusesSupervise('supervise', 'darwin', shimmed)).toBe(true);
+    const env = briefSupervisorEnv(shimmed, 4242, SHIM_VAR);
+    expect(env[SHIM_VAR]).toBeUndefined();
+    expect(env[BRIEF_SUPERVISOR_VAR]).toBe('4242');
+    expect(env.PATH).toBe('/bin');
+    expect(shimRefusesSupervise('supervise', 'darwin', env)).toBe(false);
+    expect(shimmed[SHIM_VAR]).toBe('/Applications/buddi.app');
+  });
+
+  test('brief only for the live parent pid; a stray 1 (env file, plist) is a normal run', () => {
+    const alive = () => true;
+    expect(briefParent({ [BRIEF_SUPERVISOR_VAR]: '4242' }, 4242, alive)).toBe(4242);
+    expect(briefParent({ [BRIEF_SUPERVISOR_VAR]: '1' }, 1, alive)).toBeUndefined();
+    expect(briefParent({ [BRIEF_SUPERVISOR_VAR]: '1' }, 4242, alive)).toBeUndefined();
+    expect(briefParent({ [BRIEF_SUPERVISOR_VAR]: '4242' }, 999, alive)).toBeUndefined();
+    expect(briefParent({ [BRIEF_SUPERVISOR_VAR]: '4242' }, 4242, () => false)).toBeUndefined();
+    expect(briefParent({ [BRIEF_SUPERVISOR_VAR]: 'yes' }, 4242, alive)).toBeUndefined();
+    expect(briefParent({}, 4242, alive)).toBeUndefined();
+  });
+
+  test('leaves once when the parent is gone', () => {
+    let tick: () => void = () => {};
+    let parentAlive = true;
+    const leave = vi.fn();
+    const cleared: unknown[] = [];
+    watchBriefParent({ parent: 4242, leave, alive: () => parentAlive, now: () => 0, every: fn => { tick = fn; return 7; }, clear: h => cleared.push(h) });
+    tick(); tick();
+    expect(leave).not.toHaveBeenCalled();
+    parentAlive = false;
+    tick(); tick();
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(leave.mock.calls[0]?.[0]).toMatch(/pid 4242/);
+    expect(cleared).toEqual([7]);
+  });
+
+  test('leaves after the hard cap even with the parent alive; stopping the watch stops it', () => {
+    let tick: () => void = () => {};
+    let clock = 0;
+    const leave = vi.fn();
+    watchBriefParent({ parent: 4242, leave, alive: () => true, now: () => clock, maxMs: 30 * 60_000, every: fn => { tick = fn; return 1; }, clear: () => {} });
+    clock = 29 * 60_000; tick();
+    expect(leave).not.toHaveBeenCalled();
+    clock = 30 * 60_000; tick();
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(leave.mock.calls[0]?.[0]).toMatch(/30 minutes/);
+    const other = vi.fn();
+    const stop = watchBriefParent({ parent: 1, leave: other, alive: () => false, every: fn => { tick = fn; return 2; }, clear: () => {} });
+    stop(); tick();
+    expect(other).not.toHaveBeenCalled();
   });
 });

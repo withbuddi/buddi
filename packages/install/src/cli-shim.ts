@@ -53,6 +53,11 @@ export function shimAction(args: readonly string[]): ShimAction {
 
 export const SHIM_REFUSAL = 'buddi.app runs buddi on this Mac, so this command does not start a service of its own. Open buddi.app (or run buddi, which opens it); quit it from its menu.';
 
+/** Is this a `supervise` started through buddi.app's command line tool on a Mac (refused: it would compete with the app's own)? */
+export function shimRefusesSupervise(command: string | undefined, platform: NodeJS.Platform | string, env: NodeJS.ProcessEnv): boolean {
+  return command === 'supervise' && platform === 'darwin' && (env[SHIM_VAR] ?? '').trim() !== '';
+}
+
 export function userShim(home: string): string {
   return path.join(home, '.local', 'bin', 'buddi');
 }

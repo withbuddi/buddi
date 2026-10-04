@@ -17,13 +17,13 @@ import { promisify } from 'node:util';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { environment, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
-import { BRIEF_SUPERVISOR_VAR, supervise, supervisorSocket } from './supervisor.js';
+import { briefSupervisorEnv, supervise, supervisorSocket } from './supervisor.js';
 import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
 import { APP_RUNNING_LINE, appLayout, insideAppBundle, runsAppCopy } from './app-layout.js';
-import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimsFor } from './cli-shim.js';
+import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimRefusesSupervise, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
 
 const entry = fileURLToPath(import.meta.url);
@@ -171,13 +171,26 @@ async function startSupervisorBriefly(ctx: InstallContext, lockPid: () => number
   const log = await open(path.join(ctx.data, 'logs/supervisor.log'), 'a', 0o600);
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: { ...ctx.env, [BRIEF_SUPERVISOR_VAR]: '1' } });
+    child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: briefSupervisorEnv(ctx.env, process.pid, SHIM_VAR) });
     await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
   } finally { await log.close(); }
   let exited = false;
   child.once('exit', () => { exited = true; });
   child.unref();
+  /*
+   * A Ctrl-C during the backup stops the database before this process goes
+   * (the supervisor would also notice its parent gone, a few seconds later).
+   */
+  let interrupted = false;
+  const onInterrupt = (): void => {
+    if (interrupted) return;
+    interrupted = true;
+    console.error('\nbuddi: interrupted; stopping the database started for the last backup.');
+    void stop().catch(() => {}).finally(() => process.exit(130));
+  };
+  process.on('SIGINT', onInterrupt); process.on('SIGTERM', onInterrupt);
   const stop = async (): Promise<void> => {
+    process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onInterrupt);
     if (!exited && child.pid !== undefined) { try { process.kill(child.pid, 'SIGTERM'); } catch { /* gone */ } }
     const alive = (): boolean => { if (exited || child.pid === undefined) return false; try { process.kill(child.pid, 0); return true; } catch { return false; } };
     for (let waited = 0; lockPid() !== undefined || alive(); waited += 250) {
@@ -539,7 +552,7 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
 async function run(): Promise<void> {
   let ctx = await environment(root);
   // A supervisor started through buddi.app's command line tool would compete with the app's own (cli-shim.ts).
-  if (args[0] === 'supervise' && process.platform === 'darwin' && (process.env[SHIM_VAR] ?? '').trim() !== '') {
+  if (shimRefusesSupervise(args[0], process.platform, process.env)) {
     console.error(`buddi: ${SHIM_REFUSAL}`);
     process.exitCode = 2;
     return;

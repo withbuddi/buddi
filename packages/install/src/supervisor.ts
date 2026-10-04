@@ -86,12 +86,74 @@ export function restartDelay(failures: number): number { return Math.min(30_000,
 export const HANDOVER_GRACE_MS = 5_000;
 
 /**
- * Set to `1` by `buddi uninstall` with the service stopped: the supervisor
- * brings up the database and its control socket for the last backup, and
- * nothing else — no gateway (no Telegram, no jobs), no scheduled backup, no
- * version check.
+ * Set by `buddi uninstall` with the service stopped, to its own pid: the
+ * supervisor brings up the database and its control socket for the last
+ * backup, and nothing else — no gateway (no Telegram, no jobs), no scheduled
+ * backup, no version check. Any other value (a stray `1` in an env file or a
+ * plist) is ignored, so a normal service never runs without its gateway.
  */
 export const BRIEF_SUPERVISOR_VAR = 'BUDDI_SUPERVISE_BRIEFLY';
+
+/** How often a brief supervisor checks that the uninstall that started it is still there. */
+export const BRIEF_PARENT_POLL_MS = 3_000;
+/** The longest a brief supervisor stays up, whatever happens to its parent. */
+export const BRIEF_MAX_MS = 30 * 60_000;
+
+/**
+ * The uninstall a brief supervisor serves: the pid in `BUDDI_SUPERVISE_BRIEFLY`
+ * when it is this process's parent and alive, else undefined (a normal run).
+ */
+export function briefParent(env: NodeJS.ProcessEnv, ppid: number = process.ppid, alive: (pid: number) => boolean = pidAlive): number | undefined {
+  const raw = (env[BRIEF_SUPERVISOR_VAR] ?? '').trim();
+  if (!/^[1-9]\d*$/.test(raw)) return undefined;
+  const pid = Number(raw);
+  return pid === ppid && pid !== 1 && alive(pid) ? pid : undefined;
+}
+
+/** `kill(pid, 0)`: is a process with this pid there (EPERM counts as there)? */
+export function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * The environment `buddi uninstall` starts a brief supervisor with: its own
+ * pid as the brief marker, and without the app's command-line-tool marker,
+ * which would otherwise make the child refuse `supervise` (cli-shim.ts).
+ */
+export function briefSupervisorEnv(env: NodeJS.ProcessEnv, parentPid: number, shimVar: string): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env, [BRIEF_SUPERVISOR_VAR]: String(parentPid) };
+  delete out[shimVar];
+  return out;
+}
+
+/**
+ * The brief supervisor's leash: every `pollMs` it asks whether the uninstall
+ * is still there, and calls `leave` once when it is gone or `maxMs` has
+ * passed — a Ctrl-C or a crash of `buddi uninstall` must not leave a database
+ * holding the lock. Returns the function that stops watching.
+ */
+export function watchBriefParent(options: {
+  parent: number; leave: (why: string) => void; alive?: (pid: number) => boolean;
+  pollMs?: number; maxMs?: number; now?: () => number;
+  every?: (fn: () => void, ms: number) => { unref?: () => void } | number; clear?: (handle: unknown) => void;
+}): () => void {
+  const alive = options.alive ?? pidAlive, now = options.now ?? Date.now;
+  const maxMs = options.maxMs ?? BRIEF_MAX_MS, started = now();
+  const every = options.every ?? ((fn, ms) => setInterval(fn, ms));
+  const clear = options.clear ?? (handle => clearInterval(handle as NodeJS.Timeout));
+  let done = false;
+  const handle = every(() => {
+    if (done) return;
+    const why = !alive(options.parent) ? `the uninstall that started it (pid ${options.parent}) is gone`
+      : now() - started >= maxMs ? `it has been up for ${Math.round(maxMs / 60_000)} minutes` : undefined;
+    if (why === undefined) return;
+    done = true; clear(handle);
+    options.leave(why);
+  }, options.pollMs ?? BRIEF_PARENT_POLL_MS);
+  if (typeof handle === 'object' && typeof handle.unref === 'function') handle.unref();
+  return () => { done = true; clear(handle); };
+}
 
 /** What `/status` reports; the CLI prints it verbatim. */
 export interface SupervisorStatus {
@@ -416,8 +478,16 @@ export async function supervise(ctx: InstallContext): Promise<void> {
    * the successor of an upgrade is spawned with, and a secret that travelled
    * through a restart would outlive the process that was allowed to hold it.
    */
+  const briefPid = briefParent(ctx.env);
+  const briefly = briefPid !== undefined;
+  if (!briefly && (ctx.env[BRIEF_SUPERVISOR_VAR] ?? '').trim() !== '') {
+    console.error(`supervisor: ignoring ${BRIEF_SUPERVISOR_VAR} (not set by a running buddi uninstall); starting normally.`);
+  }
+  // Never inherited: not by the gateway, not by an upgrade's successor.
+  delete ctx.env[BRIEF_SUPERVISOR_VAR];
+  delete process.env[BRIEF_SUPERVISOR_VAR];
   const startEnv = { ...ctx.env };
-  const briefly = ctx.env[BRIEF_SUPERVISOR_VAR] === '1';
+  let unwatchBrief: (() => void) | undefined;
   const release = await acquireLock(ctx.data);
   let database: ManagedDatabase | undefined, server: Server | undefined, child: ChildProcess | undefined, retry: NodeJS.Timeout | undefined, log: WriteStream | undefined;
   let backup: BackupControl | undefined, scheduleTick: NodeJS.Timeout | undefined;
@@ -438,6 +508,9 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   const shutdown = new Promise<void>(resolve => { resolveShutdown = resolve; });
   const onSignal = () => { closing = true; desired = false; resolveShutdown(); };
   process.once('SIGINT', onSignal); process.once('SIGTERM', onSignal);
+  if (briefPid !== undefined) {
+    unwatchBrief = watchBriefParent({ parent: briefPid, leave: why => { console.error(`supervisor: leaving the brief run: ${why}.`); onSignal(); } });
+  }
   try {
     await initialize(ctx);
     const ready = ctx as ReadyContext;
@@ -665,6 +738,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     throw error;
   } finally {
     closing = true;
+    unwatchBrief?.();
     clearInterval(scheduleTick);
     clearInterval(upgradeTick);
     await chain.catch(() => {});
