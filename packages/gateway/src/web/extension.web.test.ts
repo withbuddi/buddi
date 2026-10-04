@@ -359,7 +359,7 @@ describe('the browser extension endpoint', () => {
     const { socketUrl, origin, extension } = await setup({ log: (line: string) => lines.push(line) } as never);
     const headers = await session(origin);
     const heard: unknown[] = [];
-    const stop = extension.logins('s1', (login) => heard.push(login));
+    const stop = extension.logins('s1', (login) => { heard.push(login); });
     // A socket that never paired is not believed.
     const stranger = connect(socketUrl);
     await stranger.open;
@@ -382,6 +382,34 @@ describe('the browser extension endpoint', () => {
     ]));
     expect(lines.join('\n')).not.toContain('fixture-pass');
     stop();
+  });
+
+  it('answers a Save with what became of it, by the id the tab sent: kept, the keeper’s reason, or gone', async () => {
+    const { socketUrl, origin, extension } = await setup();
+    const headers = await session(origin);
+    const client = connect(socketUrl);
+    await client.open;
+    await client.hello(null);
+    const code = String((await client.next('pair')).code);
+    await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    await client.next('paired');
+    let answer: { saved: true } | { saved: false; reason: string } = { saved: true };
+    const stop = extension.logins('s1', async () => answer);
+    const ackFor = async (id: string) => {
+      await vi.waitFor(() => expect(client.seen.some((frame) => frame.type === 'loginAck' && frame.id === id)).toBe(true));
+      return client.seen.find((frame) => frame.type === 'loginAck' && frame.id === id)!;
+    };
+    client.send({ type: 'login', session: 's1', decision: 'save', origin: 'https://www.amazon.com', username: 'sam', password: 'fixture-pass-7Qz!', id: 'ack-1' });
+    expect(await ackFor('ack-1')).toEqual({ type: 'loginAck', id: 'ack-1', saved: true });
+    answer = { saved: false, reason: 'buddi could not keep that login. Try again, or add it in Settings → Keys and secrets.' };
+    client.send({ type: 'login', session: 's1', decision: 'save', origin: 'https://www.amazon.com', username: 'sam', password: 'fixture-pass-7Qz!', id: 'ack-2' });
+    const refused = await ackFor('ack-2');
+    expect(refused).toEqual({ type: 'loginAck', id: 'ack-2', saved: false, reason: answer.reason });
+    expect(JSON.stringify(refused)).not.toContain('fixture-pass');
+    stop();
+    // Nobody holds that page any more: the tab is told the question is gone.
+    client.send({ type: 'login', session: 's1', decision: 'save', origin: 'https://www.amazon.com', username: 'sam', password: 'fixture-pass-7Qz!', id: 'ack-3' });
+    expect(await ackFor('ack-3')).toMatchObject({ id: 'ack-3', saved: false, reason: expect.stringContaining('That question is gone') });
   });
 
   it('counts pongs only from the browser it is talking to', async () => {
@@ -433,5 +461,7 @@ describe('a login frame, read strictly', () => {
     expect(readExtensionLogin({ session: 's', decision: 'later', origin: 'https://a.test', username: 'u' })).toBeUndefined();
     expect(readExtensionLogin({ session: 's', decision: 'never', origin: 'file:///etc', username: 'u' })).toBeUndefined();
     expect(readExtensionLogin({ session: 's', decision: 'never', origin: 'https://a.test', username: 'u' })).toEqual({ session: 's', login: { decision: 'never', origin: 'https://a.test', username: 'u' } });
+    expect(readExtensionLogin({ session: 's', decision: 'save', origin: 'https://a.test', username: 'u', password: 'p', id: 'ack-1' })).toMatchObject({ id: 'ack-1' });
+    expect(readExtensionLogin({ session: 's', decision: 'save', origin: 'https://a.test', username: 'u', password: 'p', id: 'no spaces <b>' })).toBeUndefined();
   });
 });

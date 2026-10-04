@@ -60,6 +60,7 @@ import { findingsOf, renderFindings, type FindingPayload } from './sentinel-wake
 import { missionOwnerAgent } from './reminders.js';
 import { askInto } from '../surfaces/browser-cards.js';
 import { ASK_TOOL, createAskManifest, type AskSink } from '../surfaces/pending-question.js';
+import { askHeldBack, noteHeldAsk, timedOutRecently } from './ask-cap.js';
 import { DEFAULT_MISSION_WAIT_MS, isCardQuestion, neededYouLine, parkForHandback, parkMissionRun, type ParkedRun } from './parked.js';
 
 /**
@@ -502,7 +503,13 @@ export function createMissionExecutor(
       const conversationId = parked.conversationId;
       const text = neededYouLine({ missionName: mission.name, question: parked.question, waitedMs: parked.waitMs, ...(parked.handback ? { handback: true } : {}) });
       if (isCardQuestion(parked.questionId)) await closeQuestion(deps.pool, { id: parked.questionId, via: 'timeout', now: deps.now() }).catch(() => false);
-      await appendEvent(deps.pool, 'mission.needed_you', { missionId: mission.id, occurrenceId: occurrence.id, conversationId, questionId: parked.questionId }, conversationId);
+      // Folded: the same mission timed out on the same question in the last day, and that line was sent then.
+      const folded = await timedOutRecently(deps.pool, mission.id, parked.question).catch(() => false);
+      await appendEvent(deps.pool, 'mission.needed_you', { missionId: mission.id, occurrenceId: occurrence.id, conversationId, questionId: parked.questionId, question: parked.question, ...(folded ? { folded: true } : {}) }, conversationId);
+      if (folded) {
+        log(`mission ${mission.id}: occurrence ${occurrence.id} timed out on the same question as earlier today — not saying so again`);
+        return { conversationId, text, delivered: false, decision: 'needed-you', reason: 'needed-you', skipped: 'The same question timed out in the last day; the owner was told then.' };
+      }
       log(`mission ${mission.id}: occurrence ${occurrence.id} needed the owner and nobody answered — ending with the report line`);
       let chatId: string | undefined;
       try {
@@ -670,6 +677,18 @@ export function createMissionExecutor(
     // The run asked the owner, or a browser moment needed them (Look? / Keep going? / Sign in / Human check): park on the card.
     // Whatever the run decided after the card is held back (it was told to stop); the answer brings it back here.
     if (asked.asked) {
+      // One open question per mission, and the same unanswered one not again within a day: no card, no Telegram, a quiet line on Needs you.
+      const held = await askHeldBack(deps.pool, mission.id, asked.asked.question).catch((err: unknown) => {
+        log(`mission ${mission.id}: could not check for an open question: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      });
+      if (held) {
+        await noteHeldAsk(deps.pool, { now: deps.now, timezone: deps.ctx.timezone, log }, {
+          missionId: mission.id, missionName: mission.name, agentId, conversationId, question: asked.asked.question, why: held,
+        });
+        await countQuiet(false);
+        return { conversationId, text: result.text.trim(), delivered: false, decision: 'no-decision', reason: held === 'open' ? 'question-open' : 'question-repeat' };
+      }
       if (sink.decision) log(`mission ${mission.id}: the run decided (${sink.decision.kind}) after asking the owner; parking on the card instead`);
       const parked = await parkMissionRun({ pool: deps.pool, now: deps.now, timezone: deps.ctx.timezone, log }, {
         missionId: mission.id,

@@ -16,6 +16,17 @@ describe('secretsAct', () => {
     expect(ctx.agentId).toBe(OWNER_AGENT_ID);
   });
 
+  it('a kept login renamed here keeps its label under the new name; removed, its label goes', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, output: {} }));
+    const logins = { saved: vi.fn(() => []), forget: vi.fn(async () => true), rename: vi.fn(async () => true) };
+    const deps = { pool: {} as never, registry: { invoke } as never, ctx: {} as never, logins };
+    expect((await secretsAct(deps as never, { tool: 'secrets.rename', args: { name: 'login · amazon.com', to: 'Amazon' } }, { id: 'rename-session' })).status).toBe(200);
+    expect(logins.rename).toHaveBeenCalledWith('login · amazon.com', 'Amazon');
+    expect(logins.forget).not.toHaveBeenCalled();
+    expect((await secretsAct(deps as never, { tool: 'secrets.delete', args: { name: 'Amazon' } }, { id: 'delete-session' })).status).toBe(200);
+    expect(logins.forget).toHaveBeenCalledWith('Amazon');
+  });
+
   it('refuses a tool that is not a secrets write', async () => {
     const invoke = vi.fn();
     const reply = await secretsAct({ pool: {} as never, registry: { invoke } as never, ctx: {} as never } as never, { tool: 'email.send', args: {} }, { id: 's1' });

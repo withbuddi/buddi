@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api } from '../../api';
-import { SaveLoginCard, LOGIN_CARD_MS } from './SaveLoginCard';
+import { SaveLoginCard, LOGIN_CARD_MS, SAVED_MS } from './SaveLoginCard';
 
 vi.mock('../../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../api')>();
@@ -55,6 +55,40 @@ describe('the save-login card', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Never for this site' }));
     await waitFor(() => expect(never).toHaveBeenCalled());
     expect(api.browserLogin).toHaveBeenLastCalledWith('q2', 'never');
+  });
+
+  it('Saved stays two seconds, then the card goes', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.browserLogin).mockResolvedValue({ outcome: 'saved', saved: { name: 'login · amazon.com', site: 'amazon.com', username: LOGIN.username, savedAt: '2026-10-03T09:00:00Z' } });
+    const onDone = vi.fn();
+    render(<SaveLoginCard login={LOGIN} onDone={onDone} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(screen.getByText('Saved the login for amazon.com')).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(SAVED_MS - 1); });
+    expect(onDone).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(onDone).toHaveBeenCalled();
+  });
+
+  it('a Save the vault refused says why and offers Try again', async () => {
+    vi.mocked(api.browserLogin).mockRejectedValueOnce(new Error('buddi could not keep that login. Add it in Settings → Keys and secrets.'));
+    render(<SaveLoginCard login={LOGIN} onDone={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not keep that login');
+    vi.mocked(api.browserLogin).mockResolvedValue({ outcome: 'saved', saved: { name: 'login · amazon.com', site: 'amazon.com', username: LOGIN.username, savedAt: '2026-10-03T09:00:00Z' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Saved the login for amazon.com')).toBeInTheDocument();
+    expect(api.browserLogin).toHaveBeenCalledTimes(2);
+  });
+
+  it('a kept login with a new password asks to update, and Update saves', async () => {
+    vi.mocked(api.browserLogin).mockResolvedValue({ outcome: 'saved', saved: { name: 'login · amazon.com', site: 'amazon.com', username: LOGIN.username, savedAt: '2026-10-03T09:00:00Z' } });
+    render(<SaveLoginCard login={{ ...LOGIN, update: true }} onDone={vi.fn()} />);
+    expect(screen.getByText('Update the login for amazon.com?')).toBeInTheDocument();
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Never for this site', 'Not now', 'Update']);
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() => expect(api.browserLogin).toHaveBeenCalledWith('q1', 'save'));
+    expect(await screen.findByText('Updated the login for amazon.com')).toBeInTheDocument();
   });
 
   it('says so when the sign-in is no longer held, and goes by itself after two minutes', async () => {

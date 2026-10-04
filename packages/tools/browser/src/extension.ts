@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { checkUrl } from '@buddi/core/plugin';
 import { fieldOrigin } from './secrets.js';
-import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type SeenLoginReport } from './types.js';
+import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type LoginAck, type LoginSeenListener, LOGIN_GONE, LOGIN_GRACE_MS } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */
 export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot', 'fieldInfo', 'secretFill'] as const;
@@ -83,16 +83,17 @@ export interface ExtensionBridge {
   /**
    * A sign-in the owner answered in a tab they hold (the waiting bar's "Save
    * this login?"), for one session: Save with the pair, Never with the site.
-   * Only from the paired socket. Returns the unsubscribe.
+   * Only from the paired socket. A Save is answered with what became of it
+   * (the bar says Saved, or why not). Returns the unsubscribe.
    */
-  logins?(session: string, listener: (login: ExtensionLogin) => void): () => void;
+  logins?(session: string, listener: (login: ExtensionLogin) => Promise<LoginAck> | void): () => void;
 }
 /** What the extension sends when the owner answers the save prompt in a held tab. The password only with Save. */
 export interface ExtensionLogin { decision: 'save' | 'never'; origin: string; username: string; password?: string }
 /** What the extension needs before it asks: sites never to ask about, and logins already kept. */
 export interface ExtensionLoginFacts { never: string[]; saved: Array<{ site: string; username: string }> }
 /** How long after Give it back a Save tapped in the tab still counts. */
-const LOGIN_GRACE_MS = 2 * 60_000;
+export { LOGIN_GRACE_MS, LOGIN_GONE };
 /**
  * An unsolicited event from the extension about one session: `takeover` from
  * the working bar, `giveback` from the bar a held tab shows (extension
@@ -166,13 +167,14 @@ export class ExtensionDriver implements BrowserDriver {
    * (or just gave it back): a Save from a tab buddi is driving is not the
    * owner's. The pair goes to the listener and nowhere else.
    */
-  onLoginSeen(listener: (login: SeenLoginReport) => void): void {
+  onLoginSeen(listener: LoginSeenListener): void {
     this.#logins?.();
     this.#logins = this.bridge.logins?.(this.session, (login) => {
       const now = this.options.now?.() ?? Date.now();
-      if (!this.#held && now >= this.#heldUntil) return;
-      if (login.decision === 'save' && !login.password) return;
-      try { listener({ origin: login.origin, username: login.username, password: login.password ?? '', decision: login.decision }); } catch { /* the keeper decides */ }
+      if (!this.#held && now >= this.#heldUntil) return Promise.resolve({ saved: false, reason: LOGIN_GONE });
+      if (login.decision === 'save' && !login.password) return Promise.resolve({ saved: false, reason: LOGIN_GONE });
+      try { return listener({ origin: login.origin, username: login.username, password: login.password ?? '', decision: login.decision }); }
+      catch { return Promise.resolve({ saved: false, reason: LOGIN_GONE }); }
     });
   }
 

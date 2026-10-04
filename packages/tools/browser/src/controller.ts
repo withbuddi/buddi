@@ -16,7 +16,7 @@ import { agoText, cardAnswer, ownerClock, chooseRoute, detectSignedOut, detectWa
 import { BrowserTelemetry, missionMark, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
 import { canonicalOrigin, fieldBoundTo } from './secrets.js';
 import { LoginKeeper } from './logins.js';
-import type { SeenLoginReport } from './types.js';
+import { LOGIN_GONE, LOGIN_NOT_KEPT, type LoginAck, type SeenLoginReport } from './types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The one control an app card carries: how long the yes lasts. */
@@ -137,9 +137,13 @@ export class HostController implements BrowserController {
    * password stops at the keeper; whatever goes wrong is dropped without a
    * word, because a word here could carry it.
    */
-  #loginSeen(sessionId: string, login: SeenLoginReport): void {
-    const work = login.decision ? this.logins.decided(login, login.decision) : this.logins.seen(sessionId, login);
-    void work.catch(() => undefined);
+  #loginSeen(sessionId: string, login: SeenLoginReport): Promise<LoginAck> | void {
+    if (!login.decision) { void this.logins.seen(sessionId, login).catch(() => undefined); return; }
+    // The owner's Chrome waits to hear what became of a Save: kept, or one plain sentence why not (never the store's words).
+    return this.logins.decided(login, login.decision).then(
+      (answer): LoginAck => answer.outcome === 'saved' || answer.outcome === 'never' ? { saved: true } : { saved: false, reason: LOGIN_GONE },
+      (): LoginAck => ({ saved: false, reason: LOGIN_NOT_KEPT }),
+    );
   }
   /** What the owner's Chrome needs to know before it asks: the sites never to ask about, and the logins already kept. */
   #loginFacts(): { never: string[]; saved: Array<{ site: string; username: string }> } {

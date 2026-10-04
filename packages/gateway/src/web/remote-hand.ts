@@ -549,7 +549,7 @@ export class RemoteHandEndpoint {
       if (this.#live !== live || live.closing || prompt.sessionId !== live.sessionId) return;
       const ws = live.ws;
       if (ws.readyState !== ws.OPEN) return;
-      try { ws.send(JSON.stringify({ type: 'loginSeen', id: prompt.id, site: prompt.site, username: prompt.username })); } catch { /* the close handler says so */ }
+      try { ws.send(JSON.stringify({ type: 'loginSeen', id: prompt.id, site: prompt.site, username: prompt.username, ...(prompt.update ? { update: true } : {}) })); } catch { /* the close handler says so */ }
     };
     live.offLogins = keeper.onSeen(tell);
     for (const prompt of keeper.pending(live.sessionId)) tell(prompt);

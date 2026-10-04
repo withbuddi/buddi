@@ -190,17 +190,22 @@ export interface HeldLoginFacts { never: string[]; saved: Array<{ site: string; 
 
 /**
  * Watch a held tab for a sign-in going out, and ask in its bar: "Save this
- * login for amazon.com?" Save · Not now · Never for this site
- * (docs/browser.md, "Saving a sign-in").
+ * login for amazon.com?" Save · Not now · Never for this site — or, for a
+ * login already kept with that user name, "Update the login for amazon.com?"
+ * with Update (docs/browser.md, "Saving a sign-in").
  *
  * Serialised into the tab beside `showHeldBar`, in the same isolated world,
  * so it is self-contained; the detection is the browser plugin's
  * `watchLogins`, written out again here because a serialised function can
- * call nothing outside itself. The pair stays in this closure: Save sends it
- * to the worker (a runtime message only this extension's scripts can send),
- * which sends it to buddi on its authenticated socket; Never sends the site
- * alone; Not now sends nothing. Nothing is logged, and two minutes after the
- * sign-in the pair is dropped whatever happened.
+ * call nothing outside itself. The pair goes to the worker the moment the
+ * form goes out (a runtime message only this extension's scripts can send)
+ * and waits there, because the form's own navigation takes this page away;
+ * the page the tab lands on asks the worker and asks the owner again. Save
+ * tells the worker, which sends the pair to buddi on its authenticated
+ * socket and says what became of it: "Saved" for two seconds, or why not
+ * with Try again. Never sends the site alone; Not now drops the pair.
+ * Nothing is logged, and two minutes after the sign-in the pair is dropped
+ * whatever happened.
  */
 export function watchHeldLogins(session: string, facts: HeldLoginFacts | null): void {
   const holder = globalThis as unknown as Record<string, unknown>;
@@ -213,33 +218,69 @@ export function watchHeldLogins(session: string, facts: HeldLoginFacts | null): 
   holder['__buddiHeldLogins'] = state;
   const runtime = (): { sendMessage(message: unknown): Promise<unknown> } | undefined =>
     (globalThis as unknown as { chrome?: { runtime?: { sendMessage(message: unknown): Promise<unknown> } } }).chrome?.runtime;
-  const post = (message: unknown): void => {
-    try { void runtime()?.sendMessage(message)?.catch?.(() => undefined); } catch { /* the worker is gone; nothing is kept */ }
+  const call = async (message: unknown): Promise<unknown> => {
+    try { return await runtime()?.sendMessage(message); } catch { return undefined; /* the worker is gone; nothing is kept */ }
   };
   const site = (): string => ((globalThis as unknown as { location?: Location }).location?.hostname ?? '').toLowerCase().replace(/^www\./, '');
   const listed = (where: string): boolean => state.facts.never.some((entry) => { const bare = entry.toLowerCase().replace(/^www\./, ''); return where === bare || where.endsWith(`.${bare}`); });
-  const ask = (found: { username: string; password: string }): void => {
-    const where = site();
-    if (where === '' || listed(where)) return;
-    if (state.facts.saved.some((login) => login.site === where && login.username === found.username)) return;
-    const question = holder['__buddiHeldAsk'] as ((question: string, choices: Array<{ label: string; primary?: boolean; pick: () => void }>) => () => void) | undefined;
-    if (typeof question !== 'function') return;
-    let pair: { username: string; password: string } | undefined = found;
+  type Choice = { label: string; primary?: boolean; pick: () => void };
+  const bar = (): ((question: string, choices: Choice[]) => () => void) | undefined => {
+    const question = holder['__buddiHeldAsk'];
+    return typeof question === 'function' ? question as (question: string, choices: Choice[]) => () => void : undefined;
+  };
+  /** The question, as the worker holds it: the site the form sat on, the user name, whether it updates a kept login. */
+  const prompt = (where: string, update: boolean): void => {
+    const question = bar();
+    if (!question) return;
     if (state.drop) clearTimeout(state.drop);
-    const restore = question(`Save this login for ${where}?`, [
-      { label: 'Save', primary: true, pick: () => {
-        const held = pair; pair = undefined;
-        if (held) post({ type: 'buddi-login', session: state.session, decision: 'save', username: held.username, password: held.password });
-      } },
-      { label: 'Not now', pick: () => { pair = undefined; } },
+    let answered = false;
+    const save = (): void => {
+      if (answered) return;
+      answered = true;
+      const asking = bar();
+      asking?.(update ? 'Updating…' : 'Saving…', []);
+      void call({ type: 'buddi-login', session: state.session, decision: 'save' }).then((reply) => {
+        const answer = reply as { saved?: unknown; reason?: unknown } | undefined;
+        const now = bar();
+        if (!now) return;
+        if (answer?.saved === true) {
+          const restore = now(update ? `Updated the login for ${where}` : `Saved the login for ${where}`, []);
+          if (state.drop) clearTimeout(state.drop);
+          state.drop = setTimeout(restore, 2_000);
+          return;
+        }
+        const reason = typeof answer?.reason === 'string' && answer.reason !== '' ? answer.reason : 'buddi did not answer. Try again.';
+        now(reason, [
+          { label: 'Try again', primary: true, pick: () => { answered = false; save(); } },
+          { label: 'Not now', pick: () => { void call({ type: 'buddi-login', session: state.session, decision: 'later' }); } },
+        ]);
+      });
+    };
+    const restore = question(update ? `Update the login for ${where}?` : `Save this login for ${where}?`, [
+      { label: update ? 'Update' : 'Save', primary: true, pick: save },
+      { label: 'Not now', pick: () => { answered = true; void call({ type: 'buddi-login', session: state.session, decision: 'later' }); } },
       { label: 'Never for this site', pick: () => {
-        const held = pair; pair = undefined;
+        answered = true;
         state.facts.never.push(where);
-        post({ type: 'buddi-login', session: state.session, decision: 'never', username: held?.username ?? '' });
+        void call({ type: 'buddi-login', session: state.session, decision: 'never' });
       } },
     ]);
-    state.drop = setTimeout(() => { pair = undefined; restore(); }, 2 * 60_000);
+    state.drop = setTimeout(() => { if (!answered) restore(); }, 2 * 60_000);
   };
+  const ask = (found: { username: string; password: string }): void => {
+    const where = site();
+    if (where === '' || listed(where) || !bar()) return;
+    const update = state.facts.saved.some((login) => login.site === where && login.username === found.username);
+    // The pair goes to the worker now: the form's navigation is about to take this page away.
+    void call({ type: 'buddi-login-seen', session: state.session, username: found.username, password: found.password, update });
+    prompt(where, update);
+  };
+  // A page the tab landed on after the form went out: the question the worker still holds, asked again here.
+  void call({ type: 'buddi-login-pending', session: state.session }).then((reply) => {
+    const waiting = reply as { site?: unknown; update?: unknown } | null | undefined;
+    if (holder['__buddiHeldLogins'] !== state || !waiting || typeof waiting.site !== 'string') return;
+    prompt(waiting.site, waiting.update === true);
+  });
   const NOT_SUBMIT = /\b(show|hide|reveal|toggle|eye|forgot|reset|cancel|back|close|sign ?up|register|create)\b/i;
   const USER = /user|email|login|account|ident|phone|mail/i;
   const passwords = (root: ParentNode): HTMLInputElement[] => Array.from(root.querySelectorAll('input[type="password" i]')) as HTMLInputElement[];
@@ -307,28 +348,43 @@ export function watchHeldLogins(session: string, facts: HeldLoginFacts | null): 
   }
 }
 
-/** The frame the worker sends the gateway when the owner answered the save prompt in a held tab. The password only with Save. */
-export interface LoginFrame { type: 'login'; session: string; decision: 'save' | 'never'; origin: string; username: string; password?: string }
+/**
+ * The frame the worker sends the gateway when the owner answered the save
+ * prompt in a held tab. The password only with Save, which carries an id the
+ * gateway's `loginAck` names.
+ */
+export interface LoginFrame { type: 'login'; session: string; decision: 'save' | 'never'; origin: string; username: string; password?: string; id?: string }
+
+/** The tab told the worker a sign-in went out: kept in the worker until the owner answers. */
+export const LOGIN_SEEN_MESSAGE = 'buddi-login-seen';
+/** A page of a held tab asking whether a question is still waiting for it. */
+export const LOGIN_PENDING_MESSAGE = 'buddi-login-pending';
+
+/** What a held tab may ask the worker about a sign-in, read strictly. */
+export type HeldLoginRequest =
+  | { kind: 'seen'; session: string; tabId: number; url: string; username: string; password: string; update: boolean }
+  | { kind: 'pending'; session: string; tabId: number; url: string }
+  | { kind: 'answer'; session: string; tabId: number; decision: 'save' | 'later' | 'never' };
 
 /**
- * A save-prompt answer from a tab, as the worker passes it on: only from the
- * tab the session holds, with the origin Chrome reports for the frame that
- * sent it (never the page's claim), the password only with Save. Undefined
- * for anything else.
+ * A sign-in message from a tab, as the worker believes it: only from the tab
+ * the session holds, with the page address Chrome reports for the sender
+ * (never the page's claim). Undefined for anything else.
  */
-export function loginFrame(message: unknown, sender: { tab?: { id?: number }; url?: string } | undefined, heldTab: number | undefined): LoginFrame | undefined {
-  const request = message as { type?: unknown; session?: unknown; decision?: unknown; username?: unknown; password?: unknown } | null;
-  if (!request || request.type !== LOGIN_MESSAGE || typeof request.session !== 'string') return undefined;
+export function heldLoginRequest(message: unknown, sender: { tab?: { id?: number }; url?: string } | undefined, heldTab: number | undefined): HeldLoginRequest | undefined {
+  const request = message as { type?: unknown; session?: unknown; decision?: unknown; username?: unknown; password?: unknown; update?: unknown } | null;
+  if (!request || typeof request.session !== 'string' || request.session === '') return undefined;
   if (heldTab === undefined || sender?.tab?.id !== heldTab) return undefined;
-  if (request.decision !== 'save' && request.decision !== 'never') return undefined;
-  let origin: string;
-  try {
-    const parsed = new URL(sender.url ?? '');
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined;
-    origin = parsed.origin;
-  } catch { return undefined; }
-  const username = typeof request.username === 'string' ? request.username.slice(0, 200) : '';
-  if (request.decision === 'never') return { type: 'login', session: request.session, decision: 'never', origin, username };
-  if (typeof request.password !== 'string' || request.password === '' || request.password.length > 1024) return undefined;
-  return { type: 'login', session: request.session, decision: 'save', origin, username, password: request.password };
+  const session = request.session;
+  const url = sender.url ?? '';
+  if (request.type === LOGIN_SEEN_MESSAGE) {
+    if (typeof request.password !== 'string' || request.password === '' || request.password.length > 1024) return undefined;
+    const username = typeof request.username === 'string' ? request.username.slice(0, 200) : '';
+    return { kind: 'seen', session, tabId: heldTab, url, username, password: request.password, update: request.update === true };
+  }
+  if (request.type === LOGIN_PENDING_MESSAGE) return { kind: 'pending', session, tabId: heldTab, url };
+  if (request.type === LOGIN_MESSAGE && (request.decision === 'save' || request.decision === 'later' || request.decision === 'never')) {
+    return { kind: 'answer', session, tabId: heldTab, decision: request.decision };
+  }
+  return undefined;
 }

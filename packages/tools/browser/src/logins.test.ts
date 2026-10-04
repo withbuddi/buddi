@@ -15,7 +15,7 @@ import { PlaywrightDriver } from './driver.js';
 import { ExtensionDriver, type ExtensionBridge, type ExtensionLogin } from './extension.js';
 import { BrowserService } from './service.js';
 import { LOGIN_BINDING, LOGIN_WORLD, LoginKeeper, loginName, loginWatchSource, readLoginPayload, shortUsername, type LoginPrompt, type LoginStoreInput } from './logins.js';
-import { commandSchema, type BrowserDriver, type Observation, type SeenLoginReport } from './types.js';
+import { commandSchema, LOGIN_GONE, type BrowserDriver, type Observation, type SeenLoginReport } from './types.js';
 
 const PASSWORD = 'fixture-pass-7Qz!';
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
@@ -114,7 +114,7 @@ describe('the service passes a sign-in on only while the owner holds the page', 
     const driver: BrowserDriver = { start: vi.fn(async () => {}), perform: vi.fn(async () => {}), observe: vi.fn(async () => observation), screenshot: vi.fn(async () => undefined), close: vi.fn(async () => {}),
       takeover: vi.fn(async () => {}), resume: vi.fn(), onLoginSeen: (fn) => { listener = fn; } };
     const passed: Array<[string, SeenLoginReport]> = [];
-    const service = new BrowserService(driver, { loginSeen: (sessionId, login) => passed.push([sessionId, login]), sleep: async () => {} });
+    const service = new BrowserService(driver, { loginSeen: (sessionId, login) => { passed.push([sessionId, login]); }, sleep: async () => {} });
     await service.enable();
     await service.execute(commandSchema.parse({ action: 'navigate', url: 'https://www.amazon.com/ap/signin' }), ctx());
     listener!({ origin: 'https://www.amazon.com', username: 'agent', password: PASSWORD });
@@ -123,6 +123,32 @@ describe('the service passes a sign-in on only while the owner holds the page', 
     listener!({ origin: 'https://www.amazon.com', username: 'sam@example.com', password: PASSWORD });
     expect(passed).toHaveLength(1);
     expect(passed[0]![0]).toBe(service.status().session!.id);
+    await service.shutdown();
+  });
+
+  it('a Save from the owner’s Chrome a beat after Give it back still counts, within the grace; later it is gone, and says so', async () => {
+    let now = Date.parse('2026-10-03T09:00:00Z');
+    let listener: ((login: SeenLoginReport) => Promise<unknown> | void) | undefined;
+    const observation: Observation = { id: 'o1', url: 'https://www.amazon.com/ap/signin', title: 'Sign in', tree: '', tabs: [], capturedAt: new Date().toISOString() };
+    const driver: BrowserDriver = { start: vi.fn(async () => {}), perform: vi.fn(async () => {}), observe: vi.fn(async () => observation), screenshot: vi.fn(async () => undefined), close: vi.fn(async () => {}),
+      takeover: vi.fn(async () => {}), resume: vi.fn(), onLoginSeen: (fn) => { listener = fn; } };
+    (driver as { holdsInPlace?: 'chrome' }).holdsInPlace = 'chrome';
+    const passed: string[] = [];
+    const service = new BrowserService(driver, { now: () => now, sleep: async () => {},
+      loginSeen: async (sessionId) => { passed.push(sessionId); return { saved: true }; } });
+    await service.enable();
+    await service.execute(commandSchema.parse({ action: 'navigate', url: 'https://www.amazon.com/ap/signin' }), ctx());
+    const held = service.status().session!.id;
+    await service.control('takeover');
+    await service.control('resume');
+    now += 30_000;
+    await expect(listener!({ origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD, decision: 'save' })).resolves.toEqual({ saved: true });
+    expect(passed).toEqual([held]);
+    // A report with no answer in it is never taken after the hold.
+    expect(listener!({ origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD })).toBeUndefined();
+    now += 2 * 60_000;
+    await expect(listener!({ origin: 'https://www.amazon.com', username: 'sam', password: PASSWORD, decision: 'save' })).resolves.toEqual({ saved: false, reason: LOGIN_GONE });
+    expect(passed).toHaveLength(1);
     await service.shutdown();
   });
 });
@@ -211,6 +237,77 @@ describe('the keeper asks the owner, and keeps what they say', () => {
     expect(keeper.never()).toEqual(['bank.test']);
   });
 
+  it('two accounts saved at once on one site get two secrets, and a name the store already holds is never taken', async () => {
+    const { keeper } = await keeperIn();
+    // A store slow enough that both saves would pick their names before either finished.
+    const store = new Map<string, string>();
+    keeper.useStore(async ({ name, value }) => { await new Promise((resolve) => setTimeout(resolve, 5)); store.set(name, value); }, async () => [...store.keys()]);
+    const [alice, bob] = await Promise.all([
+      keeper.decided({ origin: 'https://example.org', username: 'alice', password: 'pa' }, 'save'),
+      keeper.decided({ origin: 'https://example.org', username: 'bob', password: 'pb' }, 'save'),
+    ]);
+    expect(alice.saved!.name).not.toBe(bob.saved!.name);
+    expect(store.size).toBe(2);
+    expect(store.get(alice.saved!.name)).toBe('pa');
+    expect(store.get(bob.saved!.name)).toBe('pb');
+    // The owner's own secret called "login · example.net" is not one of buddi's: a captured login goes beside it.
+    store.set('login · example.net', 'the owner’s');
+    const carol = await keeper.decided({ origin: 'https://example.net', username: 'carol', password: 'pc' }, 'save');
+    expect(carol.saved!.name).toBe('login · example.net · carol');
+    expect(store.get('login · example.net')).toBe('the owner’s');
+  });
+
+  it('the same sign-in again restarts the two minutes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { keeper } = await keeperIn();
+      const first = await keeper.seen('s1', { origin: 'https://example.org', username: 'u', password: 'one' });
+      vi.advanceTimersByTime(90_000);
+      await keeper.seen('s1', { origin: 'https://example.org', username: 'u', password: 'two' });
+      vi.advanceTimersByTime(90_000);
+      expect(keeper.pending().map((prompt) => prompt.id)).toEqual([first!.id]);
+      vi.advanceTimersByTime(30_001);
+      expect(keeper.pending()).toEqual([]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a kept login signed into with a new password is offered as an update, and Save replaces its value', async () => {
+    const { keeper, stored } = await keeperIn();
+    const first = await keeper.seen('s1', { origin: 'https://www.amazon.com', username: 'sam', password: 'old-one' });
+    expect(first?.update).toBeUndefined();
+    await keeper.decide(first!.id, 'save');
+    // The same password: nothing to ask.
+    expect(await keeper.seen('s1', { origin: 'https://www.amazon.com', username: 'sam', password: 'old-one' })).toBeUndefined();
+    const changed = await keeper.seen('s1', { origin: 'https://www.amazon.com', username: 'sam', password: 'new-one' });
+    expect(changed).toMatchObject({ site: 'amazon.com', username: 'sam', update: true });
+    expect(await keeper.decide(changed!.id, 'save')).toMatchObject({ outcome: 'saved', saved: { name: 'login · amazon.com' } });
+    expect(stored.map((input) => [input.name, input.value])).toEqual([['login · amazon.com', 'old-one'], ['login · amazon.com', 'new-one']]);
+    expect(keeper.saved()).toHaveLength(1);
+    // After a restart buddi cannot tell, so a kept login is asked about as an update rather than never.
+    const reopened = new LoginKeeper(keeper.file);
+    expect(await reopened.seen('s2', { origin: 'https://www.amazon.com', username: 'sam', password: 'new-one' })).toMatchObject({ update: true });
+  });
+
+  it('a Save the store refuses stays open for another try', async () => {
+    const { keeper } = await keeperIn();
+    let refuse = true;
+    const stored: string[] = [];
+    keeper.useStore(async ({ name }) => { if (refuse) throw new Error('vault locked'); stored.push(name); });
+    const prompt = await keeper.seen('s1', { origin: 'https://example.org', username: 'u', password: PASSWORD });
+    await expect(keeper.decide(prompt!.id, 'save')).rejects.toThrow();
+    refuse = false;
+    expect(await keeper.decide(prompt!.id, 'save')).toMatchObject({ outcome: 'saved' });
+    expect(stored).toEqual(['login · example.org']);
+  });
+
+  it('a renamed secret keeps its label under the new name', async () => {
+    const { keeper } = await keeperIn();
+    await keeper.decided({ origin: 'https://example.org', username: 'u', password: PASSWORD }, 'save');
+    expect(await keeper.rename('login · example.org', 'Work login')).toBe(true);
+    expect(keeper.saved()).toMatchObject([{ name: 'Work login', site: 'example.org', username: 'u' }]);
+    expect(await keeper.rename('nothing', 'else')).toBe(false);
+  });
+
   it('says a user name the way Settings does', () => {
     expect(shortUsername('sam.smith@example.com')).toBe('sam.smith@…');
     expect(shortUsername('sam')).toBe('sam');
@@ -229,12 +326,22 @@ describe('the owner’s Chrome passes on an answer only from a tab the owner hol
     return { fake, sent, push: (login: ExtensionLogin) => listener?.(login) };
   }
 
+  it('answers a Save with what became of it: the keeper’s word while held, gone otherwise', async () => {
+    let listener: ((login: ExtensionLogin) => Promise<unknown> | void) | undefined;
+    const fake: ExtensionBridge = { connected: () => true, close: () => {}, send: async () => ({}), logins: (_session, fn) => { listener = fn; return () => {}; } };
+    const driver = new ExtensionDriver(fake, undefined, { now: () => 0 });
+    driver.onLoginSeen(async () => ({ saved: false, reason: 'buddi could not keep that login.' }));
+    await expect(listener!({ decision: 'save', origin: 'https://example.org', username: 'u', password: PASSWORD })).resolves.toEqual({ saved: false, reason: LOGIN_GONE });
+    await driver.takeover();
+    await expect(listener!({ decision: 'save', origin: 'https://example.org', username: 'u', password: PASSWORD })).resolves.toEqual({ saved: false, reason: 'buddi could not keep that login.' });
+  });
+
   it('tells the tab what not to ask about, and relays Save only while held or just after', async () => {
     let now = 0;
     const { fake, sent, push } = bridge();
     const driver = new ExtensionDriver(fake, undefined, { logins: () => ({ never: ['bank.test'], saved: [{ site: 'amazon.com', username: 'sam' }] }), now: () => now });
     const seen: SeenLoginReport[] = [];
-    driver.onLoginSeen((login) => seen.push(login));
+    driver.onLoginSeen((login) => { seen.push(login); });
     push({ decision: 'save', origin: 'https://example.org', username: 'u', password: PASSWORD });
     expect(seen).toEqual([]);
     await driver.takeover();

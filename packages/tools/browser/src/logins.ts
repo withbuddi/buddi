@@ -24,7 +24,7 @@
  * remembers the site. The labels and the never-list are a small file in the
  * plugin's directory; the password is never written by this module.
  */
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { siteListed, siteOf } from './routes.js';
@@ -52,6 +52,8 @@ export interface LoginPrompt {
   sessionId: string;
   site: string;
   username: string;
+  /** A login kept for this site and user name already: the question is "Update the login for amazon.com?", and Save replaces its value. */
+  update?: true;
 }
 
 /** A login buddi kept for the owner: the secret's name, where it may go, and the label. */
@@ -71,6 +73,8 @@ export interface LoginStoreInput {
 }
 /** The owner-secret store, handed in by the gateway. */
 export type LoginStore = (input: LoginStoreInput) => Promise<void>;
+/** The names the owner-secret store holds now (names only), so a new login never takes one already there. */
+export type LoginStoreNames = () => Promise<readonly string[]>;
 
 export type LoginOutcome = 'saved' | 'dismissed' | 'never' | 'gone';
 
@@ -83,13 +87,25 @@ interface Pending {
 
 interface LoginFile { saved: SavedLogin[]; never: string[] }
 
-/** The owner's word for a captured login, and what agents ask for it by. */
-export function loginName(site: string, username: string, saved: readonly SavedLogin[]): string {
+/**
+ * The owner's word for a captured login, and what agents ask for it by. The
+ * login already kept for this site and user name keeps its name (Save then
+ * replaces its value); otherwise the first name that neither another kept
+ * login nor any other secret in the store (`existing`) holds.
+ */
+export function loginName(site: string, username: string, saved: readonly SavedLogin[], existing: ReadonlySet<string> = new Set()): string {
+  const mine = saved.find((login) => login.site === site && login.username === username);
+  if (mine) return mine.name;
+  const free = (name: string): boolean => !saved.some((login) => login.name === name) && !existing.has(name);
   const plain = `login · ${site}`;
-  const taken = saved.find((login) => login.name === plain);
-  if (!taken || taken.username === username) return plain;
+  if (free(plain)) return plain;
   const named = `login · ${site} · ${username}`.slice(0, 120);
-  return named;
+  if (free(named)) return named;
+  for (let n = 2; n < 100; n++) {
+    const numbered = `${named.slice(0, 112)} · ${n}`;
+    if (free(numbered)) return numbered;
+  }
+  return `${named.slice(0, 100)} · ${randomUUID().slice(0, 8)}`;
 }
 
 /** A user name as Settings says it: an address's mailbox and "@…", anything long cut short. */
@@ -117,13 +133,30 @@ export class LoginKeeper {
   #pending = new Map<string, Pending>();
   #listeners = new Set<(prompt: LoginPrompt) => void>();
   #store?: LoginStore;
+  #names?: LoginStoreNames;
   #state: LoginFile = { saved: [], never: [] };
   #loaded?: Promise<void>;
   #writing: Promise<unknown> = Promise.resolve();
+  /** One save at a time per site: the name is picked and stored before the next save there looks. */
+  #saving = new Map<string, Promise<unknown>>();
+  /**
+   * What each kept login's password was when this process last saw it, as a
+   * keyed hash whose key never leaves this process's memory (and so never
+   * matches across a restart). Only to tell "the same password again" from "a
+   * new one worth an Update question"; never written anywhere.
+   */
+  #marks = new Map<string, Buffer>();
+  readonly #markKey = randomBytes(32);
   constructor(readonly file: string | undefined, readonly options: { holdMs?: number; now?: () => number } = {}) {}
 
-  /** The gateway's owner-secret store; without one, Save says so. */
-  useStore(store: LoginStore): void { this.#store = store; }
+  /** The gateway's owner-secret store, and the names it holds; without a store, Save says so. */
+  useStore(store: LoginStore, names?: LoginStoreNames): void { this.#store = store; this.#names = names; }
+
+  #mark(password: string): Buffer { return createHmac('sha256', this.#markKey).update(password).digest(); }
+  #sameAsKept(name: string, password: string): boolean {
+    const kept = this.#marks.get(name);
+    return kept !== undefined && timingSafeEqual(kept, this.#mark(password));
+  }
   get canSave(): boolean { return this.#store !== undefined; }
 
   /** Read the labels and the never-list once. A missing or broken file is an empty one. */
@@ -171,32 +204,42 @@ export class LoginKeeper {
     return [...this.#pending.values()].filter((entry) => sessionId === undefined || entry.prompt.sessionId === sessionId).map((entry) => ({ ...entry.prompt }));
   }
 
-  /** A site the owner said Never for, or a login already kept with this user name: nothing to ask. */
-  #quiet(site: string, username: string): boolean {
-    if (siteListed(site, this.#state.never)) return true;
-    return this.#state.saved.some((login) => login.site === site && login.username === username);
+  /** The login already kept for this site and user name, if any. */
+  #kept(site: string, username: string): SavedLogin | undefined {
+    return this.#state.saved.find((login) => login.site === site && login.username === username);
+  }
+
+  #expire(id: string): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => { this.#pending.delete(id); }, this.options.holdMs ?? LOGIN_HOLD_MS);
+    timer.unref?.();
+    return timer;
   }
 
   /**
    * The owner's own browser saw a sign-in go out. Held for two minutes; the
    * listeners hear the site and the user name. Undefined when there is
-   * nothing to ask: no password, a site on the never-list, a login already kept.
+   * nothing to ask: no password, a site on the never-list, or a login kept
+   * with this user name and, as far as this process knows, this password. A
+   * kept login whose password differs (or is not known since a restart) is
+   * asked about as an update.
    */
   async seen(sessionId: string, login: SeenLogin): Promise<LoginPrompt | undefined> {
     await this.load();
     const facts = usable(login);
-    if (!facts || this.#quiet(facts.site, facts.username)) return undefined;
-    // The same sign-in again (a second click on the button): one question, the newest password.
+    if (!facts || siteListed(facts.site, this.#state.never)) return undefined;
+    const kept = this.#kept(facts.site, facts.username);
+    if (kept && this.#sameAsKept(kept.name, login.password)) return undefined;
+    // The same sign-in again (a second click on the button): one question, the newest password, two fresh minutes.
     const again = [...this.#pending.values()].find((entry) => entry.prompt.sessionId === sessionId && entry.prompt.site === facts.site && entry.prompt.username === facts.username);
     if (again) {
       again.password = login.password;
       again.origin = facts.origin;
+      clearTimeout(again.timer);
+      again.timer = this.#expire(again.prompt.id);
       return { ...again.prompt };
     }
-    const prompt: LoginPrompt = { id: randomUUID(), sessionId, site: facts.site, username: facts.username };
-    const timer = setTimeout(() => { this.#pending.delete(prompt.id); }, this.options.holdMs ?? LOGIN_HOLD_MS);
-    timer.unref?.();
-    this.#pending.set(prompt.id, { prompt, origin: facts.origin, password: login.password, timer });
+    const prompt: LoginPrompt = { id: randomUUID(), sessionId, site: facts.site, username: facts.username, ...(kept ? { update: true as const } : {}) };
+    this.#pending.set(prompt.id, { prompt, origin: facts.origin, password: login.password, timer: this.#expire(prompt.id) });
     for (const listener of this.#listeners) {
       try { listener({ ...prompt }); } catch { /* a listener never decides */ }
     }
@@ -211,12 +254,21 @@ export class LoginKeeper {
     return entry;
   }
 
-  /** The owner's answer to one question. `gone` when its two minutes are up. */
+  /**
+   * The owner's answer to one question. `gone` when its two minutes are up. A
+   * Save the store refuses throws and leaves the question open, so the owner
+   * can try again while the two minutes last.
+   */
   async decide(id: string, decision: LoginDecision): Promise<{ outcome: LoginOutcome; saved?: SavedLogin }> {
     await this.load();
     const entry = this.#take(id);
     if (!entry) return { outcome: 'gone' };
-    return this.#apply(entry.prompt.site, entry.origin, entry.prompt.username, entry.password, decision);
+    try {
+      return await this.#apply(entry.prompt.site, entry.origin, entry.prompt.username, entry.password, decision);
+    } catch (error) {
+      if (!this.#pending.has(id)) this.#pending.set(id, { ...entry, timer: this.#expire(id) });
+      throw error;
+    }
   }
 
   /**
@@ -241,12 +293,21 @@ export class LoginKeeper {
     const store = this.#store;
     if (!store) throw new Error('This buddi has nowhere to keep a login right now.');
     if (password === '') return { outcome: 'gone' };
-    const name = loginName(site, username, this.#state.saved);
-    await store({ name, value: password, bindings: [{ kind: FIELD_KIND, target: origin, rule: LOGIN_RULE }] });
-    const saved: SavedLogin = { name, site, origin, username, savedAt: new Date(this.options.now?.() ?? Date.now()).toISOString() };
-    this.#state.saved = [...this.#state.saved.filter((login) => login.name !== name), saved].slice(-500);
-    await this.#persist();
-    return { outcome: 'saved', saved: { ...saved } };
+    // One site at a time: two accounts saved at once must not pick the same name, or the second replaces the first.
+    const before = this.#saving.get(site) ?? Promise.resolve();
+    const run = before.catch(() => undefined).then(async () => {
+      const existing = new Set(this.#names ? await this.#names() : []);
+      const name = loginName(site, username, this.#state.saved, existing);
+      await store({ name, value: password, bindings: [{ kind: FIELD_KIND, target: origin, rule: LOGIN_RULE }] });
+      this.#marks.set(name, this.#mark(password));
+      const saved: SavedLogin = { name, site, origin, username, savedAt: new Date(this.options.now?.() ?? Date.now()).toISOString() };
+      this.#state.saved = [...this.#state.saved.filter((login) => login.name !== name), saved].slice(-500);
+      await this.#persist();
+      return { outcome: 'saved' as const, saved: { ...saved } };
+    });
+    this.#saving.set(site, run);
+    try { return await run; }
+    finally { if (this.#saving.get(site) === run) this.#saving.delete(site); }
   }
 
   /** The secret behind a label is gone (Settings → Remove): drop the label. */
@@ -254,7 +315,21 @@ export class LoginKeeper {
     await this.load();
     const before = this.#state.saved.length;
     this.#state.saved = this.#state.saved.filter((login) => login.name !== name);
+    this.#marks.delete(name);
     if (this.#state.saved.length === before) return false;
+    await this.#persist();
+    return true;
+  }
+
+  /** The secret behind a label was renamed (Settings → Rename): the label follows it. */
+  async rename(from: string, to: string): Promise<boolean> {
+    await this.load();
+    const login = this.#state.saved.find((entry) => entry.name === from);
+    if (!login || from === to) return false;
+    this.#state.saved = [...this.#state.saved.filter((entry) => entry.name !== from && entry.name !== to), { ...login, name: to }];
+    const mark = this.#marks.get(from);
+    this.#marks.delete(from);
+    if (mark) this.#marks.set(to, mark);
     await this.#persist();
     return true;
   }

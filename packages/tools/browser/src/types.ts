@@ -240,10 +240,24 @@ export interface BrowserDriver {
    * owner's answer (`save` with the pair, `never` with no password). The
    * password goes to the browser host's login keeper and nowhere else.
    */
-  onLoginSeen?(listener: (login: SeenLoginReport) => void): void;
+  onLoginSeen?(listener: LoginSeenListener): void;
 }
 /** What a backend reports about a sign-in the owner made: the frame's origin, the pair, and the answer when the owner already gave it. */
 export interface SeenLoginReport { origin: string; username: string; password: string; decision?: 'save' | 'never' }
+/**
+ * What became of a decision-bearing report (a Save tapped in the owner's
+ * Chrome): kept, or not with one plain sentence why. Never the store's own
+ * words, which may carry what it was handed.
+ */
+export type LoginAck = { saved: true } | { saved: false; reason: string };
+/** How long after Give it back a Save tapped in the owner's Chrome still counts, for the page they held. */
+export const LOGIN_GRACE_MS = 2 * 60_000;
+/** What the bar says when a Save arrives for a question nobody holds any more. */
+export const LOGIN_GONE = 'That question is gone; add the login in Settings → Keys and secrets.';
+/** What the bar says when the store would not keep a login. */
+export const LOGIN_NOT_KEPT = 'buddi could not keep that login. Try again, or add it in Settings → Keys and secrets.';
+/** Hears a sign-in report; for one that carries the owner's answer, says what became of it. */
+export type LoginSeenListener = (login: SeenLoginReport) => Promise<LoginAck> | void;
 /** "Observed 12:04:35 UTC." — the line a result opens with, so the model can tell old evidence from new. */
 export function observedLine(iso: string): string {
   return `Observed ${iso.slice(11, 19)} UTC.`;

@@ -225,10 +225,10 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
         }).catch(() => { /* a frame that will not decode is a frame not drawn */ });
         return;
       }
-      const message = JSON.parse(event.data) as { type?: string; error?: string; id?: unknown; site?: unknown; username?: unknown };
+      const message = JSON.parse(event.data) as { type?: string; error?: string; id?: unknown; site?: unknown; username?: unknown; update?: unknown };
       if (message.type === 'driving') { setPhase('driving'); setRefusal(null); return; }
       if (message.type === 'loginSeen') {
-        if (typeof message.id === 'string' && typeof message.site === 'string' && typeof message.username === 'string') loginSeen.current?.({ id: message.id, site: message.site, username: message.username });
+        if (typeof message.id === 'string' && typeof message.site === 'string' && typeof message.username === 'string') loginSeen.current?.({ id: message.id, site: message.site, username: message.username, ...(message.update === true ? { update: true } : {}) });
         return;
       }
       if (message.type === 'refused' || message.type === 'ended') {

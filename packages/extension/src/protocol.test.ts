@@ -280,3 +280,18 @@ describe('sentence', () => {
     expect(sentence(new Error('  '))).toBe('The browser extension could not run that command.');
   });
 });
+
+describe('the answer to a Save', () => {
+  it('passes buddi’s loginAck on only once paired, with a short reason', async () => {
+    const acks: unknown[] = [];
+    const { chrome } = fakeChrome();
+    const protocol = new Protocol({ chrome, version: '0.1.0', send: () => {}, execute: async () => ({}), onLoginAck: (id, answer) => { acks.push([id, answer]); } });
+    await protocol.receive(JSON.stringify({ type: 'loginAck', id: 'a1', saved: true }));
+    expect(acks).toEqual([]);
+    await protocol.receive(JSON.stringify({ type: 'paired', token: 'granted', installation: 'buddi' }));
+    await protocol.receive(JSON.stringify({ type: 'loginAck', id: 'a1', saved: true }));
+    await protocol.receive(JSON.stringify({ type: 'loginAck', id: 'a2', saved: false, reason: 'x'.repeat(400) }));
+    expect(acks[0]).toEqual(['a1', { saved: true }]);
+    expect((acks[1] as [string, { reason: string }])[1].reason).toHaveLength(300);
+  });
+});

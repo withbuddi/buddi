@@ -30,6 +30,8 @@ export interface ChromeLike {
     query(query: { windowId?: number }): Promise<TabInfo[]>;
     /** A tab finished loading (or changed): a held tab's bar is drawn again on its new page. */
     onUpdated?: { addListener(listener: (tabId: number, change: { status?: string }, tab: TabInfo) => void): void };
+    /** A tab closed: a sign-in it was waiting to save goes with it. */
+    onRemoved?: { addListener(listener: (tabId: number) => void): void };
   };
   tabGroups: {
     update(groupId: number, properties: { title?: string; collapsed?: boolean }): Promise<unknown>;

@@ -8,7 +8,7 @@ import { BrowserCommands, NEW_WINDOW_NOTE, NO_WINDOW_NOTE } from './commands.js'
 import type { WorkerChrome } from './chrome.js';
 import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type FrameMessage } from './protocol.js';
 import type { CollectedElement } from './tree.js';
-import type { OwnerEventMessage } from './bar.js';
+import type { LoginFrame, OwnerEventMessage } from './bar.js';
 
 interface FrameResult { url: string; title: string; tree: string; elements: CollectedElement[]; scroll: { x: number; y: number } }
 
@@ -56,6 +56,8 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
   const bar = { calls: [] as string[], choice: undefined as string | undefined, watched: [] as unknown[][] };
   /** Tabs activated and windows focused, in order. */
   const focuses: string[] = [];
+  /** Who hears a tab close. */
+  const closers: Array<(tabId: number) => void> = [];
   let nextTabId = 100;
   const chrome = {
     storage: { local: { async get() { return {}; }, async set() {}, async remove() {} } },
@@ -75,6 +77,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
       async get(id: number) { const tab = tabs.get(id); if (!tab) throw new Error('no such tab'); return tab; },
       async remove(ids: number[]) { for (const id of ids) tabs.delete(id); },
       async query() { return [...tabs.values()]; },
+      onRemoved: { addListener(listener: (tabId: number) => void) { closers.push(listener); } },
       // Chrome puts the tab in the group; the fake has to as well, because
       // every command now asks whether the tab is still in it.
       async group({ tabIds }: { tabIds: number[] }) {
@@ -132,12 +135,12 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     alarms: { create() {}, onAlarm: { addListener() {} } },
     runtime: { getManifest: () => ({ version: '0.1.0' }), onMessage: { addListener() {} }, async sendMessage() { return undefined; } },
   } as unknown as WorkerChrome;
-  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar, creates, windowCreates, focuses };
+  return { chrome, closers, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar, creates, windowCreates, focuses };
 }
 
 const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
 
-async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>, options: { onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; now?: () => number } = {}) {
+async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>, options: { onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; onLogin?: (frame: LoginFrame) => void; now?: () => number } = {}) {
   const fake = fakeChrome(frames);
   const waits: number[] = [];
   // A clock the waits move, so waiting thirty seconds for the owner takes no time.
@@ -353,6 +356,41 @@ describe('the owner’s tabs', () => {
     expect(commands.heldTab('s1')).toBe(tab.id);
     await commands.run(command('unhold', {}, true));
     expect(commands.heldTab('s1')).toBeUndefined();
+  });
+
+  it('a sign-in seen in a held tab waits in the worker across the form’s navigation, and Save sends it with the original origin', async () => {
+    const frames: LoginFrame[] = [];
+    const { commands, tabs, closers } = await opened(undefined, { onLogin: (frame) => frames.push(frame) });
+    const tab = [...tabs.values()][0]!;
+    await commands.run(command('hold', {}, true));
+    const from = (url: string, id = tab.id) => ({ tab: { id }, url });
+    // The form goes out on www.example.com: the pair is kept here, with the origin Chrome reports.
+    await expect(commands.loginMessage({ type: 'buddi-login-seen', session: 's1', username: 'sam', password: 'fixture-pass', update: false }, from('https://www.example.com/signin'))).resolves.toEqual({ ok: true });
+    // Another tab is not believed.
+    expect(commands.loginMessage({ type: 'buddi-login-pending', session: 's1' }, from('https://www.example.com/', 999))).toBeUndefined();
+    // The redirect lands on another host of the same site: the question is asked again, naming the site the form sat on.
+    await expect(commands.loginMessage({ type: 'buddi-login-pending', session: 's1' }, from('https://accounts.example.com/home'))).resolves.toEqual({ site: 'example.com', username: 'sam', update: false });
+    // A page of another site gets nothing.
+    await expect(commands.loginMessage({ type: 'buddi-login-pending', session: 's1' }, from('https://elsewhere.test/'))).resolves.toBeNull();
+    const saving = commands.loginMessage({ type: 'buddi-login', session: 's1', decision: 'save' }, from('https://accounts.example.com/home'))!;
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ type: 'login', session: 's1', decision: 'save', origin: 'https://www.example.com', username: 'sam', password: 'fixture-pass' });
+    // buddi says it could not: the bar hears why, and the pair stays for Try again.
+    commands.logins.ack(frames[0]!.id!, { saved: false, reason: 'buddi could not keep that login.' });
+    await expect(saving).resolves.toEqual({ saved: false, reason: 'buddi could not keep that login.' });
+    const again = commands.loginMessage({ type: 'buddi-login', session: 's1', decision: 'save' }, from('https://accounts.example.com/home'))!;
+    commands.logins.ack(frames[1]!.id!, { saved: true });
+    await expect(again).resolves.toEqual({ saved: true });
+    // Saved: nothing waits any more.
+    await expect(commands.loginMessage({ type: 'buddi-login-pending', session: 's1' }, from('https://www.example.com/'))).resolves.toBeNull();
+    // Given back or closed: a waiting pair goes.
+    await commands.loginMessage({ type: 'buddi-login-seen', session: 's1', username: 'sam', password: 'x' }, from('https://www.example.com/'));
+    expect(commands.logins.size).toBe(1);
+    for (const close of closers) close(tab.id);
+    expect(commands.logins.size).toBe(0);
+    await commands.loginMessage({ type: 'buddi-login-seen', session: 's1', username: 'sam', password: 'x' }, from('https://www.example.com/'));
+    await commands.run(command('unhold', {}, true));
+    expect(commands.logins.size).toBe(0);
   });
 
   it('unhold (Give it back from the Canvas) takes the waiting bar down', async () => {

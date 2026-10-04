@@ -233,6 +233,63 @@ suite('missions that ask the owner (postgres)', () => {
     expect(dropped).toEqual(['Second question?']);
   });
 
+  describe('a stuck watcher does not interrupt the owner every run', () => {
+    const runOnce = async (steps: Step[], delivered: string[] = []) => {
+      const m = await mission();
+      const occurrence = await insertOccurrence(pool, m.id, 0, new Date(), 'claimed');
+      return executor(steps, [], delivered)(occurrence, m);
+    };
+    const notifications = async () => (await pool.query<{ kind: string; urgency: string; state: string; title: string }>(
+      `select kind, urgency, state, title from core.owner_notifications order by created_at`,
+    )).rows;
+
+    it('one open question per mission: a second run that asks while the first card waits is held back, quietly', async () => {
+      const first = await runOnce([ASK, { text: 'Waiting.' }]);
+      expect(first.parked?.question).toBe(QUESTION);
+      const second = await runOnce([{ tool: 'conversation.ask', input: { question: 'Something else entirely?' } }, { text: 'Waiting.' }]);
+      expect(second).toMatchObject({ decision: 'no-decision', delivered: false, reason: 'question-open' });
+      expect(second.parked).toBeUndefined();
+      expect((await pool.query(`select question from core.questions`)).rows).toEqual([{ question: QUESTION }]);
+      // The card reached the owner once; the held-back one is a quiet line on Needs you, stored, never pushed.
+      expect(await notifications()).toEqual([
+        expect.objectContaining({ kind: 'question', urgency: 'now' }),
+        expect.objectContaining({ kind: 'watcher', urgency: 'digest', state: 'stored', title: 'Renewal needed you' }),
+      ]);
+      expect(logs.some((line) => line.includes('question held back (open)'))).toBe(true);
+    });
+
+    it('the same unanswered question within a day is not asked again', async () => {
+      const first = await runOnce([ASK, { text: 'Waiting.' }]);
+      // Nobody answered: the parking time ran out and the card closed.
+      await pool.query(`update core.questions set answered_at = now(), answered_via = 'timeout' where id = $1::uuid`, [first.parked!.questionId]);
+      const again = await runOnce([ASK, { text: 'Waiting.' }]);
+      expect(again).toMatchObject({ decision: 'no-decision', reason: 'question-repeat' });
+      expect((await pool.query(`select count(*)::int as n from core.questions`)).rows[0]).toEqual({ n: 1 });
+      expect((await notifications()).filter((n) => n.kind === 'question')).toHaveLength(1);
+      // A question the owner did answer may be asked again.
+      await pool.query(`update core.questions set answered_via = 'telegram', answer = 'One year' where id = $1::uuid`, [first.parked!.questionId]);
+      expect((await runOnce([ASK, { text: 'Waiting.' }])).parked?.question).toBe(QUESTION);
+    });
+
+    it('the timeout line is folded: the same mission timing out on the same question again today says nothing more', async () => {
+      const delivered: string[] = [];
+      const timeOut = async () => {
+        const run = await runOnce([ASK, { text: 'Waiting.' }]);
+        const m = await mission();
+        const occurrence = await insertOccurrence(pool, m.id, 0, new Date(), 'claimed');
+        // The card is closed by the clock, so the next run may ask (and park) again.
+        return executor([], [], delivered)(occurrence, m, { answer: { parked: run.parked!, timedOut: true } });
+      };
+      const first = await timeOut();
+      expect(first).toMatchObject({ decision: 'needed-you', delivered: true });
+      // Answered earlier today by the owner, so asking again is allowed; it times out again.
+      await pool.query(`update core.questions set answered_via = 'telegram' where answered_via = 'timeout'`);
+      const second = await timeOut();
+      expect(second).toMatchObject({ decision: 'needed-you', delivered: false });
+      expect(delivered).toHaveLength(1);
+    });
+  });
+
   it('a scheduled run is told it may ask; a /recap in an open chat is not', async () => {
     const m = await mission();
     const occurrence = await insertOccurrence(pool, m.id, 0, new Date(), 'claimed');

@@ -13,7 +13,7 @@
 import type { Pool } from 'pg';
 import { OWNER_AGENT_ID, SECRETS_QUERIES, type ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { listAccounts } from '@buddi/tool-email';
-import type { LoginKeeper, LoginStore } from '@buddi/tool-browser';
+import type { LoginKeeper, LoginStore, LoginStoreNames } from '@buddi/tool-browser';
 import { LEGACY_PASSWORD_VAR } from '../owner-secrets.js';
 import { mailProvider } from './recovery.js';
 
@@ -23,7 +23,7 @@ export interface SecretsDeps {
   ctx: Omit<CoreToolContext, 'db'>;
   now?: () => Date;
   /** The browser host's login keeper: the labels of logins buddi kept from the owner's own sign-ins. */
-  logins?: Pick<LoginKeeper, 'saved' | 'forget'>;
+  logins?: Pick<LoginKeeper, 'saved' | 'forget' | 'rename'>;
 }
 
 export interface RouteReply {
@@ -215,9 +215,12 @@ export async function secretsAct(
     return reply(404, { error: 'That is not a write the Keys and secrets page makes.' });
   }
   const answer = await invoke(deps, tool, args, session.id);
-  // A kept login removed or renamed here: its label goes with it.
-  const name = (args as { name?: unknown } | null | undefined)?.name;
-  if (answer.status === 200 && (tool === 'secrets.delete' || tool === 'secrets.rename') && typeof name === 'string') await deps.logins?.forget(name).catch(() => false);
+  // A kept login removed here: its label goes with it. Renamed: its label follows the new name.
+  const { name, to } = (args ?? {}) as { name?: unknown; to?: unknown };
+  if (answer.status === 200 && typeof name === 'string') {
+    if (tool === 'secrets.delete') await deps.logins?.forget(name).catch(() => false);
+    else if (tool === 'secrets.rename' && typeof to === 'string') await deps.logins?.rename(name, to).catch(() => false);
+  }
   return answer;
 }
 
@@ -236,6 +239,14 @@ export function ownerLoginStore(deps: SecretsDeps): LoginStore {
     const now = deps.now ?? (() => new Date());
     const result = await deps.registry.invoke('secrets.put', { name, value, bindings }, { ...deps.ctx, agentId: OWNER_AGENT_ID, db: deps.pool, now } as CoreToolContext);
     if (!result.ok) throw new Error('buddi could not keep that login.');
+  };
+}
+
+/** The names the owner-secret store holds now, names only: what a new login's name must not take. */
+export function ownerLoginNames(deps: SecretsDeps): LoginStoreNames {
+  return async () => {
+    const listed = (await SECRETS_QUERIES[0]!.produce({}, { ...deps.ctx, db: deps.pool, now: deps.now ?? (() => new Date()) } as CoreToolContext)) as { secrets: Array<{ name: string }> };
+    return listed.secrets.map((secret) => secret.name);
   };
 }
 

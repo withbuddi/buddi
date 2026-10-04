@@ -18,7 +18,8 @@
 import type { TabInfo, WorkerChrome } from './chrome.js';
 import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type CommandResult, type FieldFacts, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
-import { hideBar, hideHeldBar, readBar, showBar, showHeldBar, waitForOwner, watchHeldLogins, type BarChoice, type HeldLoginFacts, type OwnerEventMessage } from './bar.js';
+import { heldLoginRequest, hideBar, hideHeldBar, readBar, showBar, showHeldBar, waitForOwner, watchHeldLogins, type BarChoice, type HeldLoginFacts, type LoginFrame, type OwnerEventMessage } from './bar.js';
+import { HeldLogins } from './held-logins.js';
 
 interface Session {
   groupId: number;
@@ -285,6 +286,8 @@ export class BrowserCommands implements Executor {
   #held = new Map<string, number>();
   /** What a held tab need not ask about before offering to save a sign-in, as buddi said at the hold. */
   #heldLogins = new Map<string, HeldLoginFacts>();
+  /** Sign-ins seen in held tabs, waiting for the owner's answer: one per tab, two minutes, gone on unhold or close. */
+  readonly logins: HeldLogins;
   #now: () => number;
   #wait: (ms: number) => Promise<void>;
   /** How many things want the debugger on this tab. A screencast is one of them, and it outlives a command. */
@@ -293,8 +296,10 @@ export class BrowserCommands implements Executor {
   #castsByTab = new Map<number, Screencast>();
   #ownerWaitMs: number | undefined;
 
-  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; now?: () => number; wait?: (ms: number) => Promise<void>; ownerWaitMs?: number } = {}) {
+  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; onLogin?: (frame: LoginFrame) => void; now?: () => number; wait?: (ms: number) => Promise<void>; ownerWaitMs?: number } = {}) {
     this.#chrome = chrome;
+    this.logins = new HeldLogins(options.onLogin ?? (() => undefined));
+    chrome.tabs.onRemoved?.addListener((tabId) => this.logins.clearTab(tabId));
     this.#onEvent = options.onEvent ?? (() => undefined);
     this.#ownerWaitMs = options.ownerWaitMs;
     this.#wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -358,6 +363,7 @@ export class BrowserCommands implements Executor {
     this.#inView.clear();
     this.#held.clear();
     this.#heldLogins.clear();
+    this.logins.clear();
   }
 
   /* ---- take-over in place ---- */
@@ -398,6 +404,27 @@ export class BrowserCommands implements Executor {
   heldTab(session: string): number | undefined { return this.#held.get(session); }
 
   /**
+   * A sign-in message from a held tab's page (`heldLoginRequest`): a pair
+   * seen, a page asking whether a question still waits for it, or the
+   * owner's answer. The reply goes back to the page — a Save's is what buddi
+   * said became of it. Undefined for a message this worker does not believe.
+   */
+  loginMessage(message: unknown, sender: { tab?: { id?: number }; url?: string } | undefined): Promise<unknown> | undefined {
+    const session = (message as { session?: unknown } | null)?.session;
+    const request = heldLoginRequest(message, sender, typeof session === 'string' ? this.#held.get(session) : undefined);
+    if (!request) return undefined;
+    if (request.kind === 'seen') {
+      const asked = this.logins.capture(request.tabId, request.session, request.url, request);
+      return Promise.resolve(asked ? { ok: true } : null);
+    }
+    if (request.kind === 'pending') return Promise.resolve(this.logins.pending(request.tabId, request.session, request.url) ?? null);
+    if (request.decision === 'save') return this.logins.save(request.tabId, request.session);
+    if (request.decision === 'never') return Promise.resolve({ ok: this.logins.never(request.tabId, request.session) });
+    this.logins.dismiss(request.tabId, request.session);
+    return Promise.resolve({ ok: true });
+  }
+
+  /**
    * Given back (from the Canvas, or the bar): the bar goes, and the agent may
    * act in that tab although the owner is looking at it — they just handed it
    * over there, so waiting for them to leave it would be asking twice.
@@ -406,6 +433,7 @@ export class BrowserCommands implements Executor {
     const tabId = this.#held.get(session);
     this.#held.delete(session);
     this.#heldLogins.delete(session);
+    this.logins.clearSession(session);
     if (tabId === undefined) return {};
     this.#inView.set(session, tabId);
     await this.#chrome.scripting.executeScript({ target: { tabId }, func: hideHeldBar }).catch(() => undefined);

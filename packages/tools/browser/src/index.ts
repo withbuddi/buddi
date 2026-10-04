@@ -141,12 +141,12 @@ export type { StopCause, TelemetryEvent, TelemetrySummary } from './telemetry.js
 export { APPS_UNAVAILABLE, APPS_NOT_INSTALLED } from './controller.js';
 export { BrowserManager } from './manager.js';
 export { LoginKeeper, LOGIN_HOLD_MS, LOGIN_RULE, loginName, shortUsername, watchLogins } from './logins.js';
-export type { LoginDecision, LoginOutcome, LoginPrompt, LoginStore, LoginStoreInput, SavedLogin, SeenLogin } from './logins.js';
+export type { LoginDecision, LoginOutcome, LoginPrompt, LoginStore, LoginStoreInput, LoginStoreNames, SavedLogin, SeenLogin } from './logins.js';
 export { PlaywrightHost } from './host.js';
 export type { GuardedLookup } from './proxy.js';
 export { PlaywrightDriver } from './driver.js';
 export { HostController } from './controller.js';
 export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED } from './extension.js';
 export type { ExtensionBridge, ExtensionCommand, ExtensionCommandName, ExtensionEvent, ExtensionLogin, ExtensionLoginFacts, ExtensionResult } from './extension.js';
-export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, BrowserOpenedError, HAND_QUALITY, HAND_QUALITY_LOW } from './types.js';
-export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandQuality, Observation, ObservedTarget, SeenLoginReport } from './types.js';
+export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, BrowserOpenedError, HAND_QUALITY, HAND_QUALITY_LOW, LOGIN_GONE, LOGIN_GRACE_MS, LOGIN_NOT_KEPT } from './types.js';
+export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandQuality, Observation, ObservedTarget, SeenLoginReport, LoginAck, LoginSeenListener } from './types.js';

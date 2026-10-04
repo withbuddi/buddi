@@ -14,7 +14,7 @@
  */
 
 import { BrowserCommands } from './commands.js';
-import { GIVE_BACK_MESSAGE, LOGIN_MESSAGE, loginFrame } from './bar.js';
+import { GIVE_BACK_MESSAGE, LOGIN_MESSAGE, LOGIN_PENDING_MESSAGE, LOGIN_SEEN_MESSAGE } from './bar.js';
 import type { WorkerChrome } from './chrome.js';
 import { handleExternal, type ExtensionStatus } from './external.js';
 import { Protocol, type ClientState } from './protocol.js';
@@ -106,7 +106,7 @@ function flush(open: WebSocket): void {
 
 // Screencast frames are not answers to anything: they arrive while the owner
 // is driving and go straight out, outside the command/result pairing.
-const commands = new BrowserCommands(chrome, { onFrame: send, onEvent: send });
+const commands = new BrowserCommands(chrome, { onFrame: send, onEvent: send, onLogin: send });
 let attempt = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let silence: ReturnType<typeof setTimeout> | undefined;
@@ -121,6 +121,7 @@ const protocol = new Protocol({
   execute: (command, cancel) => commands.run(command, cancel),
   // The socket ended: sessions and refs go with it. The tabs do not.
   onReset: () => commands.reset(),
+  onLoginAck: (id, answer) => commands.logins.ack(id, answer),
   onState: (state) => {
     last = state;
     // The popup may not be open; nobody is listening then, and that is fine.
@@ -220,16 +221,18 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return;
   }
   /*
-   * "Save this login?" answered in a held tab's bar: Save with the pair, Never
-   * with the site. Only from the tab that session holds, with the origin
-   * Chrome reports for the sender, straight to buddi on this worker's
-   * authenticated socket — never logged, never kept. Not now sends nothing,
-   * so it never arrives here.
+   * "Save this login?" in a held tab: the pair seen (kept here, in memory,
+   * until the owner answers or two minutes pass — the form's navigation takes
+   * the page away), a new page asking whether a question still waits, and the
+   * answer. Only from the tab that session holds, with the origin Chrome
+   * reported when the pair was seen; Save goes to buddi on this worker's
+   * authenticated socket and the page hears what became of it. Never logged.
    */
-  if (request.type === LOGIN_MESSAGE) {
-    const frame = loginFrame(message, sender as { tab?: { id?: number }; url?: string } | undefined, typeof request.session === 'string' ? commands.heldTab(request.session) : undefined);
-    if (frame) send(frame);
-    return;
+  if (request.type === LOGIN_MESSAGE || request.type === LOGIN_SEEN_MESSAGE || request.type === LOGIN_PENDING_MESSAGE) {
+    const reply = commands.loginMessage(message, sender as { tab?: { id?: number }; url?: string } | undefined);
+    if (!reply) { respond(null); return; }
+    safely(() => reply.then((answer) => respond(answer), () => respond(null)));
+    return true;
   }
   if (request.type === 'buddi-get-state') { respond({ state: last }); return; }
   if (request.type === 'buddi-connect') {

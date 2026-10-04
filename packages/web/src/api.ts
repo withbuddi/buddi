@@ -2451,7 +2451,7 @@ export interface SecretListingView {
 }
 
 /** A sign-in the owner just made on a page they hold, waiting for Save, Not now or Never. Never the password. */
-export interface LoginSeen { id: string; site: string; username: string }
+export interface LoginSeen { id: string; site: string; username: string; /** A login kept for this site and user name already: Save replaces its value. */ update?: boolean }
 export type LoginDecision = 'save' | 'later' | 'never';
 export interface LoginAnswer { outcome: 'saved' | 'dismissed' | 'never' | 'gone'; saved?: { name: string; site: string; username: string; savedAt: string } }
 

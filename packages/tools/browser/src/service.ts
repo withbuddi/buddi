@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core/plugin';
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { LoginKeeper } from './logins.js';
-import type { BrowserCommand, BrowserDriver, BrowserHand, Observation, SeenLoginReport } from './types.js';
-import { APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
+import type { BrowserCommand, BrowserDriver, BrowserHand, LoginAck, Observation, SeenLoginReport } from './types.js';
+import { LOGIN_GONE, LOGIN_GRACE_MS, APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
 import { ownerCard, siteOf, type ChromeLink, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
 import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
@@ -196,7 +196,7 @@ export interface BrowserServiceOptions {
   /** The owner pressed Give it back in the page itself: the controller resumes it, so the waiting run hears of it. */
   requestResume?: (sessionId: string) => void;
   /** A sign-in went out on this page while the owner held it: to the host's login keeper, and nowhere else. */
-  loginSeen?: (sessionId: string, login: SeenLoginReport) => void;
+  loginSeen?: (sessionId: string, login: SeenLoginReport) => Promise<LoginAck> | void;
 }
 
 /** A result that carries a card: the run stops and the surface draws it. */
@@ -220,6 +220,10 @@ export class BrowserService {
   #handless = false;
   /** The owner holds the page in place (their Chrome brought it forward): no frames, no hand. */
   #held = false;
+  /** The page the owner last held in place, and until when a Save they tapped there still counts (the driver's grace). */
+  #lastHeld?: { id: string; until: number };
+  /** Who waits for the action in flight to settle (a Give it back pressed while it stops). */
+  #settleWaiters: Array<() => void> = [];
   #controller?: AbortController;
   #expiry?: ReturnType<typeof setTimeout>;
   #lastAction?: string;
@@ -258,10 +262,13 @@ export class BrowserService {
       else void this.control('resume').catch(() => undefined);
     });
     // A sign-in the owner made on the page they hold: the keeper asks them, never a model.
+    // A Save the owner tapped in their Chrome a beat after Give it back still counts, for the page they held, within the driver's grace.
     this.driver.onLoginSeen?.((login) => {
-      const id = this.#session?.id;
-      if (!id || this.#state !== 'paused') return;
-      this.options.loginSeen?.(id, login);
+      const live = this.#state === 'paused' ? this.#session?.id : undefined;
+      const recent = !live && login.decision && this.#lastHeld && this.#now() < this.#lastHeld.until ? this.#lastHeld.id : undefined;
+      const id = live ?? recent;
+      if (!id) return login.decision ? Promise.resolve({ saved: false, reason: LOGIN_GONE } as const) : undefined;
+      return this.options.loginSeen?.(id, login);
     });
     this.#state = 'idle';
     this.#enabled = true;
@@ -498,7 +505,7 @@ export class BrowserService {
     } finally {
       ctx.signal?.removeEventListener('abort', cancel);
       if (this.#controller === controller) this.#controller = undefined;
-      this.#busy = false;
+      this.#busy = false; this.#settled();
     }
   }
 
@@ -626,7 +633,7 @@ export class BrowserService {
       } finally {
         ctx.signal?.removeEventListener('abort', cancel);
         if (this.#controller === controller) this.#controller = undefined;
-        this.#busy = false;
+        this.#busy = false; this.#settled();
       }
     });
   }
@@ -697,6 +704,31 @@ export class BrowserService {
     });
   }
 
+  #markHeldEnd(): void {
+    const id = this.#session?.id;
+    if (id) this.#lastHeld = { id, until: this.#now() + LOGIN_GRACE_MS };
+  }
+
+  /** The action in flight went (its `finally` ran): whoever waited on it hears. */
+  #settled(): void {
+    for (const resolve of this.#settleWaiters.splice(0)) resolve();
+  }
+
+  /**
+   * The interrupted action, stopped and gone: abort it again, interrupt the
+   * driver, and wait for its `finally` — at most a few seconds, because a give
+   * back must not hang on an action that will not finish.
+   */
+  async #settle(limitMs = 10_000): Promise<void> {
+    this.#controller?.abort(new Error('Owner took control during an action. Inspect the site before retrying.'));
+    const gone = new Promise<void>((resolve) => { this.#settleWaiters.push(resolve); });
+    if (this.driver.interrupt) await this.#interrupt().catch(() => false);
+    if (!this.#busy) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([gone, new Promise<void>((resolve) => { timer = setTimeout(resolve, limitMs); timer.unref?.(); })]);
+    clearTimeout(timer);
+  }
+
   /** Stop the action, keep the screen if the driver can. True when there is still something to drive. */
   async #interrupt(): Promise<boolean> {
     if (!this.driver.interrupt) { await this.driver.close().catch(() => {}); return false; }
@@ -713,7 +745,7 @@ export class BrowserService {
     }
     if (this.#observation?.url) this.#lastUrl = this.#observation.url;
     this.#handless = false;
-    if (this.#held) { this.#held = false; this.driver.resume?.(); }
+    if (this.#held) { this.#markHeldEnd(); this.#held = false; this.driver.resume?.(); }
     this.#state = state;
     this.#controller?.abort(new Error(`Browser ${state}. An in-flight submission may have completed; inspect before retrying.`));
     clearTimeout(this.#expiry);
@@ -783,7 +815,10 @@ export class BrowserService {
           this.#message = this.driver.preservesWindows ? 'The app is yours. Give it back when you are done.' : 'The page is yours. Give it back when you are done.';
         }
       } else if (action === 'resume') {
-        if (this.#busy) throw new Error('Wait for the interrupted action to settle before giving it back.');
+        // Given back while the interrupted action is still stopping: stop it for good and wait for it, then give back. Never a refusal:
+        // the owner's Chrome has already taken its bar down.
+        if (this.#busy) await this.#settle();
+        if (this.#held) this.#markHeldEnd();
         this.driver.resume?.();
         this.#handless = false;
         this.#held = false;

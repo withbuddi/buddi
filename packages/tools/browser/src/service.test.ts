@@ -119,6 +119,28 @@ describe('the page and its lifecycle', () => {
     await working;
     expect(service.status().state).toBe('paused');
   });
+  it('Give it back while the interrupted action is still settling waits for it, then gives back — never a refusal', async () => {
+    const driver = fake();
+    let fail: (error: Error) => void = () => {};
+    driver.perform = vi.fn(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+    // The first interrupt (the take-over) leaves the action hanging; the next one ends it.
+    let interrupts = 0;
+    driver.interrupt = vi.fn(async () => { if (++interrupts > 1) fail(new Error('aborted')); });
+    driver.takeover = vi.fn(async () => {});
+    driver.resume = vi.fn();
+    (driver as { holdsInPlace?: 'chrome' }).holdsInPlace = 'chrome';
+    const service = new BrowserService(driver);
+    services.push(service);
+    await service.enable();
+    const working = service.execute(navigate, contexts()).catch((error: Error) => error);
+    await vi.waitFor(() => expect(service.status().busy).toBe(true));
+    await service.control('takeover');
+    expect(service.status()).toMatchObject({ state: 'paused', busy: true });
+    await expect(service.control('resume')).resolves.toMatchObject({ state: 'running', busy: false });
+    expect(driver.resume).toHaveBeenCalled();
+    expect(interrupts).toBe(2);
+    await working;
+  });
   it('take-over is the one pause: the agent waits, and giving it back renews the budget and returns the page', async () => {
     const { service, driver, ctx } = await setup({ maxSteps: 3 });
     await service.execute(navigate, ctx);
