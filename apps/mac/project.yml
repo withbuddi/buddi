@@ -37,12 +37,12 @@ targets:
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.productivity
         NSHumanReadableCopyright: "Apache-2.0"
-        # The app's own version, not buddi's: the buddi release inside is whatever
-        # `make fetch VERSION=...` put in Resources/buddi/current. Sparkle compares
-        # CFBundleVersion, which must be numbers and dots (no "-pre.38"), so phase 2
-        # decides how it follows releases; keep BOTH in lockstep like Shotcrisp.
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "0.1.0"
+        # The app is versioned as the buddi release it carries (Payload/buddi/current).
+        # The Makefile passes both: the buddi version as it is for display, and
+        # scripts/release/bundle-version.mjs's numbers-and-dots form for Sparkle,
+        # which compares CFBundleVersion (0.1.0-pre.39 → 0.1.0.39, 0.1.0 → 0.1.0.1000).
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         SUFeedURL: "https://withbuddi.com/appcast.xml"
         # Placeholder: generate the key pair once with Sparkle's tool —
         #   build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys
@@ -56,6 +56,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.withbuddi.app
         PRODUCT_NAME: buddi
+        # Placeholders for a build without a payload; the Makefile overrides both.
+        MARKETING_VERSION: "0.0.0"
+        CURRENT_PROJECT_VERSION: "0.0.0.0"
         CODE_SIGN_ENTITLEMENTS: App/buddi.entitlements
         CODE_SIGN_STYLE: Manual
         # DEVELOPMENT_TEAM is not written here: the Makefile passes it from the

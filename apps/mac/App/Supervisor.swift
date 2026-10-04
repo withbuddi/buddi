@@ -22,8 +22,9 @@ final class Supervisor {
     }
 
     let data: URL
-    let layout: BundleLayout?
-    private let layoutProblem: String?
+    /// Located again before every start: an upgrade moves `<data>/releases/current`.
+    private(set) var layout: BundleLayout?
+    private var layoutProblem: String?
     private var socket: String { DataDirectory.socket(for: data) }
 
     private(set) var health: Health = .stopped { didSet { if health != oldValue { onChange?() } } }
@@ -50,8 +51,12 @@ final class Supervisor {
 
     init(data: URL = DataDirectory.resolve()) {
         self.data = data
+        relocate()
+    }
+
+    private func relocate() {
         do {
-            layout = try BundleLayout.locate()
+            layout = try BundleLayout.locate(data: data)
             layoutProblem = nil
         } catch {
             layout = nil
@@ -130,7 +135,12 @@ final class Supervisor {
     // MARK: - The child
 
     private func spawn() {
-        guard let layout, !stopping else { return }
+        guard !stopping else { return }
+        relocate()
+        guard let layout else {
+            health = .attention(layoutProblem ?? "This copy of buddi.app is incomplete.")
+            return
+        }
         respawn = nil
         let fm = FileManager.default
         let logs = DataDirectory.logs(for: data)
@@ -158,7 +168,8 @@ final class Supervisor {
         process.standardError = log ?? FileHandle.nullDevice
         process.terminationHandler = { [weak self] ended in
             let status = ended.terminationStatus
-            Task { @MainActor in self?.childEnded(status: status) }
+            let pid = ended.processIdentifier
+            Task { @MainActor in self?.childEnded(status: status, pid: pid) }
         }
         do {
             try process.run()
@@ -172,9 +183,21 @@ final class Supervisor {
         try? log?.close()
     }
 
-    private func childEnded(status: Int32) {
+    private func childEnded(status: Int32, pid: pid_t) {
+        // A child that ended after a newer one started (a restart with the
+        // previous version) is old news: the newer one is the child now.
+        if let child, child.processIdentifier != pid { return }
         child = nil
         guard !stopping else { health = .stopped; return }
+        // An upgrade switched `<data>/releases/current` and handed over to us
+        // (APP_RESTART_EXIT in app-layout.ts): start the new release now.
+        if status == Self.restartExit {
+            NSLog("buddi: the supervisor handed over for an upgrade; starting the release current points at")
+            failures = 0
+            health = .updating
+            spawn()
+            return
+        }
         let socket = self.socket
         Task.detached {
             // A supervisor that exits during an upgrade has handed over to a
@@ -221,6 +244,8 @@ final class Supervisor {
             if let value = source[key] { env[key] = value }
         }
         env["BUDDI_DATA_DIR"] = data.path
+        // Upgrades go to `<data>/releases`, never into the signed bundle.
+        env["BUDDI_APP_LAYOUT"] = BundleLayout.releases(for: data).path
         if forService, let port = source["BUDDI_WEB_PORT"], !port.isEmpty { env["BUDDI_WEB_PORT"] = port }
         env["PATH"] = [layout?.runtimeDir.path ?? "", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         return env
@@ -249,8 +274,10 @@ final class Supervisor {
     }
 
     func isOurs(_ status: ControlSocket.Status) -> Bool {
-        guard let layout else { return false }
-        return status.installRoot == layout.release.path && status.nodePath == layout.node.path
+        guard let layout, status.nodePath == layout.node.path else { return false }
+        // Any of this app's releases: the bundle's copy or one under <data>/releases.
+        return status.installRoot == layout.release.path || status.installRoot == layout.bundleRelease.path
+            || status.installRoot.hasPrefix(layout.releases.path + "/")
     }
 
     private func apply(_ status: ControlSocket.Status) {
@@ -338,6 +365,55 @@ final class Supervisor {
                 if let view { self.version = view; self.onChange?() }
                 then?(view)
             }
+        }
+    }
+
+    /// `APP_RESTART_EXIT` in packages/install/src/app-layout.ts.
+    static let restartExit: Int32 = 75
+
+    /// Start the upgrade Settings → System starts: the supervisor's `/upgrade`.
+    /// It downloads and verifies the release into `<data>/releases`, takes a
+    /// backup, switches `current` and exits with `restartExit`; `childEnded`
+    /// starts the new release. Calls back with the refusal, if any.
+    func startUpgrade(to version: String, then: @escaping @MainActor (String?) -> Void) {
+        let socket = self.socket
+        let body = try? JSONSerialization.data(withJSONObject: ["version": version])
+        Task.detached {
+            var refusal: String?
+            do {
+                let (code, data) = try ControlSocket.request(socket, method: "POST", path: "/upgrade", body: body, timeout: 25)
+                if code != 200 && code != 202 {
+                    refusal = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+                        ?? "The service refused the upgrade (\(code))."
+                }
+            } catch {
+                refusal = "The service did not answer. Try again in a moment."
+            }
+            await MainActor.run {
+                if refusal == nil { self.health = .updating }
+                then(refusal)
+            }
+        }
+    }
+
+    /// The version "Restart with the Previous Version" would go back to.
+    var previousVersion: String? {
+        guard let layout, foreign == nil, let target = layout.rollbackTarget() else { return nil }
+        return BundleLayout.version(of: target)
+    }
+
+    /// Stop buddi, point `current` at the previous release, start it again.
+    /// The data is not touched: a newer version may have changed the database,
+    /// and the backup its upgrade took is what goes back with it.
+    func restartWithPreviousVersion(then: @escaping @MainActor (String?) -> Void) {
+        guard let layout, let target = layout.rollbackTarget() else { then("There is no previous version to go back to."); return }
+        shutdown {
+            var problem: String?
+            do { try layout.rollBack(to: target) } catch { problem = "buddi could not switch versions: \(error.localizedDescription)" }
+            self.failures = 0
+            self.runningSince = nil
+            self.start()
+            then(problem)
         }
     }
 

@@ -12,16 +12,28 @@
 # Once, on npmjs.com: package `@withbuddi/buddi` → Settings → Publishing access →
 # add a trusted publisher: GitHub, owner `withbuddi`, repository `buddi`,
 # workflow `release.yml`, environment `npm`.
+#
+# After the npm publish, `mac-app` builds buddi.app around that same tarball,
+# signs and notarizes it, and publishes the DMG and its Sparkle feed (see the
+# job). The npm release is out by then, so the job can be run again on its own:
+# Actions → release → Run workflow, with the version (`0.1.0-pre.39`).
 name: release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'A buddi version already on npm, to build buddi.app for (0.1.0-pre.39). Runs only the Mac app jobs.'
+        required: true
 jobs:
   # The full gate first: a tag publishes only what passed everything.
   gate:
+    if: github.event_name == 'push'
     uses: ./.github/workflows/gate.yml
   publish:
     needs: [gate]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm
@@ -92,3 +104,178 @@ jobs:
           gh release create "$GITHUB_REF_NAME" $pre --title "buddi ${{ steps.v.outputs.version }}" \
             --notes "$notes" \
             "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install-linux.sh
+
+  # buddi.app, phase 2 of the Mac app (apps/mac/README.md). Skipped with a
+  # notice, never failed, while the signing secrets are not in the repository:
+  #
+  #   MACOS_CERTIFICATE           base64 of the "Developer ID Application" .p12
+  #   MACOS_CERTIFICATE_PASSWORD  its password
+  #   APPLE_ID                    the Apple ID that submits to the notary service
+  #   DEVELOPMENT_TEAM            the team id
+  #   NOTARIZE_PASSWORD           an app-specific password for that Apple ID
+  #   SPARKLE_PRIVATE_KEY         `generate_keys -x` output; signs the appcast item
+  #
+  # and, to publish at withbuddi.com (buddi-site's worker serves the bucket):
+  #
+  #   CLOUDFLARE_API_TOKEN        R2 object write on the bucket
+  #   CLOUDFLARE_ACCOUNT_ID
+  #   vars.R2_BUCKET              optional; `buddi-releases` by default
+  #
+  # Same secret names as Shotcrisp. Without the Cloudflare pair the DMG and
+  # the feed are still attached to the GitHub release.
+  mac-check:
+    needs: [publish]
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.publish.result == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - id: check
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+          NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          ASKED: ${{ inputs.version }}
+        run: |
+          v="${ASKED:-${GITHUB_REF_NAME#v}}"
+          v="${v#v}"
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$' || { echo "::error::\"$v\" is not a buddi version like 0.1.0-pre.39"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          missing=""
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD APPLE_ID DEVELOPMENT_TEAM NOTARIZE_PASSWORD SPARKLE_PRIVATE_KEY; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice title=buddi.app not built::The repository has no$missing secret(s); the Mac app is skipped. See the mac-app job in release.yml."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  mac-app:
+    needs: [mac-check]
+    if: always() && needs.mac-check.outputs.ok == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write   # the release assets
+    env:
+      VERSION: ${{ needs.mac-check.outputs.version }}
+      R2_BUCKET: ${{ vars.R2_BUCKET || 'buddi-releases' }}
+    defaults:
+      run:
+        working-directory: apps/mac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with: { xcode-version: latest-stable }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: brew install xcodegen
+
+      - name: Versions
+        id: v
+        run: |
+          bundle=$(node ../../scripts/release/bundle-version.mjs "$VERSION")
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          # Only the version npm calls latest moves the download button and the
+          # feed; a pre-release under `next` (once a stable exists) is attached
+          # to its GitHub release and uploaded, and nothing points at it.
+          latest=$(npm view @withbuddi/buddi dist-tags.latest 2>/dev/null || true)
+          if [ "$latest" = "$VERSION" ]; then echo "latest=true" >> "$GITHUB_OUTPUT"; else echo "latest=false" >> "$GITHUB_OUTPUT"; fi
+          echo "buddi $VERSION, CFBundleVersion $bundle, npm latest is ${latest:-unknown}"
+
+      # npm names a fresh version minutes before it serves the tarball.
+      - name: Wait for npm to serve the tarball
+        run: |
+          url="https://registry.npmjs.org/@withbuddi/buddi/-/buddi-$VERSION.tgz"
+          for i in $(seq 1 60); do
+            if curl -sfI "$url" >/dev/null; then echo "served after $i check(s)"; exit 0; fi
+            sleep 20
+          done
+          echo "::error::npm did not serve $url within 20 minutes; run this workflow again with version $VERSION"
+          exit 1
+
+      - name: Import the Developer ID certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+      - name: Node and the buddi release into Payload/
+        run: make fetch VERSION="$VERSION"
+
+      - name: Build, sign, notarize, staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+          NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
+        run: |
+          make notarize
+          plist=build/Build/Products/Release/buddi.app/Contents/Info.plist
+          test "$(plutil -extract CFBundleShortVersionString raw "$plist")" = "$VERSION"
+          test "$(plutil -extract CFBundleVersion raw "$plist")" = "${{ steps.v.outputs.bundle }}"
+
+      - name: Notarized DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+          NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
+        run: make dmg && test -f "build/buddi-$VERSION.dmg"
+
+      - name: Sign for Sparkle; appcast.xml and latest.json
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          SIGN_UPDATE=$(find build/SourcePackages/artifacts -type f -name sign_update | head -1)
+          test -x "$SIGN_UPDATE" || { echo "::error::sign_update not found under build/SourcePackages"; exit 1; }
+          key="$RUNNER_TEMP/ed_private.key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$key"
+          signature=$("$SIGN_UPDATE" --ed-key-file "$key" "build/buddi-$VERSION.dmg")
+          rm -f "$key"
+          node ../../scripts/release/appcast.mjs "$VERSION" "build/buddi-$VERSION.dmg" "$signature" build
+
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$VERSION"
+          # The publish job creates the release; a run on its own may come first.
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "buddi $VERSION" \
+            --notes "buddi $VERSION. npm: \`npm install -g @withbuddi/buddi@$VERSION\`."
+          gh release upload "$tag" "build/buddi-$VERSION.dmg" build/appcast.xml build/latest.json --clobber
+
+      - name: Publish at withbuddi.com (R2)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          LATEST: ${{ steps.v.outputs.latest }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice title=buddi.app not on withbuddi.com::No CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID; the DMG is on the GitHub release only."
+            exit 0
+          fi
+          put() { npx --yes wrangler@4 r2 object put "$R2_BUCKET/$1" --file "$2" --content-type "$3" --remote; }
+          # The versioned DMG first; the feed and the pointer only once it is there.
+          put "mac/buddi-$VERSION.dmg" "build/buddi-$VERSION.dmg" application/x-apple-diskimage
+          if [ "$LATEST" = "true" ]; then
+            put mac/appcast.xml build/appcast.xml application/xml
+            put mac/latest.json build/latest.json application/json
+          else
+            echo "::notice::$VERSION is not npm's latest; withbuddi.com/download/mac and the feed stay where they are."
+          fi

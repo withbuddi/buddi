@@ -22,6 +22,7 @@ import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
+import { appLayout, insideAppBundle } from './app-layout.js';
 import type { SupervisorStatus } from './supervisor.js';
 
 const entry = fileURLToPath(import.meta.url);
@@ -77,6 +78,19 @@ async function ask<T>(ctx: InstallContext, method: string, route: string, body?:
     req.once('error', reject);
     req.end(payload);
   });
+}
+
+/**
+ * Is this buddi.app's installation? The app says so in the supervisor's
+ * environment; a terminal running the same launcher is told by where it runs
+ * from: inside the bundle, or from a release under `<data>/releases`.
+ */
+function isAppInstall(ctx: InstallContext): boolean {
+  return appLayout(process.env) !== undefined || insideAppBundle(root) || root.startsWith(path.join(ctx.data, 'releases') + path.sep);
+}
+
+function withApp(view: VersionView, ctx: InstallContext): VersionView {
+  return isAppInstall(ctx) ? { ...view, app: true } : view;
 }
 
 async function control(ctx: InstallContext, action = 'status'): Promise<SupervisorStatus> {
@@ -500,15 +514,15 @@ async function run(): Promise<void> {
      * looking at a supervisor that is barely up. The file is the record.
      */
     const state = await readUpgradeState(ctx.data, await installedVersion(root));
-    for (const line of upgradeDoctorLines(versionView(state), ctx.state?.phase)) console.log(line);
+    for (const line of upgradeDoctorLines(withApp(versionView(state), ctx), ctx.state?.phase)) console.log(line);
     console.log(`Logs: ${path.join(ctx.data, 'logs')}`); return;
   }
   if (!wantsHelp && (args[0] === 'version' || args[0] === '--version' || args[0] === '-v')) {
     let view: VersionView | undefined;
     try { view = await ask<VersionView>(ctx, 'GET', '/version'); }
-    catch { view = versionView(await readUpgradeState(ctx.data, await installedVersion(root))); }
-    console.log(`buddi ${view.current}`);
-    if (view.updateAvailable) console.log(`A newer buddi is available: ${view.latest}`);
+    catch { view = withApp(versionView(await readUpgradeState(ctx.data, await installedVersion(root))), ctx); }
+    console.log(`buddi ${view.current}${view.app ? ' (buddi.app)' : ''}`);
+    if (view.updateAvailable) console.log(view.app ? `A newer buddi is available: ${view.latest}. Choose Update to ${view.latest} in the buddi menu.` : `A newer buddi is available: ${view.latest}`);
     else if (view.processing) console.log(view.processing.message);
     else if (view.latest !== undefined) console.log('This is the latest version.');
     return;

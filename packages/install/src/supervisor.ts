@@ -24,6 +24,7 @@ import { startDatabase } from './postgres.js';
 import type { ManagedDatabase } from './postgres.js';
 import { createUpgradeService, finishUpgrade, handOver, installedVersion, isVersion, recoverySentence, statusOnSocket, TICK_INTERVAL_MS } from './upgrade.js';
 import type { UpgradeControl, UpgradeInProgress } from './upgrade.js';
+import { APP_RESTART_EXIT, appLayout } from './app-layout.js';
 
 /** The launcher, as the supervisor spawns it for the gateway child. */
 const LAUNCHER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'launcher.js');
@@ -419,7 +420,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       // back and came up, so the upgrade is over without having arrived.
       console.error(entry.outcome === 'done'
         ? `upgrade: ${entry.from} to ${entry.to} finished.`
-        : entry.step === 'finishing' ? `upgrade: ${entry.error}.` : recoverySentence(entry));
+        : entry.step === 'finishing' ? `upgrade: ${entry.error}.` : recoverySentence(entry, { app: appLayout(process.env) !== undefined }));
     } else {
       ready.state.phase = 'ready'; await atomicJson(path.join(ready.data, 'installation.json'), ready.state);
     }
@@ -502,7 +503,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     if (pending && !resolved) {
       const entry = await finishUpgrade(ctx as ReadyContext, pending, { ok: false, error: error instanceof Error ? error.message : String(error) }, 'starting')
         .catch(() => undefined);
-      if (entry) console.error(recoverySentence(entry));
+      if (entry) console.error(recoverySentence(entry, { app: appLayout(process.env) !== undefined }));
     }
     throw error;
   } finally {
@@ -576,7 +577,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     if (!result.ok && marker) {
       const entry = await finishUpgrade(ctx as ReadyContext, marker, { ok: false, error: `the upgraded supervisor did not answer on ${supervisorSocket(ctx.data)}` }, 'starting')
         .catch(() => undefined);
-      if (entry) console.error(recoverySentence(entry));
+      if (entry) console.error(recoverySentence(entry, { app: appLayout(process.env) !== undefined }));
     }
     /*
      * And then go, whatever is still holding the loop.
@@ -588,9 +589,12 @@ export async function supervise(ctx: InstallContext): Promise<void> {
      * serving; there is nothing this process can still be for. The timer is
      * unref'd so a process that was going to exit anyway exits silently.
      */
+    // buddi.app reads this status as "start `current` again, now" (app-layout.ts).
+    const status = result.plan.mode === 'app' ? APP_RESTART_EXIT : 0;
+    if (status !== 0) process.exitCode = status;
     const grace = setTimeout(() => {
       console.error('supervisor: handed over, but something is still holding this process open; exiting.');
-      process.exit(0);
+      process.exit(status);
     }, HANDOVER_GRACE_MS);
     grace.unref?.();
   }

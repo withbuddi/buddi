@@ -1948,6 +1948,8 @@ export interface VersionView {
   supervised: boolean;
   /** A developer checkout, which upgrades with git rather than with this page. */
   checkout: boolean;
+  /** buddi.app runs this installation: the way back from a failed upgrade is its menu, not a terminal. */
+  app?: boolean;
   /** The dashboard build the gateway is serving (`build.json`), to compare with this page's own. */
   web?: string;
 }

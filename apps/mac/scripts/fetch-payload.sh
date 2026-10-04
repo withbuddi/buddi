@@ -104,9 +104,10 @@ for arch in arm64 x64; do
 done
 
 # A packaged installation upgrades itself with `npm install --prefix <dir above its
-# root>`. Inside the app that would write into a signed bundle and leave `current`
-# on the old code, so a named manifest here makes the supervisor refuse the upgrade
-# (upgradeTarget) until the app's own buddi updater exists (phase 2).
+# root>`. Inside the app that would write into a signed bundle, so npm must never be
+# pointed here: the app upgrades into <data>/releases instead (BUDDI_APP_LAYOUT,
+# packages/install/src/app-layout.ts), and upgradeTarget refuses any root inside a
+# .app. This named manifest is a second guard for an npm run by hand.
 cat > "$PAYLOAD/buddi/package.json" <<JSON
 {
   "name": "buddi-app-bundle",

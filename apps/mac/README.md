@@ -6,7 +6,9 @@ supervises them. No Electron and no window: the dashboard opens in the default
 browser. Spec: `buddi-planning/specs/distribution.md`. The recipe (XcodeGen,
 Makefile, signing, notarizing, Sparkle) is copied from Shotcrisp.
 
-This is **phase 1**: you can build it locally and run it. It is not distributed yet.
+**Phase 2**: buddi updates itself from inside the app (outside the signed bundle), and
+the release workflow builds, notarizes and publishes the DMG once the signing secrets
+are in the repository. Until then you build it locally, as below.
 
 ## Build and run
 
@@ -61,9 +63,9 @@ buddi.app/Contents/
                                      bundled, plus @embedded-postgres/darwin-arm64 AND
                                      darwin-x64 (npm would fetch only this Mac's one),
                                      with their postinstall (hydrate-symlinks) run at fetch
-  Resources/buddi/package.json       a named manifest: it makes the supervisor refuse a
-                                     self-upgrade with npm (that would write into the
-                                     signed bundle); see "Updates" below
+  Resources/buddi/package.json       a named manifest: a second guard against npm ever
+                                     writing into the signed bundle; upgrades go to
+                                     <data>/releases (see "Updates" below)
 ```
 
 `make fetch` checks every download before it unpacks it: Node against its
@@ -95,34 +97,96 @@ supervisor to stop, and starts buddi from the app. Data is never touched. The di
 says `npm rm -g @withbuddi/buddi` can be run later. No starts the app in "Needs
 attention" (another buddi holds the folder), and the menu offers Take Over until it's done.
 
+## Versions
+
+The app is versioned as the buddi release it carries: `CFBundleShortVersionString` is
+the buddi version (`0.1.0-pre.39`) and `CFBundleVersion`, which Sparkle compares and
+which must be numbers and dots, comes from `scripts/release/bundle-version.mjs`:
+`0.1.0-pre.39` → `0.1.0.39`, and a final `0.1.0` → `0.1.0.1000`, above every pre of
+it. The Makefile reads the version from `Payload/buddi/current/package.json` and passes
+both; `make version` prints them. The release workflow uses the same script, and
+`ReleaseVersion` in `App/BundleLayout.swift` is the same mapping.
+
 ## Updates
 
-- **The app**: Sparkle, with the feed at `https://withbuddi.com/appcast.xml`. It stays
-  off until `SUPublicEDKey` in `project.yml` holds a real key. Generate the key pair once:
-  `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys` (after a build, which
-  resolves the Sparkle package). It stores the private key in your login keychain and
-  prints the public key. Then export the private key with `generate_keys -x <file>` into
-  the `SPARKLE_PRIVATE_KEY` secret.
-- **buddi itself**: Check for Updates calls the supervisor's `/version/check`, the same
-  call Settings → System makes, and the menu shows "Update to <version>" when one is
-  available. In phase 1 that item only explains that the next app build brings it: the
-  release sits inside the signed bundle, and the supervisor's npm upgrade is refused
-  there on purpose.
+Two layers, as in the spec.
 
-## Phase 2 (not built yet)
+**buddi itself**, from inside the app. The app starts its supervisor with
+`BUDDI_APP_LAYOUT=<data>/releases`, and an upgrade (Settings → System, the menu's
+"Update to …", or `buddi upgrade`) then never touches the signed bundle
+(`packages/install/src/app-layout.ts`):
 
-- A `mac-app` job in `.github/workflows/release.yml`, after the npm publish: `make fetch
-  VERSION=<tag>`, import the Developer ID certificate, `make notarize`, `make dmg`, upload
-  the DMG as a release asset, sign it with `sign_update` and publish `appcast.xml`. Same
-  steps as Shotcrisp's workflow. If signing fails, the job fails and can be re-run; the
-  npm release is already out.
-- An in-app updater for buddi: download the next tarball, verify its integrity and
-  provenance, unpack it outside the signed bundle (for example
-  `~/Library/Application Support/buddi/releases/buddi-<v>`), point `current` there,
-  restart. The supervisor's upgrade path and Settings → System need to know about it
-  (today they refuse because of the guard manifest, with the wrong message).
-- The CFBundleVersion scheme. Sparkle needs numbers and dots, and buddi versions look
-  like `0.1.0-pre.38`.
-- The site's "Download for Mac" button, a real app icon (today it's the web
-  `apple-touch-icon` scaled up, as a placeholder), "Install command line tool"
-  (`Contents/Resources/bin/buddi`), and a richer status line (agents, last update).
+1. It reads the version's packument (the sha512 `integrity` and the provenance URL),
+   runs `npm install --prefix <data>/releases/.staging-<v> @withbuddi/buddi@<v>
+   --ignore-scripts` with the bundled npm, and checks that the integrity npm recorded
+   in its lock is the registry's.
+2. `npm audit signatures --include-attestations` verifies the registry signature and the
+   sigstore provenance bundle with npm's own sigstore client, and the SLSA statement
+   must name `https://github.com/withbuddi/buddi` as the source. From npmjs.com a release
+   without provenance is refused. `release.json` in the release folder records what
+   was verified.
+3. The new release's Postgres has to start (`postgres --version`, after hydrating its
+   dylib links: the one install script the release needs).
+4. Only then: the backup, the gateway stops, `<data>/releases/current` points at the new
+   release and `previous` at the one that ran, older release folders are removed, and
+   the supervisor exits with status 75. The app starts whatever `current` points at;
+   the new supervisor migrates and finishes the upgrade as on any packaged install.
+
+Everything before step 4 happens with buddi still running, and a failure there changes
+nothing. The bundle's own copy is never written to and stays the fallback: no
+`current`, or a `current` that does not resolve, runs the bundle's copy. An app update
+that carries a newer buddi than `current` (Sparkle, or a newer DMG) moves `current` to
+the bundle's copy once, at its first launch.
+
+**Going back**: Advanced → Restart with the Previous Version (`<v>`) stops buddi,
+points `current` at `previous` (or at the bundle's copy) and starts it. The data is not
+touched; if the newer version already migrated the database, the older one refuses
+to start, and the backup the upgrade took is what goes back with it (Settings →
+Backups).
+
+**The app**: Sparkle, with the feed at `https://withbuddi.com/appcast.xml`. It stays
+off until `SUPublicEDKey` in `project.yml` holds a real key. Generate the key pair once:
+`build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys` (after a build, which
+resolves the Sparkle package). It stores the private key in your login keychain and
+prints the public key. Then export the private key with `generate_keys -x <file>` into
+the `SPARKLE_PRIVATE_KEY` secret.
+
+## Releasing
+
+The `mac-app` job in `.github/workflows/release.yml` runs after the npm publish of a
+tag: it waits until npm serves the tarball, `make fetch VERSION=<tag>`, imports the
+Developer ID certificate, `make notarize`, `make dmg`, signs the DMG with Sparkle's
+`sign_update`, writes `appcast.xml` and `latest.json` (`{version, file, sha256,
+bundleVersion}`, `scripts/release/appcast.mjs`), attaches all three to the GitHub
+release and uploads them to R2. The npm release is out by then, so a failed run is
+repeated on its own: Actions → release → Run workflow, with the version.
+
+| Secret | What |
+| --- | --- |
+| `MACOS_CERTIFICATE` | base64 of the "Developer ID Application" certificate (.p12) |
+| `MACOS_CERTIFICATE_PASSWORD` | its password |
+| `APPLE_ID`, `DEVELOPMENT_TEAM`, `NOTARIZE_PASSWORD` | as in the table above |
+| `SPARKLE_PRIVATE_KEY` | `generate_keys -x` output |
+| `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | R2 write on the bucket; without them the DMG is on the GitHub release only |
+
+Variable `R2_BUCKET` (optional, `buddi-releases` by default). Without the first six
+secrets the job is skipped with a notice. In the bucket:
+
+```
+mac/buddi-<version>.dmg   every release
+mac/latest.json           the newest one npm calls latest
+mac/appcast.xml           its Sparkle feed
+```
+
+buddi-site's worker serves them: `withbuddi.com/download/mac` redirects to
+`/download/mac/buddi-<version>.dmg` (from `latest.json`), and `/appcast.xml` is the
+feed. A pre-release that npm puts under `next` (once a stable release exists) is
+uploaded and attached, and neither pointer moves.
+
+## Not built yet
+
+- "Install command line tool" (`Contents/Resources/bin/buddi`) and a richer status
+  line (agents, last update).
+- A real app icon (today it's the web `apple-touch-icon` scaled up, as a placeholder).
+- A release of buddi that needs a newer Node than the bundled one waits for an app
+  update; the upgrade does not check `engines.node` yet.

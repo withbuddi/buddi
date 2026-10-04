@@ -39,7 +39,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { open, readFile } from 'node:fs/promises';
+import { open, readFile, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 /*
@@ -57,6 +57,7 @@ import { JobStore } from './backup.js';
 import { createPostgresCheck } from './postgres-check.js';
 import type { PostgresCheck } from './postgres-check.js';
 import type { BackupControl, BackupJob } from './backup.js';
+import { APP_BUNDLE, appLayout, insideAppBundle, releaseDir, stageRelease, switchCurrent } from './app-layout.js';
 
 const run = promisify(execFile);
 
@@ -144,6 +145,8 @@ export interface VersionView {
   /** The newer version npm is still processing, and the sentence that says so. Never offered meanwhile. */
   processing?: { version: string; message: string };
   history: UpgradeHistoryEntry[];
+  /** buddi.app runs this installation: upgrades go to its releases folder, and the way back is its menu. */
+  app?: true;
 }
 
 /** What an upgrade in progress records in `installation.json`. */
@@ -414,6 +417,9 @@ export function upgradeTarget(
   opts: { platform?: NodeJS.Platform | string; manifest?: (prefix: string) => { name?: unknown } | undefined } = {},
 ): InstallTarget | { error: string } {
   const platform = opts.platform ?? process.platform;
+  // The bundle is signed: npm must never write there. buddi.app upgrades it
+  // through its own layout (`app-layout.ts`) when it is the one running buddi.
+  if (insideAppBundle(root)) return { error: APP_BUNDLE };
   const target = installTarget(root, platform);
   if (target.global) return target;
   if (platform === 'win32') return { error: NOT_GLOBAL };
@@ -517,7 +523,7 @@ export function createInstaller(opts: { binary?: string; timeoutMs?: number; run
  * ------------------------------------------------------------------ */
 
 export interface RestartPlan {
-  mode: 'launchd' | 'systemd' | 'spawn';
+  mode: 'launchd' | 'systemd' | 'app' | 'spawn';
   reason: string;
 }
 
@@ -549,7 +555,12 @@ export interface RestartPlan {
  * machine that also has the plist installed used to read as launchd's and exit
  * into nothing, leaving the installation down until the next login.
  */
-export function restartPlan(facts: { platform: NodeJS.Platform | string; label: string; xpcServiceName?: string | undefined; serviceUnit?: string | undefined }): RestartPlan {
+export function restartPlan(facts: { platform: NodeJS.Platform | string; label: string; xpcServiceName?: string | undefined; serviceUnit?: string | undefined; appLayout?: boolean | undefined }): RestartPlan {
+  // buddi.app is this supervisor's parent: it starts the launcher `current`
+  // points at again as soon as this exits with APP_RESTART_EXIT (app-layout.ts).
+  if (facts.appLayout === true) {
+    return { mode: 'app', reason: 'buddi.app starts the release `current` points at again' };
+  }
   if (facts.platform === 'darwin' && facts.label !== '' && facts.xpcServiceName === facts.label) {
     return { mode: 'launchd', reason: 'launchd keeps this job alive and runs the launcher from the install root' };
   }
@@ -596,9 +607,9 @@ export interface HandOverResult {
  * owner actually asked for.
  */
 export async function handOver(opts: HandOverOptions): Promise<HandOverResult> {
-  const plan = opts.plan ?? restartPlan({ platform: process.platform, label: launchAgentLabel(opts.ctx.data), serviceUnit: process.env[SERVICE_UNIT_VAR] ?? opts.env[SERVICE_UNIT_VAR], xpcServiceName: process.env.XPC_SERVICE_NAME ?? opts.env.XPC_SERVICE_NAME });
+  const plan = opts.plan ?? restartPlan({ platform: process.platform, label: launchAgentLabel(opts.ctx.data), serviceUnit: process.env[SERVICE_UNIT_VAR] ?? opts.env[SERVICE_UNIT_VAR], xpcServiceName: process.env.XPC_SERVICE_NAME ?? opts.env.XPC_SERVICE_NAME, appLayout: appLayout(opts.env) !== undefined });
   const log = opts.log ?? ((line: string) => console.error(line));
-  if (plan.mode === 'launchd' || plan.mode === 'systemd') {
+  if (plan.mode === 'launchd' || plan.mode === 'systemd' || plan.mode === 'app') {
     log(`supervisor: exiting for the upgrade; ${plan.reason}.`);
     return { plan, ok: true, attempts: 0 };
   }
@@ -670,11 +681,15 @@ export async function statusOnSocket(socket: string, timeoutMs = 2_000): Promise
  * dashboard is not available in that state — the gateway is deliberately not
  * started — so this has to be complete on its own.
  */
-export function recoverySentence(entry: UpgradeHistoryEntry): string {
+export function recoverySentence(entry: UpgradeHistoryEntry, opts: { app?: boolean } = {}): string {
   const where = entry.step === 'starting' ? 'while starting' : 'while migrating';
-  return `Upgrade to ${entry.to} failed ${where}: ${entry.error ?? 'unknown error'}. ` +
-    `The backup taken first is ${entry.backup ?? 'not available'}. ` +
-    `Reinstall with \`npm install -g ${PACKAGE_NAME}@${entry.from}\` and run \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
+  const head = `Upgrade to ${entry.to} failed ${where}: ${entry.error ?? 'unknown error'}. ` +
+    `The backup taken first is ${entry.backup ?? 'not available'}. `;
+  if (opts.app === true) {
+    // buddi.app keeps the release that ran before; its menu goes back to it.
+    return head + `In the buddi menu, choose Advanced → Restart with the Previous Version (${entry.from}), then restore ${entry.backup ?? 'that backup'} in Settings → Backups.`;
+  }
+  return head + `Reinstall with \`npm install -g ${PACKAGE_NAME}@${entry.from}\` and run \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -706,6 +721,8 @@ export interface UpgradeServiceOptions {
   /** Shut down and hand over to the newly installed code. Never returns. */
   restart: () => void;
   install?: UpgradeInstaller | undefined;
+  /** npm, as buddi.app's layout runs it (install into a release folder, audit signatures). A seam for tests. */
+  npm?: NpmRunner | undefined;
   /** Does the newly installed Postgres binary start? Asked before the hand-over. */
   checkPostgres?: PostgresCheck | undefined;
   http?: HttpTransport | undefined;
@@ -728,6 +745,10 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
   const install = opts.install ?? createInstaller();
   const checkPostgres = opts.checkPostgres ?? createPostgresCheck({ env: ctx.env });
   const backupWait = opts.backupWaitMs ?? BACKUP_WAIT_MS;
+  /** buddi.app's releases folder, when the app runs this installation. */
+  const releases = appLayout(ctx.env);
+  const npm: NpmRunner = opts.npm ?? (async (bin, argv, where) => await run(bin, argv, where));
+  const dressed = (view: VersionView): VersionView => releases === undefined ? view : { ...view, app: true };
   let running: UpgradeJob | undefined;
   /** Has the code under this process already been replaced? See `perform`. */
   let replaced = false;
@@ -825,6 +846,8 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       } else log(`upgrade: ${step} failed: ${error}`);
     };
 
+    if (releases !== undefined) return await performInApp(job, version, releases, give, startedAt, (next) => { to = next; }, (taken) => { archive = taken; });
+
     // Where npm may write, decided before anything is stopped or archived.
     const target = upgradeTarget(ctx.root);
     if ('error' in target) return await give('checking', target.error, false);
@@ -843,24 +866,9 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       }
     }
 
-    /*
-     * The backup is encrypted exactly as the schedule says, because that
-     * setting is the owner's answer to "may an archive of everything sit on
-     * this disk in the clear", and an upgrade is not an exception to it.
-     */
-    const schedule = await backup.schedule().catch(() => undefined);
-    const encrypt = schedule?.encryptLocal !== false;
-    if (encrypt && !backup.hasVault()) {
-      return await give('backup', 'This installation has no vault, so the backup an upgrade takes first cannot be encrypted. Turn off "Encrypt local backups" in Settings, or set up a vault.', false);
-    }
-
-    jobs.phase(job, 'backup', 'taking a backup before anything changes');
-    const started = backup.create(encrypt);
-    if ('status' in started) return await give('backup', started.error, false);
-    const done = await settled(started, backupWait);
-    if (done === undefined) return await give('backup', 'the backup did not finish within twenty minutes', false);
-    if (done.phase !== 'done') return await give('backup', done.error ?? 'the backup did not finish', false);
-    archive = (done.report as { archive?: string } | undefined)?.archive;
+    const taken = await takeBackup(job);
+    if ('error' in taken) return await give('backup', taken.error, false);
+    archive = taken.archive;
 
     jobs.phase(job, 'stopping', 'stopping the gateway; the database stays up');
     await opts.stopGateway();
@@ -915,6 +923,88 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       }
     }
 
+    await handOverTo(job, to, startedAt, archive);
+  };
+
+  /**
+   * The backup every upgrade takes first. Encrypted exactly as the schedule
+   * says, because that setting is the owner's answer to "may an archive of
+   * everything sit on this disk in the clear", and an upgrade is not an
+   * exception to it.
+   */
+  const takeBackup = async (job: UpgradeJob): Promise<{ archive: string | undefined } | { error: string }> => {
+    const schedule = await backup.schedule().catch(() => undefined);
+    const encrypt = schedule?.encryptLocal !== false;
+    if (encrypt && !backup.hasVault()) {
+      return { error: 'This installation has no vault, so the backup an upgrade takes first cannot be encrypted. Turn off "Encrypt local backups" in Settings, or set up a vault.' };
+    }
+    jobs.phase(job, 'backup', 'taking a backup before anything changes');
+    const started = backup.create(encrypt);
+    if ('status' in started) return { error: started.error };
+    const done = await settled(started, backupWait);
+    if (done === undefined) return { error: 'the backup did not finish within twenty minutes' };
+    if (done.phase !== 'done') return { error: done.error ?? 'the backup did not finish' };
+    return { archive: (done.report as { archive?: string } | undefined)?.archive };
+  };
+
+  /**
+   * buddi.app's upgrade: the new release goes into `<releases>/buddi-<v>`,
+   * verified and checked while the gateway still runs, and only then is there
+   * a backup, a stop and the switch of `current`. See `app-layout.ts`.
+   */
+  const performInApp = async (
+    job: UpgradeJob, version: string | undefined, dir: string,
+    give: (step: string, error: string, restart: boolean) => Promise<void>,
+    startedAt: string, setTo: (to: string) => void, setArchive: (archive: string | undefined) => void,
+  ): Promise<void> => {
+    if (ctx.env.BUDDI_UPGRADE_SOURCE?.trim()) return await give('checking', 'buddi.app upgrades from the registry only; BUDDI_UPGRADE_SOURCE is for npm installations.', false);
+    const resolved = await resolveVersion(version);
+    if ('error' in resolved) return await give('checking', resolved.error, false);
+    const to = resolved.version;
+    setTo(to);
+    if (opts.http === undefined) return await give('checking', 'this installation has no outbound transport', false);
+    const served = await tarballServed(registry, to, opts.http).catch(() => undefined);
+    if (served === false) return await give('checking', processingSentence(to), false);
+    const base = await realpath(dir).catch(() => dir);
+    if ((path.resolve(ctx.root) + path.sep).startsWith(releaseDir(base, to) + path.sep)) {
+      return await give('checking', `${to} is the version running.`, false);
+    }
+
+    jobs.phase(job, 'installing', `downloading and verifying ${to}`);
+    let staged: { dir: string; root: string };
+    try {
+      staged = await stageRelease({ releases: dir, version: to, registry, http: opts.http, exec: npm, log });
+    } catch (err) {
+      const said = message(err);
+      return await give('installing', isNotFound(said) ? processingSentence(to) : said, false);
+    }
+    const discard = async (): Promise<void> => { await rm(staged.dir, { recursive: true, force: true }).catch(() => {}); };
+
+    if (ctx.state.database !== 'external') {
+      jobs.phase(job, 'verifying', `checking that ${to} can start its database`);
+      const verdict = await checkPostgres(staged.root);
+      if (!verdict.ok) {
+        await discard();
+        return await give('verifying', `${verdict.error} buddi did not switch to ${to}. It is still running on ${current}.`, false);
+      }
+    }
+
+    const taken = await takeBackup(job);
+    if ('error' in taken) { await discard(); return await give('backup', taken.error, false); }
+    setArchive(taken.archive);
+
+    jobs.phase(job, 'stopping', 'stopping the gateway; the database stays up');
+    await opts.stopGateway();
+    try {
+      await switchCurrent(dir, staged.root, ctx.root);
+    } catch (err) {
+      return await give('installing', `could not switch to ${to}: ${message(err)}`, true);
+    }
+    await handOverTo(job, to, startedAt, taken.archive);
+  };
+
+  /** The point of no return, shared by both layouts. */
+  const handOverTo = async (job: UpgradeJob, to: string, startedAt: string, archive: string | undefined): Promise<void> => {
     replaced = true;
     jobs.phase(job, 'restarting', `handing over to ${to}`);
     /*
@@ -951,16 +1041,16 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     current,
 
     async view() {
-      return versionView(await read());
+      return dressed(versionView(await read()));
     },
 
     async check() {
-      return versionView(await runCheck());
+      return dressed(versionView(await runCheck()));
     },
 
     async setCheckEnabled(enabled) {
       const state = await read();
-      return versionView(await save({ ...state, check: { ...state.check, enabled } }));
+      return dressed(versionView(await save({ ...state, check: { ...state.check, enabled } })));
     },
 
     start(version) {
@@ -1068,7 +1158,7 @@ export function upgradeDoctorLines(view: VersionView, phase: string | undefined)
   const last = view.history[view.history.length - 1];
   if (last !== undefined) {
     lines.push(`Last upgrade: ${last.from} to ${last.to}, ${last.outcome}${last.step === undefined ? '' : ` at ${last.step}`}`);
-    if (phase === 'upgrade-failed' && last.outcome === 'failed') lines.push(recoverySentence(last));
+    if (phase === 'upgrade-failed' && last.outcome === 'failed') lines.push(recoverySentence(last, { app: view.app === true }));
   }
   return lines;
 }

@@ -500,10 +500,14 @@ const CHECKOUT_UPGRADE_LINE = 'A checkout upgrades with git pull, then buddi upg
 const RECENT_FAILURE_MS = 15 * 60_000;
 
 /** The way back from an upgrade that failed under the new code. */
-export function recoveryLine(attempt: UpgradeAttempt): string {
+export function recoveryLine(attempt: UpgradeAttempt, app = false): string {
   const where = attempt.step === 'starting' ? 'while starting' : `at ${attempt.step ?? 'an unknown step'}`;
-  return `The upgrade to ${attempt.to} failed ${where}: ${attempt.error ?? 'no reason given'}. ` +
-    `The backup taken first is ${attempt.backup ?? 'not available'}. Run buddi doctor in a terminal; it prints the way back.`;
+  const head = `The upgrade to ${attempt.to} failed ${where}: ${attempt.error ?? 'no reason given'}. ` +
+    `The backup taken first is ${attempt.backup ?? 'not available'}. `;
+  // buddi.app keeps the version that ran before; its menu goes back to it.
+  return app
+    ? head + `To go back to ${attempt.from}, choose Advanced → Restart with the Previous Version in the buddi menu.`
+    : head + 'Run buddi doctor in a terminal; it prints the way back.';
 }
 
 /** The last attempt, when it failed in the last quarter of an hour. */
@@ -711,7 +715,7 @@ export function Version(): JSX.Element {
           <Stack gap="sm">
             <UpgradeProgress {...upgrade} job={upgrade.job ?? ended ?? undefined} />
             {!upgrade.job && !ended && !upgrade.error && data && recentFailure(data.history) ? (
-              <Notice tone="critical" role="alert">{recoveryLine(recentFailure(data.history)!)}</Notice>
+              <Notice tone="critical" role="alert">{recoveryLine(recentFailure(data.history)!, data.app === true)}</Notice>
             ) : null}
             {asking ? (
               <Notice tone="warning" role="alert">

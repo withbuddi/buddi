@@ -6,11 +6,18 @@ APP_PATH := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/buddi.app
 
 .DEFAULT_GOAL := help
 
-.PHONY: help generate resolve fetch build run stop clean logs open-xcode release notarize dmg
+.PHONY: help generate resolve fetch build run stop clean logs open-xcode release notarize dmg version
 
 RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/buddi.app
-APP_VERSION := $(shell sed -n 's/.*CFBundleShortVersionString: "\(.*\)"/\1/p' project.yml)
-DMG_PATH := $(DERIVED_DATA)/buddi-$(APP_VERSION).dmg
+
+# The app is versioned as the buddi release in Payload/ (what `make fetch` put
+# there): that version for display, and the numbers-and-dots form Sparkle
+# compares as CFBundleVersion, from the one script the release workflow uses too.
+# Lazy (=): read when a target runs, after a `make fetch` in an earlier call.
+APP_VERSION = $(shell plutil -extract version raw -o - Payload/buddi/current/package.json 2>/dev/null)
+BUNDLE_VERSION = $(if $(APP_VERSION),$(shell node ../../scripts/release/bundle-version.mjs "$(APP_VERSION)"))
+VERSION_FLAGS = $(if $(BUNDLE_VERSION),MARKETING_VERSION=$(APP_VERSION) CURRENT_PROJECT_VERSION=$(BUNDLE_VERSION))
+DMG_PATH = $(DERIVED_DATA)/buddi-$(APP_VERSION).dmg
 
 # The buddi release the app carries: the npm version, `latest` by default.
 # make fetch VERSION=0.1.0-pre.38
@@ -51,7 +58,7 @@ build: generate ## Build the app (ad-hoc signed, or Developer ID when DEVELOPMEN
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration $(CONFIGURATION) \
 		-derivedDataPath $(DERIVED_DATA) \
 		CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-		$(DEBUG_SIGN) \
+		$(DEBUG_SIGN) $(VERSION_FLAGS) \
 		build
 
 # Runs the build in place (no copy to /Applications: this is a service, and a second
@@ -69,8 +76,12 @@ release: generate ## Release build, signed with secure timestamp (notarization-r
 		-derivedDataPath $(DERIVED_DATA) \
 		CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
 		OTHER_CODE_SIGN_FLAGS=--timestamp \
-		$(TEAM_FLAGS) \
+		$(TEAM_FLAGS) $(VERSION_FLAGS) \
 		build
+
+version: ## Print the buddi version in Payload/ and the CFBundleVersion it maps to
+	@test -n "$(APP_VERSION)" || { echo "version: Payload/ is empty; run make fetch first" >&2; exit 1; }
+	@echo "$(APP_VERSION) $(BUNDLE_VERSION)"
 
 # Sparkle's nested helpers keep Sparkle's own signature when Xcode embeds the
 # framework; the notary service requires OUR Developer ID + secure timestamp on

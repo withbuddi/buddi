@@ -17,6 +17,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var loginItem: NSMenuItem!
     private var takeOverItem: NSMenuItem!
     private var logsItem: NSMenuItem!
+    private var advancedItem: NSMenuItem!
+    private var previousItem: NSMenuItem!
 
     init(supervisor: Supervisor, appDelegate: AppDelegate) {
         self.supervisor = supervisor
@@ -49,6 +51,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         loginItem = add(menu, "Start at Login", #selector(toggleLogin))
         takeOverItem = add(menu, "Take Over from npm Install…", #selector(takeOver))
         logsItem = add(menu, "Show Logs", #selector(showLogs))
+        let advanced = NSMenu()
+        advanced.autoenablesItems = false
+        previousItem = add(advanced, "Restart with the Previous Version…", #selector(restartWithPrevious))
+        advancedItem = menu.addItem(withTitle: "Advanced", action: nil, keyEquivalent: "")
+        advancedItem.submenu = advanced
         menu.addItem(.separator())
         add(menu, "Quit buddi", #selector(quit), key: "q")
         return menu
@@ -89,6 +96,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         loginItem.state = LaunchAtLogin.isEnabled ? .on : .off
         takeOverItem.isHidden = Adoption.npmService(data: supervisor.data) == nil
         if case .attention = health { logsItem.isHidden = false } else { logsItem.isHidden = true }
+        if let previous = supervisor.previousVersion, health != .updating {
+            previousItem.title = "Restart with the Previous Version (\(previous))…"
+            previousItem.isEnabled = true
+        } else {
+            previousItem.title = "Restart with the Previous Version…"
+            previousItem.isEnabled = false
+        }
 
         if let version = supervisor.version, version.updateAvailable, let latest = version.latest, running {
             updateBuddiItem.title = "Update to \(latest)"
@@ -163,21 +177,52 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// In this first build the buddi release is part of the signed app, so a
-    /// new buddi arrives as a new app build. The in-app updater (download the
-    /// tarball, verify it, swap `current`) is phase 2; until then this says so
-    /// and shows what changed.
+    /// The same upgrade as Settings → System: the supervisor downloads the
+    /// release from npm, checks its integrity and provenance, unpacks it into
+    /// `<data>/releases` (never into this signed app), takes a backup, and
+    /// restarts on it. Asked once, with what changes.
     @objc private func updateBuddi() {
         guard let view = supervisor.version, let latest = view.latest else { return }
         let alert = NSAlert()
-        alert.messageText = "buddi \(latest) is out"
-        var text = "This build of buddi.app carries \(view.current). Updating buddi from inside the app comes with the next build of the app."
+        alert.messageText = "Update buddi to \(latest)?"
+        var text = "You have \(view.current). buddi takes a backup first, installs \(latest) and restarts; it takes a minute or two."
         if let notes = view.latestNotes, !notes.isEmpty {
             text += "\n\nWhat changes:\n" + String(notes.prefix(1200))
         }
         alert.informativeText = text
+        alert.addButton(withTitle: "Update")
+        alert.addButton(withTitle: "Cancel")
         NSApp.activate()
-        alert.runModal()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        supervisor.startUpgrade(to: latest) { refusal in
+            guard let refusal else { return }
+            let failed = NSAlert()
+            failed.messageText = "buddi did not update"
+            failed.informativeText = refusal
+            NSApp.activate()
+            failed.runModal()
+        }
+    }
+
+    /// Advanced → Restart with the Previous Version: back to the release that
+    /// ran before the last update (or the one this app carries).
+    @objc private func restartWithPrevious() {
+        guard let previous = supervisor.previousVersion else { return }
+        let alert = NSAlert()
+        alert.messageText = "Restart buddi with \(previous)?"
+        alert.informativeText = "buddi stops and starts again on \(previous). Your data stays as it is. If the newer version already changed the database, \(previous) may refuse to start: then restore the backup the update took first, in Settings → Backups."
+        alert.addButton(withTitle: "Restart with \(previous)")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        supervisor.restartWithPreviousVersion { problem in
+            guard let problem else { return }
+            let failed = NSAlert()
+            failed.messageText = "buddi did not switch versions"
+            failed.informativeText = problem
+            NSApp.activate()
+            failed.runModal()
+        }
     }
 
     @objc private func quit() { NSApp.terminate(nil) }

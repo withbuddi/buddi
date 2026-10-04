@@ -1,7 +1,7 @@
 ---
 title: "Install: one command, then the dashboard"
 status: reference
-updated: 2026-09-27
+updated: 2026-10-03
 ---
 
 # Install: one command, then the dashboard
@@ -12,8 +12,9 @@ to read in a terminal and nothing to answer there. From then on the dashboard
 is where you set buddi up, upgrade it and add plugins. A source checkout is
 for people working on buddi itself (§14). §13 lists what is not there yet.
 
-buddi is not a desktop app. There is no DMG or MSI; it runs as a background
-service on your machine and you reach it in the browser.
+buddi runs as a background service on your machine and you reach it in the
+browser. On a Mac you can also install it as an app, with nothing else to
+install (§1.1); there is no Windows installer yet.
 
 ---
 
@@ -41,6 +42,54 @@ opens the dashboard.
 On a machine without a screen, `buddi doctor`, `buddi service`, `buddi vault`
 and `buddi upgrade` do the same work from a terminal. The dashboard calls the
 same code through its API, so each step has one implementation.
+
+### 1.1 The Mac app
+
+buddi.app is the same buddi without Node or a terminal: download the DMG from
+[withbuddi.com](https://withbuddi.com) (`withbuddi.com/download/mac`), drag
+buddi to Applications and open it. It lives in the menu bar, not the Dock, and
+asks nothing: the first launch sets buddi up and opens the first-run chapters
+in your browser. The menu has Open buddi, the status, updates, Restart, Start
+at Login and Quit. macOS 14 or newer, Apple silicon or Intel (one universal
+app).
+
+**What it is.** A small native app that carries Node, the very
+`@withbuddi/buddi` tarball npm serves, and the embedded Postgres for both Mac
+architectures, and runs buddi's own supervisor as its child, in the place the
+LaunchAgent takes for an npm install (§6). It is signed with a Developer ID and
+notarized by Apple.
+
+**Where data lives.** Where an npm install keeps it:
+`~/Library/Application Support/buddi` (§4), with the same keychain namespace.
+The app never reads a secret; the gateway does, as always. Releases buddi
+installs for itself go in `releases/` inside that folder.
+
+**How updates work.** Two layers.
+
+- *buddi itself*, as with npm: Settings → System or the menu's "Update to …".
+  The app never writes into its own signed bundle: buddi downloads the release
+  into `releases/buddi-<version>/` with the npm the app carries, checks the
+  tarball against the registry's sha512 integrity, verifies its provenance
+  (signed by npm's sigstore attestation as built by `withbuddi/buddi`'s release
+  workflow; a release without it is refused), checks that its Postgres starts,
+  and only then takes the backup, switches `releases/current` to it and
+  restarts. Anything that fails before that leaves buddi running as it was.
+  The previous release is kept: **Advanced → Restart with the Previous
+  Version** in the menu goes back to it (your data stays; if the newer version
+  already changed the database, restore the backup its upgrade took, in
+  Settings → Backups). The release inside the app is always there as the last
+  fallback.
+- *The app*, rarely, through Sparkle (Check for Updates in the menu). A newer
+  app that carries a newer buddi starts it at its first launch.
+
+**Moving from the npm install.** Keep your data where it is and open the app.
+It sees the npm install's background service for the same folder and asks
+once whether to take over: yes stops that service, moves its LaunchAgent aside
+(`launchagent-from-npm.plist` in the data folder) and starts buddi from the
+app, on the same data. Then `npm rm -g @withbuddi/buddi` removes the command
+line copy whenever you like. Going the other way, quit the app, drag it to the
+Trash, and `npm install -g @withbuddi/buddi && buddi` (the same version or newer) picks the folder up
+again.
 
 ---
 
