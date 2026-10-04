@@ -290,7 +290,7 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
         // which is a hand that is over rather than a picture that stopped.
         void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => end());
         const { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } = event.metadata;
-        this.#handFrames?.({ jpeg: Buffer.from(event.data, 'base64'), metadata: { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } });
+        this.#handFrames?.({ jpeg: Buffer.from(event.data, 'base64'), metadata: { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY, url: page.url() } });
       });
       try {
         await cdp.send('Page.startScreencast', { format: 'jpeg', quality: quality.quality, maxWidth: quality.maxWidth, maxHeight: quality.maxHeight, everyNthFrame: 1 });
@@ -318,6 +318,7 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
         try { this.host.check(page.url(), true); }
         catch (error) { await this.hand.stop(); throw error; }
       }
+      if (event.kind === 'nav') { await this.#handNav(page, event); return; }
       if (event.kind === 'wheel') { await page.mouse.move(event.x, event.y); await page.mouse.wheel(event.deltaX, event.deltaY); return; }
       if (event.kind === 'mouse') {
         await page.mouse.move(event.x, event.y);
@@ -355,6 +356,28 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
       await cdp.detach().catch(() => {});
     },
   };
+  /**
+   * The window's buttons on the held page: back, forward, reload, an address.
+   *
+   * The same page, never a new tab, and the same check an agent's navigate
+   * goes through — before for a typed address, after for history (a back
+   * button can land anywhere the page has been). A disallowed landing ends
+   * the hand, exactly as a link that went there would.
+   */
+  async #handNav(page: Page, event: Extract<HandInput, { kind: 'nav' }>): Promise<void> {
+    const options = { waitUntil: 'commit' as const, timeout: 15_000 };
+    if (event.action === 'navigate') {
+      if (!event.url) throw new BrowserPreconditionError('Type an address first.');
+      this.host.check(event.url, true);
+      await page.goto(event.url, options);
+    } else if (event.action === 'back') await page.goBack(options);
+    else if (event.action === 'forward') await page.goForward(options);
+    else await page.reload(options);
+    if (page.url() !== 'about:blank') {
+      try { this.host.check(page.url(), true); }
+      catch (error) { await this.hand.stop(); throw error; }
+    }
+  }
   async close(): Promise<void> {
     ++this.#generation; this.#invalidate(); this.#picture = undefined; this.#page = undefined;
     await this.hand.stop();

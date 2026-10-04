@@ -7,6 +7,12 @@ What changes in buddi from one release to the next, newest first.
 - Chat: the round Send button is back at the right of the composer when Use my Chrome sits beside the model and Thinking; in a narrow box (the corner chat, a squeezed column) the model chip steps aside and the chip says just "Chrome".
 - Your Chrome: a page opens in an ordinary Chrome window, in the background, even when the window you last used is a popup or an installed app; when Chrome won't group the tab there, the page still opens (the "buddi" group is skipped), and with no ordinary window it opens in a new one that doesn't take the focus, with one line in the chat saying so.
 - Your Chrome: when the page opened and a later step failed, the agent gets the page and "opened, then this failed" instead of "I couldn't open it"; the same failure twice in a row is said plainly once rather than tried a third time.
+- Page tab: the page sits in a small browser window, with back, forward, reload and the address on a bar above it. While the agent drives, the bar is there but asleep and a click on the address copies it; a thin line along the bar shows a page loading.
+- Page tab: while you have the page in buddi's browser, back, forward and reload work, and you can type an address and press Enter to go there (the same sites the agent may visit; file and internal addresses are refused). The address follows the links you click.
+- Page tab: an Enlarge button beside Stop / Take over (and "Open the full page view" under ⋯) opens the page over the whole window with the same header; Esc or the button brings it back.
+- Page tab: the Keyboard button only shows on a phone, where it says "Type into the page"; on a computer, click the page and type.
+- Page tab: your pointer on the page is an arrow, not a crosshair.
+- Page tab: after reloading the dashboard while you have the page, clicks and typing reach it again straight away, without pressing Drive it here (on a computer; a phone still asks).
 
 ## 0.1.0-pre.38 — 2026-10-03
 

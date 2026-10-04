@@ -298,7 +298,11 @@ export class ExtensionDriver implements BrowserDriver {
       if (!this.#frames || !this.bridge.connected()) return;
       await this.#send('screencast.start', { ...quality, everyNthFrame: 1 }).catch(() => undefined);
     },
-    input: async (event: HandInput) => { await this.#send('input', event as unknown as Record<string, unknown>, true); },
+    input: async (event: HandInput) => {
+      // Back, forward and an address are Chrome's own buttons, right there in the owner's window.
+      if (event.kind === 'nav') throw new BrowserPreconditionError('Use Chrome’s own buttons for that page.');
+      await this.#send('input', event as unknown as Record<string, unknown>, true);
+    },
     stop: async () => {
       this.#frames?.();
       this.#frames = undefined;

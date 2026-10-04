@@ -103,6 +103,12 @@ const GLYPHS = {
   thought: [13, 1.4, <><path d="M4.2 9.6a3.6 3.6 0 1 1 4.6 0v1.2H4.2z" /><path d="M5.2 12.2h2.6" /></>],
   chevron: [11, 1.5, <path d="M2.8 4.2 5.5 6.9l2.7-2.7" />],
   arrow: [13, 1.5, <path d="M4.8 2.6 9 6.5l-4.2 3.9" />],
+  // The page window's own buttons (the Page tab), in the inline 16px hand.
+  back: [16, 1.6, <path d="M13 8H3.4M7.4 4 3.4 8l4 4" />],
+  forward: [16, 1.6, <path d="M3 8h9.6M8.6 4l4 4-4 4" />],
+  reload: [16, 1.6, <><path d="M13 8a5 5 0 1 1-1.6-3.7" /><path d="M11.8 1.9v2.8H9" /></>],
+  expand: [16, 1.6, <path d="M9.6 2.8h3.6v3.6M13.2 2.8 9 7M6.4 13.2H2.8V9.6M2.8 13.2 7 9" />],
+  collapse: [16, 1.6, <path d="M12.8 7H9V3.2M9 7l4.2-4.2M3.2 9H7v3.8M7 9l-4.2 4.2" />],
   // Under a reply: two sheets, the back one peeking out.
   copy: [16, 1.5, <><rect x="5.6" y="5.6" width="7.6" height="7.6" rx="1.4" /><path d="M10.4 5.6V4a1.2 1.2 0 0 0-1.2-1.2H4A1.2 1.2 0 0 0 2.8 4v5.2A1.2 1.2 0 0 0 4 10.4h1.6" /></>],
   // Read aloud, and an audio file's player: start, pause, stop.

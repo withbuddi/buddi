@@ -6,12 +6,12 @@
  * asking that stops when the page does. The steps read from the conversation
  * still fold the agent's calls into the tab; the tab no longer lists them.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserStatus } from '../api';
-import { BrowserMenu, BrowserView, BROWSER_POLL_MS, MAX_SCREENSHOT_FAILURES } from './views/BrowserView';
+import { addressFrom, BrowserMenu, BrowserView, BROWSER_POLL_MS, MAX_SCREENSHOT_FAILURES, TOUCH_QUERY } from './views/BrowserView';
 
 vi.mock('../api', async (original) => ({ ...(await original<typeof import('../api')>()), csrfToken: () => 'c', api: { session: vi.fn(async () => ({ platform: 'darwin' })), browserControl: vi.fn(), browserPin: vi.fn(), browserSettings: vi.fn(async () => ({})) } }));
 import { browserSteps, stepFor, BROWSER_TOOLS } from '../chat/browser';
@@ -30,7 +30,45 @@ function keepsFrames(): void {
 }
 
 beforeEach(keepsFrames);
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+/** A phone (no hover, a finger) or a desktop, as the media query sees it. */
+function device(kind: 'phone' | 'desktop'): void {
+  vi.stubGlobal('matchMedia', (query: string) => ({ matches: kind === 'phone' && query === TOUCH_QUERY, addEventListener: () => {}, removeEventListener: () => {} }));
+}
+
+/** The hand's socket, caught: what the tab sends, and a way to answer. */
+class FakeSocket {
+  static all: FakeSocket[] = [];
+  sent: Array<Record<string, unknown>> = [];
+  binaryType = '';
+  onopen: ((event: unknown) => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onclose: ((event: unknown) => void) | null = null;
+  onerror: ((event: unknown) => void) | null = null;
+  constructor(readonly url: string) { FakeSocket.all.push(this); }
+  send(data: string): void { this.sent.push(JSON.parse(data) as Record<string, unknown>); }
+  close(): void {}
+  /** The gateway's side: open, driving, and one frame from a page at `url`. */
+  drive(url = 'https://example.com/account'): void {
+    act(() => { this.onopen?.({}); });
+    act(() => { this.onmessage?.({ data: JSON.stringify({ type: 'driving', sessionId: 's1' }) }); });
+    const head = new TextEncoder().encode(JSON.stringify({ deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0, url }));
+    const buffer = new ArrayBuffer(3 + head.length + 4);
+    const view = new DataView(buffer);
+    view.setUint8(0, 1); view.setUint16(1, head.length);
+    new Uint8Array(buffer, 3, head.length).set(head);
+    act(() => { this.onmessage?.({ data: buffer }); });
+  }
+  inputs(): Array<Record<string, unknown>> { return this.sent.filter((frame) => frame.type === 'input').map((frame) => frame.input as Record<string, unknown>); }
+}
+
+/** A page the owner holds, with a hand the gateway grants. */
+function heldBy(owner: 'takeover-grants-hand' | 'no-hand' = 'takeover-grants-hand'): BrowserStatus {
+  const held: BrowserStatus = { ...status, state: 'paused', route: 'own', page: { ...status.page!, url: 'https://example.com/account', title: 'Your account' } };
+  vi.mocked(api.browserControl).mockImplementation(async (action) => (action === 'takeover' ? { ...held, hand: owner === 'takeover-grants-hand' } : status));
+  return held;
+}
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); FakeSocket.all = []; });
 
 const status: BrowserStatus = {
   mode: 'extension',
@@ -152,7 +190,7 @@ describe('the Page tab', () => {
   it('says who looks where in one quiet line, with Stop and Take over, and no steps or counters', () => {
     render(<BrowserView status={{ ...status, route: 'own', page: { ...status.page!, url: 'https://www.amazon.com/cart', title: 'Your cart' } }} error={null} reload={() => {}} live agentName="Home Manager" />);
     expect(screen.getByTestId('browser-view')).toHaveAttribute('data-live', 'true');
-    expect(screen.getByText('Your cart')).toBeInTheDocument();
+    expect(screen.getByText('Your cart', { selector: '.br-head-title' })).toBeInTheDocument();
     expect(screen.getByText('Looking at amazon.com · in buddi’s browser')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Take over' })).not.toHaveAttribute('data-variant', 'accent');
@@ -187,7 +225,8 @@ describe('the Page tab', () => {
     await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ showWindow: true }));
   }, 60_000);
 
-  it('takes over in the frame: You have the page, nothing typed is kept, Keyboard and Give it back', async () => {
+  it('takes over in the frame: You have the page, nothing typed is kept, Give it back, and no Keyboard on a desktop', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
     let state: BrowserStatus = status;
     vi.mocked(api.browserControl).mockImplementation(async (action) => {
       if (action === 'takeover') { state = { ...status, state: 'paused' }; return { ...state, hand: true }; }
@@ -200,12 +239,14 @@ describe('the Page tab', () => {
     expect(await screen.findByText(/^You have the page/)).toBeInTheDocument();
     expect(screen.getByText('Nothing you type here is kept. Home Manager carries on when you give it back.')).toBeInTheDocument();
     expect(screen.getByTestId('remote-hand')).toHaveAttribute('data-bare', 'true');
-    expect(screen.getByRole('button', { name: 'Keyboard' })).toHaveAttribute('aria-pressed', 'false');
+    // A desktop's frame takes keys when focused; the soft-keyboard button is a phone's.
+    expect(screen.queryByRole('button', { name: /Keyboard|Type into the page/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Give it back' }));
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume', 's1'));
   });
 
-  it('a page already in the owner’s hands (taken from a chat card, or after a reload) still offers Give it back', async () => {
+  it('a page already in the owner’s hands, seen on a phone, still offers Give it back and Drive it here', async () => {
+    device('phone');
     vi.mocked(api.browserControl).mockResolvedValue(status);
     render(<BrowserView status={{ ...status, state: 'paused' }} error={null} reload={() => {}} live agentName="Home Manager" />);
     expect(screen.getByText(/^You have the page/)).toBeInTheDocument();
@@ -214,6 +255,112 @@ describe('the Page tab', () => {
     expect(screen.getByRole('button', { name: 'Drive it here' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Give it back' }));
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume', 's1'));
+  });
+
+  it('reattaches the hand by itself after a reload, so a click reaches the page without pressing anything', async () => {
+    device('desktop');
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const held = heldBy();
+    render(<BrowserView status={held} error={null} reload={() => {}} live agentName="Home Manager" />);
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('takeover', 's1'));
+    expect(await screen.findByTestId('remote-hand')).toBeInTheDocument();
+    expect(FakeSocket.all).toHaveLength(1);
+    const socket = FakeSocket.all[0]!;
+    socket.drive();
+    expect(socket.sent[0]).toMatchObject({ type: 'hello', sessionId: 's1' });
+    const picture = await screen.findByTestId('hand-picture');
+    fireEvent.mouseDown(picture, { clientX: 0, clientY: 0, button: 0 });
+    fireEvent.mouseUp(picture, { clientX: 0, clientY: 0, button: 0 });
+    expect(socket.inputs()).toEqual([
+      expect.objectContaining({ kind: 'mouse', type: 'mousePressed', button: 'left' }),
+      expect.objectContaining({ kind: 'mouse', type: 'mouseReleased', button: 'left' }),
+    ]);
+    // Once per page: the answer coming back does not ask again.
+    expect(vi.mocked(api.browserControl).mock.calls.filter(([action]) => action === 'takeover')).toHaveLength(1);
+  });
+
+  it('on a phone, the keyboard button says Type into the page, with a hint', async () => {
+    device('phone');
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const held = heldBy();
+    render(<BrowserView status={held} error={null} reload={() => {}} live agentName="Home Manager" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Drive it here' }));
+    const typing = await screen.findByRole('button', { name: 'Type into the page' });
+    expect(typing).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText(/Tap Type into the page to bring up your keyboard\./)).toBeInTheDocument();
+    fireEvent.click(typing);
+    expect(typing).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('draws the page as a window: the bar is asleep while the agent drives, and the address copies', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    render(<BrowserView status={{ ...status, busy: true, route: 'own', page: { ...status.page!, url: 'https://www.amazon.com/gp/cart?ref=nav', title: 'Your cart' } }} error={null} reload={() => {}} live />);
+    const bar = screen.getByRole('toolbar', { name: 'Page controls' });
+    for (const name of ['Back', 'Forward', 'Reload']) expect(within(bar).getByRole('button', { name })).toBeDisabled();
+    expect(within(bar).getByText('amazon.com')).toBeInTheDocument();
+    expect(within(bar).getByText('/gp/cart?ref=nav')).toBeInTheDocument();
+    expect(within(bar).getByRole('progressbar', { name: 'Loading' })).toBeInTheDocument();
+    fireEvent.click(within(bar).getByRole('button', { name: 'Copy the address' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('https://www.amazon.com/gp/cart?ref=nav'));
+    expect(await within(bar).findByRole('button', { name: 'Address copied' })).toBeInTheDocument();
+  });
+
+  it('while the owner holds the page, back, forward, reload and a typed address go down the hand', async () => {
+    device('desktop');
+    vi.stubGlobal('WebSocket', FakeSocket);
+    render(<BrowserView status={heldBy()} error={null} reload={() => {}} live />);
+    await screen.findByTestId('remote-hand');
+    const socket = FakeSocket.all[0]!;
+    socket.drive('https://example.com/after-a-click');
+    const bar = screen.getByRole('toolbar', { name: 'Page controls' });
+    const field = within(bar).getByRole('textbox', { name: 'Address' });
+    // The address follows the page the owner is on, not the last observation.
+    expect(field).toHaveValue('https://example.com/after-a-click');
+    fireEvent.click(within(bar).getByRole('button', { name: 'Back' }));
+    fireEvent.click(within(bar).getByRole('button', { name: 'Forward' }));
+    fireEvent.click(within(bar).getByRole('button', { name: 'Reload' }));
+    fireEvent.change(field, { target: { value: 'example.com/orders' } });
+    fireEvent.submit(field);
+    expect(socket.inputs()).toEqual([
+      { kind: 'nav', action: 'back' },
+      { kind: 'nav', action: 'forward' },
+      { kind: 'nav', action: 'reload' },
+      { kind: 'nav', action: 'navigate', url: 'https://example.com/orders' },
+    ]);
+    // Something that is not a web address never leaves the tab.
+    fireEvent.change(field, { target: { value: 'file:///etc/passwd' } });
+    fireEvent.submit(field);
+    expect(socket.inputs()).toHaveLength(4);
+    expect(screen.getByRole('alert')).toHaveTextContent(/isn’t a web address/);
+  });
+
+  it('enlarges to the whole window and back, from its own button, the overflow, and Esc', async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    render(<><BrowserView status={status} error={null} reload={() => {}} live /><BrowserMenu status={status} reload={() => {}} /></>);
+    const view = screen.getByTestId('browser-view');
+    expect(view).not.toHaveAttribute('data-enlarged');
+    fireEvent.click(screen.getByRole('button', { name: 'Enlarge the page' }));
+    expect(view).toHaveAttribute('data-enlarged', 'true');
+    expect(screen.getByRole('dialog', { name: 'The page, full size' })).toBe(view);
+    // The same header comes along: Stop and Take over are still there.
+    expect(screen.getByRole('button', { name: 'Take over' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the side' }));
+    expect(view).not.toHaveAttribute('data-enlarged');
+    await user.click(screen.getByRole('button', { name: 'More for this page' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Open the full page view/ }));
+    expect(view).toHaveAttribute('data-enlarged', 'true');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(view).not.toHaveAttribute('data-enlarged');
+  }, 60_000);
+
+  it('reads a typed address the way a browser would, and refuses what is not one', () => {
+    expect(addressFrom('amazon.com')).toBe('https://amazon.com/');
+    expect(addressFrom(' http://example.com/a ')).toBe('http://example.com/a');
+    expect(addressFrom('localhost:3000')).toBe('https://localhost:3000/');
+    expect(addressFrom('file:///etc/passwd')).toBeNull();
+    expect(addressFrom('javascript:alert(1)')).toBeNull();
+    expect(addressFrom('two words')).toBeNull();
   });
 
   it('keeps the page it asked to take over, never another page the answer names', async () => {

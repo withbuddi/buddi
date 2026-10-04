@@ -139,6 +139,42 @@ describe('the Playwright driver’s hand', () => {
     expect(cdp.detach).toHaveBeenCalled();
   });
 
+  it('drives the window buttons on the held page, through the same address check, and says where each frame is', async () => {
+    const { page, cdp } = fakePage();
+    const calls: string[] = [];
+    Object.assign(page, {
+      goto: vi.fn(async (to: string) => { calls.push(`goto ${to}`); page.here = to; }),
+      goBack: vi.fn(async () => { calls.push('back'); page.here = 'https://example.com/before'; }),
+      goForward: vi.fn(async () => { calls.push('forward'); }),
+      reload: vi.fn(async () => { calls.push('reload'); }),
+    });
+    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));
+    await driver.start();
+    const frames: HandFrame[] = [];
+    await driver.hand.start((frame) => frames.push(frame));
+    cdp.listeners.get('Page.screencastFrame')!({ data: Buffer.from('x').toString('base64'), sessionId: 1, metadata });
+    expect(frames[0]!.metadata.url).toBe('https://example.com/');
+
+    await driver.hand.input({ kind: 'nav', action: 'back' });
+    await driver.hand.input({ kind: 'nav', action: 'forward' });
+    await driver.hand.input({ kind: 'nav', action: 'reload' });
+    await driver.hand.input({ kind: 'nav', action: 'navigate', url: 'https://example.com/orders' });
+    expect(calls).toEqual(['back', 'forward', 'reload', 'goto https://example.com/orders']);
+
+    // An address the tool may not visit is refused before anything loads.
+    await expect(driver.hand.input({ kind: 'nav', action: 'navigate', url: 'https://elsewhere.invalid/' })).rejects.toThrow(/outside/);
+    expect(calls).toHaveLength(4);
+    await driver.hand.stop();
+  });
+
+  it('leaves the owner’s Chrome to its own buttons', async () => {
+    const { fake, sent } = bridge();
+    const driver = new ExtensionDriver(fake);
+    await driver.hand.start(() => {});
+    await expect(driver.hand.input({ kind: 'nav', action: 'reload' })).rejects.toThrow(/Chrome’s own buttons/);
+    expect(sent.some((command) => command.name === 'input')).toBe(false);
+  });
+
   it('types "ame" once, not "aammee", and pastes in one piece', async () => {
     const { page, keyboard } = fakePage();
     const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));

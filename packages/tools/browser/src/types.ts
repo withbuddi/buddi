@@ -83,6 +83,12 @@ export interface HandFrameMetadata {
   offsetTop: number;
   scrollOffsetX: number;
   scrollOffsetY: number;
+  /**
+   * The page's address when the frame was painted, so the owner's address
+   * field follows the links they click. Optional: a backend that cannot say
+   * leaves it out and the dashboard keeps the last observed address.
+   */
+  url?: string;
 }
 /** One picture of the page, as JPEG bytes. Never stored, never logged. */
 export interface HandFrame { jpeg: Buffer; metadata: HandFrameMetadata }
@@ -103,12 +109,17 @@ export interface HandFrame { jpeg: Buffer; metadata: HandFrameMetadata }
  * `text` (the kind) is a paste: what the owner had on *their* clipboard, which
  * the host has no way to reach, inserted in one piece. It is the one string
  * here longer than a keystroke, and it is kept no longer than one is.
+ *
+ * `nav` is the window's own buttons while the owner holds the page: back,
+ * forward, reload, or an address they typed. It stays on the held page and
+ * goes through the same address check every agent navigation does.
  */
 export type HandInput =
   | { kind: 'mouse'; type: 'mousePressed' | 'mouseReleased' | 'mouseMoved'; x: number; y: number; button: 'none' | 'left' | 'middle' | 'right'; clickCount: number; modifiers: number }
   | { kind: 'key'; type: 'keyDown' | 'keyUp' | 'char'; key: string; code: string; text?: string; modifiers: number }
   | { kind: 'text'; text: string }
-  | { kind: 'wheel'; x: number; y: number; deltaX: number; deltaY: number };
+  | { kind: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }
+  | { kind: 'nav'; action: 'back' | 'forward' | 'reload' | 'navigate'; url?: string };
 
 /**
  * How big and how good a picture is worth sending.

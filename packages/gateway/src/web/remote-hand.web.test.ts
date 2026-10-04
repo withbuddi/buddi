@@ -12,7 +12,7 @@ import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/co
 import type { BrowserController, BrowserHand, BrowserStatus, HandFrame, HandInput } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
-import { packFrame } from './remote-hand.js';
+import { packFrame, readInput } from './remote-hand.js';
 
 /** The dashboard's half of `packFrame`: one message, header then JPEG. */
 function unpack(message: Buffer): { metadata: Record<string, number>; jpeg: Buffer } {
@@ -455,5 +455,19 @@ describe('a hand that has already been let through', () => {
     expect(await tab.next('ended')).toMatchObject({ error: expect.stringContaining('Take over again') });
     expect(lines.join('\n')).not.toMatch(/hunter2|Unknown key/);
     expect(lines).toContain('browser hand: input failed at the host');
+  });
+});
+
+describe('the window buttons on the hand', () => {
+  it('takes back, forward, reload and an http address, and nothing else', () => {
+    expect(readInput({ kind: 'nav', action: 'back' })).toEqual({ kind: 'nav', action: 'back' });
+    expect(readInput({ kind: 'nav', action: 'reload' })).toEqual({ kind: 'nav', action: 'reload' });
+    expect(readInput({ kind: 'nav', action: 'navigate', url: 'https://example.com/a?b=1' })).toEqual({ kind: 'nav', action: 'navigate', url: 'https://example.com/a?b=1' });
+    expect(readInput({ kind: 'nav', action: 'navigate', url: 'file:///etc/passwd' })).toBeNull();
+    expect(readInput({ kind: 'nav', action: 'navigate', url: 'javascript:alert(1)' })).toBeNull();
+    expect(readInput({ kind: 'nav', action: 'navigate', url: 'https://a b' })).toBeNull();
+    expect(readInput({ kind: 'nav', action: 'navigate', url: `https://x.com/${'a'.repeat(3000)}` })).toBeNull();
+    expect(readInput({ kind: 'nav', action: 'back', url: 'https://example.com' })).toBeNull();
+    expect(readInput({ kind: 'nav', action: 'close' })).toBeNull();
   });
 });

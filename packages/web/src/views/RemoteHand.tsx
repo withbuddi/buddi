@@ -22,7 +22,7 @@
  * that header and the size the picture is *displayed* at, so a phone showing a
  * 1280-wide page in a 380-wide column still clicks the right link.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Button, Notice, Toolbar } from '../ui';
 
 /** Where a frame came from, as the host browser measured it. */
@@ -33,6 +33,8 @@ export interface HandFrameMetadata {
   offsetTop: number;
   scrollOffsetX: number;
   scrollOffsetY: number;
+  /** Where the page was when this frame was painted; the address field follows it. */
+  url?: string;
 }
 
 /** A displayed rectangle, which is all of `DOMRect` this needs. */
@@ -98,7 +100,7 @@ const MOVE_MS = 33;
 /** Has anything a click depends on moved? */
 function sameFrameShape(a: HandFrameMetadata, b: HandFrameMetadata): boolean {
   return a.deviceWidth === b.deviceWidth && a.deviceHeight === b.deviceHeight
-    && a.pageScaleFactor === b.pageScaleFactor && a.offsetTop === b.offsetTop;
+    && a.pageScaleFactor === b.pageScaleFactor && a.offsetTop === b.offsetTop && a.url === b.url;
 }
 
 /**
@@ -150,11 +152,22 @@ export interface RemoteHandProps {
   bare?: boolean;
   typing?: boolean;
   onTyping?: (typing: boolean) => void;
+  /** The page's address as the frames report it, for the window's address field. */
+  onLocation?: (url: string) => void;
+}
+
+/** The window's buttons, sent down the same socket as the clicks. */
+export type HandNav = 'back' | 'forward' | 'reload' | 'navigate';
+
+/** What the Page tab's window bar reaches into the hand for. */
+export interface RemoteHandHandle {
+  /** Back, forward, reload, or an address; false when there is no socket to send it on. */
+  nav(action: HandNav, url?: string): boolean;
 }
 
 type Phase = 'connecting' | 'driving' | 'lost' | 'refused';
 
-export function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false, typing: typingProp, onTyping }: RemoteHandProps): JSX.Element {
+export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false, typing: typingProp, onTyping, onLocation }, handle): JSX.Element {
   const [phase, setPhase] = useState<Phase>('connecting');
   const [refusal, setRefusal] = useState<string | null>(null);
   /** Whether any picture has arrived. The picture itself lives on the canvas. */
@@ -223,6 +236,9 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false,
   }, [sessionId, csrf, attempt, connect]);
 
   useEffect(() => () => { clearTimeout(moved.current.timer); }, []);
+  // The address the page reports, whenever it changes (a link the owner clicked, a back).
+  const location = metadata?.url;
+  useEffect(() => { if (location) onLocation?.(location); }, [location]);
 
   /** One event, straight out to the socket. Never stored on the way. */
   const send = useCallback((input: Record<string, unknown>): void => {
@@ -230,6 +246,14 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false,
     if (!ws) return;
     try { ws.send(JSON.stringify({ type: 'input', input })); } catch { /* the close handler says so */ }
   }, []);
+
+  useImperativeHandle(handle, () => ({
+    nav: (action: HandNav, url?: string): boolean => {
+      if (!socket.current) return false;
+      send({ kind: 'nav', action, ...(action === 'navigate' && url ? { url } : {}) });
+      return true;
+    },
+  }), [send]);
 
   const point = (event: { clientX: number; clientY: number }): { x: number; y: number } | null => {
     const element = picture.current;
@@ -419,4 +443,4 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false,
       />
     </section>
   );
-}
+});

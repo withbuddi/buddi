@@ -96,6 +96,9 @@ const MAX_MODIFIERS = 15;
 const BUTTONS = new Set(['none', 'left', 'middle', 'right']);
 const MOUSE_TYPES = new Set(['mousePressed', 'mouseReleased', 'mouseMoved']);
 const KEY_TYPES = new Set(['keyDown', 'keyUp', 'char']);
+const NAV_ACTIONS = new Set(['back', 'forward', 'reload', 'navigate']);
+/** An address someone types is a line, never a document. */
+const MAX_URL = 2_048;
 
 /**
  * The keys a hand may press.
@@ -170,6 +173,15 @@ export function readInput(raw: unknown): HandInput | null {
     if (pasted === '' || pasted.length > MAX_PASTE) return null;
     if (!pastable(pasted)) return null;
     return { kind: 'text', text: pasted };
+  }
+  if (input.kind === 'nav') {
+    // The window's buttons. An address is only shaped here; the driver runs
+    // the same check every agent navigation goes through before it goes.
+    if (typeof input.action !== 'string' || !NAV_ACTIONS.has(input.action)) return null;
+    if (input.action !== 'navigate') return input.url === undefined ? { kind: 'nav', action: input.action as 'back' | 'forward' | 'reload' } : null;
+    const url = typeof input.url === 'string' ? input.url : '';
+    if (url.length === 0 || url.length > MAX_URL || !/^https?:\/\//i.test(url) || /[\u0000-\u0020\u007f]/.test(url)) return null;
+    return { kind: 'nav', action: 'navigate', url };
   }
   if (input.kind !== 'key') return null;
   if (typeof input.type !== 'string' || !KEY_TYPES.has(input.type) || modifiers === null) return null;
@@ -439,8 +451,8 @@ export class RemoteHandEndpoint {
 
   /** What is down, so what is down can be let go of. Never the typed text. */
   #track(held: Held, input: HandInput): void {
-    // A paste holds nothing down, and nothing about it is worth remembering.
-    if (input.kind === 'text') return;
+    // A paste holds nothing down, and nothing about it is worth remembering; nor does a window button.
+    if (input.kind === 'text' || input.kind === 'nav') return;
     if (input.kind === 'wheel') { held.x = input.x; held.y = input.y; return; }
     if (input.kind === 'mouse') {
       held.x = input.x; held.y = input.y;

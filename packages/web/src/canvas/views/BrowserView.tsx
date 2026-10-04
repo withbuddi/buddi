@@ -19,13 +19,25 @@
  * nothing typed is kept, Keyboard · Give it back; the agent carries on with no
  * new message. Who holds the page is the server's word (a paused page is the
  * owner's), not this tab's: a take-over from a chat card, a reload, or a route
- * with no remote hand still shows Give it back.
+ * with no remote hand still shows Give it back. **After a reload the hand
+ * reattaches by itself** on a desktop: the server says the page is the
+ * owner's, so the tab asks for the hand again instead of showing a picture
+ * that no longer takes clicks.
+ *
+ * The picture sits in a small browser window (Amen, 2026-10-03: "like a real
+ * window"; the kit has no window treatment, so this one is drawn here): back,
+ * forward, reload and the address on a bar above the page. While the agent
+ * drives the bar is there but asleep and the address copies on a click; while
+ * the owner holds the page the buttons work and a typed address goes, through
+ * the same address check every agent navigation passes. Enlarge opens the same
+ * window over the whole dashboard, header and all; Esc closes it.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { api, csrfToken, type BrowserStatus } from '../../api';
 import { fmtClock } from '../../format';
-import { ActionMenu, Button, Notice, Toolbar } from '../../ui';
-import { RemoteHand } from '../../views/RemoteHand';
+import { ActionMenu, Button, Icon, Notice, Toolbar } from '../../ui';
+import { RemoteHand, type HandNav, type RemoteHandHandle } from '../../views/RemoteHand';
+import { useMediaQuery } from '../../useMediaQuery';
 import { appWord, lookingLine, siteOfUrl } from '../../views/Browser';
 import { useThisMachine } from '../../useThisMachine';
 
@@ -38,6 +50,46 @@ export const BROWSER_POLL_MS = 2000;
  * tab still has the last frame that did arrive.
  */
 export const MAX_SCREENSHOT_FAILURES = 5;
+
+/**
+ * A device whose keyboard has to be asked for: no hover, a finger for a
+ * pointer. Width is not the test — a narrow desktop window still has keys.
+ */
+export const TOUCH_QUERY = '(hover: none) and (pointer: coarse)';
+
+/** The Canvas overflow's "full page view" asks the Page tab to enlarge with this. */
+export const BROWSER_ENLARGE_EVENT = 'buddi:browser-enlarge';
+
+/** How long a window button's load shows as in progress when no frame says it landed. */
+const NAV_SPIN_MS = 8_000;
+/** The scheme a bare host gets. */
+const WEB = 'https:';
+
+/**
+ * What the owner typed into the address field, as an address to go to — or
+ * null for something that is not a web address. A bare host gets https; the
+ * driver still checks the result the way it checks an agent's.
+ */
+export function addressFrom(typed: string): string | null {
+  const text = typed.trim();
+  if (text === '' || /\s/.test(text)) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(text) && !/^[^:]+:\d+(\/|$)/.test(text) ? text : `${WEB}//${text}`;
+  try {
+    const url = new URL(withScheme);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null;
+  } catch { return null; }
+}
+
+/** The address as the field draws it: host strong, the rest quiet. */
+function addressParts(url: string | undefined): { host: string; rest: string; secure: boolean } | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { host: url, rest: '', secure: false };
+    const rest = `${parsed.pathname === '/' ? '' : parsed.pathname}${parsed.search}${parsed.hash}`;
+    return { host: parsed.host.replace(/^www\./, ''), rest, secure: parsed.protocol === 'https:' };
+  } catch { return { host: url, rest: '', secure: false }; }
+}
 
 export interface BrowserViewProps {
   status: BrowserStatus | undefined;
@@ -131,6 +183,10 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   const [note, setNote] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const machine = useThisMachine();
+  const touch = useMediaQuery(TOUCH_QUERY);
+  const handRef = useRef<RemoteHandHandle | null>(null);
+  /** The page asked for its hand already, so a reload asks once and never loops. */
+  const asked = useRef<string | null>(null);
   const session = shown?.session;
   const act = async (action: () => Promise<void>) => {
     setBusy(true); setFailure(null);
@@ -139,10 +195,11 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   };
   const takeOver = () => void act(async () => {
     setNote(null); setOffline(false);
-    const asked = session?.id;
-    const next = await api.browserControl('takeover', asked);
+    const wanted = session?.id;
+    if (wanted) asked.current = wanted;
+    const next = await api.browserControl('takeover', wanted);
     // The answer is the page asked about; with several open, never another one.
-    if (next.hand && next.session && (!asked || next.session.id === asked)) setDriving(next.session.id);
+    if (next.hand && next.session && (!wanted || next.session.id === wanted)) setDriving(next.session.id);
     else if (next.handReason === 'browser-offline') setOffline(true);
     else setNote(next.handMessage ?? null);
   });
@@ -159,6 +216,50 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   // The owner holds this page when the server says it is paused, however it got there.
   const owned = live && !!status?.session && status.state === 'paused';
   const hand = owned && driving && status?.session?.id === driving ? driving : null;
+  /*
+   * Reattach after a reload. The hand is this tab's socket, and a reload loses
+   * it while the server still says the page is the owner's: the picture shows
+   * and nothing reaches it. On a desktop the tab asks for the hand again by
+   * itself, once per page; a phone keeps "Drive it here", where taking the
+   * hand from a desk across the room is not what a glance at the page means.
+   * An app window has no hand to ask for.
+   */
+  const ownedId = owned ? status?.session?.id ?? null : null;
+  useEffect(() => {
+    if (!ownedId || driving === ownedId || touch || busy || status?.route === 'apps') return;
+    if (asked.current === ownedId) return;
+    takeOver();
+  }, [ownedId, driving, touch]);
+  useEffect(() => { if (!owned) asked.current = null; }, [owned]);
+
+  /* ---- the window ---- */
+  const [enlarged, setEnlarged] = useState(false);
+  useEffect(() => {
+    const open = (): void => setEnlarged(true);
+    window.addEventListener(BROWSER_ENLARGE_EVENT, open);
+    return () => window.removeEventListener(BROWSER_ENLARGE_EVENT, open);
+  }, []);
+  useEffect(() => {
+    if (!enlarged) return undefined;
+    // Esc closes, unless something inside took it first: the page being driven, the address field.
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape' && !event.defaultPrevented) setEnlarged(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [enlarged]);
+  /** Where the held page is now, as its frames say; the last observation until one does. */
+  const [location, setLocation] = useState<string | null>(null);
+  const [navigating, setNavigating] = useState(false);
+  useEffect(() => { setLocation(null); setNavigating(false); }, [hand]);
+  useEffect(() => {
+    if (!navigating) return undefined;
+    const timer = window.setTimeout(() => setNavigating(false), NAV_SPIN_MS);
+    return () => window.clearTimeout(timer);
+  }, [navigating]);
+  const onLocation = (url: string): void => { setLocation(url); setNavigating(false); };
+  const nav = (action: HandNav, url?: string): void => {
+    setFailure(null);
+    if (handRef.current?.nav(action, url)) setNavigating(true);
+  };
 
   /* ---- what the header says ---- */
   const taking = owned;
@@ -172,9 +273,20 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
     : done ? `${agentName} looked at ${site} · done${closedAt ? ` at ${fmtClock(new Date(closedAt), zone)}` : ''}`
     : shown ? lookingLine(shown) : 'Opening the page…';
   const src = live ? (shown ? screenshotUrl(shown, tick) : null) : frame;
+  const app = shown?.route === 'apps';
+  const address = hand ? location ?? shown?.page?.url : shown?.page?.url;
+  const loading = live && (navigating || (!taking && !!status?.busy));
+  const enlarge = shown || live ? (
+    <button type="button" className="ui-icon-btn br-enlarge" data-size="sm"
+      aria-label={enlarged ? 'Back to the side' : 'Enlarge the page'} title={enlarged ? 'Back to the side (Esc)' : 'Enlarge the page'}
+      onClick={() => setEnlarged(!enlarged)}>
+      <Icon name={enlarged ? 'collapse' : 'expand'} />
+    </button>
+  ) : null;
 
   return (
-    <div className="br-canvas" data-testid="browser-view" data-live={live ? 'true' : 'false'}>
+    <div className="br-canvas" data-testid="browser-view" data-live={live ? 'true' : 'false'} data-enlarged={enlarged ? 'true' : undefined}
+      {...(enlarged ? { role: 'dialog', 'aria-modal': true, 'aria-label': 'The page, full size' } : {})}>
       <header className="br-head">
         <span className="br-tile" aria-hidden="true">{paused ? <GlobeGlyph /> : tileLetter(shown)}</span>
         <span className="br-head-text">
@@ -183,20 +295,22 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
         </span>
         {taking ? (
           <Toolbar align="end">
-            {hand ? <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Keyboard</Button>
+            {hand ? (touch ? <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Type into the page</Button> : null)
               : <Button size="sm" variant="ghost" disabled={busy} onClick={takeOver}>Drive it here</Button>}
             <Button size="sm" variant="accent" disabled={busy} onClick={giveBack}>Give it back</Button>
+            {enlarge}
           </Toolbar>
         ) : paused ? (
           <Button size="sm" variant="accent" disabled={busy} onClick={() => void act(async () => { await api.browserControl('resume'); })}>Resume</Button>
-        ) : done || !session ? null : (
+        ) : done || !session ? (enlarge ? <Toolbar align="end">{enlarge}</Toolbar> : null) : (
           <Toolbar align="end">
             <Button size="sm" disabled={busy || !shown?.enabled} onClick={stopPage}>Stop</Button>
             <Button size="sm" variant={waiting ? 'accent' : undefined} disabled={busy || !shown?.enabled || shown?.state === 'paused'} onClick={takeOver}>Take over</Button>
+            {enlarge}
           </Toolbar>
         )}
       </header>
-      {taking ? <p className="br-hand-said" role="status">{hand ? `Nothing you type here is kept. ${agentName} carries on when you give it back.` : `${agentName} waits. It carries on when you give the page back.`}</p> : null}
+      {taking ? <p className="br-hand-said" role="status">{hand ? `Nothing you type here is kept. ${agentName} carries on when you give it back.${touch ? ' Tap Type into the page to bring up your keyboard.' : ''}` : `${agentName} waits. It carries on when you give the page back.`}</p> : null}
       {failure || error ? <Notice tone="critical" role="alert">{failure ?? error}</Notice> : null}
       {note ? <Notice tone="warning" role="status">{note}</Notice> : null}
       {offline ? (
@@ -207,11 +321,22 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
       ) : null}
       {paused ? (
         <div className="br-frame br-frame-empty"><p className="ui-empty">{`No page is open. Agents look again when you resume${paused.until ? `, or by themselves at ${fmtClock(new Date(paused.until), zone)}` : ''}.`}</p></div>
-      ) : hand ? (
-        <div className="br-frame" data-state="yours">
-          <RemoteHand sessionId={hand} csrf={csrfToken()} onGiveBack={giveBack} bare typing={typing} onTyping={setTyping} />
-        </div>
       ) : (
+        <div className="br-window" data-state={hand ? 'yours' : waiting ? 'waiting' : done ? 'done' : 'live'}>
+          <WindowBar
+            app={app ? site : null}
+            title={shown?.page?.title || undefined}
+            address={address}
+            held={!!hand}
+            loading={loading}
+            onNav={nav}
+            onRefused={(message) => setFailure(message)}
+          />
+          {hand ? (
+            <div className="br-frame" data-state="yours">
+              <RemoteHand ref={handRef} sessionId={hand} csrf={csrfToken()} onGiveBack={giveBack} bare typing={typing} onTyping={setTyping} onLocation={onLocation} />
+            </div>
+          ) : (
         <div className="br-frame" data-state={waiting ? 'waiting' : done ? 'done' : 'live'}>
           {src ? (
             <img
@@ -224,11 +349,102 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
             />
           ) : <p className="ui-empty br-frame-wait">{live ? 'The page appears here as soon as it opens.' : 'No picture of this page was kept.'}</p>}
         </div>
+          )}
+        </div>
       )}
       {done ? <p className="br-ended" role="status">The page is closed. This is the last thing it showed.</p>
         : live && stalled ? <p className="br-ended" role="status">The newest picture didn’t load. Showing the one before it.</p> : null}
     </div>
   );
+}
+
+/**
+ * The window's bar: back, forward, reload, the address, the title.
+ *
+ * Asleep while the agent drives (the buttons are drawn, disabled, so the frame
+ * reads as a browser rather than a screenshot) and the address copies on a
+ * click. Awake while the owner holds the page: the buttons go down the hand,
+ * and the address is a field — Enter goes there, Esc puts it back.
+ */
+function WindowBar({ app, title, address, held, loading, onNav, onRefused }: {
+  app: string | null;
+  title?: string;
+  address?: string;
+  held: boolean;
+  loading: boolean;
+  onNav: (action: HandNav, url?: string) => void;
+  onRefused: (message: string) => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => { setDraft(null); }, [address, held]);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = window.setTimeout(() => setCopied(false), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  const parts = addressParts(address);
+  const copy = (): void => {
+    if (!address) return;
+    void navigator.clipboard?.writeText(address).then(() => setCopied(true), () => undefined);
+  };
+  const go = (event: FormEvent): void => {
+    event.preventDefault();
+    if (draft === null) return;
+    const url = addressFrom(draft);
+    if (!url) { onRefused('That isn’t a web address. Type one like amazon.com/orders.'); return; }
+    setDraft(null);
+    onNav('navigate', url);
+    (document.activeElement as HTMLElement | null)?.blur?.();
+  };
+  const escape = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    setDraft(null);
+    event.currentTarget.blur();
+  };
+  return (
+    <div className="br-window-bar" role="toolbar" aria-label="Page controls">
+      {app ? <span className="br-window-app">{app}</span> : (
+        <>
+          <span className="br-window-nav">
+            <button type="button" className="ui-icon-btn" data-size="sm" aria-label="Back" title="Back" disabled={!held} onClick={() => onNav('back')}><Icon name="back" /></button>
+            <button type="button" className="ui-icon-btn" data-size="sm" aria-label="Forward" title="Forward" disabled={!held} onClick={() => onNav('forward')}><Icon name="forward" /></button>
+            <button type="button" className="ui-icon-btn" data-size="sm" aria-label="Reload" title="Reload" disabled={!held} onClick={() => onNav('reload')}><Icon name="reload" /></button>
+          </span>
+          {held ? (
+            <form className="br-address" data-editable="true" onSubmit={go}>
+              <AddressMark secure={parts?.secure ?? false} />
+              <input
+                className="br-address-input"
+                aria-label="Address"
+                value={draft ?? address ?? ''}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={escape}
+              />
+              <button type="button" className="br-address-copy" aria-label={copied ? 'Copied' : 'Copy the address'} title={copied ? 'Copied' : 'Copy the address'} disabled={!address} onClick={copy}><Icon name={copied ? 'check' : 'copy'} size={14} /></button>
+            </form>
+          ) : (
+            <button type="button" className="br-address" aria-label={copied ? 'Address copied' : 'Copy the address'} title={copied ? 'Copied' : 'Copy the address'} disabled={!address} onClick={copy}>
+              <AddressMark secure={parts?.secure ?? false} />
+              <span className="br-address-text">{parts ? <><span className="br-address-host">{parts.host}</span><span className="br-address-rest">{parts.rest}</span></> : <span className="br-address-rest">No address yet</span>}</span>
+              {copied ? <span className="br-address-said" aria-hidden="true">Copied</span> : null}
+            </button>
+          )}
+        </>
+      )}
+      {title ? <span className="br-window-title" title={title}>{title}</span> : null}
+      {loading ? <span className="br-window-progress" role="progressbar" aria-label="Loading" /> : null}
+    </div>
+  );
+}
+
+function AddressMark({ secure }: { secure: boolean }): JSX.Element {
+  return <span className="br-address-mark" aria-hidden="true"><Icon name={secure ? 'lock' : 'globe'} size={12} /></span>;
 }
 
 function GlobeGlyph(): JSX.Element {
@@ -251,7 +467,7 @@ export function BrowserMenu({ status, timezone, reload }: { status: BrowserStatu
       { label: 'Until I say', hint: 'Until you press Resume', onSelect: () => run(() => api.browserControl('stop', undefined, { forever: true })) },
       'separator',
       status?.settings && !status.settings.showWindow ? { label: 'Show the window', hint: 'A window on this machine, for sites that refuse a hidden browser', onSelect: () => run(() => api.browserSettings({ showWindow: true })) } : null,
-      { label: 'Open the full page view', hint: 'Every page agents have open', onSelect: () => { window.location.hash = '#/browser'; } },
+      { label: 'Open the full page view', hint: 'This page over the whole window; Esc comes back', onSelect: () => { window.dispatchEvent(new Event(BROWSER_ENLARGE_EVENT)); } },
     ]} />
   );
 }

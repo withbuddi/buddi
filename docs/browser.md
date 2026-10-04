@@ -249,8 +249,15 @@ amazon.com · in buddi's browser*, *· in your Chrome · background tab*,
 sign-in*. **Stop** closes this conversation's page; **Take over** (the accent
 while it waits for you) puts the remote hand in the same frame — *You have the
 page*, *Nothing you type here is kept. Home Manager carries on when you give it
-back*, **Keyboard** · **Give it back**. No step list, counter, mode or
-observation time. While a Stop holds, a conversation that asked for a page
+back*, **Give it back** (and, on a phone, **Type into the page** to raise the
+keyboard). The picture sits in a small browser window: back, forward, reload
+and the address on a bar above it, asleep while the agent drives (a click on
+the address copies it) and live while you hold a page in buddi's browser — the
+buttons and a typed address go down the remote hand as `nav` input, through the
+same address check an agent's navigate passes. An Enlarge button (and ⋯ → full
+page view) opens the same window over the whole dashboard; Esc brings it back.
+After a dashboard reload with a page in your hands, a desktop reattaches the
+hand by itself. No step list, counter, mode or observation time. While a Stop holds, a conversation that asked for a page
 shows *Browsing is paused* with **Resume** there too.
 
 **The cards.** One at a time in the dock above the composer (and in the corner
@@ -515,7 +522,8 @@ agent, task, URL, step budget and latest page snapshot.
 In chat, an open page also opens a **Page** tab in the right-hand canvas,
 beside charts and artifacts. It follows only the selected agent and conversation,
 updates the picture after actions, and holds Stop and Take over; ⋯ on the strip
-holds Stop agents' browsing, Show the window and the full page view. You can
+holds Stop agents' browsing, Show the window and the full page view (the Page
+tab enlarged over the whole window). You can
 switch canvas tabs without the polling pulling you back. On smaller screens, use
 the chat's Canvas button. When the page closes the tab keeps its last picture,
 unpinned.
@@ -568,8 +576,8 @@ browser" and Playwright — the Page tab answers it with a live picture of the
 page and takes your pointer and keyboard on it, so a login, an MFA prompt or a
 consent banner can be dealt with from a phone instead of by walking to the
 machine. A thin bar over the picture says *You are driving. Nothing you type
-here is kept*, with **Give it back** beside it and a **Keyboard** toggle that
-raises a phone's keyboard. **Give it back** is `resume`: the agent's evidence is
+here is kept*, with **Give it back** beside it and, on a phone, a **Type into
+the page** toggle that raises the keyboard. **Give it back** is `resume`: the agent's evidence is
 invalidated and it must observe again before acting.
 
 **With no browser connected.** In "Your browser" mode with the extension
