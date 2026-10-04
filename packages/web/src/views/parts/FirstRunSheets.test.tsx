@@ -129,6 +129,7 @@ describe('the calendar sheet', () => {
         plugin.row = { id: `s${plugin.started}`, url: `https://accounts.google.com/o/${plugin.started}`, state: 'waiting', note: '', problem: '' };
       }
       if (body.tool === 'calendar.google_finish') plugin.found = 3;
+      if (body.tool === 'calendar.google_cancel' && plugin.row?.id === (body.args as { id?: string }).id) plugin.row = null;
       return { result: { note: '' } };
     });
     return plugin;
@@ -203,6 +204,55 @@ describe('the calendar sheet', () => {
     fireEvent.click(within(s).getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalled();
     expect(api.pageAct).toHaveBeenCalledWith('calendar', { tool: 'calendar.google_cancel', args: { id: 's2' } });
+  });
+
+  it('uses a Google sign-in already waiting instead of starting one, which would drop it', async () => {
+    const plugin = googlePlugin();
+    plugin.row = { id: 'theirs', url: 'https://accounts.google.com/o/theirs', state: 'waiting', note: '', problem: '' };
+    render(<CalendarSheet onClose={vi.fn()} onLinked={vi.fn()} />);
+    const s = await sheet(SHEETS.calendar.sheet);
+    expect(await within(s).findByRole('link', { name: SHEETS.calendar.google })).toHaveAttribute('href', 'https://accounts.google.com/o/theirs');
+    expect(plugin.started).toBe(0);
+    expect(api.pageAct).not.toHaveBeenCalledWith('calendar', expect.objectContaining({ tool: 'calendar.google_sign_in' }));
+  });
+
+  it('drops the prepared sign-in when the sheet goes away without Close, and keeps a pressed one', async () => {
+    googlePlugin();
+    const first = render(<CalendarSheet onClose={vi.fn()} onLinked={vi.fn()} />);
+    await within(await sheet(SHEETS.calendar.sheet)).findByRole('link', { name: SHEETS.calendar.google });
+    first.unmount();
+    expect(api.pageAct).toHaveBeenCalledWith('calendar', { tool: 'calendar.google_cancel', args: { id: 's1' } });
+
+    vi.mocked(api.pageAct).mockClear();
+    const second = render(<CalendarSheet onClose={vi.fn()} onLinked={vi.fn()} />);
+    const s = await sheet(SHEETS.calendar.sheet);
+    fireEvent.click(await within(s).findByRole('link', { name: SHEETS.calendar.google }));
+    await within(s).findByText(SHEETS.calendar.waiting);
+    second.unmount();
+    expect(api.pageAct).not.toHaveBeenCalledWith('calendar', expect.objectContaining({ tool: 'calendar.google_cancel' }));
+  });
+
+  it('prepares it again when the tab comes back to the front after the prepared one got old', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const state = vi.spyOn(document, 'visibilityState', 'get');
+    try {
+      const plugin = googlePlugin();
+      render(<CalendarSheet onClose={vi.fn()} onLinked={vi.fn()} />);
+      const s = await sheet(SHEETS.calendar.sheet);
+      expect(await within(s).findByRole('link', { name: SHEETS.calendar.google })).toHaveAttribute('href', 'https://accounts.google.com/o/1');
+      // Back in front soon after: nothing to do.
+      state.mockReturnValue('visible');
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+      expect(plugin.started).toBe(1);
+      // A background tab's timer did not fire; the clock moved on all the same.
+      vi.setSystemTime(Date.now() + SIGN_IN_PREPARE_MS + 1_000);
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+      await waitFor(() => expect(within(s).getByRole('link', { name: SHEETS.calendar.google })).toHaveAttribute('href', 'https://accounts.google.com/o/2'));
+      expect(plugin.started).toBe(2);
+    } finally {
+      state.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('names a pasted link after where it points', () => {

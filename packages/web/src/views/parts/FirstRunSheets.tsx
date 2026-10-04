@@ -420,32 +420,62 @@ export function CalendarSheet({ onClose, onLinked }: { onClose: () => void; onLi
   const opened = useRef(false);
   const refresher = useRef<number | undefined>(undefined);
   const googleAvailable = settings?.googleAvailable === true;
+  /** The prepared sign-in as the effect's cleanup sees it, and when it was prepared. */
+  const preparedRef = useRef<{ id: string; at: number } | null>(null);
   useEffect(() => {
     if (!googleAvailable) return undefined;
     let stopped = false;
-    const prepare = async (): Promise<void> => {
+    /*
+     * `calendar.google_sign_in` drops every sign-in still pending before it
+     * starts one, so it is not called while one is already waiting with an
+     * address (the settings page's, a sheet opened again): that one is used.
+     * Only a refresh — the prepared one getting old — starts a fresh one.
+     */
+    const prepare = async (fresh: boolean): Promise<void> => {
       if (stopped || opened.current) return;
+      window.clearTimeout(refresher.current);
       try {
-        await api.pageAct('calendar', { tool: 'calendar.google_sign_in', args: {} });
-        const answer = await api.pageQuery<{ rows?: SignInRow[] }>('calendar', 'sign_in');
+        const waiting = (rows: SignInRow[] | undefined): SignInRow | undefined => {
+          const row = rows?.[0];
+          return row && row.state === 'waiting' && row.url ? row : undefined;
+        };
+        let row = fresh ? undefined : waiting((await api.pageQuery<{ rows?: SignInRow[] }>('calendar', 'sign_in')).data?.rows);
+        if (!row) {
+          if (stopped || opened.current) return;
+          await api.pageAct('calendar', { tool: 'calendar.google_sign_in', args: {} });
+          row = waiting((await api.pageQuery<{ rows?: SignInRow[] }>('calendar', 'sign_in')).data?.rows);
+        }
         if (stopped || opened.current) return;
-        const row = answer.data?.rows?.[0];
-        if (!row || row.state !== 'waiting' || !row.url) throw new Error('no address to open');
+        if (!row) throw new Error('no address to open');
+        preparedRef.current = { id: row.id, at: Date.now() };
         setPrepared({ id: row.id, url: row.url });
         setPrepareFailed(false);
-        refresher.current = window.setTimeout(() => void prepare(), SIGN_IN_PREPARE_MS);
+        refresher.current = window.setTimeout(() => void prepare(true), SIGN_IN_PREPARE_MS);
       } catch {
         // The press starts it instead, the slower way.
         if (!stopped) {
+          preparedRef.current = null;
           setPrepared(null);
           setPrepareFailed(true);
         }
       }
     };
-    void prepare();
+    // A tab in the back has its timers slowed: back in front, an old one is prepared again.
+    const visible = (): void => {
+      const current = preparedRef.current;
+      if (document.visibilityState !== 'visible' || !current || opened.current) return;
+      if (Date.now() - current.at >= SIGN_IN_PREPARE_MS) void prepare(true);
+    };
+    document.addEventListener('visibilitychange', visible);
+    void prepare(false);
     return () => {
       stopped = true;
       window.clearTimeout(refresher.current);
+      document.removeEventListener('visibilitychange', visible);
+      // Prepared and never pressed: dropped, so no sign-in is left behind the sheet.
+      const left = preparedRef.current;
+      preparedRef.current = null;
+      if (left && !opened.current) void api.pageAct('calendar', { tool: 'calendar.google_cancel', args: { id: left.id } }).catch(() => undefined);
     };
   }, [googleAvailable, round]);
 
