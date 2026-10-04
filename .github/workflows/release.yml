@@ -108,6 +108,26 @@ jobs:
           gh release create "$GITHUB_REF_NAME" $pre --title "buddi ${{ steps.v.outputs.version }}" \
             --notes "$notes" \
             "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install-linux.sh
+      - name: Tell withbuddi.com
+        # The site's "Release check" workflow reads npm and bumps its version
+        # badge; a repository_dispatch runs it now instead of at the next hourly
+        # tick. Needs SITE_DISPATCH_TOKEN: a fine-grained token for
+        # withbuddi/buddi-site with Contents: read and write. Without it, a
+        # notice; the hourly check still catches up.
+        if: steps.v.outputs.tag == 'latest'
+        env:
+          TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::SITE_DISPATCH_TOKEN is not set; withbuddi.com picks up $VERSION at its next hourly check."
+            exit 0
+          fi
+          code=$(curl -s -o /tmp/dispatch.out -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/withbuddi/buddi-site/dispatches \
+            -d "{\"event_type\":\"buddi-released\",\"client_payload\":{\"version\":\"$VERSION\"}}")
+          if [ "$code" = "204" ]; then echo "withbuddi.com told about $VERSION"; else echo "::warning::site dispatch answered $code: $(head -c 300 /tmp/dispatch.out)"; fi
 
   # buddi.app, phase 2 of the Mac app (apps/mac/README.md). Skipped with a
   # notice, never failed, while the signing secrets are not in the repository:
