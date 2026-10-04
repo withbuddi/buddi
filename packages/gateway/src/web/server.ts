@@ -324,6 +324,7 @@ import { StreamBudget, frame, resumeCursor, streamConversation } from './stream.
 import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
 import { LOCKED_BODY, LockUnavailable, allowedWhileLocked, clientOf, createLock } from './lock.js';
+import { acknowledgePassphrase, passphraseNotice, type PassphraseNoticeDeps } from './passphrase-notice.js';
 import { matchApiRoute, TOKEN_REFUSALS } from './api-routes.js';
 import { QUIET_UNAVAILABLE_TEXT, pluginCommands } from './composer.js';
 import { createEngagementHooks } from '../missions/engagement.js';
@@ -1571,6 +1572,14 @@ export function createWebApp(deps: WebServerDeps): Server {
       env: deps.env ?? process.env,
       log,
     });
+    /** Home's passphrase card: the backups, the words, and where "I saved it" is kept. */
+    const noticeDeps = (): PassphraseNoticeDeps => ({
+      pool: deps.pool,
+      listBackups: () => listBackups(backupDeps()),
+      passphrase: () => passphraseRoute(backupDeps(), 'GET'),
+      now: deps.now,
+      log,
+    });
     /** What the plugin page routes need: the registry, and the owner's context. */
     const pagesDeps = (): PagesDeps => ({ registry: deps.registry, ctx: deps.ctx, now: deps.now, log });
     const agentOffersDeps = (): AgentOffersDeps => ({
@@ -2279,8 +2288,15 @@ export function createWebApp(deps: WebServerDeps): Server {
           return reply(res, await listBackups(backupDeps()));
         case '/api/backups/schedule':
           return reply(res, await scheduleRoute(backupDeps(), 'GET'));
-        case '/api/backups/passphrase':
+        case '/api/backups/passphrase': {
+          // Behind the PIN when there is one: Settings → Backup reveals it with POST …/reveal.
+          const allowed = await lock.verify(undefined);
+          if (!allowed.ok) return sendJson(res, 403, { error: 'Type your PIN to see the passphrase.', needsPin: true });
           return reply(res, await passphraseRoute(backupDeps(), 'GET'));
+        }
+        /* Home's card after the first encrypted backup, until "I saved it" (web/passphrase-notice.ts). */
+        case '/api/backups/passphrase/notice':
+          return sendJson(res, 200, await passphraseNotice(noticeDeps()));
         /*
          * Plugins: what is installed, what is staged and waiting to be read,
          * and the trust sentence the page shows above the install field. A
@@ -3641,6 +3657,12 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (path === '/api/upgrade') return reply(res, await upgradeRoute(versionDeps(), body));
 
     if (path === '/api/backups') return reply(res, await createBackupRoute(backupDeps(), body));
+    if (path === '/api/backups/passphrase/notice') return sendJson(res, 200, await acknowledgePassphrase({ pool: deps.pool, now: deps.now }));
+    if (path === '/api/backups/passphrase/reveal') {
+      const allowed = await lock.verify((body as { pin?: unknown }).pin);
+      if (!allowed.ok) return sendJson(res, allowed.status, allowed.body);
+      return reply(res, await passphraseRoute(backupDeps(), 'GET'));
+    }
     if (path === '/api/backups/verify') return reply(res, await verifyBackupRoute(backupDeps(), body));
     if (path === '/api/backups/restore') {
       return reply(res, await restoreRoute(backupDeps(), {

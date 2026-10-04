@@ -933,7 +933,10 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   { method: 'GET', path: '/api/backups/schedule', area: 'system', summary: 'The backup schedule.' },
   { method: 'PUT', path: '/api/backups/schedule', area: 'system', summary: 'Change the backup schedule.', errors: '400; 409 a checkout schedules its own' },
-  { method: 'GET', path: '/api/backups/passphrase', area: 'system', token: 'secret', summary: 'The backup passphrase.', answer: '{ passphrase }' },
+  { method: 'GET', path: '/api/backups/passphrase', area: 'system', token: 'secret', summary: 'The backup passphrase. Refused while a lock-screen PIN is set: use POST …/reveal.', answer: '{ passphrase }', errors: '403 { needsPin: true }' },
+  { method: 'POST', path: '/api/backups/passphrase/reveal', area: 'system', token: 'secret', summary: 'The backup passphrase, behind the lock-screen PIN when there is one (counted like an unlock try).', body: '{ pin?: string }', answer: '{ passphrase }', errors: '403 wrong or missing PIN; 429 too many tries' },
+  { method: 'GET', path: '/api/backups/passphrase/notice', area: 'system', token: 'secret', summary: 'Home\'s passphrase card: the six words once an encrypted backup exists, until they are acknowledged.', answer: '{ show: false } or { show: true, passphrase }' },
+  { method: 'POST', path: '/api/backups/passphrase/notice', area: 'system', summary: '"I saved it": the passphrase card goes for good.', answer: '{ acknowledgedAt }' },
   { method: 'PUT', path: '/api/backups/passphrase', area: 'system', token: 'secret', summary: 'Set the backup passphrase.', body: '{ passphrase: string }', errors: '400' },
   { method: 'GET', path: '/api/recovery', area: 'system', summary: 'After a restore: the checklist to get through (active: false otherwise).' },
   {
@@ -1259,6 +1262,9 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'POST /api/backups/passphrase/reveal': '0.1.0-pre.41',
+  'GET /api/backups/passphrase/notice': '0.1.0-pre.41',
+  'POST /api/backups/passphrase/notice': '0.1.0-pre.41',
   'GET /api/access': '0.1.0-pre.38',
   'GET /api/access/tailscale': '0.1.0-pre.38',
   'PUT /api/access/tailscale': '0.1.0-pre.38',

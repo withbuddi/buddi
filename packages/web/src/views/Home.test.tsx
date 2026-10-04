@@ -37,6 +37,8 @@ vi.mock('../api', async (importOriginal) => {
       tips: vi.fn(async () => ({ tips: [], enabled: true })),
       catalogue: vi.fn(async () => ({ agents: [], fromPlugins: [], delisted: [] })),
       plugins: vi.fn(async () => ({ installed: [], staged: [], trust: '', restartNeeded: false, checkout: false })),
+      passphraseNotice: vi.fn(async () => ({ show: false })),
+      acknowledgePassphrase: vi.fn(async () => ({ acknowledgedAt: '2026-09-21T09:00:00Z' })),
     },
     chatApi: {
       ...original.chatApi,

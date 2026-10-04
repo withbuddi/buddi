@@ -461,6 +461,54 @@ function ArchiveRow({
  */
 const CHECKOUT_LINE = 'Restoring needs the packaged installation. In a checkout, run: buddi backup restore <file>';
 
+/** The words in a `.passphrase.txt` (what uninstall writes beside a backup), or a bare one-line file. */
+export function passphraseFromText(text: string): string | undefined {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '');
+  const body = lines[0] === 'buddi backup passphrase' ? lines[1] : lines.length === 1 ? lines[0] : undefined;
+  return body === undefined || body === '' ? undefined : body;
+}
+
+/** A small text file's contents (FileReader: older WebKit and jsdom have no `File.text`). */
+function readTextFile(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('unreadable'));
+    reader.readAsText(file);
+  });
+}
+
+/**
+ * "Read it from the .passphrase.txt beside it": uninstall leaves
+ * `<archive>.passphrase.txt` next to the last backup, and a browser cannot
+ * look beside a chosen file by itself, so the owner picks that one too.
+ */
+function PassphraseFromFile({ archive, onPassphrase }: { archive?: string; onPassphrase: (next: string) => void }): JSX.Element {
+  const [said, setSaid] = useState<string | null>(null);
+  return (
+    <Field
+      label="Or read it from its .passphrase.txt"
+      hint={said ?? (archive ? `Uninstall leaves ${archive}.passphrase.txt beside the backup it took.` : 'Uninstall leaves one beside the backup it took.')}
+    >
+      <input
+        type="file"
+        accept=".txt,text/plain"
+        aria-label="The passphrase file"
+        onChange={(event) => {
+          const chosen = event.target.files?.[0];
+          if (!chosen) return;
+          void readTextFile(chosen).then((text) => {
+            const phrase = passphraseFromText(text);
+            if (phrase === undefined) { setSaid(`${chosen.name} has no passphrase in it.`); return; }
+            onPassphrase(phrase);
+            setSaid(`Read from ${chosen.name}.`);
+          }, () => setSaid(`${chosen.name} could not be read.`));
+        }}
+      />
+    </Field>
+  );
+}
+
 /** What is about to be replaced, and the word that says you meant it. */
 function Confirm({
   what,
@@ -494,9 +542,12 @@ function Confirm({
         restore that fails puts it back.
       </Notice>
       {needsPassphrase ? (
-        <Field label="The passphrase this one was locked with">
-          <input type="password" autoComplete="off" value={passphrase} onChange={(event) => onPassphrase(event.target.value)} />
-        </Field>
+        <>
+          <Field label="The passphrase this one was locked with">
+            <input type="password" autoComplete="off" value={passphrase} onChange={(event) => onPassphrase(event.target.value)} />
+          </Field>
+          <PassphraseFromFile onPassphrase={onPassphrase} />
+        </>
       ) : null}
       <Field
         label={asked ? `Type ${asked} to confirm` : 'Type the name of this database to confirm'}
@@ -526,13 +577,19 @@ function Passphrase(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [needsPin, setNeedsPin] = useState(false);
+  const [pin, setPin] = useState('');
   const reveal = (): void => {
     setBusy(true);
     setFailed(null);
     api
-      .backupPassphrase()
-      .then((answer) => setShown(answer.passphrase))
-      .catch((error: unknown) => setFailed(error instanceof ApiError ? error.message : String(error)))
+      .revealBackupPassphrase(needsPin ? pin : undefined)
+      .then((answer) => { setShown(answer.passphrase); setNeedsPin(false); setPin(''); })
+      .catch((error: unknown) => {
+        // The first press finds out whether there is a PIN; the field appears then.
+        if (error instanceof ApiError && error.status === 403 && !needsPin) { setNeedsPin(true); return; }
+        setFailed(error instanceof ApiError ? error.message : String(error));
+      })
       .finally(() => setBusy(false));
   };
   const replace = (): void => {
@@ -556,13 +613,34 @@ function Passphrase(): JSX.Element {
             <ErrorBanner message={failed} />
             <p className="ui-card-meta">This is the only thing that opens an encrypted backup. Write it down.</p>
             {shown ? (
-              <p className="backup-phrase mono">{shown}</p>
+              <>
+                <p className="backup-phrase mono">{shown}</p>
+                <Toolbar align="end">
+                  <Button variant="ghost" onClick={() => setShown(null)}>
+                    Hide
+                  </Button>
+                </Toolbar>
+              </>
             ) : (
-              <Toolbar align="end">
-                <Button disabled={busy} onClick={reveal}>
-                  Show it
-                </Button>
-              </Toolbar>
+              <>
+                {needsPin ? (
+                  <Field label="Your PIN" hint="The one that unlocks this dashboard.">
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={pin}
+                      onChange={(event) => setPin(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === 'Enter' && pin !== '') reveal(); }}
+                    />
+                  </Field>
+                ) : null}
+                <Toolbar align="end">
+                  <Button disabled={busy || (needsPin && pin === '')} onClick={reveal}>
+                    Reveal
+                  </Button>
+                </Toolbar>
+              </>
             )}
             {saved ? <Notice tone="good" role="status">Saved. Backups made from now on use it; older ones keep the one they were made with.</Notice> : null}
           </Stack>
@@ -634,6 +712,7 @@ function FromAFile({
                 <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
               </Field>
             </FormGrid>
+            {file?.name.endsWith('.age') ? <PassphraseFromFile archive={file.name} onPassphrase={setPassphrase} /> : null}
             {asking ? null : (
               <Toolbar align="end">
                 <Button variant="accent" disabled={busy || !file} onClick={() => setAsking(true)}>

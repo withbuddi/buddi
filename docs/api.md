@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-313 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+316 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -4197,7 +4197,10 @@ curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/telegram/
 | POST | `/api/backups/restore` | Restore a backup over this installation (typed-back confirmation required). | no |
 | GET | `/api/backups/schedule` | The backup schedule. | yes |
 | PUT | `/api/backups/schedule` | Change the backup schedule. | yes |
-| GET | `/api/backups/passphrase` | The backup passphrase. | no |
+| GET | `/api/backups/passphrase` | The backup passphrase. Refused while a lock-screen PIN is set: use POST …/reveal. | no |
+| POST | `/api/backups/passphrase/reveal` | The backup passphrase, behind the lock-screen PIN when there is one (counted like an unlock try). | no |
+| GET | `/api/backups/passphrase/notice` | Home's passphrase card: the six words once an encrypted backup exists, until they are acknowledged. | no |
+| POST | `/api/backups/passphrase/notice` | "I saved it": the passphrase card goes for good. | yes |
 | PUT | `/api/backups/passphrase` | Set the backup passphrase. | no |
 | GET | `/api/recovery` | After a restore: the checklist to get through (active: false otherwise). | yes |
 | POST | `/api/recovery/leave` | Leave recovery: drop pending work, keep the grants listed, restart. | no |
@@ -4414,14 +4417,53 @@ curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/backups/sche
 
 #### `GET /api/backups/passphrase`
 
-The backup passphrase.
+The backup passphrase. Refused while a lock-screen PIN is set: use POST …/reveal.
 
 - **Auth:** Dashboard session only. It reads or stores a secret.
 - **Answer:** `{ passphrase }`
+- **Errors:** 403 { needsPin: true }
 - **Since:** 0.1.0-pre.15
 
 ```sh
 curl -b cookies.txt "$BUDDI_URL/api/backups/passphrase"
+```
+
+#### `POST /api/backups/passphrase/reveal`
+
+The backup passphrase, behind the lock-screen PIN when there is one (counted like an unlock try).
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It reads or stores a secret.
+- **Body:** `{ pin?: string }`
+- **Answer:** `{ passphrase }`
+- **Errors:** 403 wrong or missing PIN; 429 too many tries
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/backups/passphrase/reveal"
+```
+
+#### `GET /api/backups/passphrase/notice`
+
+Home's passphrase card: the six words once an encrypted backup exists, until they are acknowledged.
+
+- **Auth:** Dashboard session only. It reads or stores a secret.
+- **Answer:** `{ show: false } or { show: true, passphrase }`
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -b cookies.txt "$BUDDI_URL/api/backups/passphrase/notice"
+```
+
+#### `POST /api/backups/passphrase/notice`
+
+"I saved it": the passphrase card goes for good.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `{ acknowledgedAt }`
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/backups/passphrase/notice"
 ```
 
 #### `PUT /api/backups/passphrase`

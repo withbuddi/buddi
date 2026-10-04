@@ -3011,6 +3011,11 @@ export const api = {
   backupSchedule: () => get<BackupSchedule>('/backups/schedule'),
   setBackupSchedule: (schedule: BackupSchedule) => put<BackupSchedule>('/backups/schedule', schedule),
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
+  /** The passphrase behind the lock-screen PIN (none needed when no PIN is set). */
+  revealBackupPassphrase: (pin?: string) => post<{ passphrase: string }>('/backups/passphrase/reveal', pin === undefined ? {} : { pin }),
+  /** Home's card after the first encrypted backup, until "I saved it". */
+  passphraseNotice: () => get<{ show: false } | { show: true; passphrase: string }>('/backups/passphrase/notice'),
+  acknowledgePassphrase: () => post<{ acknowledgedAt: string }>('/backups/passphrase/notice', {}),
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
   /* ---- plugins ---- */
   plugins: () => get<PluginsView>('/plugins'),

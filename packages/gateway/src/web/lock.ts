@@ -503,6 +503,17 @@ export function createLock(deps: LockDeps) {
     startLocked,
     /** The /api/lock* routes; null for a path that is not one. */
     route,
+    /**
+     * Step-up for one sensitive read (the backup passphrase's Reveal): the
+     * PIN checked and counted like an unlock try. `{ ok: true }` when there
+     * is no PIN at all; then the signed-in session is all there is.
+     */
+    async verify(pin: unknown): Promise<{ ok: true } | { ok: false; status: number; body: Record<string, unknown> }> {
+      const state = await current(true);
+      if (!state.pin) return { ok: true };
+      if (!isValidPin(pin)) return { ok: false, status: 403, body: { error: 'Type your PIN to see it.', needsPin: true } };
+      return await check(pin);
+    },
     /** Called with each session the moment it locks. Returns the unsubscribe. */
     onLocked(listener: Listener): () => void {
       listeners.add(listener);

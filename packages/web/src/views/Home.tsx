@@ -51,6 +51,7 @@ import { TipCard, previewTipOf } from './parts/TipCard';
 import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
 import { HomeGlances, useGlanceHiding } from './parts/HomeGlances';
 import { BirthdayCard } from './parts/BirthdayCard';
+import { PassphraseCard } from './parts/PassphraseCard';
 import { HomeWidgets, placedIds, useWidgets } from './parts/HomeWidgets';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 import { pluginTitle, type PluginPages } from '../pages/usePages';
@@ -202,6 +203,8 @@ export function Home({
       <TipsSection tips={tips} navigate={navigate} />
       {/* One quiet tip a day, when something in buddi has gone unused. */}
       <TipCard navigate={navigate} preview={previewTipOf(hash)} hidden={tips.open} />
+      {/* After the first backup: the six words, until "I saved it". */}
+      <PassphraseCard />
 
       {update && update.updateAvailable && !update.checkout && update.latest && !closed.is('update', update.latest) ? (
         <Notice tone="accent" action={<CloseButton label="Not now — tell me at the next version" onClick={() => closed.close('update', update.latest!)} />}>

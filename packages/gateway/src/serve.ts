@@ -980,6 +980,34 @@ export async function main(): Promise<void> {
     }, ORPHAN_SWEEP_MS);
     if (typeof orphanSweep.unref === 'function') orphanSweep.unref();
 
+    // The backup passphrase, once to the paired phone after the first encrypted
+    // backup (web/passphrase-notice.ts). Checked a minute after start and then
+    // every ten; after the one message (or none paired) it does nothing.
+    const passphrasePass = async (): Promise<void> => {
+      const { telegramPassphraseOnce } = await import('./web/passphrase-notice.js');
+      const { listBackups, passphraseRoute } = await import('./web/backups.js');
+      const { notifyOwner: telegramOwner } = await import('./telegram/notify.js');
+      const backupDeps = { env: process.env, log: (line: string) => console.error(line) };
+      await telegramPassphraseOnce({
+        pool,
+        listBackups: () => listBackups(backupDeps),
+        passphrase: () => passphraseRoute(backupDeps, 'GET'),
+        sendTelegram: async (text) => { await telegramOwner(text, { pool, env: process.env }); },
+        now,
+        log: (line) => console.error(line),
+      });
+    };
+    const passphraseTimer = setInterval(() => {
+      if (recovering) return;
+      void passphrasePass().catch((err) => console.error(`backup passphrase: the Telegram pass failed: ${err instanceof Error ? err.message : String(err)}`));
+    }, 10 * 60_000);
+    if (typeof passphraseTimer.unref === 'function') passphraseTimer.unref();
+    const passphraseFirst = setTimeout(() => {
+      if (recovering) return;
+      void passphrasePass().catch((err) => console.error(`backup passphrase: the Telegram pass failed: ${err instanceof Error ? err.message : String(err)}`));
+    }, 60_000);
+    if (typeof passphraseFirst.unref === 'function') passphraseFirst.unref();
+
     // The queue worker is what actually runs a mission. The scheduler decides
     // *when* and hands the occurrence over; the run itself is a durable job with
     // a lease, bounded retries and a failed-job inspection path — so a restart

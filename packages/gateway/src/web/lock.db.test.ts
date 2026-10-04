@@ -361,6 +361,24 @@ suite('the lock screen', () => {
     expect((await b.post('/api/lock/pin/remove', { current: '1357' })).body).toMatchObject({ pin: false });
   });
 
+  it('reveals the backup passphrase behind the PIN, counted like an unlock try', async () => {
+    const open = await browser();
+    // No PIN: the signed-in session is all there is.
+    expect((await open.post('/api/backups/passphrase/reveal', {})).body).toMatchObject({ passphrase: expect.any(String) });
+    await open.put('/api/lock/pin', { pin: '2468' });
+    const b = open;
+    const plain = await b.get('/api/backups/passphrase');
+    expect(plain.status).toBe(403);
+    expect(plain.body).toMatchObject({ needsPin: true });
+    expect((await b.post('/api/backups/passphrase/reveal', {})).status).toBe(403);
+    const wrong = await b.post('/api/backups/passphrase/reveal', { pin: '9999' });
+    expect(wrong.status).toBe(403);
+    expect(wrong.body).toMatchObject({ triesLeft: expect.any(Number) });
+    const right = await b.post('/api/backups/passphrase/reveal', { pin: '2468' });
+    expect(right.status).toBe(200);
+    expect(right.body!.passphrase.split(' ').length).toBeGreaterThanOrEqual(6);
+  });
+
   it('keeps the lock screen’s clock: Profile by default, picked formats, a second zone from a place or a town', async () => {
     const b = await browser();
     expect((await b.get('/api/lock')).body).toMatchObject({ clock: { time: 'profile', date: 'profile', zone: null } });

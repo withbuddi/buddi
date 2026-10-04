@@ -59,3 +59,39 @@ describe('restoring a backup', () => {
     expect(restartState()).toBeNull();
   });
 });
+
+describe('the passphrase', () => {
+  const PHRASE = 'able acid actor adult afraid agent';
+
+  it('Reveal asks for the PIN when one is set, then shows the words', async () => {
+    const { ApiError } = await import('../api');
+    vi.mocked(api.revealBackupPassphrase)
+      .mockRejectedValueOnce(new ApiError(403, 'Type your PIN to see it.'))
+      .mockResolvedValueOnce({ passphrase: PHRASE });
+    render(<Backup />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal' }));
+    const pin = await screen.findByLabelText('Your PIN');
+    expect(screen.queryByText(PHRASE)).not.toBeInTheDocument();
+    fireEvent.change(pin, { target: { value: '2468' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
+    expect(await screen.findByText(PHRASE)).toBeInTheDocument();
+    expect(vi.mocked(api.revealBackupPassphrase).mock.calls).toEqual([[undefined], ['2468']]);
+  });
+
+  it('Reveal shows the words at once when there is no PIN', async () => {
+    vi.mocked(api.revealBackupPassphrase).mockResolvedValueOnce({ passphrase: PHRASE });
+    render(<Backup />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal' }));
+    expect(await screen.findByText(PHRASE)).toBeInTheDocument();
+  });
+
+  it('the restore of a locked backup reads its .passphrase.txt', async () => {
+    vi.mocked(api.backups).mockResolvedValue({ dir: '/data/backups', archives: [{ ...ARCHIVE, name: 'buddi-backup-20260930-030000.tar.gz.age', encrypted: true, envelopeOk: true }], database: 'buddi', supervised: true });
+    render(<Backup />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore…' }));
+    const file = new File(['buddi backup passphrase\n\n' + PHRASE + '\n\nThese six words open it.\n'], 'buddi-backup-20260930-030000.tar.gz.age.passphrase.txt', { type: 'text/plain' });
+    fireEvent.change(screen.getByLabelText('The passphrase file'), { target: { files: [file] } });
+    expect(await screen.findByText(/Read from buddi-backup-20260930-030000\.tar\.gz\.age\.passphrase\.txt/)).toBeInTheDocument();
+    expect(screen.getByLabelText('The passphrase this one was locked with')).toHaveValue(PHRASE);
+  });
+});
