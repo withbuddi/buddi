@@ -85,6 +85,14 @@ export function restartDelay(failures: number): number { return Math.min(30_000,
  */
 export const HANDOVER_GRACE_MS = 5_000;
 
+/**
+ * Set to `1` by `buddi uninstall` with the service stopped: the supervisor
+ * brings up the database and its control socket for the last backup, and
+ * nothing else — no gateway (no Telegram, no jobs), no scheduled backup, no
+ * version check.
+ */
+export const BRIEF_SUPERVISOR_VAR = 'BUDDI_SUPERVISE_BRIEFLY';
+
 /** What `/status` reports; the CLI prints it verbatim. */
 export interface SupervisorStatus {
   phase: string | undefined;
@@ -409,6 +417,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
    * through a restart would outlive the process that was allowed to hold it.
    */
   const startEnv = { ...ctx.env };
+  const briefly = ctx.env[BRIEF_SUPERVISOR_VAR] === '1';
   const release = await acquireLock(ctx.data);
   let database: ManagedDatabase | undefined, server: Server | undefined, child: ChildProcess | undefined, retry: NodeJS.Timeout | undefined, log: WriteStream | undefined;
   let backup: BackupControl | undefined, scheduleTick: NodeJS.Timeout | undefined;
@@ -528,10 +537,10 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     // who meant to go through with it.
     const swept = await sweepIncoming(ready.data).catch(() => [] as string[]);
     if (swept.length > 0) console.error(`backup: discarded ${swept.length} uploaded archive(s) nobody restored from`);
-    scheduleTick = setInterval(() => {
+    if (!briefly) scheduleTick = setInterval(() => {
       void backup!.tick().catch(err => console.error(`backup: the schedule tick failed: ${err instanceof Error ? err.message : String(err)}`));
     }, 60_000);
-    if (typeof scheduleTick.unref === 'function') scheduleTick.unref();
+    if (typeof scheduleTick?.unref === 'function') scheduleTick.unref();
     // Upgrading runs here for the same reason backing up does, and one more:
     // the supervisor is the only process that survives the code being replaced
     // under it, because it is the one that hands over. See upgrade.ts.
@@ -624,7 +633,8 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       backup, upgrade, data: ready.data, uninstall, cli,
     });
     await listenOnSocket(server, supervisorSocket(ready.data));
-    if (migrationFailure === undefined) start();
+    if (briefly) console.error('supervisor: started briefly, for an uninstall\'s last backup; the gateway stays stopped.');
+    else if (migrationFailure === undefined) start();
     else console.error('supervisor: the gateway was not started; this installation is in upgrade-failed.');
     // The daily version check: once at start, now that the installation is up,
     // and then on the hour, which is only ever a question about the clock —
@@ -632,9 +642,11 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     const tick = (): void => {
       void upgrade!.tick().catch(err => console.error(`upgrade: the version check failed: ${err instanceof Error ? err.message : String(err)}`));
     };
-    upgradeTick = setInterval(tick, Number(ready.env.BUDDI_UPGRADE_TICK_MS) || TICK_INTERVAL_MS);
-    if (typeof upgradeTick.unref === 'function') upgradeTick.unref();
-    tick();
+    if (!briefly) {
+      upgradeTick = setInterval(tick, Number(ready.env.BUDDI_UPGRADE_TICK_MS) || TICK_INTERVAL_MS);
+      if (typeof upgradeTick.unref === 'function') upgradeTick.unref();
+      tick();
+    }
     console.log('Buddi supervisor ready.');
     await shutdown;
   } catch (error) {

@@ -83,6 +83,12 @@ export interface PackagedUninstallDeps {
     stopGateway: () => Promise<void>;
     /** The supervisor's backup, followed to the end: the archive's full path. */
     backup: () => Promise<string>;
+    /**
+     * With the service stopped: start this installation's supervisor without
+     * its gateway (the database and the control socket only), for the last
+     * backup. Resolves once it answers, with what stops it again.
+     */
+    startBriefly?: () => Promise<() => Promise<void>>;
   };
   /** The backup passphrase the vault keeps, read without making one; undefined only when the vault confirms there is none, and throws when the read failed. */
   passphrase: () => Promise<string | undefined>;
@@ -105,7 +111,16 @@ export interface PackagedUninstallDeps {
    * Present when a bot token is at hand. `collect` runs while the database is
    * still up (it reads the paired chats) and returns what clears the menu.
    */
-  telegram?: { collect: () => Promise<() => Promise<void>> };
+  telegram?: {
+    collect: () => Promise<() => Promise<void>>;
+    /** With the database out of reach: the menu cleared where the token alone (and the owner's chat in the environment) reaches. */
+    withoutChats?: () => Promise<void>;
+  };
+  /**
+   * buddi.app and this installation: `running` while the app runs it,
+   * `installed` when the app owns it but is quit; undefined for npm's.
+   */
+  buddiApp?: () => Promise<'running' | 'installed' | undefined>;
   /** The dashboard app, when it exists and this installation wrote it. */
   app?: string;
   /** buddi.app's command line tool shims that run this installation (cli-shim.ts), and how to remove one. */
@@ -137,6 +152,12 @@ function tooBroad(data: string, home: string): boolean {
 
 export const PACKAGE_LINE = 'Now remove the package: npm uninstall -g @withbuddi/buddi';
 
+/** The last line when buddi.app owns the installation: the app is what is left. */
+export const APP_LAST_LINE = 'Now move buddi.app to the Trash.';
+
+/** Refused while buddi.app runs the installation: the app would start it again, and its own route removes the app too. */
+export const APP_RUNNING_UNINSTALL = 'buddi.app is running this installation. Choose buddi → Uninstall buddi… in its menu (it also moves the app to the Trash), or quit buddi.app first and run buddi uninstall again. Nothing was removed.';
+
 export async function uninstallPackaged(options: UninstallOptions, deps: PackagedUninstallDeps): Promise<number> {
   const { data, home, io } = deps;
   const join = (...parts: string[]): string => path.join(data, ...parts);
@@ -157,6 +178,11 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
   if (mismatch !== undefined) {
     io.error(`${mismatch} Nothing was removed.`);
     io.error('Run this from the app\'s menu, or set BUDDI_DATA_DIR to the installation you mean.');
+    return 1;
+  }
+  const app = await deps.buddiApp?.().catch(() => undefined);
+  if (app === 'running') {
+    io.error(APP_RUNNING_UNINSTALL);
     return 1;
   }
   io.log(`Installation: ${data}`);
@@ -198,6 +224,26 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
       }
       stopped = true;
     } });
+  }
+
+  /*
+   * The Telegram bot's menu: the bot is the owner's, only buddi's menu goes.
+   * Cleared before the secrets, with the token read at the start; the paired
+   * chats are read while the database is up, else the token alone clears
+   * what it reaches.
+   */
+  let clearMenu: (() => Promise<void>) | undefined;
+  if (deps.telegram) {
+    const telegram = deps.telegram;
+    steps.push({
+      line: "the Telegram bot's command menu",
+      bestEffort: true,
+      run: async () => {
+        if (clearMenu) await clearMenu();
+        else if (telegram.withoutChats) await telegram.withoutChats();
+        else throw new Error('the paired chats could not be read');
+      },
+    });
   }
 
   /* The data directory. */
@@ -261,19 +307,6 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
     steps.push({ line: `the extension pairing record ${pairing}`, run: async () => { if (deps.exists(pairing)) await deps.remove(pairing); } });
   }
 
-  /* The Telegram bot's menu: the bot is the owner's, only buddi's menu goes. */
-  let clearMenu: (() => Promise<void>) | undefined;
-  if (deps.telegram) {
-    steps.push({
-      line: "the Telegram bot's command menu",
-      bestEffort: true,
-      run: async () => {
-        if (!clearMenu) throw new Error('the paired chats could not be read');
-        await clearMenu();
-      },
-    });
-  }
-
   const notes: string[] = [];
   const backingUp = options.backup && isInstallation && steps.length > 0;
   if (backingUp) {
@@ -282,12 +315,13 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
       : `First it takes one last backup and moves it to ${keptBackupsDir(home)}, where it stays.`);
   }
   if (options.keepData && hasData) notes.push(`The data directory ${data} stays as it is, with the secrets that open it, for a reinstall.`);
+  if (app === 'installed') notes.push('This installation is buddi.app\'s. buddi.app itself stays until you move it to the Trash.');
 
   const plan: UninstallPlan = {
     heading: `This removes buddi from ${machine}:`,
     steps,
     notes,
-    last: PACKAGE_LINE,
+    last: app === 'installed' ? APP_LAST_LINE : PACKAGE_LINE,
     prepare: async () => {
       const lines: string[] = [];
       // The vault that keeps the passphrase goes with the secrets (and with the data directory on Linux).
@@ -301,44 +335,63 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
           lines.push(`It is also in ${file} (only you can read it). Write the six words down, then delete that file.`);
         }
       };
-      if (backingUp) {
-        if (!(await deps.supervisor.answers())) {
+      /* With the service stopped, the supervisor is started briefly, without its gateway, and stopped again before anything goes. */
+      let stopBriefly: (() => Promise<void>) | undefined;
+      if (backingUp && !(await deps.supervisor.answers())) {
+        if (!deps.supervisor.startBriefly) {
           throw new Error('The service is not running, so the last backup could not be taken. Start it with buddi, or run buddi uninstall --no-backup.');
         }
-        io.log('Taking one last backup.');
-        const archive = await deps.supervisor.backup();
-        const envelope = archive.replace(/\.age$/, '.json');
-        let kept = archive;
-        if (options.keepData) {
-          lines.push(`The backup is ${archive}. It stays, with the rest of the data directory.`);
-        } else {
-          kept = path.join(keptBackupsDir(home), path.basename(archive));
-          await deps.move(archive, kept);
-          if (envelope !== archive && deps.exists(envelope)) await deps.move(envelope, path.join(keptBackupsDir(home), path.basename(envelope)));
-          lines.push(`The backup is ${kept}. It stays: uninstall does not touch that folder.`);
-        }
-        const copies: string[] = [];
-        if (options.copyTo !== undefined) {
-          const copy = path.join(options.copyTo, path.basename(kept));
-          await deps.copy(kept, copy);
-          const keptEnvelope = kept.replace(/\.age$/, '.json');
-          if (keptEnvelope !== kept && deps.exists(keptEnvelope)) await deps.copy(keptEnvelope, path.join(options.copyTo, path.basename(keptEnvelope)));
-          copies.push(copy);
-          lines.push(`A copy is ${copy}.`);
-        }
-        if (archive.endsWith('.age') && vaultGoes) {
-          const phrase = await passphraseBeforeRemoval(deps.passphrase, options.havePassphrase === true);
-          if (phrase !== undefined) await keepPhrase(phrase, [kept, ...copies]);
-        }
-      } else if (vaultGoes && !options.havePassphrase) {
-        // No last backup, but older ones may be locked with the words the vault is about to lose.
-        const phrase = await passphraseBeforeRemoval(deps.passphrase, false);
-        if (phrase !== undefined) {
-          await keepPhrase(phrase, [], loosePassphraseFile(options.copyTo ?? keptBackupsDir(home), now()));
-          lines.push('Pass --i-have-the-passphrase with --no-backup when you already have them.');
+        io.log('The service is stopped; starting buddi\'s database for the last backup (buddi itself stays stopped).');
+        try {
+          stopBriefly = await deps.supervisor.startBriefly();
+        } catch (error) {
+          const why = (error instanceof Error ? error.message : String(error)).replace(/[.\s]+$/, '');
+          throw new Error(`The service is stopped and its database would not start for the last backup (${why}). Start buddi and try again, or run buddi uninstall --no-backup.`);
         }
       }
-      if (deps.telegram) clearMenu = await deps.telegram.collect().catch(() => undefined);
+      try {
+        if (backingUp) {
+          io.log('Taking one last backup.');
+          const archive = await deps.supervisor.backup();
+          const envelope = archive.replace(/\.age$/, '.json');
+          let kept = archive;
+          if (options.keepData) {
+            lines.push(`The backup is ${archive}. It stays, with the rest of the data directory.`);
+          } else {
+            kept = path.join(keptBackupsDir(home), path.basename(archive));
+            await deps.move(archive, kept);
+            if (envelope !== archive && deps.exists(envelope)) await deps.move(envelope, path.join(keptBackupsDir(home), path.basename(envelope)));
+            lines.push(`The backup is ${kept}. It stays: uninstall does not touch that folder.`);
+          }
+          const copies: string[] = [];
+          if (options.copyTo !== undefined) {
+            const copy = path.join(options.copyTo, path.basename(kept));
+            await deps.copy(kept, copy);
+            const keptEnvelope = kept.replace(/\.age$/, '.json');
+            if (keptEnvelope !== kept && deps.exists(keptEnvelope)) await deps.copy(keptEnvelope, path.join(options.copyTo, path.basename(keptEnvelope)));
+            copies.push(copy);
+            lines.push(`A copy is ${copy}.`);
+          }
+          if (archive.endsWith('.age') && vaultGoes) {
+            const phrase = await passphraseBeforeRemoval(deps.passphrase, options.havePassphrase === true);
+            if (phrase !== undefined) await keepPhrase(phrase, [kept, ...copies]);
+          }
+        } else if (vaultGoes && !options.havePassphrase) {
+          // No last backup, but older ones may be locked with the words the vault is about to lose.
+          const phrase = await passphraseBeforeRemoval(deps.passphrase, false);
+          if (phrase !== undefined) {
+            await keepPhrase(phrase, [], loosePassphraseFile(options.copyTo ?? keptBackupsDir(home), now()));
+            lines.push('Pass --i-have-the-passphrase with --no-backup when you already have them.');
+          }
+        }
+        // The paired chats, read while the database is up (started briefly or not).
+        if (deps.telegram) clearMenu = await deps.telegram.collect().catch(() => undefined);
+      } finally {
+        if (stopBriefly) {
+          await stopBriefly();
+          io.log('Stopped the database again.');
+        }
+      }
       return lines;
     },
   };

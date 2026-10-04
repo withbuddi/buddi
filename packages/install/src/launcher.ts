@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { environment, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
-import { supervise, supervisorSocket } from './supervisor.js';
+import { BRIEF_SUPERVISOR_VAR, supervise, supervisorSocket } from './supervisor.js';
 import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
@@ -162,6 +162,38 @@ async function supervisedBackupJob(ctx: InstallContext): Promise<{ file: string;
 }
 
 /**
+ * The supervisor without its gateway, for `buddi uninstall`'s last backup
+ * while the service is stopped: started in the background, waited for until
+ * it answers, and stopped by what this returns (SIGTERM, then its lock gone).
+ */
+async function startSupervisorBriefly(ctx: InstallContext, lockPid: () => number | undefined): Promise<() => Promise<void>> {
+  await mkdir(path.join(ctx.data, 'logs'), { recursive: true, mode: 0o700 });
+  const log = await open(path.join(ctx.data, 'logs/supervisor.log'), 'a', 0o600);
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: { ...ctx.env, [BRIEF_SUPERVISOR_VAR]: '1' } });
+    await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+  } finally { await log.close(); }
+  let exited = false;
+  child.once('exit', () => { exited = true; });
+  child.unref();
+  const stop = async (): Promise<void> => {
+    if (!exited && child.pid !== undefined) { try { process.kill(child.pid, 'SIGTERM'); } catch { /* gone */ } }
+    const alive = (): boolean => { if (exited || child.pid === undefined) return false; try { process.kill(child.pid, 0); return true; } catch { return false; } };
+    for (let waited = 0; lockPid() !== undefined || alive(); waited += 250) {
+      if (waited >= 60_000) throw new Error(`the database started for the last backup did not stop within a minute (supervisor pid ${child.pid})`);
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  };
+  for (let waited = 0; ; waited += 500) {
+    if (exited) throw new Error(`it stopped while starting; see ${path.join(ctx.data, 'logs/supervisor.log')}`);
+    try { await control(ctx); return stop; } catch { /* not yet */ }
+    if (waited >= 120_000) { await stop().catch(() => {}); throw new Error(`it did not answer within two minutes; see ${path.join(ctx.data, 'logs/supervisor.log')}`); }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+}
+
+/**
  * `buddi uninstall`, in a packaged installation. The order and the refusals
  * are in `uninstall.ts`; this wires them to the real machine: the supervisor's
  * socket, `launchctl`/`systemctl`, the keychain, the Telegram Bot API.
@@ -205,6 +237,14 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
       answers: () => control(ctx).then(() => true, () => false),
       stopGateway: async () => { await control(ctx, 'stop'); },
       backup: () => supervisedBackup(ctx),
+      startBriefly: () => startSupervisorBriefly(ctx, lockPid),
+    },
+    // Run by buddi.app itself (its uninstall route), the app is already on its way out: nothing to say about it.
+    buddiApp: async () => {
+      if (appLayout(process.env) !== undefined) return undefined;
+      const status = await control(ctx).catch(() => undefined);
+      if (status !== undefined && runsFromApp(status, ctx)) return 'running';
+      return isAppInstall(ctx) ? 'installed' : undefined;
     },
     // Read from the vault itself, never through the supervisor's route: that one makes a passphrase when there is none.
     passphrase: async () => {
@@ -241,6 +281,15 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
             const { defaultHttpTransport } = await import('@buddi/gateway');
             return () => clearTelegramMenu(token, chats, defaultHttpTransport);
           } finally { await pool.end().catch(() => {}); }
+        },
+        // The database out of reach: the default menu, and the owner's chat when the environment names one.
+        withoutChats: async () => {
+          const chats = [ctx.env.TELEGRAM_OWNER_CHAT_ID, ctx.env.TELEGRAM_OWNER_USER_ID]
+            .flatMap(value => (value ?? '').split(','))
+            .map(value => value.trim())
+            .filter(value => /^-?\d+$/.test(value));
+          const { defaultHttpTransport } = await import('@buddi/gateway');
+          await clearTelegramMenu(token, [...new Set(chats)], defaultHttpTransport);
         },
       },
     }),

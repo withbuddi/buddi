@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
-import { PACKAGE_LINE, parseUninstallArgs, uninstallPackaged } from './uninstall.js';
+import { APP_LAST_LINE, APP_RUNNING_UNINSTALL, PACKAGE_LINE, parseUninstallArgs, uninstallPackaged } from './uninstall.js';
 import type { ExecResult, PackagedUninstallDeps, UninstallOptions } from './uninstall.js';
 
 const home = '/Users/owner';
@@ -23,6 +23,8 @@ interface Machine {
   backups: number;
   written: Map<string, string>;
   copied: Array<[string, string]>;
+  /** What happened, in order: the brief start and stop, the backup, the menu, the purge. */
+  events: string[];
 }
 
 function machine(opts: {
@@ -37,6 +39,11 @@ function machine(opts: {
   app?: string;
   phrase?: string | undefined;
   state?: Record<string, unknown>;
+  /** The supervisor can be started briefly (true), or that start fails (an Error). */
+  brief?: boolean | Error;
+  buddiApp?: 'running' | 'installed';
+  /** The paired chats cannot be read: the menu is cleared with the token alone. */
+  collectFails?: boolean;
 } = {}): Machine {
   const platform = opts.platform ?? 'darwin';
   const unit = platform === 'darwin' ? plist : systemdUnitPath(data, {}, home);
@@ -48,7 +55,7 @@ function machine(opts: {
   let supervisorAlive = opts.supervisor ?? true;
   let loaded = true;
   const m: Machine = {
-    files, out: [], err: [], exec: [], removed: [], moved: [], purged: [], menuCleared: false, backups: 0, written: new Map(), copied: [],
+    files, out: [], err: [], exec: [], removed: [], moved: [], purged: [], menuCleared: false, backups: 0, written: new Map(), copied: [], events: [],
     deps: undefined as unknown as PackagedUninstallDeps,
   };
   m.deps = {
@@ -69,7 +76,17 @@ function machine(opts: {
     supervisor: {
       answers: async () => supervisorAlive,
       stopGateway: async () => {},
+      ...(opts.brief === undefined ? {} : {
+        startBriefly: async () => {
+          if (opts.brief instanceof Error) throw opts.brief;
+          supervisorAlive = true;
+          m.events.push('started briefly');
+          return async () => { supervisorAlive = false; m.events.push('stopped'); };
+        },
+      }),
       backup: async () => {
+        if (!supervisorAlive) throw new Error('the supervisor is not running');
+        m.events.push('backup');
         m.backups++;
         const archive = `${data}/backups/buddi-backup-20260926-120000.tar.gz.age`;
         files.add(archive); files.add(`${data}/backups/buddi-backup-20260926-120000.tar.gz.json`);
@@ -87,10 +104,20 @@ function machine(opts: {
       keychain: {
         service: 'buddi.install.abc',
         names: async () => { if (opts.names instanceof Error) throw opts.names; return opts.names ?? ['BRAVE_SEARCH_API_KEY', 'BUDDI_DB_ADMIN_PASSWORD', 'BUDDI_DB_PASSWORD']; },
-        purge: async (names: string[]) => { if (opts.purge) throw opts.purge; m.purged.push(names); },
+        purge: async (names: string[]) => { if (opts.purge) throw opts.purge; m.events.push('purge'); m.purged.push(names); },
       },
     } : {}),
-    ...(opts.telegram ? { telegram: { collect: async () => async () => { m.menuCleared = true; } } } : {}),
+    ...(opts.telegram ? {
+      telegram: {
+        collect: async () => {
+          if (opts.collectFails || !supervisorAlive) throw new Error('connection refused');
+          m.events.push('chats read');
+          return async () => { m.events.push('menu cleared'); m.menuCleared = true; };
+        },
+        withoutChats: async () => { m.events.push('menu cleared without chats'); m.menuCleared = true; },
+      },
+    } : {}),
+    ...(opts.buddiApp === undefined ? {} : { buddiApp: async () => opts.buddiApp }),
     ...(opts.app === undefined ? {} : { app: opts.app }),
     sleep: async () => {},
     io: {
@@ -127,11 +154,11 @@ describe('uninstallPackaged', () => {
       'Keychain namespace: buddi.install.abc',
       'This removes buddi from this Mac:',
       `  - the background service: launchd agent ${label} (${plist})`,
+      "  - the Telegram bot's command menu",
       `  - the data directory ${data}: the database, agents and skills, the files library, logs, backups and the fetched Chromium`,
       '  - secrets: 3 keychain entries under buddi.install.abc: BRAVE_SEARCH_API_KEY, BUDDI_DB_ADMIN_PASSWORD, BUDDI_DB_PASSWORD',
       `  - the dashboard app ${home}/Applications/Buddi Dashboard.app`,
       `  - the extension pairing record ${data}/extension.json`,
-      "  - the Telegram bot's command menu",
       `First it takes one last backup and moves it to ${home}/buddi-backups, where it stays.`,
     ]);
     expect(m.exec).toContain(`launchctl bootout gui/501/${label}`);
@@ -247,6 +274,57 @@ describe('uninstallPackaged', () => {
     const m = machine({ files: [], supervisor: false, names: [] });
     expect(await uninstallPackaged(defaults, m.deps)).toBe(0);
     expect(m.out).toEqual([`Installation: ${data}`, 'Keychain namespace: buddi.install.abc', 'Nothing of buddi is installed here, so there is nothing to remove.', PACKAGE_LINE]);
+  });
+});
+
+describe('uninstallPackaged: with the service stopped', () => {
+  const stoppedFiles = [data, `${data}/installation.json`, `${data}/postgres`, `${data}/backups`];
+
+  it('starts the database briefly for the last backup and the paired chats, stops it, then removes', async () => {
+    const m = machine({ files: stoppedFiles, supervisor: false, brief: true, telegram: true });
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(0);
+    expect(m.events).toEqual(['started briefly', 'backup', 'chats read', 'stopped', 'menu cleared', 'purge']);
+    expect(m.out).toContain("The service is stopped; starting buddi's database for the last backup (buddi itself stays stopped).");
+    expect(m.out).toContain('Stopped the database again.');
+    expect(m.moved.map(([, to]) => to)[0]).toBe(`${home}/buddi-backups/buddi-backup-20260926-120000.tar.gz.age`);
+    expect(m.removed).toEqual([data]);
+    expect(m.err).toEqual([]);
+  });
+
+  it('removes nothing when the database will not start for the backup, and says the way round', async () => {
+    const m = machine({ files: stoppedFiles, supervisor: false, brief: new Error('Postgres would not start') });
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(1);
+    expect(m.err[0]).toBe('The service is stopped and its database would not start for the last backup (Postgres would not start). Start buddi and try again, or run buddi uninstall --no-backup. Nothing was removed.');
+    expect(m.removed).toEqual([]);
+    expect(m.purged).toEqual([]);
+  });
+
+  it('--no-backup clears the Telegram menu with the token alone when the paired chats cannot be read, before the keychain goes', async () => {
+    const m = machine({ files: stoppedFiles, supervisor: false, brief: true, telegram: true });
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
+    expect(m.events).toEqual(['menu cleared without chats', 'purge']);
+    expect(m.out).toContain("Removed the Telegram bot's command menu.");
+  });
+});
+
+describe('uninstallPackaged: buddi.app\'s installation', () => {
+  it('refuses while buddi.app runs it, touching nothing, and points to the app\'s own Uninstall', async () => {
+    const m = machine({ buddiApp: 'running', telegram: true });
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(1);
+    expect(m.err).toEqual([APP_RUNNING_UNINSTALL]);
+    expect(APP_RUNNING_UNINSTALL).toMatch(/buddi → Uninstall buddi… in its menu .* or quit buddi\.app first/);
+    expect(m.out).toEqual([]);
+    expect(m.removed).toEqual([]);
+    expect(m.backups).toBe(0);
+    expect(m.menuCleared).toBe(false);
+  });
+
+  it('with buddi.app quit, removes the installation and ends on moving the app to the Trash, not on npm', async () => {
+    const m = machine({ buddiApp: 'installed' });
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(0);
+    expect(m.out).toContain("This installation is buddi.app's. buddi.app itself stays until you move it to the Trash.");
+    expect(m.out[m.out.length - 1]).toBe(APP_LAST_LINE);
+    expect(m.out).not.toContain(PACKAGE_LINE);
   });
 });
 

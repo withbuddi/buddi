@@ -857,7 +857,7 @@ export const COMMANDS: readonly CommandEntry[] = [
   {
     name: 'uninstall',
     group: 'Operate',
-    summary: 'Remove buddi from this machine: the service, the data, the secrets. It lists everything first, asks, and prints your backup passphrase (and saves it beside the last backup) before the vault goes.',
+    summary: 'Remove buddi from this machine: the service, the data, the secrets. It lists everything first, asks, and prints your backup passphrase (and saves it beside the last backup) before the vault goes. With the service stopped, it starts the database alone for the last backup.',
     usage: 'buddi uninstall [--yes] [--keep-data] [--no-backup [--i-have-the-passphrase]] [--copy-to <dir>]',
     flags: [
       { flag: '--yes', meaning: 'Do not ask.' },
@@ -867,7 +867,7 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--copy-to <dir>', meaning: 'Also copy the last backup and its passphrase file here (your Desktop, say).' },
     ],
     example: 'buddi uninstall',
-    exitCodes: [{ code: 1, meaning: 'Something listed could not be removed, or nothing was: the question was not answered yes, the backup failed, or the data directory is not an installation.' }],
+    exitCodes: [{ code: 1, meaning: 'Something listed could not be removed, or nothing was: the question was not answered yes, the backup failed, the data directory is not an installation, or buddi.app is running it (use buddi → Uninstall buddi… there, or quit the app first).' }],
     applies: 'both',
   },
   {

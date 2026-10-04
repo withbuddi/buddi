@@ -1572,7 +1572,7 @@ Keeping buddi running: the service, upgrades, backups, secrets and the work queu
 - [`buddi service logs`](#buddi-service-logs): Follow the service's log. Ctrl-C stops following.
 - [`buddi service install`](#buddi-service-install): Install the background service, started at login. Source checkout only.
 - [`buddi service uninstall`](#buddi-service-uninstall): Remove the background service. Your data stays. Source checkout only.
-- [`buddi uninstall`](#buddi-uninstall): Remove buddi from this machine: the service, the data, the secrets. It lists everything first, asks, and prints your backup passphrase (and saves it beside the last backup) before the vault goes.
+- [`buddi uninstall`](#buddi-uninstall): Remove buddi from this machine: the service, the data, the secrets. It lists everything first, asks, and prints your backup passphrase (and saves it beside the last backup) before the vault goes. With the service stopped, it starts the database alone for the last backup.
 - [`buddi backup create`](#buddi-backup-create): Write one archive of this installation: the database, your agents and skills, and your files.
 - [`buddi backup list`](#buddi-backup-list): List every archive, newest first.
 - [`buddi backup verify`](#buddi-backup-verify): Check that an archive is whole and can be restored.
@@ -1811,7 +1811,7 @@ buddi service uninstall
 
 ### buddi uninstall
 
-Remove buddi from this machine: the service, the data, the secrets. It lists everything first, asks, and prints your backup passphrase (and saves it beside the last backup) before the vault goes.
+Remove buddi from this machine: the service, the data, the secrets. It lists everything first, asks, and prints your backup passphrase (and saves it beside the last backup) before the vault goes. With the service stopped, it starts the database alone for the last backup.
 
 ```sh
 buddi uninstall [--yes] [--keep-data] [--no-backup [--i-have-the-passphrase]] [--copy-to <dir>]
@@ -1834,7 +1834,7 @@ buddi uninstall
 **Exit codes**
 
 - `0`: Done.
-- `1`: Something listed could not be removed, or nothing was: the question was not answered yes, the backup failed, or the data directory is not an installation.
+- `1`: Something listed could not be removed, or nothing was: the question was not answered yes, the backup failed, the data directory is not an installation, or buddi.app is running it (use buddi → Uninstall buddi… there, or quit the app first).
 - `2`: The command was not typed right.
 
 ### buddi backup create
