@@ -18,6 +18,7 @@ What changes in buddi from one release to the next, newest first.
 - Your Chrome: when you asked for your Chrome (the Use my Chrome pin, the agent's setting, or the task) and buddi couldn't use it, the reply says why in one line: not connected to this buddi, not open right now, or turned off for agents in Settings.
 - A page that shows up signed out where the task needs your account (an Amazon cart saying "Sign in to your account") now asks with the "needs your sign-in" card, or moves to your Chrome where you're signed in, instead of the agent asking you in chat; a news front page with a Sign in link is left alone. Google's sign-in page under the title "Gmail" is now recognised as a sign-in page too.
 - Agents answer a list of items from a website (a cart, orders, search results) as a short list, one line per item, instead of a wide table; a table only when you ask for a comparison.
+- Lock screen: the widgets keep refreshing while it's locked, even in a tab in the back, and catch up the moment you look at it again; a slow answer can no longer put older headlines back over newer ones.
 
 ## 0.1.0-pre.38 — 2026-10-03
 

@@ -264,6 +264,55 @@ describe('the lock screen', () => {
     expect(dialog).toHaveTextContent('buddi dashboard --remove-pin');
   });
 
+  it('keeps its widgets fresh while locked, hidden or not, and catches up the moment it is looked at again', async () => {
+    vi.useFakeTimers();
+    const story = (title: string): LockScreenData => screenData({
+      widgets: [{ key: 'l1', id: 'news.top', title: 'Top stories', size: 'small', view: { state: 'ok', body: { kind: 'stat', value: title } as never } }],
+    });
+    let headline = 'Morning news';
+    const asked = vi.spyOn(api, 'lockScreen').mockImplementation(async () => story(headline));
+    const hidden = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    render(<LockScreen initial={locked} onUnlocked={() => {}} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByRole('group', { name: 'Top stories' })).toHaveTextContent('Morning news');
+
+    // Fifteen minutes on a hidden page: the poll kept asking, and the new headline is drawn.
+    headline = 'Noon news';
+    await act(async () => { await vi.advanceTimersByTimeAsync(15 * 60_000); });
+    expect(asked.mock.calls.length).toBeGreaterThanOrEqual(30);
+    expect(screen.getByRole('group', { name: 'Top stories' })).toHaveTextContent('Noon news');
+
+    // Looked at again: asked at once, not on the next tick.
+    headline = 'Evening news';
+    const before = asked.mock.calls.length;
+    hidden.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); await vi.advanceTimersByTimeAsync(0); });
+    expect(asked.mock.calls.length).toBe(before + 1);
+    expect(screen.getByRole('group', { name: 'Top stories' })).toHaveTextContent('Evening news');
+
+    // Refocused well after the last ask: asked at once too.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    const later = asked.mock.calls.length;
+    await act(async () => { window.dispatchEvent(new Event('focus')); await vi.advanceTimersByTimeAsync(0); });
+    expect(asked.mock.calls.length).toBe(later + 1);
+  });
+
+  it('never lets a slow answer put older widgets back over a newer one', async () => {
+    vi.useFakeTimers();
+    const story = (title: string): LockScreenData => screenData({
+      widgets: [{ key: 'l1', id: 'news.top', title: 'Top stories', size: 'small', view: { state: 'ok', body: { kind: 'stat', value: title } as never } }],
+    });
+    let release: (d: LockScreenData) => void = () => {};
+    vi.spyOn(api, 'lockScreen')
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+      .mockImplementation(async () => story('Fresh news'));
+    render(<LockScreen initial={locked} onUnlocked={() => {}} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(screen.getByRole('group', { name: 'Top stories' })).toHaveTextContent('Fresh news');
+    await act(async () => { release(story('Old news')); await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByRole('group', { name: 'Top stories' })).toHaveTextContent('Fresh news');
+  });
+
   it('leaves by itself when another tab or device unlocked the session', async () => {
     vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({ locked: false }));
     const done = vi.fn();

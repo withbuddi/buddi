@@ -44,6 +44,8 @@ export function lockBackgroundOf(background: LockBackground | undefined, image: 
 export const LOCK_PHONE_QUERY = '(max-width: 720px)';
 /** How often the lock screen asks again: the time, the counts, an unlock elsewhere. */
 export const LOCK_SCREEN_POLL_MS = 30_000;
+/** Refocused or restored at least this long after the last ask: ask again at once. */
+export const LOCK_SCREEN_CATCH_UP_MS = 5_000;
 
 const DELAY_WORDS: Record<number, string> = { 1: 'a minute', 5: '5 minutes', 15: '15 minutes', 60: 'an hour' };
 
@@ -392,8 +394,20 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
     else field.current?.focus();
   };
 
+  /**
+   * Ask again. Answers apply in the order they were asked: a slow one (a
+   * widget producing behind it) never lands over a newer one and puts the old
+   * headlines back.
+   */
+  const asked = useRef(0);
+  const applied = useRef(0);
+  const lastAsked = useRef(0);
   const load = useCallback(() => {
+    const seq = ++asked.current;
+    lastAsked.current = Date.now();
     api.lockScreen().then((next) => {
+      if (seq < applied.current) return;
+      applied.current = seq;
       setDown(false);
       setData(next);
       setWaitUntil(next.waitUntil);
@@ -405,12 +419,32 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
     });
   }, []);
 
+  /*
+   * The widgets stay fresh while locked: every poll asks the gateway, which
+   * produces each widget again once its own refresh has passed (news every
+   * 10 minutes, the weather and the calendar on theirs). The poll runs while
+   * hidden too, and a browser that froze or throttled the page (a laptop
+   * asleep, a tab in the back) catches up the moment the page is looked at,
+   * refocused, restored or back online.
+   */
   useEffect(() => {
     load();
     const timer = window.setInterval(load, LOCK_SCREEN_POLL_MS);
     const onVisible = (): void => { if (document.visibilityState === 'visible') load(); };
+    const catchUp = (): void => { if (Date.now() - lastAsked.current >= LOCK_SCREEN_CATCH_UP_MS) load(); };
     document.addEventListener('visibilitychange', onVisible);
-    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+    document.addEventListener('resume', catchUp);
+    window.addEventListener('focus', catchUp);
+    window.addEventListener('pageshow', catchUp);
+    window.addEventListener('online', load);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      document.removeEventListener('resume', catchUp);
+      window.removeEventListener('focus', catchUp);
+      window.removeEventListener('pageshow', catchUp);
+      window.removeEventListener('online', load);
+    };
   }, [load]);
 
   // A World clock on the lock screen is asked again on the minute.
