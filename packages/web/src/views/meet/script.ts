@@ -68,9 +68,9 @@ const NUMBER = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Ei
 
 /** The six outcomes of chapter 3, in the order the tiles are drawn. */
 export const TAKE_ON = [
-  { id: 'days', title: 'My days', plugins: 'Weather · Calendar', line: 'Weather and your calendars, for a brief every morning.', note: 'Weather needs nothing. Calendar asks for your calendar’s private link later, on its own page.' },
+  { id: 'days', title: 'My days', plugins: 'Weather · Calendar', line: 'Weather and your calendars, for a brief every morning.', note: 'Weather needs nothing. Calendar asks for your calendar’s private link in chapter 4.' },
   { id: 'mail', title: 'My mail', plugins: 'Mail Triage (built in)', line: 'Mail Triage reads new mail and brings you only what needs you.', mate: 'Mail Triage', note: 'Mail asks for a mailbox in chapter 4.' },
-  { id: 'money', title: 'My money', plugins: 'Finance', line: 'Accounts, cards and cash flow, kept on this computer.', note: 'Finance asks for your bank on its own page.' },
+  { id: 'money', title: 'My money', plugins: 'Finance', line: 'Accounts, cards and cash flow, kept on this computer.', note: 'Finance reads the statements you hand it; no bank sign-in.' },
   { id: 'voice', title: 'Voice', plugins: 'Speech', line: 'Talk to me and hear me back, here and on your phone. Runs on this computer.', note: 'Speech needs nothing.' },
   { id: 'code', title: 'My code', plugins: 'Developer', line: 'Developer works in one folder you name, and shows you what it changed.', mate: 'Developer', note: 'Developer asks for its folder the first time you talk.' },
   { id: 'pictures', title: 'Pictures', plugins: 'Image', line: 'One picture from a prompt, with an account you pick.', note: 'Image asks which account to draw with.' },
@@ -327,7 +327,7 @@ export const SCRIPT = {
   /* ---- chapter 4 ---- */
   reach: {
     title: 'How do we reach each other?',
-    ask: 'Three things, each a minute. Do the ones you want; the rest wait in Settings.',
+    ask: 'A few things, each a minute. Do the ones you want; the rest wait in Settings.',
     submit: 'Continue',
     phone: {
       title: 'Your phone, through Telegram',
@@ -345,6 +345,21 @@ export const SCRIPT = {
       sheet: 'Add a mailbox',
       added: 'Mailbox added',
       unavailable: 'Mail is not ready on this computer yet. Settings → Mail can add one later.',
+    },
+    /** Shown when My days was taken on in chapter 3. */
+    calendar: {
+      title: 'Your calendar',
+      line: 'Its private link, or a Google sign-in. Reading only until you say otherwise.',
+      waiting: 'Calendar is still being fetched. The button wakes up when it is in.',
+      add: 'Link a calendar',
+      linked: 'Calendar linked',
+    },
+    /** Shown when My money was taken on in chapter 3. */
+    bank: {
+      title: 'Your bank',
+      line: 'No bank sign-in: Finance reads the statements you hand it.',
+      add: 'How it works',
+      later: 'After setup',
     },
     app: {
       title: 'buddi as an app, and a browser of its own',

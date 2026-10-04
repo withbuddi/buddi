@@ -57,10 +57,9 @@ import type { ChatAgent, ChatMessage } from '../chat/types';
 import { AGENTS_ROUTE, HOME_ROUTE, chatRoute } from '../routes';
 import { Blob, Button, ButtonLink, Code, Field, FloatCard, GradientField, Icon, Mark, Notice, Pill, Progress, Segment, Sheet, Spacer, Stack, Toolbar, type IconName } from '../ui';
 import { useMediaQuery } from '../useMediaQuery';
-import type { PluginPageDescriptor } from '../pages/types';
 import { GEMINI_FALLBACK_MODEL, geminiBrains, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
 import { firstMlxhModel, isMlxhAccount, isMlxhImageModel, mlxhNotAnswering } from '../mlxh';
-import { PluginPage } from '../pages/PluginPage';
+import { BankSheet, CalendarSheet, MailboxSheet } from './parts/FirstRunSheets';
 import { InstallProgress } from './parts/InstallProgress';
 import { SignInCode } from './parts/SignInCode';
 import { installHint, useInstallPrompt } from './parts/KeepClose';
@@ -2738,12 +2737,13 @@ function TakeOnChapter({ answers, progress, offers, onProgress, onSettled, onBac
  * 4. Reach me
  * ------------------------------------------------------------------ */
 
-function ReachChapter({ answers, navigate, onSettled, onBack }: QuestionProps): JSX.Element {
+function ReachChapter({ answers, progress, onSettled, onBack }: QuestionProps): JSX.Element {
   const [phone, setPhone] = useState(answers.reach?.phone === true);
   const [mailbox, setMailbox] = useState(answers.reach?.mailbox === true);
   const [app, setApp] = useState(answers.reach?.app === true);
   const [browser, setBrowser] = useState<BrowserAnswer | undefined>(answers.browser);
-  const mailWanted = (answers.takeOn ?? []).includes('mail');
+  const taken = answers.takeOn ?? [];
+  const mailWanted = taken.includes('mail');
   const submit = (): void => {
     const reach: OnboardingReach = { phone, mailbox, app, browser: browser === 'chrome' || browser === 'chromium' || browser === 'installed' };
     // The browser keeps its own step, as it always had: never a gate.
@@ -2766,7 +2766,9 @@ function ReachChapter({ answers, navigate, onSettled, onBack }: QuestionProps): 
       >
         <div className="wiz-rows">
           <PhoneRow paired={phone} onPaired={() => setPhone(true)} />
-          <MailboxRow wanted={mailWanted} added={mailbox} onAdded={setMailbox} navigate={navigate} timezone={answers.clock ?? 'UTC'} />
+          <MailboxRow wanted={mailWanted} added={mailbox} onAdded={setMailbox} />
+          {taken.includes('days') ? <CalendarRow progress={progress} /> : null}
+          {taken.includes('money') ? <BankRow /> : null}
           <AppRow app={app} onApp={() => setApp(true)} browser={browser} onBrowser={setBrowser} />
           {phone ? (
             <Notice tone="good" role="status">
@@ -2876,26 +2878,24 @@ function InlineSquare({ onPaired }: { onPaired: () => void }): JSX.Element {
 }
 
 /**
- * A mailbox: the email plugin's own Settings page, in a sheet — the same form
- * Settings → Mail adds an account with — and whether one is there now.
+ * A mailbox: first run's own small sheet (provider, then only what that
+ * provider needs), writing through the email plugin's `email.add_account` —
+ * the full Mail settings stay on their page — and whether one is there now.
  */
 function MailboxRow({
   wanted,
   added,
   onAdded,
-  navigate,
-  timezone,
 }: {
   wanted: boolean;
   added: boolean;
   onAdded: (yes: boolean) => void;
-  navigate: (next: string, replace?: boolean) => void;
-  timezone: string;
 }): JSX.Element {
-  const [page, setPage] = useState<{ page: PluginPageDescriptor; siblings: PluginPageDescriptor[] } | null | undefined>(undefined);
+  // Whether the email plugin is here at all: its settings page is how it says so.
+  const ready = usePluginHere('email');
   const [open, setOpen] = useState(false);
   const [address, setAddress] = useState<string | null>(null);
-  const check = useCallback((): void => {
+  useEffect(() => {
     void Promise.resolve()
       .then(() => api.pageQuery<{ accounts?: Array<{ address?: string }> }>('email', 'accounts'))
       .then((answer) => {
@@ -2907,24 +2907,6 @@ function MailboxRow({
     // `onAdded` is the chapter's setter; stable enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => {
-    let cancelled = false;
-    Promise.resolve()
-      .then(() => api.pages())
-      .then((view) => {
-        if (cancelled) return;
-        const mail = (view?.pages ?? []).filter((p) => p.plugin === 'email');
-        const settings = mail.find((p) => p.id === 'settings') ?? null;
-        setPage(settings ? { page: settings, siblings: mail } : null);
-      })
-      .catch(() => {
-        if (!cancelled) setPage(null);
-      });
-    check();
-    return () => {
-      cancelled = true;
-    };
-  }, [check]);
   return (
     <div className="wiz-row">
       <span className="wiz-glyph" data-tone="mail" aria-hidden="true">
@@ -2932,31 +2914,125 @@ function MailboxRow({
       </span>
       <span className="wiz-row-text">
         <span className="wiz-opt-title">{wanted ? SCRIPT.reach.mailbox.forTriage : SCRIPT.reach.mailbox.title}</span>
-        <span className="wiz-opt-line">{page === null ? SCRIPT.reach.mailbox.unavailable : SCRIPT.reach.mailbox.line}</span>
+        <span className="wiz-opt-line">{ready === false ? SCRIPT.reach.mailbox.unavailable : SCRIPT.reach.mailbox.line}</span>
       </span>
       <span className="wiz-row-side">
         {added || address ? (
           <Pill tone="good" dot mono={address !== null}>
             {address ?? SCRIPT.reach.mailbox.added}
           </Pill>
-        ) : page ? (
+        ) : ready ? (
           <Button size="lg" onClick={() => setOpen(true)}>
             {SCRIPT.reach.mailbox.add}
           </Button>
         ) : null}
       </span>
-      {open && page ? (
-        <Sheet
-          title={SCRIPT.reach.mailbox.sheet}
-          size="wide"
-          onClose={() => {
-            setOpen(false);
-            check();
+      {open ? (
+        <MailboxSheet
+          onClose={() => setOpen(false)}
+          onAdded={(next) => {
+            setAddress(next);
+            onAdded(true);
           }}
-        >
-          <PluginPage page={page.page} siblings={page.siblings} navigate={navigate} timezone={timezone} embedded />
-        </Sheet>
+        />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Is a plugin installed here, by whether it serves a settings page. Chapter 3
+ * may still be fetching it when chapter 4 opens, so it is asked again as the
+ * installs move on (`progress` changes). `undefined` until the first answer.
+ */
+function usePluginHere(plugin: string, progress?: TakeOnView | null): boolean | undefined {
+  const [here, setHere] = useState<boolean | undefined>(undefined);
+  const moved = progress?.plugins.map((p) => `${p.title}:${p.state}`).join(',') ?? '';
+  useEffect(() => {
+    if (here) return undefined;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.pages())
+      .then((view) => {
+        if (!cancelled) setHere((view?.pages ?? []).some((p) => p.plugin === plugin && p.id === 'settings'));
+      })
+      .catch(() => {
+        if (!cancelled) setHere(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Asked once, then again only when the installs moved on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plugin, moved]);
+  return here;
+}
+
+/**
+ * The calendar from chapter 3's My days: its private link, or Google's
+ * sign-in, in first run's own sheet. Settings → Calendar keeps the rest.
+ */
+function CalendarRow({ progress }: { progress: TakeOnView | null }): JSX.Element {
+  const ready = usePluginHere('calendar', progress);
+  const [open, setOpen] = useState(false);
+  const [linked, setLinked] = useState(false);
+  useEffect(() => {
+    if (!ready) return;
+    void Promise.resolve()
+      .then(() => api.pageQuery<{ calendars?: unknown[] }>('calendar', 'settings'))
+      .then((answer) => {
+        if ((answer?.data?.calendars?.length ?? 0) > 0) setLinked(true);
+      })
+      .catch(() => {});
+  }, [ready]);
+  return (
+    <div className="wiz-row">
+      <span className="wiz-glyph" data-tone="calendar" aria-hidden="true">
+        <Icon name="calendar" />
+      </span>
+      <span className="wiz-row-text">
+        <span className="wiz-opt-title">{SCRIPT.reach.calendar.title}</span>
+        <span className="wiz-opt-line">{ready === false ? SCRIPT.reach.calendar.waiting : SCRIPT.reach.calendar.line}</span>
+      </span>
+      <span className="wiz-row-side">
+        {linked ? (
+          <Pill tone="good" dot>
+            {SCRIPT.reach.calendar.linked}
+          </Pill>
+        ) : (
+          <Button size="lg" disabled={!ready} onClick={() => setOpen(true)}>
+            {SCRIPT.reach.calendar.add}
+          </Button>
+        )}
+      </span>
+      {open ? <CalendarSheet onClose={() => setOpen(false)} onLinked={() => setLinked(true)} /> : null}
+    </div>
+  );
+}
+
+/** The bank, from chapter 3's My money: what Finance needs, said once. */
+function BankRow(): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [seen, setSeen] = useState(false);
+  return (
+    <div className="wiz-row">
+      <span className="wiz-glyph" data-tone="finance" aria-hidden="true">
+        <Icon name="money" />
+      </span>
+      <span className="wiz-row-text">
+        <span className="wiz-opt-title">{SCRIPT.reach.bank.title}</span>
+        <span className="wiz-opt-line">{SCRIPT.reach.bank.line}</span>
+      </span>
+      <span className="wiz-row-side">
+        {seen ? (
+          <Pill dot>{SCRIPT.reach.bank.later}</Pill>
+        ) : (
+          <Button size="lg" onClick={() => setOpen(true)}>
+            {SCRIPT.reach.bank.add}
+          </Button>
+        )}
+      </span>
+      {open ? <BankSheet onClose={() => setOpen(false)} onUnderstood={() => setSeen(true)} /> : null}
     </div>
   );
 }

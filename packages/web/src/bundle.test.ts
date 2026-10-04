@@ -52,6 +52,8 @@ const ALLOWED_LITERALS = [
   'https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah',
   // Cloudflare's API-token page, from Sign in from elsewhere: a link the owner follows, never fetched.
   'https://dash.cloudflare.com/profile/api-tokens',
+  // Where to make a mailbox's app password, from first run's mailbox sheet: links the owner follows, never fetched.
+  'https://myaccount.google.com/apppasswords', 'https://support.apple.com/en-us/102654', 'https://www.fastmail.help/hc/en-us/articles/360058752854',
 ];
 
 function externalUrls(text: string): string[] {

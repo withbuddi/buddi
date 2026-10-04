@@ -15,6 +15,7 @@ import { App } from '../App';
 import { Meet, FIRST_MESSAGE_TIMEOUT_MS, PATIENCE_MS, TAKE_ON_POLL_MS } from './Meet';
 import { BANNED_WORDS, DEFAULT_ASSISTANT_NAME, SCRIPT } from './meet/script';
 import { resetInstallPrompt } from './parts/KeepClose';
+import { SHEETS } from './parts/FirstRunSheets';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -64,6 +65,7 @@ vi.mock('../api', async (load) => {
       browserCheck: vi.fn(),
       pages: vi.fn(),
       pageQuery: vi.fn(),
+      pageAct: vi.fn(),
       firstRunRestore: vi.fn(),
       backupJob: vi.fn(),
       catalogue: vi.fn(),
@@ -1265,20 +1267,59 @@ describe('chapter 4: reach me', () => {
     expect(await screen.findByText(SCRIPT.reach.app.installed)).toBeInTheDocument();
   });
 
-  it('adds a mailbox with the email plugin\'s own form, in a sheet, and says which one', async () => {
+  it('adds a mailbox in first run\'s own sheet, not the Mail settings page, and says which one', async () => {
     atReach(['mail']);
     vi.mocked(api.pages).mockResolvedValue({
-      pages: [{ plugin: 'email', id: 'settings', title: 'Mail', place: 'settings', body: [{ kind: 'notice', text: 'The mailbox form.' }] }] as never,
+      pages: [{ plugin: 'email', id: 'settings', title: 'Mail', place: 'settings', body: [{ kind: 'notice', text: 'The Mail settings page.' }] }] as never,
     });
-    vi.mocked(api.pageQuery).mockResolvedValueOnce({ data: { accounts: [] } }).mockResolvedValue({ data: { accounts: [{ address: 'amen@fastmail.com' }] } });
+    vi.mocked(api.pageQuery).mockResolvedValue({ data: { accounts: [] } });
+    vi.mocked(api.pageAct).mockResolvedValue({ result: { added: true, address: 'amen@fastmail.com' } });
     render(meet());
     fireEvent.click(await screen.findByRole('button', { name: SCRIPT.reach.mailbox.add }));
-    const sheet = await screen.findByRole('dialog', { name: SCRIPT.reach.mailbox.sheet });
-    expect(within(sheet).getByText('The mailbox form.')).toBeInTheDocument();
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
+    const sheet = await screen.findByRole('dialog', { name: SHEETS.mailbox.sheet });
+    expect(within(sheet).queryByText('The Mail settings page.')).not.toBeInTheDocument();
+    expect(within(sheet).getByText(SHEETS.mailbox.which)).toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('button', { name: /Fastmail/ }));
+    fireEvent.change(within(sheet).getByLabelText(SHEETS.mailbox.address), { target: { value: 'amen@fastmail.com' } });
+    fireEvent.change(within(sheet).getByLabelText(SHEETS.mailbox.password), { target: { value: 'app-pass' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: SHEETS.mailbox.submit }));
+    expect(await within(sheet).findByText(SHEETS.mailbox.reading)).toBeInTheDocument();
     expect(await screen.findByText('amen@fastmail.com')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument(), { timeout: 4_000 });
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.reach.submit }));
     await waitFor(() => expect(api.onboardingStep).toHaveBeenCalledWith('reach', { reach: { phone: false, mailbox: true, app: false, browser: false } }));
+  });
+
+  it('offers the calendar link and the bank only for what chapter 3 took on, each in its own small sheet', async () => {
+    atReach(['days', 'money']);
+    vi.mocked(api.pages).mockResolvedValue({
+      pages: [{ plugin: 'calendar', id: 'settings', title: 'Calendar', place: 'settings', body: [{ kind: 'notice', text: 'The Calendar settings page.' }] }] as never,
+    });
+    vi.mocked(api.pageQuery).mockImplementation(async (plugin: string) => ({ data: plugin === 'calendar' ? { googleAvailable: false, calendars: [] } : { accounts: [] } }) as never);
+    vi.mocked(api.pageAct).mockResolvedValue({ result: { note: 'Linked iCloud calendar (iCloud): 42 events read. The link is kept as a secret.' } });
+    render(meet());
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.reach.calendar.add }));
+    const sheet = await screen.findByRole('dialog', { name: SHEETS.calendar.sheet });
+    expect(within(sheet).queryByText('The Calendar settings page.')).not.toBeInTheDocument();
+    fireEvent.change(within(sheet).getByLabelText(SHEETS.calendar.field), { target: { value: 'webcal://p01-caldav.icloud.com/published/2/abc' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: SHEETS.calendar.submit }));
+    expect(await within(sheet).findByText(SHEETS.calendar.events(42))).toBeInTheDocument();
+    expect(api.pageAct).toHaveBeenCalledWith('calendar', { tool: 'calendar.add', args: { name: 'iCloud calendar', link: 'webcal://p01-caldav.icloud.com/published/2/abc' } });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument(), { timeout: 4_000 });
+    expect(screen.getByText(SCRIPT.reach.calendar.linked)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.reach.bank.add }));
+    const bank = await screen.findByRole('dialog', { name: SHEETS.bank.sheet });
+    fireEvent.click(within(bank).getByRole('button', { name: SHEETS.bank.ok }));
+    expect(await screen.findByText(SCRIPT.reach.bank.later)).toBeInTheDocument();
+  });
+
+  it('leaves the calendar and bank rows out when chapter 3 did not take them on', async () => {
+    atReach(['mail']);
+    render(meet());
+    await screen.findByText(SCRIPT.reach.mailbox.forTriage);
+    expect(screen.queryByText(SCRIPT.reach.calendar.title)).not.toBeInTheDocument();
+    expect(screen.queryByText(SCRIPT.reach.bank.title)).not.toBeInTheDocument();
   });
 
   it('pairs the phone from the square when the bot is running, and says so', async () => {

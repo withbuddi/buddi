@@ -4,6 +4,7 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- First run: adding a mailbox is now a short sheet instead of the whole Mail settings page. Pick Gmail, iCloud, Fastmail or Other, type the address and app password (with a link to where to make one), and it checks the login and closes once Mail Triage is reading it. If you took on My days, chapter 4 also asks for your calendar's private link (or a Google sign-in) the same way; if you took on My money, it says plainly that Finance reads the statements you hand it rather than signing in to your bank.
 - First run: "What should I take on for you?" only offers what buddi can actually install today. My code is gone until the Developer plugin is published, so ticking it no longer ends in a failed install; if withbuddi.com can't be reached, you're offered the plugins known to be published.
 - Replies from Ollama models no longer show the model's thinking before the answer; it is kept apart, shown folded like Claude's. With Thinking off, gpt-oss now thinks as briefly as it can (it has no off switch).
 
