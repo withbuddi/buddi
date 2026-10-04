@@ -37,6 +37,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm
+    outputs:
+      # The dist-tag this run published under; mac-app trusts it over npm's
+      # answer, which lags a fresh publish by minutes.
+      dist_tag: ${{ steps.v.outputs.tag }}
     permissions:
       contents: write   # the GitHub release
       id-token: write   # npm trusted publishing (provenance)
@@ -160,7 +164,7 @@ jobs:
           fi
 
   mac-app:
-    needs: [mac-check]
+    needs: [publish, mac-check]
     if: always() && needs.mac-check.outputs.ok == 'true'
     runs-on: macos-latest
     timeout-minutes: 120
@@ -168,6 +172,7 @@ jobs:
       contents: write   # the release assets
     env:
       VERSION: ${{ needs.mac-check.outputs.version }}
+      PUBLISHED_TAG: ${{ needs.publish.outputs.dist_tag }}
       R2_BUCKET: ${{ vars.R2_BUCKET || 'buddi-releases' }}
     defaults:
       run:
@@ -188,9 +193,26 @@ jobs:
           # Only the version npm calls latest moves the download button and the
           # feed; a pre-release under `next` (once a stable exists) is attached
           # to its GitHub release and uploaded, and nothing points at it.
-          latest=$(npm view @withbuddi/buddi dist-tags.latest 2>/dev/null || true)
-          if [ "$latest" = "$VERSION" ]; then echo "latest=true" >> "$GITHUB_OUTPUT"; else echo "latest=false" >> "$GITHUB_OUTPUT"; fi
-          echo "buddi $VERSION, CFBundleVersion $bundle, npm latest is ${latest:-unknown}"
+          # The tag push's first attempt takes the publish job's word: npm
+          # answered the previous version right after pre.40 went out. A dispatch
+          # (no publish) or a hand re-run asks npm, waiting up to 5 minutes for
+          # the version to show under some dist-tag, so a re-run of an old
+          # release never moves the feed back past a newer latest.
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_RUN_ATTEMPT" = "1" ] && [ -n "$PUBLISHED_TAG" ]; then
+            latest_tag="$PUBLISHED_TAG"
+            echo "published under $PUBLISHED_TAG (publish job)"
+          else
+            for i in $(seq 1 16); do
+              tags=$(npm view @withbuddi/buddi dist-tags --json 2>/dev/null || true)
+              if printf '%s' "$tags" | VERSION="$VERSION" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.exit(Object.values(JSON.parse(s)).includes(process.env.VERSION)?0:1)}catch{process.exit(1)}})'; then break; fi
+              [ "$i" = "16" ] || { echo "$VERSION not under any npm dist-tag yet ($i/16)"; sleep 20; }
+            done
+            latest=$(npm view @withbuddi/buddi dist-tags.latest 2>/dev/null || true)
+            if [ "$latest" = "$VERSION" ]; then latest_tag=latest; else latest_tag=""; fi
+            echo "npm latest is ${latest:-unknown}"
+          fi
+          if [ "$latest_tag" = "latest" ]; then echo "latest=true" >> "$GITHUB_OUTPUT"; else echo "latest=false" >> "$GITHUB_OUTPUT"; fi
+          echo "buddi $VERSION, CFBundleVersion $bundle"
 
       # npm names a fresh version minutes before it serves the tarball.
       - name: Wait for npm to serve the tarball
