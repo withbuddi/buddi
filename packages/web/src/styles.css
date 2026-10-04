@@ -5270,6 +5270,8 @@ button.lk-chip:disabled { cursor: default; }
 .br-copy code { flex: 1 1 auto; min-width: 0; overflow-x: auto; white-space: nowrap; font-size: var(--text-xs); color: var(--text); }
 .br-code { align-self: flex-start; margin-top: var(--space-1); padding: var(--space-1) var(--space-3); border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); font-size: var(--text-lg); font-weight: var(--weight-semibold); letter-spacing: .12em; }
 .br-pair { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
+/* Enter the code: the six digits typed here, offered until a pairing exists (the app window has no popup to read). */
+.br-enter-code { display: flex; flex-direction: column; margin-top: var(--space-2); }
 .br-pair input { width: calc(var(--space-12) * 2); height: var(--control-h-sm); padding: 0 var(--space-2); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-family: var(--font-mono); letter-spacing: .1em; }
 .br-confirm { padding: 0 var(--space-4) var(--space-3); }
 .br-foot { margin: calc(var(--space-2) * -1) 0 0; font-size: var(--text-sm); color: var(--text-muted); }

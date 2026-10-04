@@ -277,10 +277,30 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   const more = (
     <ActionMenu label="More for your Chrome" items={[
       paired || state === 'broken' || state === 'notrunning' || state === 'connected' ? { label: 'Pair again', hint: [version ? `Extension ${version}` : null, paired].filter(Boolean).join(' · ') || undefined, onSelect: () => void act(() => api.forgetExtension()) } : null,
-      { label: 'Install unpacked…', hint: 'For a developer build of the extension', onSelect: () => setUnpacked(true) },
+      // A developer's errand: only when buddi runs from a checkout. A packaged install has the store.
+      ext.data?.checkout ? { label: 'Install unpacked…', hint: 'For a developer build of the extension', onSelect: () => setUnpacked(true) } : null,
       ext.data?.pairedAt ? 'separator' : null,
       ext.data?.pairedAt ? { label: 'Forget this Chrome…', tone: 'critical', onSelect: () => setForgetting(true) } : null,
     ]} />
+  );
+  /*
+   * The six digits, typed here from the app window or any other browser: the
+   * page cannot read the popup there, so the owner reads it and types it once.
+   * Always offered until a pairing exists; a code with no browser behind it
+   * gets the gateway's own sentence.
+   */
+  const codeField = (
+    <span className="br-pair">
+      <input aria-label="Pairing code" inputMode="numeric" autoComplete="one-time-code" maxLength={7} placeholder="482 913" value={code} onChange={(e) => setCode(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && code.replace(/[^0-9]/g, '').length === 6 && !disabled) void act(async () => { await api.pairExtension(code); setCode(''); }); }} />
+      <Button size="sm" variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void act(async () => { await api.pairExtension(code); setCode(''); })}>Pair</Button>
+    </span>
+  );
+  const enterCode = (
+    <span className="br-enter-code">
+      <span className="pl-row-line">Enter the code · Open the buddi icon in Chrome; type its code here</span>
+      {codeField}
+    </span>
   );
   const sites = [...settings.signInSites, ...learned];
   const sitesLine = sites.length > 0 ? `Always for ${listWords(sites)}` : null;
@@ -289,20 +309,15 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   if (state === 'none') {
     sub = <Lines line="For sites that need your sign-in" status={target === 'chromium'
       ? 'Add the buddi extension to Chrome, then pair it here. Until then agents use their own browser and your saved logins.'
-      : `The buddi extension runs in Chrome, Edge, Brave or Arc on a computer: add it there, then pair it on this page. Until then agents use their own browser and your saved logins.`} />;
+      : `The buddi extension runs in Chrome, Edge, Brave or Arc on a computer: add it there, then pair it on this page. Until then agents use their own browser and your saved logins.`}>{enterCode}</Lines>;
     side = <>{target === 'chromium' ? <ButtonLink size="sm" variant="accent" href={STORE_URL} target="_blank" rel="noopener noreferrer">Add to Chrome <span aria-hidden="true">↗</span></ButtonLink> : null}{more}</>;
   } else if (state === 'pair') {
     const found = probe ? `Extension ${probe.version} found in Chrome` : 'The buddi extension asks to pair';
     sub = offered ? (
       <Lines line={found} status="Pairing with the code the extension shows. This finishes by itself."><span className="br-code mono" aria-label="Pairing code">{offered.replace(/^(\d{3})(\d{3})$/, '$1 · $2')}</span></Lines>
     ) : ext.data?.pending ? (
-      <Lines line={found} status="Type the six digits the extension shows. This finishes by itself.">
-        <span className="br-pair">
-          <input aria-label="Pairing code" inputMode="numeric" placeholder="482 913" value={code} onChange={(e) => setCode(e.target.value)} />
-          <Button size="sm" variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void act(async () => { await api.pairExtension(code); setCode(''); })}>Pair</Button>
-        </span>
-      </Lines>
-    ) : <Lines line={found} status="Open the extension and press Connect: it shows a code, and this page pairs with it." />;
+      <Lines line={found} status="Type the six digits the extension shows.">{codeField}</Lines>
+    ) : <Lines line={found} status="Open the extension and press Connect: it shows a code, and this page pairs with it.">{enterCode}</Lines>;
     side = more;
   } else if (state === 'broken') {
     sub = <Lines line="Used only for sites that need your sign-in" tone="critical" status="Chrome forgot the pairing, so agents use their own browser instead." />;

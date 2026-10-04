@@ -247,3 +247,31 @@ describe('promises in the worker', () => {
     expect(rejections).toEqual([]);
   });
 });
+
+describe('a fresh install waiting for its code', () => {
+  /*
+   * The bug the owner hit on a fresh pair: the popup showed "Pairing" and a
+   * code, and buddi said no browser was waiting. A socket waiting for its code
+   * heard nothing from the gateway, so Chrome stopped the idle worker after
+   * thirty seconds and the socket went with it. The worker now speaks every
+   * twenty seconds, which is what keeps it alive.
+   */
+  it('says hello with no token and keeps the socket busy while it waits', async () => {
+    const worker = await load();
+    const socket = FakeSocket.live[0]!;
+    expect(socket.url).toBe('ws://127.0.0.1:4317/api/extension/socket');
+    socket.opened();
+    await settle();
+    expect(socket.types()).toEqual(['hello']);
+    expect(JSON.parse(socket.sent[0]!)).toMatchObject({ type: 'hello', paired: false });
+    await vi.advanceTimersByTimeAsync(worker.KEEPALIVE_MS);
+    expect(socket.types()).toEqual(['hello', 'keepalive']);
+    await vi.advanceTimersByTimeAsync(worker.KEEPALIVE_MS * 2);
+    expect(socket.types().filter((type) => type === 'keepalive')).toHaveLength(3);
+    // Gone: the interval goes with it, and nothing is sent at a dead socket.
+    socket.close();
+    await vi.advanceTimersByTimeAsync(worker.KEEPALIVE_MS);
+    expect(socket.types().filter((type) => type === 'keepalive')).toHaveLength(3);
+    expect(rejections).toEqual([]);
+  });
+});

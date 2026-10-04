@@ -151,6 +151,40 @@ describe('your Chrome: Add to Chrome, the code, Pair again', () => {
     expect(await screen.findByText(/runs in Chrome, Edge, Brave or Arc on a computer/)).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Add to Chrome/ })).not.toBeInTheDocument();
   });
+  it('none: the app window offers the six digits inline, with nothing waiting yet', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: false, path: '/opt/buddi/extension' });
+    answers(new Error('none'));
+    vi.mocked(api.pairExtension).mockResolvedValue(paired);
+    render(<Browser />);
+    await screen.findByText(/Add the buddi extension to Chrome, then pair it here/);
+    expect(screen.getByText('Enter the code · Open the buddi icon in Chrome; type its code here')).toBeInTheDocument();
+    const input = screen.getByRole('textbox', { name: 'Pairing code' });
+    expect(screen.getByRole('button', { name: 'Pair' })).toBeDisabled();
+    fireEvent.change(input, { target: { value: '482913' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
+    await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482913'));
+  });
+  it('unpaired, extension found but not connected: the field is there too', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: false, path: '/x' });
+    answers({ installed: true, version: '0.1.4', state: 'disconnected', gateway: window.location.origin });
+    render(<Browser />);
+    expect(await screen.findByText('Enter the code · Open the buddi icon in Chrome; type its code here')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Pairing code' })).toBeInTheDocument();
+  });
+  it('offers Install unpacked only when buddi runs from a checkout', async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(api.extension).mockResolvedValue({ ...paired, checkout: false });
+    const { unmount } = render(<Browser />);
+    await user.click(within(await row('Your Chrome')).getByRole('button', { name: 'More for your Chrome' }));
+    expect(await screen.findByRole('menuitem', { name: /Forget this Chrome/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Install unpacked/ })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    unmount();
+    vi.mocked(api.extension).mockResolvedValue({ ...paired, checkout: true });
+    render(<Browser />);
+    await user.click(within(await row('Your Chrome')).getByRole('button', { name: 'More for your Chrome' }));
+    expect(await screen.findByRole('menuitem', { name: /Install unpacked/ })).toBeInTheDocument();
+  }, 60_000);
   it('pair: reads the code the extension shows in this browser and pairs by itself', async () => {
     vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/x' });
     answers({ installed: true, version: '0.1.4', state: 'pairing', code: '482913', gateway: window.location.origin });
@@ -166,7 +200,8 @@ describe('your Chrome: Add to Chrome, the code, Pair again', () => {
     answers(new Error('none'));
     vi.mocked(api.pairExtension).mockResolvedValue(paired);
     render(<Browser />);
-    const input = await screen.findByRole('textbox', { name: 'Pairing code' });
+    await screen.findByText('Type the six digits the extension shows.');
+    const input = screen.getByRole('textbox', { name: 'Pairing code' });
     fireEvent.change(input, { target: { value: '123 456' } });
     fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
     await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('123 456'));

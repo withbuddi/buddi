@@ -91,6 +91,12 @@ export interface ExtensionView {
   /** {@link MIN_EXTENSION_VERSION}: the page asks for an update only when the extension is older. */
   extensionMinimum: string;
   /**
+   * buddi runs from a source checkout (no unpacked extension shipped beside
+   * it), so "Install unpacked" is a developer's errand worth offering. A
+   * packaged install points the owner at the store instead.
+   */
+  checkout: boolean;
+  /**
    * The dashboard moved to another port after this pairing (another program
    * had taken the recorded one), so the extension is looking in the wrong
    * place until it is paired again with the new address.
@@ -124,6 +130,20 @@ export async function extensionDir(env: NodeJS.ProcessEnv = process.env): Promis
   const shipped = path.join(REPO_ROOT, 'extension');
   try { await access(shipped); return shipped; } catch { /* a development checkout, then */ }
   return path.join(REPO_ROOT, 'packages', 'extension', 'dist');
+}
+
+/**
+ * Is this buddi running from a source checkout? A release ships the unpacked
+ * extension at the top of the installation (`scripts/release/build.mjs`); a
+ * checkout has `packages/extension` instead. `BUDDI_RUNTIME_CHECKOUT` (`1` or
+ * `0`) overrides it, for tests.
+ */
+export async function runsFromCheckout(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const forced = (env.BUDDI_RUNTIME_CHECKOUT ?? '').trim();
+  if (forced === '1') return true;
+  if (forced === '0') return false;
+  try { await access(path.join(REPO_ROOT, 'extension')); return false; } catch { /* not a release */ }
+  try { await access(path.join(REPO_ROOT, 'packages', 'extension', 'package.json')); return true; } catch { return false; }
 }
 
 /** The paired extension, or undefined when this buddi has never been paired. */
@@ -205,13 +225,25 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #ping?: NodeJS.Timeout;
   #missed = 0;
   #server?: Server;
+  #logger?: (line: string) => void;
+  /** Keeps a socket waiting for its code alive (see `#hello`). */
+  #pairPing?: NodeJS.Timeout;
   /** The three intervals are options so a test does not have to wait a minute. */
   constructor(readonly options: { env?: NodeJS.ProcessEnv; now?: () => number; log?: (line: string) => void;
-    pingMs?: number; commandTimeoutMs?: number; helloTimeoutMs?: number; authTimeoutMs?: number; cancelGraceMs?: number } = {}) {}
+    pingMs?: number; commandTimeoutMs?: number; helloTimeoutMs?: number; authTimeoutMs?: number; cancelGraceMs?: number } = {}) {
+    this.#logger = options.log;
+  }
 
   #env(): NodeJS.ProcessEnv { return this.options.env ?? process.env; }
   #now(): number { return this.options.now?.() ?? Date.now(); }
-  #log(line: string): void { this.options.log?.(line); }
+  #log(line: string): void { this.#logger?.(line); }
+
+  /**
+   * Where the socket's lines go, when the endpoint was made before the server
+   * that logs (the browser host asks for it first, at start-up). The first
+   * logger wins; a later one only fills an empty place.
+   */
+  useLog(log: (line: string) => void): void { this.#logger ??= log; }
 
   /**
    * Take over this server's `upgrade` event.
@@ -238,7 +270,8 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#routes.set(pathname, handle);
   }
 
-  #refuse(socket: Duplex, status: number, reason: string): void {
+  #refuse(socket: Duplex, status: number, reason: string, why?: string): void {
+    if (why) this.#log(`extension: socket refused (${status}): ${why}`);
     socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
     socket.destroy();
   }
@@ -252,10 +285,12 @@ export class ExtensionEndpoint implements ExtensionBridge {
     // not this machine, whatever it says about itself.
     // And by the listener: the ingress listener's sockets are loopback too,
     // and a relay frame has none (specs/trusted-access.md §7.5).
-    if (arrivalOf(req) !== 'main' || !isLoopbackAddress(req.socket?.remoteAddress)) return this.#refuse(socket, 403, 'Forbidden');
-    if (Object.keys(req.headers).some((key) => key === 'forwarded' || key === 'x-real-ip' || key.startsWith('x-forwarded-') || key.startsWith('tailscale-'))) return this.#refuse(socket, 403, 'Forbidden');
+    if (arrivalOf(req) !== 'main') return this.#refuse(socket, 403, 'Forbidden', 'not on the main listener');
+    if (!isLoopbackAddress(req.socket?.remoteAddress)) return this.#refuse(socket, 403, 'Forbidden', 'not from this machine');
+    if (Object.keys(req.headers).some((key) => key === 'forwarded' || key === 'x-real-ip' || key.startsWith('x-forwarded-') || key.startsWith('tailscale-'))) return this.#refuse(socket, 403, 'Forbidden', 'forwarded by a proxy');
     const origin = req.headers.origin;
-    if (typeof origin !== 'string' || !EXTENSION_ORIGIN.test(origin)) return this.#refuse(socket, 403, 'Forbidden');
+    if (typeof origin !== 'string' || !EXTENSION_ORIGIN.test(origin)) return this.#refuse(socket, 403, 'Forbidden', `not a Chrome extension origin (${typeof origin === 'string' ? origin.slice(0, 80) : 'none'})`);
+    this.#log(`extension: socket accepted from ${extensionIdOf(origin)}`);
     this.#wss.handleUpgrade(req, socket, head, (ws) => this.#accept(ws, extensionIdOf(origin)));
   }
 
@@ -268,9 +303,9 @@ export class ExtensionEndpoint implements ExtensionBridge {
       catch { ws.close(1003, 'not json'); return; }
       void this.#frame(ws, frame, extensionId).catch((error: unknown) => this.#log(`extension: ${error instanceof Error ? error.message : String(error)}`));
     });
-    ws.on('close', () => {
+    ws.on('close', (code) => {
       clearTimeout(hello);
-      if (this.#pair?.socket === ws) this.#clearPair();
+      if (this.#pair?.socket === ws) { this.#log(`extension: ${extensionId} left while waiting for its code (${code})`); this.#clearPair(); }
       if (this.#challenge?.socket === ws) this.#clearChallenge();
       if (this.#socket === ws) this.#drop('The buddi extension disconnected.');
     });
@@ -357,6 +392,8 @@ export class ExtensionEndpoint implements ExtensionBridge {
   }
 
   #clearPair(): void {
+    clearInterval(this.#pairPing);
+    this.#pairPing = undefined;
     if (!this.#pair) return;
     clearTimeout(this.#pair.timer);
     this.#pair = undefined;
@@ -381,6 +418,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     // One browser per buddi: a different unpacked copy is a different browser,
     // and it pairs only after the owner has forgotten this one.
     if (record?.extensionId && record.extensionId !== extensionId) {
+      this.#log(`extension: hello refused from ${extensionId}: this buddi is paired with ${record.extensionId}`);
       ws.close(1008, 'this buddi is paired with another browser');
       return;
     }
@@ -395,6 +433,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
       }, this.options.authTimeoutMs ?? AUTH_TIMEOUT_MS);
       timer.unref?.();
       this.#challenge = { socket: ws, nonce, extension: version, extensionId, timer };
+      this.#log(`extension: hello from ${extensionId} (${version || 'no version'}), paired: proof sent`);
       ws.send(JSON.stringify({ type: 'challenge', proof: pairingProof(record.tokenHash, nonce), installation: this.#installation() }));
       return;
     }
@@ -407,6 +446,21 @@ export class ExtensionEndpoint implements ExtensionBridge {
     }, PAIR_TTL_MS);
     timer.unref?.();
     this.#pair = { code, expiresAt: this.#now() + PAIR_TTL_MS, socket: ws, extension: version, extensionId, attempts: 0, timer };
+    /*
+     * Ping the socket while it waits. A Manifest V3 service worker is
+     * stopped after thirty seconds without an event, an open WebSocket or
+     * not, and only traffic on the socket counts as one. Before this the
+     * worker died half a minute into pairing: the popup kept showing its code,
+     * the socket closed, and the owner typed a code no browser was waiting
+     * behind ("No browser is waiting to be paired").
+     */
+    clearInterval(this.#pairPing);
+    this.#pairPing = setInterval(() => {
+      if (this.#pair?.socket !== ws || ws.readyState !== ws.OPEN) return;
+      try { ws.send(JSON.stringify({ type: 'ping' })); } catch { /* the close handler says so */ }
+    }, this.options.pingMs ?? PING_MS);
+    this.#pairPing.unref?.();
+    this.#log(`extension: hello from ${extensionId} (${version || 'no version'}), ${record && frame.paired === true ? 'its token is not usable here' : record ? 'it holds no token' : 'no pairing yet'}: waiting for the code`);
     ws.send(JSON.stringify({ type: 'pair', code }));
   }
 
@@ -417,6 +471,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const token = typeof frame.token === 'string' ? frame.token : '';
     const record = await this.#read();
     if (!record || token === '' || !sameHash(record.tokenHash, hashToken(token))) {
+      this.#log(`extension: ${extensionId} sent a token that is not this buddi's`);
       this.#clearChallenge();
       ws.close(1008, 'that token is not this buddi’s');
       return;
@@ -425,6 +480,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#adopt(ws, { ...record, extension: challenge.extension || record.extension, extensionId,
       lastSeenAt: new Date(this.#now()).toISOString() });
     await this.#announce(ws, { type: 'paired', installation: this.#installation() });
+    this.#log(`extension: ${extensionId} reconnected`);
     await this.#write(this.#record!);
   }
 
@@ -593,7 +649,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const record = await this.#read();
     const pending = !!this.#pair && this.#pair.expiresAt > this.#now();
     this.#buddiVersion ??= currentVersion(this.#env()).then((version) => version.split(' ')[0] || version);
-    return { connected: this.connected(), pending, path: await extensionDir(this.#env()), buddi: await this.#buddiVersion, extensionMinimum: MIN_EXTENSION_VERSION,
+    return { connected: this.connected(), pending, path: await extensionDir(this.#env()), checkout: await runsFromCheckout(this.#env()), buddi: await this.#buddiVersion, extensionMinimum: MIN_EXTENSION_VERSION,
       ...(record ? { pairedAt: record.pairedAt, extension: record.extension, lastSeenAt: record.lastSeenAt } : {}),
       ...((): { portMoved?: { from: number; to: number } } => {
         const moved = portMovedSincePairing(this.#env(), record?.pairedAt);
@@ -608,6 +664,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     if (digits.length !== 6) return { status: 400, body: { error: 'Type the six digits the buddi extension is showing.' } };
     const pending = this.#pair;
     if (!pending || pending.expiresAt <= this.#now()) {
+      this.#log('extension: a code was typed with no browser waiting');
       this.#clearPair();
       return { status: 409, body: { error: 'No browser is waiting to be paired. Press Connect in the buddi extension, then type the code it shows.' } };
     }
@@ -628,6 +685,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#adopt(pending.socket, { tokenHash: hashToken(token), pairedAt: now, extension: pending.extension, extensionId: pending.extensionId, lastSeenAt: now });
     await this.#write(this.#record!);
     await this.#announce(pending.socket, { type: 'paired', token, installation: this.#installation() });
+    this.#log(`extension: paired with ${pending.extensionId}`);
     return { status: 200, body: await this.view() as unknown as Record<string, unknown> };
   }
 
@@ -771,6 +829,8 @@ export function extensionEndpoint(env: NodeJS.ProcessEnv = process.env, log?: (l
   if (!endpoint) {
     endpoint = new ExtensionEndpoint({ env, ...(log ? { log } : {}) });
     endpoints.set(key, endpoint);
+  } else if (log) {
+    endpoint.useLog(log);
   }
   return endpoint;
 }

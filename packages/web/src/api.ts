@@ -3247,6 +3247,8 @@ export interface ExtensionState {
   extensionMinimum?: string;
   /** The dashboard moved port after this pairing (another program took the old one): pair again with the new address. */
   portMoved?: { from: number; to: number };
+  /** buddi runs from a source checkout, where "Install unpacked" is worth offering. Optional: an older gateway does not send it. */
+  checkout?: boolean;
 }
 export interface BrowserStatus {
   mode?: BrowserMode;

@@ -193,6 +193,21 @@ async function main(): Promise<void> {
     void recount();
   });
 
+  /*
+   * Ask again every few seconds while the popup is open. A worker Chrome
+   * stopped cannot push its last word, and a code left on screen after its
+   * socket went is a code buddi no longer waits for; asking also wakes the
+   * worker, which reconnects and shows a fresh one.
+   */
+  setInterval(() => {
+    void ask<{ state: ClientState }>({ type: 'buddi-get-state' }).then((answer) => {
+      if (!answer?.state || JSON.stringify(answer.state) === JSON.stringify(model.state)) return;
+      model.state = answer.state;
+      draw();
+      void recount();
+    });
+  }, 3000);
+
   wireCopy(byId<HTMLButtonElement>(document, 'copy'), () => byId(document, 'code').textContent ?? '');
 
   byId(document, 'connect').addEventListener('click', async () => {

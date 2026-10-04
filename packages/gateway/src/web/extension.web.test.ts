@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { BrowserOpenedError, BrowserService, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import WebSocket from 'ws';
-import { ExtensionEndpoint, MIN_EXTENSION_VERSION, readExtensionLogin } from './extension.js';
+import { ExtensionEndpoint, extensionEndpoint, MIN_EXTENSION_VERSION, readExtensionLogin } from './extension.js';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName, portOf } from './http.js';
 
@@ -30,7 +30,7 @@ afterEach(async () => {
 const proofOf = (token: string, nonce: unknown) =>
   createHmac('sha256', createHash('sha256').update(token).digest('hex')).update(String(nonce)).digest('hex');
 
-async function setup(options: { pingMs?: number; commandTimeoutMs?: number; cancelGraceMs?: number; authTimeoutMs?: number } = {}) {
+async function setup(options: { pingMs?: number; commandTimeoutMs?: number; cancelGraceMs?: number; authTimeoutMs?: number; log?: (line: string) => void } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-'));
   dirs.push(dir);
   const env = { BUDDI_DATA_DIR: dir, BUDDI_EXTENSION_DIR: path.join(dir, 'extension') };
@@ -458,6 +458,75 @@ describe('the browser extension endpoint', () => {
     });
     expect(await refused('203.0.113.7', {})).toContain('403');
     expect(await refused('127.0.0.1', { 'x-forwarded-for': '203.0.113.7' })).toContain('403');
+  });
+});
+
+describe('a fresh install, no pairing record', () => {
+  /*
+   * What the owner hit on a fresh pair: the popup showed "Pairing" and a code
+   * and buddi said no browser was waiting, with nothing in the log either way.
+   * The socket waiting for its code heard nothing, so Chrome stopped the idle
+   * worker half a minute in. Now it is pinged while it waits, and every
+   * attempt is one line in the log, never the code.
+   */
+  it('registers the browser as pending, pings it while it waits, and logs the attempt without the code', async () => {
+    const lines: string[] = [];
+    const { socketUrl, origin, dir } = await setup({ pingMs: 40, log: (line) => lines.push(line) });
+    await expect(readFile(path.join(dir, 'extension.json'), 'utf8')).rejects.toThrow();
+    const headers = await session(origin);
+    const ext = connect(socketUrl);
+    await ext.open;
+    await ext.hello(null);
+    const pair = await ext.next('pair');
+    expect(await (await fetch(`${origin}/api/extension`, { headers })).json()).toMatchObject({ connected: false, pending: true });
+    await ext.next('ping');
+    expect(ext.socket.readyState).toBe(WebSocket.OPEN);
+    expect(lines).toContain(`extension: socket accepted from ${'a'.repeat(32)}`);
+    expect(lines.some((line) => /hello from a{32} \(0\.1\.0\), no pairing yet: waiting for the code/.test(line))).toBe(true);
+    const digits = String(pair.code).replace(/[^0-9]/g, '');
+    expect(lines.join('\n')).not.toContain(digits);
+    expect(lines.join('\n')).not.toContain(String(pair.code));
+    // The owner types it in the app window: paired, and logged as such.
+    const answer = await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code: pair.code }) });
+    expect(answer.status).toBe(200);
+    expect(await ext.next('paired')).toMatchObject({ type: 'paired' });
+    expect(lines).toContain(`extension: paired with ${'a'.repeat(32)}`);
+    expect(lines.join('\n')).not.toMatch(/token/i);
+  });
+
+  it('logs a refused socket with its reason', async () => {
+    const lines: string[] = [];
+    const { socketUrl } = await setup({ log: (line) => lines.push(line) });
+    const refused = new WebSocket(socketUrl, { headers: { Origin: 'https://example.com' } });
+    await new Promise<void>((resolve) => { refused.once('error', () => resolve()); refused.once('close', () => resolve()); });
+    expect(lines.some((line) => line.startsWith('extension: socket refused (403): not a Chrome extension origin (https://example.com)'))).toBe(true);
+  });
+
+  it('says whether buddi runs from a checkout, for the Install unpacked item', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-'));
+    dirs.push(dir);
+    const packaged = new ExtensionEndpoint({ env: { BUDDI_DATA_DIR: dir, BUDDI_EXTENSION_DIR: dir, BUDDI_RUNTIME_CHECKOUT: '0' } });
+    expect((await packaged.view()).checkout).toBe(false);
+    packaged.shutdown();
+    const checkout = new ExtensionEndpoint({ env: { BUDDI_DATA_DIR: dir, BUDDI_EXTENSION_DIR: dir, BUDDI_RUNTIME_CHECKOUT: '1' } });
+    expect((await checkout.view()).checkout).toBe(true);
+    checkout.shutdown();
+    // This test runs in a checkout: without the override, it says so.
+    const plain = new ExtensionEndpoint({ env: { BUDDI_DATA_DIR: dir, BUDDI_EXTENSION_DIR: dir } });
+    expect((await plain.view()).checkout).toBe(true);
+    plain.shutdown();
+  });
+
+  it('takes the server’s log even when the browser host made the endpoint first', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-'));
+    dirs.push(dir);
+    const env = { BUDDI_DATA_DIR: dir };
+    const first = extensionEndpoint(env);
+    const lines: string[] = [];
+    expect(extensionEndpoint(env, (line) => lines.push(line))).toBe(first);
+    expect((await first.pair('123456')).status).toBe(409);
+    expect(lines).toContain('extension: a code was typed with no browser waiting');
+    first.shutdown();
   });
 });
 

@@ -37,6 +37,16 @@ const MAX_BACKOFF = 30_000;
 const KNOCK_MS = 3000;
 /** Three missed pings and the gateway is gone; reconnecting is cheap. */
 const SILENCE = 70_000;
+/**
+ * Chrome stops a Manifest V3 worker after thirty seconds without an event,
+ * an open WebSocket or not; only traffic on the socket counts as one. The
+ * gateway pings a paired socket every twenty seconds, but a socket waiting for
+ * its code heard nothing from an older gateway, and the worker died half a
+ * minute into pairing with the code still on the popup. So the worker speaks
+ * first, every twenty seconds, whatever state the socket is in. The gateway
+ * ignores the frame.
+ */
+export const KEEPALIVE_MS = 20_000;
 
 /** Loopback only. This extension talks to a buddi on this machine, never to a host on the internet. */
 export function socketUrl(address: string): string {
@@ -110,6 +120,7 @@ const commands = new BrowserCommands(chrome, { onFrame: send, onEvent: send, onL
 let attempt = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let silence: ReturnType<typeof setTimeout> | undefined;
+let keepalive: ReturnType<typeof setInterval> | undefined;
 let last: ClientState = { connection: 'offline', code: null, installation: null, error: null };
 /** The tail of the frame queue: every frame waits for the one before it. */
 let incoming: Promise<void> = Promise.resolve();
@@ -166,7 +177,12 @@ export async function connect(): Promise<void> {
   }
   const opening = new WebSocket(url);
   socket = opening;
-  opening.addEventListener('open', () => { attempt = 0; quiet(); flush(opening); safely(() => protocol.open()); });
+  opening.addEventListener('open', () => {
+    attempt = 0; quiet(); flush(opening);
+    if (keepalive) clearInterval(keepalive);
+    keepalive = setInterval(() => { if (socket === opening) send({ type: 'keepalive' }); }, KEEPALIVE_MS);
+    safely(() => protocol.open());
+  });
   // One frame at a time, in the order they arrived. A WebSocket delivers them
   // in order and the protocol is written as if they were handled that way: a
   // command that follows `paired` must not overtake it, and two commands must
@@ -180,7 +196,7 @@ export async function connect(): Promise<void> {
   // it: the gateway never heard the hello those frames belonged to.
   opening.addEventListener('error', () => { if (socket === opening) pending = []; });
   opening.addEventListener('close', () => {
-    if (socket === opening) { socket = undefined; pending = []; }
+    if (socket === opening) { socket = undefined; pending = []; if (keepalive) { clearInterval(keepalive); keepalive = undefined; } }
     if (silence) { clearTimeout(silence); silence = undefined; }
     protocol.closed('buddi did not answer at this address. Is it running?');
     schedule();
