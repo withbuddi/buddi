@@ -299,6 +299,17 @@ describe('uninstallPackaged: the passphrase leaves with the owner', () => {
   });
 });
 
+describe('uninstallPackaged: buddi.app\'s command line tool', () => {
+  it('lists and removes the shims that run this installation', async () => {
+    const m = machine();
+    const removed: string[] = [];
+    m.deps.shims = { files: ['/usr/local/bin/buddi'], remove: async (file) => { removed.push(file); } };
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
+    expect(m.out).toContain('  - the command line tool /usr/local/bin/buddi');
+    expect(removed).toEqual(['/usr/local/bin/buddi']);
+  });
+});
+
 describe('uninstallPackaged: only the installation installation.json names', () => {
   it('refuses, touching nothing, when installation.json was written for another folder', async () => {
     const m = machine({ state: { version: 1, kind: 'packaged', dataDir: '/Users/owner/Library/Application Support/buddi', vaultService: 'buddi.install.abc' } });

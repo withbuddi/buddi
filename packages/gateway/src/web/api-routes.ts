@@ -938,6 +938,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'GET', path: '/api/backups/passphrase/notice', area: 'system', token: 'secret', summary: 'Home\'s passphrase card: the six words once an encrypted backup exists, until they are acknowledged.', answer: '{ show: false } or { show: true, passphrase }' },
   { method: 'POST', path: '/api/backups/passphrase/notice', area: 'system', summary: '"I saved it": the passphrase card goes for good.', answer: '{ acknowledgedAt }' },
   { method: 'PUT', path: '/api/backups/passphrase', area: 'system', token: 'secret', summary: 'Set the backup passphrase.', body: '{ passphrase: string }', errors: '400' },
+  { method: 'GET', path: '/api/system/cli', area: 'system', summary: 'buddi.app\'s command line tool: whether this buddi offers it and where it is installed. This computer only.', answer: '{ available, installed: string[], reason? }' },
+  { method: 'POST', path: '/api/system/cli', area: 'system', token: 'code', summary: 'Install buddi.app\'s command line tool: /usr/local/bin/buddi (an administrator prompt), else ~/.local/bin/buddi.', answer: '{ file, lines: string[] }', errors: '409 npm\'s buddi is on PATH, another program\'s buddi is there, or this is not buddi.app' },
   { method: 'GET', path: '/api/system/uninstall', area: 'system', token: 'access', summary: 'Remove buddi from this Mac: what goes, and a confirmation token for the next two calls. This computer only.', answer: '{ available, data, keychain?, service?, app?, backups, appFinishes, token } or { available: false, reason }', errors: '403 not this computer' },
   { method: 'POST', path: '/api/system/uninstall/backup', area: 'system', token: 'secret', summary: 'The last backup, moved to ~/buddi-backups with <archive>.passphrase.txt beside it.', body: '{ token: string }', answer: '202 { job }', errors: '403 expired token or not this computer; 409 a checkout, a restore or an upgrade' },
   { method: 'GET', path: '/api/system/uninstall/jobs/:id', area: 'system', token: 'secret', summary: 'Where the last backup has got to; when done, its report has the archive, the passphrase file and the six words.', answer: '{ phase, finishedAt?, error?, report?: { archive, passphraseFile?, passphrase? } }' },
@@ -1266,6 +1268,8 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'GET /api/system/cli': '0.1.0-pre.41',
+  'POST /api/system/cli': '0.1.0-pre.41',
   'GET /api/system/uninstall': '0.1.0-pre.41',
   'POST /api/system/uninstall/backup': '0.1.0-pre.41',
   'GET /api/system/uninstall/jobs/:id': '0.1.0-pre.41',

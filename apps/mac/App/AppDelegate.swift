@@ -90,6 +90,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func checkForUpdatesFromMenu() { statusItemController?.checkForUpdates() }
     @objc func uninstallBuddi() { Uninstall.run(supervisor: supervisor) }
 
+    /// buddi → Install Command Line Tool…: the supervisor writes the shim
+    /// (packages/install/src/cli-shim.ts), the same call Settings → System makes.
+    @objc func installCommandLineTool() {
+        let socket = DataDirectory.socket(for: supervisor.data)
+        Task.detached {
+            // macOS's administrator prompt is part of this call: give it time.
+            let answer = try? ControlSocket.request(socket, method: "POST", path: "/cli", body: Data("{}".utf8), timeout: 150)
+            await MainActor.run {
+                let alert = NSAlert()
+                let object = answer.flatMap { try? JSONSerialization.jsonObject(with: $0.1) as? [String: Any] } ?? [:]
+                if let answer, answer.0 == 200 {
+                    alert.messageText = "The command line tool is installed"
+                    alert.informativeText = (object["lines"] as? [String])?.joined(separator: "\n") ?? "Open a new terminal and run buddi status."
+                } else {
+                    alert.messageText = "The command line tool was not installed"
+                    alert.informativeText = (object["error"] as? String) ?? "buddi did not answer. Make sure it is running, then try again."
+                }
+                NSApp.activate()
+                alert.runModal()
+            }
+        }
+    }
+
     @objc func openSettings() { mainWindow?.present(); mainWindow?.go(to: DashboardRoutes.settings) }
     @objc func lockDashboard() { mainWindow?.lock() }
     @objc func newConversation() { mainWindow?.present(); mainWindow?.newConversation() }
@@ -111,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch item.action {
         case #selector(lockDashboard), #selector(showFind), #selector(findNext), #selector(findPrevious):
             return shown
-        case #selector(openInBrowser):
+        case #selector(openInBrowser), #selector(installCommandLineTool):
             return running
         case #selector(zoomIn): return shown && (mainWindow?.canZoomIn ?? false)
         case #selector(zoomOut): return shown && (mainWindow?.canZoomOut ?? false)

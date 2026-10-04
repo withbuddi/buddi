@@ -325,6 +325,7 @@ import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
 import { LOCKED_BODY, LockUnavailable, allowedWhileLocked, clientOf, createLock } from './lock.js';
 import { acknowledgePassphrase, passphraseNotice, type PassphraseNoticeDeps } from './passphrase-notice.js';
+import { cliToolRoute } from './cli-tool.js';
 import { createTokenStore, uninstallBackupRoute, uninstallJobRoute, uninstallPlanRoute, uninstallRoute as removeBuddiRoute, withoutPassphrase } from './uninstall.js';
 import { matchApiRoute, TOKEN_REFUSALS } from './api-routes.js';
 import { QUIET_UNAVAILABLE_TEXT, pluginCommands } from './composer.js';
@@ -2422,6 +2423,11 @@ export function createWebApp(deps: WebServerDeps): Server {
       const backupJob = /^\/api\/backups\/jobs\/([0-9a-f-]{36})$/i.exec(path);
       if (backupJob) return reply(res, withoutPassphrase(await backupJobRoute(backupDeps(), backupJob[1] as string)));
 
+      /* buddi.app's command line tool: whether it is installed, from this computer only. */
+      if (path === '/api/system/cli') {
+        if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+        return reply(res, await cliToolRoute(deps.env ?? process.env, 'GET'));
+      }
       /* Remove buddi from this Mac: the plan (with its token) and the last backup's job, from this computer only. */
       if (path === '/api/system/uninstall') {
         if (session.via !== 'local') return sendJson(res, 403, { error: 'Remove buddi from the computer it runs on.' });
@@ -3672,6 +3678,10 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     if (path === '/api/backups') return reply(res, await createBackupRoute(backupDeps(), body));
     if (path === '/api/backups/passphrase/notice') return sendJson(res, 200, await acknowledgePassphrase({ pool: deps.pool, now: deps.now }));
+    if (path === '/api/system/cli') {
+      if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+      return reply(res, await cliToolRoute(deps.env ?? process.env, 'POST'));
+    }
     if (path === '/api/system/uninstall/backup' || path === '/api/system/uninstall') {
       if (session.via !== 'local') return sendJson(res, 403, { error: 'Remove buddi from the computer it runs on.' });
       const uninstallDeps = { env: deps.env ?? process.env, now: deps.now };

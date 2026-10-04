@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-320 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+322 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -4202,6 +4202,8 @@ curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/telegram/
 | GET | `/api/backups/passphrase/notice` | Home's passphrase card: the six words once an encrypted backup exists, until they are acknowledged. | no |
 | POST | `/api/backups/passphrase/notice` | "I saved it": the passphrase card goes for good. | yes |
 | PUT | `/api/backups/passphrase` | Set the backup passphrase. | no |
+| GET | `/api/system/cli` | buddi.app's command line tool: whether this buddi offers it and where it is installed. This computer only. | yes |
+| POST | `/api/system/cli` | Install buddi.app's command line tool: /usr/local/bin/buddi (an administrator prompt), else ~/.local/bin/buddi. | no |
 | GET | `/api/system/uninstall` | Remove buddi from this Mac: what goes, and a confirmation token for the next two calls. This computer only. | no |
 | POST | `/api/system/uninstall/backup` | The last backup, moved to ~/buddi-backups with <archive>.passphrase.txt beside it. | no |
 | GET | `/api/system/uninstall/jobs/:id` | Where the last backup has got to; when done, its report has the archive, the passphrase file and the six words. | no |
@@ -4482,6 +4484,31 @@ Set the backup passphrase.
 
 ```sh
 curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"passphrase":"…"}' "$BUDDI_URL/api/backups/passphrase"
+```
+
+#### `GET /api/system/cli`
+
+buddi.app's command line tool: whether this buddi offers it and where it is installed. This computer only.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ available, installed: string[], reason? }`
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/system/cli"
+```
+
+#### `POST /api/system/cli`
+
+Install buddi.app's command line tool: /usr/local/bin/buddi (an administrator prompt), else ~/.local/bin/buddi.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It installs or runs code buddi has not run before.
+- **Answer:** `{ file, lines: string[] }`
+- **Errors:** 409 npm's buddi is on PATH, another program's buddi is there, or this is not buddi.app
+- **Since:** 0.1.0-pre.41
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/system/cli"
 ```
 
 #### `GET /api/system/uninstall`

@@ -429,3 +429,14 @@ describe('an upgrade inside buddi.app', () => {
     expect(await releaseLinks(releases)).toEqual({});
   });
 });
+
+describe('whose copy a supervisor runs', () => {
+  const data = '/Users/me/Library/Application Support/buddi';
+  test('buddi.app\'s bundle and the releases it installed are the app\'s; npm\'s is not', async () => {
+    const { runsAppCopy, APP_RUNNING_LINE } = await import('./app-layout.js');
+    expect(runsAppCopy('/Applications/buddi.app/Contents/Resources/buddi/buddi-0.1.0', data)).toBe(true);
+    expect(runsAppCopy(`${data}/releases/buddi-0.1.1/node_modules/@withbuddi/buddi`, data)).toBe(true);
+    expect(runsAppCopy('/opt/homebrew/lib/node_modules/@withbuddi/buddi', data)).toBe(false);
+    expect(APP_RUNNING_LINE).toBe('buddi is already running from buddi.app; this command line talks to it.');
+  });
+});

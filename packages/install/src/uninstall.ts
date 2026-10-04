@@ -108,6 +108,8 @@ export interface PackagedUninstallDeps {
   telegram?: { collect: () => Promise<() => Promise<void>> };
   /** The dashboard app, when it exists and this installation wrote it. */
   app?: string;
+  /** buddi.app's command line tool shims that run this installation (cli-shim.ts), and how to remove one. */
+  shims?: { files: string[]; remove: (file: string) => Promise<void> };
   sleep: (ms: number) => Promise<void>;
   io: UninstallIo;
 }
@@ -245,6 +247,12 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
   if (deps.app !== undefined) {
     const app = deps.app;
     steps.push({ line: `the dashboard app ${app}`, run: () => deps.remove(app) });
+  }
+
+  /* buddi.app's command line tool: a buddi on PATH that would run nothing once this is gone. */
+  if (deps.shims) {
+    const shims = deps.shims;
+    for (const file of shims.files) steps.push({ line: `the command line tool ${file}`, bestEffort: true, run: () => shims.remove(file) });
   }
 
   /* The extension pairing lives in the data directory; --keep-data keeps it. */

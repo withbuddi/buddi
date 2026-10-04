@@ -37,6 +37,7 @@ import { PLUGINS_LEDE, Plugins } from './Plugins';
 import { Notifications, TelegramSettings } from './Notifications';
 import { AppInstallSection } from './parts/KeepClose';
 import { RemoveBuddi } from './parts/RemoveBuddi';
+import { CommandLineTool } from './parts/CommandLineTool';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 import { CONNECTION_DOT } from '../shell/Rail';
 import { UPGRADE_PATIENCE_MS, cancelRestart, restartWhile, updateRestart } from '../shell/restart';
@@ -336,6 +337,7 @@ function System({ timezone }: { timezone: string }): JSX.Element {
       </Section>
       <Service />
       <AppInstallSection />
+      <CommandLineTool />
       <AccessSettings />
       <Section title="Mail and sources" panel>
         {!data ? (

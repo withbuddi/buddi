@@ -3029,6 +3029,9 @@ export const api = {
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
   /** The passphrase behind the lock-screen PIN (none needed when no PIN is set). */
   revealBackupPassphrase: (pin?: string) => post<{ passphrase: string }>('/backups/passphrase/reveal', pin === undefined ? {} : { pin }),
+  /* ---- buddi.app's command line tool ---- */
+  cliTool: () => get<{ available: boolean; installed: string[]; reason?: string }>('/system/cli'),
+  installCliTool: () => post<{ file: string; lines: string[] }>('/system/cli', {}),
   /* ---- remove buddi from this Mac ---- */
   uninstallPlan: () => get<UninstallPlan>('/system/uninstall'),
   uninstallBackup: (token: string) => post<{ job: UninstallJob }>('/system/uninstall/backup', { token }),

@@ -9,9 +9,9 @@
  */
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, openSync, closeSync, mkdirSync } from 'node:fs';
+import { createWriteStream, existsSync, openSync, closeSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import { readFile, chmod, unlink, lstat, mkdir, rename, copyFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url';
 import { acquireLock, initialize, atomicJson, stopChild, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
 import { APP_UNINSTALL_EXIT, UNINSTALL_REQUEST, createProductUninstall } from './product-uninstall.js';
 import type { ProductUninstall } from './product-uninstall.js';
+import { installShim, shimsFor } from './cli-shim.js';
+import type { ShimOutcome } from './cli-shim.js';
 import type { InstallContext, ReadyContext } from './environment.js';
 import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule, sweepIncoming } from './backup.js';
 import type { BackupControl } from './backup.js';
@@ -49,6 +51,23 @@ export function pendingUpgrade(marker: UpgradeInProgress | undefined): UpgradeIn
 /** The control socket of the installation whose data directory this is. */
 export function supervisorSocket(data: string): string {
   return path.join(data, 'supervisor.sock');
+}
+
+/** Single quotes for sh. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * One shell command with macOS's administrator prompt (osascript's `with
+ * administrator privileges`): the owner sees the system dialog, once. Throws
+ * when it is declined or fails.
+ */
+function runAsAdmin(command: string): Promise<void> {
+  const script = `do shell script ${JSON.stringify(command)} with administrator privileges`;
+  return new Promise((resolve, reject) => {
+    execFile('/usr/bin/osascript', ['-e', script], { timeout: 120_000 }, (error) => (error ? reject(error) : resolve()));
+  });
 }
 
 export function restartDelay(failures: number): number { return Math.min(30_000, 2000 * 2 ** Math.min(failures, 4)); }
@@ -85,6 +104,8 @@ export interface ControlSocketOptions {
   data?: string | undefined;
   /** Uninstall from the product (product-uninstall.ts). */
   uninstall?: ProductUninstall | undefined;
+  /** buddi.app's command line tool (cli-shim.ts); absent outside the app. */
+  cli?: { status: () => { available: boolean; installed: string[]; reason?: string }; install: () => Promise<ShimOutcome> } | undefined;
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -137,7 +158,7 @@ function optionalString(value: unknown): string | undefined {
  * `<data>/incoming/`, and that is checked to be under that directory, resolved,
  * before it is passed on.
  */
-export function controlSocket({ status, action, backup, upgrade, data, uninstall }: ControlSocketOptions): Server {
+export function controlSocket({ status, action, backup, upgrade, data, uninstall, cli }: ControlSocketOptions): Server {
   return createServer((req, res) => {
     void handle(req, res).catch(() => send(res, 500, { error: 'The supervisor could not complete that action.' }));
   });
@@ -265,6 +286,14 @@ export function controlSocket({ status, action, backup, upgrade, data, uninstall
       });
       if ('status' in outcome) return send(res, outcome.status, { error: outcome.error });
       return send(res, 202, { job: outcome });
+    }
+    if (route === '/cli') {
+      if (!cli) return send(res, 404, { error: 'no such endpoint' });
+      if (method === 'GET') return send(res, 200, cli.status());
+      if (method === 'POST') {
+        const outcome = await cli.install();
+        return outcome.ok ? send(res, 200, { file: outcome.file, lines: outcome.lines }) : send(res, outcome.status, { error: outcome.error });
+      }
     }
     if (route === '/uninstall' && method === 'GET') {
       if (!uninstall) return send(res, 404, { error: 'no such endpoint' });
@@ -543,12 +572,41 @@ export async function supervise(ctx: InstallContext): Promise<void> {
         closeSync(fd);
       },
     });
+    // buddi.app's command line tool: one code path for the app's menu and Settings → System (cli-shim.ts).
+    const appBundle = process.env.BUDDI_APP_BUNDLE?.trim();
+    const shimDeps = () => ({
+      home,
+      searchPath: (startEnv.PATH ?? '').split(':'),
+      exists: existsSync,
+      realPath: (file: string) => { try { return realpathSync(file); } catch { return undefined; } },
+      read: (file: string) => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } },
+      write: async (file: string, text: string) => {
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, text, { mode: 0o755 });
+        await chmod(file, 0o755);
+      },
+      writeAsAdmin: async (file: string, text: string) => {
+        const staged = path.join(ready.data, `.cli-shim-${process.pid}`);
+        await writeFile(staged, text, { mode: 0o755 });
+        try { await runAsAdmin(`/bin/mkdir -p ${shellQuote(path.dirname(file))} && /usr/bin/install -m 0755 ${shellQuote(staged)} ${shellQuote(file)}`); }
+        finally { await rm(staged, { force: true }); }
+      },
+      remove: (file: string) => rm(file, { force: true }),
+      removeAsAdmin: (file: string) => runAsAdmin(`/bin/rm -f ${shellQuote(file)}`),
+    });
+    const cli = appFinishes && appBundle ? {
+      status: () => ({ available: true, installed: shimsFor(ready.data, shimDeps()) }),
+      install: () => installShim({ app: appBundle, data: ready.data }, shimDeps()),
+    } : {
+      status: () => ({ available: false, installed: [] as string[], reason: 'This buddi came from npm, and its buddi command is already on your PATH.' }),
+      install: async (): Promise<ShimOutcome> => ({ ok: false, status: 409, error: 'This buddi came from npm, and its buddi command is already on your PATH.' }),
+    };
     server = controlSocket({
       status: () => ({ phase: ready.state.phase, supervisorPid: process.pid, installRoot: ready.root, nodePath: process.execPath, database: database!.pid ? (database!.alive ? 'running' : 'failed') : 'external', databasePid: database!.pid,
         gateway: child && child.exitCode === null && child.signalCode === null ? 'running' : 'stopped', gatewayPid: child?.pid ?? null,
         current, upgrading: upgrade!.busy() }),
       action: name => { console.error(`supervisor: ${name} asked for on the control socket.`); chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
-      backup, upgrade, data: ready.data, uninstall,
+      backup, upgrade, data: ready.data, uninstall, cli,
     });
     await listenOnSocket(server, supervisorSocket(ready.data));
     if (migrationFailure === undefined) start();

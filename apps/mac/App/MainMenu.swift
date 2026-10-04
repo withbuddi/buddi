@@ -17,6 +17,7 @@ enum MainMenu {
         item(app, "Settings…", #selector(AppDelegate.openSettings), key: ",", target: target)
         item(app, "Lock", #selector(AppDelegate.lockDashboard), key: "l", modifiers: [.control, .command], target: target)
         app.addItem(.separator())
+        item(app, "Install Command Line Tool…", #selector(AppDelegate.installCommandLineTool), target: target)
         item(app, "Uninstall buddi…", #selector(AppDelegate.uninstallBuddi), target: target)
         app.addItem(.separator())
         let services = NSMenu(title: "Services")

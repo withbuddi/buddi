@@ -81,6 +81,14 @@ export function insideAppBundle(root: string): boolean {
   return /\.app\/Contents\//.test(root.split(path.sep).join('/') + '/');
 }
 
+/** Does a supervisor with this install root run buddi.app's copy: the bundle's, or a release the app installed? */
+export function runsAppCopy(installRoot: string, data: string): boolean {
+  return insideAppBundle(installRoot) || installRoot.startsWith(path.join(data, 'releases') + path.sep);
+}
+
+/** What npm's buddi says when buddi.app already runs this installation. */
+export const APP_RUNNING_LINE = 'buddi is already running from buddi.app; this command line talks to it.';
+
 export function releaseDir(releases: string, version: string): string {
   return path.join(releases, `buddi-${version}`);
 }

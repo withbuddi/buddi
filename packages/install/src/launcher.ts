@@ -14,7 +14,7 @@ import { request } from 'node:http';
 import { open, mkdir, writeFile, rm, rename, copyFile, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { environment, identityMismatch, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
@@ -22,7 +22,8 @@ import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
-import { appLayout, insideAppBundle } from './app-layout.js';
+import { APP_RUNNING_LINE, appLayout, insideAppBundle, runsAppCopy } from './app-layout.js';
+import { shimDoctorLines, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
 
 const entry = fileURLToPath(import.meta.url);
@@ -87,6 +88,11 @@ async function ask<T>(ctx: InstallContext, method: string, route: string, body?:
  */
 function isAppInstall(ctx: InstallContext): boolean {
   return appLayout(process.env) !== undefined || insideAppBundle(root) || root.startsWith(path.join(ctx.data, 'releases') + path.sep);
+}
+
+/** Does the supervisor answering run buddi.app's copy (the bundle's, or a release it installed)? */
+function runsFromApp(status: SupervisorStatus, ctx: InstallContext): boolean {
+  return runsAppCopy(status.installRoot, ctx.data);
 }
 
 function withApp(view: VersionView, ctx: InstallContext): VersionView {
@@ -239,6 +245,15 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
       },
     }),
     ...(app === undefined ? {} : { app }),
+    ...(() => {
+      const shimDeps = { home, exists: existsSync, read: (file: string) => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } } };
+      const files = shimsFor(ctx.data, shimDeps);
+      if (files.length === 0) return {};
+      return { shims: { files, remove: async (file: string) => {
+        try { await rm(file, { force: true }); if (!existsSync(file)) return; } catch { /* root's folder */ }
+        await exec('/usr/bin/osascript', ['-e', `do shell script ${JSON.stringify(`/bin/rm -f '${file.replace(/'/g, `'\\''`)}'`)} with administrator privileges`]);
+      } } };
+    })(),
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     io: {
       log: line => console.log(line),
@@ -525,6 +540,11 @@ async function run(): Promise<void> {
     return;
   }
   if (!wantsHelp && args[0] === 'doctor') {
+    // Which buddi answered, and from where: buddi.app's copy, a release it installed, or npm's.
+    const invoked = (() => { try { return realpathSync(process.argv[1] ?? entry); } catch { return entry; } })();
+    console.log(`This buddi: ${invoked} (Node ${process.execPath})`);
+    console.log(`From: ${insideAppBundle(root) ? `buddi.app (${root.slice(0, root.indexOf('.app/') + 4)})` : root.startsWith(path.join(ctx.data, 'releases') + path.sep) ? `an update buddi.app installed (${root})` : `npm (${root})`}`);
+    for (const line of shimDoctorLines({ home: os.homedir(), exists: existsSync, read: file => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } } })) console.log(line);
     console.log(`Data: ${ctx.data}`);
     // What the vault is and what it protects, said the same way everywhere
     // (install.md §4): the keychain on a Mac, the file beside its key elsewhere.
@@ -558,6 +578,15 @@ async function run(): Promise<void> {
     else if (view.processing) console.log(view.processing.message);
     else if (view.latest !== undefined) console.log('This is the latest version.');
     return;
+  }
+  if (!wantsHelp && args[0] === 'upgrade' && !isAppInstall(ctx)) {
+    // npm's buddi in front of buddi.app's supervisor: the app updates buddi, not this command.
+    const status = await control(ctx).catch(() => undefined);
+    if (status !== undefined && runsFromApp(status, ctx)) {
+      console.log(APP_RUNNING_LINE);
+      console.log('Update buddi from the app: buddi → Update to … in the menu bar, or Settings → System.');
+      return;
+    }
   }
   if (!wantsHelp && args[0] === 'upgrade') {
     // The checkout's `--no-backup` has no meaning here: the archive is the way
@@ -612,6 +641,10 @@ async function run(): Promise<void> {
         const status = await control(ctx);
         if (status.installRoot === root && status.nodePath === process.execPath) {
           if (status.gateway === 'stopped') await control(ctx, 'start');
+          running = true;
+        } else if (runsFromApp(status, ctx) && !isAppInstall(ctx)) {
+          // npm's buddi, with buddi.app running this installation: install no service, talk to the app's.
+          console.log(APP_RUNNING_LINE);
           running = true;
         }
       } catch { /* A missing supervisor is normal on first run. */ }

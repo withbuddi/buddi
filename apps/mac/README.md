@@ -237,10 +237,35 @@ GitHub release asset (`url` in `latest.json`), and `/appcast.xml` is the feed. A
 pre-release that npm puts under `next` (once a stable release exists) is attached to
 its GitHub release, and neither pointer moves.
 
+## The command line tool
+
+buddi → Install Command Line Tool… (and the same button in Settings → System) asks the
+supervisor to write a few lines of sh at `/usr/local/bin/buddi` (macOS asks for an
+administrator once), or at `~/.local/bin/buddi` when that is declined, with a line on
+how to put that folder on PATH (`packages/install/src/cli-shim.ts`). The shim runs the
+bundled Node with `<data>/releases/current` when buddi has updated itself and the
+bundle's copy otherwise, always with the app's `BUDDI_DATA_DIR`, so updates never need
+it rewritten. It refuses while npm's `buddi` is on PATH ("already installed from npm at
+<path>; remove it first for the app's copy"); `buddi doctor` says which executable
+answered and from where, and warns when a shim's app has gone. npm's `buddi` run while
+the app's supervisor is up installs no service ("buddi is already running from
+buddi.app; this command line talks to it"), and its `buddi upgrade` says the same
+instead of updating. Uninstall removes the shim.
+
+## Uninstall
+
+buddi → Uninstall buddi… and Settings → System's "Remove buddi from this Mac" list what
+goes, take the last backup into `~/buddi-backups` with `<archive>.passphrase.txt` beside
+it, show the six words with Copy and an "I wrote it down" box, and offer "Keep my data
+for a reinstall". Then buddi stops, the launcher's `buddi uninstall --yes --no-backup
+--i-have-the-passphrase` removes the service, the data and the keychain entries, and the
+app moves itself to the Trash and quits. From the dashboard the supervisor writes
+`<data>/uninstall.json` and exits with status 76 (`APP_UNINSTALL_EXIT`); the app
+finishes the same way (`App/Uninstall.swift`).
+
 ## Not built yet
 
-- "Install command line tool" (`Contents/Resources/bin/buddi`) and a richer status
-  line (agents, last update).
+- A richer status line (agents, last update).
 - A real app icon (today it's the web `apple-touch-icon` scaled up, as a placeholder).
 - A release of buddi that needs a newer Node than the bundled one waits for an app
   update; the upgrade does not check `engines.node` yet.
