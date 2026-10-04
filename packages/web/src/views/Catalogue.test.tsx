@@ -15,7 +15,7 @@ import { DRAFT_KEY } from '../chat/draft';
 import { NEEDS_ROUTE } from '../routes';
 import { Catalogue, CatCard, cardState } from './Catalogue';
 import { CatalogueLine, RemoveFromTeam } from './parts/AgentCatalogueBits';
-import { HandoverTeam, suggestFrom, suggestNames, teamIsNew } from './parts/CatalogueSuggest';
+import { HandoverTeam, suggestFrom, suggestNames, suggestWithReasons, teamIsNew } from './parts/CatalogueSuggest';
 import { UpdateSheet } from './parts/CatalogueSheets';
 import { reachRows } from './parts/catalogue-words';
 import { Plugins } from './Plugins';
@@ -540,6 +540,42 @@ describe('suggestions', () => {
     expect(api.catalogueInstall).toHaveBeenNthCalledWith(2, 'cfo', { version: '1.0.0', tools: expect.any(Array) });
     fireEvent.click(screen.getByRole('button', { name: 'See all teammates' }));
     expect(navigate).toHaveBeenCalledWith('#/agents/catalogue');
+  });
+
+  it('gives each suggestion its reason, and keeps a pick one step from ready with that step', () => {
+    const list = suggestWithReasons(VIEW.agents, { days: true, pictures: true });
+    expect(list.map((s) => [s.entry.name, s.reason, s.blocked?.step ?? null])).toEqual([
+      ['chief-of-staff', 'because you set up My days', null],
+      ['illustrator', 'because you set up Pictures', 'choose a drawing account'],
+      ['tutor', 'popular', null],
+    ]);
+    expect(suggestWithReasons(VIEW.agents, { mailbox: true })[0]).toMatchObject({ reason: 'because you added a mailbox' });
+    expect(suggestWithReasons(VIEW.agents, { money: true })[0]).toMatchObject({ reason: 'because you set up My money' });
+  });
+
+  it('the handover card shows the reasons, greys a pick that is not ready with its one step and a link to it', async () => {
+    const navigate = vi.fn();
+    render(<HandoverTeam setUp={{ days: true, pictures: true }} navigate={navigate} />);
+    const chief = await screen.findByTestId('cat-pick-chief-of-staff');
+    expect(chief).toHaveTextContent('because you set up My days');
+    expect(screen.getByTestId('cat-pick-tutor')).toHaveTextContent('popular');
+    const blocked = screen.getByTestId('cat-pick-illustrator');
+    expect(blocked).toHaveAttribute('data-blocked', 'true');
+    expect(blocked).toHaveTextContent('Illustrator · ready once you choose a drawing account');
+    expect(within(blocked).getByRole('checkbox')).toBeDisabled();
+    // Only the two that can join now are ticked and counted.
+    expect(screen.getAllByRole('checkbox').filter((b) => (b as HTMLInputElement).checked)).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Add these' })).toBeEnabled();
+    expect(screen.getByText(/^Picked from what you just set up/)).toBeInTheDocument();
+    fireEvent.click(within(blocked).getByRole('button', { name: 'Choose a drawing account' }));
+    expect(navigate).toHaveBeenCalledWith(expect.stringContaining('image'));
+  });
+
+  it('does not claim the picks came from the setup when only popular fillers show', async () => {
+    render(<HandoverTeam setUp={{}} navigate={vi.fn()} />);
+    expect(await screen.findByTestId('cat-pick-tutor')).toHaveTextContent('popular');
+    expect(screen.queryByText(/Picked from what you just set up/)).not.toBeInTheDocument();
+    expect(screen.getByText('A few teammates people often start with. One click adds the ones you tick.')).toBeInTheDocument();
   });
 });
 

@@ -134,6 +134,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         return false
     }
 
+    /// Coming to the front gives the page the keyboard, so the composer's
+    /// cursor is live without a click into the window first.
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let key = notification.object as? NSWindow, key === window, revealed else { return }
+        key.makeFirstResponder(webView)
+    }
+
     /// A popup window (window.open from the dashboard) went away.
     func windowWillClose(_ notification: Notification) {
         guard let closed = notification.object as? NSWindow, closed !== window else { return }
@@ -351,7 +358,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard webView === self.webView, !revealed else { return }
+        guard webView === self.webView else { return }
+        // A reload (⌘R, an update) keeps the keyboard in the page as the first load does.
+        guard !revealed else { window?.makeFirstResponder(webView); return }
         if case .running = supervisor.health { reveal() }
     }
 

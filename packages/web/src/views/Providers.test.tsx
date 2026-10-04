@@ -52,8 +52,10 @@ it('renders device sign-in inside the account card with cancellation and no paid
     kind: 'codex', auth: 'chatgpt', login: { state: 'pending', verificationUrl: 'http://localhost/device', userCode: 'ABCD-1234', expiresAt: '2026-09-19T12:00:00Z' },
   }] });
   render(<Providers />);
-  expect(await screen.findByText('ABCD-1234')).toBeInTheDocument();
-  expect(screen.getByDisplayValue('ABCD-1234')).toBeInTheDocument();
+  // The code once, in its field; the sentence does not repeat it.
+  expect(await screen.findByDisplayValue('ABCD-1234')).toBeInTheDocument();
+  expect(screen.queryByText('ABCD-1234')).not.toBeInTheDocument();
+  expect(screen.getByText('Open openai.com, type this code there and approve buddi.')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Open openai.com' })).toHaveAttribute('href', 'http://localhost/device');
   expect(screen.getByRole('link', { name: 'Open openai.com' })).toHaveAttribute('rel', 'noreferrer');
   expect(screen.getByText(/The code works until/)).toBeInTheDocument();

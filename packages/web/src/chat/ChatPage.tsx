@@ -102,6 +102,13 @@ export interface ChatPageProps {
   newConversationSignal?: number;
 }
 
+/** A sheet or dialog is open, or this is a touch screen: leave the focus where it is. */
+function composerFocusUnwanted(): boolean {
+  if (typeof document === 'undefined') return true;
+  if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return true;
+  return window.matchMedia?.('(pointer: coarse)').matches === true;
+}
+
 export function ChatPage({
   timezone,
   agents,
@@ -773,6 +780,25 @@ export function ChatPage({
   // Which door that sentence opens: Plugins when a plugin is what is missing,
   // Model accounts otherwise.
   const blockedFix = cannotRunFix(group ? null : agent);
+
+  /*
+   * The cursor goes where the owner is about to type: a thread opened from
+   * the list, New conversation, or first run's Open buddi lands in the
+   * composer. Not while a card stands in its place (an approval, a question),
+   * not over an open sheet or dialog, and not on a touch screen, where focus
+   * would throw the keyboard up over the thread.
+   */
+  const hasCard = docked.length > 0 || Boolean(conversation?.question);
+  const cardShown = useRef(hasCard);
+  cardShown.current = hasCard;
+  useEffect(() => {
+    if (cardShown.current || composerFocusUnwanted()) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      if (cardShown.current || composerFocusUnwanted()) return;
+      composer.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [agentId, group?.id, conversationId, newConversationSignal]);
 
   const thinking = agent && switchedFor === agent.id ? thinkingNow : (agent?.thinking ?? null);
   /**

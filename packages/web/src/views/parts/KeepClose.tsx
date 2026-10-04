@@ -117,8 +117,17 @@ export function onLoopback(hostname: string = window.location.hostname): boolean
   return host === '127.0.0.1' || host === '::1' || host === 'localhost';
 }
 
-/** Where this browser keeps "install", in one sentence; null when it has none. */
+/**
+ * The page is running inside buddi.app's own window: its WKWebView names
+ * itself `buddi-mac/<version>` in the user agent (MainWindowController).
+ */
+export function inBuddiApp(userAgent: string = typeof navigator === 'undefined' ? '' : navigator.userAgent): boolean {
+  return /\bbuddi-mac\/\S+/.test(userAgent);
+}
+
+/** Where this browser keeps "install", in one sentence; null when it has none (or it is buddi.app already). */
 export function installHint(userAgent: string): string | null {
+  if (inBuddiApp(userAgent)) return null;
   if (/Edg\//.test(userAgent)) return 'In Edge, choose Apps → Install buddi from the … menu.';
   if (/(Chrome|CriOS)\//.test(userAgent)) return 'In Chrome, click the install icon in the address bar.';
   if (/Safari\//.test(userAgent) && /Mac/.test(userAgent)) return 'In Safari, choose File → Add to Dock.';

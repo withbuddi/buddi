@@ -1020,6 +1020,8 @@ function DeviceSignIn({
   const [failure, setFailure] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [link, setLink] = useState<string | null>(null);
+  /** The site is open: the sheet waits rather than instructs. */
+  const [opened, setOpened] = useState(false);
   const landed = useRef(onSignedIn);
   landed.current = onSignedIn;
 
@@ -1029,6 +1031,7 @@ function DeviceSignIn({
     setCode(null);
     setFailure(null);
     setLink(null);
+    setOpened(false);
     const ask = async (): Promise<void> => {
       if (stopped) return;
       try {
@@ -1057,6 +1060,7 @@ function DeviceSignIn({
   /** Opened inside the click, onto the page itself: never an empty tab. */
   const openSite = (url: string): void => {
     const tab = window.open(url, '_blank');
+    setOpened(true);
     if (tab) {
       tab.opener = null;
       setLink(null);
@@ -1069,14 +1073,14 @@ function DeviceSignIn({
   return (
     <>
       <p>
-        Type this code on {service}’s site and say yes there. buddi keeps the sign-in in its vault and sends it only to{' '}
+        {code ? `Open ${address}, type this code there and say yes.` : `Type a code on ${service}’s site and say yes there.`} buddi keeps the sign-in in its vault and sends it only to{' '}
         <span className="mono">{connection.host}</span>. No agent ever sees it.
       </p>
       {code === null && failure === null ? <Empty>Asking {service} for a code…</Empty> : null}
       {code && failure === null ? (
         <>
           <SignInCode code={code.userCode} label={`Your code for ${service}`} large />
-          <Notice tone="accent" role="status">Waiting for you to approve on {service}…</Notice>
+          {opened ? <Notice tone="accent" role="status">Waiting for you to approve on {service}…</Notice> : null}
           {link ? <p><a href={link} target="_blank" rel="noopener noreferrer">Open {address}</a></p> : null}
           <Toolbar align="end">
             <Button variant="accent" onClick={() => openSite(code.verificationUri)}>Open {address}</Button>

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CodexOAuthProtocol, codexAccountId, codexAuthJson, codexTokenExpiry, readCodexTokens } from './codex-oauth.js';
+import { CodexOAuthProtocol, codexAccountEmail, codexAccountId, codexAuthJson, codexTokenExpiry, readCodexTokens } from './codex-oauth.js';
 import type { HttpTransport, TransportResponse } from './transport.js';
 
 function fakeJwt(claims: Record<string, unknown>): string {
@@ -113,5 +113,15 @@ describe('vault envelope', () => {
     const file = JSON.parse(codexAuthJson(tokens, () => 0));
     expect(file).toEqual({ auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: { id_token: 'id-1', access_token: envelope.accessToken, refresh_token: 'r1', account_id: 'acct-1' }, last_refresh: '1970-01-01T00:00:00.000Z' });
     expect(readCodexTokens(JSON.stringify(file))).toMatchObject({ accessToken: envelope.accessToken, refreshToken: 'r1', accountId: 'acct-1', expiresAt: 2_000_000_000 });
+  });
+});
+
+describe('codexAccountEmail', () => {
+  it('reads the address from the id token, else the access token profile claim', () => {
+    expect(codexAccountEmail(fakeJwt({ email: 'amen@example.com' }), access())).toBe('amen@example.com');
+    expect(codexAccountEmail(undefined, fakeJwt({ 'https://api.openai.com/profile': { email: 'sam@example.com' } }))).toBe('sam@example.com');
+    expect(codexAccountEmail(undefined, access())).toBeUndefined();
+    expect(codexAccountEmail(fakeJwt({ email: 'not an address' }))).toBeUndefined();
+    expect(codexAccountEmail('garbage')).toBeUndefined();
   });
 });

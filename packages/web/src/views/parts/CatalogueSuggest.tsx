@@ -18,7 +18,7 @@ import { Button, Icon, Notice, Spacer, Toolbar } from '../../ui';
 import { cardState, useLoadedPlugins } from '../Catalogue';
 import { CatFace } from './CatFace';
 import { InstallSheet, JOB_POLL_MS } from './CatalogueSheets';
-import { and } from './catalogue-words';
+import { and, missingFix, missingTitle } from './catalogue-words';
 
 export interface SetUp {
   days?: boolean;
@@ -49,6 +49,55 @@ export function suggestFrom(agents: readonly CatalogueAgent[], setUp: SetUp, max
   return picked.slice(0, max);
 }
 
+/** A handover suggestion: why it is offered, and — when it cannot be added yet — its one missing step. */
+export interface Suggestion {
+  entry: CatalogueAgent;
+  /** "because you set up My days"; "popular" for a filler. */
+  reason: string;
+  /** Not addable yet: the step, in words that follow "ready once you", and where it is taken. */
+  blocked?: { step: string; fix: { label: string; route: string } | null };
+}
+
+const FILLERS = ['researcher', 'tutor'];
+
+/** Why the rule picked a package, from what was set up. */
+function reasonFor(name: string, setUp: SetUp): string {
+  if (name === 'chief-of-staff') return setUp.days ? 'because you set up My days' : 'because you added a mailbox';
+  if (name === 'cfo') return 'because you set up My money';
+  if (name === 'illustrator') return 'because you set up Pictures';
+  return 'popular';
+}
+
+/**
+ * The handover's suggestions: the rule's picks with their reasons, a pick that
+ * is one step from ready shown with that step rather than dropped, and fillers
+ * ("popular") until three are on show. At most four.
+ */
+export function suggestWithReasons(agents: readonly CatalogueAgent[], setUp: SetUp, max = 4): Suggestion[] {
+  const out: Suggestion[] = [];
+  for (const name of suggestNames(setUp).filter((n) => !FILLERS.includes(n))) {
+    const entry = agents.find((a) => a.name === name);
+    // Not listed, on the team already, or never addable here: nothing to offer.
+    if (!entry || cardState(entry) !== 'ready') continue;
+    if (entry.addable) {
+      out.push({ entry, reason: reasonFor(name, setUp) });
+      continue;
+    }
+    const missing = entry.missing ?? [];
+    const first = missing.find((m) => missingFix(m) !== null) ?? missing[0];
+    if (!first) continue;
+    const fix = missingFix(first);
+    const step = fix ? fix.label.charAt(0).toLowerCase() + fix.label.slice(1) : `${missingTitle(first)} is here`;
+    out.push({ entry, reason: reasonFor(name, setUp), blocked: { step, fix } });
+  }
+  for (const name of FILLERS) {
+    if (out.length >= 3) break;
+    const entry = agents.find((a) => a.name === name);
+    if (entry && cardState(entry) === 'ready' && entry.addable) out.push({ entry, reason: 'popular' });
+  }
+  return out.slice(0, max);
+}
+
 /**
  * Whether the team is still new: the front desk and the maker plus at most
  * one more. Home shows suggestions then, and the Add a teammate tile after.
@@ -73,17 +122,46 @@ export async function addAndWait(entry: CatalogueAgent, pollMs = JOB_POLL_MS): P
   }
 }
 
-/** A suggestion row with a tick: the face, the title and the pitch. */
-export function CatPick({ entry, checked, onChange }: { entry: CatalogueAgent; checked: boolean; onChange: (checked: boolean) => void }): JSX.Element {
+/** A suggestion row with a tick: the face, the title, why it is offered, and the pitch. */
+export function CatPick({ entry, checked, onChange, reason }: { entry: CatalogueAgent; checked: boolean; onChange: (checked: boolean) => void; reason?: string }): JSX.Element {
   return (
-    <label className="cat-pick" data-checked={checked ? 'true' : undefined}>
+    <label className="cat-pick" data-checked={checked ? 'true' : undefined} data-testid={`cat-pick-${entry.name}`}>
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       <CatFace entry={entry} size="lg" />
       <span className="cat-pick-text">
-        <span className="cat-pick-name">{entry.title}</span>
+        <span className="cat-pick-name">
+          {entry.title}
+          {reason ? <span className="cat-pick-why">{reason}</span> : null}
+        </span>
         <span className="cat-pick-pitch">{entry.pitch}</span>
       </span>
     </label>
+  );
+}
+
+/**
+ * A pick that is one step from ready: greyed, no tick, the step in its name
+ * line ("ready once you add a mailbox") and a way to take it.
+ */
+export function CatPickBlocked({ suggestion, onFix }: { suggestion: Suggestion; onFix: (route: string) => void }): JSX.Element {
+  const { entry, reason, blocked } = suggestion;
+  return (
+    <div className="cat-pick" data-blocked="true" data-testid={`cat-pick-${entry.name}`}>
+      <input type="checkbox" checked={false} disabled aria-label={`${entry.title}: not ready yet`} onChange={() => {}} />
+      <CatFace entry={entry} size="lg" />
+      <span className="cat-pick-text">
+        <span className="cat-pick-name">
+          {entry.title} · ready once you {blocked?.step}
+          <span className="cat-pick-why">{reason}</span>
+        </span>
+        <span className="cat-pick-pitch">{entry.pitch}</span>
+      </span>
+      {blocked?.fix ? (
+        <Button size="sm" onClick={() => onFix(blocked.fix!.route)}>
+          {blocked.fix.label}
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
@@ -174,7 +252,7 @@ export function HomeSuggestions({ navigate }: { navigate: (route: string) => voi
  * are already in), See all teammates opens the catalogue.
  */
 export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (route: string) => void }): JSX.Element | null {
-  const [suggested, setSuggested] = useState<CatalogueAgent[] | null>(null);
+  const [offered, setOffered] = useState<Suggestion[] | null>(null);
   const [ticked, setTicked] = useState<string[]>([]);
   const [phase, setPhase] = useState<'picking' | 'adding' | 'added'>('picking');
   const [joined, setJoined] = useState<CatalogueAgent[]>([]);
@@ -186,17 +264,20 @@ export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (rou
       .catalogue()
       .then((v) => {
         if (cancelled) return;
-        const list = v.unavailable ? [] : suggestFrom(v.agents, setUp);
-        setSuggested(list);
-        setTicked(list.map((a) => a.name));
+        const list = v.unavailable ? [] : suggestWithReasons(v.agents, setUp);
+        setOffered(list);
+        setTicked(list.filter((s) => !s.blocked).map((s) => s.entry.name));
       })
-      .catch(() => { if (!cancelled) setSuggested([]); });
+      .catch(() => { if (!cancelled) setOffered([]); });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  if (!suggested || suggested.length === 0) return null;
+  if (!offered || offered.length === 0) return null;
+  // Only the ones Add can bring in now are ticked and counted; a blocked pick shows its step instead.
+  const suggested = offered.filter((s) => !s.blocked).map((s) => s.entry);
+  const fromSetUp = offered.some((s) => !s.blocked && s.reason !== 'popular');
   const seeAll = (): void => navigate(catalogueRoute());
   const add = async (): Promise<void> => {
     setPhase('adding');
@@ -218,7 +299,7 @@ export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (rou
   const label =
     phase === 'adding'
       ? `Adding ${count === 1 ? suggested.find((a) => a.name === ticked[0])?.title ?? '1' : count}…`
-      : count === suggested.length
+      : count > 0 && count === suggested.length
         ? 'Add these'
         : count > 0
           ? `Add these ${count}`
@@ -252,23 +333,32 @@ export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (rou
         <>
           <div className="handover-team-head">
             <h2 className="handover-team-title">Who do you want on your team?</h2>
-            <p className="cat-small">Picked from what you just set up. Their plugins are already in, so one click adds them all.</p>
+            <p className="cat-small">
+              {fromSetUp
+                ? 'Picked from what you just set up. Their plugins are already in, so one click adds them all.'
+                : 'A few teammates people often start with. One click adds the ones you tick.'}
+            </p>
           </div>
           <div className="cat-picks">
-            {suggested.map((entry) => (
-              <CatPick
-                key={entry.name}
-                entry={entry}
-                checked={ticked.includes(entry.name)}
-                onChange={(v) => setTicked(v ? [...ticked, entry.name] : ticked.filter((x) => x !== entry.name))}
-              />
-            ))}
+            {offered.map((s) =>
+              s.blocked ? (
+                <CatPickBlocked key={s.entry.name} suggestion={s} onFix={navigate} />
+              ) : (
+                <CatPick
+                  key={s.entry.name}
+                  entry={s.entry}
+                  reason={s.reason}
+                  checked={ticked.includes(s.entry.name)}
+                  onChange={(v) => setTicked(v ? [...ticked, s.entry.name] : ticked.filter((x) => x !== s.entry.name))}
+                />
+              ),
+            )}
           </div>
           <div className="handover-team-foot">
             <Toolbar>
               <Button variant="ghost" onClick={seeAll}>See all teammates</Button>
               <Spacer />
-              <Button variant="accent" disabled={count === 0 || phase === 'adding'} onClick={() => void add()}>{label}</Button>
+              <Button variant="accent" disabled={count === 0 || phase === 'adding' || suggested.length === 0} onClick={() => void add()}>{label}</Button>
             </Toolbar>
           </div>
         </>

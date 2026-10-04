@@ -1531,7 +1531,7 @@ export interface ProviderAccount {
   assignedAgents: string[]; test: { state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null } | null;
   removalPending?: boolean;
   reconnectRequired?: boolean;
-  login?: { state: 'pending' | 'connected' | 'failed' | 'cancelled'; verificationUrl?: string; userCode?: string; expiresAt?: string; message?: string; attemptId?: string; deviceName?: string } | null;
+  login?: { state: 'pending' | 'connected' | 'failed' | 'cancelled'; verificationUrl?: string; userCode?: string; expiresAt?: string; message?: string; attemptId?: string; deviceName?: string; /** ChatGPT, once connected: the address it signed in with. */ account?: string } | null;
   /** Ollama Cloud with a device key: which device, and which ollama.com account it is connected to. */
   device?: OllamaDevice | null;
   /** A limit its provider set, while it stands: a daily quota used up, or a burst window it named. */

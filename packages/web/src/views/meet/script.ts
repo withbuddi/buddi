@@ -176,9 +176,12 @@ export const SCRIPT = {
     chatgpt: {
       /** What the account is called, in Settings and on the map. */
       label: 'ChatGPT',
-      /** Around the code, which is drawn in bold between them. */
-      codeBefore: 'Here is your code: ',
-      codeAfter: '. Type it on the openai.com page that just opened and approve buddi. I’ll notice.',
+      /** Before the page is open: in the order the owner does it. The code is in the field under it, once. */
+      instruct: 'Open openai.com, type this code there and approve buddi. I’ll notice.',
+      /** Once the page is open. */
+      waiting: 'Waiting for your approval…',
+      /** Approved: who signed in, when ChatGPT said. */
+      signedIn: (account: string | null): string => (account ? `Signed in as ${account}.` : 'Signed in.'),
       code: 'Your code',
       open: 'Open openai.com',
       again: 'Try again',
@@ -333,6 +336,8 @@ export const SCRIPT = {
       title: 'Your phone, through Telegram',
       line: 'Scan the code with your phone and press Start. Approvals, voice notes and the morning brief land there.',
       setUp: 'Set up Telegram',
+      /** The bot is running already: the sheet opens straight on the square. */
+      pair: 'Pair your phone',
       paired: 'Paired',
       /** Under the rows, once the phone said hello. */
       hello: '✓ That is your phone, talking to me. Approvals reach you there from now on.',
@@ -370,6 +375,12 @@ export const SCRIPT = {
       chromium: 'Use its Chromium',
       fetch: 'Fetch a browser',
       ready: (engine: 'chrome' | 'chromium'): string => (engine === 'chrome' ? 'Chrome, ready' : 'Chromium, ready'),
+      /** Inside buddi.app: it is in the Dock already, so no install advice. */
+      inApp: {
+        title: 'buddi is in your Dock, and a browser of its own',
+        line: 'You’re in buddi.app already. To open it when your Mac starts, choose Start at Login in the buddi menu at the top of your screen. Give your assistant Chrome or its own Chromium (150 MB) so it can look at websites.',
+        extension: 'Get the Chrome extension',
+      },
     },
     /** The map's line once answered. */
     answer: (done: readonly string[]): string => (done.length === 0 ? 'Later, in Settings' : cap(done.join(', '))),
@@ -395,9 +406,14 @@ export const SCRIPT = {
     submit: 'Save it',
     restart: "Saved. It will be ready the next time buddi starts.",
     scan: 'Scan this with your phone and press Start.',
+    /** While a running bot mints the code. */
+    making: 'Making a code…',
+    /** Under the square, until the phone says hello. */
+    waiting: 'Waiting for your Start…',
+    /** …and then, live, before the sheet closes by itself. */
+    pairedWith: (owner: string | undefined): string => (owner?.trim() ? `Paired with ${owner.trim()}’s phone` : 'Paired with your phone'),
     expired: 'That code has run out. I can make you another one.',
     newCode: 'Show a new code',
-    paired: 'That is your phone, talking to me. You can close this and carry on.',
     close: 'Done',
     notNow: 'Not now',
   },

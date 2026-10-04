@@ -3296,6 +3296,16 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .meet-qr { width: 168px; height: 168px; background: #fff; padding: var(--space-2); border-radius: var(--radius); }
 .meet-link { font-size: var(--text-sm); word-break: break-all; }
 
+/* The phone sheet's tile: the square centred and large (about 240 px), white in
+   both themes; the SVG carries its own four-module quiet zone. */
+.tg-pair { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding-block: var(--space-2); }
+.tg-pair-tile { line-height: 0; background: #fff; border-radius: var(--radius-lg); box-shadow: inset 0 0 0 1px var(--line); }
+.tg-pair-qr { display: block; width: calc(var(--space-12) * 5); height: calc(var(--space-12) * 5); }
+.tg-pair-bot { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-muted); }
+.tg-pair-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
+.tg-pair-status { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+.tg-pair-status[data-paired='true'] { color: var(--good); font-weight: var(--weight-semibold); }
+
 /* The quiet way out, under everything, all the way through. */
 
 /* ================================================================== *
@@ -4602,6 +4612,13 @@ button.lk-chip:disabled { cursor: default; }
 .cat-pick-text { display: flex; flex-direction: column; gap: var(--space-0); flex: 1 1 auto; min-width: 0; }
 .cat-pick-name { font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold); color: var(--text); }
 .cat-pick-pitch { font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
+/* Why it is suggested, after the name, in the quiet voice. */
+.cat-pick-why { display: inline-block; white-space: nowrap; margin-left: var(--space-2); font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-normal); color: var(--text-faint); }
+/* One step from ready: greyed and not tickable; its step's button stays live. */
+.cat-pick[data-blocked='true'] { cursor: default; background: var(--surface-sunken); }
+.cat-pick[data-blocked='true']:hover { border-color: var(--line); }
+.cat-pick[data-blocked='true'] .ui-avatar, .cat-pick[data-blocked='true'] .cat-face, .cat-pick[data-blocked='true'] .cat-pick-text { opacity: 0.6; }
+.cat-pick[data-blocked='true'] .ui-btn { flex: 0 0 auto; }
 .cat-picks { display: grid; grid-template-columns: 1fr; gap: var(--space-2); }
 .cat-suggest { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-panel); cursor: pointer; text-align: left; transition: border-color var(--dur-fast) ease, transform var(--dur) var(--ease-spring), box-shadow var(--dur) ease; }
 .cat-suggest:hover { border-color: var(--line-strong); transform: translateY(calc(var(--space-0) * -1)); box-shadow: var(--shadow-pop); }

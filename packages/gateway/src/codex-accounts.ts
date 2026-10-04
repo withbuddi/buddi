@@ -1,6 +1,6 @@
 import type { CodexImage, CodexImageOptions, CodexProfile, Vault } from '@buddi/core';
 import {
-  CodexOAuthProtocol, createCodexDirectAdapter, generateCodexImage, listCodexModels, readCodexTokens, refreshDiscipline, stageCodexProfile,
+  CodexOAuthProtocol, codexAccountEmail, createCodexDirectAdapter, generateCodexImage, listCodexModels, readCodexTokens, refreshDiscipline, stageCodexProfile,
   type AccountModels, type CodexTokens, type CompletionRequest, type CompletionResponse, type HttpTransport,
 } from '@buddi/runtime';
 
@@ -8,6 +8,8 @@ export interface CodexLoginView {
   state: 'pending' | 'connected' | 'cancelled' | 'failed';
   verificationUrl?: string; userCode?: string; expiresAt?: string;
   message?: string;
+  /** Once connected: the address the ChatGPT account signed in with, when its token names one. */
+  account?: string;
 }
 export interface CodexAccountAccess {
   id: string;
@@ -108,8 +110,8 @@ export class CodexAccounts {
     const deadline = Math.min(start.expiresAt, this.now() + (this.deps.loginTimeoutMs ?? 15 * 60_000));
     const view: CodexLoginView = { state: 'pending', verificationUrl: start.verificationUrl, userCode: start.userCode, expiresAt: new Date(deadline).toISOString() };
     this.#logins.set(access.id, view);
-    const end = (state: CodexLoginView['state'], message?: string) => {
-      this.#logins.set(access.id, { state: cancelled && state !== 'connected' ? 'cancelled' : state, ...(message ? { message } : {}) });
+    const end = (state: CodexLoginView['state'], message?: string, account?: string) => {
+      this.#logins.set(access.id, { state: cancelled && state !== 'connected' ? 'cancelled' : state, ...(message ? { message } : {}), ...(account ? { account } : {}) });
     };
     const sleep = (ms: number) => new Promise<void>(resolve => {
       const timer = setTimeout(resolve, Math.max(0, Math.min(ms, deadline - this.now())));
@@ -134,7 +136,7 @@ export class CodexAccounts {
           committing = true;
           try { await this.deps.vault.set(access.secretRef, JSON.stringify(tokens)); }
           catch { return end('failed', SAVE_FAILED); }
-          return end('connected');
+          return end('connected', undefined, codexAccountEmail(tokens.idToken, tokens.accessToken));
         }
       } catch (error) {
         end('failed', error instanceof Error && /ChatGPT|account|Start/.test(error.message) ? error.message : 'Sign-in did not complete. Try again.');

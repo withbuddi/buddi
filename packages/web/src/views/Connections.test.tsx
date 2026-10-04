@@ -291,10 +291,12 @@ describe('the four screens', () => {
     expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Device', 'Token', 'Client id']);
     expect(await screen.findByDisplayValue('WDJB-MJHT')).toHaveAttribute('data-code', 'large');
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
-    expect(screen.getByText('Waiting for you to approve on GitHub…')).toBeInTheDocument();
+    expect(screen.getByText(/^Open github\.com\/login\/device, type this code there and say yes\./)).toBeInTheDocument();
+    expect(screen.queryByText('Waiting for you to approve on GitHub…')).not.toBeInTheDocument();
     expect(open).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Open github.com/login/device' }));
     expect(open).toHaveBeenCalledWith('https://github.com/login/device', '_blank');
+    expect(screen.getByText('Waiting for you to approve on GitHub…')).toBeInTheDocument();
     expect(tab.opener).toBeNull();
     expect(await screen.findByText('mcp.github.search_issues')).toBeInTheDocument();
     expect(mocked.connectionDevice).toHaveBeenCalledTimes(1);

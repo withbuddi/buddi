@@ -352,8 +352,8 @@ function CodexLogin({ account: a, busy, run }: { account: ProviderAccount; busy:
       <Button disabled={busy || !a.configured} onClick={() => void run(() => api.codexAccountAction(a.id, 'logout', a.revision), 'Subscription disconnected from Buddi. Your regular Codex login is unchanged.')}>Disconnect</Button>
     </Toolbar>
     {a.login?.state === 'pending' && <Notice tone="accent" role="status">
-      <p>Here is your code: <strong>{a.login.userCode}</strong>. Open the link, enter it, and approve buddi on openai.com.</p>
-      {a.login.userCode && <SignInCode code={a.login.userCode} />}
+      <p>Open openai.com, type this code there and approve buddi.</p>
+      {a.login.userCode && <SignInCode code={a.login.userCode} large />}
       {a.login.verificationUrl && <Toolbar><ButtonLink variant="accent" href={a.login.verificationUrl} target="_blank" rel="noreferrer">Open openai.com</ButtonLink></Toolbar>}
       {a.login.expiresAt && <p className="muted">The code works until {fmtClock(new Date(a.login.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}. Start again after that; this is the sign-in timeout, not your subscription expiry.</p>}
     </Notice>}

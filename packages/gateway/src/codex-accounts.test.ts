@@ -46,6 +46,14 @@ describe('ChatGPT device sign-in', () => {
     expect(f.access.check).toHaveBeenCalledTimes(2);
   });
 
+  it('names the signed-in account once connected, when the id token carries an address', async () => {
+    const f = fixture({ polls: [{ code: 'code-1', verifier: 'ver-1' }] });
+    const claims = Buffer.from(JSON.stringify({ email: 'amen@example.com' })).toString('base64url');
+    f.protocol.exchange.mockResolvedValueOnce({ ...tokens(1, f.clock.get() + HOUR), idToken: `e30.${claims}.sig` });
+    const start = await f.service.login(f.access); await start.finished;
+    expect(f.service.view(f.access.id)).toEqual({ state: 'connected', account: 'amen@example.com' });
+  });
+
   it('reports a denial and keeps an old credential', async () => {
     const f = fixture({ polls: [{ denied: 'ChatGPT did not approve the sign-in. Start again.' }] });
     await f.vault.set(f.access.secretRef, 'old-fixture');

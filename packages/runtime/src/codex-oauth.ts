@@ -51,6 +51,20 @@ export function codexAccountId(token: string | undefined): string | undefined {
   const id = auth && typeof auth === 'object' ? (auth as Record<string, unknown>).chatgpt_account_id : undefined;
   return validId(id) ? id : undefined;
 }
+/**
+ * The address the ChatGPT account signs in with, from the id token's `email`
+ * claim (or the access token's profile claim), for "Signed in as …". Cosmetic:
+ * nothing decides anything on it.
+ */
+export function codexAccountEmail(...tokens: Array<string | undefined>): string | undefined {
+  for (const token of tokens) {
+    const payload = jwtPayload(token);
+    const profile = payload?.['https://api.openai.com/profile'];
+    const email = payload?.email ?? (profile && typeof profile === 'object' ? (profile as Record<string, unknown>).email : undefined);
+    if (typeof email === 'string' && /^[^\s@]{1,128}@[^\s@]{1,253}$/.test(email)) return email;
+  }
+  return undefined;
+}
 /** Epoch ms from the `exp` claim, or 0 (treat as expired) when absent. */
 export function codexTokenExpiry(token: string | undefined): number {
   const exp = jwtPayload(token)?.exp;

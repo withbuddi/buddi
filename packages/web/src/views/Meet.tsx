@@ -62,7 +62,8 @@ import { firstMlxhModel, isMlxhAccount, isMlxhImageModel, mlxhNotAnswering } fro
 import { BankSheet, CalendarSheet, MailboxSheet } from './parts/FirstRunSheets';
 import { InstallProgress } from './parts/InstallProgress';
 import { SignInCode } from './parts/SignInCode';
-import { installHint, useInstallPrompt } from './parts/KeepClose';
+import { inBuddiApp, installHint, useInstallPrompt } from './parts/KeepClose';
+import { STORE_URL } from './Browser';
 import {
   COLOURS,
   DEFAULT_ASSISTANT_NAME,
@@ -95,7 +96,7 @@ import {
   type ChapterId,
   type MeetAnswers,
 } from './meet/machine';
-import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
+import { PairingTile, useTelegramPairing } from './parts/TelegramPairing';
 import { HandoverTeam } from './parts/CatalogueSuggest';
 import { fmtClock } from '../format';
 
@@ -1113,7 +1114,8 @@ function BrainChapter(props: QuestionProps): JSX.Element {
     if (next === card) return;
     consent?.close();
     // Opened inside the tap, so no popup blocker stops it.
-    const opens = next === 'free' || next === 'chatgpt';
+    // Not ChatGPT: its code is shown first, and its Open button opens the page in the order the bubble says.
+    const opens = next === 'free';
     setConsent(opens && typeof window.open === 'function' ? window.open('', '_blank') : null);
     setProblem(null);
     setChoice(null);
@@ -2266,6 +2268,10 @@ function ChatGPTCard({
   const [working, setWorking] = useState(true);
   const [trouble, setTrouble] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<{ id: string; revision: number; url: string; code: string } | null>(null);
+  /** The openai.com page is open (the button, or Try again's tab): the bubble waits rather than instructs. */
+  const [opened, setOpened] = useState(false);
+  /** Approved: who signed in, while the plan's model is being settled. */
+  const [signedIn, setSignedIn] = useState<string | null | undefined>(undefined);
   const [round, setRound] = useState(0);
   const started = useRef(-1);
   /** The window a "Try again" tap opened, for the same reason the card's tap opens one. */
@@ -2309,6 +2315,7 @@ function ChatGPTCard({
         if (!login?.verificationUrl || !login.userCode) throw new Error(login?.message ?? SCRIPT.brain.chatgpt.failed);
         pending.current = { id: row.id, revision: row.revision };
         setAttempt({ id: row.id, revision: row.revision, url: login.verificationUrl, code: login.userCode });
+        setOpened(Boolean(opened));
         if (opened) opened.location.href = login.verificationUrl;
       } catch (err) {
         opened?.close();
@@ -2340,9 +2347,11 @@ function ChatGPTCard({
           setTrouble(login.message ?? SCRIPT.brain.chatgpt.failed);
           return;
         }
+        setSignedIn(login.account ?? null);
         setWorking(true);
         setTrouble(await adopt(attempt.id));
         setWorking(false);
+        setSignedIn(undefined);
       } catch {
         /* Not answering for a moment; ask again on the next tick. */
       } finally {
@@ -2388,7 +2397,12 @@ function ChatGPTCard({
 
   return (
     <>
-      {working || busy ? (
+      {signedIn !== undefined ? (
+        <Buddi>
+          <Said>{SCRIPT.brain.chatgpt.signedIn(signedIn)}</Said>
+          <Thinking line={SCRIPT.brain.checking.chatgpt} />
+        </Buddi>
+      ) : working || busy ? (
         <Buddi>
           <Thinking line={SCRIPT.brain.checking.chatgpt} />
         </Buddi>
@@ -2398,11 +2412,7 @@ function ChatGPTCard({
         </Buddi>
       ) : attempt ? (
         <Buddi>
-          <Said>
-            {SCRIPT.brain.chatgpt.codeBefore}
-            <strong>{attempt.code}</strong>
-            {SCRIPT.brain.chatgpt.codeAfter}
-          </Said>
+          {opened ? <Thinking line={SCRIPT.brain.chatgpt.waiting} /> : <Said>{SCRIPT.brain.chatgpt.instruct}</Said>}
         </Buddi>
       ) : null}
       <Ask
@@ -2410,7 +2420,7 @@ function ChatGPTCard({
           <>
             <Back onClick={leave} disabled={working || busy} />
             {attempt ? (
-              <ButtonLink variant="accent" size="lg" href={attempt.url} target="_blank" rel="noreferrer">
+              <ButtonLink variant="accent" size="lg" href={attempt.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
                 {SCRIPT.brain.chatgpt.open}
               </ButtonLink>
             ) : trouble ? (
@@ -2424,7 +2434,7 @@ function ChatGPTCard({
           </>
         }
       >
-        {attempt ? <SignInCode code={attempt.code} label={SCRIPT.brain.chatgpt.code} /> : null}
+        {attempt ? <SignInCode code={attempt.code} label={SCRIPT.brain.chatgpt.code} large /> : null}
       </Ask>
     </>
   );
@@ -2765,7 +2775,7 @@ function ReachChapter({ answers, progress, onSettled, onBack }: QuestionProps): 
         }
       >
         <div className="wiz-rows">
-          <PhoneRow paired={phone} onPaired={() => setPhone(true)} />
+          <PhoneRow paired={phone} owner={answers.name} onPaired={() => setPhone(true)} />
           <MailboxRow wanted={mailWanted} added={mailbox} onAdded={setMailbox} />
           {taken.includes('days') ? <CalendarRow progress={progress} /> : null}
           {taken.includes('money') ? <BankRow /> : null}
@@ -2782,10 +2792,10 @@ function ReachChapter({ answers, progress, onSettled, onBack }: QuestionProps): 
 }
 
 /**
- * The phone: already paired, a square to scan from the bot that is running,
- * or the BotFather token first, in a sheet, when there is no bot yet.
+ * The phone: already paired, or a sheet — the square from the bot that is
+ * running, or the BotFather token first when there is no bot yet.
  */
-function PhoneRow({ paired, onPaired }: { paired: boolean; onPaired: () => void }): JSX.Element {
+function PhoneRow({ paired, owner, onPaired }: { paired: boolean; owner: string | undefined; onPaired: () => void }): JSX.Element {
   const [status, setStatus] = useState<{ configured: boolean; running: boolean; paired: boolean } | null>(null);
   const [sheet, setSheet] = useState(false);
   const done = useRef(onPaired);
@@ -2806,7 +2816,7 @@ function PhoneRow({ paired, onPaired }: { paired: boolean; onPaired: () => void 
       cancelled = true;
     };
   }, []);
-  const ready = status?.configured === true && status.running === true && !paired;
+  const ready = status?.configured === true && status.running === true;
   return (
     <div className="wiz-row">
       <span className="wiz-glyph" aria-hidden="true">
@@ -2816,64 +2826,28 @@ function PhoneRow({ paired, onPaired }: { paired: boolean; onPaired: () => void 
         <span className="wiz-opt-title">{SCRIPT.reach.phone.title}</span>
         <span className="wiz-opt-line">{SCRIPT.reach.phone.line}</span>
       </span>
-      {paired ? (
-        <span className="wiz-row-side">
+      <span className="wiz-row-side">
+        {paired ? (
           <Pill tone="good" dot>
             {SCRIPT.reach.phone.paired}
           </Pill>
-        </span>
-      ) : ready ? (
-        <InlineSquare onPaired={onPaired} />
-      ) : (
-        <span className="wiz-row-side">
+        ) : (
           <Button size="lg" disabled={status === null} onClick={() => setSheet(true)}>
-            {SCRIPT.reach.phone.setUp}
+            {ready ? SCRIPT.reach.phone.pair : SCRIPT.reach.phone.setUp}
           </Button>
-        </span>
-      )}
+        )}
+      </span>
       {sheet ? (
         <Sheet title={SCRIPT.telegram.sheet} onClose={() => setSheet(false)}>
           <TelegramCard
+            ready={ready}
+            owner={owner}
             onPaired={onPaired}
             onDismiss={() => setSheet(false)}
           />
         </Sheet>
       ) : null}
     </div>
-  );
-}
-
-/** The square, in the row, from the bot that is already running. */
-function InlineSquare({ onPaired }: { onPaired: () => void }): JSX.Element {
-  const { offer, square, paired, stale, ask } = useTelegramPairing(() => api.telegram().then((status) => status.paired), onPaired);
-  const asked = useRef(false);
-  useEffect(() => {
-    if (asked.current) return;
-    asked.current = true;
-    void ask().catch(() => {});
-  }, [ask]);
-  if (paired) {
-    return (
-      <span className="wiz-row-side">
-        <Pill tone="good" dot>
-          {SCRIPT.reach.phone.paired}
-        </Pill>
-      </span>
-    );
-  }
-  if (stale || !offer) {
-    return (
-      <span className="wiz-row-side">
-        <Button size="lg" onClick={() => void ask().catch(() => {})}>
-          {SCRIPT.telegram.newCode}
-        </Button>
-      </span>
-    );
-  }
-  return (
-    <span className="wiz-qr-slot">
-      <PairingSquare offer={offer} square={square} />
-    </span>
   );
 }
 
@@ -3053,7 +3027,10 @@ function AppRow({
   browser: BrowserAnswer | undefined;
   onBrowser: (answer: BrowserAnswer) => void;
 }): JSX.Element {
-  const prompt = useInstallPrompt();
+  // Inside buddi.app it is in the Dock already: no install advice, Start at Login and the extension instead.
+  const inApp = inBuddiApp();
+  const browserPrompt = useInstallPrompt();
+  const prompt = inApp ? null : browserPrompt;
   const hint = typeof navigator === 'undefined' ? null : installHint(navigator.userAgent);
   const [engine, setEngine] = useState<'chrome' | 'chromium' | 'none' | 'other' | null>(null);
   const [phase, setPhase] = useState<'idle' | 'installing' | 'launching' | 'failed'>('idle');
@@ -3155,11 +3132,15 @@ function AppRow({
         <Icon name="globe" />
       </span>
       <span className="wiz-row-text">
-        <span className="wiz-opt-title">{SCRIPT.reach.app.title}</span>
-        <span className="wiz-opt-line">{SCRIPT.reach.app.line}</span>
+        <span className="wiz-opt-title">{inApp ? SCRIPT.reach.app.inApp.title : SCRIPT.reach.app.title}</span>
+        <span className="wiz-opt-line">{inApp ? SCRIPT.reach.app.inApp.line : SCRIPT.reach.app.line}</span>
       </span>
       <span className="wiz-row-side">
-        {app ? (
+        {inApp ? (
+          <ButtonLink size="lg" href={STORE_URL} target="_blank" rel="noreferrer">
+            {SCRIPT.reach.app.inApp.extension}
+          </ButtonLink>
+        ) : app ? (
           <Pill tone="good" dot>
             {SCRIPT.reach.app.installed}
           </Pill>
@@ -3794,7 +3775,16 @@ function RestoreRunning({ onDone, onFailed }: { onDone: (name: string | undefine
  * the sheet says the phone arrived when the phone says hello, and not before.
  * Its actions stay in the sheet: the wizard's dock belongs to the chapter.
  */
-function TelegramCard(props: { onPaired: () => void; onDismiss: () => void }): JSX.Element {
+interface TelegramCardProps {
+  /** A bot is configured and running: straight to the square, no token. */
+  ready: boolean;
+  /** The owner's first name, for "Paired with Amen's phone". */
+  owner: string | undefined;
+  onPaired: () => void;
+  onDismiss: () => void;
+}
+
+function TelegramCard(props: TelegramCardProps): JSX.Element {
   return (
     <DockSlot.Provider value={null}>
       <div className="wiz-sheet-body">
@@ -3804,13 +3794,36 @@ function TelegramCard(props: { onPaired: () => void; onDismiss: () => void }): J
   );
 }
 
-function TelegramSteps({ onPaired, onDismiss }: { onPaired: () => void; onDismiss: () => void }): JSX.Element {
+/** How long "Paired with …" stays on screen before the sheet closes by itself. */
+export const PAIRED_CLOSE_MS = 1_600;
+
+function TelegramSteps({ ready, owner, onPaired, onDismiss }: TelegramCardProps): JSX.Element {
   const field = useOpened<HTMLInputElement>();
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [bot, setBot] = useState<string | null>(null);
   // First run asks whether any phone is paired: this is the first one.
   const { offer, square, paired, stale, ask } = useTelegramPairing(() => api.telegram().then((status) => status.paired), onPaired);
+  const asked = useRef(false);
+  // A running bot: its name for under the square, and a code at once.
+  useEffect(() => {
+    if (!ready || asked.current) return;
+    asked.current = true;
+    void Promise.resolve()
+      .then(() => api.telegramBot())
+      .then((view) => setBot(view?.username ?? null))
+      .catch(() => {});
+    void ask().catch((err: unknown) => setNote(err instanceof ApiError ? err.message : String(err)));
+  }, [ready, ask]);
+  // The phone said hello: say whose, a beat, then out of the way.
+  const close = useRef(onDismiss);
+  close.current = onDismiss;
+  useEffect(() => {
+    if (!paired) return undefined;
+    const timer = window.setTimeout(() => close.current(), PAIRED_CLOSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [paired]);
 
   const save = (): void => {
     if (token.trim() === '' || saving) return;
@@ -3820,6 +3833,7 @@ function TelegramSteps({ onPaired, onDismiss }: { onPaired: () => void; onDismis
       try {
         const saved = await api.saveTelegramToken(token.trim());
         setToken('');
+        setBot(saved.botUsername ?? null);
         if (saved.restartNeeded) {
           // buddi's own reason when it had one — a restored installation says
           // why it is staying quiet rather than asking for a restart.
@@ -3840,22 +3854,59 @@ function TelegramSteps({ onPaired, onDismiss }: { onPaired: () => void; onDismis
     void ask().catch((err: unknown) => setNote(err instanceof ApiError ? err.message : String(err)));
   };
 
-  if (paired) {
-    return (
-      <>
-        <Buddi>
-          <Said>{SCRIPT.telegram.paired}</Said>
-        </Buddi>
-        <Ask actions={<Button variant="accent" onClick={onDismiss}>{SCRIPT.telegram.close}</Button>} />
-      </>
-    );
-  }
-
   if (offer) {
     return (
       <>
         <Buddi>
-          <Said>{stale ? SCRIPT.telegram.expired : SCRIPT.telegram.scan}</Said>
+          <Said>{stale && !paired ? SCRIPT.telegram.expired : SCRIPT.telegram.scan}</Said>
+        </Buddi>
+        <Ask
+          actions={
+            paired ? (
+              <Button variant="accent" onClick={onDismiss}>
+                {SCRIPT.telegram.close}
+              </Button>
+            ) : (
+              <>
+                <Button variant="ghost" onClick={onDismiss}>
+                  {SCRIPT.telegram.notNow}
+                </Button>
+                {stale ? (
+                  <Button variant="accent" onClick={again}>
+                    {SCRIPT.telegram.newCode}
+                  </Button>
+                ) : null}
+              </>
+            )
+          }
+        >
+          {stale && !paired ? null : (
+            <PairingTile
+              offer={offer}
+              square={square}
+              bot={bot}
+              paired={paired}
+              status={paired ? SCRIPT.telegram.pairedWith(owner) : SCRIPT.telegram.waiting}
+            />
+          )}
+        </Ask>
+      </>
+    );
+  }
+
+  if (ready && !note) {
+    return (
+      <Buddi>
+        <Thinking line={SCRIPT.telegram.making} />
+      </Buddi>
+    );
+  }
+
+  if (ready) {
+    return (
+      <>
+        <Buddi>
+          <Said>{note}</Said>
         </Buddi>
         <Ask
           actions={
@@ -3863,16 +3914,12 @@ function TelegramSteps({ onPaired, onDismiss }: { onPaired: () => void; onDismis
               <Button variant="ghost" onClick={onDismiss}>
                 {SCRIPT.telegram.notNow}
               </Button>
-              {stale ? (
-                <Button variant="accent" onClick={again}>
-                  {SCRIPT.telegram.newCode}
-                </Button>
-              ) : null}
+              <Button variant="accent" onClick={again}>
+                {SCRIPT.telegram.newCode}
+              </Button>
             </>
           }
-        >
-          {stale ? null : <PairingSquare offer={offer} square={square} />}
-        </Ask>
+        />
       </>
     );
   }

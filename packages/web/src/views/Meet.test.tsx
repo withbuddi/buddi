@@ -56,6 +56,7 @@ vi.mock('../api', async (load) => {
       telegram: vi.fn(),
       saveTelegramToken: vi.fn(),
       telegramPairing: vi.fn(),
+      telegramBot: vi.fn(),
       session: vi.fn(),
       version: vi.fn(),
       overview: vi.fn(),
@@ -146,6 +147,7 @@ function quiet(): void {
   vi.mocked(api.pages).mockResolvedValue({ pages: [] });
   vi.mocked(api.pageQuery).mockRejectedValue(new Error('not in this test'));
   vi.mocked(api.telegram).mockResolvedValue({ configured: false, running: false, paired: false });
+  vi.mocked(api.telegramBot).mockResolvedValue({ configured: true, running: true, username: 'amen_buddi_bot' });
   vi.mocked(chatApi.agents).mockResolvedValue({ agents: [], defaultAgentId: '' });
   // Another mode by default: the browser row has nothing to fetch.
   vi.mocked(api.browser).mockRejectedValue(new Error('not in this test'));
@@ -630,7 +632,7 @@ describe('chapter 2: a brain', () => {
     expect(cards[3]).toHaveTextContent(SCRIPT.brain.cards.key.title);
   });
 
-  it('connects ChatGPT: the code and the link, then the plan default once the code is approved', async () => {
+  it('connects ChatGPT: the code once, the link, waiting, then who signed in and the plan default', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
     const pending = { state: 'pending', verificationUrl: 'device-page', userCode: 'ABCD-EFGH', expiresAt: '2099-01-01T00:00:00Z' };
     const row = { id: 'gpt', label: 'ChatGPT', kind: 'codex', auth: 'chatgpt', baseUrl: '', defaultModel: 'gpt-5.5', configured: false };
@@ -648,19 +650,30 @@ describe('chapter 2: a brain', () => {
       return pending;
     });
     vi.mocked(api.accountModels).mockResolvedValue({ models: [{ id: 'gpt-5.5', name: 'gpt-5.5', isDefault: false }, { id: 'gpt-5.6', name: 'gpt-5.6', isDefault: true }], truncated: false });
-    const opened = { location: { href: '' }, close: vi.fn() };
-    const open = vi.spyOn(window, 'open').mockReturnValue(opened as unknown as Window);
+    const open = vi.spyOn(window, 'open');
     render(meet());
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.chatgpt.title));
-    expect(open).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(opened.location.href).toBe('device-page'));
+    // No tab opens on the card: the code comes first, then the button opens the page.
+    expect(open).not.toHaveBeenCalled();
+    expect(await screen.findByText(SCRIPT.brain.chatgpt.instruct)).toBeInTheDocument();
     expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ kind: 'codex', auth: 'chatgpt', label: 'ChatGPT', defaultModel: 'gpt-5.5' });
     expect(api.codexAccountAction).toHaveBeenCalledWith('gpt', 'login', 1);
-    expect(await screen.findByText('ABCD-EFGH')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('ABCD-EFGH')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: SCRIPT.brain.chatgpt.open })).toHaveAttribute('href', 'device-page');
+    // The code once, in its field, in the large monospace look.
+    expect(screen.getByDisplayValue('ABCD-EFGH')).toHaveAttribute('data-code', 'large');
+    expect(screen.queryByText('ABCD-EFGH')).not.toBeInTheDocument();
+    const link = screen.getByRole('link', { name: SCRIPT.brain.chatgpt.open });
+    expect(link).toHaveAttribute('href', 'device-page');
+    link.addEventListener('click', (event) => event.preventDefault());
+    fireEvent.click(link);
+    expect(await screen.findByText(SCRIPT.brain.chatgpt.waiting)).toBeInTheDocument();
+    expect(screen.queryByText(SCRIPT.brain.chatgpt.instruct)).not.toBeInTheDocument();
 
-    login = { state: 'connected' };
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(api.accountModels).mockImplementation(() => held.then(() => ({ models: [{ id: 'gpt-5.5', name: 'gpt-5.5', isDefault: false }, { id: 'gpt-5.6', name: 'gpt-5.6', isDefault: true }], truncated: false })));
+    login = { state: 'connected', account: 'amen@example.com' };
+    expect(await screen.findByText(SCRIPT.brain.chatgpt.signedIn('amen@example.com'), undefined, { timeout: 4_000 })).toBeInTheDocument();
+    release();
     expect(await screen.findByText(SCRIPT.brain.works('gpt-5.6'), undefined, { timeout: 4_000 })).toBeInTheDocument();
     expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'gpt', defaultModel: 'gpt-5.6' });
     expect(api.testProviderAccount).not.toHaveBeenCalled();
@@ -681,14 +694,14 @@ describe('chapter 2: a brain', () => {
     vi.spyOn(window, 'open').mockReturnValue(null);
     render(meet());
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.chatgpt.title));
-    await screen.findByText('ABCD-EFGH');
+    await screen.findByDisplayValue('ABCD-EFGH');
     // The account was already there: reused, not made twice.
     expect(api.saveProviderAccount).not.toHaveBeenCalled();
     login = { state: 'failed', message: 'Turn on device code sign-in for Codex in ChatGPT settings.' };
     expect(await screen.findByText('Turn on device code sign-in for Codex in ChatGPT settings.', undefined, { timeout: 4_000 })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.chatgpt.again }));
     await waitFor(() => expect(vi.mocked(api.codexAccountAction).mock.calls.filter((call) => call[1] === 'login')).toHaveLength(2));
-    await screen.findByText('ABCD-EFGH');
+    await screen.findByDisplayValue('ABCD-EFGH');
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.back }));
     await waitFor(() => expect(api.codexAccountAction).toHaveBeenCalledWith('gpt', 'cancel-login', 1));
   }, 10_000);
@@ -1267,6 +1280,35 @@ describe('chapter 4: reach me', () => {
     expect(await screen.findByText(SCRIPT.reach.app.installed)).toBeInTheDocument();
   });
 
+  it('inside buddi.app says it is in the Dock already: Start at Login and the extension, no install advice', async () => {
+    atReach();
+    const ua = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15 buddi-mac/0.1.0');
+    window.dispatchEvent(Object.assign(new Event('beforeinstallprompt'), { prompt: vi.fn(), userChoice: Promise.resolve({ outcome: 'accepted' as const }) }));
+    try {
+      render(meet());
+      expect(await screen.findByText(SCRIPT.reach.app.inApp.title)).toBeInTheDocument();
+      expect(screen.getByText(SCRIPT.reach.app.inApp.line)).toHaveTextContent('Start at Login in the buddi menu');
+      expect(screen.getByRole('link', { name: SCRIPT.reach.app.inApp.extension })).toHaveAttribute('href', expect.stringContaining('chromewebstore.google.com'));
+      expect(screen.queryByRole('button', { name: SCRIPT.reach.app.install })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Add to Dock/)).not.toBeInTheDocument();
+    } finally {
+      ua.mockRestore();
+    }
+  });
+
+  it('outside the app, Safari keeps its Add to Dock line', async () => {
+    atReach();
+    const ua = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15');
+    try {
+      render(meet());
+      expect(await screen.findByText('In Safari, choose File → Add to Dock.')).toBeInTheDocument();
+      expect(screen.getByText(SCRIPT.reach.app.title)).toBeInTheDocument();
+      expect(screen.queryByText(SCRIPT.reach.app.inApp.title)).not.toBeInTheDocument();
+    } finally {
+      ua.mockRestore();
+    }
+  });
+
   it('adds a mailbox in first run\'s own sheet, not the Mail settings page, and says which one', async () => {
     atReach(['mail']);
     vi.mocked(api.pages).mockResolvedValue({
@@ -1322,14 +1364,42 @@ describe('chapter 4: reach me', () => {
     expect(screen.queryByText(SCRIPT.reach.bank.title)).not.toBeInTheDocument();
   });
 
-  it('pairs the phone from the square when the bot is running, and says so', async () => {
+  it('pairs the phone from a tile in a sheet when the bot is running: waiting, then whose phone, then it closes', async () => {
     atReach();
-    vi.mocked(api.telegram).mockResolvedValueOnce({ configured: true, running: true, paired: false }).mockResolvedValue({ configured: true, running: true, paired: true });
-    vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link: 't.me/b?start=ABC', expiresAt: new Date(Date.now() + 600_000).toISOString() });
+    let phone = false;
+    vi.mocked(api.telegram).mockImplementation(async () => ({ configured: true, running: true, paired: phone }));
+    vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link: 'https://t.me/amen_buddi_bot?start=ABC', expiresAt: new Date(Date.now() + 600_000).toISOString() });
     render(meet());
-    expect(await screen.findByText('t.me/b?start=ABC')).toBeInTheDocument();
-    expect(await screen.findByText(SCRIPT.reach.phone.hello, {}, { timeout: 5_000 })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.reach.phone.pair }));
+    const sheet = await screen.findByRole('dialog', { name: SCRIPT.telegram.sheet });
+    const tile = await within(sheet).findByTestId('pairing-tile');
+    // No token step: the bot is running. The square, its bot, two buttons and the waiting line; never the bare link.
+    expect(within(sheet).queryByLabelText(SCRIPT.telegram.field)).not.toBeInTheDocument();
+    expect(await within(tile).findByRole('img', { name: 'QR code for @amen_buddi_bot' })).toBeInTheDocument();
+    expect(within(tile).getByText('@amen_buddi_bot')).toBeInTheDocument();
+    expect(within(tile).getByRole('link', { name: 'Open in Telegram' })).toHaveAttribute('href', 'https://t.me/amen_buddi_bot?start=ABC');
+    expect(within(tile).getByRole('button', { name: 'Copy link' })).toBeInTheDocument();
+    expect(within(tile).getByRole('status')).toHaveTextContent(SCRIPT.telegram.waiting);
+    expect(screen.queryByText('https://t.me/amen_buddi_bot?start=ABC')).not.toBeInTheDocument();
+    phone = true;
+    expect(await within(tile).findByText(SCRIPT.telegram.pairedWith('Amen'), {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(SCRIPT.telegram.pairedWith('Amen')).toBe('Paired with Amen’s phone');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument(), { timeout: 4_000 });
+    expect(screen.getByText(SCRIPT.reach.phone.hello)).toBeInTheDocument();
     expect(screen.getByText(SCRIPT.reach.phone.paired)).toBeInTheDocument();
+  }, 15_000);
+
+  it('copies the pairing link from the tile', async () => {
+    atReach();
+    vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: false });
+    vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link: 'https://t.me/amen_buddi_bot?start=ABC', expiresAt: new Date(Date.now() + 600_000).toISOString() });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    render(meet());
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.reach.phone.pair }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy link' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('https://t.me/amen_buddi_bot?start=ABC'));
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
   });
 
   it('asks for the BotFather token in a sheet when there is no bot yet, then shows the square', async () => {
@@ -1343,7 +1413,10 @@ describe('chapter 4: reach me', () => {
     fireEvent.change(token, { target: { value: '8012345678:AAHfakeTokenForTestsOnly-1234567890' } });
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.telegram.submit }));
     expect(await screen.findByText(SCRIPT.telegram.scan)).toBeInTheDocument();
-    expect(await screen.findByText('t.me/b?start=ABC')).toBeInTheDocument();
+    // The bot the token named, under the square; the link is behind Open in Telegram, not printed.
+    expect(within(await screen.findByTestId('pairing-tile')).getByText('@b')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open in Telegram' })).toHaveAttribute('href', 't.me/b?start=ABC');
+    expect(screen.queryByText('t.me/b?start=ABC')).not.toBeInTheDocument();
     // Its actions stay in the sheet: the chapter's own dock is not where they went.
     expect(within(screen.getByRole('dialog', { name: SCRIPT.telegram.sheet })).getByRole('button', { name: SCRIPT.telegram.notNow })).toBeInTheDocument();
   });
@@ -1379,8 +1452,10 @@ describe('chapter 4: reach me', () => {
     fireEvent.click(await screen.findByRole('button', { name: SCRIPT.reach.phone.setUp }));
     fireEvent.change(await screen.findByLabelText(SCRIPT.telegram.field), { target: { value: '8012345678:AAHfakeTokenForTestsOnly-1234567890' } });
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.telegram.submit }));
-    expect(await screen.findByText(SCRIPT.telegram.paired, {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.telegram.pairedWith('Amen'), {}, { timeout: 5_000 })).toBeInTheDocument();
+    // Done closes it at once; left alone it closes by itself a beat later.
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.telegram.close }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(await screen.findByText(SCRIPT.reach.phone.hello)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.reach.submit }));
     await waitFor(() => expect(api.onboardingStep).toHaveBeenCalledWith('reach', { reach: { phone: true, mailbox: false, app: false, browser: false } }));
@@ -1540,7 +1615,12 @@ describe('the handover', () => {
     render(meet());
     const card = await screen.findByTestId('handover-team');
     expect(within(card).getByText('Who do you want on your team?')).toBeInTheDocument();
-    expect([...card.querySelectorAll('.cat-pick-name')].map((n) => n.textContent)).toEqual(['Chief of Staff', 'CFO', 'Researcher']);
+    // Each with its reason: the two the setup picked say why, the filler says popular.
+    expect([...card.querySelectorAll('.cat-pick-name')].map((n) => n.textContent)).toEqual([
+      'Chief of Staffbecause you set up My days',
+      'CFObecause you set up My money',
+      'Researcherpopular',
+    ]);
     expect(within(card).getAllByRole('checkbox').every((b) => (b as HTMLInputElement).checked)).toBe(true);
     expect(within(card).getByRole('button', { name: 'Add these' })).toBeEnabled();
   });

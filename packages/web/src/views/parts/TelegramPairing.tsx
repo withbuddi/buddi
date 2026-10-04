@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type PairingOffer } from '../../api';
+import { Button, ButtonLink } from '../../ui';
 import { qrSvgDataUrl } from '../meet/qr';
 
 /** The longest anything watches for a phone before offering a fresh code. */
@@ -92,6 +93,60 @@ export function PairingSquare({ offer, square, children }: { offer: PairingOffer
         {offer.link}
       </a>
       {children}
+    </div>
+  );
+}
+
+/**
+ * The square as a tile of its own (first run's phone sheet): white in both
+ * themes with a quiet zone a camera can lock onto, the bot's name under it,
+ * Copy link and Open in Telegram (the link itself is never printed), and one
+ * quiet line that waits for the phone and then says whose it is.
+ */
+export function PairingTile({
+  offer,
+  square,
+  bot,
+  status,
+  paired,
+}: {
+  offer: PairingOffer;
+  square: string | null;
+  /** The bot's username, without the @, once known. */
+  bot: string | null;
+  /** "Waiting for your Start…", then who paired. */
+  status: string;
+  paired: boolean;
+}): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const copy = (): void => {
+    void Promise.resolve()
+      .then(() => navigator.clipboard?.writeText(offer.link))
+      .then(() => setCopied(true))
+      .catch(() => {});
+  };
+  return (
+    <div className="tg-pair" data-testid="pairing-tile">
+      <div className="tg-pair-tile">
+        {square ? <img className="tg-pair-qr" src={square} alt={bot ? `QR code for @${bot}` : 'QR code for your buddi bot'} /> : null}
+      </div>
+      {bot ? <span className="tg-pair-bot">@{bot}</span> : null}
+      <div className="tg-pair-actions">
+        <Button onClick={copy}>{copied ? 'Copied' : 'Copy link'}</Button>
+        <ButtonLink variant="accent" href={offer.link} target="_blank" rel="noreferrer">
+          Open in Telegram
+        </ButtonLink>
+      </div>
+      <p className="tg-pair-status" role="status" data-paired={paired ? 'true' : undefined}>
+        {paired ? null : (
+          <span className="wiz-pulse" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+        )}
+        {status}
+      </p>
     </div>
   );
 }
