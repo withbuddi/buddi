@@ -14,6 +14,9 @@ import {
   playwrightCacheDir,
   readPrivateFile,
   reloadLaunchAgent,
+  identityMismatch,
+  initialize,
+  vaultServiceFor,
 } from './environment.js';
 
 describe('the packaged installation environment', () => {
@@ -117,5 +120,34 @@ describe('the packaged installation environment', () => {
       const challenge = new URL(url).searchParams.get('challenge');
       return Response.json({ proof: createHmac('sha256', 'fixture').update(`buddi-ready-v1:${challenge}`).digest('hex') });
     })).toBe(true);
+  });
+});
+
+describe('installation.json says who the installation is', () => {
+  test('a new installation records packaged, its folder and its keychain namespace', async () => {
+    const data = await mkdtemp(path.join(os.tmpdir(), 'buddi-identity-'));
+    const ctx = { root: '/opt/buddi', data, env: { BUDDI_VAULT: 'memory', BUDDI_ENV_FILE: path.join(data, '.env') } as NodeJS.ProcessEnv };
+    await initialize(ctx);
+    const state = JSON.parse(await readFile(path.join(data, 'installation.json'), 'utf8')) as Record<string, unknown>;
+    expect(state).toMatchObject({ kind: 'packaged', dataDir: data, vaultService: vaultServiceFor(data) });
+  });
+
+  test('an older file is completed at the next start, keeping what it had', async () => {
+    const data = await mkdtemp(path.join(os.tmpdir(), 'buddi-identity-'));
+    const old = { version: 1, database: 'managed' as const, webPort: 4317, dbPort: 5555, phase: 'ready' };
+    await writeFile(path.join(data, 'installation.json'), JSON.stringify(old));
+    const ctx = { root: '/opt/buddi', data, env: { BUDDI_VAULT: 'memory', BUDDI_ENV_FILE: path.join(data, '.env') } as NodeJS.ProcessEnv, state: { ...old } };
+    await initialize(ctx);
+    const state = JSON.parse(await readFile(path.join(data, 'installation.json'), 'utf8')) as Record<string, unknown>;
+    expect(state).toEqual({ ...old, kind: 'packaged', dataDir: data, vaultService: vaultServiceFor(data) });
+  });
+
+  test('a mismatch is said; a match or an older file is not', () => {
+    const data = '/Users/me/Library/Application Support/buddi';
+    expect(identityMismatch(undefined, data, 'x')).toBeUndefined();
+    expect(identityMismatch({ version: 1, database: 'managed', webPort: 1, dbPort: 2 }, data, 'x')).toBeUndefined();
+    expect(identityMismatch({ version: 1, database: 'managed', webPort: 1, dbPort: 2, dataDir: data, vaultService: vaultServiceFor(data) }, data, vaultServiceFor(data))).toBeUndefined();
+    expect(identityMismatch({ version: 1, database: 'managed', webPort: 1, dbPort: 2, dataDir: '/elsewhere' }, data, undefined)).toMatch(/written for the installation in \/elsewhere/);
+    expect(identityMismatch({ version: 1, database: 'managed', webPort: 1, dbPort: 2, dataDir: data, vaultService: 'buddi' }, data, vaultServiceFor(data))).toMatch(/keychain namespace buddi/);
   });
 });

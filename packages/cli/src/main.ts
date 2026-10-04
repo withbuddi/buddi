@@ -74,7 +74,8 @@ import { browserDoctor } from '@buddi/gateway';
 import { runInit } from './init.js';
 import { CATALOGUE_ACTIONS, parseCatalogueArgs } from './agents-catalogue-cmd.js';
 import { jobsCancel, jobsDismiss, jobsDismissAll, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './jobs-cmd.js';
-import { DATA_DIR, loadEnv, loadEnvironment, REPO_ROOT } from './paths.js';
+import { DATA_DIR, loadEnv, loadEnvironment, MODULE_DIR, REPO_FOUND, REPO_ROOT } from './paths.js';
+import { AMBIGUOUS_LINE, detectMode, isGuarded, type Mode } from './mode.js';
 import { runMcp } from './mcp/server.js';
 import { toggleInGateway } from './plugins-toggle.js';
 import { createServiceManager, followLogs } from './service/index.js';
@@ -305,7 +306,11 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       }
       await loadEnvironment();
       const { runUninstall } = await import('./uninstall-cmd.js');
-      return runUninstall({ yes: command.yes, keepData: command.keepData, backup: command.backup }, env);
+      return runUninstall({
+        yes: command.yes, keepData: command.keepData, backup: command.backup,
+        ...(command.copyTo === undefined ? {} : { copyTo: command.copyTo }),
+        ...(command.havePassphrase ? { havePassphrase: true } : {}),
+      }, env);
     }
     case 'dashboard':
       await loadEnvironment();
@@ -582,10 +587,44 @@ async function status(json: boolean, env: NodeJS.ProcessEnv): Promise<number> {
   return report.database.reachable ? 0 : 3;
 }
 
+/**
+ * Run the packaged launcher beside this code with the same arguments: the
+ * packaged code run without it is still a packaged installation (mode.ts).
+ */
+async function delegateToLauncher(launcher: string, argv: string[], env: NodeJS.ProcessEnv): Promise<number> {
+  const { spawn } = await import('node:child_process');
+  return await new Promise<number>((resolve) => {
+    const child = spawn(process.execPath, [launcher, ...argv], { stdio: 'inherit', env });
+    child.once('error', (error) => { console.error(`buddi: could not run ${launcher}: ${error.message}`); resolve(1); });
+    child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+  });
+}
+
+/** Which installation this run is about (mode.ts), from where this code sits and what is on disk. */
+export function currentMode(env: NodeJS.ProcessEnv): Mode {
+  return detectMode({ env, moduleDir: MODULE_DIR, repoFound: REPO_FOUND, repoRoot: REPO_ROOT, dataDir: DATA_DIR });
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
+  mode: Mode = currentMode(env),
 ): Promise<number> {
+  /*
+   * First, before any environment is loaded or a keychain read: a command
+   * that stops or removes something has to be sure which installation it is
+   * about, and packaged code never runs as a checkout.
+   */
+  if (mode.kind === 'delegate') return delegateToLauncher(mode.launcher, argv, env);
+  if (mode.kind === 'ambiguous') {
+    if (isGuarded(argv)) {
+      console.error(mode.why);
+      console.error(AMBIGUOUS_LINE);
+      return 2;
+    }
+    // Packaged code without its launcher: the launcher answers, for its default installation.
+    if (mode.launcher !== undefined) return delegateToLauncher(mode.launcher, argv, env);
+  }
   const kind = installKind(env);
 
   // `buddi <command> --help` is `buddi help <command>`.

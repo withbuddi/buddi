@@ -18,26 +18,45 @@
  * leaf `@buddi/core/uninstall` (see the note at the top of environment.ts).
  */
 import path from 'node:path';
-import { runUninstallPlan } from '@buddi/core/uninstall';
+import { passphraseFileFor, passphraseFileText, runUninstallPlan } from '@buddi/core/uninstall';
 import type { RemovalStep, UninstallIo, UninstallPlan } from '@buddi/core/uninstall';
-import { launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
+import { identityMismatch, launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
+import type { InstallationState } from './environment.js';
 
 export interface UninstallOptions {
   yes: boolean;
   keepData: boolean;
   backup: boolean;
+  /** `--copy-to <dir>`: a second copy of the last backup (and its passphrase file), on the Desktop say. */
+  copyTo?: string;
+  /** `--i-have-the-passphrase`: with `--no-backup`, the owner says the words are already written down. */
+  havePassphrase?: boolean;
 }
+
+const UNINSTALL_FLAGS = '--yes, --keep-data, --no-backup, --i-have-the-passphrase or --copy-to <dir>';
 
 /** The flags `buddi uninstall` takes. Anything else is a usage error. */
 export function parseUninstallArgs(args: readonly string[]): UninstallOptions {
   const options: UninstallOptions = { yes: false, keepData: false, backup: true };
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] as string;
     if (arg === '--yes' || arg === '-y') options.yes = true;
     else if (arg === '--keep-data') options.keepData = true;
     else if (arg === '--no-backup') options.backup = false;
-    else throw new Error(`unknown option for buddi uninstall: ${arg} (expected --yes, --keep-data or --no-backup)`);
+    else if (arg === '--i-have-the-passphrase') options.havePassphrase = true;
+    else if (arg === '--copy-to' || arg.startsWith('--copy-to=')) {
+      const value = arg === '--copy-to' ? args[++i] : arg.slice('--copy-to='.length);
+      if (value === undefined || value === '' || value.startsWith('-')) throw new Error('--copy-to needs a folder: buddi uninstall --copy-to ~/Desktop');
+      options.copyTo = value;
+    } else throw new Error(`unknown option for buddi uninstall: ${arg} (expected ${UNINSTALL_FLAGS})`);
   }
   return options;
+}
+
+/** The passphrase file written when there is no archive to put it beside. */
+export function loosePassphraseFile(dir: string, now: Date): string {
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
+  return path.join(dir, `buddi-passphrase-${stamp}.txt`);
 }
 
 export interface ExecResult {
@@ -64,8 +83,15 @@ export interface PackagedUninstallDeps {
     stopGateway: () => Promise<void>;
     /** The supervisor's backup, followed to the end: the archive's full path. */
     backup: () => Promise<string>;
-    passphrase: () => Promise<string | undefined>;
   };
+  /** The backup passphrase the vault keeps, read without making one; undefined when there is none. */
+  passphrase: () => Promise<string | undefined>;
+  /** Write a private (0600) file, creating its folder. */
+  writePrivate: (file: string, text: string) => Promise<void>;
+  copy: (from: string, to: string) => Promise<void>;
+  /** `installation.json`, parsed; undefined when there is none. */
+  readState: () => InstallationState | undefined;
+  now?: () => Date;
   /** The pid in `supervisor.lock` while that process is alive. */
   supervisorPid: () => number | undefined;
   signal: (pid: number, signal: NodeJS.Signals) => void;
@@ -118,6 +144,22 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
     io.error(`${data} is not a buddi installation (it has no installation.json and no postgres folder), so nothing was removed. Check BUDDI_DATA_DIR.`);
     return 1;
   }
+  /*
+   * Which installation, said before anything else and checked against what
+   * the installation wrote about itself: the folder and the keychain
+   * namespace this run would empty must be the ones installation.json names.
+   */
+  let state: InstallationState | undefined;
+  try { state = deps.readState(); } catch { state = undefined; }
+  const mismatch = identityMismatch(state, data, deps.keychain?.service);
+  if (mismatch !== undefined) {
+    io.error(`${mismatch} Nothing was removed.`);
+    io.error('Run this from the app\'s menu, or set BUDDI_DATA_DIR to the installation you mean.');
+    return 1;
+  }
+  io.log(`Installation: ${data}`);
+  if (deps.keychain) io.log(`Keychain namespace: ${deps.keychain.service}`);
+  const now = deps.now ?? (() => new Date());
 
   const machine = deps.platform === 'darwin' ? 'this Mac' : 'this machine';
   const steps: RemovalStep[] = [];
@@ -240,27 +282,52 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
     last: PACKAGE_LINE,
     prepare: async () => {
       const lines: string[] = [];
+      // The vault that keeps the passphrase goes with the secrets (and with the data directory on Linux).
+      const vaultGoes = !options.keepData;
+      /** Show the words and keep them beside each archive (or in `loose` when there is none). */
+      const keepPhrase = async (phrase: string, archives: string[], loose?: string): Promise<void> => {
+        lines.push(`Your backup passphrase, which opens the backups and is about to leave this ${deps.platform === 'darwin' ? 'Mac' : 'machine'}'s vault: ${phrase}`);
+        const files = archives.length > 0 ? archives.map(passphraseFileFor) : loose !== undefined ? [loose] : [];
+        for (const file of files) {
+          await deps.writePrivate(file, passphraseFileText(phrase, archives.length > 0 ? path.basename(archives[0] as string) : undefined));
+          lines.push(`It is also in ${file} (only you can read it). Write the six words down, then delete that file.`);
+        }
+      };
       if (backingUp) {
         if (!(await deps.supervisor.answers())) {
           throw new Error('The service is not running, so the last backup could not be taken. Start it with buddi, or run buddi uninstall --no-backup.');
         }
         io.log('Taking one last backup.');
         const archive = await deps.supervisor.backup();
+        const envelope = archive.replace(/\.age$/, '.json');
+        let kept = archive;
         if (options.keepData) {
           lines.push(`The backup is ${archive}. It stays, with the rest of the data directory.`);
         } else {
-          const kept = path.join(keptBackupsDir(home), path.basename(archive));
+          kept = path.join(keptBackupsDir(home), path.basename(archive));
           await deps.move(archive, kept);
-          const envelope = archive.replace(/\.age$/, '.json');
           if (envelope !== archive && deps.exists(envelope)) await deps.move(envelope, path.join(keptBackupsDir(home), path.basename(envelope)));
           lines.push(`The backup is ${kept}. It stays: uninstall does not touch that folder.`);
-          if (archive.endsWith('.age')) {
-            const phrase = await deps.supervisor.passphrase().catch(() => undefined);
-            if (phrase !== undefined) {
-              lines.push(`It is locked with your backup passphrase, and the vault that keeps it is going: ${phrase}`);
-              lines.push('Write the six words down. Nothing else opens that backup.');
-            }
-          }
+        }
+        const copies: string[] = [];
+        if (options.copyTo !== undefined) {
+          const copy = path.join(options.copyTo, path.basename(kept));
+          await deps.copy(kept, copy);
+          const keptEnvelope = kept.replace(/\.age$/, '.json');
+          if (keptEnvelope !== kept && deps.exists(keptEnvelope)) await deps.copy(keptEnvelope, path.join(options.copyTo, path.basename(keptEnvelope)));
+          copies.push(copy);
+          lines.push(`A copy is ${copy}.`);
+        }
+        if (archive.endsWith('.age') && vaultGoes) {
+          const phrase = await deps.passphrase().catch(() => undefined);
+          if (phrase !== undefined) await keepPhrase(phrase, [kept, ...copies]);
+        }
+      } else if (vaultGoes && !options.havePassphrase) {
+        // No last backup, but older ones may be locked with the words the vault is about to lose.
+        const phrase = await deps.passphrase().catch(() => undefined);
+        if (phrase !== undefined) {
+          await keepPhrase(phrase, [], loosePassphraseFile(options.copyTo ?? keptBackupsDir(home), now()));
+          lines.push('Pass --i-have-the-passphrase with --no-backup when you already have them.');
         }
       }
       if (deps.telegram) clearMenu = await deps.telegram.collect().catch(() => undefined);

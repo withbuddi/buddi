@@ -99,7 +99,7 @@ export type Command =
    */
   | { kind: 'upgrade'; backup: boolean }
   /** `buddi uninstall`: `--yes` skips the question, `--keep-data` keeps the data and its secrets. */
-  | { kind: 'uninstall'; yes: boolean; keepData: boolean; backup: boolean }
+  | { kind: 'uninstall'; yes: boolean; keepData: boolean; backup: boolean; copyTo?: string; havePassphrase?: boolean }
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
@@ -379,11 +379,17 @@ export function parseArgs(argv: string[]): Command {
 
   if (head === 'uninstall') {
     const command: Extract<Command, { kind: 'uninstall' }> = { kind: 'uninstall', yes: false, keepData: false, backup: true };
-    for (const arg of rest) {
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i] as string;
       if (arg === '--yes' || arg === '-y') command.yes = true;
       else if (arg === '--keep-data') command.keepData = true;
       else if (arg === '--no-backup') command.backup = false;
-      else throw new UsageError(`unknown option for buddi uninstall: ${arg} (expected --yes, --keep-data or --no-backup)`);
+      else if (arg === '--i-have-the-passphrase') command.havePassphrase = true;
+      else if (arg === '--copy-to' || arg.startsWith('--copy-to=')) {
+        const value = arg === '--copy-to' ? rest[++i] : arg.slice('--copy-to='.length);
+        if (value === undefined || value === '' || value.startsWith('-')) throw new UsageError('--copy-to needs a folder: buddi uninstall --copy-to ~/Desktop');
+        command.copyTo = value;
+      } else throw new UsageError(`unknown option for buddi uninstall: ${arg} (expected --yes, --keep-data, --no-backup, --i-have-the-passphrase or --copy-to <dir>)`);
     }
     return command;
   }

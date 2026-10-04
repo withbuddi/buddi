@@ -12,17 +12,33 @@
  * which also removes the data directory. The flow both share — print, ask,
  * back up, remove, report — is `@buddi/core/uninstall`.
  */
-import { existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runUninstallPlan } from '@buddi/core/uninstall';
+import { passphraseFileFor, passphraseFileText, runUninstallPlan } from '@buddi/core/uninstall';
 import type { RemovalStep, UninstallIo } from '@buddi/core/uninstall';
 
 export interface CheckoutUninstallOptions {
   yes: boolean;
   keepData: boolean;
   backup: boolean;
+  /** `--copy-to <dir>`: a second copy of the last backup and its passphrase file. */
+  copyTo?: string;
+  /** `--i-have-the-passphrase`: with `--no-backup`, the words are not printed or saved. */
+  havePassphrase?: boolean;
+}
+
+/** The newest archive in a backups folder, or undefined. */
+export function newestArchive(dir: string): string | undefined {
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return undefined; }
+  const archives = names
+    .filter((name) => /\.tar\.gz(\.age)?$/.test(name))
+    .map((name) => path.join(dir, name))
+    .map((file) => ({ file, at: (() => { try { return statSync(file).mtimeMs; } catch { return 0; } })() }))
+    .sort((a, b) => b.at - a.at);
+  return archives[0]?.file;
 }
 
 export interface CheckoutUninstallDeps {
@@ -42,9 +58,13 @@ export interface CheckoutUninstallDeps {
   /** The file vault, where there is no keychain. Its key is in `.env`, which stays. */
   fileVault?: string;
   removeFile: (file: string) => Promise<void>;
-  /** `buddi backup create --encrypt`; throws when it did not write an archive. */
-  backup: () => Promise<void>;
+  /** `buddi backup create --encrypt`; throws when it did not write an archive. Returns it, when it can tell. */
+  backup: () => Promise<string | undefined>;
   passphrase: () => Promise<string | undefined>;
+  /** Write a private (0600) file, creating its folder. */
+  writePrivate: (file: string, text: string) => Promise<void>;
+  copy: (from: string, to: string) => Promise<void>;
+  now?: () => Date;
   telegram?: { collect: () => Promise<() => Promise<void>> };
   app?: string;
   io: UninstallIo;
@@ -110,16 +130,34 @@ export async function uninstallCheckout(options: CheckoutUninstallOptions, deps:
     notes,
     prepare: async () => {
       const lines: string[] = [];
+      const keepPhrase = async (phrase: string, files: string[], archive?: string): Promise<void> => {
+        lines.push(`Your backup passphrase, which opens the backups and is about to leave the vault: ${phrase}`);
+        for (const file of files) {
+          await deps.writePrivate(file, passphraseFileText(phrase, archive === undefined ? undefined : path.basename(archive)));
+          lines.push(`It is also in ${file} (only you can read it). Write the six words down, then delete that file.`);
+        }
+      };
       if (backingUp) {
         deps.io.log('Taking one last backup.');
-        await deps.backup();
-        lines.push(`The backup is in ${deps.backupDir}. It stays.`);
-        if (secretsGo) {
+        const archive = await deps.backup();
+        lines.push(archive === undefined ? `The backup is in ${deps.backupDir}. It stays.` : `The backup is ${archive}. It stays.`);
+        const archives = archive === undefined ? [] : [archive];
+        if (archive !== undefined && options.copyTo !== undefined) {
+          const copy = path.join(options.copyTo, path.basename(archive));
+          await deps.copy(archive, copy);
+          archives.push(copy);
+          lines.push(`A copy is ${copy}.`);
+        }
+        if (secretsGo && (archive === undefined || archive.endsWith('.age'))) {
           const phrase = await deps.passphrase().catch(() => undefined);
-          if (phrase !== undefined) {
-            lines.push(`It is locked with your backup passphrase, and the vault that keeps it is going: ${phrase}`);
-            lines.push('Write the six words down. Nothing else opens that backup.');
-          }
+          if (phrase !== undefined) await keepPhrase(phrase, archives.map(passphraseFileFor), archive);
+        }
+      } else if (secretsGo && !options.havePassphrase) {
+        const phrase = await deps.passphrase().catch(() => undefined);
+        if (phrase !== undefined) {
+          const stamp = (deps.now ?? (() => new Date()))().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
+          await keepPhrase(phrase, [path.join(options.copyTo ?? deps.backupDir, `buddi-passphrase-${stamp}.txt`)]);
+          lines.push('Pass --i-have-the-passphrase with --no-backup when you already have them.');
         }
       }
       if (deps.telegram) clearMenu = await deps.telegram.collect().catch(() => undefined);
@@ -185,8 +223,18 @@ export async function runUninstall(options: CheckoutUninstallOptions, env: NodeJ
     backup: async () => {
       const code = await runBackup({ action: 'create', encrypt: true }, env);
       if (code !== 0) throw new Error('The last backup did not finish. Start the database with buddi db up, or run buddi uninstall --no-backup.');
+      return newestArchive(BACKUP_DIR);
     },
-    passphrase: async () => (await vault?.get(core.BACKUP_PASSPHRASE_KEY)) ?? undefined,
+    passphrase: async () => {
+      const stored = await vault?.get(core.BACKUP_PASSPHRASE_KEY);
+      return stored === null || stored === undefined || stored.trim() === '' ? undefined : stored;
+    },
+    writePrivate: async (file, text) => {
+      await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      await writeFile(file, text, { mode: 0o600 });
+      await chmod(file, 0o600);
+    },
+    copy: async (from, to) => { await mkdir(path.dirname(to), { recursive: true }); await copyFile(from, to); },
     ...(token && !token.startsWith('<') ? {
       telegram: {
         collect: async () => {

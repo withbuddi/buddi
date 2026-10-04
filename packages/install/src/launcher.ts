@@ -11,12 +11,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
 import { request } from 'node:http';
-import { open, mkdir, writeFile, rm, rename, copyFile } from 'node:fs/promises';
+import { open, mkdir, writeFile, rm, rename, copyFile, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync } from 'node:fs';
-import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
-import type { InstallContext } from './environment.js';
+import { environment, identityMismatch, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
+import type { InstallContext, InstallationState } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
 import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
@@ -199,7 +199,21 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
       answers: () => control(ctx).then(() => true, () => false),
       stopGateway: async () => { await control(ctx, 'stop'); },
       backup: () => supervisedBackup(ctx),
-      passphrase: async () => (await ask<{ passphrase: string }>(ctx, 'GET', '/passphrase')).passphrase,
+    },
+    // Read from the vault itself, never through the supervisor's route: that one makes a passphrase when there is none.
+    passphrase: async () => {
+      const stored = await vault?.get(core.BACKUP_PASSPHRASE_KEY);
+      return stored === null || stored === undefined || stored.trim() === '' ? undefined : core.normalizePassphrase(stored);
+    },
+    writePrivate: async (file, text) => {
+      await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      await writeFile(file, text, { mode: 0o600 });
+      await chmod(file, 0o600);
+    },
+    copy: async (from, to) => { await mkdir(path.dirname(to), { recursive: true }); await copyFile(from, to); },
+    readState: () => {
+      const file = path.join(ctx.data, 'installation.json');
+      return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as InstallationState : undefined;
     },
     supervisorPid: lockPid,
     signal: (pid, signal) => { try { process.kill(pid, signal); } catch { /* gone already */ } },
@@ -328,6 +342,15 @@ async function restoreThroughSupervisor(ctx: InstallContext, rest: string[]): Pr
   // The vault holds the passphrase of an archive this installation encrypted;
   // `--passphrase` is for one that came from another machine.
   let passphrase = flag('passphrase');
+  // `<archive>.passphrase.txt` beside it, which uninstall writes before the vault goes.
+  if (passphrase === undefined && name.endsWith('.age')) {
+    const { passphraseFileFor, passphraseFromFile } = await import('@buddi/core/uninstall');
+    for (const archive of [resolved, path.join(backups, name)]) {
+      const file = passphraseFileFor(archive);
+      if (passphrase === undefined && existsSync(file)) passphrase = passphraseFromFile(readFileSync(file, 'utf8'));
+    }
+    if (passphrase !== undefined) console.log(`Using the passphrase in ${name}.passphrase.txt beside it.`);
+  }
   if (passphrase === undefined && name.endsWith('.age')) {
     passphrase = (await ask<{ passphrase: string }>(ctx, 'GET', '/passphrase').catch(() => undefined))?.passphrase;
   }
@@ -464,6 +487,15 @@ async function run(): Promise<void> {
   }
   // Help is the command table's, whatever the command: `buddi service status --help`.
   const wantsHelp = args.some(arg => arg === '--help' || arg === '-h') || args[0] === 'help';
+  // A folder whose installation.json names another installation is not one to stop or remove from here.
+  const guarded = args[0] === 'uninstall' || (args[0] === 'service' && ['install', 'stop', 'uninstall'].includes(args[1] as string));
+  const mismatch = identityMismatch(ctx.state, ctx.data, ctx.env.BUDDI_VAULT_SERVICE);
+  if (!wantsHelp && guarded && mismatch !== undefined) {
+    console.error(`buddi: ${mismatch}`);
+    console.error("Run this from the app's menu, or set BUDDI_DATA_DIR to the installation you mean.");
+    process.exitCode = 2;
+    return;
+  }
   if (!wantsHelp && args[0] === 'uninstall') { process.exitCode = await uninstall(ctx, args.slice(1)); return; }
   const serviceJson = args.slice(2).every(arg => arg === '--json') && (args.includes('--json') || process.env.BUDDI_JSON === '1');
   if (!wantsHelp && args[0] === 'service' && ['status', 'start', 'stop', 'restart'].includes(args[1] as string) && args.slice(2).every(arg => arg === '--json')) {

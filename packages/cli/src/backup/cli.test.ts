@@ -249,6 +249,18 @@ describe('where the passphrase for a .age archive comes from', () => {
     expect(resolved.passphrase).toBe('able acid actor adult afraid agent');
   });
 
+  it('reads <archive>.passphrase.txt beside it before the vault: uninstall left it there', async () => {
+    const read: string[] = [];
+    const resolved = await resolvePassphrase({
+      archive: AGE,
+      vault: fakeVault({ [BACKUP_PASSPHRASE_KEY]: 'a new install has other words' }),
+      readFile: (file) => { read.push(file); return 'buddi backup passphrase\n\nable acid actor adult afraid agent\n\nThese six words open it.\n'; },
+      isTty: false,
+    });
+    expect(read).toEqual([`${AGE}.passphrase.txt`]);
+    expect(resolved).toEqual({ passphrase: 'able acid actor adult afraid agent', source: 'file' });
+  });
+
   it('falls back to the vault entry', async () => {
     const resolved = await resolvePassphrase({
       archive: AGE,

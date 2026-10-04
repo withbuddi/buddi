@@ -31,6 +31,37 @@ export interface InstallationState {
    * and read by the one that finishes the job. See `upgrade.ts`.
    */
   upgrade?: { from: string; to: string; backup?: string; startedAt: string };
+  /**
+   * Who this installation is, written when it is first provisioned (and added
+   * to an older file at the next start): always `packaged`, the data
+   * directory it was made for and its keychain namespace. `buddi uninstall`
+   * refuses when the folder or the namespace it is about to touch is not the
+   * one written here (a copied folder, a stray `BUDDI_DATA_DIR`).
+   */
+  kind?: 'packaged';
+  dataDir?: string;
+  vaultService?: string;
+}
+
+/** The keychain namespace of the installation in `data`: `buddi.install.<sha256(data)[:20]>`. */
+export function vaultServiceFor(data: string): string {
+  return `buddi.install.${createHash('sha256').update(data).digest('hex').slice(0, 20)}`;
+}
+
+/**
+ * Does `installation.json` name a different installation than the one at
+ * hand? The sentence that says so, or undefined when it matches (or is too
+ * old to say).
+ */
+export function identityMismatch(state: InstallationState | undefined, data: string, vaultService: string | undefined): string | undefined {
+  if (!state) return undefined;
+  if (state.dataDir !== undefined && path.resolve(state.dataDir) !== path.resolve(data)) {
+    return `${path.join(data, 'installation.json')} was written for the installation in ${state.dataDir}, not ${data}.`;
+  }
+  if (state.vaultService !== undefined && vaultService !== undefined && state.vaultService !== vaultService) {
+    return `${path.join(data, 'installation.json')} names the keychain namespace ${state.vaultService}, but this run would use ${vaultService}.`;
+  }
+  return undefined;
 }
 
 /** The install root, its data directory, the mutated environment and the state. */
@@ -258,7 +289,7 @@ export async function environment(root: string, env: NodeJS.ProcessEnv = process
   const settings = await readPrivateFile(env.BUDDI_ENV_FILE);
   if (settings !== undefined) populate(env as Record<string, string>, parse(settings));
   // A separate keychain namespace prevents a test or second install sharing credentials.
-  env.BUDDI_VAULT_SERVICE = `buddi.install.${createHash('sha256').update(data).digest('hex').slice(0, 20)}`;
+  env.BUDDI_VAULT_SERVICE = vaultServiceFor(data);
   env.BUDDI_VAULT_FILE = path.join(data, 'vault.json');
   if ((env.BUDDI_VAULT || (process.platform === 'darwin' ? 'keychain' : 'file')) === 'file') {
     const keyFile = path.join(data, 'vault-key');
@@ -323,6 +354,10 @@ export async function acquireLock(data: string): Promise<() => Promise<void>> {
   throw new Error('Could not acquire the installation lock.');
 }
 
+function identity(data: string): Pick<InstallationState, 'kind' | 'dataDir' | 'vaultService'> {
+  return { kind: 'packaged', dataDir: path.resolve(data), vaultService: vaultServiceFor(path.resolve(data)) };
+}
+
 export async function initialize(ctx: InstallContext): Promise<void> {
   // `incoming` is where the dashboard writes an uploaded archive, and the one
   // directory the control socket accepts a path inside.
@@ -340,7 +375,11 @@ export async function initialize(ctx: InstallContext): Promise<void> {
     const webPort = await freePort(Number(ctx.env.BUDDI_WEB_PORT) || 4317);
     let dbPort = await freePort();
     while (dbPort === webPort) dbPort = await freePort();
-    ctx.state = { version: 1, database: ctx.env.DATABASE_URL ? 'external' : 'managed', webPort, dbPort, phase: 'provisioning' };
+    ctx.state = { version: 1, database: ctx.env.DATABASE_URL ? 'external' : 'managed', webPort, dbPort, phase: 'provisioning', ...identity(ctx.data) };
+    await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
+  } else if (ctx.state.kind === undefined || ctx.state.dataDir === undefined || ctx.state.vaultService === undefined) {
+    // An installation provisioned before the file said who it is: said now, once.
+    ctx.state = { ...ctx.state, ...identity(ctx.data) };
     await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
   }
   ctx.env.BUDDI_WEB_PORT = String(ctx.state.webPort);

@@ -21,6 +21,8 @@ interface Machine {
   purged: string[][];
   menuCleared: boolean;
   backups: number;
+  written: Map<string, string>;
+  copied: Array<[string, string]>;
 }
 
 function machine(opts: {
@@ -33,6 +35,8 @@ function machine(opts: {
   purge?: Error;
   telegram?: boolean;
   app?: string;
+  phrase?: string | undefined;
+  state?: Record<string, unknown>;
 } = {}): Machine {
   const platform = opts.platform ?? 'darwin';
   const unit = platform === 'darwin' ? plist : systemdUnitPath(data, {}, home);
@@ -44,7 +48,7 @@ function machine(opts: {
   let supervisorAlive = opts.supervisor ?? true;
   let loaded = true;
   const m: Machine = {
-    files, out: [], err: [], exec: [], removed: [], moved: [], purged: [], menuCleared: false, backups: 0,
+    files, out: [], err: [], exec: [], removed: [], moved: [], purged: [], menuCleared: false, backups: 0, written: new Map(), copied: [],
     deps: undefined as unknown as PackagedUninstallDeps,
   };
   m.deps = {
@@ -71,8 +75,12 @@ function machine(opts: {
         files.add(archive); files.add(`${data}/backups/buddi-backup-20260926-120000.tar.gz.json`);
         return archive;
       },
-      passphrase: async () => 'alpha bravo charlie delta echo foxtrot',
     },
+    passphrase: async () => ('phrase' in opts ? opts.phrase : 'alpha bravo charlie delta echo foxtrot'),
+    writePrivate: async (file, text) => { m.written.set(file, text); files.add(file); },
+    copy: async (from, to) => { m.copied.push([from, to]); files.add(to); },
+    readState: () => (opts.state as never) ?? undefined,
+    now: () => new Date('2026-10-04T10:00:00Z'),
     supervisorPid: () => (supervisorAlive ? 4242 : undefined),
     signal: () => { supervisorAlive = false; },
     ...(platform === 'darwin' ? {
@@ -97,9 +105,13 @@ function machine(opts: {
 const defaults: UninstallOptions = { yes: false, keepData: false, backup: true };
 
 describe('parseUninstallArgs', () => {
-  it('takes the three flags and nothing else', () => {
+  it('takes its flags and nothing else', () => {
     expect(parseUninstallArgs([])).toEqual(defaults);
     expect(parseUninstallArgs(['--yes', '--keep-data', '--no-backup'])).toEqual({ yes: true, keepData: true, backup: false });
+    expect(parseUninstallArgs(['--no-backup', '--i-have-the-passphrase', '--copy-to', '/Users/owner/Desktop']))
+      .toEqual({ ...defaults, backup: false, havePassphrase: true, copyTo: '/Users/owner/Desktop' });
+    expect(parseUninstallArgs(['--copy-to=/tmp/x'])).toEqual({ ...defaults, copyTo: '/tmp/x' });
+    expect(() => parseUninstallArgs(['--copy-to'])).toThrow(/--copy-to needs a folder/);
     expect(() => parseUninstallArgs(['--force'])).toThrow(/unknown option for buddi uninstall: --force/);
   });
 });
@@ -111,6 +123,8 @@ describe('uninstallPackaged', () => {
     expect(code).toBe(0);
     const plan = m.out.slice(0, m.out.indexOf('Taking one last backup.'));
     expect(plan).toEqual([
+      `Installation: ${data}`,
+      'Keychain namespace: buddi.install.abc',
       'This removes buddi from this Mac:',
       `  - the background service: launchd agent ${label} (${plist})`,
       `  - the data directory ${data}: the database, agents and skills, the files library, logs, backups and the fetched Chromium`,
@@ -226,12 +240,86 @@ describe('uninstallPackaged', () => {
     expect(m.out).toContain(`  - secrets: the file vault ${path.join(data, 'vault.json')} and its key ${path.join(data, 'vault-key')}`);
     expect(m.exec).toContain(`systemctl --user disable --now ${label}.service`);
     expect(m.exec).toContain('systemctl --user daemon-reload');
-    expect(m.out[0]).toBe('This removes buddi from this machine:');
+    expect(m.out.slice(0, 2)).toEqual([`Installation: ${data}`, 'This removes buddi from this machine:']);
   });
 
   it('says there is nothing to remove when nothing is there', async () => {
     const m = machine({ files: [], supervisor: false, names: [] });
     expect(await uninstallPackaged(defaults, m.deps)).toBe(0);
-    expect(m.out).toEqual(['Nothing of buddi is installed here, so there is nothing to remove.', PACKAGE_LINE]);
+    expect(m.out).toEqual([`Installation: ${data}`, 'Keychain namespace: buddi.install.abc', 'Nothing of buddi is installed here, so there is nothing to remove.', PACKAGE_LINE]);
+  });
+});
+
+describe('uninstallPackaged: the passphrase leaves with the owner', () => {
+  const archive = `${home}/buddi-backups/buddi-backup-20260926-120000.tar.gz.age`;
+
+  it('prints it and writes <archive>.passphrase.txt beside the kept backup before the keychain is purged', async () => {
+    const m = machine();
+    let writtenBeforePurge = false;
+    const purge = m.deps.keychain!.purge;
+    m.deps.keychain!.purge = async (names) => { writtenBeforePurge = m.written.has(`${archive}.passphrase.txt`); await purge(names); };
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(0);
+    expect(writtenBeforePurge).toBe(true);
+    const text = m.written.get(`${archive}.passphrase.txt`)!;
+    expect(text).toContain('alpha bravo charlie delta echo foxtrot');
+    expect(text).toContain('buddi-backup-20260926-120000.tar.gz.age');
+    expect(m.out.some(line => line.includes(`${archive}.passphrase.txt`))).toBe(true);
+  });
+
+  it('--copy-to copies the archive and its envelope, and writes a passphrase file beside the copy too', async () => {
+    const m = machine();
+    m.files.add(`${home}/buddi-backups/buddi-backup-20260926-120000.tar.gz.json`);
+    expect(await uninstallPackaged({ ...defaults, yes: true, copyTo: `${home}/Desktop` }, m.deps)).toBe(0);
+    expect(m.copied.map(([, to]) => to)).toEqual([
+      `${home}/Desktop/buddi-backup-20260926-120000.tar.gz.age`,
+      `${home}/Desktop/buddi-backup-20260926-120000.tar.gz.json`,
+    ]);
+    expect([...m.written.keys()]).toEqual([`${archive}.passphrase.txt`, `${home}/Desktop/buddi-backup-20260926-120000.tar.gz.age.passphrase.txt`]);
+  });
+
+  it('--no-backup still prints and saves the passphrase, in ~/buddi-backups', async () => {
+    const m = machine();
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(0);
+    expect([...m.written.keys()]).toEqual([`${home}/buddi-backups/buddi-passphrase-20261004-100000.txt`]);
+    expect(m.out.some(line => line.endsWith('alpha bravo charlie delta echo foxtrot'))).toBe(true);
+    expect(m.out.join('\n')).toMatch(/--i-have-the-passphrase/);
+  });
+
+  it('--no-backup --i-have-the-passphrase neither prints nor saves it', async () => {
+    const m = machine();
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
+    expect(m.written.size).toBe(0);
+    expect(m.out.some(line => line.includes('alpha bravo'))).toBe(false);
+  });
+
+  it('writes nothing when the vault keeps no passphrase', async () => {
+    const m = machine({ phrase: undefined });
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(0);
+    expect(m.written.size).toBe(0);
+  });
+});
+
+describe('uninstallPackaged: only the installation installation.json names', () => {
+  it('refuses, touching nothing, when installation.json was written for another folder', async () => {
+    const m = machine({ state: { version: 1, kind: 'packaged', dataDir: '/Users/owner/Library/Application Support/buddi', vaultService: 'buddi.install.abc' } });
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(1);
+    expect(m.err[0]).toMatch(/was written for the installation in \/Users\/owner\/Library\/Application Support\/buddi, not .*buddi-test\. Nothing was removed\./);
+    expect(m.err[1]).toBe("Run this from the app's menu, or set BUDDI_DATA_DIR to the installation you mean.");
+    expect(m.removed).toEqual([]);
+    expect(m.purged).toEqual([]);
+    expect(m.exec).toEqual([]);
+    expect(m.backups).toBe(0);
+  });
+
+  it('refuses when the keychain namespace is not the one installation.json names', async () => {
+    const m = machine({ state: { version: 1, kind: 'packaged', dataDir: data, vaultService: 'buddi' } });
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(1);
+    expect(m.err[0]).toMatch(/names the keychain namespace buddi, but this run would use buddi\.install\.abc/);
+    expect(m.purged).toEqual([]);
+  });
+
+  it('goes ahead when both match', async () => {
+    const m = machine({ state: { version: 1, kind: 'packaged', dataDir: data, vaultService: 'buddi.install.abc' } });
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(0);
   });
 });

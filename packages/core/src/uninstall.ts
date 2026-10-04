@@ -96,6 +96,37 @@ function sentence(error: unknown): string {
   return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
+/**
+ * The file that keeps a backup's passphrase beside it: `<archive>.passphrase.txt`.
+ * Written (mode 0600) by every path that deletes the vault holding the
+ * passphrase, before it does, and read by a restore that finds it there.
+ */
+export function passphraseFileFor(archive: string): string {
+  return `${archive}.passphrase.txt`;
+}
+
+/** What that file says: the words on a line of their own, and what they open. */
+export function passphraseFileText(phrase: string, archiveName?: string): string {
+  return [
+    'buddi backup passphrase',
+    '',
+    phrase,
+    '',
+    archiveName === undefined
+      ? 'These six words open every backup this installation locked.'
+      : `These six words open ${archiveName} and every other backup this installation locked.`,
+    'Write them down somewhere safe, then delete this file: anyone who has it can open those backups.',
+    '',
+  ].join('\n');
+}
+
+/** The words in a passphrase file (or a bare one-line file), or undefined when there are none. */
+export function passphraseFromFile(text: string): string | undefined {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '');
+  const body = lines[0] === 'buddi backup passphrase' ? lines[1] : lines.length === 1 ? lines[0] : undefined;
+  return body === undefined || body === '' ? undefined : body;
+}
+
 /** `security`, as the caller runs it: an argv, an exit code, and never a shell. */
 export type SecurityRun = (args: readonly string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 

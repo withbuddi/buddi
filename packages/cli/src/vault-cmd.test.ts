@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createMemoryVault } from '@buddi/core';
@@ -24,6 +24,25 @@ function capture(): { out: (line: string) => void; lines: string[] } {
 }
 
 describe('buddi vault', () => {
+  it('prints the backup passphrase and saves it (0600) before deleting it, never any other secret', async () => {
+    const vault = createMemoryVault();
+    await vault.set('BACKUP_PASSPHRASE', 'one two three four five six');
+    await vault.set('TELEGRAM_BOT_TOKEN', 'abc:123');
+    const dir = mkdtempSync(path.join(tmpdir(), 'buddi-vault-phrase-'));
+    dirs.push(dir);
+    const { out, lines } = capture();
+    expect(await runVault('delete', 'BACKUP_PASSPHRASE', { vault, out, backupDir: dir, now: () => new Date('2026-10-04T10:00:00Z') })).toBe(0);
+    const file = path.join(dir, 'buddi-passphrase-20261004-100000.txt');
+    expect(readFileSync(file, 'utf8')).toContain('one two three four five six');
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(lines.join('\n')).toContain('one two three four five six');
+    expect(await vault.get('BACKUP_PASSPHRASE')).toBeNull();
+    const other = capture();
+    expect(await runVault('delete', 'TELEGRAM_BOT_TOKEN', { vault, out: other.out, backupDir: dir })).toBe(0);
+    expect(other.lines.join('\n')).not.toContain('abc:123');
+    expect(readdirSync(dir)).toEqual(['buddi-passphrase-20261004-100000.txt']);
+  });
+
   it('stores a secret read with echo off, and never prints it back', async () => {
     const vault = createMemoryVault();
     const { out, lines } = capture();

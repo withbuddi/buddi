@@ -39,6 +39,13 @@ export function findRepoRoot(start: string, exists: (dir: string) => boolean = i
 
 export const REPO_ROOT = process.env.BUDDI_INSTALL_ROOT ?? findRepoRoot(MODULE_DIR);
 
+/**
+ * Whether a workspace manifest really is above this module, rather than
+ * `REPO_ROOT` being the three-up fallback. False in every packaged tree (the
+ * npm tarball and buddi.app's copy carry no `pnpm-workspace.yaml`): see mode.ts.
+ */
+export const REPO_FOUND = isRepoRoot(findRepoRoot(MODULE_DIR));
+
 export const ENV_FILE = process.env.BUDDI_ENV_FILE ?? path.join(REPO_ROOT, '.env');
 
 /**

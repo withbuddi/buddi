@@ -5,7 +5,7 @@
  * verb prints a secret, and the one that could (`create`, over `.env`) refuses
  * to write an archive at all if scrubbing left anything behind.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -32,6 +32,7 @@ import {
   type RestoreOptions,
   type Vault,
 } from '@buddi/core';
+import { passphraseFileFor, passphraseFromFile } from '@buddi/core/uninstall';
 import { BACKUP_DIR } from '../paths.js';
 import { installationOptions, pluginMigrations } from './options.js';
 import { createBackupScheduler } from './schedule.js';
@@ -70,7 +71,7 @@ export interface BackupCommand {
 /** What opened (or will open) an encrypted archive, and where it came from. */
 export interface ResolvedPassphrase {
   passphrase: string | undefined;
-  source: 'flag' | 'vault' | 'prompt' | 'none';
+  source: 'flag' | 'file' | 'vault' | 'prompt' | 'none';
 }
 
 /**
@@ -88,11 +89,18 @@ export async function resolvePassphrase(opts: {
   vault?: Vault | undefined;
   ask?: ((question: string) => Promise<string>) | undefined;
   isTty?: boolean | undefined;
+  /** Reads the passphrase file beside the archive; injected in tests. */
+  readFile?: ((file: string) => string | undefined) | undefined;
 }): Promise<ResolvedPassphrase> {
   if (opts.given !== undefined && opts.given.trim() !== '') {
     return { passphrase: normalizePassphrase(opts.given), source: 'flag' };
   }
   if (!opts.archive.endsWith(ENCRYPTED_SUFFIX)) return { passphrase: undefined, source: 'none' };
+
+  // `<archive>.passphrase.txt`, which uninstall writes beside the last backup before the vault goes.
+  const beside = (opts.readFile ?? ((file: string) => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } }))(passphraseFileFor(opts.archive));
+  const fromFile = beside === undefined ? undefined : passphraseFromFile(beside);
+  if (fromFile !== undefined) return { passphrase: normalizePassphrase(fromFile), source: 'file' };
 
   if (opts.vault) {
     try {
@@ -327,6 +335,7 @@ async function verify(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<n
     ask: promptLine,
   });
   if (opened.source === 'vault') console.log(`passphrase: the one in the vault\n`);
+  if (opened.source === 'file') console.log(`passphrase: the one in the .passphrase.txt beside it\n`);
   const result = await verifyBackup({
     archive,
     ...(opened.passphrase === undefined ? {} : { passphrase: opened.passphrase }),
@@ -380,6 +389,7 @@ async function restore(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<
     ask: promptLine,
   });
   if (opened.source === 'vault') console.log('passphrase: the one in the vault');
+  if (opened.source === 'file') console.log('passphrase: the one in the .passphrase.txt beside it');
 
   const opts: RestoreOptions = {
     ...installation,

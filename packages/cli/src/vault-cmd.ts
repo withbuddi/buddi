@@ -15,9 +15,11 @@
  *    value never lands in scrollback — and never in shell history either,
  *    because there is no way to pass it as an argument.
  */
-import { readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { createInterface } from 'node:readline';
 import {
+  BACKUP_PASSPHRASE_KEY,
   KNOWN_SECRETS,
   VAULT_PLACEHOLDER_LINE,
   VaultLockedError,
@@ -30,7 +32,8 @@ import {
 } from '@buddi/core';
 import type { VaultAction } from './args.js';
 import { applyEnvEdits, parseEnv } from './env-file.js';
-import { ENV_FILE } from './paths.js';
+import { passphraseFileText } from '@buddi/core/uninstall';
+import { BACKUP_DIR, ENV_FILE } from './paths.js';
 
 export interface VaultDeps {
   vault?: Vault | undefined;
@@ -41,6 +44,9 @@ export interface VaultDeps {
   /** Asks a yes/no question. Injected in tests. */
   confirm?: (question: string) => Promise<boolean>;
   out?: (line: string) => void;
+  /** Where the backup passphrase is saved before `delete` takes it out of the vault. */
+  backupDir?: string;
+  now?: () => Date;
 }
 
 /* ------------------------------------------------------------------ *
@@ -127,7 +133,7 @@ export async function runVault(
       case 'get':
         return await getSecret(vault, requireName(name), out);
       case 'delete':
-        return await deleteSecret(vault, requireName(name), out);
+        return await deleteSecret(vault, requireName(name), out, deps);
       case 'list':
         return await listSecrets(vault, out);
       case 'import-env':
@@ -184,7 +190,27 @@ async function deleteSecret(
   vault: Vault,
   name: string,
   out: (line: string) => void,
+  deps: VaultDeps = {},
 ): Promise<number> {
+  /*
+   * The backup passphrase is the one secret nothing can make again: every
+   * archive locked with it opens with it alone. Before it leaves the vault it
+   * is printed, the one exception to "never printed", and saved beside the
+   * backups (0600), as uninstall does.
+   */
+  if (name === BACKUP_PASSPHRASE_KEY) {
+    const phrase = await vault.get(name);
+    if (phrase !== null && phrase.trim() !== '') {
+      const dir = deps.backupDir ?? BACKUP_DIR;
+      const stamp = (deps.now ?? (() => new Date()))().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
+      const file = path.join(dir, `buddi-passphrase-${stamp}.txt`);
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await writeFile(file, passphraseFileText(phrase.trim()), { mode: 0o600 });
+      await chmod(file, 0o600);
+      out(`Your backup passphrase, which opens the backups locked with it: ${phrase.trim()}`);
+      out(`It is also in ${file} (only you can read it). Write the six words down, then delete that file.`);
+    }
+  }
   const removed = await vault.delete(name);
   out(removed ? `Removed ${name} from the ${vault.kind} vault.` : `${name} was not in the vault.`);
   return removed ? 0 : 1;
