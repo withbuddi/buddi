@@ -111,7 +111,7 @@ notarize: release ## Submit release build to Apple notary service, staple ticket
 	$(SIGN) "$(SPARKLE_FW)/Versions/B/Updater.app"
 	$(SIGN) "$(SPARKLE_FW)"
 	find "$(RELEASE_APP)/Contents/Resources/buddi" -type f \( -name '*.dylib' -o -name '*.so' -o -name '*.node' -o -perm -u+x \) -print0 \
-		| xargs -0 file | grep 'Mach-O' | cut -d: -f1 | while read -r bin; do $(SIGN) "$$bin"; done
+		| xargs -0 file | grep 'Mach-O' | sed -E 's/ \(for architecture [^)]*\)//' | cut -d: -f1 | sort -u | while read -r bin; do $(SIGN) "$$bin" || exit 1; done
 	$(SIGN) --entitlements App/node.entitlements "$(RELEASE_APP)/Contents/Resources/runtime/node"
 	$(SIGN) --entitlements App/buddi.entitlements "$(RELEASE_APP)"
 	codesign --verify --deep --strict "$(RELEASE_APP)"
