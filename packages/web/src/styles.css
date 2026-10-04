@@ -5259,7 +5259,7 @@ button.lk-chip:disabled { cursor: default; }
 .access-run-more { display: flex; flex-direction: column; gap: var(--space-2); font-weight: var(--weight-normal); }
 
 /* ---- The browser experience (buddi-design Browser.jsx): Where agents may look, the Page tab, the cards ---- */
-/* Settings → Where agents may look. */
+/* Settings → Browser & apps ("Where agents may look"). */
 .br-glyph { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: var(--space-8); height: var(--space-8); border-radius: var(--radius); background: var(--surface-sunken); border: 1px solid var(--line); color: var(--text-muted); }
 .br-glyph svg { width: var(--space-5); height: var(--space-5); }
 .br-glyph-letter { font-size: var(--text-xs); font-weight: var(--weight-semibold); }

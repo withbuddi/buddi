@@ -513,7 +513,7 @@ A list of sections in four groups.
   [memory.md](memory.md#people)), then Preferences and Notes.
 - **Proposals**: what the agents learned, to keep or discard.
 - **Model accounts**: the credentials the agents run on.
-- **Where agents may look**: one row per route — buddi's own browser (its
+- **Browser & apps** (its lede: where agents may look): one row per route — buddi's own browser (its
   health and the one fix), your Chrome (a switch once paired; Add to Chrome,
   the pairing code, Pair again; the sites that need your sign-in), your apps
   when something provides them (Settings › for the helper, macOS permissions

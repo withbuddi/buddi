@@ -411,7 +411,7 @@ it('offers Where it may look on Tools for an agent granted the browser, saved as
   expect(select).toHaveValue('own');
   fireEvent.change(select, { target: { value: 'chrome' } });
   await waitFor(() => expect(api.setAgentEngine).toHaveBeenCalledWith('demo', { browser: 'chrome' }));
-  expect(screen.getByRole('link', { name: 'Where agents may look' })).toHaveAttribute('href', '#/settings/computer');
+  expect(screen.getByRole('link', { name: 'Browser & apps' })).toHaveAttribute('href', '#/settings/computer');
 });
 
 it('offers no Where it may look to an agent without the browser', async () => {

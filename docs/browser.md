@@ -197,7 +197,7 @@ yours in that conversation (the owner request lives an hour too). The agent
 run's `maxTurns` does not count `browser.act` turns (`ownBudget`; capped at 240
 extra turns); the browser's budget is the ceiling, and its card is Keep going?.
 
-## Settings: where agents may look
+## Settings: Browser & apps
 
 `browser/settings.json` is `{version: 2, yourChrome, yourApps: off|ask|on,
 signInSites, defaultRoute, stopExpiryMinutes, maxOwnPages, showWindow,
@@ -234,7 +234,9 @@ sandbox, pair, permissions, helper).
 What the owner sees and touches, as the kit draws it (buddi-design
 `Browser.jsx`).
 
-**Settings → Where agents may look.** One panel, a row per route, a repair
+**Settings → Browser & apps** (the sidebar entry; the page's lede is "Where
+agents may look", and its route stays `#/settings/computer`, with
+`#/settings/browser` landing there too). One panel, a row per route, a repair
 where health is red; no radio buttons.
 
 - **buddi's own browser** — always on: *ready*; *Chromium isn't installed*
@@ -372,7 +374,7 @@ is the Computer plugin's: see its
 
 ## Optional: "Your browser", the Chrome extension
 
-The **Your Chrome** row of Settings → Where agents may look: agents work in
+The **Your Chrome** row of Settings → Browser & apps: agents work in
 the Chrome you are already signed in to, through a Manifest V3 extension.
 **[Add it to Chrome from the Chrome Web Store](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)**; it
 updates itself from there. It works in Chrome, Edge, Brave and Arc on macOS,
@@ -381,18 +383,23 @@ also ships unpacked in `<install root>/extension`, for developers.
 
 Setup, in the owner's words:
 
-1. Turn on **Your Chrome** in Where agents may look (it reads Add to Chrome
+1. Turn on **Your Chrome** in Browser & apps (it reads Add to Chrome
    until a Chrome is paired).
 2. Press **Add to Chrome** on the settings page, which opens the
    [store listing](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah) in a new tab, and install it there.
-   (Developer install, folded under it: open `chrome://extensions`, turn on
-   **Developer mode**, choose **Load unpacked**, and pick the folder the
-   settings page prints.) In Firefox or Safari the page says the extension
+   (Developer install, under the row's ⋯ when buddi runs from a source
+   checkout: open `chrome://extensions`, turn on **Developer mode**, choose
+   **Load unpacked**, and pick the folder the settings page prints.) In Firefox or Safari the page says the extension
    needs Chrome, Edge, Brave or Arc; on a phone it leaves the install out.
 3. Press **Connect** in the extension popup. It shows a six-digit code, valid
    for five minutes, with a **Copy** button and **Open buddi settings** beside
-   it. If the dashboard is open in that same Chrome it fills the code in for
-   you; otherwise type it into **Pair your browser** on the settings page. Once
+   it, which opens buddi.app on this page through a `buddi://settings/browser`
+   link when the app is installed and the dashboard in a new tab otherwise. If
+   the dashboard is open in that same Chrome it fills the code in for you;
+   otherwise type it into **Enter the code** on the Your Chrome row, which is
+   always there until a Chrome is paired (that is how you pair from the
+   buddi.app window). The extension and buddi keep the socket busy while the
+   code waits, so the code stays good for its five minutes. Once
    paired, the popup shows only which buddi it is connected to, how many tabs
    it is working in, and **Forget this buddi**.
 

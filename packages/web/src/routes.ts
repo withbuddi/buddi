@@ -298,7 +298,7 @@ export function parseConnectionRoute(hash: string): string | null {
   return settingsParam(hash, 'connections', 'connection');
 }
 
-/** Settings → Where agents may look. `#/browser`, the full page view, lands here too. */
+/** Settings → Browser & apps (route id `computer`). `#/browser` and `#/settings/browser` land here too. */
 export const LOOKING_ROUTE = settingsRoute('computer');
 
 
@@ -431,7 +431,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'memory', label: 'Memory', group: 'you' },
   { id: 'proposals', label: 'Proposals', group: 'you' },
   { id: 'accounts', label: 'Model accounts', group: 'access' },
-  { id: 'computer', label: 'Where agents may look', group: 'access' },
+  { id: 'computer', label: 'Browser & apps', group: 'access' },
   { id: 'secrets', label: 'Keys and secrets', group: 'access' },
   { id: 'connections', label: 'Connections', group: 'access' },
   { id: 'lock', label: 'Lock screen', group: 'access' },

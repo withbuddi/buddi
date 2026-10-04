@@ -30,7 +30,7 @@ function isAppEnvelope(value: unknown): value is AppEnvelope {
 export const UNATTENDED_CHROME = "A mission looks only in buddi's own browser, never the owner's Chrome: nobody is there to watch it. Use the own browser, or report what needs the owner's sign-in.";
 /** What a mission is told when it asks for an app. */
 export const UNATTENDED_APPS = "A mission looks only in buddi's own browser; the owner's apps need the owner. Report what you could not do instead.";
-export const APPS_UNAVAILABLE = 'Your apps are not available to agents right now. The owner can turn them on, or repair them, in Settings → Where agents may look.';
+export const APPS_UNAVAILABLE = 'Your apps are not available to agents right now. The owner can turn them on, or repair them, in Settings → Browser & apps.';
 /** What the agent is told when no plugin provides the apps route. */
 export const APPS_NOT_INSTALLED = 'Agents cannot work in apps here: that needs the Computer plugin (macOS), which the owner installs from Settings → Plugins.';
 /** An installed app as the route names it: its id (a bundle id) and its name. */

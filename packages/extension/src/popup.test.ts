@@ -124,7 +124,7 @@ describe('the four states of the popup', () => {
     expect(shown('copy')).toBe(true);
     expect(shown('open-settings')).toBe(true);
     expect(shown('gateway')).toBe(false);
-    expect(document.body.textContent).toMatch(/Settings → Computer\u00a0&\u00a0browser, within five minutes/);
+    expect(document.body.textContent).toMatch(/Settings → Browser\u00a0&\u00a0apps, within five minutes/);
     expect(dashboardUrl('http://127.0.0.1:4317', SETTINGS_HASH)).toBe('http://127.0.0.1:4317/#/settings/computer');
   });
 

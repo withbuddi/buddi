@@ -33,7 +33,7 @@ export interface PopupModel {
 
 export type View = 'address' | 'pairing' | 'paired';
 
-/** Where the dashboard keeps Where agents may look (`packages/web/src/routes.ts`). */
+/** Where the dashboard keeps Settings → Browser & apps (route id `computer`, `packages/web/src/routes.ts`). */
 export const SETTINGS_HASH = '#/settings/computer';
 
 const PILL: Record<ClientState['connection'], { word: string; tone: string }> = {

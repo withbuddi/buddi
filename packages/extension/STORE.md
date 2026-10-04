@@ -69,7 +69,7 @@ characters.
 > - It never types a password on its own. A secret you saved in buddi goes into
 >   a field only after you approve that one fill.
 > - Pairing takes one code: press Connect, and type the six digits into buddi
->   under Settings → Where agents may look. If buddi is open in this Chrome, it
+>   under Settings → Browser & apps. If buddi is open in this Chrome, it
 >   fills them in for you.
 >
 > You need buddi installed first: https://withbuddi.com

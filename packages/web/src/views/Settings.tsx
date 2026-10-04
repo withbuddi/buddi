@@ -94,10 +94,11 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
               }
             />
           ) : section === 'computer' ? (
-            /* Where agents may look, as the kit draws it: the way back, the title; the apps page one step further. */
+            /* Browser & apps, as the kit draws it: the way back, the title, what it is; the apps page one step further. */
             <PageHeader
               before={<Breadcrumb inline items={[{ label: 'Settings', href: SETTINGS_ROUTE, onClick: () => navigate(SETTINGS_ROUTE) }]} />}
-              title="Where agents may look"
+              title="Browser & apps"
+              lede="Where agents may look"
             />
           ) : section === 'plugins' || section === 'connections' ? (
             /* Plugins and Connections are pages of their own inside Settings, as

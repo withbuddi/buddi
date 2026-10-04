@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 - Pairing Chrome no longer goes stale half a minute in. Chrome put the extension to sleep while it waited for you to type its code, so the popup kept showing a code buddi was no longer waiting for ("No browser is waiting to be paired"). buddi now keeps the waiting extension awake, the extension keeps itself awake too, and the popup picks up a fresh code if the old one went.
 - Settings → Your Chrome always offers "Enter the code" until Chrome is paired: open the buddi icon in Chrome and type its six digits here, which is how you pair from the buddi.app window. "Install unpacked…" shows only when buddi runs from a source checkout.
 - buddi's log has one line for every connection the Chrome extension makes: accepted or refused and why, waiting for its code, paired, or reconnected. Never the code or the token.
+- Settings → Where agents may look is now called **Browser & apps** in the sidebar and at the top of the page, with "Where agents may look" underneath. The extension popup, first run and the docs use the new name; old links still land there.
 
 ## 0.1.0-pre.41 — 2026-10-04
 

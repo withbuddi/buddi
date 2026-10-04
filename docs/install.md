@@ -523,7 +523,7 @@ runs again. On a Linux server with no display the browser runs headless (see
 
 **Your browser** is Chrome (or Edge, Brave, Arc) on every platform: install
 the extension from the **[Chrome Web Store](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)** — **Add to
-Chrome** in Settings → Where agents may look opens it — and pair it with a six-digit code
+Chrome** in Settings → Browser & apps opens it — and pair it with a six-digit code
 there. The package also carries the unpacked extension at `<root>/extension`
 for a developer install (`chrome://extensions` → Developer mode → Load
 unpacked). Nothing about it is macOS-only.

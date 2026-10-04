@@ -221,7 +221,7 @@ dots, and §3's native typing is always a card for that reason.
 ## 6. Settings → Keys and secrets
 
 An entry, **Keys and secrets**, in the **Models and access** group, after
-Model accounts and Where agents may look. It sits there because it answers the
+Model accounts and Browser & apps. It sits there because it answers the
 same question as its neighbours, what agents may reach, and not You's, which
 is about the owner and what buddi learned about them.
 

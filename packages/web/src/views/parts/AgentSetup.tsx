@@ -335,7 +335,7 @@ function Agent({
               <div className="br-adv-row">
                 <span className="br-adv-head">
                   <span className="br-adv-title">Pages for {agent.name}</span>
-                  <span className="br-adv-hint">A conversation’s Use my Chrome comes first, then this, then <a href={LOOKING_ROUTE}>Where agents may look</a>. A rule never allows what is off there.</span>
+                  <span className="br-adv-hint">A conversation’s Use my Chrome comes first, then this, then <a href={LOOKING_ROUTE}>Browser & apps</a>. A rule never allows what is off there.</span>
                 </span>
                 <PinSelect value={engine.browser ?? 'auto'} label={`Where ${agent.name} may look`} apps={false} onChange={(browser) => set({ browser })} />
               </div>

@@ -1,5 +1,5 @@
 /**
- * Settings → Where agents may look (docs/browser.md, "Routes"; the kit's
+ * Settings → Browser & apps, "Where agents may look" (docs/browser.md, "Routes"; the kit's
  * `WhereAgentsLook` in buddi-design Browser.jsx).
  *
  * Permissions and health, one row per route, a repair where health is red; no
