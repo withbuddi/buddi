@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.41 — 2026-10-04
+
 - First run: adding a mailbox is now a short sheet instead of the whole Mail settings page. Pick Gmail, iCloud, Fastmail or Other, type the address and app password (with a link to where to make one), and it checks the login and closes once Mail Triage is reading it. If you took on My days, chapter 4 also asks for your calendar's private link (or a Google sign-in) the same way; if you took on My money, it says plainly that Finance reads the statements you hand it rather than signing in to your bank.
 - First run, Telegram: pairing your phone opens a sheet with a large QR code on a white tile you can scan from across the desk, your bot's name under it, Open in Telegram and Copy link (no bare link to squint at). "Waiting for your Start…" turns into "Paired with Amen's phone" as soon as you press Start, and the sheet closes by itself.
 - First run inside buddi.app: the "app and browser" card no longer tells you to add buddi to the Dock from Safari. It says buddi is already in your Dock, points to Start at Login in the buddi menu, and links the Chrome extension.
