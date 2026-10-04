@@ -544,7 +544,7 @@ async function readImage(pool: Queryable): Promise<{ jpeg: Buffer; sha256: strin
  * that is sensitive (the service never places one there), only those with
  * something to draw, at most four.
  */
-async function lockWidgets(service: WidgetsService | undefined, hour?: HourCycle, timeFormat?: '12h' | '24h' | null): Promise<LockScreenView['widgets']> {
+export async function lockWidgets(service: WidgetsService | undefined, hour?: HourCycle, timeFormat?: '12h' | '24h' | null): Promise<LockScreenView['widgets']> {
   if (!service) return [];
   try {
     const answer = await service.answer({ surface: 'lock', ...(hour ? { hour } : {}), ...(timeFormat ? { timeFormat } : {}) });
@@ -554,7 +554,9 @@ async function lockWidgets(service: WidgetsService | undefined, hour?: HourCycle
       const info = answer.available.find((w) => w.id === placement.widget);
       const view = answer.views[placement.key];
       if (!info || info.sensitive || !view || !view.body || (view.state !== 'ok' && view.state !== 'stale')) continue;
-      out.push({ key: placement.key, id: info.id, title: placement.label, size: placement.size, view: { state: view.state, body: view.body } });
+      // A stale body keeps its mark and when it was made: the screen says "from 9:12" rather than passing it off as now.
+      const since = view.state === 'stale' && view.updatedAt ? { updatedAt: view.updatedAt } : {};
+      out.push({ key: placement.key, id: info.id, title: placement.label, size: placement.size, view: { state: view.state, body: view.body, ...since } });
     }
     return out;
   } catch {

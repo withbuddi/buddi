@@ -1282,7 +1282,7 @@ export interface LockScreenData extends LockState {
   /** Everything else that needs the owner, by the same rule as Home's counts and the rail's badge. */
   needs: number;
   focus: FocusState | null;
-  widgets: Array<{ key: string; id: string; title: string; size: WidgetSize; view: { state: 'ok' | 'stale'; body: WidgetBody } }>;
+  widgets: Array<{ key: string; id: string; title: string; size: WidgetSize; view: { state: 'ok' | 'stale'; body: WidgetBody; updatedAt?: string } }>;
   clockView?: LockClockView;
 }
 

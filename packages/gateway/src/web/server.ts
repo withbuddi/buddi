@@ -696,7 +696,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   const ollamaPulls = deps.ollamaPulls ?? createOllamaPulls({ baseUrl: OLLAMA_BASE_URL });
   const machine = deps.ollamaMachine ?? (() => ollamaMachine());
   // Home's widgets: one cache per server (web/widgets.ts).
-  const widgets = createWidgets({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
+  const widgets = createWidgets({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, log });
   /*
    * The lock screen (web/lock.ts): which sessions are locked, the PIN, the
    * gate below. A session that locks has its streams closed and its remote

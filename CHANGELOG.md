@@ -10,6 +10,7 @@ What changes in buddi from one release to the next, newest first.
 - buddi's log has one line for every connection the Chrome extension makes: accepted or refused and why, waiting for its code, paired, or reconnected. Never the code or the token.
 - Settings → Where agents may look is now called **Browser & apps** in the sidebar and at the top of the page, with "Where agents may look" underneath. The extension popup, first run and the docs use the new name; old links still land there.
 - buddi.app answers `buddi://` links: `buddi://open` brings the window forward, `buddi://settings/<page>` opens that Settings page, and `buddi://settings/browser?code=123456` opens Browser & apps with the Chrome pairing code already typed in (you still press Pair). Any other link is ignored. The extension's **Open buddi settings** opens buddi.app this way on a Mac and falls back to the dashboard in a tab when the app doesn't answer; if that tab finds you signed out, it offers **Open buddi.app** first and shows the Terminal command only when the app didn't open.
+- Lock screen: a widget that couldn't refresh still shows its last good answer, but its title now says when that was ("Top stories · from 9:12"), so yesterday's headlines no longer pass for now. A widget that answers a little after its 5 seconds is kept for the next look instead of thrown away, and each widget that fails or times out leaves one line in buddi's log (which widget, how long it took).
 
 ## 0.1.0-pre.41 — 2026-10-04
 

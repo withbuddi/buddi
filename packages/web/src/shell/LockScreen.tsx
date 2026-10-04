@@ -217,7 +217,18 @@ export function lockShown<T extends { view: { body: LockScreenData['widgets'][nu
   return widgets.filter((w) => !(w.view.body.kind === 'text' && !w.view.body.sub));
 }
 
-function Widgets({ widgets: all, phone }: { widgets: LockScreenData['widgets']; phone: boolean }): JSX.Element | null {
+/**
+ * "from 9:12": when a stale body on the lock screen was made, in the lock's
+ * time format — quiet, so an old list never passes for now. Null for a fresh one.
+ */
+export function lockStaleFrom(view: { state: string; updatedAt?: string }, timezone: string, clockView: LockClockView | undefined): string | null {
+  if (view.state !== 'stale' || !view.updatedAt) return null;
+  const at = new Date(view.updatedAt);
+  if (Number.isNaN(at.getTime())) return null;
+  return `from ${inLockFormats(clockView, () => fmtClock(at, timezone))}`;
+}
+
+function Widgets({ widgets: all, phone, timezone, clockView }: { widgets: LockScreenData['widgets']; phone: boolean; timezone: string; clockView: LockClockView | undefined }): JSX.Element | null {
   const widgets = lockShown(all);
   if (widgets.length === 0) return null;
   // A sentence (nothing today, nobody waiting) takes one column, so it never stretches into a hollow card.
@@ -226,12 +237,15 @@ function Widgets({ widgets: all, phone }: { widgets: LockScreenData['widgets']; 
   return (
     <div className="lk-widgets">
       <div className="lk-grid" data-phone={phone ? 'true' : undefined} data-cols={cols}>
-        {sized.map(({ w, size }) => (
-          <div key={w.key ?? w.id} className="wg-frame" data-variant="compact" data-size={size} data-kind={w.view.body.kind} role="group" aria-label={w.title}>
-            <div className="wg-body"><WidgetBodyView body={w.view.body} size={size} /></div>
-            <span className="wg-compact-title">{w.title}</span>
-          </div>
-        ))}
+        {sized.map(({ w, size }) => {
+          const from = lockStaleFrom(w.view, timezone, clockView);
+          return (
+            <div key={w.key ?? w.id} className="wg-frame" data-variant="compact" data-size={size} data-kind={w.view.body.kind} data-stale={from ? 'true' : undefined} role="group" aria-label={w.title}>
+              <div className="wg-body"><WidgetBodyView body={w.view.body} size={size} /></div>
+              <span className="wg-compact-title">{w.title}{from ? <span className="wg-compact-from"> · {from}</span> : null}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -343,7 +357,7 @@ export function LockFace({ data, now, phone, pad = false, after, onPick }: { dat
           </p>
         ) : null}
         {pad || !data ? null : <Badges approvals={data.approvals} needs={data.needs ?? 0} after={after ?? null} {...(onPick ? { onPick } : {})} />}
-        {pad || !data ? null : <Widgets widgets={data.widgets} phone={phone} />}
+        {pad || !data ? null : <Widgets widgets={data.widgets} phone={phone} timezone={timezone} clockView={data.clockView} />}
       </div>
     </>
   );

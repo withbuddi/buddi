@@ -20,7 +20,9 @@
  * and resolved settings (two placements set alike share it; a failure is tried
  * again after a minute), with its own timeout. One that throws, times out or
  * answers a body the page cannot draw keeps its last good body and is marked
- * stale, or shows its error when it never had one; nothing else notices. The
+ * stale, or shows its error when it never had one. Each failure is logged
+ * (the widget, its size, how long it took); one that times out but answers
+ * later still lands in the cache for the next ask. The
  * built-in World clock reads only the clock and is produced every time.
  *
  * An older plugin's glance that sends a `card` is a widget too — a small
@@ -173,6 +175,8 @@ export interface WidgetsDeps {
   ctx: CoreToolContext;
   now: () => Date;
   timeoutMs?: number;
+  /** One line per production that failed or answered late: ids and timings, never a body or a plugin's message. */
+  log?: (line: string) => void;
 }
 
 interface Stored {
@@ -180,10 +184,15 @@ interface Stored {
   lock?: Placement[];
 }
 
+/** A production that took longer than its budget. */
+class WidgetTimeout extends Error {}
+/** A production that answered something the page cannot draw. */
+class InvalidBody extends Error {}
+
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`did not answer in ${Math.round(ms / 1000)} seconds`)), ms);
+    timer = setTimeout(() => reject(new WidgetTimeout(`did not answer in ${Math.round(ms / 1000)} seconds`)), ms);
   });
   return Promise.race([work, late]).finally(() => clearTimeout(timer));
 }
@@ -378,25 +387,49 @@ export function createWidgets(deps: WidgetsDeps) {
     const wait = entry.error !== undefined ? Math.min(WIDGET_RETRY_MS, p.refreshMs) : p.refreshMs;
     if (!force && entry.at > 0 && now - entry.at < wait) return entry;
     const e = entry;
-    e.inflight = (async () => {
+    const started = Date.now();
+    const work = Promise.resolve().then(() => p.produce(deps.ctx, { size, settings }, owner));
+    let outcome: 'timed out' | 'answered a body the page cannot draw' | 'failed' | null = null;
+    /** A body, or null for nothing; throws when the page could not draw it. */
+    const accept = (raw: unknown): WidgetBody | null => {
+      if (raw === null || raw === undefined) return null;
+      const checked = widgetBodyOf(raw, { plugin: p.info.plugin });
+      if (!checked.ok) throw new InvalidBody(checked.reason);
+      return checked.body;
+    };
+    const tried = (async () => {
       try {
-        const raw = await withTimeout(Promise.resolve().then(() => p.produce(deps.ctx, { size, settings }, owner)), timeoutMs);
-        if (raw === null || raw === undefined) {
-          e.body = null;
-        } else {
-          const checked = widgetBodyOf(raw, { plugin: p.info.plugin });
-          if (!checked.ok) throw new Error(checked.reason);
-          e.body = checked.body;
-        }
+        e.body = accept(await withTimeout(work, timeoutMs));
         e.okAt = deps.now().getTime();
         delete e.error;
       } catch (err) {
         e.error = err instanceof Error ? err.message : String(err);
+        outcome = err instanceof WidgetTimeout ? 'timed out' : err instanceof InvalidBody ? 'answered a body the page cannot draw' : 'failed';
+        // The id, size and timing only: a plugin's message can carry the owner's data.
+        deps.log?.(`widgets: ${p.info.id} (${size}) ${outcome} after ${Date.now() - started} ms`);
       } finally {
         e.at = deps.now().getTime();
         delete e.inflight;
       }
     })();
+    e.inflight = tried;
+    // A production that missed the budget may still finish: its body is kept
+    // for the next ask, unless a newer try is under way or answered meanwhile.
+    void work.then(
+      async (raw) => {
+        await tried;
+        if (outcome !== 'timed out' || e.inflight || e.error === undefined) return;
+        try {
+          e.body = accept(raw);
+        } catch {
+          return;
+        }
+        e.okAt = deps.now().getTime();
+        delete e.error;
+        deps.log?.(`widgets: ${p.info.id} (${size}) answered late, after ${Date.now() - started} ms; kept for the next ask`);
+      },
+      () => {},
+    );
     await e.inflight;
     return e;
   }

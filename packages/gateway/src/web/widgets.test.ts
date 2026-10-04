@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { ToolRegistry, type HomeContribution, type PageDescriptor, type WidgetDefinition } from '@buddi/core';
 import { createWidgets, readStoredWidgets, widgetsRoute, WIDGETS_SETTINGS_KEY, type WidgetsAnswer } from './widgets.js';
+import { lockWidgets } from './lock.js';
 
 const PLACES = [
   { id: 'home', label: 'Home', address: null, name: 'Lyon, France', latitude: 45.76, longitude: 4.84, timezone: 'Europe/Paris' },
@@ -41,12 +42,12 @@ function fakePool(opts: { places?: boolean; timeFormat?: '12h' | '24h' | null } 
 
 const page = { id: 'weather', title: 'Weather', place: 'rail', icon: 'sun', body: [{ kind: 'notice', text: 'x' }] } as unknown as PageDescriptor;
 
-function setup(opts: { widgets?: WidgetDefinition[]; home?: HomeContribution[]; timeoutMs?: number; places?: boolean; timeFormat?: '12h' | '24h' | null } = {}) {
+function setup(opts: { widgets?: WidgetDefinition[]; home?: HomeContribution[]; timeoutMs?: number; places?: boolean; timeFormat?: '12h' | '24h' | null; log?: (line: string) => void } = {}) {
   const registry = new ToolRegistry();
   registry.register({ name: 'demo', version: '1', schema: 'demo', migrationsDir: '', tools: [], pages: [page], widgets: opts.widgets ?? [], home: opts.home ?? [] });
   const pool = fakePool(opts);
   let now = new Date('2026-10-01T08:00:00Z');
-  const service = createWidgets({ pool: pool as never, registry, ctx: { db: pool, timezone: 'Europe/Paris' } as never, now: () => now, timeoutMs: opts.timeoutMs ?? 50 });
+  const service = createWidgets({ pool: pool as never, registry, ctx: { db: pool, timezone: 'Europe/Paris' } as never, now: () => now, timeoutMs: opts.timeoutMs ?? 50, ...(opts.log ? { log: opts.log } : {}) });
   return { service, pool, registry, tick: (ms: number) => { now = new Date(now.getTime() + ms); } };
 }
 
@@ -199,6 +200,51 @@ describe('widgets', () => {
     expect(views['d-demo-broken']).toEqual({ state: 'error', error: 'down' });
     expect(views['d-demo-html']).toMatchObject({ state: 'error', error: expect.stringMatching(/not "html"/) });
     expect(views['d-demo-fine']).toMatchObject({ state: 'ok', body: text('fine') });
+  });
+
+  it('logs each failure with the widget, its size and how long it took, never the plugin\'s message', async () => {
+    const lines: string[] = [];
+    const { service } = setup({
+      log: (line) => lines.push(line),
+      widgets: [
+        { id: 'demo.slow', title: 'Slow', sizes: ['small'], produce: () => new Promise(() => {}) },
+        { id: 'demo.broken', title: 'Broken', sizes: ['small'], produce: async () => { throw new Error('the owner\'s account 1234 is overdrawn'); } },
+        { id: 'demo.html', title: 'Html', sizes: ['small'], produce: async () => ({ kind: 'html', html: '<b>' }) as never },
+        { id: 'demo.fine', title: 'Fine', sizes: ['small'], produce: async () => text('fine') },
+      ],
+    });
+    await service.answer();
+    expect(lines).toHaveLength(3);
+    expect(lines.find((l) => l.includes('demo.slow'))).toMatch(/^widgets: demo\.slow \(small\) timed out after \d+ ms$/);
+    expect(lines.find((l) => l.includes('demo.broken'))).toMatch(/^widgets: demo\.broken \(small\) failed after \d+ ms$/);
+    expect(lines.find((l) => l.includes('demo.html'))).toMatch(/^widgets: demo\.html \(small\) answered a body the page cannot draw after \d+ ms$/);
+    expect(lines.join('\n')).not.toMatch(/overdrawn|1234/);
+  });
+
+  it('keeps a body that answers after its budget for the next ask, without producing it again', async () => {
+    const lines: string[] = [];
+    let calls = 0;
+    let release: (body: ReturnType<typeof text>) => void = () => {};
+    const { service } = setup({
+      log: (line) => lines.push(line),
+      widgets: [{ id: 'demo.late', title: 'Late', sizes: ['small'], refreshSeconds: 600, produce: () => { calls++; return new Promise((resolve) => { release = resolve; }); } }],
+    });
+    expect((await service.answer()).views['d-demo-late']).toEqual({ state: 'error', error: 'did not answer in 0 seconds' });
+    release(text('late but fresh'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect((await service.answer()).views['d-demo-late']).toMatchObject({ state: 'ok', body: text('late but fresh') });
+    expect(calls).toBe(1);
+    expect(lines.at(-1)).toMatch(/^widgets: demo\.late \(small\) answered late, after \d+ ms; kept for the next ask$/);
+  });
+
+  it('keeps the stale mark on the lock screen with when the body was made, so the screen can say "from 8:00"', async () => {
+    let fail = false;
+    const { service, tick } = setup({ widgets: [{ id: 'demo.a', title: 'A', sizes: ['small'], refreshSeconds: 600, produce: async () => { if (fail) throw new Error('offline'); return text('good'); } }] });
+    expect((await service.saveSurface('lock', { placements: [{ widget: 'demo.a', size: 'small' }] })).status).toBe(200);
+    expect((await lockWidgets(service))[0]!.view).toEqual({ state: 'ok', body: text('good') });
+    fail = true;
+    tick(600_000);
+    expect((await lockWidgets(service))[0]!.view).toEqual({ state: 'stale', body: text('good'), updatedAt: '2026-10-01T08:00:00.000Z' });
   });
 
   it('marks a placement stale when a refresh fails after a good answer, retries after a minute, and Try again forces it', async () => {
