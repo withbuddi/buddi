@@ -138,9 +138,10 @@ type WireRequest = {
    * Ollama's own switch for the same thing, sent beside `reasoning_effort` to
    * an Ollama endpoint. Its OpenAI-compatible route accepts unknown fields,
    * and the ones that honour this stop reasoning where `reasoning_effort`
-   * alone is ignored. Nothing else is sent it.
+   * alone is ignored. Nothing else is sent it. gpt-oss takes a level
+   * instead: it cannot stop reasoning, and ignores `false`.
    */
-  think?: boolean;
+  think?: boolean | 'low' | 'medium' | 'high';
   /**
    * Routes requests sharing a prompt prefix to the same cache (OpenAI's
    * caching is automatic; this only improves the hit rate). Sent to OpenAI
@@ -383,6 +384,15 @@ export function isOllama(baseUrl: string): boolean {
 }
 
 /**
+ * A model that always reasons and takes a level instead of an off switch
+ * (Ollama's documented rule for gpt-oss: `low`, `medium` or `high`;
+ * `true`/`false` are ignored).
+ */
+export function reasonsAlways(model: string): boolean {
+  return /^gpt-oss(?:[:\-]|$)/i.test(model.trim());
+}
+
+/**
  * Reasoning the model wrote into its own answer, taken back out.
  *
  * A host that separates thinking returns it in `reasoning`; a great many
@@ -400,15 +410,95 @@ export function isOllama(baseUrl: string): boolean {
  */
 const THOUGHT = /^\s*<(think|thinking)>([\s\S]*?)(?:<\/\1>|$)/i;
 
-/** The longest opening tag, for deciding whether a short head might become one. */
-const OPEN_THOUGHT = '<thinking>';
+/**
+ * How a thought can open, for deciding whether a short head might become one.
+ * The last two are gpt-oss's harmony format: its analysis channel with the
+ * channel tokens left in, and the same with them stripped, which runs the
+ * channel names into the words ("analysisWe need to…assistantfinalHello").
+ */
+const THOUGHT_OPENERS = ['<thinking>', '<|start|>assistant<|channel|>analysis<|message|>', '<|channel|>analysis<|message|>', 'analysis'];
+
+/** Could this start of an answer still turn out to be the start of a thought? */
+function mightOpenThought(content: string): boolean {
+  const head = content.replace(/^\s+/, '');
+  if (head === '') return false;
+  // A bare "analysis" is a thought only when a capital follows with no space.
+  if (head === 'analysis') return true;
+  return THOUGHT_OPENERS.some((opener) => head.length < opener.length && opener.startsWith(head.toLowerCase()));
+}
+
+/** gpt-oss's analysis channel, its tokens kept. */
+const HARMONY_OPEN = /^\s*(?:<\|start\|>assistant)?<\|channel\|>analysis<\|message\|>/;
+/** Where its final channel starts, with the close of the analysis before it. */
+const HARMONY_FINAL = /(?:<\|end\|>)?\s*(?:<\|start\|>assistant)?<\|channel\|>final<\|message\|>/;
+/** The same with the tokens stripped: "analysisWe need…". */
+const BARE_HARMONY_OPEN = /^analysis(?=[A-Z])/;
+const BARE_HARMONY_FINAL = 'assistantfinal';
+
+const HARMONY_FINAL_HEADER = '<|start|>assistant<|channel|>final<|message|>';
+
+/** The final channel's words, without its closing token (or the start of one still arriving). */
+function harmonyAnswer(text: string): string {
+  let out = text.replace(/<\|(?:return|end)\|>\s*$/, '');
+  for (const token of ['<|return|>', '<|end|>']) out = withoutPartial(out, token, 2);
+  return out.replace(/^\s+/, '');
+}
+
+/** `text` without a tail that could be the start of `marker`, still arriving. */
+function withoutPartial(text: string, marker: string, least = 1): string {
+  for (let n = Math.min(marker.length - 1, text.length); n >= least; n--) {
+    if (text.endsWith(marker.slice(0, n))) return text.slice(0, -n);
+  }
+  return text;
+}
+
+/**
+ * gpt-oss's analysis channel left in the answer.
+ *
+ * Its reasoning and its answer are two channels of one output. A host that
+ * parses them hands the analysis over as `reasoning`; one that does not (or a
+ * template that misfires) leaves both in `content`, either with the channel
+ * tokens or — when they are stripped as special tokens — with nothing but the
+ * channel names run into the words. Read the same way as `<think>`: an
+ * analysis with no final channel yet is all thought.
+ */
+function splitHarmony(content: string): { thought: string; text: string } | null {
+  const open = HARMONY_OPEN.exec(content);
+  if (open) {
+    const rest = content.slice(open[0].length);
+    const final = HARMONY_FINAL.exec(rest);
+    if (final) {
+      return { thought: rest.slice(0, final.index).trim(), text: harmonyAnswer(rest.slice(final.index + final[0].length)) };
+    }
+    const end = rest.indexOf('<|end|>');
+    // Still open: a token arriving in pieces is not thought, so stop at one.
+    if (end === -1) return { thought: rest.split('<|')[0]!.trim(), text: '' };
+    const after = rest.slice(end + '<|end|>'.length).replace(/^\s+/, '');
+    // The final channel's header, still arriving, is not the answer yet.
+    if (HARMONY_FINAL_HEADER.startsWith(after)) return { thought: rest.slice(0, end).trim(), text: '' };
+    return { thought: rest.slice(0, end).trim(), text: harmonyAnswer(after.replace(/^<\|start\|>assistant(?:<\|channel\|>\w+<\|message\|>)?/, '')) };
+  }
+  const head = content.replace(/^\s+/, '');
+  if (!BARE_HARMONY_OPEN.test(head)) return null;
+  const rest = head.slice('analysis'.length);
+  const final = rest.indexOf(BARE_HARMONY_FINAL);
+  if (final === -1) return { thought: withoutPartial(rest, BARE_HARMONY_FINAL).trim(), text: '' };
+  return { thought: rest.slice(0, final).trim(), text: rest.slice(final + BARE_HARMONY_FINAL.length).replace(/^\s+/, '') };
+}
 
 /** A closing tag with no opening one: some hosts eat the `<think>` and leave the `</think>`. */
 const CLOSED_THOUGHT = /<\/(think|thinking)>/i;
 
 export function splitThought(content: string): { thought: string; text: string } {
+  const harmony = splitHarmony(content);
+  if (harmony) return harmony;
   const match = THOUGHT.exec(content);
-  if (match) return { thought: match[2] ?? '', text: content.slice(match[0].length).replace(/^\s+/, '') };
+  if (match) {
+    const closed = new RegExp(`</${match[1]}>$`, 'i').test(match[0]);
+    // An open block that ends in the first letters of its closing tag holds them back.
+    const thought = closed ? (match[2] ?? '') : withoutPartial(match[2] ?? '', `</${match[1]!.toLowerCase()}>`);
+    return { thought, text: content.slice(match[0].length).replace(/^\s+/, '') };
+  }
   // Ollama's cloud route, for one, strips the opening tag of glm and qwen
   // answers and keeps the closing one, so the answer arrives as
   // "…thought…</think>\n\nHello". Everything before that first closing tag
@@ -554,11 +644,19 @@ export function createOpenAiProvider(
     };
     const tools = toWireTools(req.tools, names);
     if (tools) wire.tools = tools;
-    if (req.thinking === 'off') wire.reasoning_effort = resolved.compatible ? 'none' : 'minimal';
-    else if (req.thinking === 'on' && !resolved.compatible) wire.reasoning_effort = 'medium';
-    // Ollama asks for this by its own name. Sent only there, and only when the
-    // answer to "should it think" is no.
-    if (req.thinking === 'off' && isOllama(resolved.baseUrl)) wire.think = false;
+    const ollama = isOllama(resolved.baseUrl);
+    if (req.thinking === 'off' && ollama && reasonsAlways(resolved.model)) {
+      // gpt-oss has no off switch: `false` and `none` are ignored and it
+      // reasons at its default length. The least it can be asked for is low.
+      wire.reasoning_effort = 'low';
+      wire.think = 'low';
+    } else {
+      if (req.thinking === 'off') wire.reasoning_effort = resolved.compatible ? 'none' : 'minimal';
+      else if (req.thinking === 'on' && !resolved.compatible) wire.reasoning_effort = 'medium';
+      // Ollama asks for this by its own name. Sent only there, and only when the
+      // answer to "should it think" is no.
+      if (req.thinking === 'off' && ollama) wire.think = false;
+    }
     const cacheKey = wireCacheKey(req.cacheKey);
     if (cacheKey && !resolved.compatible) wire.prompt_cache_key = cacheKey;
     if (req.onDelta) {
@@ -777,8 +875,7 @@ class OpenAiStreamAssembly {
    * is one or is not.
    */
   #emit(): void {
-    const head = this.#content.replace(/^\s+/, '');
-    if (head !== '' && head.length < OPEN_THOUGHT.length && OPEN_THOUGHT.startsWith(head.toLowerCase())) return;
+    if (mightOpenThought(this.#content)) return;
     const split = splitThought(this.#content);
     // A closing tag that arrives after its thought was already handed out as
     // answer text (no opening tag to warn us) cannot take those words back on

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { CLI_SURFACE, OWNER_INTERJECTION_SPEAKER, SCHEDULED_SURFACE, TELEGRAM_SURFACE, ToolRegistry, surfaceSection } from '@buddi/core';
@@ -2652,5 +2654,42 @@ describe('a long thinking turn, replayed on the next one', () => {
       { type: 'text', text: 'x' },
     ]);
     expect(persistable(step1)).toEqual(step1);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * A compatible host's reasoning, through the loop into core.messages
+ * ------------------------------------------------------------------ */
+
+describe('reasoning from an Ollama model, stored', () => {
+  const ollamaAgent: AgentDefinition = { ...agent, thinking: 'off', provider: { kind: 'openai', credential: { kind: 'api-key', env: 'K' }, model: 'gpt-oss:120b' } };
+  const target = { kind: 'openai' as const, compatible: true as const, credentialKind: 'api-key' as const, secret: '', baseUrl: 'https://ollama.com/v1', model: 'gpt-oss:120b' };
+  const recorded = readFileSync(fileURLToPath(new URL('../test/fixtures/ollama-cloud-gpt-oss-hello.sse', import.meta.url)), 'utf8');
+  const wireOf = (content: string) => `${[
+    { model: 'gpt-oss:120b', choices: [{ delta: { role: 'assistant', content } }] },
+    { choices: [{ delta: {}, finish_reason: 'stop' }] },
+  ].map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`;
+
+  it.each([
+    ['a separate reasoning delta (recorded)', recorded, /Should not ask a question/],
+    ['a <think> block', wireOf('<think>Should I make any tool calls? Draft: hi.</think>\n\nHello Amen, I am Pip.'), /tool calls/],
+    ['gpt-oss analysis with its tokens stripped', wireOf("analysisShould I make any tool calls? Draft: hi. That's three sentences.assistantfinalHello Amen, I am Pip."), /tool calls/],
+  ])('keeps %s out of the stored answer and the live text', async (_name, wire, thought) => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, agent.id);
+    const fetch = vi.fn(async (_url: unknown, init: any) => {
+      for (let i = 0; i < wire.length; i += 50) init.onChunk(wire.slice(i, i + 50), 200);
+      return new Response(wire, { status: 200 });
+    });
+    const provider = createOpenAiProvider(target, { fetch: fetch as never, sleep: async () => {} });
+    const live: Array<{ kind: string; text: string }> = [];
+    await runAgent({ agent: ollamaAgent, provider, registry: registryWithDouble(), ctx, pool: db, conversationId, userMessage: 'Introduce yourself.', onDelta: (d) => live.push(d) });
+
+    const stored = db.messages.filter((m) => m.role === 'assistant').flatMap((m) => m.content as Array<{ type: string; text?: string }>);
+    const answer = stored.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    expect(answer).toMatch(/^(Hello|Hi) Amen/);
+    expect(answer).not.toMatch(thought);
+    expect(stored.filter((b) => b.type === 'thinking').map((b) => b.text).join('')).toMatch(thought);
+    expect(live.filter((d) => d.kind === 'text').map((d) => d.text).join('')).not.toMatch(thought);
   });
 });

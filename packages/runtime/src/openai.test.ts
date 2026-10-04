@@ -1,4 +1,6 @@
 import { createPublicKey, verify } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { resolveProvider, type ProviderRef } from '@buddi/core';
 import {
@@ -782,5 +784,114 @@ describe('createOpenAiProvider — Gemini thought signatures', () => {
       { google: { thought_signature: 'skip_thought_signature_validator' } },
       { google: { thought_signature: 'CiQBSIG-B==' } },
     ]);
+  });
+});
+
+/*
+ * Reasoning kept out of the answer, in the three shapes a compatible host
+ * sends it: a separate `reasoning` delta (Ollama Cloud's gpt-oss, recorded
+ * 2026-10-04), a `<think>` block written into the content, and gpt-oss's
+ * harmony channels left in the content with or without their tokens.
+ */
+describe('createOpenAiProvider — reasoning never reaches the answer', () => {
+  const fixture = readFileSync(fileURLToPath(new URL('../test/fixtures/ollama-cloud-gpt-oss-hello.sse', import.meta.url)), 'utf8');
+
+  /** The recorded stream's two channels, joined the plain way. */
+  function channels(wire: string): { reasoning: string; content: string } {
+    let reasoning = '';
+    let content = '';
+    for (const line of wire.split('\n')) {
+      if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
+      const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta ?? {};
+      reasoning += delta.reasoning ?? '';
+      content += delta.content ?? '';
+    }
+    return { reasoning, content };
+  }
+
+  /** Feed `wire` to the provider in pieces of `size` characters, as a slow network would. */
+  async function stream(wire: string, size: number, model = 'gpt-oss:120b') {
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+      for (let i = 0; i < wire.length; i += size) init.onChunk(wire.slice(i, i + size), 200);
+      return new Response(wire, { status: 200 });
+    });
+    const provider = createOpenAiProvider(
+      { kind: 'openai', compatible: true, credentialKind: 'api-key', secret: '', baseUrl: 'https://ollama.com/v1', model },
+      { fetch: fetchMock as unknown as typeof fetch },
+    );
+    const deltas: Array<{ kind: string; text: string }> = [];
+    const res = await provider.complete({ ...request, thinking: 'off', onDelta: (d) => deltas.push(d) });
+    const said = (kind: string) => deltas.filter((d) => d.kind === kind).map((d) => d.text).join('');
+    return { res, text: said('text'), thinking: said('thinking') };
+  }
+
+  /** A stream whose content is `content`, sent a few characters per chunk. */
+  function contentWire(content: string): string {
+    const chunks: unknown[] = [];
+    for (let i = 0; i < content.length; i += 3) chunks.push({ model: 'gpt-oss:120b', choices: [{ delta: { content: content.slice(i, i + 3) } }] });
+    chunks.push({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+    return `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`;
+  }
+
+  it('(a) routes a separate reasoning delta to the thinking channel: the recorded Ollama Cloud hello', async () => {
+    const { reasoning, content } = channels(fixture);
+    expect(reasoning).toMatch(/Should not ask a question/);
+    for (const size of [7, 64, fixture.length]) {
+      const { res, text, thinking } = await stream(fixture, size);
+      expect(text).toBe(content);
+      expect(thinking).toBe(reasoning);
+      expect(res.content).toEqual([{ type: 'thinking', text: reasoning }, { type: 'text', text: content }]);
+    }
+  });
+
+  it('(b) strips a <think> block from the content, including one left open at the start', async () => {
+    const closed = await stream(contentWire('\n<think>Draft: hello. Three sentences, no question.</think>\n\nHello Amen, I am Pip.'), 5);
+    expect(closed.text).toBe('Hello Amen, I am Pip.');
+    expect(closed.thinking).toBe('Draft: hello. Three sentences, no question.');
+    expect(closed.res.content).toEqual([
+      { type: 'thinking', text: 'Draft: hello. Three sentences, no question.' },
+      { type: 'text', text: 'Hello Amen, I am Pip.' },
+    ]);
+    const open = await stream(contentWire('<think>Should I make any tool calls? Draft: hello'), 5);
+    expect(open.text).toBe('');
+    expect(open.res.content).toEqual([{ type: 'thinking', text: 'Should I make any tool calls? Draft: hello' }]);
+  });
+
+  it('(c) strips gpt-oss analysis left in the content, with its channel tokens or without them', async () => {
+    const thought = "Should I make any tool calls? No. Draft: Hello Amen. That's three sentences, no question.";
+    const answer = 'Hello Amen! I am Pip, your assistant.';
+    for (const content of [
+      `<|channel|>analysis<|message|>${thought}<|end|><|start|>assistant<|channel|>final<|message|>${answer}<|return|>`,
+      `<|start|>assistant<|channel|>analysis<|message|>${thought}<|end|>${answer}`,
+      `analysis${thought}assistantfinal${answer}`,
+    ]) {
+      const { res, text, thinking } = await stream(contentWire(content), 4);
+      expect(text).toBe(answer);
+      expect(thinking).not.toContain('<|');
+      expect(res.content).toEqual([{ type: 'thinking', text: thought }, { type: 'text', text: answer }]);
+    }
+    // Still deciding when the stream stops: nothing of it is an answer.
+    const cut = await stream(contentWire(`analysis${thought}`), 4);
+    expect(cut.text).toBe('');
+    expect(cut.res.content).toEqual([{ type: 'thinking', text: thought }]);
+  });
+
+  it('leaves an answer that merely starts like a thought alone', async () => {
+    for (const answer of ['analysis of your spending is ready.', 'Analysis: all good.', '<b>bold</b> start']) {
+      const { res, text, thinking } = await stream(contentWire(answer), 2);
+      expect(text).toBe(answer);
+      expect(thinking).toBe('');
+      expect(res.content).toEqual([{ type: 'text', text: answer }]);
+    }
+  });
+
+  it('asks gpt-oss on Ollama for its lowest level, since it ignores an off switch', async () => {
+    const bodies: any[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => { bodies.push(JSON.parse(init.body)); return jsonResponse(200, okBody()); });
+    for (const [baseUrl, model] of [['https://ollama.com/v1', 'gpt-oss:120b'], ['http://localhost:11434/v1', 'gpt-oss:20b'], ['https://ollama.com/v1', 'glm-5.3-flash']] as const) {
+      const provider = createOpenAiProvider({ kind: 'openai', compatible: true, credentialKind: 'api-key', secret: '', baseUrl, model }, { fetch: fetchMock as unknown as typeof fetch });
+      await provider.complete({ ...request, thinking: 'off' });
+    }
+    expect(bodies.map((b) => [b.reasoning_effort, b.think])).toEqual([['low', 'low'], ['low', 'low'], ['none', false]]);
   });
 });

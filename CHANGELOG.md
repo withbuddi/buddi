@@ -5,6 +5,7 @@ What changes in buddi from one release to the next, newest first.
 ## Unreleased
 
 - First run: "What should I take on for you?" only offers what buddi can actually install today. My code is gone until the Developer plugin is published, so ticking it no longer ends in a failed install; if withbuddi.com can't be reached, you're offered the plugins known to be published.
+- Replies from Ollama models no longer show the model's thinking before the answer; it is kept apart, shown folded like Claude's. With Thinking off, gpt-oss now thinks as briefly as it can (it has no off switch).
 
 ## 0.1.0-pre.40 — 2026-10-04
 
