@@ -49,8 +49,8 @@ targets:
         # (it stores the private key in the login keychain and prints the public
         # one). Paste the public key here; export the private key with
         # `generate_keys -x sparkle_private.key` into the SPARKLE_PRIVATE_KEY secret.
-        # The app does not start Sparkle while this still says REPLACE.
-        SUPublicEDKey: "REPLACE_WITH_generate_keys_PUBLIC_KEY"
+        # Sparkle EdDSA public key for buddi (keychain account "buddi" on Amen's Mac); the private half is the SPARKLE_PRIVATE_KEY secret.
+        SUPublicEDKey: "jBAeEEwStNtRScUv07ddeqG+Bn4OanHAwd4gkPLD6/Q="
         SUEnableAutomaticChecks: true
     settings:
       base:
