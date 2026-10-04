@@ -207,7 +207,7 @@ import { createAccessRegistry } from './access/registry.js';
 import { createIngress, type Ingress } from './access/ingress.js';
 import type { AccessContext, AccessProviderId, AccessRefusal } from './access/provider.js';
 import { clientKey } from './client-key.js';
-import { retryHref, sendSignedOut, wantsSignedOutPage, type SignedOutOptions } from './signed-out.js';
+import { appLinkFor, retryHref, sendSignedOut, wantsSignedOutPage, type SignedOutOptions } from './signed-out.js';
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
 import { REMOTE_HAND_SOCKET_PATH, RemoteHandEndpoint } from './remote-hand.js';
 import {
@@ -1141,6 +1141,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       tailscaleSignIn: !!setting?.enabled && tailscaleRefusal?.kind !== 'login',
       ...(tailscaleRefusal?.kind === 'login' ? { tailscaleRefusal: tailscaleRefusal.sentence } : {}),
       ...(tailscaleRefusal?.kind === 'unanswered' ? { tailscaleUnanswered: true } : {}),
+      // From the Chrome extension's popup, on this computer: offer buddi.app first.
+      ...(arrived === 'local' && appLinkFor(search) ? { appLink: appLinkFor(search) } : {}),
       ...locked,
     };
   };

@@ -5,6 +5,8 @@ import Sparkle
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItemController: StatusItemController?
     private var mainWindow: MainWindowController?
+    /// A `buddi://` link that arrived before the window existed (a cold launch by link).
+    private var pendingLink: BuddiLink?
     let supervisor = Supervisor()
 
     // Sparkle updates the app binary itself (rarely); buddi's own releases are the
@@ -45,11 +47,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         supervisor.presentDashboard = { [weak window] url in window?.present(link: url) }
         window.present()
         window.supervisorChanged()
+        if let link = pendingLink { pendingLink = nil; follow(link) }
 
         if let plist = Adoption.npmService(data: supervisor.data) {
             _ = Adoption.offer(data: supervisor.data, plist: plist)
         }
         supervisor.start()
+    }
+
+    /// `buddi://open`, `buddi://settings/<page>?…` (App/BuddiLink.swift). Anything
+    /// else is refused: the window does not move for a link it does not know.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let link = BuddiLink.parse(url) else {
+                NSLog("buddi: refused a link it does not answer (%@)", url.scheme ?? "no scheme")
+                continue
+            }
+            if mainWindow == nil { pendingLink = link } else { follow(link) }
+        }
+    }
+
+    private func follow(_ link: BuddiLink) {
+        mainWindow?.present()
+        if case .route(let route) = link { mainWindow?.go(to: route) }
     }
 
     /// From the menu, while an npm install's service still holds the data directory.

@@ -293,6 +293,15 @@ export function connectionRoute(connectionId: string): string {
   return `${settingsRoute('connections')}?connection=${encodeURIComponent(connectionId)}`;
 }
 
+/**
+ * The pairing code a Browser & apps hash carries (`#/settings/computer?code=482913`,
+ * from a `buddi://settings/browser?code=…` link), as six digits, or null.
+ */
+export function parsePairingCode(hash: string): string | null {
+  const code = (settingsParam(hash, 'computer', 'code') ?? settingsParam(hash, 'browser', 'code') ?? '').replace(/[\s-]/g, '');
+  return /^\d{6}$/.test(code) ? code : null;
+}
+
 /** The connection a connections hash opens, or null. */
 export function parseConnectionRoute(hash: string): string | null {
   return settingsParam(hash, 'connections', 'connection');
@@ -479,6 +488,10 @@ export function legacyRedirect(hash: string): string | null {
     }
   }
   if (hash === '#/settings/email') return pluginSettingsRoute('email', 'settings');
+  // `buddi://settings/browser?code=…` (buddi.app's link) and the extension say
+  // "browser"; the page's id is `computer`. The query comes along.
+  const browser = /^#\/settings\/browser(\?.*)?$/.exec(hash);
+  if (browser) return `${settingsRoute('computer')}${browser[1] ?? ''}`;
   const map: Record<string, string> = {
     '#/overview': HOME_ROUTE,
     '#/approvals': HOME_ROUTE,

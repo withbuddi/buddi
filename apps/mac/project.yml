@@ -63,6 +63,11 @@ targets:
         # in-app updater (the menu's "Update to …" and Settings → System).
         SUAutomaticallyUpdate: false
         SUAllowsAutomaticUpdates: false
+        # buddi:// links (App/BuddiLink.swift): the extension popup and the
+        # signed-out page open the window on a Settings page with them.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.withbuddi.app.link
+            CFBundleURLSchemes: [buddi]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.withbuddi.app
@@ -108,6 +113,7 @@ targets:
     sources:
       - path: Tests
       - path: App/SupervisorPolicy.swift
+      - path: App/BuddiLink.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.withbuddi.app.tests

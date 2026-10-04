@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { COPIED_FOR, SETTINGS_HASH, countBuddiTabs, dashboardUrl, render, wireCopy, workingLine, type PopupModel } from './popup.js';
+import { APP_WAIT_MS, COPIED_FOR, SETTINGS_HASH, appSettingsLink, countBuddiTabs, dashboardUrl, openSettings, render, settingsWebUrl, triesApp, wireCopy, workingLine, type PopupModel } from './popup.js';
 import type { ClientState } from './protocol.js';
 
 let written: string[] = [];
@@ -177,5 +177,51 @@ describe('the four states of the popup', () => {
     expect(await countBuddiTabs(api)).toBe(0);
     api.tabGroups.query.mockRejectedValueOnce(new Error('no'));
     expect(await countBuddiTabs(api)).toBeNull();
+  });
+});
+
+describe('Open buddi settings: buddi.app first, the dashboard otherwise', () => {
+  const MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+  const LINUX = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+  const run = (gateway: string, userAgent: string, lost: boolean, code: string | null = '482 913') => {
+    const launch = vi.fn();
+    const openTab = vi.fn();
+    let later: (() => void) | undefined;
+    let waited = 0;
+    openSettings({ gateway, code, userAgent, launch, openTab, focusLost: () => lost, wait: (ms, then) => { waited = ms; later = then; } });
+    return { launch, openTab, fire: () => later?.(), waited };
+  };
+
+  it('tries buddi://settings/browser with the code, and stops there when the app took the focus', () => {
+    const { launch, openTab, fire, waited } = run('http://127.0.0.1:4317', MAC, true);
+    expect(launch).toHaveBeenCalledWith('buddi://settings/browser?code=482913');
+    expect(waited).toBe(APP_WAIT_MS);
+    expect(APP_WAIT_MS).toBe(1500);
+    fire();
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it('opens the dashboard as before when nothing answered the link in time', () => {
+    const { launch, openTab, fire } = run('http://127.0.0.1:4317', MAC, false);
+    expect(launch).toHaveBeenCalledOnce();
+    expect(openTab).not.toHaveBeenCalled();
+    fire();
+    expect(openTab).toHaveBeenCalledWith('http://127.0.0.1:4317/?from=extension&code=482913#/settings/computer?code=482913');
+  });
+
+  it('goes straight to the dashboard off a Mac, or for a buddi on another address', () => {
+    for (const [gateway, agent] of [['http://127.0.0.1:4317', LINUX], ['http://127.0.0.1:4327', MAC]] as const) {
+      const { launch, openTab } = run(gateway, agent, false, null);
+      expect(launch).not.toHaveBeenCalled();
+      expect(openTab).toHaveBeenCalledWith(`${gateway}/?from=extension#/settings/computer`);
+    }
+  });
+
+  it('builds its links from six digits and fixed text only', () => {
+    expect(appSettingsLink(null)).toBe('buddi://settings/browser');
+    expect(appSettingsLink('48291')).toBe('buddi://settings/browser');
+    expect(settingsWebUrl('not a url', '482913')).toBeNull();
+    expect(triesApp('http://localhost:4317', MAC)).toBe(true);
+    expect(triesApp('https://example.com:4317', MAC)).toBe(false);
   });
 });

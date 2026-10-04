@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   connectionRoute,
+  legacyRedirect,
   parseConnectionRoute,
+  parsePairingCode,
   parsePluginsInstall,
   parsePluginsTab,
   parseSecretRoute,
@@ -15,6 +17,19 @@ import {
   settingsSectionOf,
   tipsPageOf,
 } from './routes';
+
+describe('buddi.app links to Browser & apps', () => {
+  it('lands #/settings/browser on the page, query and all, and reads only a six-digit code', () => {
+    expect(legacyRedirect('#/settings/browser')).toBe('#/settings/computer');
+    expect(legacyRedirect('#/settings/browser?code=482913')).toBe('#/settings/computer?code=482913');
+    expect(legacyRedirect('#/settings/browserx')).toBeNull();
+    expect(parsePairingCode('#/settings/computer?code=482913')).toBe('482913');
+    expect(parsePairingCode('#/settings/browser?code=482%20913')).toBe('482913');
+    expect(parsePairingCode('#/settings/computer?code=48291')).toBeNull();
+    expect(parsePairingCode('#/settings/computer?code=abcdef')).toBeNull();
+    expect(parsePairingCode('#/settings/secrets?code=482913')).toBeNull();
+  });
+});
 
 describe('tipsPageOf', () => {
   it('names the place, and the section for Settings and plugin places, never an id', () => {

@@ -48,6 +48,20 @@ export function retryHref(pathname: string, search: string): string {
   return `${path}${search}`;
 }
 
+/**
+ * `buddi://settings/browser`, with the pairing code when the popup sent a
+ * valid one, for a page the Chrome extension opened (`?from=extension`, set by
+ * `packages/extension/src/popup.ts`). Undefined for any other request. Built
+ * from six digits and fixed text only, never from what the request said.
+ */
+export function appLinkFor(search: string): string | undefined {
+  let params: URLSearchParams;
+  try { params = new URLSearchParams(search); } catch { return undefined; }
+  if (params.get('from') !== 'extension') return undefined;
+  const code = (params.get('code') ?? '').replace(/[\s-]/g, '');
+  return /^\d{6}$/.test(code) ? `buddi://settings/browser?code=${code}` : 'buddi://settings/browser';
+}
+
 export interface SignedOutOptions {
   /** Where "Try again" goes, from `retryHref`. */
   retry: string;
@@ -73,6 +87,11 @@ export interface SignedOutOptions {
   /** A sign-in lockout is running for this address, and how long is left. */
   lockedForMs?: number | undefined;
   /**
+   * The Chrome extension sent the owner here (`appLinkFor`): "Open buddi.app"
+   * leads, and the Terminal line waits until the link did not answer.
+   */
+  appLink?: string | undefined;
+  /**
    * The request came through a provider other than Tailscale (Cloudflare
    * Access, on the ingress listener) and earned no identity: its title and
    * the refusal's fixed name, never anything the request supplied.
@@ -90,6 +109,17 @@ const COMMAND = 'buddi dashboard';
  */
 const COPY_SCRIPT = "document.querySelectorAll('[data-copy]').forEach(function(b){b.hidden=false;b.addEventListener('click',function(){navigator.clipboard.writeText(b.getAttribute('data-copy')).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1600)},function(){})})})";
 const COPY_SCRIPT_HASH = `sha256-${createHash('sha256').update(COPY_SCRIPT, 'utf8').digest('base64')}`;
+
+/** How long "Open buddi.app" waits for the app to take over before the Terminal line shows. */
+export const APP_LINK_WAIT_MS = 1500;
+/**
+ * "Open buddi.app": follow the link, and if this page still has the focus
+ * after a second and a half, buddi.app did not answer (not installed, or the
+ * owner said no), so the Terminal line shows. Without the script the line is
+ * never hidden. Allowed by hash, like the copy script.
+ */
+const APP_SCRIPT = `document.querySelectorAll('[data-app-wait]').forEach(function(w){w.hidden=true});document.querySelectorAll('[data-app-link]').forEach(function(a){a.addEventListener('click',function(){var gone=false;function away(){gone=true}window.addEventListener('blur',away,{once:true});document.addEventListener('visibilitychange',away,{once:true});setTimeout(function(){if(gone&&!document.hasFocus())return;document.querySelectorAll('[data-app-wait]').forEach(function(w){w.hidden=false})},${APP_LINK_WAIT_MS})})})`;
+const APP_SCRIPT_HASH = `sha256-${createHash('sha256').update(APP_SCRIPT, 'utf8').digest('base64')}`;
 
 interface Copy {
   title: string;
@@ -190,6 +220,11 @@ function providerCopy(provider: NonNullable<SignedOutOptions['provider']>): Copy
   };
 }
 
+/** Only a `buddi://settings/browser` link with at most a six-digit code is ever drawn. */
+function appLinkHref(link: string | undefined): string | undefined {
+  return link && /^buddi:\/\/settings\/browser(\?code=\d{6})?$/.test(link) ? link : undefined;
+}
+
 /** The page itself. Exported for tests; the server calls `sendSignedOut`. */
 export function signedOutPage(options: SignedOutOptions): string {
   const copy = copyFor(options);
@@ -197,9 +232,14 @@ export function signedOutPage(options: SignedOutOptions): string {
   const lockout = minutes > 0
     ? `<div class="notice" role="status"><div class="notice-title">Too many tries — wait ${minutes} min</div>Too many sign-in tries came from here in the last minute; a forgotten tab can do that. A fresh link from <code>${COMMAND}</code> works right away.</div>`
     : '';
+  const app = appLinkHref(options.appLink);
   const how = copy.how !== undefined
-    ? `<p>${copy.how}</p>
-      <div class="cmd"><code class="cmd-text">${COMMAND}</code><button type="button" class="button small" data-copy="${COMMAND}" hidden>Copy</button></div>`
+    ? `<div${app ? ' data-app-wait' : ''}><p>${app ? 'buddi.app didn’t open. ' : ''}${copy.how}</p>
+      <div class="cmd"><code class="cmd-text">${COMMAND}</code><button type="button" class="button small" data-copy="${COMMAND}" hidden>Copy</button></div></div>`
+    : '';
+  const open = app
+    ? `<p>The buddi extension sent you here. buddi.app opens on Settings → Browser &amp; apps, where you finish pairing.</p>
+    <p class="app"><a class="button accent" href="${escapeHtml(app)}" data-app-link>Open buddi.app</a></p>`
     : '';
   return `<!doctype html>
 <html lang="en">
@@ -258,6 +298,7 @@ export function signedOutPage(options: SignedOutOptions): string {
   .button.accent { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast);
     box-shadow: 0 1px 0 rgb(255 255 255 / 18%) inset, 0 2px 6px -2px color-mix(in oklab, var(--accent) 60%, transparent); }
   .button.accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .app { margin: 16px 0; }
   .button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   @media (max-width: 720px) { .body { padding: 20px; } .dock { padding: 12px 20px; } }
 </style>
@@ -269,11 +310,13 @@ export function signedOutPage(options: SignedOutOptions): string {
     <h1>${copy.title}</h1>
     ${copy.lines.map((line) => `<p>${line}</p>`).join('\n    ')}
     ${lockout}
+    ${open}
     ${how}
   </div>
   <div class="dock"><a class="button accent" href="${escapeHtml(options.retry)}">${copy.primary}</a></div>
 </main>
 ${copy.how !== undefined ? `<script>${COPY_SCRIPT}</script>` : ''}
+${app ? `<script>${APP_SCRIPT}</script>` : ''}
 </body>
 </html>
 `;
@@ -291,7 +334,7 @@ export function sendSignedOut(
     ...baseHeaders(),
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': Buffer.byteLength(html),
-    'Content-Security-Policy': `default-src 'none'; style-src 'unsafe-inline'; script-src '${COPY_SCRIPT_HASH}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+    'Content-Security-Policy': `default-src 'none'; style-src 'unsafe-inline'; script-src '${COPY_SCRIPT_HASH}'${appLinkHref(options.appLink) ? ` '${APP_SCRIPT_HASH}'` : ''}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
     ...headers,
   });
   res.end(html);

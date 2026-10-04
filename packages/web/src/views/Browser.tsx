@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type AgentEngine, type BrowserRoute, type BrowserRouteStatus, type BrowserStatus, type ControlSettings, type ExtensionState } from '../api';
 import { fmtClock, fmtTime } from '../format';
-import { chatRoute, pluginSettingsRoute } from '../routes';
+import { chatRoute, parsePairingCode, pluginSettingsRoute } from '../routes';
 import { ActionMenu, Avatar, Icon, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, Panel, Pill, Segment, Sheet, Spacer, Switch, Toolbar, useAsync } from '../ui';
 import { useThisMachine } from '../useThisMachine';
 
@@ -247,7 +247,14 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   const ext = useAsync(() => api.extension(), [], 3_000);
   const probe = useAsync(() => askExtension(), [], 3_000).data ?? null;
   const thisMachine = useThisMachine();
-  const [code, setCode] = useState('');
+  // A `buddi://settings/browser?code=…` link pre-fills the code; the owner still presses Pair.
+  const [code, setCode] = useState(() => parsePairingCode(typeof window === 'undefined' ? '' : window.location.hash) ?? '');
+  useEffect(() => {
+    // The app follows a second link while this page is already open.
+    const follow = () => { const linked = parsePairingCode(window.location.hash); if (linked) setCode(linked); };
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [forgetting, setForgetting] = useState(false);

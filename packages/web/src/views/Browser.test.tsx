@@ -164,6 +164,20 @@ describe('your Chrome: Add to Chrome, the code, Pair again', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
     await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482913'));
   });
+  it('a buddi:// link pre-fills the code; the owner still presses Pair', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/x' });
+    answers(new Error('none'));
+    vi.mocked(api.pairExtension).mockResolvedValue(paired);
+    window.location.hash = '#/settings/computer?code=482913';
+    try {
+      render(<Browser />);
+      await screen.findByText('Type the six digits the extension shows.');
+      expect(screen.getByRole('textbox', { name: 'Pairing code' })).toHaveValue('482913');
+      expect(api.pairExtension).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
+      await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482913'));
+    } finally { window.location.hash = ''; }
+  });
   it('unpaired, extension found but not connected: the field is there too', async () => {
     vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: false, path: '/x' });
     answers({ installed: true, version: '0.1.4', state: 'disconnected', gateway: window.location.origin });

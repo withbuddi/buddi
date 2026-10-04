@@ -115,6 +115,67 @@ export function render(model: PopupModel, doc: Document = document): void {
   byId(doc, 'working').textContent = workingLine(model.tabs);
 }
 
+/** How long "Open buddi settings" waits for buddi.app to take over before opening the dashboard in a tab. */
+export const APP_WAIT_MS = 1500;
+
+/** Six digits, or null: whatever spacing the gateway gave the code. */
+function digitsOf(code: string | null | undefined): string | null {
+  const digits = (code ?? '').replace(/[^0-9]/g, '');
+  return digits.length === 6 ? digits : null;
+}
+
+/** `buddi://settings/browser`, with the code while one is showing (apps/mac/App/BuddiLink.swift reads it). */
+export function appSettingsLink(code: string | null | undefined): string {
+  const digits = digitsOf(code);
+  return digits ? `buddi://settings/browser?code=${digits}` : 'buddi://settings/browser';
+}
+
+/**
+ * The dashboard's Browser & apps page in a tab, as before, now saying it came
+ * from here (`?from=extension`, so a signed-out page can offer buddi.app) and
+ * carrying the code so the page can fill it in.
+ */
+export function settingsWebUrl(gateway: string, code: string | null | undefined): string | null {
+  const digits = digitsOf(code);
+  const base = dashboardUrl(gateway);
+  if (!base) return null;
+  const search = digits ? `?from=extension&code=${digits}` : '?from=extension';
+  return `${base}${search}${SETTINGS_HASH}${digits ? `?code=${digits}` : ''}`;
+}
+
+/**
+ * buddi.app answers only for the buddi it runs, which listens on the default
+ * address; a popup pointed anywhere else (a checkout on 4327, a moved port)
+ * goes straight to that address. And only on a Mac, where the app exists.
+ */
+export function triesApp(gateway: string, userAgent: string): boolean {
+  if (!/Macintosh|Mac OS X/.test(userAgent)) return false;
+  try {
+    const url = new URL(gateway);
+    return (url.hostname === '127.0.0.1' || url.hostname === 'localhost') && (url.port || (url.protocol === 'https:' ? '443' : '80')) === '4317';
+  } catch { return false; }
+}
+
+/**
+ * "Open buddi settings": buddi.app first, the dashboard in a tab otherwise.
+ *
+ * There is no way to ask whether a scheme has an app behind it. So the link is
+ * followed, and if this popup still has the focus a second and a half later,
+ * nothing took it: the tab opens as it always did. When buddi.app does open,
+ * Chrome closes the popup as it loses focus, and the fallback never runs.
+ */
+export function openSettings(options: {
+  gateway: string; code: string | null; userAgent: string;
+  launch(url: string): void; openTab(url: string): void; focusLost(): boolean;
+  wait?: (ms: number, then: () => void) => void;
+}): void {
+  const web = settingsWebUrl(options.gateway, options.code);
+  const fallback = () => { if (web) options.openTab(web); };
+  if (!triesApp(options.gateway, options.userAgent)) { fallback(); return; }
+  try { options.launch(appSettingsLink(options.code)); } catch { fallback(); return; }
+  (options.wait ?? ((ms, then) => { setTimeout(then, ms); }))(APP_WAIT_MS, () => { if (!options.focusLost()) fallback(); });
+}
+
 /** How long the button admits to having copied before going back to offering it. */
 export const COPIED_FOR = 2000;
 
@@ -231,7 +292,19 @@ async function main(): Promise<void> {
     const url = dashboardUrl(model.gateway, hash);
     if (url) void chrome.tabs.create({ url });
   };
-  byId(document, 'open-settings').addEventListener('click', () => open(SETTINGS_HASH));
+  byId(document, 'open-settings').addEventListener('click', () => {
+    let lost = false;
+    const away = () => { lost = true; };
+    window.addEventListener('blur', away, { once: true });
+    document.addEventListener('visibilitychange', away, { once: true });
+    openSettings({
+      gateway: model.gateway, code: model.state.connection === 'pairing' ? model.state.code : null, userAgent: navigator.userAgent,
+      // A link clicked in this page: Chrome hands buddi:// to the app registered for it, or does nothing.
+      launch: (url) => { const link = document.createElement('a'); link.href = url; link.rel = 'noopener'; link.click(); },
+      openTab: (url) => { void chrome.tabs.create({ url }); },
+      focusLost: () => lost || !document.hasFocus(),
+    });
+  });
   byId(document, 'open-buddi').addEventListener('click', () => open(''));
   byId(document, 'forget').addEventListener('click', async () => {
     const answer = await ask<{ state: ClientState }>({ type: 'buddi-forget' });

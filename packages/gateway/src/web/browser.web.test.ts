@@ -91,6 +91,27 @@ describe('the signed-out page', () => {
     expect(html).not.toContain(process.env.HOME ?? '/Users/');
   });
 
+  it('from the Chrome extension, leads with Open buddi.app and holds the Terminal line back until it did not answer', async () => {
+    const { origin } = await setup(false);
+    const res = await hostFetch(`${origin}/?from=extension&code=482913`, { headers: NAVIGATE });
+    expect(res.status).toBe(401);
+    const html = await res.text();
+    expect(html).toContain('<a class="button accent" href="buddi://settings/browser?code=482913" data-app-link>Open buddi.app</a>');
+    // Above the Terminal line, which the script hides until the link did not answer.
+    expect(html.indexOf('Open buddi.app')).toBeLessThan(html.indexOf('Run this in Terminal'));
+    expect(html).toContain('<div data-app-wait><p>buddi.app didn’t open. Run this in Terminal on this computer');
+    expect(html.match(/<script/g)).toHaveLength(2);
+    expect(res.headers.get('content-security-policy')).toMatch(/script-src 'sha256-[A-Za-z0-9+/=]+' 'sha256-[A-Za-z0-9+/=]+';/);
+    // A code that is not six digits is left off; anything else in the query never reaches the link.
+    const odd = await (await hostFetch(`${origin}/?from=extension&code=%22%3E%3Cb%3E`, { headers: NAVIGATE })).text();
+    expect(odd).toContain('href="buddi://settings/browser" data-app-link');
+    expect(odd).not.toContain('<b>');
+    // Not from the extension: the page as it was, one script.
+    const plain = await (await hostFetch(`${origin}/?code=482913`, { headers: NAVIGATE })).text();
+    expect(plain).not.toContain('Open buddi.app');
+    expect(plain.match(/<script/g)).toHaveLength(1);
+  });
+
   it('keeps the empty 401 for API calls, scripts and fetches', async () => {
     const { origin } = await setup(false);
     for (const [path, headers] of [
