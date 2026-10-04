@@ -158,6 +158,8 @@ interface Entry {
   okAt?: number;
   error?: string;
   inflight?: Promise<void>;
+  /** Counts productions started; a late answer is kept only while no newer one has started. */
+  generation?: number;
 }
 
 /** How a browser reads a clock: sent while the owner left Time on Auto. */
@@ -387,6 +389,7 @@ export function createWidgets(deps: WidgetsDeps) {
     const wait = entry.error !== undefined ? Math.min(WIDGET_RETRY_MS, p.refreshMs) : p.refreshMs;
     if (!force && entry.at > 0 && now - entry.at < wait) return entry;
     const e = entry;
+    const generation = e.generation = (e.generation ?? 0) + 1;
     const started = Date.now();
     const work = Promise.resolve().then(() => p.produce(deps.ctx, { size, settings }, owner));
     let outcome: 'timed out' | 'answered a body the page cannot draw' | 'failed' | null = null;
@@ -418,7 +421,9 @@ export function createWidgets(deps: WidgetsDeps) {
     void work.then(
       async (raw) => {
         await tried;
-        if (outcome !== 'timed out' || e.inflight || e.error === undefined) return;
+        // Only the newest production may land late: after a newer one started
+        // (answered, failed or still going), this answer is older than what is known.
+        if (outcome !== 'timed out' || e.generation !== generation || e.inflight || e.error === undefined) return;
         try {
           e.body = accept(raw);
         } catch {

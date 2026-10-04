@@ -217,18 +217,35 @@ export function lockShown<T extends { view: { body: LockScreenData['widgets'][nu
   return widgets.filter((w) => !(w.view.body.kind === 'text' && !w.view.body.sub));
 }
 
+/** The calendar day `at` falls on in `timezone`, as a day count (for "yesterday", "Mon"). */
+function dayNumber(at: Date, timezone: string): number {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(at).map((part) => [part.type, part.value]));
+  return Math.round(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day)) / 86_400_000);
+}
+
 /**
  * "from 9:12": when a stale body on the lock screen was made, in the lock's
- * time format — quiet, so an old list never passes for now. Null for a fresh one.
+ * time format — quiet, so an old list never passes for now. A body from an
+ * earlier day says which, in the lock's time zone: "from yesterday 9:12",
+ * "from Mon 9:12" within the week, "from 3 Oct 9:12" before that. Null for a
+ * fresh one.
  */
-export function lockStaleFrom(view: { state: string; updatedAt?: string }, timezone: string, clockView: LockClockView | undefined): string | null {
+export function lockStaleFrom(view: { state: string; updatedAt?: string }, timezone: string, clockView: LockClockView | undefined, now: Date = new Date()): string | null {
   if (view.state !== 'stale' || !view.updatedAt) return null;
   const at = new Date(view.updatedAt);
   if (Number.isNaN(at.getTime())) return null;
-  return `from ${inLockFormats(clockView, () => fmtClock(at, timezone))}`;
+  return `from ${inLockFormats(clockView, () => {
+    const time = fmtClock(at, timezone);
+    const days = dayNumber(now, timezone) - dayNumber(at, timezone);
+    if (days <= 0) return time;
+    if (days === 1) return `yesterday ${time}`;
+    if (days < 7) return `${new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' }).format(at)} ${time}`;
+    return `${fmtDate(at, timezone, { compact: true })} ${time}`;
+  })}`;
 }
 
-function Widgets({ widgets: all, phone, timezone, clockView }: { widgets: LockScreenData['widgets']; phone: boolean; timezone: string; clockView: LockClockView | undefined }): JSX.Element | null {
+function Widgets({ widgets: all, phone, timezone, clockView, now }: { widgets: LockScreenData['widgets']; phone: boolean; timezone: string; clockView: LockClockView | undefined; now: Date }): JSX.Element | null {
   const widgets = lockShown(all);
   if (widgets.length === 0) return null;
   // A sentence (nothing today, nobody waiting) takes one column, so it never stretches into a hollow card.
@@ -238,7 +255,7 @@ function Widgets({ widgets: all, phone, timezone, clockView }: { widgets: LockSc
     <div className="lk-widgets">
       <div className="lk-grid" data-phone={phone ? 'true' : undefined} data-cols={cols}>
         {sized.map(({ w, size }) => {
-          const from = lockStaleFrom(w.view, timezone, clockView);
+          const from = lockStaleFrom(w.view, timezone, clockView, now);
           return (
             <div key={w.key ?? w.id} className="wg-frame" data-variant="compact" data-size={size} data-kind={w.view.body.kind} data-stale={from ? 'true' : undefined} role="group" aria-label={w.title}>
               <div className="wg-body"><WidgetBodyView body={w.view.body} size={size} /></div>
@@ -357,7 +374,7 @@ export function LockFace({ data, now, phone, pad = false, after, onPick }: { dat
           </p>
         ) : null}
         {pad || !data ? null : <Badges approvals={data.approvals} needs={data.needs ?? 0} after={after ?? null} {...(onPick ? { onPick } : {})} />}
-        {pad || !data ? null : <Widgets widgets={data.widgets} phone={phone} timezone={timezone} clockView={data.clockView} />}
+        {pad || !data ? null : <Widgets widgets={data.widgets} phone={phone} timezone={timezone} clockView={data.clockView} now={now} />}
       </div>
     </>
   );

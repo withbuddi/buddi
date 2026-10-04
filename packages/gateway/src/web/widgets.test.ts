@@ -237,6 +237,32 @@ describe('widgets', () => {
     expect(lines.at(-1)).toMatch(/^widgets: demo\.late \(small\) answered late, after \d+ ms; kept for the next ask$/);
   });
 
+  it('drops a late answer once a newer production has started, even after that newer one failed', async () => {
+    const releases: Array<(body: ReturnType<typeof text>) => void> = [];
+    let mode: 'hang' | 'good' | 'fail' = 'hang';
+    const { service, tick } = setup({
+      widgets: [{ id: 'demo.race', title: 'Race', sizes: ['small'], refreshSeconds: 60, produce: () => {
+        if (mode === 'good') return Promise.resolve(text('newer'));
+        if (mode === 'fail') return Promise.reject(new Error('offline'));
+        return new Promise((resolve) => { releases.push(resolve); });
+      } }],
+    });
+    // 1: times out, still running.
+    expect((await service.answer()).views['d-demo-race']).toMatchObject({ state: 'error' });
+    // 2: a newer production answers.
+    mode = 'good';
+    tick(60_000);
+    expect((await service.answer()).views['d-demo-race']).toMatchObject({ state: 'ok', body: text('newer') });
+    // 3: the refresh after it fails: the newer body is kept, marked stale.
+    mode = 'fail';
+    tick(60_000);
+    expect((await service.answer()).views['d-demo-race']).toMatchObject({ state: 'stale', body: text('newer'), error: 'offline' });
+    // 1 answers at last: older than "newer", so it is dropped.
+    releases[0]!(text('older'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect((await service.answer()).views['d-demo-race']).toMatchObject({ state: 'stale', body: text('newer') });
+  });
+
   it('keeps the stale mark on the lock screen with when the body was made, so the screen can say "from 8:00"', async () => {
     let fail = false;
     const { service, tick } = setup({ widgets: [{ id: 'demo.a', title: 'A', sizes: ['small'], refreshSeconds: 600, produce: async () => { if (fail) throw new Error('offline'); return text('good'); } }] });
