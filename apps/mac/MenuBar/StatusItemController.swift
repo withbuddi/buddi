@@ -124,15 +124,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         updateGlyph(health)
     }
 
+    /// The Blob's silhouette (Resources/Assets.xcassets/StatusGlyph*, drawn by
+    /// scripts/make-icons.mjs): full ink when running, dimmed while starting,
+    /// stopped or updating, with a dot badge when it needs attention.
     private func updateGlyph(_ health: Supervisor.Health) {
         let name: String
         switch health {
-        case .running: name = "b.circle.fill"
-        case .attention: name = "exclamationmark.circle"
-        default: name = "b.circle"
+        case .running: name = "StatusGlyph"
+        case .attention: name = "StatusGlyphAttention"
+        default: name = "StatusGlyphStarting"
         }
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "buddi")
+        let image = NSImage(named: name)
         image?.isTemplate = true
+        image?.accessibilityDescription = "buddi"
         statusItem.button?.image = image
         statusItem.button?.toolTip = "buddi — \(statusLine.title)"
     }

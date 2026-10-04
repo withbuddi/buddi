@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- buddi.app: the Dock icon and the menu-bar glyph are the Blob now, not a "b". The menu-bar Blob is dimmed while buddi starts or updates and carries a dot when it needs attention.
+
 ## 0.1.0-pre.41 — 2026-10-04
 
 - First run: adding a mailbox is now a short sheet instead of the whole Mail settings page. Pick Gmail, iCloud, Fastmail or Other, type the address and app password (with a link to where to make one), and it checks the login and closes once Mail Triage is reading it. If you took on My days, chapter 4 also asks for your calendar's private link (or a Google sign-in) the same way; if you took on My money, it says plainly that Finance reads the statements you hand it rather than signing in to your bank.
