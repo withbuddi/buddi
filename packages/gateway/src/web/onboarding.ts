@@ -38,7 +38,8 @@ import {
 import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
 import { composeAgentFile, createAgentDirAtomic, replaceBody, writeFilesAtomic } from '../agents/platform-files.js';
 import { FIRST_AGENT_OPENING, defaultThinkingFor } from '../agents/opening.js';
-import { writeDefaultAgentRecord } from '../agents/default-agent.js';
+import { recordedDefaultAgent, writeDefaultAgentRecord } from '../agents/default-agent.js';
+import { PROVENANCE_FILE } from '../plugins/provenance.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 
 /** The surface recorded against everything the wizard writes. */
@@ -171,10 +172,54 @@ export interface OnboardingDeps {
   registry?: ToolNameSource;
 }
 
-/** Does this installation hold an agent the owner made? Examples are not one. */
-export function hasPrivateAgent(catalog: AgentCatalog): boolean {
+type RosterEntry = ReturnType<AgentCatalog['list']>[number];
+
+/**
+ * The owner's agents that could be their *assistant*: the one first run writes.
+ *
+ * Examples are not one. Nor is an agent a plugin proposed or the catalogue
+ * installed — Mail Triage accepted in chapter 3 is a teammate waiting to be
+ * introduced, not the assistant chapter 5 is about to name. Those carry the
+ * provenance sidecar (`plugin.json`) beside their file, which is how they are
+ * told apart. One exception: a proposed agent the owner has since *made* the
+ * default (the installation's record names it) is the one they talk to, and
+ * counts.
+ *
+ * Everything else the owner holds counts: the agent this route wrote, an older
+ * install's `default: true` file, one written by hand or by the maker.
+ */
+function assistantCandidates(catalog: AgentCatalog): RosterEntry[] {
   const list = typeof catalog?.list === 'function' ? catalog.list() : [];
-  return list.some((agent) => agent.source !== 'example');
+  const recorded = recordedDefaultAgent();
+  return list.filter((agent) => {
+    if (agent.source === 'example') return false;
+    if (recorded !== undefined && agent.id === recorded) return true;
+    return !proposedAgent(catalog, agent.id);
+  });
+}
+
+/** Did a plugin or the catalogue put this agent here (`plugin.json` beside its file)? */
+function proposedAgent(catalog: AgentCatalog, id: string): boolean {
+  const file = typeof catalog?.get === 'function' ? catalog.get(id)?.file : undefined;
+  return typeof file === 'string' && existsSync(path.join(path.dirname(file), PROVENANCE_FILE));
+}
+
+/**
+ * Does this installation already have an assistant of the owner's own?
+ * Teammates a plugin proposed do not count; see `assistantCandidates`.
+ */
+export function hasAssistant(catalog: AgentCatalog): boolean {
+  return assistantCandidates(catalog).length > 0;
+}
+
+/** The proposed teammates already here, by name: the assistant's hello mentions them. */
+export function proposedTeammates(catalog: AgentCatalog): string[] {
+  const list = typeof catalog?.list === 'function' ? catalog.list() : [];
+  const counted = new Set(assistantCandidates(catalog).map((agent) => agent.id));
+  return list
+    .filter((agent) => agent.source !== 'example' && !counted.has(agent.id))
+    .map((agent) => agent.name.trim())
+    .filter((name) => name !== '');
 }
 
 /**
@@ -206,7 +251,7 @@ export async function readOnboarding(deps: OnboardingDeps): Promise<OnboardingVi
     needs: {
       owner: profile.preferredName === null,
       model: !hasUsableModel(deps.providerAccounts),
-      agent: !hasPrivateAgent(deps.catalog),
+      agent: !hasAssistant(deps.catalog),
     },
   };
 }
@@ -464,10 +509,11 @@ async function writeFirstAgent(
   deps: OnboardingDeps,
   input: FirstAgentInput,
 ): Promise<{ id: string; handle: string; file: string; live: boolean; assigned: string | null }> {
-  // This route writes the *first* agent and nothing else. Once the owner has
+  // This route writes the owner's *assistant* and nothing else. Once they have
   // one, adding another is the maker agent's job, where a grant is proposed and
-  // approved rather than assumed.
-  if (hasPrivateAgent(deps.catalog)) {
+  // approved rather than assumed. A teammate a plugin proposed earlier in first
+  // run is not an assistant and does not close the route.
+  if (hasAssistant(deps.catalog)) {
     throw new OnboardingRefusal(409, 'You already have an agent of your own. Add another one from the Agents page.');
   }
   const name = input.name.trim();
@@ -607,10 +653,9 @@ function generatedPersona(body: string, name: string, description: string): { in
   return null;
 }
 
-/** The owner's own agent, if they have one. Examples are not it. */
+/** The owner's assistant, if they have one. Examples and proposed teammates are not it. */
 export function privateAgent(catalog: AgentCatalog): { id: string; handle: string; file: string; name: string; description: string } | undefined {
-  const list = typeof catalog?.list === 'function' ? catalog.list() : [];
-  const own = list.filter((agent) => agent.source !== 'example');
+  const own = assistantCandidates(catalog);
   const summary = own.find((agent) => agent.isDefault) ?? own[0];
   // The summary says who; the whole agent says which file, which is what an
   // edit needs.
@@ -903,6 +948,10 @@ export async function withFirstRunFacts(
   }
   const installed = around.installed ? (await inTime(around.installed, FIRST_RUN_FACT_MS)) ?? [] : [];
   if (installed.length > 0) facts.push(`Installed for the owner during setup: ${installed.join(', ')}.`);
+  // Chapter 5 told the owner "your team so far: …, waiting to be introduced";
+  // the hello is where that promise is kept.
+  const team = proposedTeammates(deps.catalog);
+  if (team.length > 0) facts.push(`Already on the owner's team, accepted during setup: ${team.join(', ')}. Mention them by name as your teammates.`);
   if (tiles.includes('days') && around.weatherAtHome) {
     const weather = await inTime(around.weatherAtHome, FIRST_RUN_FACT_MS);
     if (weather) facts.push(`The weather at home right now: ${weather}.`);

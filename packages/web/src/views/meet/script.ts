@@ -419,6 +419,9 @@ export const SCRIPT = {
       "- When you change how you work, say so. This file is yours to grow, and the owner should always know what it says.",
     ].join('\n'),
     submit: 'Introduce us',
+    /** Above the server's refusal when an assistant already exists. */
+    refusedTitle: 'You already have an assistant.',
+    toAgents: 'Open Agents',
   },
   /**
    * The other way this screen can go: there is already a buddi somewhere, and

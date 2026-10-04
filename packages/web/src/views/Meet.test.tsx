@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { api, chatApi, type BrowserStatus, type OllamaProbe, type OnboardingView, type OwnerView, type ProviderAccountsView, type TakeOnView } from '../api';
+import { ApiError, api, chatApi, type BrowserStatus, type OllamaProbe, type OnboardingView, type OwnerView, type ProviderAccountsView, type TakeOnView } from '../api';
 import { App } from '../App';
 import { Meet, FIRST_MESSAGE_TIMEOUT_MS, PATIENCE_MS, TAKE_ON_POLL_MS } from './Meet';
 import { BANNED_WORDS, DEFAULT_ASSISTANT_NAME, SCRIPT } from './meet/script';
@@ -1386,6 +1386,22 @@ describe('chapter 5: your assistant', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('turns a refusal into a notice with the way to Agents, and keeps the button down', async () => {
+    atAssistant();
+    const message = 'You already have an agent of your own. Add another one from the Agents page.';
+    vi.mocked(api.createFirstAgent).mockRejectedValue(new ApiError(409, message));
+    const navigate = vi.fn();
+    render(meet(navigate));
+    const submit = await screen.findByRole('button', { name: SCRIPT.assistant.submit });
+    fireEvent.click(submit);
+    expect(await screen.findByText(SCRIPT.assistant.refusedTitle)).toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: SCRIPT.assistant.submit })).toBeDisabled();
+    fireEvent.click(screen.getByRole('link', { name: SCRIPT.assistant.toAgents }));
+    expect(navigate).toHaveBeenCalledWith('#/agents');
+    expect(api.createFirstAgent).toHaveBeenCalledTimes(1);
   });
 });
 

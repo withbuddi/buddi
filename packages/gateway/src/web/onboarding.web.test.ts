@@ -12,7 +12,8 @@ import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
-import { createFirstAgent, firstAgentTools, firstSentence, FIRST_AGENT_TOOLS } from './onboarding.js';
+import { createFirstAgent, firstAgentTools, firstSentence, withFirstRunFacts, FIRST_AGENT_TOOLS } from './onboarding.js';
+import { setRecordedDefaultAgent } from '../agents/default-agent.js';
 import { createToolRegistry, loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { resolveToolNames } from '@buddi/core';
 import { shouldStartFirstRun } from '../agents/first-run.js';
@@ -779,4 +780,85 @@ it('turns reasoning off when a brain change moves the assistant onto a local acc
   expect(changed.status).toBe(200);
   expect((await json(changed)).thinking).toBe('off');
   expect(readFileSync(file, 'utf8')).toMatch(/^thinking: off$/m);
+});
+
+/** An agent a plugin proposed and the owner accepted: its file, and the provenance sidecar beside it. */
+function acceptedPluginAgent(dir: string): void {
+  mkdirSync(path.join(dir, 'mail-triage'), { recursive: true });
+  writeFileSync(
+    path.join(dir, 'mail-triage', 'agent.md'),
+    ['---', 'id: mail-triage', 'handle: mail', 'name: Mail Triage', 'description: Sorts the inbox.', 'tools: [memory.*]', '---', '', 'You sort mail.', ''].join('\n'),
+    'utf8',
+  );
+  writeFileSync(
+    path.join(dir, 'mail-triage', 'plugin.json'),
+    JSON.stringify({ plugin: 'email', version: '0.1.0', agent: 'mail-triage', acceptedAt: '2026-10-04T00:00:00Z', proposal: 'x', file: 'y' }),
+    'utf8',
+  );
+}
+
+it('writes the assistant when a plugin-proposed teammate is already here, makes it the default, and names the teammate in the hello', async () => {
+  setRecordedDefaultAgent(undefined);
+  try {
+    const pool = fakePool();
+    const dir = agentsDir();
+    acceptedPluginAgent(dir);
+    const service = accounts([{ id: 'one', enabled: true, configured: true }]);
+    const { origin, headers, catalog } = await boot({ pool, agentsDir: dir, providerAccounts: service });
+    // The teammate is not an assistant: first run still needs one.
+    expect((await json(await fetch(`${origin}/api/onboarding`, { headers }))).needs.agent).toBe(true);
+    const created = await fetch(`${origin}/api/onboarding/agent`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'My assistant.' }),
+    });
+    expect(created.status).toBe(200);
+    expect((await json(created)).agent).toMatchObject({ id: 'ada', isDefault: true });
+    const listed = await json(await fetch(`${origin}/api/agents`, { headers }));
+    expect(listed.agents.filter((a: { isDefault: boolean }) => a.isDefault).map((a: { id: string }) => a.id)).toEqual(['ada']);
+    expect(listed.agents.map((a: { id: string }) => a.id)).toContain('mail-triage');
+    expect((await json(await fetch(`${origin}/api/onboarding`, { headers }))).needs.agent).toBe(false);
+    const said = await withFirstRunFacts(
+      { pool: pool as never, catalog, agentsDir: dir, examplesDir: dir, reload: () => {} },
+      'Introduce yourself.',
+    );
+    expect(said).toContain('You are Ada.');
+    expect(said).toMatch(/team, accepted during setup: Mail Triage\./);
+  } finally {
+    setRecordedDefaultAgent(undefined);
+  }
+});
+
+it('still refuses a second assistant when the default agent is already the owner’s', async () => {
+  // A proposed agent the owner made the default *is* their assistant.
+  setRecordedDefaultAgent('mail-triage');
+  try {
+    const dir = agentsDir();
+    acceptedPluginAgent(dir);
+    const { origin, headers } = await boot({ pool: fakePool(), agentsDir: dir, providerAccounts: accounts([]) });
+    const res = await fetch(`${origin}/api/onboarding/agent`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'A second assistant.' }),
+    });
+    expect(res.status).toBe(409);
+    expect((await json(res)).error).toMatch(/already have an agent/);
+  } finally {
+    setRecordedDefaultAgent(undefined);
+  }
+  // And an agent of the owner's own declaring `default: true` closes it too.
+  const dir = agentsDir();
+  mkdirSync(path.join(dir, 'front'), { recursive: true });
+  writeFileSync(
+    path.join(dir, 'front', 'agent.md'),
+    ['---', 'id: front', 'handle: front', 'name: Front', 'description: The front desk.', 'default: true', 'tools: [memory.*]', '---', '', 'You are the front desk.', ''].join('\n'),
+    'utf8',
+  );
+  const { origin, headers } = await boot({ pool: fakePool(), agentsDir: dir, providerAccounts: accounts([]) });
+  const res = await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'A second assistant.' }),
+  });
+  expect(res.status).toBe(409);
 });

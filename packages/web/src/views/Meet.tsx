@@ -54,7 +54,7 @@ import {
 import { useAsync } from '../ui/async';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
-import { HOME_ROUTE, chatRoute } from '../routes';
+import { AGENTS_ROUTE, HOME_ROUTE, chatRoute } from '../routes';
 import { Blob, Button, ButtonLink, Code, Field, FloatCard, GradientField, Icon, Mark, Notice, Pill, Progress, Segment, Sheet, Spacer, Stack, Toolbar, type IconName } from '../ui';
 import { useMediaQuery } from '../useMediaQuery';
 import type { PluginPageDescriptor } from '../pages/types';
@@ -3137,7 +3137,7 @@ function AppRow({
  * 5. Your assistant
  * ------------------------------------------------------------------ */
 
-function AssistantChapter({ answers, existing, onSettled, onTrouble, onReload, onBack }: QuestionProps): JSX.Element {
+function AssistantChapter({ answers, existing, navigate, onSettled, onTrouble, onReload, onBack }: QuestionProps): JSX.Element {
   const [name, setName] = useState(() => existing?.name ?? DEFAULT_ASSISTANT_NAME);
   /*
    * A colour is a Blob, uploaded as the assistant's picture. An assistant
@@ -3165,6 +3165,12 @@ function AssistantChapter({ answers, existing, onSettled, onTrouble, onReload, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing?.id]);
   const [saving, setSaving] = useState(false);
+  /*
+   * The server said no for good (409: there is an assistant already). Said as
+   * a notice with the way out, and the button stays down: pressing it again
+   * would only hear the same no.
+   */
+  const [refused, setRefused] = useState<string | null>(null);
   const mates = TAKE_ON.filter((tile) => (answers.takeOn ?? []).includes(tile.id) && 'mate' in tile).map((tile) => (tile as { mate: string }).mate);
   const chosen = COLOURS.find((c) => c.id === colour);
 
@@ -3197,7 +3203,12 @@ function AssistantChapter({ answers, existing, onSettled, onTrouble, onReload, o
       try {
         saved = await written;
       } catch (err) {
-        onTrouble(err instanceof ApiError ? err.message : String(err));
+        if (err instanceof ApiError && err.status === 409) {
+          setRefused(err.message);
+          onTrouble(null);
+        } else {
+          onTrouble(err instanceof ApiError ? err.message : String(err));
+        }
         setSaving(false);
         return;
       }
@@ -3229,7 +3240,7 @@ function AssistantChapter({ answers, existing, onSettled, onTrouble, onReload, o
         actions={
           <>
             <Back onClick={onBack} disabled={saving} />
-            <Primary onClick={submit} disabled={saving || name.trim() === '' || initialPurpose === null}>
+            <Primary onClick={submit} disabled={saving || refused !== null || name.trim() === '' || initialPurpose === null}>
               {SCRIPT.assistant.submit}
             </Primary>
           </>
@@ -3271,6 +3282,26 @@ function AssistantChapter({ answers, existing, onSettled, onTrouble, onReload, o
             </Field>
           </div>
         </div>
+        {refused ? (
+          <Notice
+            tone="warm"
+            role="status"
+            title={SCRIPT.assistant.refusedTitle}
+            action={
+              <ButtonLink
+                href={AGENTS_ROUTE}
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate(AGENTS_ROUTE);
+                }}
+              >
+                {SCRIPT.assistant.toAgents}
+              </ButtonLink>
+            }
+          >
+            {refused}
+          </Notice>
+        ) : null}
       </Ask>
     </>
   );
