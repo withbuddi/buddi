@@ -33,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             statusChanged?()
             window?.supervisorChanged()
         }
+        // First run (and anything else that opens the dashboard) lands in the window.
+        supervisor.presentDashboard = { [weak window] url in window?.present(link: url) }
         window.present()
         window.supervisorChanged()
 
@@ -85,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func openSettings() { mainWindow?.present(); mainWindow?.go(to: DashboardRoutes.settings) }
     @objc func lockDashboard() { mainWindow?.lock() }
     @objc func newConversation() { mainWindow?.present(); mainWindow?.newConversation() }
-    @objc func openInBrowser() { supervisor.openDashboard() }
+    @objc func openInBrowser() { supervisor.openDashboard(inBrowser: true) }
     @objc func showFind() { mainWindow?.present(); mainWindow?.showFind() }
     @objc func findNext() { mainWindow?.findNext() }
     @objc func findPrevious() { mainWindow?.findPrevious() }

@@ -147,7 +147,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     @objc private func openBuddi() { appDelegate?.showMainWindow() }
 
     /// Advanced → Open in Browser: the dashboard in the default browser, as before the window.
-    @objc private func openInBrowser() { supervisor.openDashboard() }
+    @objc private func openInBrowser() { supervisor.openDashboard(inBrowser: true) }
 
     @objc private func restart() { supervisor.restart() }
 

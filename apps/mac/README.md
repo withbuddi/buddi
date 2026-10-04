@@ -44,9 +44,10 @@ the signing environment below.
 bar and a main window that hosts the dashboard (`App/MainWindow*.swift`, `App/MainMenu.swift`).
 
 - **What it loads**: the same five-minute sign-in link Open in Browser uses (`buddi
-  --no-service --no-open`, `DashboardLink` in `App/MainWindowKit.swift`), so first run
-  and the lock screen are simply pages in it. The session cookie lives in WebKit's
-  default data store, as in a browser.
+  --no-service --no-open`, `Supervisor.dashboardLink`), so first run and the lock
+  screen are simply pages in it. When buddi opens the dashboard by itself (the first
+  run), `Supervisor.presentDashboard` sends it to the window, never to a browser tab.
+  The session cookie lives in WebKit's default data store, as in a browser.
 - **Startup**: the window opens at launch on a native placeholder (the kit's `--bg`,
   the mascot from `packages/web/public/mascot/core.png`, "Starting buddi…") and loads
   the dashboard once the gateway answers. When the gateway goes away (a restart, an

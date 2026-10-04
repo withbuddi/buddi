@@ -401,28 +401,47 @@ final class Supervisor {
 
     // MARK: - Dashboard and updates
 
-    /// Opens the dashboard with a fresh sign-in link. The link is the one
-    /// `buddi` prints (a five-minute ticket minted from the install's web
-    /// token), so the app asks the same launcher for it rather than touching
-    /// the token itself. `--no-service`: if the supervisor turned out not to be
-    /// this app's, the launcher must never install a LaunchAgent in its place.
-    func openDashboard() {
-        guard let layout, case .running = health else { return }
+    /// Where a dashboard link goes when buddi opens it by itself (first run) or
+    /// the owner asks for it: the app's window. Unset, or `inBrowser`, the
+    /// default browser.
+    var presentDashboard: ((URL) -> Void)?
+
+    /// A fresh sign-in link: the one `buddi` prints (a five-minute ticket
+    /// minted from the install's web token), so the app asks the same launcher
+    /// for it rather than touching the token itself. `--no-service`: if the
+    /// supervisor turned out not to be this app's, the launcher must never
+    /// install a LaunchAgent in its place. The window loads it; Open in
+    /// Browser hands it to the default browser.
+    func dashboardLink() async -> Result<URL, DashboardLinkFailure> {
+        guard let layout else { return .failure(DashboardLinkFailure(description: layoutProblem ?? "buddi.app is incomplete.")) }
         let env = environment(forService: false)
         let data = self.data
-        Task.detached {
+        return await Task.detached {
             let result = Self.runLauncher(layout: layout, env: env, cwd: data, args: ["--no-service", "--no-open"], timeout: 45)
-            await MainActor.run {
-                if let line = result.output.split(separator: "\n").first(where: { $0.hasPrefix("Dashboard: ") }),
-                   let url = URL(string: String(line.dropFirst("Dashboard: ".count)).trimmingCharacters(in: .whitespaces)) {
-                    NSWorkspace.shared.open(url)
-                } else {
-                    let alert = NSAlert()
-                    alert.messageText = "buddi did not give a dashboard link"
-                    alert.informativeText = result.output.isEmpty ? "No answer within 45 seconds." : String(result.output.suffix(600))
-                    NSApp.activate()
-                    alert.runModal()
-                }
+            if let line = result.output.split(separator: "\n").first(where: { $0.hasPrefix("Dashboard: ") }),
+               let url = URL(string: String(line.dropFirst("Dashboard: ".count)).trimmingCharacters(in: .whitespaces)) {
+                return .success(url)
+            }
+            return .failure(DashboardLinkFailure(description: result.output.isEmpty ? "No answer within 45 seconds." : String(result.output.suffix(600))))
+        }.value
+    }
+
+    struct DashboardLinkFailure: Error, CustomStringConvertible, Sendable { let description: String }
+
+    /// Opens the dashboard with a fresh sign-in link: in the window
+    /// (`presentDashboard`), or in the default browser.
+    func openDashboard(inBrowser: Bool = false) {
+        guard case .running = health else { return }
+        Task { @MainActor in
+            switch await self.dashboardLink() {
+            case .success(let url):
+                if !inBrowser, let present = self.presentDashboard { present(url) } else { NSWorkspace.shared.open(url) }
+            case .failure(let failure):
+                let alert = NSAlert()
+                alert.messageText = "buddi did not give a dashboard link"
+                alert.informativeText = failure.description
+                NSApp.activate()
+                alert.runModal()
             }
         }
     }

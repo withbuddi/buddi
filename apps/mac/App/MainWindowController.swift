@@ -169,23 +169,35 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
     }
 
     private func load() {
-        guard let layout = supervisor.layout else { return }
+        guard supervisor.layout != nil else { return }
         loading = true
-        let data = supervisor.data
         Task { @MainActor in
-            let result = await DashboardLink.fetch(layout: layout, data: data)
+            let result = await self.supervisor.dashboardLink()
             guard case .running = self.supervisor.health else { self.loading = false; return }
             switch result {
             case .success(let link):
-                var components = URLComponents(url: link, resolvingAgainstBaseURL: false)
-                self.origin = Self.origin(of: link)
-                if let route = self.pendingRoute { components?.fragment = String(route.dropFirst()) }
-                self.webView.load(URLRequest(url: components?.url ?? link))
+                self.open(link: link)
             case .failure(let failure):
                 self.loading = false
                 self.placeholder.show(.attention("buddi did not give a dashboard link. \(failure.description)", canRestart: true))
             }
         }
+    }
+
+    /// Loads a sign-in link, on the route to come back to if there is one.
+    private func open(link: URL) {
+        var components = URLComponents(url: link, resolvingAgainstBaseURL: false)
+        origin = Self.origin(of: link)
+        if let route = pendingRoute { components?.fragment = String(route.dropFirst()) }
+        loading = true
+        webView.load(URLRequest(url: components?.url ?? link))
+    }
+
+    /// `Supervisor.presentDashboard`: buddi opening the dashboard by itself (the
+    /// first run): the window comes forward, and loads the link unless it already has a page.
+    func present(link: URL) {
+        present()
+        if !revealed && !loading { open(link: link) }
     }
 
     private func reveal() {
