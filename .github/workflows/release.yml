@@ -217,7 +217,11 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
 
-      - name: Node and the buddi release into Payload/
+      # fetch-payload.sh checks the tarball's sha512 against the registry AND its
+      # provenance (signed by this repository's release.yml for tag v$VERSION, see
+      # packages/install/src/provenance.ts); either failing fails the job before
+      # anything is signed. Works the same on a workflow_dispatch re-run.
+      - name: Node and the buddi release into Payload/ (integrity and provenance checked)
         run: make fetch VERSION="$VERSION"
 
       - name: Build, sign, notarize, staple

@@ -38,6 +38,8 @@ final class Supervisor {
     private var spawnedAt: Date?
     private var runningSince: Date?
     private var failures = 0
+    /// Exit 75s in the last minute: one is an upgrade, two is a loop.
+    private var restartExits = RestartExitThrottle()
     private var respawn: DispatchWorkItem?
     private var poller: Timer?
     private var stopping = false
@@ -82,10 +84,74 @@ final class Supervisor {
                 // A supervisor already answering is either ours from an earlier
                 // session (an upgrade hands over to a detached successor) or
                 // another installation's; either way, starting one more would
-                // only lose the lock race.
-                if let status { self.apply(status) } else { self.spawn() }
+                // only lose the lock race. Ours on another release than the one
+                // chosen (a newer bundle's first launch moved `current`) is
+                // replaced, or the new bundle would go on running the old buddi.
+                guard let status else { self.spawn(); return }
+                if self.isOurs(status), let layout = self.layout,
+                   SupervisorPolicy.runsOtherRelease(installRoot: status.installRoot, chosen: layout.release.path) {
+                    self.replace(status, with: layout)
+                } else {
+                    self.apply(status)
+                }
             }
         }
+    }
+
+    /// Stop a supervisor of ours that runs another release, then start the chosen one.
+    private func replace(_ status: ControlSocket.Status, with layout: BundleLayout) {
+        NSLog("buddi: the running supervisor (pid \(status.supervisorPid)) runs \(status.installRoot); stopping it to start \(layout.release.path)")
+        health = .updating
+        let pid = pid_t(status.supervisorPid)
+        Task.detached {
+            await Self.terminate(pid, grace: 30)
+            await MainActor.run {
+                guard !self.stopping else { return }
+                self.spawn()
+            }
+        }
+    }
+
+    /// SIGTERM (the supervisor's orderly shutdown: gateway, then the database),
+    /// up to `grace` seconds, then SIGKILL for it and everything under it, so a
+    /// Postgres it started never outlives it holding the data directory.
+    nonisolated static func terminate(_ pid: pid_t, grace: TimeInterval) async {
+        guard pid > 1 else { return }
+        kill(pid, SIGTERM)
+        let deadline = Date().addingTimeInterval(grace)
+        while Date() < deadline {
+            if kill(pid, 0) != 0 { return }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard kill(pid, 0) == 0 else { return }
+        // Collected before the kill: once the supervisor is gone its children are launchd's.
+        let tree = descendants(of: pid)
+        NSLog("buddi: the supervisor (pid \(pid)) did not stop within \(Int(grace)) s; killing it and \(tree.count) process(es) under it")
+        // Its own process group too, when it leads one (never ours: the app's group is not its).
+        let group = getpgid(pid)
+        if group == pid && group != getpgrp() { kill(-group, SIGKILL) }
+        kill(pid, SIGKILL)
+        for child in tree { kill(child, SIGKILL) }
+    }
+
+    /// Every process under `pid`, children first found, depth-first.
+    nonisolated static func descendants(of pid: pid_t) -> [pid_t] {
+        var found: [pid_t] = []
+        var queue: [pid_t] = [pid]
+        while let parent = queue.popLast(), found.count < 512 {
+            let estimate = proc_listchildpids(parent, nil, 0)
+            guard estimate > 0 else { continue }
+            var buffer = [pid_t](repeating: 0, count: Int(estimate) + 16)
+            let count = buffer.withUnsafeMutableBytes { raw in
+                proc_listchildpids(parent, raw.baseAddress, Int32(raw.count))
+            }
+            guard count > 0 else { continue }
+            for child in buffer.prefix(Int(count)) where child > 1 && !found.contains(child) {
+                found.append(child)
+                queue.append(child)
+            }
+        }
+        return found
     }
 
     /// Restart buddi: the supervisor restarts its gateway; with no supervisor
@@ -108,7 +174,8 @@ final class Supervisor {
     }
 
     /// Stop buddi on Quit: SIGTERM is the supervisor's orderly shutdown (gateway,
-    /// then the database). Waits up to 30 s off the main thread, then calls back.
+    /// then the database). Waits up to 30 s off the main thread; a supervisor
+    /// still there then is killed with everything under it. Then calls back.
     func shutdown(_ done: @escaping @MainActor () -> Void) {
         stopping = true
         respawn?.cancel()
@@ -121,13 +188,8 @@ final class Supervisor {
             pid = pid_t(status.supervisorPid)   // a successor an upgrade handed over to
         }
         guard let pid else { done(); return }
-        kill(pid, SIGTERM)
         Task.detached {
-            let deadline = Date().addingTimeInterval(30)
-            while Date() < deadline {
-                if kill(pid, 0) != 0 { break }
-                try? await Task.sleep(for: .milliseconds(250))
-            }
+            await Self.terminate(pid, grace: 30)
             await MainActor.run { done() }
         }
     }
@@ -191,11 +253,20 @@ final class Supervisor {
         guard !stopping else { health = .stopped; return }
         // An upgrade switched `<data>/releases/current` and handed over to us
         // (APP_RESTART_EXIT in app-layout.ts): start the new release now.
+        // Twice within a minute is not an upgrade but a release that exits 75 as
+        // it starts: it falls through to the backoff below, and the menu says so.
         if status == Self.restartExit {
-            NSLog("buddi: the supervisor handed over for an upgrade; starting the release current points at")
-            failures = 0
-            health = .updating
-            spawn()
+            if restartExits.allowsImmediateRestart(at: Date()) {
+                NSLog("buddi: the supervisor handed over for an upgrade; starting the release current points at")
+                failures = 0
+                health = .updating
+                spawn()
+                return
+            }
+            NSLog("buddi: the supervisor asked to be restarted again within a minute; backing off")
+            failures += 1
+            health = .attention("buddi keeps restarting for an update that does not start. The logs say why.")
+            scheduleRespawn()
             return
         }
         let socket = self.socket
@@ -294,7 +365,7 @@ final class Supervisor {
         } else if status.gateway == "running" {
             let since = runningSince ?? Date()
             runningSince = since
-            if Date().timeIntervalSince(since) > 60 { failures = 0 }
+            if Date().timeIntervalSince(since) > 60 { failures = 0; restartExits.reset() }
             health = .running(since: since)
             if firstRun && !openedFirstRun {
                 // First launch asks nothing: it opens the first-run chapters.

@@ -62,28 +62,58 @@ enum Adoption {
         }
     }
 
+    enum TakeOverError: LocalizedError {
+        case bootout(Int32)
+        case stillAnswering(restarted: Bool)
+        var errorDescription: String? {
+            switch self {
+            case .bootout(let status):
+                return "macOS would not stop the npm service (launchctl status \(status))."
+            case .stillAnswering(let restarted):
+                return "The npm service's buddi was still running after 20 seconds, so the app left it in place"
+                    + (restarted ? " and started its service again." : ".")
+            }
+        }
+    }
+
+    /// How long the old supervisor gets to let go of the socket after bootout.
+    static let socketWait: TimeInterval = 20
+
     /// `launchctl bootout` stops the supervisor (SIGTERM: gateway, then the
-    /// database) and unloads the job; then the plist moves out of LaunchAgents,
-    /// and this waits for the old supervisor to let go of the socket.
+    /// database) and unloads the job. Only once its control socket has gone
+    /// silent does the plist move out of LaunchAgents: an old supervisor still
+    /// answering keeps its plist, its service is loaded again, and the owner is
+    /// told, rather than two supervisors racing for one data directory.
     static func takeOver(data: URL, plist: URL) throws {
         let label = DataDirectory.launchAgentLabel(for: data)
-        let bootout = Process()
-        bootout.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        bootout.arguments = ["bootout", "gui/\(getuid())/\(label)"]
-        bootout.standardOutput = FileHandle.nullDevice
-        bootout.standardError = FileHandle.nullDevice
-        try bootout.run()
-        bootout.waitUntilExit()
-        // 3 ("No such process") means it was not loaded; that is fine too.
+        let status = launchctl(["bootout", "gui/\(getuid())/\(label)"])
+        guard SupervisorPolicy.bootoutStopped(status) else { throw TakeOverError.bootout(status) }
+
+        let socket = DataDirectory.socket(for: data)
+        let deadline = Date().addingTimeInterval(socketWait)
+        while Date() < deadline, ControlSocket.status(socket) != nil {
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        if ControlSocket.status(socket) != nil {
+            // Put the service back as it was: loaded again from the plist it kept.
+            let restarted = status == 0 && launchctl(["bootstrap", "gui/\(getuid())", plist.path]) == 0
+            NSLog("buddi: the npm service still answered \(Int(socketWait)) s after bootout; left in place (reloaded: \(restarted))")
+            throw TakeOverError.stillAnswering(restarted: restarted)
+        }
 
         let kept = data.appendingPathComponent("launchagent-from-npm.plist")
         try? FileManager.default.removeItem(at: kept)
         try FileManager.default.moveItem(at: plist, to: kept)
+    }
 
-        let socket = DataDirectory.socket(for: data)
-        let deadline = Date().addingTimeInterval(45)
-        while Date() < deadline, ControlSocket.status(socket) != nil {
-            Thread.sleep(forTimeInterval: 0.5)
-        }
+    private static func launchctl(_ arguments: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return -1 }
+        process.waitUntilExit()
+        return process.terminationStatus
     }
 }

@@ -57,7 +57,8 @@ import { JobStore } from './backup.js';
 import { createPostgresCheck } from './postgres-check.js';
 import type { PostgresCheck } from './postgres-check.js';
 import type { BackupControl, BackupJob } from './backup.js';
-import { APP_BUNDLE, appLayout, insideAppBundle, releaseDir, stageRelease, switchCurrent } from './app-layout.js';
+import { APP_BUNDLE, appLayout, insideAppBundle, placeRelease, pruneReleases, releaseDir, stageRelease, switchCurrent } from './app-layout.js';
+import type { StagedRelease } from './app-layout.js';
 
 const run = promisify(execFile);
 
@@ -295,26 +296,140 @@ export function processingSentence(version: string): string {
 }
 
 /**
- * Where npm serves a version's tarball: `<registry>/@withbuddi/buddi/-/buddi-<version>.tgz`.
- * A fresh publish shows in the registry document minutes before this answers.
+ * Where npm serves a version's tarball by convention: `<registry>/@withbuddi/buddi/-/buddi-<version>.tgz`.
+ * Only the fallback: the version document's `dist.tarball` is what npm itself downloads.
  */
 export function tarballUrl(registry: string, version: string): string {
   return `${registry.replace(/\/+$/, '')}/${PACKAGE_NAME}/-/${PACKAGE_NAME.split('/').pop()}-${version}.tgz`;
 }
 
-/** Does npm serve this version's tarball yet? One HEAD; only a 200 is yes. A transport failure throws. */
-export async function tarballServed(registry: string, version: string, http: HttpTransport): Promise<boolean> {
-  const response = await http(tarballUrl(registry, version), {
-    method: 'HEAD',
-    headers: {},
-    signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
-  });
-  return response.status === 200;
+/**
+ * The credentials npm itself would send to this registry, read from the
+ * owner's npmrc (`NPM_CONFIG_USERCONFIG`, else `~/.npmrc`): `_authToken` as a
+ * bearer, `_auth` or `username` + `_password` as basic. The longest
+ * `//host/path/:` key the registry URL starts with wins, as in npm, and
+ * `${VAR}` is read from the environment. Nothing found is no headers: the
+ * public registry needs none.
+ *
+ * Read so the check and the install see the same registry: a mirror that wants
+ * a token answered the anonymous check 401, which once read as "still
+ * processing" for ever.
+ */
+export function registryAuth(registry: string, env: NodeJS.ProcessEnv, read: (file: string) => string = file => readFileSync(file, 'utf8')): Record<string, string> {
+  const file = env.NPM_CONFIG_USERCONFIG ?? env.npm_config_userconfig ?? (env.HOME ? path.join(env.HOME, '.npmrc') : undefined);
+  if (file === undefined) return {};
+  let text: string;
+  try { text = read(file); } catch { return {}; }
+  let url: URL;
+  try { url = new URL(registry.replace(/\/+$/, '') + '/'); } catch { return {}; }
+  const nerf = `//${url.host}${url.pathname}`;
+  const entries = new Map<string, string>();
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const value = trimmed.slice(eq + 1).trim().replace(/^"(.*)"$/, '$1').replace(/\$\{([^}]+)\}/g, (_, name: string) => env[name] ?? '');
+    entries.set(trimmed.slice(0, eq).trim(), value);
+  }
+  const scopes = [...new Set([...entries.keys()].filter(k => k.startsWith('//') && k.includes('/:')).map(k => k.slice(0, k.lastIndexOf('/:') + 1)))]
+    .filter(scope => nerf.startsWith(scope))
+    .sort((a, b) => b.length - a.length);
+  for (const scope of scopes) {
+    const token = entries.get(`${scope}:_authToken`);
+    if (token) return { authorization: `Bearer ${token}` };
+    const auth = entries.get(`${scope}:_auth`);
+    if (auth) return { authorization: `Basic ${auth}` };
+    const user = entries.get(`${scope}:username`), password = entries.get(`${scope}:_password`);
+    if (user && password) return { authorization: `Basic ${Buffer.from(`${user}:${Buffer.from(password, 'base64').toString('utf8')}`).toString('base64')}` };
+  }
+  return {};
 }
 
-/** npm's own words for a tarball it does not serve (yet). */
-function isNotFound(error: string): boolean {
-  return /\bE404\b|\b404\b|Not Found/i.test(error);
+/** Credentials go to the registry's own origin only, never to a host a document names. */
+export function authFor(url: string, registry: string, auth: Record<string, string> | undefined): Record<string, string> {
+  if (auth === undefined || Object.keys(auth).length === 0) return {};
+  try { return new URL(url).origin === new URL(registry).origin ? auth : {}; } catch { return {}; }
+}
+
+export interface ServedOptions {
+  /** `dist.tarball` from a version document already in hand; asked for otherwise. */
+  tarball?: string | undefined;
+  /** What `registryAuth` found: sent with every request to the registry's origin. */
+  auth?: Record<string, string> | undefined;
+}
+
+/**
+ * Does npm serve this version's tarball yet?
+ *
+ * The tarball is the one the version document names (`dist.tarball`), asked
+ * with the registry's credentials. Only a 404 (of the document or the
+ * tarball) is "still processing": that is what npmjs answers in the minutes
+ * after a publish. A registry that refuses HEAD (405, 501) is asked for one
+ * byte instead. Anything else — a 401 or 403 from a mirror, a 5xx — is not a
+ * publish in progress and is not reported as one: the install that follows
+ * says what is actually wrong. A transport failure throws.
+ */
+export async function tarballServed(registry: string, version: string, http: HttpTransport, opts: ServedOptions = {}): Promise<boolean> {
+  const base = registry.replace(/\/+$/, '');
+  let url = opts.tarball;
+  if (url === undefined || url === '') {
+    const doc = await http(`${base}/${PACKAGE_PATH}/${version}`, {
+      method: 'GET',
+      headers: { accept: 'application/json', ...authFor(base, base, opts.auth) },
+      signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+    });
+    if (doc.status === 404) return false;
+    if (doc.status === 200) {
+      const body = await doc.json().catch(() => undefined) as { dist?: { tarball?: unknown } } | undefined;
+      if (typeof body?.dist?.tarball === 'string' && body.dist.tarball !== '') url = body.dist.tarball;
+    }
+  }
+  if (url === undefined || url === '') url = tarballUrl(base, version);
+  const headers = authFor(url, base, opts.auth);
+  const head = await http(url, { method: 'HEAD', headers, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
+  if (head.status >= 200 && head.status < 300) return true;
+  if (head.status === 404) return false;
+  if (head.status === 405 || head.status === 501) {
+    try {
+      const ranged = await http(url, { method: 'GET', headers: { ...headers, range: 'bytes=0-0' }, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS), maxBytes: 64 * 1024 });
+      return ranged.status !== 404;
+    } catch {
+      // A server that ignored the range and started sending the whole tarball is serving it.
+      return true;
+    }
+  }
+  return true;
+}
+
+/**
+ * npm's own words for *this package's* tarball not being served (yet): `E404`
+ * and a 404 line naming `@withbuddi/buddi`. A 404 for anything else — a
+ * dependency, a mirror's missing path — is not a publish in progress, and
+ * keeps npm's own words.
+ */
+export function isNotFound(error: string): boolean {
+  // The "npm install <spec> failed:" this module puts in front names the package itself.
+  const said = error.replace(/npm (install|cache add) \S+ failed:/g, '');
+  if (!/\bE404\b/.test(said)) return false;
+  return said.split('\n').some(line => /\b404\b/.test(line) && /@withbuddi(\/|%2f)buddi\b/i.test(line));
+}
+
+/**
+ * What npm said, safe to keep in the history and show on the dashboard:
+ * credentials in URLs and npmrc-style tokens masked, terminal escapes and
+ * other control characters dropped, the last eight lines.
+ */
+export function sanitizeNpmOutput(text: string): string {
+  return text
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+    .replace(/(\w+:\/\/)[^\s/@:]+(:[^\s/@]*)?@/g, '$1***@')
+    .replace(/(_authToken|_auth|_password)(\s*[=:]\s*)\S+/gi, '$1$2***')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/g, '$1 ***')
+    .trim().split('\n').slice(-8).join('\n');
 }
 
 /** Release notes longer than this are cut; `build.mjs` keeps them to 8 KB. */
@@ -324,6 +439,8 @@ export const NOTES_LIMIT = 8 * 1024;
 export interface LatestRelease {
   version: string;
   notes?: string;
+  /** The document's `dist.tarball`: where `tarballServed` asks. */
+  tarball?: string;
 }
 
 /**
@@ -335,21 +452,23 @@ export interface LatestRelease {
  * same document carries the release notes (`buddi.notes`, written by
  * `scripts/release/build.mjs`), so they cost no second request.
  */
-export async function fetchLatestRelease(registry: string, http: HttpTransport): Promise<LatestRelease> {
-  const response = await http(`${registry.replace(/\/+$/, '')}/${PACKAGE_PATH}/latest`, {
+export async function fetchLatestRelease(registry: string, http: HttpTransport, auth?: Record<string, string>): Promise<LatestRelease> {
+  const base = registry.replace(/\/+$/, '');
+  const response = await http(`${base}/${PACKAGE_PATH}/latest`, {
     method: 'GET',
-    headers: { accept: 'application/json' },
+    headers: { accept: 'application/json', ...authFor(base, base, auth) },
     signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
   });
   if (response.status !== 200) throw new Error(`the registry answered ${response.status}`);
-  const body = await response.json() as { version?: unknown; buddi?: { notes?: unknown } };
+  const body = await response.json() as { version?: unknown; buddi?: { notes?: unknown }; dist?: { tarball?: unknown } };
   if (typeof body.version !== 'string' || body.version === '') throw new Error('the registry named no version');
   // Whatever that registry is, what it says becomes a spec for `npm install`
   // and a number on the dashboard. It gets to name a version, and nothing else.
   if (!isVersion(body.version)) throw new Error(`the registry named "${body.version}", which is not a version`);
+  const tarball = typeof body.dist?.tarball === 'string' && body.dist.tarball !== '' ? { tarball: body.dist.tarball } : {};
   const notes = typeof body.buddi === 'object' && body.buddi !== null ? body.buddi.notes : undefined;
-  if (typeof notes !== 'string' || notes.trim() === '') return { version: body.version };
-  return { version: body.version, notes: notes.trim().slice(0, NOTES_LIMIT) };
+  if (typeof notes !== 'string' || notes.trim() === '') return { version: body.version, ...tarball };
+  return { version: body.version, notes: notes.trim().slice(0, NOTES_LIMIT), ...tarball };
 }
 
 
@@ -500,7 +619,7 @@ export function createInstaller(opts: { binary?: string; timeoutMs?: number; run
   const failed = (verb: string, spec: string, err: unknown): Error => {
     const stderr = (err as { stderr?: string } | null)?.stderr;
     const text = (stderr ?? (err instanceof Error ? err.message : String(err))).toString().trim();
-    return new Error(`npm ${verb} ${spec} failed: ${text.split('\n').slice(-8).join('\n')}`);
+    return new Error(`npm ${verb} ${spec} failed: ${sanitizeNpmOutput(text)}`);
   };
   return async (spec, where) => {
     if (!isLocalTarball(spec)) {
@@ -725,6 +844,8 @@ export interface UpgradeServiceOptions {
   npm?: NpmRunner | undefined;
   /** Does the newly installed Postgres binary start? Asked before the hand-over. */
   checkPostgres?: PostgresCheck | undefined;
+  /** The CA chain a release's provenance must chain to; Fulcio's unless a test brings its own. */
+  provenanceChain?: readonly string[] | undefined;
   http?: HttpTransport | undefined;
   log?: ((line: string) => void) | undefined;
   checkIntervalMs?: number | undefined;
@@ -741,6 +862,8 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
   const log = opts.log ?? ((line: string) => console.error(line));
   const jobs = new JobStore();
   const registry = registryFor(ctx.env);
+  /** What npm would send this registry; the check asks with the same. */
+  const auth = registryAuth(registry, ctx.env);
   const checkInterval = opts.checkIntervalMs ?? (Number(ctx.env.BUDDI_UPGRADE_CHECK_INTERVAL_MS) || CHECK_INTERVAL_MS);
   const install = opts.install ?? createInstaller();
   const checkPostgres = opts.checkPostgres ?? createPostgresCheck({ env: ctx.env });
@@ -767,10 +890,10 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       return await save({ ...state, check: { ...state.check, lastAt: at, error: 'this installation has no outbound transport' } });
     }
     try {
-      const latest = await fetchLatestRelease(registry, opts.http);
+      const latest = await fetchLatestRelease(registry, opts.http, auth);
       // npm names a fresh version minutes before it serves the tarball; until
       // it does, the version is known but not offered (Upgrade would 404).
-      const served = !isNewer(latest.version, current) || await tarballServed(registry, latest.version, opts.http);
+      const served = !isNewer(latest.version, current) || await tarballServed(registry, latest.version, opts.http, { tarball: latest.tarball, auth });
       // A check that answered clears the error a check that did not left, and
       // the notes are always the ones this answer carried: notes kept from an
       // older `latest` would describe the wrong release.
@@ -861,7 +984,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       // Asked before the backup and the stop: a version npm is still
       // processing would only reach npm's 404 after both.
       if (opts.http !== undefined) {
-        const served = await tarballServed(registry, to, opts.http).catch(() => undefined);
+        const served = await tarballServed(registry, to, opts.http, { auth }).catch(() => undefined);
         if (served === false) return await give('checking', processingSentence(to), false);
       }
     }
@@ -963,31 +1086,46 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     const to = resolved.version;
     setTo(to);
     if (opts.http === undefined) return await give('checking', 'this installation has no outbound transport', false);
-    const served = await tarballServed(registry, to, opts.http).catch(() => undefined);
+    const served = await tarballServed(registry, to, opts.http, { auth }).catch(() => undefined);
     if (served === false) return await give('checking', processingSentence(to), false);
     const base = await realpath(dir).catch(() => dir);
     if ((path.resolve(ctx.root) + path.sep).startsWith(releaseDir(base, to) + path.sep)) {
       return await give('checking', `${to} is the version running.`, false);
     }
 
+    /*
+     * Everything is checked in a staging folder of its own, and only a release
+     * that passed every check is renamed into `buddi-<v>`: a failed retry never
+     * touches a `buddi-<v>` that `previous` (after a rollback) still points at.
+     */
     jobs.phase(job, 'installing', `downloading and verifying ${to}`);
-    let staged: { dir: string; root: string };
+    let staged: StagedRelease;
     try {
-      staged = await stageRelease({ releases: dir, version: to, registry, http: opts.http, exec: npm, log });
+      staged = await stageRelease({ releases: dir, version: to, registry, http: opts.http, exec: npm, log, auth, ...(opts.provenanceChain === undefined ? {} : { chain: opts.provenanceChain }) });
     } catch (err) {
       const said = message(err);
       return await give('installing', isNotFound(said) ? processingSentence(to) : said, false);
     }
-    const discard = async (): Promise<void> => { await rm(staged.dir, { recursive: true, force: true }).catch(() => {}); };
+    const dropStaging = async (): Promise<void> => { await rm(staged.staging, { recursive: true, force: true }).catch(() => {}); };
 
     if (ctx.state.database !== 'external') {
       jobs.phase(job, 'verifying', `checking that ${to} can start its database`);
       const verdict = await checkPostgres(staged.root);
       if (!verdict.ok) {
-        await discard();
+        await dropStaging();
         return await give('verifying', `${verdict.error} buddi did not switch to ${to}. It is still running on ${current}.`, false);
       }
     }
+
+    let placed: { dir: string; root: string };
+    try {
+      placed = await placeRelease(dir, to, staged.staging, log);
+    } catch (err) {
+      await dropStaging();
+      return await give('installing', `could not put ${to} in place: ${message(err)}`, false);
+    }
+    // Only what neither link uses goes: a kept `buddi-<v>` that `previous` names stays.
+    const discard = async (): Promise<void> => { await pruneReleases(dir).catch(() => []); };
 
     const taken = await takeBackup(job);
     if ('error' in taken) { await discard(); return await give('backup', taken.error, false); }
@@ -996,7 +1134,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     jobs.phase(job, 'stopping', 'stopping the gateway; the database stays up');
     await opts.stopGateway();
     try {
-      await switchCurrent(dir, staged.root, ctx.root);
+      await switchCurrent(dir, placed.root, ctx.root);
     } catch (err) {
       return await give('installing', `could not switch to ${to}: ${message(err)}`, true);
     }

@@ -6,7 +6,7 @@ APP_PATH := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/buddi.app
 
 .DEFAULT_GOAL := help
 
-.PHONY: help generate resolve fetch build run stop clean logs open-xcode release notarize dmg version
+.PHONY: help generate resolve fetch build test run stop clean logs open-xcode release notarize dmg version
 
 RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/buddi.app
 
@@ -61,11 +61,19 @@ build: generate ## Build the app (ad-hoc signed, or Developer ID when DEVELOPMEN
 		$(DEBUG_SIGN) $(VERSION_FLAGS) \
 		build
 
+# The decision logic (Tests/), as plain XCTest: nothing launches the app.
+test: generate ## Run the app's logic tests
+	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration $(CONFIGURATION) \
+		-derivedDataPath $(DERIVED_DATA) -only-testing:buddiTests \
+		CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO $(DEBUG_SIGN) \
+		test
+
 # Runs the build in place (no copy to /Applications: this is a service, and a second
 # registered copy would start at login too). For a throwaway instance next to a real
 # one, pass a data directory and a port; both reach the app through `open --env`:
 #   make run BUDDI_DATA_DIR=$(mktemp -d) BUDDI_WEB_PORT=4517
-RUN_ENV := $(if $(BUDDI_DATA_DIR),--env BUDDI_DATA_DIR=$(BUDDI_DATA_DIR)) $(if $(BUDDI_WEB_PORT),--env BUDDI_WEB_PORT=$(BUDDI_WEB_PORT))
+# Quoted: a data directory with a space in it (~/Library/Application Support/…) is one argument.
+RUN_ENV := $(if $(BUDDI_DATA_DIR),--env "BUDDI_DATA_DIR=$(BUDDI_DATA_DIR)") $(if $(BUDDI_WEB_PORT),--env "BUDDI_WEB_PORT=$(BUDDI_WEB_PORT)")
 run: build stop ## Build and launch from build/ (BUDDI_DATA_DIR / BUDDI_WEB_PORT for a scratch instance)
 	open -n $(RUN_ENV) "$(APP_PATH)"
 

@@ -13,6 +13,10 @@ import {
   finishUpgrade,
   handOver,
   installArgs,
+  isNotFound,
+  registryAuth,
+  sanitizeNpmOutput,
+  tarballServed,
   installTarget,
   isNewer,
   isVersion,
@@ -50,16 +54,41 @@ function backupControl(overrides: Partial<BackupControl> = {}): BackupControl {
 }
 
 /** The registry, as a transport. No test in this file touches the network. */
-function registry(version: string, extra: Record<string, unknown> = {}, opts: { unserved?: string[] } = {}): (url: string, init?: { method?: string }) => Promise<{ status: number; json: () => Promise<unknown> }> {
-  return async (url: string, init?: { method?: string }) => {
-    // The tarball, asked with a HEAD: served unless this registry is still processing that version.
-    const tarball = /^https:\/\/registry\.example\/@withbuddi\/buddi\/-\/buddi-(.+)\.tgz$/.exec(url);
-    if (tarball) {
-      expect(init?.method).toBe('HEAD');
-      return { status: opts.unserved?.includes(tarball[1]!) ? 404 : 200, json: async () => ({}) };
+interface FakeRegistryOptions {
+  /** Versions whose tarball answers 404: npm still processing them. */
+  unserved?: string[];
+  /** What a HEAD of a served tarball answers instead of 200 (a mirror refusing HEAD: 405). */
+  head?: number;
+  /** What a ranged GET answers, when the HEAD was refused. */
+  ranged?: number;
+  /** Every request must carry this `authorization`, or it answers 401. */
+  auth?: string;
+  /** Where the version documents say the tarballs are (`dist.tarball`). */
+  tarballBase?: string;
+}
+
+type FakeInit = { method?: string; headers?: Record<string, string> };
+
+/** The registry, as a transport. No test in this file touches the network. */
+function registry(version: string, extra: Record<string, unknown> = {}, opts: FakeRegistryOptions = {}): (url: string, init?: FakeInit) => Promise<{ status: number; json: () => Promise<unknown> }> {
+  const base = opts.tarballBase ?? 'https://registry.example/@withbuddi/buddi/-';
+  const answer = (status: number, body: unknown = {}) => ({ status, json: async () => body });
+  const doc = (v: string) => ({ name: '@withbuddi/buddi', version: v, dist: { tarball: `${base}/buddi-${v}.tgz` } });
+  return async (url: string, init?: FakeInit) => {
+    if (opts.auth !== undefined && url.startsWith('https://registry.example/') && init?.headers?.authorization !== opts.auth) return answer(401);
+    // The tarball the document names, asked with a HEAD: served unless this registry is still processing that version.
+    const tarball = /\/buddi-([^/]+)\.tgz$/.exec(url);
+    if (tarball && url.startsWith(base)) {
+      if (opts.unserved?.includes(tarball[1]!)) return answer(404);
+      if (init?.method === 'HEAD') return answer(opts.head ?? 200);
+      expect(init?.method).toBe('GET');
+      expect(init?.headers?.range).toBe('bytes=0-0');
+      return answer(opts.ranged ?? 206);
     }
-    expect(url).toBe('https://registry.example/%40withbuddi%2Fbuddi/latest');
-    return { status: 200, json: async () => ({ name: '@withbuddi/buddi', version, ...extra }) };
+    if (url === 'https://registry.example/%40withbuddi%2Fbuddi/latest') return answer(200, { ...doc(version), ...extra });
+    const one = /^https:\/\/registry\.example\/%40withbuddi%2Fbuddi\/([^/]+)$/.exec(url);
+    if (one) return answer(200, doc(one[1]!));
+    throw new Error(`unexpected request ${init?.method ?? 'GET'} ${url}`);
   };
 }
 
@@ -422,7 +451,11 @@ describe('an upgrade', () => {
   test('an install that fails leaves buddi running, and says where it stopped', async () => {
     const ctx = await installation();
     const { upgrade, startGateway } = service(ctx, {
-      install: async () => { throw new Error('npm install buddi@0.1.1 failed: 404 Not Found'); },
+      install: async () => { throw new Error([
+        'npm install @withbuddi/buddi@0.1.1 failed: npm error code E404',
+        'npm error 404 Not Found - GET https://registry.example/@withbuddi%2fbuddi/-/buddi-0.1.1.tgz - Not found',
+        'npm error 404  \'@withbuddi/buddi@0.1.1\' is not in this registry.',
+      ].join('\n')); },
     });
     const job = await settled(upgrade, (upgrade.start('0.1.1') as BackupJob).id);
     expect(job.phase).toBe('failed');
@@ -682,5 +715,106 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('
     await settled(upgrade, (upgrade.start('0.1.0') as BackupJob).id);
     expect(checkPostgres).not.toHaveBeenCalled();
     expect(restart).toHaveBeenCalled();
+  });
+});
+
+describe('is the tarball served yet', () => {
+  const REG = 'https://registry.example';
+  const asked = (fake: ReturnType<typeof registry>) => {
+    const calls: Array<{ method: string; url: string; headers: Record<string, string> }> = [];
+    const http = async (url: string, init?: FakeInit) => {
+      calls.push({ method: init?.method ?? 'GET', url, headers: init?.headers ?? {} });
+      return await fake(url, init);
+    };
+    return { http: http as never, calls };
+  };
+
+  test('200 is served and 404 is processing, asked at the tarball the document names', async () => {
+    const ok = asked(registry('0.1.1', {}, { tarballBase: 'https://cdn.example/t' }));
+    expect(await tarballServed(REG, '0.1.1', ok.http)).toBe(true);
+    expect(ok.calls.map(c => `${c.method} ${c.url}`)).toEqual([
+      'GET https://registry.example/%40withbuddi%2Fbuddi/0.1.1',
+      'HEAD https://cdn.example/t/buddi-0.1.1.tgz',
+    ]);
+    expect(await tarballServed(REG, '0.1.1', registry('0.1.1', {}, { unserved: ['0.1.1'] }) as never)).toBe(false);
+    // A tarball already known from the check's document is asked directly.
+    const known = asked(registry('0.1.1'));
+    expect(await tarballServed(REG, '0.1.1', known.http, { tarball: 'https://registry.example/@withbuddi/buddi/-/buddi-0.1.1.tgz' })).toBe(true);
+    expect(known.calls).toHaveLength(1);
+  });
+
+  test('a registry that refuses HEAD is asked for one byte', async () => {
+    const refused = asked(registry('0.1.1', {}, { head: 405 }));
+    expect(await tarballServed(REG, '0.1.1', refused.http)).toBe(true);
+    expect(refused.calls.at(-1)).toMatchObject({ method: 'GET', headers: { range: 'bytes=0-0' } });
+    expect(await tarballServed(REG, '0.1.1', registry('0.1.1', {}, { head: 501, ranged: 200 }) as never)).toBe(true);
+    expect(await tarballServed(REG, '0.1.1', registry('0.1.1', {}, { head: 405, ranged: 404 }) as never)).toBe(false);
+  });
+
+  test('a registry that wants credentials gets the npmrc\'s, and a 401 is never "processing"', async () => {
+    const withAuth = asked(registry('0.1.1', {}, { auth: 'Bearer s3cret' }));
+    expect(await tarballServed(REG, '0.1.1', withAuth.http, { auth: { authorization: 'Bearer s3cret' } })).toBe(true);
+    expect(withAuth.calls.every(c => c.headers.authorization === 'Bearer s3cret')).toBe(true);
+    // Credentials missing or wrong: the 401 lets the install say so, not "still processing".
+    expect(await tarballServed(REG, '0.1.1', registry('0.1.1', {}, { auth: 'Bearer other' }) as never, { tarball: 'https://registry.example/@withbuddi/buddi/-/buddi-0.1.1.tgz', auth: { authorization: 'Bearer s3cret' } })).toBe(true);
+    // And never to another host a document names.
+    const cdn = asked(registry('0.1.1', {}, { tarballBase: 'https://cdn.example/t' }));
+    await tarballServed(REG, '0.1.1', cdn.http, { auth: { authorization: 'Bearer s3cret' } });
+    expect(cdn.calls[0]?.headers.authorization).toBe('Bearer s3cret');
+    expect(cdn.calls[1]?.headers.authorization).toBeUndefined();
+  });
+
+  test('the check of an installation behind such a mirror offers the version', async () => {
+    const ctx = await installation();
+    const npmrc = path.join(ctx.data, 'npmrc');
+    await writeFile(npmrc, '//registry.example/:_authToken=${MIRROR_TOKEN}\n');
+    ctx.env.NPM_CONFIG_USERCONFIG = npmrc;
+    ctx.env.MIRROR_TOKEN = 's3cret';
+    const { upgrade } = service(ctx, { http: registry('0.1.1', {}, { auth: 'Bearer s3cret' }) as never });
+    const view = await upgrade.check();
+    expect(view).toMatchObject({ latest: '0.1.1', updateAvailable: true });
+    expect(view.processing).toBeUndefined();
+    expect(view.error).toBeUndefined();
+  });
+
+  test('registryAuth reads the npmrc the way npm does', () => {
+    const rc = (text: string) => () => text;
+    expect(registryAuth('https://registry.example', { HOME: '/h' }, rc('//registry.example/:_authToken=abc'))).toEqual({ authorization: 'Bearer abc' });
+    expect(registryAuth('https://mirror.example/npm/', { HOME: '/h' }, rc('//mirror.example/:_authToken=wide\n//mirror.example/npm/:_authToken=narrow'))).toEqual({ authorization: 'Bearer narrow' });
+    expect(registryAuth('https://mirror.example/npm', { HOME: '/h' }, rc('//mirror.example/npm/:_auth=dXNlcjpwYXNz'))).toEqual({ authorization: 'Basic dXNlcjpwYXNz' });
+    expect(registryAuth('https://mirror.example', { HOME: '/h' }, rc(`//mirror.example/:username=me\n//mirror.example/:_password=${Buffer.from('pw').toString('base64')}`)))
+      .toEqual({ authorization: `Basic ${Buffer.from('me:pw').toString('base64')}` });
+    expect(registryAuth('https://registry.npmjs.org', { HOME: '/h' }, rc('//registry.example/:_authToken=abc\n# comment'))).toEqual({});
+    expect(registryAuth('https://registry.example', {}, rc('//registry.example/:_authToken=abc'))).toEqual({});
+    expect(registryAuth('https://registry.example', { HOME: '/h' }, () => { throw new Error('ENOENT'); })).toEqual({});
+  });
+});
+
+describe('npm\'s 404', () => {
+  test('is "still processing" only when it is this package\'s tarball', () => {
+    expect(isNotFound('npm install @withbuddi/buddi@0.1.1 failed: npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@withbuddi%2fbuddi/-/buddi-0.1.1.tgz - Not found')).toBe(true);
+    expect(isNotFound('npm error code E404\nnpm error 404  \'@withbuddi/buddi@0.1.1\' is not in this registry.')).toBe(true);
+    // A dependency that is gone, a 404 without npm's code, a 404 that is not one: npm's own words.
+    expect(isNotFound('npm install @withbuddi/buddi@0.1.1 failed: npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-pad - Not found')).toBe(false);
+    expect(isNotFound('npm install @withbuddi/buddi@0.1.1 failed: npm error 404 Not Found - GET https://registry.npmjs.org/@withbuddi%2fbuddi')).toBe(false);
+    expect(isNotFound('npm cache add @withbuddi/buddi@0.1.1 failed: npm error code EINTEGRITY sha512-404')).toBe(false);
+  });
+
+  test('an install that failed for another reason keeps npm\'s words, without credentials', async () => {
+    const ctx = await installation();
+    const stderr = 'npm error code E404\nnpm error 404 Not Found - GET https://user:hunter2@mirror.example/left-pad - Not found\nnpm error //mirror.example/:_authToken=abc123';
+    const { upgrade } = service(ctx, {
+      install: createInstaller({ binary: 'npm', runner: async () => { throw Object.assign(new Error('exit 1'), { stderr }); } }),
+    });
+    const job = await settled(upgrade, (upgrade.start('0.1.1') as BackupJob).id);
+    expect(job.error).toContain('left-pad');
+    expect(job.error).not.toContain('still processing');
+    expect(job.error).not.toContain('hunter2');
+    expect(job.error).not.toContain('abc123');
+  });
+
+  test('npm output is kept short and plain', () => {
+    expect(sanitizeNpmOutput('\u001b[31mnpm error\u001b[0m Bearer abc.def\n' + Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')).split('\n')).toHaveLength(8);
+    expect(sanitizeNpmOutput('\u001b[31mnpm error\u001b[0m Authorization: Bearer abc.def')).toBe('npm error Authorization: Bearer ***');
   });
 });

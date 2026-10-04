@@ -9,7 +9,8 @@
 #   Payload/buddi/current -> buddi-<version>
 #
 # Every download is checked before it is unpacked: Node against its SHASUMS256.txt,
-# every npm tarball against the sha512 integrity in its packument.
+# every npm tarball against the sha512 integrity in its packument, and buddi's own
+# against the signed provenance its release workflow published (from npmjs.com).
 #
 # Usage: scripts/fetch-payload.sh <buddi-version> [node-major]
 set -euo pipefail
@@ -79,6 +80,24 @@ echo "$NODE_VERSION" > "$PAYLOAD/runtime/VERSION"
 # ---------------------------------------------------------------- buddi release
 say "@withbuddi/buddi@$VERSION"
 TGZ="$(npm_tarball @withbuddi/buddi "$VERSION")"
+
+# Who built it, not only which bytes: the release baked into a signed DMG must carry
+# the provenance withbuddi/buddi's release workflow published for this tag. The same
+# check buddi.app makes before it installs an update (packages/install/src/provenance.ts:
+# Fulcio chain, signature, subject sha512 = the integrity just checked, the workflow at
+# refs/tags/v<version>), run with the Node going into the app. A registry of one's own
+# serves no provenance and is let through with a warning, as the app does.
+if [ "${REGISTRY%/}" = "https://registry.npmjs.org" ]; then
+  say "provenance of @withbuddi/buddi@$VERSION"
+  ATTESTATIONS="$CACHE/attestations-buddi-$VERSION.json"
+  curl -fsSL "$REGISTRY/-/npm/v1/attestations/@withbuddi%2Fbuddi@$VERSION" -o "$ATTESTATIONS" \
+    || die "$REGISTRY serves no provenance for @withbuddi/buddi@$VERSION; nothing was built"
+  "$PAYLOAD/runtime/node" --no-warnings --experimental-strip-types "$HERE/../../packages/install/src/provenance.ts" \
+    "$VERSION" "$(field "$(packument @withbuddi/buddi "$VERSION")" dist.integrity)" "$ATTESTATIONS" \
+    || die "@withbuddi/buddi@$VERSION failed its provenance check; nothing was built"
+else
+  printf 'fetch: warning: %s serves no provenance; @withbuddi/buddi@%s is checked by integrity only\n' "$REGISTRY" "$VERSION" >&2
+fi
 rm -rf "$PAYLOAD/buddi"; mkdir -p "$PAYLOAD/buddi/buddi-$VERSION"
 RELEASE="$PAYLOAD/buddi/buddi-$VERSION"
 tar -xzf "$TGZ" -C "$RELEASE" --strip-components 1

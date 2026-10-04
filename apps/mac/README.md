@@ -117,19 +117,23 @@ Two layers, as in the spec.
 (`packages/install/src/app-layout.ts`):
 
 1. It reads the version's packument (the sha512 `integrity` and the provenance URL),
-   runs `npm install --prefix <data>/releases/.staging-<v> @withbuddi/buddi@<v>
+   runs `npm install --prefix <data>/releases/.staging-<v>-<random> @withbuddi/buddi@<v>
    --ignore-scripts` with the bundled npm, and checks that the integrity npm recorded
    in its lock is the registry's.
 2. `npm audit signatures --include-attestations` verifies the registry signature and the
-   sigstore provenance bundle with npm's own sigstore client, and the SLSA statement
-   must name `https://github.com/withbuddi/buddi` as the source. From npmjs.com a release
-   without provenance is refused. `release.json` in the release folder records what
-   was verified.
+   sigstore bundles with npm's own sigstore client (Node 22's npm reports only what is
+   invalid or missing). Then `provenance.ts` checks who signed: the SLSA bundle chains
+   to Fulcio, its signature verifies, its subject is the tarball's sha512, and its
+   certificate names `withbuddi/buddi`'s `release.yml` at this version's tag. From
+   npmjs.com a release without provenance is refused. `release.json` records what was
+   verified.
 3. The new release's Postgres has to start (`postgres --version`, after hydrating its
-   dylib links: the one install script the release needs).
+   dylib links: the one install script the release needs). Only then is the staging
+   folder renamed to `buddi-<v>`; a `buddi-<v>` that `current` or `previous` already
+   points at (a retry after a rollback) is kept as it is.
 4. Only then: the backup, the gateway stops, `<data>/releases/current` points at the new
-   release and `previous` at the one that ran, older release folders are removed, and
-   the supervisor exits with status 75. The app starts whatever `current` points at;
+   release and `previous` at the one that ran, release folders neither points at are
+   removed, and the supervisor exits with status 75. The app starts whatever `current` points at;
    the new supervisor migrates and finishes the upgrade as on any packaged install.
 
 Everything before step 4 happens with buddi still running, and a failure there changes

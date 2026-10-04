@@ -22,12 +22,22 @@
  *    npm verifies the tarball against it while installing, and the
  *    `package-lock.json` npm wrote is read back to check that the integrity it
  *    recorded is that same value: what is on disk is the tarball npm serves.
- *  - **Provenance.** `npm audit signatures --include-attestations` verifies the
- *    registry signature and the sigstore provenance bundle with npm's own
- *    sigstore client (Fulcio certificate, Rekor inclusion, subject digest), and
- *    the SLSA statement it verified must name this repository as the source.
- *    Required from the public registry; a registry of one's own (the smoke, a
- *    mirror) has none to offer, and the record says so.
+ *  - **Signatures.** `npm audit signatures --include-attestations` verifies the
+ *    registry signature and the sigstore bundles with npm's own sigstore client
+ *    (Fulcio chain, Rekor inclusion). The npm that ships with Node 22 answers
+ *    `--json` with only `{ invalid, missing }`, so that is all this reads from
+ *    it: nothing invalid, and this package not missing.
+ *  - **Provenance.** Who signed is checked here (`provenance.ts`): the SLSA
+ *    bundle the registry serves for this version chains to Fulcio, its
+ *    signature verifies, its subject is the tarball's sha512, and its
+ *    certificate names `withbuddi/buddi`'s release workflow at this version's
+ *    tag. Required from the public registry; a registry of one's own (the
+ *    smoke, a mirror) has none to offer, and the record says so.
+ *
+ * All of it happens in `<releases>/.staging-<v>-<random>`; only a release that
+ * passed (and whose Postgres starts, see `upgrade.ts`) is renamed into
+ * `buddi-<v>` by `placeRelease`, and a `buddi-<v>` that `current` or
+ * `previous` points at is never removed to make room.
  *
  * Scripts stay off (`--ignore-scripts`, as everywhere in `upgrade.ts`); the one
  * install script the release needs, embedded Postgres's dylib links, is what
@@ -36,10 +46,12 @@
  * Like `upgrade.ts`, nothing here reaches the network by itself: the registry
  * is the `http` seam and npm is the `exec` seam.
  */
+import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { HttpTransport } from '@buddi/gateway';
-import { DEFAULT_REGISTRY, PACKAGE_NAME, PACKAGE_PATH, CHECK_TIMEOUT_MS, npmBinary } from './upgrade.js';
+import { DEFAULT_REGISTRY, PACKAGE_NAME, PACKAGE_PATH, CHECK_TIMEOUT_MS, authFor, npmBinary, sanitizeNpmOutput } from './upgrade.js';
+import { attestationsUrl, verifyProvenance } from './provenance.js';
 import type { NpmRunner } from './upgrade.js';
 
 /** What the app sets in its supervisor's environment: where releases go. */
@@ -91,10 +103,11 @@ export interface ReleaseMeta {
 }
 
 /** One GET of `<registry>/@withbuddi%2Fbuddi/<version>`: the integrity and the provenance URL. */
-export async function fetchReleaseMeta(registry: string, version: string, http: HttpTransport): Promise<ReleaseMeta> {
-  const response = await http(`${registry.replace(/\/+$/, '')}/${PACKAGE_PATH}/${version}`, {
+export async function fetchReleaseMeta(registry: string, version: string, http: HttpTransport, auth?: Record<string, string>): Promise<ReleaseMeta> {
+  const base = registry.replace(/\/+$/, '');
+  const response = await http(`${base}/${PACKAGE_PATH}/${version}`, {
     method: 'GET',
-    headers: { accept: 'application/json' },
+    headers: { accept: 'application/json', ...authFor(base, base, auth) },
     signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
   });
   if (response.status !== 200) throw new Error(`the registry answered ${response.status} for ${PACKAGE_NAME}@${version}`);
@@ -123,47 +136,34 @@ export function auditArgs(prefix: string, registry: string): string[] {
   return ['audit', 'signatures', '--prefix', prefix, '--registry', registry, '--json', '--include-attestations'];
 }
 
-/** What `npm audit signatures --json --include-attestations` answers. */
-interface AuditReport {
+/**
+ * What `npm audit signatures --json --include-attestations` answers. npm 10
+ * (Node 22's) prints only `invalid` and `missing`; npm 11 adds `verified`,
+ * which nothing here needs.
+ */
+export interface AuditReport {
   invalid?: Array<{ name?: string; version?: string; code?: string; message?: string }>;
   missing?: Array<{ name?: string; version?: string }>;
-  verified?: Array<{
-    name?: string;
-    version?: string;
-    attestations?: { provenance?: unknown };
-    attestationBundles?: Array<{ predicateType?: string; bundle?: { dsseEnvelope?: { payload?: string } } }>;
-  }>;
 }
 
 /**
- * The provenance verdict on an audit report: verified, for this version, from
- * this repository. Throws with the reason otherwise. Returns the source
- * repository the statement names.
+ * npm's verdict: nothing in the release failed its registry signature or its
+ * sigstore bundle, and this package is not unsigned. Throws with the reason.
  */
-export function provenanceVerdict(report: AuditReport, version: string, repository = SOURCE_REPOSITORY): string {
+export function auditVerdict(report: AuditReport, version: string): void {
+  if (typeof report !== 'object' || report === null || (!Array.isArray(report.invalid) && !Array.isArray(report.missing))) {
+    throw new Error('npm audit signatures answered with something other than its report');
+  }
   const bad = (report.invalid ?? []).find(entry => entry.name === PACKAGE_NAME) ?? report.invalid?.[0];
   if (bad !== undefined) throw new Error(`npm could not verify ${bad.name ?? 'a package'}@${bad.version ?? '?'}: ${bad.message ?? bad.code ?? 'invalid signature'}`);
   if ((report.missing ?? []).some(entry => entry.name === PACKAGE_NAME)) throw new Error(`${PACKAGE_NAME}@${version} has no registry signature`);
-  const ours = (report.verified ?? []).find(entry => entry.name === PACKAGE_NAME && entry.version === version);
-  if (ours === undefined || ours.attestations?.provenance === undefined) throw new Error(`npm did not verify a provenance attestation for ${PACKAGE_NAME}@${version}`);
-  const slsa = (ours.attestationBundles ?? []).find(b => b.predicateType?.startsWith('https://slsa.dev/provenance/') === true);
-  const payload = slsa?.bundle?.dsseEnvelope?.payload;
-  if (payload === undefined) throw new Error(`the provenance of ${PACKAGE_NAME}@${version} has no SLSA statement`);
-  let source: unknown;
-  try {
-    const statement = JSON.parse(Buffer.from(payload, 'base64').toString('utf8')) as { predicate?: { buildDefinition?: { externalParameters?: { workflow?: { repository?: unknown } } } } };
-    source = statement.predicate?.buildDefinition?.externalParameters?.workflow?.repository;
-  } catch { /* said below */ }
-  if (typeof source !== 'string') throw new Error(`the provenance of ${PACKAGE_NAME}@${version} names no source repository`);
-  if (source.replace(/\.git$/, '').toLowerCase() !== repository.toLowerCase()) throw new Error(`${PACKAGE_NAME}@${version} was built from ${source}, not ${repository}`);
-  return source;
 }
 
 /** What `<release>/release.json` records about how a release was checked. */
 export interface ReleaseRecord {
   version: string;
   integrity: string;
-  provenance: { verified: true; url: string; repository: string } | { verified: false; reason: string };
+  provenance: { verified: true; url: string; repository: string; workflow: string } | { verified: false; reason: string };
   stagedAt: string;
 }
 
@@ -176,15 +176,34 @@ export interface StageOptions {
   binary?: string;
   /** Provenance is required unless this says otherwise; default: only from the public registry. */
   requireProvenance?: boolean;
+  /** The registry's credentials (`registryAuth`), sent to its origin only. */
+  auth?: Record<string, string>;
+  /** The CA chain provenance must chain to; Fulcio's by default. */
+  chain?: readonly string[];
   log?: (line: string) => void;
 }
 
+/** A release that passed every check, still in its staging folder. */
+export interface StagedRelease {
+  /** `<releases>/.staging-<v>-<random>`: npm's prefix. */
+  staging: string;
+  /** The package root inside it, where the Postgres check runs. */
+  root: string;
+  record: ReleaseRecord;
+}
+
+/** The plain line a release that fails its provenance check is refused with. */
+export function provenanceRefusal(version: string, reason: string): string {
+  return `buddi did not update to ${version}: its provenance did not check out (${reason}).`;
+}
+
 /**
- * Download, verify and unpack one release into `<releases>/buddi-<version>`.
- * Nothing the app runs changes here: `current` is switched later, by
- * `switchCurrent`, once the rest of the upgrade has said yes.
+ * Download, verify and unpack one release into a staging folder of its own.
+ * Nothing the app runs changes here, and no `buddi-<v>` is touched: the
+ * release is put in place by `placeRelease` once the rest of the upgrade has
+ * checked it, and `current` is switched later still, by `switchCurrent`.
  */
-export async function stageRelease(opts: StageOptions): Promise<{ dir: string; root: string; record: ReleaseRecord }> {
+export async function stageRelease(opts: StageOptions): Promise<StagedRelease> {
   const { version, registry } = opts;
   const binary = opts.binary ?? npmBinary();
   const requireProvenance = opts.requireProvenance ?? registry.replace(/\/+$/, '') === DEFAULT_REGISTRY;
@@ -193,10 +212,10 @@ export async function stageRelease(opts: StageOptions): Promise<{ dir: string; r
   const fail = (what: string, err: unknown): Error => {
     const stderr = (err as { stderr?: string } | null)?.stderr;
     const text = (stderr ?? (err instanceof Error ? err.message : String(err))).toString().trim();
-    return new Error(`${what}: ${text.split('\n').slice(-8).join('\n')}`);
+    return new Error(`${what}: ${sanitizeNpmOutput(text)}`);
   };
 
-  const meta = await fetchReleaseMeta(registry, version, opts.http);
+  const meta = await fetchReleaseMeta(registry, version, opts.http, opts.auth);
   if (requireProvenance && meta.attestations === undefined) {
     throw new Error(`${PACKAGE_NAME}@${version} has no provenance attestation, and buddi.app installs only releases built by withbuddi/buddi's CI.`);
   }
@@ -206,8 +225,7 @@ export async function stageRelease(opts: StageOptions): Promise<{ dir: string; r
   // linked home) writes its lock with `../../private/...` keys, and the
   // integrity check below would find nothing.
   const releases = await realpath(opts.releases);
-  const staging = path.join(releases, `.staging-${version}`);
-  await rm(staging, { recursive: true, force: true });
+  const staging = path.join(releases, `.staging-${version}-${randomBytes(4).toString('hex')}`);
   await mkdir(staging, { recursive: true, mode: 0o700 });
   // npm's own kind of prefix manifest: no name, so it is nobody's project.
   await writeFile(path.join(staging, 'package.json'), JSON.stringify({ private: true, description: 'A buddi release installed by buddi.app.' }, null, 2) + '\n');
@@ -237,24 +255,68 @@ export async function stageRelease(opts: StageOptions): Promise<{ dir: string; r
       let report: AuditReport;
       try { report = JSON.parse(text) as AuditReport; }
       catch { throw new Error('npm audit signatures did not answer with JSON'); }
-      const repository = provenanceVerdict(report, version);
-      provenance = { verified: true, url: meta.attestations, repository };
+      auditVerdict(report, version);
+
+      // Who signed: the bundle npm verified, read and checked here.
+      const base = registry.replace(/\/+$/, '');
+      const url = meta.attestations.startsWith(`${base}/`) ? meta.attestations : attestationsUrl(base, PACKAGE_NAME, version);
+      const response = await opts.http(url, { method: 'GET', headers: { accept: 'application/json', ...authFor(url, base, opts.auth) }, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
+      if (response.status !== 200) throw new Error(provenanceRefusal(version, `the registry answered ${response.status} for its attestations`));
+      const doc = await response.json().catch(() => undefined);
+      let facts: { repository: string; workflow: string };
+      try { facts = verifyProvenance(doc, { name: PACKAGE_NAME, version, integrity: meta.integrity, ...(opts.chain === undefined ? {} : { chain: opts.chain }) }); }
+      catch (err) { throw new Error(provenanceRefusal(version, err instanceof Error ? err.message : String(err))); }
+      provenance = { verified: true, url, repository: facts.repository, workflow: facts.workflow };
     } else {
       provenance = { verified: false, reason: `${registry} serves no provenance for ${version}` };
     }
 
     const record: ReleaseRecord = { version, integrity: meta.integrity, provenance, stagedAt: new Date().toISOString() };
     await writeFile(path.join(staging, 'release.json'), JSON.stringify(record, null, 2) + '\n');
-    const dir = releaseDir(releases, version);
-    await rm(dir, { recursive: true, force: true });
-    await rename(staging, dir);
-    opts.log?.(`upgrade: ${version} is staged in ${dir} (integrity ${provenance.verified ? 'and provenance ' : ''}verified).`);
-    return { dir, root: releaseRoot(dir), record };
+    opts.log?.(`upgrade: ${version} is downloaded to ${staging} (integrity ${provenance.verified ? 'and provenance ' : ''}verified).`);
+    return { staging, root: releaseRoot(staging), record };
   } catch (err) {
     await rm(staging, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
 }
+
+/** Is `dir` (a `buddi-<v>` in `releases`) the one `current` or `previous` points into? */
+async function referenced(releases: string, dir: string): Promise<boolean> {
+  const targets = await Promise.all(['current', 'previous'].map(name => realpath(path.join(releases, name)).catch(() => undefined)));
+  return targets.some(target => target !== undefined && path.relative(releases, target).split(path.sep)[0] === path.basename(dir));
+}
+
+/**
+ * Rename a checked staging folder into `<releases>/buddi-<version>`.
+ *
+ * A `buddi-<version>` already there that `current` or `previous` points at is
+ * kept as it is (it passed the same checks when it was staged), and the new
+ * copy is dropped: the release the app falls back on is never removed to make
+ * room. One nothing points at is replaced.
+ */
+export async function placeRelease(target: string, version: string, staging: string, log?: (line: string) => void): Promise<{ dir: string; root: string; kept: boolean }> {
+  const releases = await realpath(target);
+  const dir = releaseDir(releases, version);
+  const there = await lstat(dir).then(s => s.isDirectory(), () => false);
+  if (there && await referenced(releases, dir)) {
+    await rm(staging, { recursive: true, force: true });
+    log?.(`upgrade: ${version} is already in ${dir} and the app may go back to it; keeping that copy.`);
+    return { dir, root: releaseRoot(dir), kept: true };
+  }
+  if (there) {
+    // rename(2) replaces only an empty directory: move the old one aside first.
+    const aside = path.join(releases, `.staging-${version}-old-${randomBytes(4).toString('hex')}`);
+    await rename(dir, aside);
+    await rename(staging, dir);
+    await rm(aside, { recursive: true, force: true }).catch(() => {});
+  } else {
+    await rename(staging, dir);
+  }
+  log?.(`upgrade: ${version} is in place in ${dir}.`);
+  return { dir, root: releaseRoot(dir), kept: false };
+}
+
 
 /* ------------------------------------------------------------------ *
  * current, previous, and what is kept

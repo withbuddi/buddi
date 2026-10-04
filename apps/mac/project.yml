@@ -72,6 +72,8 @@ targets:
           CODE_SIGN_IDENTITY: "-"
         Release:
           CODE_SIGN_IDENTITY: "Developer ID Application"
+    scheme:
+      testTargets: [buddiTests]
     # The Node runtime and the buddi release (fetched into Payload/ by `make fetch`)
     # go into Contents/Resources as they are: rsync keeps the `current` link and
     # the Postgres dylib links. Runs before Xcode signs the bundle.
@@ -86,3 +88,19 @@ targets:
           rsync -a --delete "$SRCROOT/Payload/runtime/" "$CODESIGNING_FOLDER_PATH/Contents/Resources/runtime/"
           rsync -a --delete "$SRCROOT/Payload/buddi/" "$CODESIGNING_FOLDER_PATH/Contents/Resources/buddi/"
         basedOnDependencyAnalysis: false
+
+  # Logic tests, without a host app: launching buddi.app would start a supervisor on
+  # the real data directory. Only the Foundation-only decision code is compiled in.
+  buddiTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      - path: App/SupervisorPolicy.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.withbuddi.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
