@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-10-03
+updated: 2026-10-04
 ---
 
 # The buddi command line
@@ -1572,7 +1572,7 @@ Keeping buddi running: the service, upgrades, backups, secrets and the work queu
 - [`buddi service logs`](#buddi-service-logs): Follow the service's log. Ctrl-C stops following.
 - [`buddi service install`](#buddi-service-install): Install the background service, started at login. Source checkout only.
 - [`buddi service uninstall`](#buddi-service-uninstall): Remove the background service. Your data stays. Source checkout only.
-- [`buddi uninstall`](#buddi-uninstall): Remove buddi from this machine: the service, the data, the secrets. It lists everything first and asks.
+- [`buddi uninstall`](#buddi-uninstall): Remove buddi from this machine: the service, the data, the secrets. It lists everything first, asks, and prints your backup passphrase (and saves it beside the last backup) before the vault goes.
 - [`buddi backup create`](#buddi-backup-create): Write one archive of this installation: the database, your agents and skills, and your files.
 - [`buddi backup list`](#buddi-backup-list): List every archive, newest first.
 - [`buddi backup verify`](#buddi-backup-verify): Check that an archive is whole and can be restored.
@@ -1811,17 +1811,19 @@ buddi service uninstall
 
 ### buddi uninstall
 
-Remove buddi from this machine: the service, the data, the secrets. It lists everything first and asks.
+Remove buddi from this machine: the service, the data, the secrets. It lists everything first, asks, and prints your backup passphrase (and saves it beside the last backup) before the vault goes.
 
 ```sh
-buddi uninstall [--yes] [--keep-data] [--no-backup]
+buddi uninstall [--yes] [--keep-data] [--no-backup [--i-have-the-passphrase]] [--copy-to <dir>]
 ```
 
 **Flags**
 
 - `--yes`: Do not ask.
 - `--keep-data`: Keep the data directory and the secrets that open it, for a reinstall.
-- `--no-backup`: Skip the last backup it takes first.
+- `--no-backup`: Skip the last backup it takes first. The backup passphrase is still printed and saved to a file, unless you also pass --i-have-the-passphrase.
+- `--i-have-the-passphrase`: With --no-backup: you already have the six words, so they are not printed or saved.
+- `--copy-to <dir>`: Also copy the last backup and its passphrase file here (your Desktop, say).
 
 **Example**
 
