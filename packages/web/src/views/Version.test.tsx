@@ -7,6 +7,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ApiError, api } from '../api';
+import { answered } from '../test/answered';
 import { Version } from './Settings';
 import { UPGRADE_PATIENCE_MS, resetRestart, restartState } from '../shell/restart';
 
@@ -46,8 +47,9 @@ describe('the version panel', () => {
     vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'u1', phase: 'starting', startedAt: new Date().toISOString() } } as never);
     vi.mocked(api.upgradeJob).mockReturnValue(new Promise(() => {}));
     render(<Version />);
+    // Inside act, so the effect that starts the minute's poll has run before the clock moves.
+    await answered(api.version);
     expect(await screen.findByRole('button', { name: 'Update' })).toBeDisabled();
-    await act(async () => {});
     // The app learned of 0.1.1; a minute later the panel says it too.
     await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
     await waitFor(() => expect(vi.mocked(api.version).mock.calls.length).toBeGreaterThanOrEqual(2));

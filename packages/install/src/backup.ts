@@ -335,6 +335,8 @@ export interface BackupJob {
 /** The last twenty jobs, newest last. Memory only: the archives are the state. */
 export class JobStore {
   private readonly jobs = new Map<string, BackupJob>();
+  /** The work behind each job, so a caller can await its end instead of polling for it. */
+  private readonly work = new Map<string, Promise<void>>();
 
   constructor(private readonly limit = 20) {}
 
@@ -351,6 +353,7 @@ export class JobStore {
       const oldest = this.jobs.keys().next();
       if (oldest.done) break;
       this.jobs.delete(oldest.value);
+      this.work.delete(oldest.value);
     }
     return job;
   }
@@ -369,6 +372,21 @@ export class JobStore {
   }
 
   get(id: string): BackupJob | undefined {
+    return this.jobs.get(id);
+  }
+
+  /** The promise that does the job's work. Its rejection is the job's `failed`, never the caller's. */
+  track(job: BackupJob, work: Promise<unknown>): void {
+    this.work.set(job.id, work.then(() => {}, () => {}));
+  }
+
+  /**
+   * The job once its work has run to the end, everything after `finish`
+   * included (a history entry, a restarted gateway). `finishedAt` alone is set
+   * before that tail runs, so a poller that stops at it races the tail.
+   */
+  async settled(id: string): Promise<BackupJob | undefined> {
+    await this.work.get(id);
     return this.jobs.get(id);
   }
 
@@ -449,6 +467,8 @@ export interface BackupControl {
   verify(name: string): BackupJob;
   restore(input: RestoreRequest): Promise<BackupJob | { status: number; error: string }>;
   job(id: string): BackupJob | undefined;
+  /** The job once its work is over, tail and all. See `JobStore.settled`. */
+  settled(id: string): Promise<BackupJob | undefined>;
   schedule(): Promise<ScheduleFile>;
   setSchedule(next: BackupSchedule): Promise<{ error: string } | { schedule: ScheduleFile }>;
   passphrase(): Promise<string>;
@@ -507,8 +527,9 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
 
   /** One at a time. A second backup while one runs would dump the same rows twice. */
   let chain: Promise<void> = Promise.resolve();
-  const queue = (work: () => Promise<void>): void => {
+  const queue = (work: () => Promise<void>): Promise<void> => {
     chain = chain.catch(() => {}).then(work);
+    return chain;
   };
 
   /**
@@ -719,25 +740,25 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
     create(encrypt) {
       if (restoring) return { status: 409, error: RESTORE_RUNNING };
       const job = jobs.start('backup');
-      queue(async () => {
+      jobs.track(job, queue(async () => {
         try {
           await runBackup(job, encrypt !== false);
         } catch (err) {
           jobs.finish(job, 'failed', { error: message(err) });
         }
-      });
+      }));
       return job;
     },
 
     verify(name) {
       const job = jobs.start('verify');
-      queue(async () => {
+      jobs.track(job, queue(async () => {
         try {
           await runVerify(job, name);
         } catch (err) {
           jobs.finish(job, 'failed', { error: message(err) });
         }
-      });
+      }));
       return job;
     },
 
@@ -760,7 +781,7 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
       }
       const job = jobs.start('restore');
       restoring = job;
-      queue(async () => {
+      jobs.track(job, queue(async () => {
         try {
           await runRestore(
             job,
@@ -772,11 +793,13 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
         } finally {
           restoring = undefined;
         }
-      });
+      }));
       return job;
     },
 
     job: (id) => jobs.get(id),
+
+    settled: (id) => jobs.settled(id),
 
     schedule: () => readSchedule(ctx.data),
 
@@ -830,7 +853,7 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
       // retried every minute for the rest of the day.
       await writeSchedule(ctx.data, { ...file, lastRunAt: now.toISOString() });
       const job = jobs.start('backup');
-      queue(async () => {
+      jobs.track(job, queue(async () => {
         try {
           await runBackup(job, file.encryptLocal);
           log(`backup: the scheduled backup finished (${String(job.phase)})`);
@@ -838,7 +861,7 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
           jobs.finish(job, 'failed', { error: message(err) });
           log(`backup: the scheduled backup failed: ${message(err)}`);
         }
-      });
+      }));
     },
   };
 }

@@ -823,6 +823,8 @@ export interface UpgradeControl {
   /** `202` with a job, or a status and an error when something else has the lever. */
   start(version?: string): UpgradeJob | { status: number; error: string };
   job(id: string): UpgradeJob | undefined;
+  /** The job once its work is over: the history written and the gateway started again or handed over. */
+  settled(id: string): Promise<UpgradeJob | undefined>;
   /** Is an upgrade under way? `/status` reports it and the socket refuses a second. */
   busy(): boolean;
   /** An hour has passed: run the daily check if it is due. */
@@ -1199,7 +1201,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       if (backup.busy()) return { status: 409, error: 'A restore is running.' };
       const job = jobs.start('upgrade');
       running = job;
-      void (async () => {
+      jobs.track(job, (async () => {
         try {
           await perform(job, version);
         } catch (err) {
@@ -1210,11 +1212,13 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
         } finally {
           running = undefined;
         }
-      })();
+      })());
       return job;
     },
 
     job: id => jobs.get(id),
+
+    settled: id => jobs.settled(id),
 
     busy: () => running !== undefined,
 

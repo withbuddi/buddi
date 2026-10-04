@@ -328,18 +328,15 @@ async function appInstallation(): Promise<{ ctx: ReadyContext; releases: string 
   };
 }
 
-async function finished(upgrade: ReturnType<typeof createUpgradeService>, id: string, restarted: () => boolean): Promise<BackupJob> {
-  for (let i = 0; i < 3000; i++) {
-    const job = upgrade.job(id);
-    if (job?.finishedAt !== undefined || (job?.phase === 'restarting' && restarted())) return job;
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-  throw new Error('the upgrade job never settled');
+/** The job once its work is over, awaited on the service's own promise rather than polled. */
+async function finished(upgrade: ReturnType<typeof createUpgradeService>, id: string): Promise<BackupJob> {
+  const job = await upgrade.settled(id);
+  if (job === undefined) throw new Error('no such upgrade job');
+  return job;
 }
 
 describe('an upgrade inside buddi.app', () => {
   function appService(ctx: ReadyContext, opts: Partial<Parameters<typeof createUpgradeService>[0]> = {}) {
-    let restarted = false;
     const stopGateway = vi.fn(async () => {});
     const startGateway = vi.fn(() => {});
     const install = vi.fn(async () => {});
@@ -348,16 +345,16 @@ describe('an upgrade inside buddi.app', () => {
       ctx, current: '0.1.0', backup: backupControl(), stopGateway, startGateway, install, checkPostgres,
       http: registry('0.1.1') as never, npm: fakeNpm().runner, log: () => {}, provenanceChain: CHAIN,
       ...opts,
-      restart: () => { restarted = true; },
+      restart: vi.fn(),
     });
-    return { upgrade, stopGateway, startGateway, install, checkPostgres, restarted: () => restarted };
+    return { upgrade, stopGateway, startGateway, install, checkPostgres };
   }
 
   test('stages outside the bundle, switches current, keeps the bundle as previous, and hands over', async () => {
     const { ctx, releases } = await appInstallation();
     const s = appService(ctx);
     expect((await s.upgrade.view()).app).toBe(true);
-    const job = await finished(s.upgrade, (s.upgrade.start() as BackupJob).id, s.restarted);
+    const job = await finished(s.upgrade, (s.upgrade.start() as BackupJob).id);
     expect(job.phase).toBe('restarting');
     expect(s.install).not.toHaveBeenCalled();
     const next = releaseRoot(path.join(releases, 'buddi-0.1.1'));
@@ -374,7 +371,7 @@ describe('an upgrade inside buddi.app', () => {
   test('a release that fails verification changes nothing and never stops the gateway', async () => {
     const { ctx, releases } = await appInstallation();
     const s = appService(ctx, { npm: fakeNpm({ audit: auditReport({ invalid: true }) }).runner });
-    const job = await finished(s.upgrade, (s.upgrade.start() as BackupJob).id, s.restarted);
+    const job = await finished(s.upgrade, (s.upgrade.start() as BackupJob).id);
     expect(job.phase).toBe('failed');
     expect(job.error).toMatch(/could not verify/);
     expect(s.stopGateway).not.toHaveBeenCalled();
@@ -386,7 +383,7 @@ describe('an upgrade inside buddi.app', () => {
   test('a release built anywhere but withbuddi/buddi\'s release workflow is refused in one plain line', async () => {
     const { ctx, releases } = await appInstallation();
     const s = appService(ctx, { http: registry('0.1.1', { provenance: { san: 'https://github.com/someone/buddi/.github/workflows/release.yml@refs/tags/v0.1.1' } }) as never });
-    const job = await finished(s.upgrade, (s.upgrade.start() as BackupJob).id, s.restarted);
+    const job = await finished(s.upgrade, (s.upgrade.start() as BackupJob).id);
     expect(job.phase).toBe('failed');
     expect(job.error).toMatch(/^buddi did not update to 0\.1\.1: its provenance did not check out \(it was signed by https:\/\/github\.com\/someone\/buddi.*\)\.$/);
     expect(s.stopGateway).not.toHaveBeenCalled();
@@ -405,14 +402,14 @@ describe('an upgrade inside buddi.app', () => {
 
     // The retry fails after staging: previous still runs.
     const failing = appService(ctx, { checkPostgres: async () => ({ ok: false, error: 'dyld: Library not loaded.' }) });
-    expect((await finished(failing.upgrade, (failing.upgrade.start('0.1.1') as BackupJob).id, failing.restarted)).phase).toBe('failed');
+    expect((await finished(failing.upgrade, (failing.upgrade.start('0.1.1') as BackupJob).id)).phase).toBe('failed');
     expect(await releaseLinks(releases)).toEqual({ current: ctx.root, previous: old });
     expect(await readFile(path.join(old, 'packages/install/dist/launcher.js'), 'utf8')).toBe('// the copy that ran');
     expect(await leftovers(releases)).toEqual(['buddi-0.1.1']);
 
     // The retry that passes keeps that copy, and switches to it.
     const passing = appService(ctx);
-    expect((await finished(passing.upgrade, (passing.upgrade.start('0.1.1') as BackupJob).id, passing.restarted)).phase).toBe('restarting');
+    expect((await finished(passing.upgrade, (passing.upgrade.start('0.1.1') as BackupJob).id)).phase).toBe('restarting');
     expect(await releaseLinks(releases)).toEqual({ current: old, previous: ctx.root });
     expect(await readFile(path.join(old, 'packages/install/dist/launcher.js'), 'utf8')).toBe('// the copy that ran');
     expect(await leftovers(releases)).toEqual(['buddi-0.1.1']);
@@ -421,7 +418,7 @@ describe('an upgrade inside buddi.app', () => {
   test('a Postgres that does not start in the new release is discarded before the backup', async () => {
     const { ctx, releases } = await appInstallation();
     const s = appService(ctx, { checkPostgres: async () => ({ ok: false, error: 'dyld: Library not loaded.' }) });
-    const job = await finished(s.upgrade, (s.upgrade.start('0.1.1') as BackupJob).id, s.restarted);
+    const job = await finished(s.upgrade, (s.upgrade.start('0.1.1') as BackupJob).id);
     expect(job.phase).toBe('failed');
     expect(job.error).toBe('dyld: Library not loaded. buddi did not switch to 0.1.1. It is still running on 0.1.0.');
     expect(s.stopGateway).not.toHaveBeenCalled();

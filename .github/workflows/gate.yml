@@ -62,6 +62,19 @@ jobs:
       # The web package's dependencies (core), not the web bundle itself.
       - run: pnpm --filter '@buddi/web^...' build
       - run: pnpm --filter @buddi/web exec vitest run ${{ matrix.lane.files }} ${{ matrix.lane.exclude }}
+        env:
+          VITEST_RETRIED: ${{ runner.temp }}/vitest-retried.txt
+      # web and install retry on CI as a stopgap (their vitest.config.ts); a
+      # test that passed only on a retry is still a race. scripts/ci/retried-tests.mjs
+      # wrote each one to this file; here they become warnings and a job summary.
+      - name: Tests that needed a retry
+        if: always()
+        env:
+          VITEST_RETRIED: ${{ runner.temp }}/vitest-retried.txt
+        run: |
+          [ -s "$VITEST_RETRIED" ] || exit 0
+          { echo "### Tests that needed a retry"; echo; sed 's/^/- /' "$VITEST_RETRIED"; } >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r line; do echo "::warning title=Retried test::$line"; done < "$VITEST_RETRIED"
 
   gateway:
     runs-on: ubuntu-latest
@@ -117,5 +130,18 @@ jobs:
       - run: node scripts/migrate.mjs
       # `!buddi` is the workspace root, whose own test script is the whole gate.
       - run: pnpm -r --filter '!buddi' --filter '!@buddi/web' --filter '!@buddi/gateway' test
+        env:
+          VITEST_RETRIED: ${{ runner.temp }}/vitest-retried.txt
+      # web and install retry on CI as a stopgap (their vitest.config.ts); a
+      # test that passed only on a retry is still a race. scripts/ci/retried-tests.mjs
+      # wrote each one to this file; here they become warnings and a job summary.
+      - name: Tests that needed a retry
+        if: always()
+        env:
+          VITEST_RETRIED: ${{ runner.temp }}/vitest-retried.txt
+        run: |
+          [ -s "$VITEST_RETRIED" ] || exit 0
+          { echo "### Tests that needed a retry"; echo; sed 's/^/- /' "$VITEST_RETRIED"; } >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r line; do echo "::warning title=Retried test::$line"; done < "$VITEST_RETRIED"
       - run: pnpm check:generic
       - run: pnpm exec vitest run --dir scripts

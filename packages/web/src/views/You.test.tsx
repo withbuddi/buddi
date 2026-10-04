@@ -8,6 +8,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type OwnerView } from '../api';
 import { displayFormats, setDisplayFormats } from '../format';
+import { answered } from '../test/answered';
 import { You } from './You';
 
 vi.mock('../api', async (load) => {
@@ -41,6 +42,7 @@ describe('You', () => {
     vi.mocked(api.owner).mockResolvedValue(owner());
     vi.mocked(api.setOwner).mockResolvedValue(owner({ timeFormat: '12h', dateFormat: 'short' }));
     render(<You />);
+    await answered(api.owner);
     expect(await screen.findByDisplayValue('Amen')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Time'), { target: { value: '12h' } });
     fireEvent.change(screen.getByLabelText(/^Dates/), { target: { value: 'short' } });
@@ -54,6 +56,7 @@ describe('You', () => {
     vi.mocked(api.owner).mockResolvedValue(owner());
     vi.mocked(api.setOwner).mockResolvedValue(owner({ fullName: 'Amenophis Mouzou', pronouns: 'he/him', birthday: { day: 2, month: 10, year: null } }));
     render(<You />);
+    await answered(api.owner);
     fireEvent.change(await screen.findByLabelText(/^Full name/), { target: { value: 'Amenophis Mouzou' } });
     fireEvent.change(screen.getByLabelText(/^Pronouns/), { target: { value: 'he/him' } });
     // Half a date is not saved, and says what it needs.
@@ -71,6 +74,7 @@ describe('You', () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ birthday: { day: 14, month: 3, year: 1990 } }));
     vi.mocked(api.setOwner).mockResolvedValue(owner());
     render(<You />);
+    await answered(api.owner);
     expect(await screen.findByLabelText('Birthday: year (optional)')).toHaveValue('1990');
     expect(screen.getByLabelText('Birthday: month')).toHaveValue('3');
     fireEvent.change(screen.getByLabelText('Birthday: day'), { target: { value: '' } });
@@ -83,6 +87,7 @@ describe('You', () => {
   it('offers Home and Work until they are set, and shows a place’s address and country', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ places: [{ ...HOME, address: '12 Elm St, Portland' }] }));
     render(<You />);
+    await answered(api.owner);
     expect(await screen.findByText('12 Elm St, Portland · United States')).toBeInTheDocument();
     expect(screen.getByLabelText('Work: add')).toBeInTheDocument();
     expect(screen.queryByLabelText('Home: add')).not.toBeInTheDocument();
@@ -98,6 +103,7 @@ describe('You', () => {
     });
     vi.mocked(api.savePlace).mockResolvedValue({ place: HOME, places: [HOME] });
     render(<You />);
+    await answered(api.owner);
     fireEvent.click(within(await screen.findByLabelText('Home: add')).getByRole('button', { name: 'Add' }));
     const sheet = await screen.findByRole('dialog');
     expect(within(sheet).getByRole('button', { name: 'Save' })).toBeDisabled();
@@ -124,6 +130,7 @@ describe('You', () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ places: [HOME] }));
     vi.mocked(api.removePlace).mockResolvedValue({ places: [] });
     render(<You />);
+    await answered(api.owner);
     fireEvent.click(await screen.findByLabelText('Home: edit'));
     const sheet = await screen.findByRole('dialog');
     fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));

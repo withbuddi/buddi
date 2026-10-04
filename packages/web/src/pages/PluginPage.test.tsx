@@ -476,7 +476,8 @@ describe('the pieces a descriptor is made of', () => {
   it('draws stats from their query, formatted by the unit the descriptor named', async () => {
     draw('board');
     expect(await screen.findByText('Where things stand')).toBeInTheDocument();
-    expect(screen.getByText('Things in all')).toBeInTheDocument();
+    // The stats come from their own query, after the page itself.
+    expect(await screen.findByText('Things in all')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
   });
 

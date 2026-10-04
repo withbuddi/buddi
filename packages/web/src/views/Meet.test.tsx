@@ -1667,7 +1667,8 @@ describe('the handover', () => {
     render(meet());
     expect(await screen.findByText(/I'm Ada\./)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('link', { name: SCRIPT.done.open })).toHaveAttribute('href', '#/chat/ada/c1'));
-    expect(screen.queryByRole('button', { name: SCRIPT.later })).not.toBeInTheDocument();
+    // A render of its own: the link can be drawn a commit before the offer goes.
+    await waitFor(() => expect(screen.queryByRole('button', { name: SCRIPT.later })).not.toBeInTheDocument());
   });
 
   it('sends a reload after first run to the conversation it happened in', async () => {

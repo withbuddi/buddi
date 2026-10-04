@@ -73,6 +73,7 @@ function fakeControl(): { control: BackupControl; seen: unknown[] } {
     verify: (name) => { seen.push({ verify: name }); return job('verify'); },
     restore: async (input) => { seen.push({ restore: input }); return job('restore', 'stopping'); },
     job: (id) => (id === job('backup').id ? job('backup', 'done') : undefined),
+    settled: async (id) => (id === job('backup').id ? job('backup', 'done') : undefined),
     schedule: async () => ({ ...DEFAULT_SCHEDULE }),
     setSchedule: async (next) => { seen.push({ schedule: next }); return { schedule: { ...next, lastRunAt: null } }; },
     passphrase: async () => 'able acid actor adult afraid agent',
@@ -341,13 +342,11 @@ function engine(over: Record<string, unknown> = {}) {
   };
 }
 
+/** The job once its work is over, awaited on the control's own promise rather than polled. */
 async function settled(control: BackupControl, id: string): Promise<BackupJob> {
-  for (let i = 0; i < 200; i += 1) {
-    const job = control.job(id);
-    if (job?.finishedAt) return job;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error('the job never finished');
+  const job = await control.settled(id);
+  if (job === undefined) throw new Error('no such job');
+  return job;
 }
 
 async function makeService(world: ReturnType<typeof fakeWorld>): Promise<{

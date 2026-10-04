@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api } from '../api';
+import { answered } from '../test/answered';
 import { Tailscale } from './Settings';
 
 vi.mock('../api', async (load) => ({
@@ -43,6 +44,8 @@ describe('the Tailscale panel', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     vi.mocked(api.tailscale).mockResolvedValue(VIEW);
     render(<Tailscale />);
+    // Copy is on the page, disabled, before the view has loaded.
+    await answered(api.tailscale);
     fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(VIEW.serveCommand));
   });

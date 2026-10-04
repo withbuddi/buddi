@@ -53,7 +53,7 @@ describe('Where agents may look: one row per route, no radio buttons', () => {
     const chrome = await row('Your Chrome');
     expect(await within(chrome).findByText('connected')).toBeInTheDocument();
     expect(within(chrome).getByText('Used only for sites that need your sign-in · background tabs in a buddi group')).toBeInTheDocument();
-    expect(within(chrome).getByRole('switch', { name: 'Let agents use your Chrome' })).toBeChecked();
+    expect(await within(chrome).findByRole('switch', { name: 'Let agents use your Chrome' })).toBeChecked();
     const apps = await row('Your apps');
     expect(within(apps).getByText('From the Computer plugin · when you name an app')).toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: 'Control mode' })).not.toBeInTheDocument();
@@ -61,9 +61,9 @@ describe('Where agents may look: one row per route, no radio buttons', () => {
   });
   it('turns your Chrome and your apps on and off as switches', async () => {
     render(<Browser />);
-    fireEvent.click(within(await row('Your Chrome')).getByRole('switch', { name: 'Let agents use your Chrome' }));
+    fireEvent.click(await within(await row('Your Chrome')).findByRole('switch', { name: 'Let agents use your Chrome' }));
     await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourChrome: false }));
-    fireEvent.click(within(await row('Your apps')).getByRole('switch', { name: 'Let agents use your apps' }));
+    fireEvent.click(await within(await row('Your apps')).findByRole('switch', { name: 'Let agents use your apps' }));
     await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ yourApps: 'off' }));
   });
   it('says Chrome off in the kit’s words, and Chrome closed when paired but not running', async () => {
@@ -216,14 +216,14 @@ describe('your Chrome: Add to Chrome, the code, Pair again', () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     vi.mocked(api.extension).mockResolvedValue({ ...paired, checkout: false });
     const { unmount } = render(<Browser />);
-    await user.click(within(await row('Your Chrome')).getByRole('button', { name: 'More for your Chrome' }));
+    await user.click(await within(await row('Your Chrome')).findByRole('button', { name: 'More for your Chrome' }));
     expect(await screen.findByRole('menuitem', { name: /Forget this Chrome/ })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /Install unpacked/ })).not.toBeInTheDocument();
     await user.keyboard('{Escape}');
     unmount();
     vi.mocked(api.extension).mockResolvedValue({ ...paired, checkout: true });
     render(<Browser />);
-    await user.click(within(await row('Your Chrome')).getByRole('button', { name: 'More for your Chrome' }));
+    await user.click(await within(await row('Your Chrome')).findByRole('button', { name: 'More for your Chrome' }));
     expect(await screen.findByRole('menuitem', { name: /Install unpacked/ })).toBeInTheDocument();
   }, 60_000);
   it('pair: reads the code the extension shows in this browser and pairs by itself', async () => {
@@ -267,7 +267,7 @@ describe('your Chrome: Add to Chrome, the code, Pair again', () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     vi.mocked(api.forgetExtension).mockResolvedValue({ connected: false, pending: false, path: '/x' });
     render(<Browser />);
-    await user.click(within(await row('Your Chrome')).getByRole('button', { name: 'More for your Chrome' }));
+    await user.click(await within(await row('Your Chrome')).findByRole('button', { name: 'More for your Chrome' }));
     await user.click(await screen.findByRole('menuitem', { name: /Forget this Chrome/ }));
     expect(api.forgetExtension).not.toHaveBeenCalled();
     await user.click(await screen.findByRole('button', { name: 'Forget' }));
@@ -300,7 +300,7 @@ describe('your apps: only with the Computer plugin', () => {
   it('Settings opens the plugin’s own page', async () => {
     const navigate = vi.fn();
     render(<Browser navigate={navigate} />);
-    fireEvent.click(within(await row('Your apps')).getByRole('button', { name: 'Manage apps' }));
+    fireEvent.click(await within(await row('Your apps')).findByRole('button', { name: 'Manage apps' }));
     expect(navigate).toHaveBeenCalledWith(pluginSettingsRoute('computer'));
   });
   it('reads a provider only from the plugin', () => {
