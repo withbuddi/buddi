@@ -19,6 +19,7 @@ What changes in buddi from one release to the next, newest first.
 - A page that shows up signed out where the task needs your account (an Amazon cart saying "Sign in to your account") now asks with the "needs your sign-in" card, or moves to your Chrome where you're signed in, instead of the agent asking you in chat; a news front page with a Sign in link is left alone. Google's sign-in page under the title "Gmail" is now recognised as a sign-in page too.
 - Agents answer a list of items from a website (a cart, orders, search results) as a short list, one line per item, instead of a wide table; a table only when you ask for a comparison.
 - Lock screen: the widgets keep refreshing while it's locked, even in a tab in the back, and catch up the moment you look at it again; a slow answer can no longer put older headlines back over newer ones.
+- Settings → System: a version npm has just published but isn't serving yet is no longer offered; the panel says "npm is still processing 0.1.0-pre.N; try again in a few minutes" with no Upgrade button, and an upgrade that still runs into npm's 404 says that same sentence instead of npm's output.
 
 ## 0.1.0-pre.38 — 2026-10-03
 

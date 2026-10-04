@@ -509,6 +509,7 @@ async function run(): Promise<void> {
     catch { view = versionView(await readUpgradeState(ctx.data, await installedVersion(root))); }
     console.log(`buddi ${view.current}`);
     if (view.updateAvailable) console.log(`A newer buddi is available: ${view.latest}`);
+    else if (view.processing) console.log(view.processing.message);
     else if (view.latest !== undefined) console.log('This is the latest version.');
     return;
   }

@@ -102,6 +102,11 @@ export interface UpgradeCheckState {
   latestNotes?: string;
   /** What the registry did instead of answering. Never fails anything else. */
   error?: string;
+  /**
+   * `latest`, when npm names it but does not serve its tarball yet (the few
+   * minutes after a publish): it is not offered until a check finds it served.
+   */
+  processing?: string;
 }
 
 /** One upgrade that reached an outcome. Nothing pending is ever in here. */
@@ -136,6 +141,8 @@ export interface VersionView {
   checkEnabled: boolean;
   updateAvailable: boolean;
   error?: string;
+  /** The newer version npm is still processing, and the sentence that says so. Never offered meanwhile. */
+  processing?: { version: string; message: string };
   history: UpgradeHistoryEntry[];
 }
 
@@ -250,6 +257,7 @@ export async function readUpgradeState(data: string, current: string): Promise<U
       ...(typeof check.latest === 'string' ? { latest: check.latest } : {}),
       ...(typeof check.latest === 'string' && typeof check.latestNotes === 'string' ? { latestNotes: check.latestNotes } : {}),
       ...(typeof check.error === 'string' ? { error: check.error } : {}),
+      ...(typeof check.processing === 'string' && check.processing === check.latest ? { processing: check.processing } : {}),
     },
     current,
     ...(typeof parsed.registry === 'string' ? { registry: parsed.registry } : {}),
@@ -263,16 +271,47 @@ export async function writeUpgradeState(data: string, state: UpgradeState): Prom
 }
 
 export function versionView(state: UpgradeState): VersionView {
+  const newer = isNewer(state.check.latest, state.current);
+  const processing = newer && state.check.processing !== undefined && state.check.processing === state.check.latest ? state.check.processing : undefined;
   return {
     current: state.current,
     ...(state.check.latest === undefined ? {} : { latest: state.check.latest }),
     ...(state.check.latest === undefined || state.check.latestNotes === undefined ? {} : { latestNotes: state.check.latestNotes }),
     ...(state.check.lastAt === undefined ? {} : { checkedAt: state.check.lastAt }),
     checkEnabled: state.check.enabled,
-    updateAvailable: isNewer(state.check.latest, state.current),
+    updateAvailable: newer && processing === undefined,
     ...(state.check.error === undefined ? {} : { error: state.check.error }),
+    ...(processing === undefined ? {} : { processing: { version: processing, message: processingSentence(processing) } }),
     history: state.history,
   };
+}
+
+/** What the sheet and a failed install say while npm has not served a fresh version's tarball yet. */
+export function processingSentence(version: string): string {
+  return `npm is still processing ${version}; try again in a few minutes.`;
+}
+
+/**
+ * Where npm serves a version's tarball: `<registry>/@withbuddi/buddi/-/buddi-<version>.tgz`.
+ * A fresh publish shows in the registry document minutes before this answers.
+ */
+export function tarballUrl(registry: string, version: string): string {
+  return `${registry.replace(/\/+$/, '')}/${PACKAGE_NAME}/-/${PACKAGE_NAME.split('/').pop()}-${version}.tgz`;
+}
+
+/** Does npm serve this version's tarball yet? One HEAD; only a 200 is yes. A transport failure throws. */
+export async function tarballServed(registry: string, version: string, http: HttpTransport): Promise<boolean> {
+  const response = await http(tarballUrl(registry, version), {
+    method: 'HEAD',
+    headers: {},
+    signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+  });
+  return response.status === 200;
+}
+
+/** npm's own words for a tarball it does not serve (yet). */
+function isNotFound(error: string): boolean {
+  return /\bE404\b|\b404\b|Not Found/i.test(error);
 }
 
 /** Release notes longer than this are cut; `build.mjs` keeps them to 8 KB. */
@@ -708,12 +747,16 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     }
     try {
       const latest = await fetchLatestRelease(registry, opts.http);
+      // npm names a fresh version minutes before it serves the tarball; until
+      // it does, the version is known but not offered (Upgrade would 404).
+      const served = !isNewer(latest.version, current) || await tarballServed(registry, latest.version, opts.http);
       // A check that answered clears the error a check that did not left, and
       // the notes are always the ones this answer carried: notes kept from an
       // older `latest` would describe the wrong release.
       return await save({ ...state, check: {
         enabled: state.check.enabled, lastAt: at, latest: latest.version,
         ...(latest.notes === undefined ? {} : { latestNotes: latest.notes }),
+        ...(served ? {} : { processing: latest.version }),
       } });
     } catch (err) {
       // A registry that did not answer changes nothing but the error: the last
@@ -754,9 +797,10 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     if (asked !== undefined) {
       return isVersion(asked) ? { version: asked } : { error: `"${asked}" is not a version this can install.` };
     }
-    const known = (await read()).check.latest;
-    if (isNewer(known, current)) return { version: known as string };
+    const kept = (await read()).check;
+    if (isNewer(kept.latest, current) && kept.processing === undefined) return { version: kept.latest as string };
     const state = await runCheck();
+    if (state.check.processing !== undefined) return { error: processingSentence(state.check.processing) };
     if (isVersion(state.check.latest)) return { version: state.check.latest };
     return { error: state.check.error ?? 'the registry did not name a version to upgrade to' };
   };
@@ -791,6 +835,12 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       if ('error' in resolved) return await give('checking', resolved.error, false);
       to = resolved.version;
       spec = `${PACKAGE_NAME}@${resolved.version}`;
+      // Asked before the backup and the stop: a version npm is still
+      // processing would only reach npm's 404 after both.
+      if (opts.http !== undefined) {
+        const served = await tarballServed(registry, to, opts.http).catch(() => undefined);
+        if (served === false) return await give('checking', processingSentence(to), false);
+      }
     }
 
     /*
@@ -819,7 +869,9 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     try {
       await install(spec, { registry, root: ctx.root, target });
     } catch (err) {
-      return await give('installing', message(err), true);
+      // npm's 404 wall for a version it has not served yet is one sentence here.
+      const said = message(err);
+      return await give('installing', tarball === undefined && isNotFound(said) ? processingSentence(to) : said, true);
     }
 
     /*

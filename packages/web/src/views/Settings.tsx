@@ -672,7 +672,9 @@ export function Version(): JSX.Element {
                     ? '…'
                     : data.updateAvailable && data.latest
                       ? <span>A newer buddi is available: <span className="mono">{data.latest}</span></span>
-                      : data.checkedAt
+                      : data.processing
+                        ? <span>{data.processing.message}</span>
+                        : data.checkedAt
                         ? <span>This is the latest, as of {fmtRelative(data.checkedAt)}.</span>
                         : <span>Not checked yet.</span>,
                 },
@@ -726,7 +728,7 @@ export function Version(): JSX.Element {
                     Upgrade to {data?.latest}
                   </Button>
                 </>
-              ) : (
+              ) : data?.processing && jobId === null ? null : (
                 <Button
                   variant="accent"
                   disabled={busy || jobId !== null || !data?.updateAvailable}

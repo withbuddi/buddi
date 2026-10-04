@@ -211,6 +211,23 @@ it('compares the disk record the way the supervisor does, and defaults the switc
   expect(await view.json()).toMatchObject({ updateAvailable: false, checkEnabled: true });
 });
 
+it('never offers from the disk record a version npm was still processing, and says so', async () => {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-upgrade-processing-'));
+  await writeFile(path.join(data, 'upgrade.json'), JSON.stringify({
+    check: { enabled: true, lastAt: '2026-10-03T03:04:05.000Z', latest: '0.1.0-pre.38', processing: '0.1.0-pre.38' },
+    current: '0.1.0-pre.37',
+    history: [],
+  }), 'utf8');
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: path.join(data, 'gone.sock'), BUDDI_DATA_DIR: data });
+  const { origin, headers } = await open(app);
+  const view = await fetch(`${origin}/api/version`, { headers });
+  expect(await view.json()).toMatchObject({
+    latest: '0.1.0-pre.38',
+    updateAvailable: false,
+    processing: { version: '0.1.0-pre.38', message: 'npm is still processing 0.1.0-pre.38; try again in a few minutes.' },
+  });
+});
+
 it('refuses a version that is not one before the supervisor is asked at all', async () => {
   const { socket, seen } = await fakeSupervisor();
   const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket });

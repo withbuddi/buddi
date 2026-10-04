@@ -72,6 +72,23 @@ describe('the version panel', () => {
     await waitFor(() => expect(api.setVersionCheck).toHaveBeenCalledWith(false));
   });
 
+  it('says npm is still processing a fresh version, and offers no Upgrade button meanwhile', async () => {
+    vi.mocked(api.version).mockResolvedValue({
+      ...AVAILABLE,
+      latest: '0.1.0-pre.38',
+      current: '0.1.0-pre.37',
+      updateAvailable: false,
+      latestNotes: '### Fixed\n\n- Something.',
+      processing: { version: '0.1.0-pre.38', message: 'npm is still processing 0.1.0-pre.38; try again in a few minutes.' },
+    });
+    render(<Version />);
+    expect(await screen.findByText('npm is still processing 0.1.0-pre.38; try again in a few minutes.')).toBeInTheDocument();
+    expect(screen.queryByText(/A newer buddi is available/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Upgrade/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('What changes in 0.1.0-pre.38')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeInTheDocument();
+  });
+
   it('shows what changes in the newer version when its release carried notes, and nothing when not', async () => {
     vi.mocked(api.version).mockResolvedValue({ ...AVAILABLE, latestNotes: '### Fixed\n\n- The browser starts on Ubuntu.' });
     const { unmount } = render(<Version />);

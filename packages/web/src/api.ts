@@ -1942,6 +1942,8 @@ export interface VersionView {
   updateAvailable: boolean;
   /** The last check that did not get an answer. Never fatal, always said. */
   error?: string;
+  /** A newer version npm names but does not serve yet: not offered, and the sentence that says so. */
+  processing?: { version: string; message: string };
   history: UpgradeAttempt[];
   supervised: boolean;
   /** A developer checkout, which upgrades with git rather than with this page. */

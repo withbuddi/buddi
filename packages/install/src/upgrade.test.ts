@@ -50,8 +50,14 @@ function backupControl(overrides: Partial<BackupControl> = {}): BackupControl {
 }
 
 /** The registry, as a transport. No test in this file touches the network. */
-function registry(version: string, extra: Record<string, unknown> = {}): (url: string) => Promise<{ status: number; json: () => Promise<unknown> }> {
-  return async (url: string) => {
+function registry(version: string, extra: Record<string, unknown> = {}, opts: { unserved?: string[] } = {}): (url: string, init?: { method?: string }) => Promise<{ status: number; json: () => Promise<unknown> }> {
+  return async (url: string, init?: { method?: string }) => {
+    // The tarball, asked with a HEAD: served unless this registry is still processing that version.
+    const tarball = /^https:\/\/registry\.example\/@withbuddi\/buddi\/-\/buddi-(.+)\.tgz$/.exec(url);
+    if (tarball) {
+      expect(init?.method).toBe('HEAD');
+      return { status: opts.unserved?.includes(tarball[1]!) ? 404 : 200, json: async () => ({}) };
+    }
     expect(url).toBe('https://registry.example/%40withbuddi%2Fbuddi/latest');
     return { status: 200, json: async () => ({ name: '@withbuddi/buddi', version, ...extra }) };
   };
@@ -179,32 +185,65 @@ describe('the check', () => {
     expect(view.updateAvailable).toBe(false);
   });
 
+  test('a version npm names but does not serve yet is known, said, and not offered, until a check finds it served', async () => {
+    const ctx = await installation();
+    const early = service(ctx, { http: registry('0.1.1', {}, { unserved: ['0.1.1'] }) as never });
+    const view = await early.upgrade.check();
+    expect(view.latest).toBe('0.1.1');
+    expect(view.updateAvailable).toBe(false);
+    expect(view.processing).toEqual({ version: '0.1.1', message: 'npm is still processing 0.1.1; try again in a few minutes.' });
+    // Upgrade with nothing named: the sentence, before any backup or stop.
+    const job = await settled(early.upgrade, (early.upgrade.start() as BackupJob).id);
+    expect(job.phase).toBe('failed');
+    expect(job.error).toBe('npm is still processing 0.1.1; try again in a few minutes.');
+    expect(early.install).not.toHaveBeenCalled();
+    expect(early.stopGateway).not.toHaveBeenCalled();
+    // A few minutes on, npm serves it: offered.
+    const later = service(ctx, { http: registry('0.1.1') as never });
+    const served = await later.upgrade.check();
+    expect(served.updateAvailable).toBe(true);
+    expect(served.processing).toBeUndefined();
+  });
+
+  test('an Upgrade to a named version npm is still processing stops before the backup', async () => {
+    const ctx = await installation();
+    const create = vi.fn();
+    const { upgrade, install, stopGateway } = service(ctx, { http: registry('0.1.1', {}, { unserved: ['0.1.1'] }) as never, backup: backupControl({ create }) });
+    const job = await settled(upgrade, (upgrade.start('0.1.1') as BackupJob).id);
+    expect(job.error).toBe('npm is still processing 0.1.1; try again in a few minutes.');
+    expect(create).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
+    expect(stopGateway).not.toHaveBeenCalled();
+    expect((await upgrade.view()).history.at(-1)).toMatchObject({ outcome: 'failed', step: 'checking', to: '0.1.1' });
+  });
+
   test('the daily tick asks once a day, and never when the switch is off', async () => {
     const ctx = await installation();
     const http = vi.fn(registry('0.1.1') as never);
     const { upgrade } = service(ctx, { http: http as never, checkIntervalMs: 24 * 60 * 60 * 1000 });
+    // Each check is two requests: the registry document, and a HEAD on the newer version's tarball.
     await upgrade.tick();
-    expect(http).toHaveBeenCalledTimes(1);
+    expect(http).toHaveBeenCalledTimes(2);
     const first = (await upgrade.view()).checkedAt;
 
     // Within the day: nothing.
     await upgrade.tick();
-    expect(http).toHaveBeenCalledTimes(1);
+    expect(http).toHaveBeenCalledTimes(2);
     expect((await upgrade.view()).checkedAt).toBe(first);
 
     // A day later: once more.
     await upgrade.tick(new Date(Date.now() + 25 * 60 * 60 * 1000));
-    expect(http).toHaveBeenCalledTimes(2);
+    expect(http).toHaveBeenCalledTimes(4);
 
     // Switched off: not even then.
     await upgrade.setCheckEnabled(false);
     await upgrade.tick(new Date(Date.now() + 90 * 60 * 60 * 1000));
-    expect(http).toHaveBeenCalledTimes(2);
+    expect(http).toHaveBeenCalledTimes(4);
     expect((await upgrade.view()).checkEnabled).toBe(false);
 
     // A check the owner asks for still runs: the switch is about the tick.
     await upgrade.check();
-    expect(http).toHaveBeenCalledTimes(3);
+    expect(http).toHaveBeenCalledTimes(6);
   });
 });
 
@@ -387,7 +426,8 @@ describe('an upgrade', () => {
     });
     const job = await settled(upgrade, (upgrade.start('0.1.1') as BackupJob).id);
     expect(job.phase).toBe('failed');
-    expect(job.error).toMatch(/404/);
+    // npm's 404 wall is the one sentence the sheet says too.
+    expect(job.error).toBe('npm is still processing 0.1.1; try again in a few minutes.');
     expect(startGateway).toHaveBeenCalled();
     const entry = (await upgrade.view()).history.at(-1)!;
     // The version that was asked for, never the word `latest`.

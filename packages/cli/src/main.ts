@@ -572,7 +572,8 @@ async function status(json: boolean, env: NodeJS.ProcessEnv): Promise<number> {
     update: async () => {
       const file = await readUpgradeFile(env);
       const latest = file?.check.latest;
-      if (!file || latest === undefined) return { available: false };
+      // A version npm is still processing is not offered yet.
+      if (!file || latest === undefined || file.check.processing === latest) return { available: false };
       return (compareVersions(latest, file.current) ?? 0) > 0 ? { available: true, latest } : { available: false };
     },
   });

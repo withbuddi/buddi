@@ -63,7 +63,10 @@ nothing half done.
 
 The package version is buddi's version. The dashboard shows the version that
 is running and says when a newer one is published: it asks the npm registry
-once a day, and you can turn that off.
+once a day, and you can turn that off. A newer version is offered only once
+npm serves its tarball (one `HEAD` on it); in the few minutes after a publish
+the page says "npm is still processing <version>; try again in a few minutes"
+instead, and an install that still meets npm's 404 says the same.
 
 **Upgrading.** `buddi upgrade`, or Upgrade in Settings → System, runs one
 sequence through the supervisor: `backup`, `stopping`, `installing`

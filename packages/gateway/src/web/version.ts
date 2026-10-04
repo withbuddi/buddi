@@ -56,7 +56,8 @@ export interface UpgradeAttempt {
 
 /** The file itself, as the supervisor, the CLI and this module all read it. */
 export interface UpgradeFile {
-  check: { enabled: boolean; lastAt?: string; latest?: string; latestNotes?: string; error?: string };
+  /** `processing`: `latest` while npm names it but does not serve its tarball yet. */
+  check: { enabled: boolean; lastAt?: string; latest?: string; latestNotes?: string; error?: string; processing?: string };
   current: string;
   registry?: string;
   history: UpgradeAttempt[];
@@ -212,6 +213,9 @@ export async function readUpgradeFile(env: NodeJS.ProcessEnv): Promise<UpgradeFi
 /** The view a `/version` body has, composed from the file rather than the socket. */
 function fromFile(file: UpgradeFile): Record<string, unknown> {
   const latest = file.check.latest;
+  const newer = latest !== undefined && (compareVersions(latest, file.current) ?? 0) > 0;
+  // Named but not served yet: never offered, and said (the supervisor's sentence).
+  const processing = newer && file.check.processing === latest ? latest : undefined;
   return {
     current: file.current,
     ...(latest === undefined ? {} : { latest }),
@@ -220,8 +224,9 @@ function fromFile(file: UpgradeFile): Record<string, unknown> {
     checkEnabled: file.check.enabled,
     // The same comparison the supervisor makes (`@buddi/core`'s semver), so
     // that the fallback cannot offer an upgrade the supervisor would not.
-    updateAvailable: latest !== undefined && (compareVersions(latest, file.current) ?? 0) > 0,
+    updateAvailable: newer && processing === undefined,
     ...(file.check.error === undefined ? {} : { error: file.check.error }),
+    ...(processing === undefined ? {} : { processing: { version: processing, message: `npm is still processing ${processing}; try again in a few minutes.` } }),
     history: file.history,
   };
 }
