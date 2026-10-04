@@ -11,8 +11,10 @@
 //   Resources/Assets.xcassets/AppIcon.appiconset/icon_*.png   16 … 1024
 //   Resources/Assets.xcassets/StatusGlyph*.imageset/*.png     18 pt, @1x and @2x, template
 //
-// Rendering is resvg (@resvg/resvg-js), installed once into ~/Library/Caches/buddi-make-icons
-// when it cannot be imported from here.
+// Rendering is resvg (@resvg/resvg-js, pinned to RESVG_VERSION and installed with
+// --ignore-scripts), installed once into ~/Library/Caches/buddi-make-icons when it
+// cannot be imported from here. apps/mac has no package.json of its own, so the
+// pin lives here; a cached copy of another version is replaced.
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
@@ -209,15 +211,21 @@ function glyphSvg(state, { tipGap, eyeGrow } = GLYPH.at2x) {
 
 // ---- rendering -------------------------------------------------------------
 
+/** The exact resvg this script renders with; its prebuilt binaries come as optional dependencies, no install script needed. */
+const RESVG_VERSION = '2.6.2';
+
 async function loadResvg() {
   try {
     return (await import('@resvg/resvg-js')).Resvg;
   } catch {
     const cache = join(homedir(), 'Library/Caches/buddi-make-icons');
-    if (!existsSync(join(cache, 'node_modules/@resvg/resvg-js'))) {
+    const installed = (() => {
+      try { return JSON.parse(readFileSync(join(cache, 'node_modules/@resvg/resvg-js/package.json'), 'utf8')).version; } catch { return undefined; }
+    })();
+    if (installed !== RESVG_VERSION) {
       mkdirSync(cache, { recursive: true });
-      console.log(`installing @resvg/resvg-js into ${cache}`);
-      execFileSync('npm', ['install', '--prefix', cache, '--no-audit', '--no-fund', '--silent', '@resvg/resvg-js@2'], { stdio: 'inherit' });
+      console.log(`installing @resvg/resvg-js@${RESVG_VERSION} into ${cache}`);
+      execFileSync('npm', ['install', '--prefix', cache, '--no-audit', '--no-fund', '--silent', '--ignore-scripts', '--save-exact', `@resvg/resvg-js@${RESVG_VERSION}`], { stdio: 'inherit' });
     }
     return createRequire(join(cache, 'package.json'))('@resvg/resvg-js').Resvg;
   }
