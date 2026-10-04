@@ -109,33 +109,28 @@ jobs:
             --notes "$notes" \
             "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install-linux.sh
       - name: Tell withbuddi.com
-        # withbuddi.com shows the version from buddi-site's src/release.json; a
-        # commit there is what makes Cloudflare rebuild the site (its hourly
-        # "Release check" does the same from npm). This pushes that commit
-        # right after publish, over SSH with a deploy key for withbuddi/buddi-site
-        # (write access) kept as SITE_DEPLOY_KEY. Without it, a notice; the
-        # hourly check catches up.
+        # withbuddi.com reads buddi's version from npm at build time
+        # (buddi-site's scripts/sync-release.mjs runs in its build), so a rebuild
+        # is all a release needs. SITE_DEPLOY_HOOK is the site's Cloudflare
+        # deploy hook (the same secret site-docs.yml uses). npm's dist-tag can
+        # lag publish by a minute or two, so wait for it before asking for the
+        # build. Without the hook, a notice; the site's hourly check catches up.
         if: steps.v.outputs.tag == 'latest'
         env:
-          KEY: ${{ secrets.SITE_DEPLOY_KEY }}
+          HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
           VERSION: ${{ steps.v.outputs.version }}
         run: |
-          if [ -z "$KEY" ]; then
-            echo "::notice::SITE_DEPLOY_KEY is not set; withbuddi.com picks up $VERSION at its next hourly check."
+          if [ -z "$HOOK" ]; then
+            echo "::notice::SITE_DEPLOY_HOOK is not set; withbuddi.com picks up $VERSION at its next hourly check."
             exit 0
           fi
-          umask 077; mkdir -p ~/.ssh
-          printf '%s\n' "$KEY" > ~/.ssh/site_deploy_key
-          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/site_deploy_key -o IdentitiesOnly=yes"
-          git clone -q --depth 1 git@github.com:withbuddi/buddi-site.git /tmp/site
-          cd /tmp/site
-          current=$(node -e "console.log(require('./src/release.json').version)")
-          if [ "$current" = "$VERSION" ]; then echo "withbuddi.com already says $VERSION"; exit 0; fi
-          printf '{\n  "version": "%s"\n}\n' "$VERSION" > src/release.json
-          git -c user.name="buddi release" -c user.email="release@withbuddi.com" commit -qam "buddi $VERSION is out: the hero and the docs header say so"
-          git push -q origin HEAD:main && echo "withbuddi.com told about $VERSION" || echo "::warning::could not push the version to buddi-site; the hourly check will"
-          rm -f ~/.ssh/site_deploy_key
+          for i in $(seq 1 20); do
+            latest=$(curl -fsS https://registry.npmjs.org/-/package/@withbuddi/buddi/dist-tags | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).latest||''))" 2>/dev/null || true)
+            [ "$latest" = "$VERSION" ] && break
+            sleep 15
+          done
+          if [ "$latest" != "$VERSION" ]; then echo "::warning::npm still says $latest, not $VERSION; the site rebuild would not show it yet. The hourly check will."; exit 0; fi
+          curl -fsS -X POST "$HOOK" -o /dev/null && echo "withbuddi.com rebuild requested for $VERSION"
 
   # buddi.app, phase 2 of the Mac app (apps/mac/README.md). Skipped with a
   # notice, never failed, while the signing secrets are not in the repository:
