@@ -2962,6 +2962,8 @@ export const api = {
   startCloudflareSetup: (input: { token?: string; host: string; email: string; zone?: string; adopt?: boolean }) => post<CloudflareSetupView>('/access/cloudflare-access/setup', input),
   stopCloudflareSetup: () => post<CloudflareSetupView>('/access/cloudflare-access/setup/stop'),
   removeCloudflareSetup: (input: { token?: string } = {}) => post<CloudflareSetupView>('/access/cloudflare-access/setup/remove', input),
+  /** Forget the kept Cloudflare API token (the owner secret); it stays valid in Cloudflare. */
+  forgetCloudflareToken: () => post<CloudflareSetupView>('/access/cloudflare-access/setup/forget-token'),
   /* ---- owner API tokens (docs/api.md, "Authentication") ---- */
   apiTokens: () => get<{ tokens: ApiTokenView[] }>('/api-tokens'),
   /** The answer's `token` is the only time the token itself exists outside the program that will use it. */

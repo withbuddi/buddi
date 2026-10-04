@@ -109,11 +109,20 @@ describe('Set it up for me, through the server', () => {
     const after = await removed.json() as { progress: { state: string; removed: string[]; error: string | null } };
     expect(after.progress).toMatchObject({ state: 'removed', error: null });
     expect(after.progress.removed).toHaveLength(4);
-    expect(tokens.value).toBeNull();
     expect(cf.state.apps).toHaveLength(0);
     const offNow = await (await fetch(`${main}/api/access/cloudflare-access`, { headers })).json() as { enabled: boolean };
     expect(offNow.enabled).toBe(false);
     expect(app.ingress.port()).toBeNull();
+
+    // The token is still kept after Remove: the panel offers to forget it.
+    expect(tokens.value).toBe(FAKE_TOKEN);
+    expect((after as unknown as { tokenStored: boolean }).tokenStored).toBe(true);
+    const forgot = await fetch(`${main}/api/access/cloudflare-access/setup/forget-token`, { method: 'POST', headers, body: '{}' });
+    expect(forgot.status).toBe(200);
+    expect(((await forgot.json()) as { tokenStored: boolean }).tokenStored).toBe(false);
+    expect(tokens.value).toBeNull();
+    // Forgetting twice is not an error.
+    expect((await fetch(`${main}/api/access/cloudflare-access/setup/forget-token`, { method: 'POST', headers, body: '{}' })).status).toBe(200);
   });
 
   it('stops waiting for the tunnel: the run says stopped, what it made stays, and the setting stays on', async () => {
@@ -150,6 +159,9 @@ describe('Set it up for me, through the server', () => {
     const removing = await t.post('/setup/remove', {});
     expect(removing.status).toBe(409);
     expect(t.cf.state.apps).toHaveLength(1);
+    // The run holds the token: it is not forgotten under it.
+    expect((await t.post('/setup/forget-token', {})).status).toBe(409);
+    expect(t.tokens.value).toBe(FAKE_TOKEN);
     await t.post('/setup/stop', {});
 
     // A removal holding the lock (as the CLI's or the panel's would).

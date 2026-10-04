@@ -719,6 +719,17 @@ export const COMMANDS: readonly CommandEntry[] = [
     flags: [{ flag: '--host <hostname>', meaning: 'Which hostname, for the message when buddi has no record of a setup (only what buddi recorded making is removed).' }],
     exitCodes: [{ code: 1, meaning: 'Something could not be removed; run it again.' }, { code: 3, meaning: 'The database is not reachable.' }],
     example: 'buddi access cloudflare remove',
+    next: 'The API token stays kept for a later setup; `buddi access cloudflare forget-token` drops it.',
+    applies: 'both',
+  },
+  {
+    name: 'access cloudflare forget-token',
+    group: 'Reach',
+    summary: 'Forget the Cloudflare API token `access cloudflare setup` kept. It stays valid in Cloudflare until you revoke it there (My Profile → API Tokens).',
+    usage: 'buddi access cloudflare forget-token',
+    flags: [],
+    exitCodes: [{ code: 1, meaning: 'The token could not be forgotten (the vault refused).' }, { code: 3, meaning: 'The database is not reachable.' }],
+    example: 'buddi access cloudflare forget-token',
     applies: 'both',
   },
   {

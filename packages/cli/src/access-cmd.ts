@@ -1,7 +1,9 @@
 /**
  * `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt]` and
- * `buddi access cloudflare remove [--host <h>]`: Settings → Sign in from
- * elsewhere → Cloudflare Access → "Set it up for me", from the terminal.
+ * `buddi access cloudflare remove [--host <h>]` and `buddi access cloudflare
+ * forget-token`: Settings → Sign in from elsewhere → Cloudflare Access →
+ * "Set it up for me", from the terminal. Remove keeps the token; forget-token
+ * drops it (it stays valid in Cloudflare until revoked there).
  *
  * The same engine as the panel (`@buddi/gateway`'s cloudflare-setup), on the
  * same database: it writes the setting directly and the running gateway binds
@@ -30,6 +32,9 @@ import {
 import { createInterface } from 'node:readline';
 import { promptHidden } from './vault-cmd.js';
 import { bold as boldOn, colorOn, dim as dimOn } from './style.js';
+
+/** Forgetting the token here leaves it valid in Cloudflare: where to revoke it. */
+const REVOKE_LINE = 'To revoke it in Cloudflare: My Profile → API Tokens.';
 
 const color = colorOn();
 const dim = (s: string): string => dimOn(s, color);
@@ -78,7 +83,7 @@ function printer(): (p: SetupProgress) => void {
 }
 
 export async function runAccess(
-  command: { action: 'cloudflare-setup' | 'cloudflare-remove'; host?: string; zone?: string; email?: string; adopt?: boolean },
+  command: { action: 'cloudflare-setup' | 'cloudflare-remove' | 'cloudflare-forget-token'; host?: string; zone?: string; email?: string; adopt?: boolean },
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const databaseUrl = env.DATABASE_URL;
@@ -89,6 +94,18 @@ export async function runAccess(
   const pool = createPool(databaseUrl);
   const tokens = ownerSecretTokenStore(pool, createVault({ env }));
   try {
+    if (command.action === 'cloudflare-forget-token') {
+      const had = await tokens.has().catch(() => false);
+      try {
+        await tokens.remove();
+      } catch (err) {
+        console.error(`The token could not be forgotten: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+      console.log(had ? 'Forgotten: buddi no longer keeps your Cloudflare API token.' : 'No Cloudflare API token was kept.');
+      console.log(dim(REVOKE_LINE));
+      return 0;
+    }
     const fromEnv = env.CLOUDFLARE_API_TOKEN?.trim();
     let token = fromEnv && fromEnv !== VAULT_PLACEHOLDER ? fromEnv : null;
     if (token === null) token = await tokens.use().catch(() => null);
@@ -114,8 +131,11 @@ export async function runAccess(
       const done = await removeCloudflareSetup({ api, platform: process.platform, readSetting, saveSetting, readRecord, saveRecord, host: command.host });
       if (done.removed.length) console.log(`Removed ${removedInWords(done.removed)}.`);
       if (done.error) { console.error(done.error); return 1; }
-      await tokens.remove().catch(() => undefined);
       console.log(`To remove the connector from this computer too: ${done.uninstall}`);
+      if (await tokens.has().catch(() => false)) {
+        console.log('Your Cloudflare API token is still kept here, and still valid in Cloudflare. To forget it: buddi access cloudflare forget-token');
+        console.log(dim(REVOKE_LINE));
+      }
       return 0;
     }
 

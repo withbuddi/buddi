@@ -103,8 +103,8 @@ export type Command =
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
-  /** `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt]` and `… remove [--host <h>]`. */
-  | { kind: 'access'; action: 'cloudflare-setup' | 'cloudflare-remove'; host?: string; zone?: string; email?: string; adopt?: true }
+  /** `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt]`, `… remove [--host <h>]` and `… forget-token`. */
+  | { kind: 'access'; action: 'cloudflare-setup' | 'cloudflare-remove' | 'cloudflare-forget-token'; host?: string; zone?: string; email?: string; adopt?: true }
   /** The local dashboard over the event log. */
   | { kind: 'dashboard'; action: DashboardAction }
   /** The agents' own browser: `status` says which one is here, `install` downloads Chromium. */
@@ -521,8 +521,12 @@ export function parseArgs(argv: string[]): Command {
   }
 
   if (head === 'access') {
-    if (rest[0] !== 'cloudflare' || (rest[1] !== 'setup' && rest[1] !== 'remove')) {
-      throw new UsageError('buddi access needs: cloudflare setup --host <hostname> [--zone <zone>] [--email <email>] [--adopt], or cloudflare remove');
+    if (rest[0] !== 'cloudflare' || (rest[1] !== 'setup' && rest[1] !== 'remove' && rest[1] !== 'forget-token')) {
+      throw new UsageError('buddi access needs: cloudflare setup --host <hostname> [--zone <zone>] [--email <email>] [--adopt], cloudflare remove, or cloudflare forget-token');
+    }
+    if (rest[1] === 'forget-token') {
+      if (rest.length > 2) throw new UsageError(`unexpected argument: ${rest[2]}`);
+      return { kind: 'access', action: 'cloudflare-forget-token' };
     }
     const action = rest[1] === 'setup' ? 'cloudflare-setup' as const : 'cloudflare-remove' as const;
     const allowed = action === 'cloudflare-setup' ? ['--host', '--zone', '--email'] : ['--host'];

@@ -446,9 +446,12 @@ buddi holds what it made for one hostname, a setup for another stops before
 asking Cloudflare anything: remove the first, or set up the same hostname again.
 *Remove what buddi made* (or `buddi access cloudflare remove`) deletes the
 application, the policy, the DNS record and the tunnel, only those whose ids
-buddi recorded making (never anything found by name), turns the setting off when setup filled it in, forgets
-the token once everything went, and shows `sudo cloudflared service uninstall`
-for the connector. The CLI writes the database directly; the running service
+buddi recorded making (never anything found by name), turns the setting off when setup filled it in,
+and shows `sudo cloudflared service uninstall` for the connector. The API
+token stays kept (a later setup reuses it): the panel then says so with
+*Forget the token* (or `buddi access cloudflare forget-token`), which drops the
+owner secret. Forgotten here, it is still valid in Cloudflare until revoked
+there (My Profile → API Tokens). The CLI writes the database directly; the running service
 binds its ingress listener within 15 seconds.
 
 On Save buddi binds the ingress listener and fetches the team's signing keys

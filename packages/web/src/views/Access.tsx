@@ -345,6 +345,8 @@ export function CloudflareRow({ enabled, locked, onSaved }: { enabled: boolean; 
   const [mode, setMode] = useState<'offer' | 'form' | 'run' | 'manual' | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The kept token was just forgotten: say where to revoke it. */
+  const [forgot, setForgot] = useState(false);
   useEffect(() => {
     if (locked) return;
     api.cloudflareSetup().then(setSetup).catch(() => setSetup(null));
@@ -426,6 +428,9 @@ export function CloudflareRow({ enabled, locked, onSaved }: { enabled: boolean; 
       onAdopt={() => { const p = setup?.progress; if (p) act(() => api.startCloudflareSetup({ host: p.host, email: p.email, adopt: true }), 'run'); }}
       onRemove={remove}
       onAgain={() => setMode('form')}
+      tokenStored={setup?.tokenStored ?? false}
+      forgot={forgot}
+      onForget={() => act(() => api.forgetCloudflareToken().then((answer) => { setForgot(true); return answer; }))}
     />
   );
 }
@@ -576,7 +581,10 @@ function SetupForm({ setup, busy, failed, onCancel, onStart }: {
   );
 }
 
-function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, onAgain }: {
+/** Where a token forgotten here is revoked: buddi forgetting it leaves it valid in Cloudflare. */
+export const CLOUDFLARE_REVOKE_LINE = 'To revoke it in Cloudflare: My Profile → API Tokens.';
+
+function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, onAgain, tokenStored = false, forgot = false, onForget }: {
   progress: CloudflareSetupProgress | null;
   busy: boolean;
   failed: string | null;
@@ -585,9 +593,14 @@ function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, 
   onAdopt: () => void;
   onRemove: () => void;
   onAgain: () => void;
+  tokenStored?: boolean;
+  forgot?: boolean;
+  onForget?: () => void;
 }): JSX.Element {
   if (!progress) return <p className="ui-card-meta">…</p>;
   if (progress.state === 'removed' || progress.state === 'removing') {
+    // Removed cleanly with the token still kept: offer to forget it too.
+    const offerForget = progress.state === 'removed' && !progress.error && tokenStored && onForget !== undefined;
     return (
       <Stack gap="sm">
         <ErrorBanner message={failed} />
@@ -602,8 +615,18 @@ function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, 
             <Command text={progress.uninstall} />
           </>
         ) : null}
+        {offerForget ? (
+          <div>
+            <p>Your Cloudflare API token is still kept here, and still valid in Cloudflare.</p>
+            <p className="ui-card-meta">{CLOUDFLARE_REVOKE_LINE}</p>
+          </div>
+        ) : null}
+        {progress.state === 'removed' && forgot && !tokenStored ? (
+          <Notice role="status">Forgotten here. {CLOUDFLARE_REVOKE_LINE}</Notice>
+        ) : null}
         <Toolbar align="end">
           {progress.error && progress.state === 'removed' ? <Button disabled={busy} onClick={onRemove}>Remove again</Button> : null}
+          {offerForget ? <Button disabled={busy} onClick={onForget}>Forget the token</Button> : null}
           <Button variant="accent" disabled={busy} onClick={onAgain}>Set it up again</Button>
         </Toolbar>
       </Stack>

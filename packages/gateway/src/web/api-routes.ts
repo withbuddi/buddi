@@ -209,9 +209,14 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'POST', path: '/api/access/cloudflare-access/setup/remove', area: 'session', localOnly: true, token: 'access',
-    summary: 'Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went.',
+    summary: 'Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in. The token stays kept (`tokenStored`) until forgotten.',
     body: '{ token?: string, host?: string }', answer: 'as GET; progress.removed lists what went, progress.error what did not',
     errors: '400 no token kept or given; 403 not from the computer buddi runs on; 409 a setup or removal going',
+  },
+  {
+    method: 'POST', path: '/api/access/cloudflare-access/setup/forget-token', area: 'session', localOnly: true, token: 'access',
+    summary: 'Forget the kept Cloudflare API token (drops the owner secret CLOUDFLARE_API_TOKEN). It stays valid in Cloudflare until revoked there (My Profile → API Tokens).',
+    answer: 'as GET, with tokenStored: false', errors: '403 not from the computer buddi runs on; 409 a setup or removal going, or the vault refused',
   },
   {
     method: 'GET', path: '/api/tailscale', area: 'session',
@@ -1263,6 +1268,7 @@ export const API_SINCE: Readonly<Record<string, string>> = {
   'POST /api/access/cloudflare-access/setup': '0.1.0-pre.38',
   'POST /api/access/cloudflare-access/setup/stop': '0.1.0-pre.38',
   'POST /api/access/cloudflare-access/setup/remove': '0.1.0-pre.38',
+  'POST /api/access/cloudflare-access/setup/forget-token': '0.1.0-pre.39',
   'POST /api/access/cloudflare-access/zones': '0.1.0-pre.38',
   'POST /api/browser/pin': '0.1.0-pre.38',
   'POST /api/browser/card': '0.1.0-pre.38',

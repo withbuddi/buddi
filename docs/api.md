@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-311 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+312 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -208,7 +208,8 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 | POST | `/api/access/cloudflare-access/setup` | Start "Set it up for me": with the API token (kept as the owner secret CLOUDFLARE_API_TOKEN; omit it to use the kept one), buddi finds the zone, creates (or reuses what it made before) the tunnel buddi-<host>, its ingress, the DNS record, the Access policy and application, fills in Cloudflare Access sign-in, shows the service install line, waits for the tunnel and runs the test. Poll GET for progress. An object of buddi's name that buddi did not make stops the run with `progress.adoptable`; `adopt: true` uses it anyway. | no |
 | POST | `/api/access/cloudflare-access/zones` | Check a Cloudflare API token (omit it to use the kept one) and list the domains (zones) it can see, for the setup form's domain choice. The pasted token is not kept and never echoed. | no |
 | POST | `/api/access/cloudflare-access/setup/stop` | Stop waiting for the tunnel. What buddi made stays; a new run picks it up. | no |
-| POST | `/api/access/cloudflare-access/setup/remove` | Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went. | no |
+| POST | `/api/access/cloudflare-access/setup/remove` | Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in. The token stays kept (`tokenStored`) until forgotten. | no |
+| POST | `/api/access/cloudflare-access/setup/forget-token` | Forget the kept Cloudflare API token (drops the owner secret CLOUDFLARE_API_TOKEN). It stays valid in Cloudflare until revoked there (My Profile → API Tokens). | no |
 | GET | `/api/tailscale` | Alias of GET /api/access/tailscale, kept for one release. | yes |
 | PUT | `/api/tailscale` | Alias of PUT /api/access/tailscale, kept for one release. | no |
 
@@ -506,7 +507,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$B
 
 #### `POST /api/access/cloudflare-access/setup/remove`
 
-Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in, and forget the token once all of it went.
+Remove what "Set it up for me" made — the Access application and policy, the DNS record and the tunnel, only those whose ids buddi recorded making — turn Cloudflare Access sign-in off when setup filled it in. The token stays kept (`tokenStored`) until forgotten.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Body:** `{ token?: string, host?: string }`
@@ -516,6 +517,19 @@ Remove what "Set it up for me" made — the Access application and policy, the D
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/access/cloudflare-access/setup/remove"
+```
+
+#### `POST /api/access/cloudflare-access/setup/forget-token`
+
+Forget the kept Cloudflare API token (drops the owner secret CLOUDFLARE_API_TOKEN). It stays valid in Cloudflare until revoked there (My Profile → API Tokens).
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin); from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Answer:** `as GET, with tokenStored: false`
+- **Errors:** 403 not from the computer buddi runs on; 409 a setup or removal going, or the vault refused
+- **Since:** 0.1.0-pre.39
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/access/cloudflare-access/setup/forget-token"
 ```
 
 #### `GET /api/tailscale`

@@ -2900,11 +2900,29 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     /*
      * "Set it up for me": start a run (202, then poll GET …/setup), stop the
-     * health wait, or remove what buddi made. From this machine only, like the
-     * setting it fills in.
+     * health wait, remove what buddi made, or forget the kept API token. From
+     * this machine only, like the setting it fills in.
      */
-    if (path === '/api/access/cloudflare-access/setup' || path === '/api/access/cloudflare-access/setup/stop' || path === '/api/access/cloudflare-access/setup/remove') {
+    if (path === '/api/access/cloudflare-access/setup' || path === '/api/access/cloudflare-access/setup/stop' || path === '/api/access/cloudflare-access/setup/remove' || path === '/api/access/cloudflare-access/setup/forget-token') {
       if (session.via !== 'local') return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+      /*
+       * Forget the token: drop the owner secret. Not while a run holds it.
+       * Cloudflare still honours it until the owner revokes it there.
+       */
+      if (path.endsWith('/forget-token')) {
+        const lease = claimSetupOperation('setup');
+        if (!lease) return sendJson(res, 409, { error: setupBusySentence(setupOperation()) });
+        try {
+          try {
+            await tokenStore().remove();
+          } catch {
+            return sendJson(res, 409, { error: 'The token could not be forgotten. Check that the vault is unlocked, then try again.' });
+          }
+          return sendJson(res, 200, await setupView());
+        } finally {
+          lease.release();
+        }
+      }
       /*
        * One operation at a time (cloudflare-setup's lock, claimed before the
        * first await and held to the end): a second setup or a removal while
@@ -2939,7 +2957,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           setupRun = run;
           const progress = await removeCloudflareSetup({ ...setupDepsFor(token, lease), host: str(body.host) || undefined }, (p) => { run.progress = p; });
           run.progress = progress;
-          if (!progress.error) await tokens.remove().catch(() => undefined);
+          // The token stays kept: the panel offers to forget it (…/setup/forget-token), and Set it up again reuses it.
           return sendJson(res, 200, await setupView());
         }
         const input = { host: str(body.host), email: str(body.email), zone: str(body.zone) || undefined, adopt: body.adopt === true };

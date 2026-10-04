@@ -20,6 +20,7 @@ What changes in buddi from one release to the next, newest first.
 - Agents answer a list of items from a website (a cart, orders, search results) as a short list, one line per item, instead of a wide table; a table only when you ask for a comparison.
 - Lock screen: the widgets keep refreshing while it's locked, even in a tab in the back, and catch up the moment you look at it again; a slow answer can no longer put older headlines back over newer ones.
 - Settings → System: a version npm has just published but isn't serving yet is no longer offered; the panel says "npm is still processing 0.1.0-pre.N; try again in a few minutes" with no Upgrade button, and an upgrade that still runs into npm's 404 says that same sentence instead of npm's output.
+- Cloudflare setup: after "Remove what buddi made", the panel says your Cloudflare API token is still kept here and still valid in Cloudflare, with a "Forget the token" button and where to revoke it (My Profile → API Tokens); Remove no longer drops the token on its own, so setting it up again doesn't ask for it. From the terminal: `buddi access cloudflare forget-token`.
 
 ## 0.1.0-pre.38 — 2026-10-03
 

@@ -23,6 +23,7 @@ vi.mock('../api', async (load) => ({
     startCloudflareSetup: vi.fn(),
     stopCloudflareSetup: vi.fn(),
     removeCloudflareSetup: vi.fn(),
+    forgetCloudflareToken: vi.fn(),
   },
 }));
 
@@ -249,6 +250,34 @@ describe('Set it up for me', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove what buddi made' }));
     expect(await screen.findByText('Removed the DNS record and the tunnel. Signing in through Cloudflare is off.')).toBeInTheDocument();
     expect(screen.getByText('sudo cloudflared service uninstall')).toBeInTheDocument();
+  });
+
+  it('after Remove, says the API token is still kept and valid, and forgets it on asking', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    const removed = { ...progress('removed', 0), steps: [], removed: ['the DNS record', 'the tunnel'], uninstall: 'sudo cloudflared service uninstall' };
+    vi.mocked(api.cloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: progress('done', 9) });
+    vi.mocked(api.removeCloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: removed });
+    vi.mocked(api.forgetCloudflareToken).mockResolvedValue({ ...SETUP, tokenStored: false, progress: removed });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove what buddi made' }));
+    expect(await screen.findByText('Your Cloudflare API token is still kept here, and still valid in Cloudflare.')).toBeInTheDocument();
+    expect(screen.getByText('To revoke it in Cloudflare: My Profile → API Tokens.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Forget the token' }));
+    await waitFor(() => expect(api.forgetCloudflareToken).toHaveBeenCalled());
+    expect(await screen.findByText(/Forgotten here\./)).toBeInTheDocument();
+    expect(screen.queryByText('Your Cloudflare API token is still kept here, and still valid in Cloudflare.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Forget the token' })).not.toBeInTheDocument();
+  });
+
+  it('offers no Forget the token when nothing is kept, or the removal left something behind', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    const partial = { ...progress('removed', 0), steps: [], removed: ['the DNS record'], uninstall: null, error: 'The tunnel could not be deleted.' };
+    vi.mocked(api.cloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: partial });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    expect(await screen.findByText('The tunnel could not be deleted.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Forget the token' })).not.toBeInTheDocument();
   });
 
   it('offers Use it anyway when it stopped at something buddi didn’t make, and runs again with adopt', async () => {

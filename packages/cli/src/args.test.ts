@@ -234,5 +234,8 @@ describe('buddi speech', () => {
     expect(() => parseArgs(['access', 'cloudflare', 'setup', '--host'])).toThrow(/needs a value/);
     expect(() => parseArgs(['access', 'cloudflare', 'remove', '--zone', 'x.com'])).toThrow(/unexpected argument/);
     expect(() => parseArgs(['access', 'tailscale'])).toThrow(UsageError);
+    expect(parseArgs(['access', 'cloudflare', 'forget-token'])).toEqual({ kind: 'access', action: 'cloudflare-forget-token' });
+    expect(() => parseArgs(['access', 'cloudflare', 'forget-token', '--host', 'x.com'])).toThrow('unexpected argument: --host');
+    expect(() => parseArgs(['access', 'cloudflare', 'forget'])).toThrow(/forget-token/);
   });
 });

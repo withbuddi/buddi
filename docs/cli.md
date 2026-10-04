@@ -1396,6 +1396,7 @@ The ways your agents reach you, and the ways you reach them.
 - [`buddi telegram unpair`](#buddi-telegram-unpair): Unpair a device, so it can no longer reach your agents.
 - [`buddi access cloudflare setup`](#buddi-access-cloudflare-setup): Set up signing in through Cloudflare Access on your own domain: tunnel, DNS, Access application and policy, from one API token.
 - [`buddi access cloudflare remove`](#buddi-access-cloudflare-remove): Remove what `access cloudflare setup` made in Cloudflare, and turn signing in through Cloudflare off.
+- [`buddi access cloudflare forget-token`](#buddi-access-cloudflare-forget-token): Forget the Cloudflare API token `access cloudflare setup` kept. It stays valid in Cloudflare until you revoke it there (My Profile → API Tokens).
 - [`buddi mcp`](#buddi-mcp): Run buddi as an MCP server over stdio, for Claude Code or any MCP client.
 
 ### buddi telegram pair
@@ -1513,10 +1514,27 @@ buddi access cloudflare remove [--host <hostname>]
 buddi access cloudflare remove
 ```
 
+**Then**: The API token stays kept for a later setup; `buddi access cloudflare forget-token` drops it.
+
 **Exit codes**
 
 - `0`: Done.
 - `1`: Something could not be removed; run it again.
+- `2`: The command was not typed right.
+- `3`: The database is not reachable.
+
+### buddi access cloudflare forget-token
+
+Forget the Cloudflare API token `access cloudflare setup` kept. It stays valid in Cloudflare until you revoke it there (My Profile → API Tokens).
+
+```sh
+buddi access cloudflare forget-token
+```
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: The token could not be forgotten (the vault refused).
 - `2`: The command was not typed right.
 - `3`: The database is not reachable.
 
