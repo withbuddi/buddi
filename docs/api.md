@@ -3973,7 +3973,7 @@ Take over the screen from the agent.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ sessionId?: string }`
-- **Answer:** `the status, with hand: boolean`
+- **Answer:** `the status, with hand: boolean; a page in your Chrome comes to the front there instead and the status carries held: { by: "owner", where: "chrome" }`
 - **Since:** 0.1.0-pre.15
 
 ```sh

@@ -199,6 +199,8 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
     if (wanted) asked.current = wanted;
     const next = await api.browserControl('takeover', wanted);
     // The answer is the page asked about; with several open, never another one.
+    // A page in your Chrome came to the front there: no hand, no frames, nothing to wait for.
+    if (next.held?.where === 'chrome') return;
     if (next.hand && next.session && (!wanted || next.session.id === wanted)) setDriving(next.session.id);
     else if (next.handReason === 'browser-offline') setOffline(true);
     else setNote(next.handMessage ?? null);
@@ -215,7 +217,9 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   });
   // The owner holds this page when the server says it is paused, however it got there.
   const owned = live && !!status?.session && status.state === 'paused';
-  const hand = owned && driving && status?.session?.id === driving ? driving : null;
+  /** The owner holds a page in their own Chrome: it is in front there, so no hand is asked for and no frame waited on. */
+  const inChrome = owned && status?.held?.where === 'chrome';
+  const hand = owned && !inChrome && driving && status?.session?.id === driving ? driving : null;
   /*
    * Reattach after a reload. The hand is this tab's socket, and a reload loses
    * it while the server still says the page is the owner's: the picture shows
@@ -226,7 +230,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
    */
   const ownedId = owned ? status?.session?.id ?? null : null;
   useEffect(() => {
-    if (!ownedId || driving === ownedId || touch || busy || status?.route === 'apps') return;
+    if (!ownedId || driving === ownedId || touch || busy || status?.route === 'apps' || inChrome) return;
     if (asked.current === ownedId) return;
     takeOver();
   }, [ownedId, driving, touch]);
@@ -269,6 +273,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   const where = shown?.route === 'chrome' ? 'in your Chrome · background tab' : shown?.route === 'apps' ? `in ${site}` : 'in buddi’s browser';
   const title = paused ? 'Browsing is paused' : shown?.page?.title || site;
   const line = paused ? `By you at ${fmtClock(new Date(paused.at), zone)} · ${paused.until ? `until ${fmtClock(new Date(paused.until), zone)}` : 'until you resume it'}`
+    : inChrome ? 'You have the page · in your Chrome · it’s in front'
     : taking ? `You have the page · ${where}`
     : done ? `${agentName} looked at ${site} · done${closedAt ? ` at ${fmtClock(new Date(closedAt), zone)}` : ''}`
     : shown ? lookingLine(shown) : 'Opening the page…';
@@ -295,7 +300,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
         </span>
         {taking ? (
           <Toolbar align="end">
-            {hand ? (touch ? <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Type into the page</Button> : null)
+            {inChrome ? null : hand ? (touch ? <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Type into the page</Button> : null)
               : <Button size="sm" variant="ghost" disabled={busy} onClick={takeOver}>Drive it here</Button>}
             <Button size="sm" variant="accent" disabled={busy} onClick={giveBack}>Give it back</Button>
             {enlarge}
@@ -310,7 +315,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
           </Toolbar>
         )}
       </header>
-      {taking ? <p className="br-hand-said" role="status">{hand ? `Nothing you type here is kept. ${agentName} carries on when you give it back.${touch ? ' Tap Type into the page to bring up your keyboard.' : ''}` : `${agentName} waits. It carries on when you give the page back.`}</p> : null}
+      {taking ? <p className="br-hand-said" role="status">{inChrome ? 'Finish in Chrome, then give it back.' : hand ? `Nothing you type here is kept. ${agentName} carries on when you give it back.${touch ? ' Tap Type into the page to bring up your keyboard.' : ''}` : `${agentName} waits. It carries on when you give the page back.`}</p> : null}
       {failure || error ? <Notice tone="critical" role="alert">{failure ?? error}</Notice> : null}
       {note ? <Notice tone="warning" role="status">{note}</Notice> : null}
       {offline ? (

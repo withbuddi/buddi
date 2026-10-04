@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardAnswer, chooseRoute, detectWall, ownerCard, routeNote, siteListed, siteName, siteOf, type RouteInput } from './routes.js';
+import { cardAnswer, chooseRoute, detectSignedOut, detectWall, ownerCard, routeNote, siteListed, siteName, siteOf, type RouteInput } from './routes.js';
 import { STOP_CAUSES, summarize, telemetryLines, BrowserTelemetry } from './telemetry.js';
 
 const all = { own: true, chrome: true, apps: true };
@@ -84,5 +84,65 @@ describe('the stop causes', () => {
     const summary = summarize(telemetry.events, Date.parse('2026-10-03T12:00:00Z'));
     expect(summary).toMatchObject({ tasks: 2, stops: 2, cards: 1, stopsPerTask: 1, routes: { own: 1, chrome: 1 } });
     expect(telemetryLines(summary)[0]).toBe('Browser, last 7 days: 2 tasks, 2 stops (1 per task), 1 card.');
+  });
+});
+
+/* Pages as the observation reads them (title, tree, targets), from the real sites. */
+const AMAZON_CART_SIGNED_OUT = {
+  url: 'https://www.amazon.com/gp/cart/view.html?ref_=nav_cart', title: 'Amazon.com Shopping Cart',
+  tree: '- link "Amazon"\n- link "Hello, sign in Account & Lists"\n- link "Returns & Orders"\n- link "0 items in cart"\n- heading "Your Amazon Cart is empty"\n- link "Shop today\'s deals"\n- button "Sign in to your account"\n- button "Sign up now"',
+  targets: [
+    { ref: 'e1', frame: 0, role: 'link', name: 'Hello, sign in Account & Lists' },
+    { ref: 'e2', frame: 0, role: 'link', name: 'Returns & Orders' },
+    { ref: 'e3', frame: 0, role: 'button', name: 'Sign in to your account' },
+    { ref: 'e4', frame: 0, role: 'button', name: 'Sign up now' },
+  ],
+};
+const AMAZON_HOME = {
+  url: 'https://www.amazon.com/', title: 'Amazon.com. Spend less. Smile more.',
+  tree: '- link "Hello, sign in Account & Lists"\n- searchbox "Search Amazon"\n- heading "Today\'s deals"',
+  targets: [{ ref: 'e1', frame: 0, role: 'link', name: 'Hello, sign in Account & Lists' }, { ref: 'e2', frame: 0, role: 'searchbox', name: 'Search Amazon' }],
+};
+const HN_FRONT = {
+  url: 'https://news.ycombinator.com/', title: 'Hacker News',
+  tree: '- link "Hacker News"\n- link "new"\n- link "past"\n- link "login"\n- link "Show HN: A tiny database"\n- link "48 comments"',
+  targets: [{ ref: 'e1', frame: 0, role: 'link', name: 'new' }, { ref: 'e2', frame: 0, role: 'link', name: 'login' }, { ref: 'e3', frame: 0, role: 'link', name: 'Show HN: A tiny database' }],
+};
+const NEWS_HOME = {
+  url: 'https://www.nytimes.com/', title: 'The New York Times - Breaking News',
+  tree: '- button "Sections"\n- link "Log in"\n- button "Subscribe"\n- heading "Top stories"',
+  targets: [{ ref: 'e1', frame: 0, role: 'link', name: 'Log in' }, { ref: 'e2', frame: 0, role: 'button', name: 'Subscribe' }],
+};
+const GMAIL_LOGIN = {
+  url: 'https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fmail.google.com%2Fmail%2F&service=mail', title: 'Gmail',
+  tree: '- heading "Sign in"\n- text "to continue to Gmail"\n- textbox "Email or phone"\n- button "Forgot email?"\n- button "Next"',
+  targets: [{ ref: 'e1', frame: 0, role: 'textbox', name: 'Email or phone' }, { ref: 'e2', frame: 0, role: 'button', name: 'Next' }],
+};
+
+describe('a page that renders signed out', () => {
+  it('is a sign-in when a prominent Sign in meets an account page, ask or listed site', () => {
+    expect(detectWall(AMAZON_CART_SIGNED_OUT)).toBeUndefined();
+    expect(detectSignedOut(AMAZON_CART_SIGNED_OUT)).toBe(true);
+    // The same page under an address that says nothing: the owner's ask, or the sign-in list, says it.
+    const anywhere = { ...AMAZON_CART_SIGNED_OUT, url: 'https://www.amazon.com/gp/aw/c' };
+    expect(detectSignedOut(anywhere)).toBe(false);
+    expect(detectSignedOut(anywhere, { task: "What's in my Amazon cart?" })).toBe(true);
+    expect(detectSignedOut(anywhere, { signInSite: true })).toBe(true);
+  });
+  it('leaves front pages with a Sign in link in the header alone', () => {
+    expect(detectSignedOut(HN_FRONT)).toBe(false);
+    expect(detectSignedOut(HN_FRONT, { task: "What's on Hacker News today?" })).toBe(false);
+    expect(detectSignedOut(NEWS_HOME, { task: 'Read me the headlines' })).toBe(false);
+    // A link that only says Sign in is not prominent, even on a site the owner signs in to.
+    expect(detectSignedOut(AMAZON_HOME, { task: 'Find a kettle under $40', signInSite: true })).toBe(false);
+  });
+  it('a full login page stays the login wall it was', () => {
+    expect(detectWall(GMAIL_LOGIN)).toBe('sign-in');
+    expect(detectWall(HN_FRONT)).toBeUndefined();
+  });
+  it('says why the owner\'s Chrome could not serve, in one line', () => {
+    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'unpaired')).toBe("Your Chrome isn't connected to this buddi, so I looked in my own browser.");
+    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'closed')).toBe("Your Chrome isn't open right now, so I looked in my own browser.");
+    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'off')).toBe('Your Chrome is turned off for agents in Settings, so I looked in my own browser.');
   });
 });

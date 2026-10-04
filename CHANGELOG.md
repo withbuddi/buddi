@@ -13,6 +13,10 @@ What changes in buddi from one release to the next, newest first.
 - Page tab: the Keyboard button only shows on a phone, where it says "Type into the page"; on a computer, click the page and type.
 - Page tab: your pointer on the page is an arrow, not a crosshair.
 - Page tab: after reloading the dashboard while you have the page, clicks and typing reach it again straight away, without pressing Drive it here (on a computer; a phone still asks).
+- Your Chrome: Take over on a page in your Chrome brings its tab to the front of Chrome instead of waiting for a picture that never came; the bar in the tab says "buddi is waiting" with Give it back, and Give it back there or in the Canvas lets the agent carry on in that tab. Needs the extension from this release.
+- Your Chrome: when you asked for your Chrome (the Use my Chrome pin, the agent's setting, or the task) and buddi couldn't use it, the reply says why in one line: not connected to this buddi, not open right now, or turned off for agents in Settings.
+- A page that shows up signed out where the task needs your account (an Amazon cart saying "Sign in to your account") now asks with the "needs your sign-in" card, or moves to your Chrome where you're signed in, instead of the agent asking you in chat; a news front page with a Sign in link is left alone. Google's sign-in page under the title "Gmail" is now recognised as a sign-in page too.
+- Agents answer a list of items from a website (a cart, orders, search results) as a short list, one line per item, instead of a wide table; a table only when you ask for a comparison.
 
 ## 0.1.0-pre.38 — 2026-10-03
 

@@ -18,7 +18,7 @@
 import type { TabInfo, WorkerChrome } from './chrome.js';
 import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type CommandResult, type FieldFacts, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
-import { hideBar, readBar, showBar, waitForOwner, type BarChoice, type OwnerEventMessage } from './bar.js';
+import { hideBar, hideHeldBar, readBar, showBar, showHeldBar, waitForOwner, type BarChoice, type OwnerEventMessage } from './bar.js';
 
 interface Session {
   groupId: number;
@@ -281,6 +281,8 @@ export class BrowserCommands implements Executor {
   #onEvent: (event: OwnerEventMessage) => void;
   /** Sessions the owner let carry on in a tab they are looking at, by tab id. */
   #inView = new Map<string, number>();
+  /** Sessions whose tab the owner holds (taken over in place), by tab id. */
+  #held = new Map<string, number>();
   #now: () => number;
   #wait: (ms: number) => Promise<void>;
   /** How many things want the debugger on this tab. A screencast is one of them, and it outlives a command. */
@@ -306,6 +308,12 @@ export class BrowserCommands implements Executor {
       const cast = this.#castsByTab.get(tabId);
       if (cast) this.#forgetCast(cast);
     });
+    // A held tab that loads a new page (the owner signing in) keeps its bar.
+    chrome.tabs.onUpdated?.addListener((tabId, change) => {
+      if (change.status !== 'complete' || ![...this.#held.values()].includes(tabId)) return;
+      const session = [...this.#held].find(([, held]) => held === tabId)?.[0];
+      if (session) void this.#chrome.scripting.executeScript<[string], void>({ target: { tabId }, func: showHeldBar, args: [session] }).catch(() => undefined);
+    });
     this.#uuid = options.uuid ?? (() => crypto.randomUUID());
     this.#contentFile = options.contentFile ?? 'content.js';
   }
@@ -327,6 +335,8 @@ export class BrowserCommands implements Executor {
       case 'screencast.start': return this.#startScreencast(command, cancel);
       case 'screencast.stop': { await this.#stopScreencast(command.session); return {}; }
       case 'input': return this.#input(command, cancel);
+      case 'hold': return this.#hold(command, cancel);
+      case 'unhold': return this.#unhold(command.session);
       case 'close': return this.#close(command, cancel);
       default: throw new PreconditionError(`This browser cannot run ${command.name}.`);
     }
@@ -344,6 +354,56 @@ export class BrowserCommands implements Executor {
     this.#sessions.clear();
     this.#refs.clear();
     this.#inView.clear();
+    this.#held.clear();
+  }
+
+  /* ---- take-over in place ---- */
+
+  /**
+   * The owner takes the page where it is: the session's tab becomes the
+   * active one, its window comes to the front, and the bar in it says buddi
+   * is waiting, with Give it back. Nothing is streamed; it is their Chrome.
+   */
+  async #hold(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    const session = await this.#session(command.session);
+    const tab = await this.#ownTab(session, this.#activeKey(session));
+    const tabId = tab.id!;
+    cancel.check();
+    cancel.dispatch();
+    await this.#chrome.tabs.update(tabId, { active: true });
+    if (tab.windowId !== undefined) await this.#chrome.windows.update?.(tab.windowId, { focused: true });
+    this.#held.set(command.session, tabId);
+    // A page buddi cannot draw on (a chrome:// error page) still comes forward; only the bar is missing.
+    await this.#chrome.scripting.executeScript<[string], void>({ target: { tabId }, func: showHeldBar, args: [command.session] }).catch(() => undefined);
+    return {};
+  }
+
+  /**
+   * Given back (from the Canvas, or the bar): the bar goes, and the agent may
+   * act in that tab although the owner is looking at it — they just handed it
+   * over there, so waiting for them to leave it would be asking twice.
+   */
+  async #unhold(session: string): Promise<CommandResult> {
+    const tabId = this.#held.get(session);
+    this.#held.delete(session);
+    if (tabId === undefined) return {};
+    this.#inView.set(session, tabId);
+    await this.#chrome.scripting.executeScript({ target: { tabId }, func: hideHeldBar }).catch(() => undefined);
+    return {};
+  }
+
+  /**
+   * Give it back pressed in a held tab's bar. Refused from any other tab than
+   * the one the session holds; a worker that was restarted since (and so
+   * forgot what it held) passes it on, and the gateway resumes only a page
+   * that is in the owner's hands. It hears it as the Canvas's Give it back.
+   */
+  async giveBack(session: string, tabId: number | undefined): Promise<boolean> {
+    const held = this.#held.get(session);
+    if (tabId === undefined || (held !== undefined && held !== tabId)) return false;
+    await this.#unhold(session);
+    this.#onEvent({ type: 'event', name: 'giveback', session });
+    return true;
   }
 
   /* ---- sessions and tabs ---- */

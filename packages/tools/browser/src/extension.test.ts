@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core/testing';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
@@ -226,5 +226,58 @@ describe('the secret pair on the extension wire', () => {
     expect(sent.at(-1)).toMatchObject({ name: 'secretFill', args: { ref: 'e3', expectedOrigin: 'https://example.com' } });
     // The evidence is spent: the same observation cannot fill twice.
     await expect(driver.secretFillField(id, 'e3', VALUE, 'https://example.com')).rejects.toThrow('Stale page observation');
+  });
+});
+
+describe('taking over a page in your Chrome', () => {
+  async function held(answers: Partial<Record<string, unknown>> = { observe: page, screenshot: shot }) {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-held-'));
+    dirs.push(dir);
+    const { fake, sent } = bridge(answers);
+    const listeners = new Map<string, (event: 'takeover' | 'giveback') => void>();
+    fake.events = (session, listener) => { listeners.set(session, listener); return () => { listeners.delete(session); }; };
+    fake.frames = () => { throw new Error('no screencast for a page in your Chrome'); };
+    const controller = new HostController(dir, { extensionBridge: () => fake, platform: 'linux' });
+    controllers.push(controller);
+    await controller.enable();
+    await controller.configure({ yourChrome: true, signInSites: ['example.com'] });
+    await controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('h'));
+    const sessionId = controller.status({ conversationId: 'h', agentId: 'h' }).session!.id;
+    return { controller, sent, sessionId, emit: (event: 'takeover' | 'giveback') => { for (const listener of listeners.values()) listener(event); } };
+  }
+
+  it('brings the tab forward in Chrome: the status says it is held there, and no screencast starts', async () => {
+    const { controller, sent, sessionId } = await held();
+    const status = await controller.control('takeover', sessionId);
+    expect(status).toMatchObject({ state: 'paused', route: 'chrome', held: { by: 'owner', where: 'chrome' } });
+    expect(sent.map((c) => c.name)).toEqual(['navigate', 'observe', 'screenshot', 'hold']);
+    expect(sent.at(-1)).toMatchObject({ owner: true });
+    expect(controller.hand({ sessionId })).toMatchObject({ supported: false });
+    expect(controller.hand({ sessionId }).hand).toBeUndefined();
+    // Give it back from the Canvas: the waiting bar goes, and the field with it.
+    const back = await controller.control('resume', sessionId);
+    expect(back.held).toBeUndefined();
+    expect(back.state).toBe('running');
+    expect(sent.at(-1)).toMatchObject({ name: 'unhold' });
+    expect(sent.some((c) => c.name.startsWith('screencast'))).toBe(false);
+  });
+
+  it('Give it back from the bar in the tab resumes the page, and the waiting run hears it', async () => {
+    const { controller, sessionId, emit } = await held();
+    const heard: string[] = [];
+    controller.onGiveBack((info) => heard.push(info.sessionId));
+    emit('takeover');
+    await vi.waitFor(() => expect(controller.status({ sessionId }).held).toBeDefined());
+    emit('giveback');
+    await vi.waitFor(() => expect(heard).toEqual([sessionId]));
+    expect(controller.status({ sessionId })).toMatchObject({ state: 'running' });
+  });
+
+  it('an extension that cannot bring the tab forward leaves the page paused and says where it is', async () => {
+    const { controller, sessionId } = await held({ observe: page, screenshot: shot, hold: new BrowserPreconditionError('This browser cannot run hold.') });
+    const status = await controller.control('takeover', sessionId);
+    expect(status.state).toBe('paused');
+    expect(status.held).toBeUndefined();
+    expect(status.message).toContain("Your Chrome couldn't bring the page forward");
   });
 });

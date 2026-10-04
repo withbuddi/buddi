@@ -224,6 +224,15 @@ export interface BrowserDriver {
    * bar). The service treats it exactly like the Canvas button.
    */
   onOwnerTakeover?(listener: () => void): void;
+  /**
+   * Take-over holds the page where it already is instead of streaming it:
+   * `takeover()` brings it to the front of the owner's own browser (the tab
+   * activated, its window focused) and `resume()` lets it go. A background
+   * tab cannot be captured, so a screencast of it would never paint.
+   */
+  holdsInPlace?: 'chrome';
+  /** The owner pressed Give it back in the page itself (the bar a held tab shows). Treated as the Canvas's Give it back. */
+  onOwnerGiveBack?(listener: () => void): void;
 }
 /** "Observed 12:04:35 UTC." — the line a result opens with, so the model can tell old evidence from new. */
 export function observedLine(iso: string): string {

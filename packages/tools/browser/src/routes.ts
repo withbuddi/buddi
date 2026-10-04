@@ -93,8 +93,16 @@ export function siteName(site: string | undefined): string | undefined {
   return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
+/**
+ * Why the owner's Chrome could not serve, as the owner sees it in Settings:
+ * no pairing with this buddi, paired but not connected (Chrome closed), or
+ * turned off for agents.
+ */
+export type ChromeLink = 'unpaired' | 'closed' | 'connected';
+export type ChromeMiss = 'unpaired' | 'closed' | 'off';
+
 /** The one chat line, only when the route is not the own browser or changed mid-task. */
-export function routeNote(route: RouteKind, reason: RouteReason, site: string | undefined, appName?: string): string | undefined {
+export function routeNote(route: RouteKind, reason: RouteReason, site: string | undefined, appName?: string, chrome?: ChromeMiss): string | undefined {
   const where = site ?? 'this site';
   if (route === 'chrome') {
     if (reason === 'sign-in' || reason === 'sign-in-fallback') return `I used your Chrome because ${siteName(site) ?? 'this site'} needs your sign-in.`;
@@ -103,7 +111,12 @@ export function routeNote(route: RouteKind, reason: RouteReason, site: string | 
     return `I used your Chrome for ${where}.`;
   }
   if (route === 'apps') return appName ? `I opened ${appName} because the task needs it.` : 'I used your apps for this.';
-  if (reason === 'chrome-unavailable') return `Your Chrome isn't connected, so I used my own browser for ${where}.`;
+  if (reason === 'chrome-unavailable') {
+    if (chrome === 'unpaired') return "Your Chrome isn't connected to this buddi, so I looked in my own browser.";
+    if (chrome === 'closed') return "Your Chrome isn't open right now, so I looked in my own browser.";
+    if (chrome === 'off') return "Your Chrome is turned off for agents in Settings, so I looked in my own browser.";
+    return `Your Chrome isn't connected, so I used my own browser for ${where}.`;
+  }
   if (reason === 'apps-unavailable') return `Your apps aren't available, so I used my own browser for ${where}.`;
   return undefined;
 }
@@ -136,7 +149,43 @@ export function detectWall(page: Pick<Observation, 'url' | 'title' | 'tree' | 't
   if (fields.some((field) => CODE.test(field.name)) || (CODE.test(head) && fields.length > 0)) return 'code';
   if (fields.some((field) => PASSWORD.test(field.name)) || PASSWORD.test(head)) return 'sign-in';
   // An identifier-first page (an email box on /signin): a sign-in all the same.
-  return LOGIN_PATH.test(pathname) && LOGIN_TITLE.test(page.title) ? 'sign-in' : undefined;
+  // Google's says "Sign in" in its heading under a title of "Gmail".
+  if (!LOGIN_PATH.test(pathname)) return undefined;
+  return LOGIN_TITLE.test(page.title) || (fields.length > 0 && LOGIN_TITLE.test(page.tree.slice(0, 1500))) ? 'sign-in' : undefined;
+}
+
+/* ---------------- a page that renders signed out ---------------- */
+
+/** A sign-in call to action that stands out: "Sign in to see your cart", or a button that only says Sign in. */
+const SIGN_IN_TO = /\b(?:sign|log)[- ]?in\s+to\b|\b(?:sign|log)[- ]?in\s+(?:now\s+)?(?:to|for)\s+(?:see|view|access|continue|manage|check)\b/i;
+const SIGN_IN_WORDS = /^(?:sign[- ]?in|log[- ]?in|login|sign[- ]?in\s*(?:\/|or)\s*(?:register|sign[- ]?up|create account))$/i;
+const SIGNED_OUT_TEXT = /\b(?:you(?:'re| are) (?:not )?signed out|you(?:'re| are) not (?:signed|logged) in|sign in to (?:see|view|access|continue|manage|check)|log in to (?:see|view|access|continue|manage|check))\b/i;
+/** Addresses that hold the owner's own data. */
+const ACCOUNT_PATH = /\/(?:cart|basket|bag|checkout|orders?|order-history|your-orders|purchases|account|my-?account|myaccount|profile|inbox|mail|messages|dashboard|settings|preferences|billing|subscriptions?|wishlist|bookings|reservations|trips|statements?|library)(?:[\/?#._-]|$)/i;
+/** Words in the owner's ask that point at their own account. */
+const ACCOUNT_WORDS = /\b(?:my|our)\s+(?:\w+\s+)?(?:cart|basket|bag|orders?|order history|purchases|account|profile|inbox|e-?mails?|mail|messages|dashboard|settings|subscriptions?|wish ?list|bookings?|reservations?|trips?|statements?|balance|library)\b|\b(?:in|from|to) (?:the )?cart\b|\border history\b/i;
+
+/**
+ * A page that renders, but signed out where the task needs the owner's
+ * account: an Amazon cart showing "Sign in to your account". Strong signals
+ * only, both of them: a prominent sign-in call to action (a "Sign in to …"
+ * link or line, or a button that only says Sign in) and an account context
+ * (the address is a cart, orders, account, inbox, dashboard or settings page,
+ * the owner's ask is about their own cart or orders or inbox, or the site is
+ * on the sign-in list). A news front page with a Sign in link in its header
+ * is neither.
+ */
+export function detectSignedOut(page: Pick<Observation, 'url' | 'title' | 'tree' | 'targets'> | undefined, context: { task?: string | undefined; signInSite?: boolean } = {}): boolean {
+  if (!page) return false;
+  const targets = page.targets ?? [];
+  const head = page.tree.slice(0, 8000);
+  const prominent = targets.some((target) => (target.role === 'button' || target.role === 'link') && SIGN_IN_TO.test(target.name))
+    || targets.some((target) => target.role === 'button' && SIGN_IN_WORDS.test(target.name.trim()))
+    || SIGNED_OUT_TEXT.test(head);
+  if (!prominent) return false;
+  let pathname = '';
+  try { pathname = new URL(page.url).pathname; } catch { return false; }
+  return context.signInSite === true || ACCOUNT_PATH.test(pathname) || ACCOUNT_WORDS.test(context.task ?? '');
 }
 
 /* ---------------- the owner's four moments, and the Stop ---------------- */

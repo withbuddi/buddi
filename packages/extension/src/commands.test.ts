@@ -54,6 +54,8 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
   const page = { answers: [] as Array<Array<{ frameId: number; result: FrameResult | null }>>, readyState: 'complete' };
   /** The in-tab bar: what was drawn, and the owner's tap the next read returns. */
   const bar = { calls: [] as string[], choice: undefined as string | undefined };
+  /** Tabs activated and windows focused, in order. */
+  const focuses: string[] = [];
   let nextTabId = 100;
   const chrome = {
     storage: { local: { async get() { return {}; }, async set() {}, async remove() {} } },
@@ -65,7 +67,11 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
         tabs.set(tab.id, tab);
         return tab;
       },
-      async update(id: number, { url }: { url?: string }) { const tab = tabs.get(id)!; if (url) tab.url = url; return tab; },
+      async update(id: number, { url, active }: { url?: string; active?: boolean }) {
+        const tab = tabs.get(id)!; if (url) tab.url = url;
+        if (active) { focuses.push(`tab ${id}`); for (const other of tabs.values()) if (other.windowId === tab.windowId) other.active = other.id === id; }
+        return tab;
+      },
       async get(id: number) { const tab = tabs.get(id); if (!tab) throw new Error('no such tab'); return tab; },
       async remove(ids: number[]) { for (const id of ids) tabs.delete(id); },
       async query() { return [...tabs.values()]; },
@@ -82,6 +88,11 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
       async get(id: number) { const found = windows.get(id); if (!found) throw new Error('no such window'); return found; },
       async getLastFocused() { const found = normalWindows().find((window) => window.focused) ?? normalWindows()[0]; if (!found) throw new Error('No last-focused window'); return found; },
       async getAll() { return normalWindows(); },
+      async update(id: number, data: { focused?: boolean }) {
+        const found = windows.get(id)!;
+        if (data.focused) { focuses.push(`window ${id}`); for (const window of windows.values()) window.focused = window.id === id; }
+        return found;
+      },
       async create(data: { url?: string; focused?: boolean; state?: string }) {
         windowCreates.push(data);
         const window = { id: 50 + windowCreates.length, focused: data.focused ?? true, type: 'normal' };
@@ -95,6 +106,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
       async executeScript(injection: { target: { frameIds?: number[]; allFrames?: boolean }; files?: string[]; func?: { name: string } }) {
         if (injection.files) { injected.push(injection.files.join(',')); return []; }
         if (injection.func?.name === 'readReadyState') return [{ frameId: 0, result: page.readyState }];
+        if (injection.func?.name === 'showHeldBar' || injection.func?.name === 'hideHeldBar') { bar.calls.push(injection.func.name); return [{ frameId: 0, result: undefined }]; }
         if (injection.func?.name === 'showBar' || injection.func?.name === 'hideBar') { bar.calls.push(injection.func.name); return [{ frameId: 0, result: undefined }]; }
         if (injection.func?.name === 'readBar') { const choice = bar.choice; bar.choice = undefined; return [{ frameId: 0, result: choice }]; }
         if (injection.func?.name === 'readObservation' && page.answers.length > 0) return page.answers.shift()!;
@@ -119,7 +131,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     alarms: { create() {}, onAlarm: { addListener() {} } },
     runtime: { getManifest: () => ({ version: '0.1.0' }), onMessage: { addListener() {} }, async sendMessage() { return undefined; } },
   } as unknown as WorkerChrome;
-  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar, creates, windowCreates };
+  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar, creates, windowCreates, focuses };
 }
 
 const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
@@ -304,6 +316,41 @@ describe('the owner’s tabs', () => {
     await expect(commands.run(command('click', { target: { ref: 'e1' } }))).rejects.toThrow('The owner took over this tab');
     expect(events).toEqual([{ type: 'event', name: 'takeover', session: 's1' }]);
     expect(dispatched).toEqual([]);
+  });
+
+  it('a take-over in place activates the tab, focuses its window and shows the waiting bar; Give it back there tells the gateway', async () => {
+    const events: OwnerEventMessage[] = [];
+    const { commands, tabs, windows, focuses, bar, dispatched } = await opened(undefined, { onEvent: (event) => events.push(event) });
+    windows.set(2, { id: 2, focused: true, type: 'normal' });
+    windows.get(1)!.focused = false;
+    const tab = [...tabs.values()][0]!;
+    tab.active = false;
+    await expect(commands.run(command('hold', {}, true))).resolves.toEqual({});
+    expect(focuses).toEqual([`tab ${tab.id}`, 'window 1']);
+    expect(tab.active).toBe(true);
+    expect(windows.get(1)!.focused).toBe(true);
+    expect(bar.calls).toEqual(['showHeldBar']);
+    // No screencast: nothing went through the debugger.
+    expect(dispatched).toEqual([]);
+    // Give it back from another tab is not believed; from the held one it is.
+    await expect(commands.giveBack('s1', 999)).resolves.toBe(false);
+    await expect(commands.giveBack('s1', tab.id)).resolves.toBe(true);
+    expect(events).toEqual([{ type: 'event', name: 'giveback', session: 's1' }]);
+    expect(bar.calls).toEqual(['showHeldBar', 'hideHeldBar']);
+    // Given back while looking at it: the agent acts there without asking again.
+    await commands.run(command('observe'));
+    await expect(commands.run(command('click', { target: { ref: 'e1' } }))).resolves.toEqual({});
+    expect(bar.calls).toEqual(['showHeldBar', 'hideHeldBar']);
+  });
+
+  it('unhold (Give it back from the Canvas) takes the waiting bar down', async () => {
+    const { commands, bar } = await opened();
+    await commands.run(command('hold', {}, true));
+    await expect(commands.run(command('unhold', {}, true))).resolves.toEqual({});
+    expect(bar.calls).toEqual(['showHeldBar', 'hideHeldBar']);
+    // Nothing held any more: a second unhold does nothing.
+    await commands.run(command('unhold', {}, true));
+    expect(bar.calls).toEqual(['showHeldBar', 'hideHeldBar']);
   });
 
   it('acts in an active tab whose window is not focused', async () => {

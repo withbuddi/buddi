@@ -33,17 +33,18 @@ function routeDriver(name: string, log: string[], page: (url: string) => Partial
     };
   };
 }
-function chromeBridge(connected: { value: boolean }, paired = true): ExtensionBridge {
-  return { connected: () => connected.value, paired: () => paired, send: async () => { throw new Error(NOT_CONNECTED); }, close: () => {} };
+function chromeBridge(connected: { value: boolean }, paired: boolean | { value: boolean } = true): ExtensionBridge {
+  return { connected: () => connected.value, paired: () => typeof paired === 'boolean' ? paired : paired.value, send: async () => { throw new Error(NOT_CONNECTED); }, close: () => {} };
 }
-async function routes(options: { settings?: Record<string, unknown>; connected?: boolean; page?: (url: string) => Partial<Observation>; now?: () => number; platform?: NodeJS.Platform; agentPin?: (id: string) => 'own' | 'chrome' | undefined } = {}) {
+async function routes(options: { settings?: Record<string, unknown>; connected?: boolean; paired?: boolean; page?: (url: string) => Partial<Observation>; now?: () => number; platform?: NodeJS.Platform; agentPin?: (id: string) => 'own' | 'chrome' | undefined } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'buddi-routes-'));
   const log: string[] = [];
   const connected = { value: options.connected ?? true };
+  const paired = { value: options.paired ?? true };
   const controller = new HostController(dir, {
     platform: options.platform ?? 'darwin', env: {},
     detect: () => ({ engine: 'chromium', executable: '/x/chrome' }),
-    extensionBridge: () => chromeBridge(connected),
+    extensionBridge: () => chromeBridge(connected, paired),
     drivers: { own: routeDriver('own', log, options.page), chrome: routeDriver('chrome', log, options.page), apps: routeDriver('apps', log) },
     service: { sleep: async () => {}, ...(options.now ? { now: options.now } : {}) },
     ...(options.agentPin ? { agentPin: options.agentPin } : {}),
@@ -51,7 +52,7 @@ async function routes(options: { settings?: Record<string, unknown>; connected?:
   resources.push({ dir, controller });
   await controller.enable();
   if (options.settings) await controller.configure(options.settings);
-  return { dir, controller, log, connected };
+  return { dir, controller, log, connected, paired };
 }
 const LOGIN = (url: string): Partial<Observation> => url.includes('/ap/signin')
   ? { title: 'Amazon Sign-In', tree: '- textbox "Email or mobile phone number"', targets: [{ ref: 'e1', frame: 0, role: 'textbox', name: 'Email or mobile phone number' }] }
@@ -147,7 +148,7 @@ describe('the route, chosen per task', () => {
   it('a pin never allows what the switches forbid: Chrome off falls back to the own browser, silently but said', async () => {
     const { controller } = await routes({ settings: { yourChrome: false } });
     await controller.pin('a', 'chrome');
-    await expect(controller.execute(navigate('https://shop.test/'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your Chrome isn't connected, so I used my own browser for shop.test." });
+    await expect(controller.execute(navigate('https://shop.test/'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: 'Your Chrome is turned off for agents in Settings, so I looked in my own browser.' });
   });
   it('apps only for app jobs; an app job with apps off says the one fix', async () => {
     const off = await routes();
@@ -193,12 +194,64 @@ describe('the route, chosen per task', () => {
   });
 });
 
+/** Amazon's cart, signed out: it renders, with "Sign in to your account" where the items would be. */
+const SIGNED_OUT_CART = (url: string): Partial<Observation> => url.includes('/cart')
+  ? { title: 'Amazon.com Shopping Cart', tree: '- link "Hello, sign in Account & Lists"\n- heading "Your Amazon Cart is empty"\n- link "Shop today\'s deals"\n- button "Sign in to your account"\n- button "Sign up now"',
+    targets: [{ ref: 'e1', frame: 0, role: 'link', name: 'Hello, sign in Account & Lists' }, { ref: 'e2', frame: 0, role: 'button', name: 'Sign in to your account' }, { ref: 'e3', frame: 0, role: 'button', name: 'Sign up now' }] }
+  : { title: 'News', tree: '- link "Sign in"\n- heading "Top stories"', targets: [{ ref: 'e1', frame: 0, role: 'link', name: 'Sign in' }] };
+
+describe('a page that renders signed out', () => {
+  it('raises the sign-in card instead of leaving the agent to ask', async () => {
+    const asked: Asked[] = [];
+    const { controller } = await routes({ settings: { yourChrome: true }, connected: false, page: SIGNED_OUT_CART });
+    const result = await controller.execute(navigate('https://www.amazon.com/gp/cart/view.html'), ctx('s', asked)) as { completed: boolean; needsOwner?: { kind: string; title: string; options: Array<{ label: string }> } };
+    expect(result.completed).toBe(false);
+    expect(result.needsOwner).toMatchObject({ kind: 'sign-in', title: 'Amazon needs your sign-in' });
+    expect(result.needsOwner!.options.map((option) => option.label)).toEqual(['Take over', 'Use Chrome when it\u2019s open', 'Save a login for next time']);
+    expect(asked).toHaveLength(1);
+    // Learned: the next visit to amazon.com goes to the owner's Chrome when it is there.
+    expect(controller.status().learnedSignInSites).toContain('amazon.com');
+  });
+  it('moves to the owner\'s Chrome when it is connected, where he is signed in', async () => {
+    const { controller, log } = await routes({ settings: { yourChrome: true }, page: (url) => url.includes('amazon') && log.length === 1 ? SIGNED_OUT_CART(url) : {} });
+    await expect(controller.execute(navigate('https://www.amazon.com/gp/cart/view.html'), ctx())).resolves.toMatchObject({ route: 'chrome', completed: true });
+    expect(log).toEqual(['own https://www.amazon.com/gp/cart/view.html', 'chrome https://www.amazon.com/gp/cart/view.html']);
+  });
+  it('leaves a news front page with a Sign in link alone', async () => {
+    const { controller } = await routes({ settings: { yourChrome: true }, connected: false, page: SIGNED_OUT_CART });
+    const result = await controller.execute(navigate('https://news.test/'), ctx()) as { completed: boolean; needsOwner?: unknown };
+    expect(result).toMatchObject({ completed: true, route: 'own' });
+    expect(result.needsOwner).toBeUndefined();
+  });
+});
+
 describe('fallback without a stop', () => {
   it('not-connected: Chrome asked for but offline means the own browser, and the chat line says so', async () => {
     const { controller, log } = await routes({ settings: { yourChrome: true, signInSites: ['shop.test'] }, connected: false });
-    await expect(controller.execute(navigate('https://shop.test/'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your Chrome isn't connected, so I used my own browser for shop.test." });
+    await expect(controller.execute(navigate('https://shop.test/'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your Chrome isn't open right now, so I looked in my own browser." });
     expect(log).toEqual(['own https://shop.test/']);
     expect(controller.telemetry.events.map((event) => event.type === 'browser.stop' ? event.cause : event.type)).toContain('route-unavailable');
+  });
+  it('a Chrome the owner asked for and buddi cannot use is explained: not paired with this buddi, or closed', async () => {
+    const unpaired = await routes({ settings: { yourChrome: true }, connected: false, paired: false });
+    await unpaired.controller.pin('a', 'chrome');
+    await expect(unpaired.controller.execute(navigate('https://shop.test/cart'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your Chrome isn't connected to this buddi, so I looked in my own browser." });
+    // The agent's ask (prefer: yours) with Chrome paired but closed.
+    const closed = await routes({ settings: { yourChrome: true }, connected: false });
+    await expect(closed.controller.execute(navigate('https://shop.test/orders', { prefer: 'yours' }), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your Chrome isn't open right now, so I looked in my own browser." });
+    expect(closed.log).toEqual(['own https://shop.test/orders']);
+  });
+  it('the status says where the owner\'s Chrome stands, the same word on the route and at the top', async () => {
+    const { controller, connected, paired } = await routes({ settings: { yourChrome: true } });
+    const chromeRow = () => controller.status().routes!.find((route) => route.kind === 'chrome')!;
+    expect(controller.status().chrome).toBe('connected');
+    expect(chromeRow()).toMatchObject({ link: 'connected', paired: true, connected: true });
+    connected.value = false;
+    expect(controller.status({ conversationId: 'a' }).chrome).toBe('closed');
+    expect(chromeRow()).toMatchObject({ link: 'closed', paired: true, connected: false });
+    paired.value = false;
+    expect(controller.status().chrome).toBe('unpaired');
+    expect(chromeRow()).toMatchObject({ link: 'unpaired', paired: false });
   });
   it('not-connected mid-task: Chrome going away re-opens the same page in the own browser', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'buddi-routes-'));

@@ -335,6 +335,25 @@ describe('the browser extension endpoint', () => {
     expect(settled).toBe(true);
   });
 
+  it('hands the owner\'s Take over and Give it back from a tab to that session, and nothing else', async () => {
+    const { socketUrl, origin, extension } = await setup();
+    const headers = await session(origin);
+    const client = connect(socketUrl);
+    await client.open;
+    await client.hello(null);
+    const code = String((await client.next('pair')).code);
+    await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    await client.next('paired');
+    const heard: string[] = [];
+    const stop = extension.events('s1', (event) => heard.push(event));
+    client.send({ type: 'event', name: 'takeover', session: 's1' });
+    client.send({ type: 'event', name: 'giveback', session: 's1' });
+    client.send({ type: 'event', name: 'navigate', session: 's1' });
+    client.send({ type: 'event', name: 'giveback', session: 'someone-else' });
+    await vi.waitFor(() => expect(heard).toEqual(['takeover', 'giveback']));
+    stop();
+  });
+
   it('counts pongs only from the browser it is talking to', async () => {
     const { socketUrl, origin, extension } = await setup({ pingMs: 30 });
     const headers = await session(origin);

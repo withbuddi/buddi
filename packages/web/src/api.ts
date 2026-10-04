@@ -3167,6 +3167,8 @@ export interface BrowserRouteStatus {
   repair?: 'install' | 'permissions' | 'pair' | 'helper' | 'sandbox';
   paired?: boolean;
   connected?: boolean;
+  /** Chrome: `paired` and `connected` in one word. Optional: an older gateway does not send it. */
+  link?: 'unpaired' | 'closed' | 'connected';
   mode?: 'off' | 'ask' | 'on';
 }
 /** A browser card the run is parked on, waiting for the owner. */
@@ -3221,6 +3223,14 @@ export interface BrowserStatus {
   handMessage?: string;
   /** Take over only: `browser-offline` is "Your browser" with the extension not connected. */
   handReason?: 'browser-offline';
+  /**
+   * The owner holds the page where it is: a page in their Chrome was brought
+   * to the front there, so no frame comes. Draw "it's in your Chrome" with
+   * Give it back (`resume`), not a picture. Absent: take-over streams as before.
+   */
+  held?: { by: 'owner'; where: 'chrome' };
+  /** The owner's Chrome and this buddi: not paired, paired but closed, or connected. Optional: an older gateway does not send it. */
+  chrome?: 'unpaired' | 'closed' | 'connected';
   sessions?: BrowserStatus[];
   /** The agents' own browser on this machine. Own-browser mode only. */
   browser?: {

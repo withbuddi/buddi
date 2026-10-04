@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
-import { birthdayLine, createSystemManifest, DECISION_LINES, formatLine, hostFacts, NOTIFY_LINE, ownerLines, resourcefulLines, systemContext, systemTime } from './system-context.js';
+import { birthdayLine, createSystemManifest, DECISION_LINES, formatLine, hostFacts, LIST_ANSWER_LINE, NOTIFY_LINE, ownerLines, resourcefulLines, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
@@ -46,6 +46,12 @@ describe('shared platform context', () => {
     expect(bare).not.toContain('open the app or site themselves');
     expect((await systemContext(ctx, { agentId: 'home', tools: ['browser.act'] })).prompt).toContain('look with browser.act');
     expect((await systemContext(ctx)).prompt).not.toContain('Before you say you cannot');
+  });
+  it('tells an agent with the browser to answer lists of items as a short list, not a table', async () => {
+    const { ctx } = fixture();
+    expect(LIST_ANSWER_LINE).toBe('Lists of items (cart, orders, results) go as a short list, one line per item with name · price · one fact; tables only when the owner asks for a comparison.');
+    expect((await systemContext(ctx, { agentId: 'shopper', tools: ['browser.act'] })).prompt).toContain(LIST_ANSWER_LINE);
+    expect((await systemContext(ctx, { agentId: 'scout', tools: ['memory.recall'] })).prompt).not.toContain(LIST_ANSWER_LINE);
   });
   it('tells every run to take a single option, ask a few as choices, and state its defaults', async () => {
     const { ctx } = fixture();

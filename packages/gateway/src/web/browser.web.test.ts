@@ -333,6 +333,24 @@ describe('browser dashboard endpoints', () => {
     const telemetry = await fetch(`${origin}/api/browser/telemetry`, { headers });
     expect(await telemetry.json()).toMatchObject({ tasks: 3, byCause: [{ cause: 'sign-in', count: 1 }] });
   });
+  it('take over of a page in your Chrome passes the held status through, with no hand offered', async () => {
+    const held = { state: 'paused', enabled: true, busy: false, hasScreenshot: false, route: 'chrome', mode: 'extension', chrome: 'connected',
+      session: { id: 's1', agentId: 'a', conversationId: 'c1', requestId: 'r', task: 't', expiresAt: '', steps: 0, maxSteps: 200 },
+      held: { by: 'owner', where: 'chrome' }, message: 'The page is in front of you in your Chrome. Give it back when you are done.' };
+    const control = vi.fn(async () => held);
+    const hand = vi.fn(() => ({ supported: true, hand: {} }));
+    const fake = { enable: async () => {}, shutdown: async () => {}, status: () => held, screenshot: () => undefined,
+      execute: async () => ({}), secretFill: async () => ({}), secretType: async () => ({}), control, hand } as unknown as BrowserController;
+    const { origin } = await setup(true, fake);
+    const headers = await session(origin);
+    const taken = await fetch(`${origin}/api/browser/takeover`, { method: 'POST', headers, body: JSON.stringify({ sessionId: 's1' }) });
+    expect(taken.status).toBe(200);
+    const body = await taken.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ state: 'paused', held: { by: 'owner', where: 'chrome' }, hand: false, chrome: 'connected' });
+    expect(body).not.toHaveProperty('handMessage');
+    expect(control).toHaveBeenCalledWith('takeover', 's1', undefined);
+    expect(hand).not.toHaveBeenCalled();
+  });
   it('status is read-only and control needs CSRF plus same origin', async () => {
     const { origin, driver, browser } = await setup();
     const headers = await session(origin);

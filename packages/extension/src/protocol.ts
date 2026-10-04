@@ -35,13 +35,15 @@ export interface Observation {
 export const COMMAND_NAMES = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'fieldInfo', 'secretFill'] as const;
 /**
  * `screencast.start`/`screencast.stop` and `input` are the owner's own hand on
- * the page rather than anything a model may ask for, which is why they are not
+ * the page, and `hold`/`unhold` the owner taking it where it is (the tab
+ * brought to the front, a bar saying buddi waits), rather than anything a
+ * model may ask for, which is why they are not
  * in `COMMAND_NAMES`: that list is what an agent's tool can name. `fieldInfo`
  * and `secretFill` are on it because the owner's-secret tools reach them
  * exactly the way `browser.act` reaches the rest — the driver sends them, and
  * the owner's approval card, not this list, is what stands behind them.
  */
-export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input'] as const;
+export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input', 'hold', 'unhold'] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number] | (typeof HAND_COMMANDS)[number] | 'screenshot';
 
 /** What `fieldInfo` answers about the field a secret is aimed at. Never a value. */

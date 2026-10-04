@@ -3083,6 +3083,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         // Whether this screen can be driven from here at all. The dashboard
         // shows the mode's own sentence when it cannot.
         const taken = sessionId ?? status.session?.id;
+        // A page in the owner's Chrome is taken over where it is: its tab came to the front there, so no frame will come.
+        if (action === 'takeover' && status.held) return sendJson(res, 200, { ...status, hand: false });
         const offer = action === 'takeover' && taken ? browser.hand?.({ sessionId: taken }) : undefined;
         /*
          * "Your browser" with Chrome closed: the take-over itself succeeds (the

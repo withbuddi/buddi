@@ -12,7 +12,7 @@ import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngi
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
 import { applySettingsChange, migrateSettings, PIN_VALUES, settingsSchema, type ControlSettings, type RouteKind, type RoutePin } from './settings.js';
-import { agoText, cardAnswer, ownerClock, chooseRoute, detectWall, ownerCard, RouteProviderDriver, routeNote, siteListed, siteOf, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
+import { agoText, cardAnswer, ownerClock, chooseRoute, detectSignedOut, detectWall, ownerCard, RouteProviderDriver, routeNote, siteListed, siteOf, type ChromeLink, type ChromeMiss, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
 import { BrowserTelemetry, missionMark, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
 import { canonicalOrigin, fieldBoundTo } from './secrets.js';
 
@@ -112,7 +112,8 @@ export class HostController implements BrowserController {
     // Read at launch, so Show the window applies to the next launch without a restart.
     Object.defineProperty(hostOptions, 'headless', { enumerable: true, get: () => self.#headless });
     this.#host = new PlaywrightHost(hostOptions);
-    const base: BrowserServiceOptions = { ...options.service, telemetry: this.telemetry, requestTakeover: (sessionId) => { void this.control('takeover', sessionId).catch(() => undefined); } };
+    const base: BrowserServiceOptions = { ...options.service, telemetry: this.telemetry, requestTakeover: (sessionId) => { void this.control('takeover', sessionId).catch(() => undefined); },
+      requestResume: (sessionId) => { void this.control('resume', sessionId).catch(() => undefined); } };
     this.#ownOptions = { ...base, route: 'own', maxSessions: options.limits?.own ?? this.#settings.maxOwnPages, closeHost: () => this.#host.close(),
       ...(options.idleEvictMs !== undefined ? { idleEvictMs: options.idleEvictMs } : {}), ...(options.queueTimeoutMs !== undefined ? { queueTimeoutMs: options.queueTimeoutMs } : {}) };
     this.#managers = {
@@ -172,6 +173,16 @@ export class HostController implements BrowserController {
 
   #chromeConnected(): boolean { try { return this.#bridge().connected(); } catch { return false; } }
   #chromePaired(): boolean { try { return this.#bridge().paired?.() ?? this.#chromeConnected(); } catch { return false; } }
+  /** The owner's Chrome as Settings and the composer's pin see it: not paired with this buddi, paired but closed, or connected. */
+  chromeLink(): ChromeLink {
+    return this.#chromeConnected() ? 'connected' : this.#chromePaired() ? 'closed' : 'unpaired';
+  }
+  /** Why the owner's Chrome cannot serve right now, for the one line a fallback says. */
+  #chromeMiss(): ChromeMiss | undefined {
+    if (!this.#settings.yourChrome) return 'off';
+    const link = this.chromeLink();
+    return link === 'connected' ? undefined : link;
+  }
   routes(): RouteStatus[] {
     const engine = this.#engine();
     const ownOk = engine.engine !== 'none' && !engine.problem;
@@ -181,6 +192,7 @@ export class HostController implements BrowserController {
     const connected = this.#chromeConnected();
     const paired = this.#chromePaired();
     const chrome: RouteStatus = { kind: 'chrome', allowed: this.#settings.yourChrome, available: this.#settings.yourChrome && connected, provider: 'core', paired, connected,
+      link: connected ? 'connected' : paired ? 'closed' : 'unpaired',
       ...(!paired ? { message: 'Add buddi to Chrome and pair it to let agents use your Chrome.', repair: 'pair' as const }
         : !connected ? { message: 'Your Chrome is paired but not connected right now: open Chrome.' } : {}) };
     const plugin = this.#pluginApps();
@@ -312,7 +324,7 @@ export class HostController implements BrowserController {
       settings: { ...this.#settings, signInSites: [...this.#settings.signInSites] },
       // The sites buddi added itself when it met their sign-in page: one list with the owner's in Settings.
       learnedSignInSites: [...this.#learned].filter((site) => !this.#settings.signInSites.includes(site)).sort(),
-      browser: this.#engine(), routes: this.routes(),
+      browser: this.#engine(), routes: this.routes(), chrome: this.chromeLink(),
       ...(stop ? { stop: { at: new Date(stop.at).toISOString(), ...(stop.until !== undefined ? { until: new Date(stop.until).toISOString() } : {}) } } : {}),
       ...(scope?.conversationId && this.#pins.has(scope.conversationId) ? { pin: this.#pins.get(scope.conversationId)! } : {}),
     };
@@ -637,7 +649,10 @@ export class HostController implements BrowserController {
   async #walls(result: unknown, route: RouteKind, choice: RouteChoice, ctx: ToolContext, unattended: boolean): Promise<{ result: unknown; route: RouteKind; choice: RouteChoice }> {
     const observation = (result as { observation?: Observation; needsOwner?: unknown } | undefined);
     if (!observation?.observation || observation.needsOwner) return { result, route, choice };
-    const wall = detectWall(observation.observation);
+    const seenSite = siteOf(observation.observation.url);
+    // A full login page, or a page that renders signed out where the task needs the owner's account.
+    const wall = detectWall(observation.observation)
+      ?? (detectSignedOut(observation.observation, { task: ctx.ownerRequest?.text, signInSite: this.#signInSite(seenSite) }) ? 'sign-in' as const : undefined);
     if (!wall) return { result, route, choice };
     const scope = { agentId: ctx.agentId!, conversationId: ctx.conversationId! };
     const child = this.#managers[route].child(scope);
@@ -681,7 +696,7 @@ export class HostController implements BrowserController {
     let note: string | undefined;
     const reason: RouteReason = choice.reason;
     if (route !== 'own' || choice.fallbackFrom) {
-      const candidate = routeNote(route, reason, site, appName);
+      const candidate = routeNote(route, reason, site, appName, choice.fallbackFrom === 'chrome' ? this.#chromeMiss() : undefined);
       const said = `${ctx.conversationId}|${route}|${site ?? appName ?? ''}`;
       if (candidate && !this.#noted.has(said) && reason !== 'continuing') { this.#noted.add(said); note = candidate; }
     }

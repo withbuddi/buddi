@@ -68,6 +68,16 @@ seconds shows a thin bar in the tab: *buddi is working here · Take over · Let
 it continue*. **Let it continue** lets the agent act in view, in that tab;
 **Take over** is the Canvas button. Taking over is the only foreground moment.
 
+**Taking over a page in your Chrome** brings it forward where it is: the tab
+becomes the active one and its window comes to the front (a background tab
+cannot be captured, so there is no picture to stream). The take-over's status
+carries `held: { by: 'owner', where: 'chrome' }` and no hand; the bar in the
+tab says *buddi is waiting · Give it back*. **Give it back** there, or in the
+Canvas (`resume`), takes the bar down and lets the agent carry on in that tab
+although you are looking at it. Since the extension from 0.1.0-pre.39 (`hold`, `unhold`,
+and the `giveback` event); an older extension leaves the page paused and the
+status message says where it is.
+
 ## When you are asked: four cards
 
 Everything else retries or falls back silently. You are asked, with one card
@@ -571,14 +581,18 @@ directory accordingly. No tool exports passwords, cookies or profile files.
 
 ### The remote hand: driving from the dashboard
 
-**Take over** now offers more than a pause. In the two browser modes — "Your
-browser" and Playwright — the Page tab answers it with a live picture of the
+**Take over** now offers more than a pause. In buddi's own browser the Page
+tab answers it with a live picture of the
 page and takes your pointer and keyboard on it, so a login, an MFA prompt or a
 consent banner can be dealt with from a phone instead of by walking to the
 machine. A thin bar over the picture says *You are driving. Nothing you type
 here is kept*, with **Give it back** beside it and, on a phone, a **Type into
 the page** toggle that raises the keyboard. **Give it back** is `resume`: the agent's evidence is
 invalidated and it must observe again before acting.
+
+A page in your Chrome is not streamed: Take over brings its tab to the front
+of your Chrome instead (see "Work in view" above), and the status says so with
+`held`.
 
 **With no browser connected.** In "Your browser" mode with the extension
 offline (Chrome closed on the host), Take over still pauses the agent but there

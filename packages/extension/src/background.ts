@@ -14,6 +14,7 @@
  */
 
 import { BrowserCommands } from './commands.js';
+import { GIVE_BACK_MESSAGE } from './bar.js';
 import type { WorkerChrome } from './chrome.js';
 import { handleExternal, type ExtensionStatus } from './external.js';
 import { Protocol, type ClientState } from './protocol.js';
@@ -209,9 +210,15 @@ function schedule(): void {
   timer = setTimeout(() => { timer = undefined; safely(() => connect()); }, wait);
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, respond) => {
-  const request = message as { type?: string; gateway?: string } | null;
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  const request = message as { type?: string; gateway?: string; session?: string } | null;
   if (!request || typeof request.type !== 'string') return;
+  // Give it back, from the bar in a tab the owner holds: only for the session holding that very tab.
+  if (request.type === GIVE_BACK_MESSAGE) {
+    const tabId = (sender as { tab?: { id?: number } } | undefined)?.tab?.id;
+    if (typeof request.session === 'string') safely(() => commands.giveBack(request.session!, tabId).then(() => undefined));
+    return;
+  }
   if (request.type === 'buddi-get-state') { respond({ state: last }); return; }
   if (request.type === 'buddi-connect') {
     safely(async () => {

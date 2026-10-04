@@ -7,14 +7,16 @@ import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type Brows
 /** Every frame name the owner's Chrome understands. */
 export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot', 'fieldInfo', 'secretFill'] as const;
 /**
- * The take-over's own three, kept out of the list above.
+ * The take-over's own, kept out of the list above: the screencast pair and
+ * `input` for the remote hand, `hold`/`unhold` for a take-over in place (the
+ * tab brought to the front of the owner's Chrome, its bar saying buddi waits).
  *
  * Nothing an agent can name reaches them: they exist for the owner's hand, and
  * the extension keeps the same split on its side. `fieldInfo` and `secretFill`
  * are the owner's-secret pair — `secret.fill` rides them the way `browser.act`
  * rides the rest — and only the driver sends them.
  */
-export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input'] as const;
+export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input', 'hold', 'unhold'] as const;
 export type ExtensionCommandName = (typeof EXTENSION_COMMANDS)[number] | (typeof HAND_COMMANDS)[number];
 
 export interface ExtensionCommand {
@@ -79,8 +81,12 @@ export interface ExtensionBridge {
    */
   events?(session: string, listener: (event: ExtensionEvent) => void): () => void;
 }
-/** An unsolicited event from the extension about one session. */
-export type ExtensionEvent = 'takeover';
+/**
+ * An unsolicited event from the extension about one session: `takeover` from
+ * the working bar, `giveback` from the bar a held tab shows (extension
+ * from 0.1.0-pre.39).
+ */
+export type ExtensionEvent = 'takeover' | 'giveback';
 
 export const NOT_CONNECTED = 'Your browser is not connected. Open the buddi extension in Chrome and press Connect.';
 
@@ -123,11 +129,21 @@ export class ExtensionDriver implements BrowserDriver {
   }
 
   #events?: () => void;
-  /** The in-tab bar's Take over: the service treats it as the Canvas button. */
-  onOwnerTakeover(listener: () => void): void {
+  #onTakeover?: () => void;
+  #onGiveBack?: () => void;
+  #listen(): void {
     this.#events?.();
-    this.#events = this.bridge.events?.(this.session, (event) => { if (event === 'takeover') listener(); });
+    this.#events = this.bridge.events?.(this.session, (event) => {
+      if (event === 'takeover') this.#onTakeover?.();
+      else if (event === 'giveback') this.#onGiveBack?.();
+    });
   }
+  /** The in-tab bar's Take over: the service treats it as the Canvas button. */
+  onOwnerTakeover(listener: () => void): void { this.#onTakeover = listener; this.#listen(); }
+  /** The held tab's Give it back: the service treats it as the Canvas's. */
+  onOwnerGiveBack(listener: () => void): void { this.#onGiveBack = listener; this.#listen(); }
+  /** Take-over brings the tab forward in the owner's Chrome; nothing is streamed. */
+  readonly holdsInPlace = 'chrome' as const;
 
   #invalidate(): void { this.#observation = undefined; this.#picture = undefined; }
 
@@ -249,8 +265,16 @@ export class ExtensionDriver implements BrowserDriver {
     return this.#picture;
   }
 
-  /** The owner keeps using Chrome: takeover only drops this agent's evidence. */
-  async takeover(): Promise<void> { this.#invalidate(); }
+  /**
+   * The owner takes the page where it is: the session's tab becomes the
+   * active one and its window comes forward, with the bar saying buddi waits
+   * and offering Give it back. The agent's evidence is dropped.
+   */
+  async takeover(): Promise<void> {
+    this.#invalidate();
+    if (!this.bridge.connected()) throw new Error(NOT_CONNECTED);
+    await this.bridge.send({ name: 'hold', session: this.session, args: {}, owner: true });
+  }
   /**
    * The owner took over mid-action: the command is abandoned, the tab is not.
    *
@@ -264,7 +288,12 @@ export class ExtensionDriver implements BrowserDriver {
     this.#settling = undefined;
     await this.bridge.idle?.().catch(() => undefined);
   }
-  resume(): void { this.#invalidate(); }
+  /** Given back: the waiting bar goes, and the agent may act in that tab although the owner is looking at it. */
+  resume(): void {
+    this.#invalidate();
+    if (!this.bridge.connected()) return;
+    void this.bridge.send({ name: 'unhold', session: this.session, args: {}, owner: true }).catch(() => undefined);
+  }
 
   /**
    * The remote hand: a screencast out of the session's tab, and the owner's

@@ -105,5 +105,49 @@ export function hideBar(): void {
   delete holder['__buddiBar'];
 }
 
-/** The frame the worker sends the gateway when the owner pressed Take over in the bar. */
-export interface OwnerEventMessage { type: 'event'; name: 'takeover'; session: string }
+/* ---- the held tab: the owner has it, buddi waits ---- */
+
+export const HELD_BAR_ID = 'buddi-held-bar';
+/** What the held bar's Give it back sends the worker (runtime message). */
+export const GIVE_BACK_MESSAGE = 'buddi-give-back';
+
+/**
+ * "buddi is waiting · Give it back" — drawn while the owner holds a tab they
+ * took over from the Canvas or the working bar. Give it back tells the worker
+ * (a runtime message, which only this extension's own scripts can send), and
+ * the worker tells the gateway. Serialised into the tab: self-contained.
+ */
+export function showHeldBar(session: string): void {
+  const doc = (globalThis as unknown as { document?: Document }).document;
+  if (!doc || doc.getElementById('buddi-held-bar')) return;
+  const host = doc.createElement('div');
+  host.id = 'buddi-held-bar';
+  host.setAttribute('style', 'position:fixed;top:0;left:0;right:0;z-index:2147483647;all:initial;');
+  const root = host.attachShadow({ mode: 'closed' });
+  const bar = doc.createElement('div');
+  bar.setAttribute('role', 'status');
+  bar.setAttribute('style', 'position:fixed;top:0;left:0;right:0;display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:6px 16px;font:13px/1.4 system-ui,-apple-system,sans-serif;background:#1f2a44;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);');
+  const label = doc.createElement('span');
+  label.textContent = 'buddi is waiting';
+  label.setAttribute('style', 'margin-right:auto;');
+  const give = doc.createElement('button');
+  give.type = 'button';
+  give.textContent = 'Give it back';
+  give.setAttribute('style', 'font:inherit;cursor:pointer;border-radius:6px;padding:3px 10px;border:1px solid #fff;background:#fff;color:#1f2a44;');
+  give.addEventListener('click', () => {
+    const runtime = (globalThis as unknown as { chrome?: { runtime?: { sendMessage(message: unknown): Promise<unknown> } } }).chrome?.runtime;
+    void runtime?.sendMessage({ type: 'buddi-give-back', session })?.catch?.(() => undefined);
+    host.remove();
+  });
+  bar.append(label, give);
+  root.append(bar);
+  (doc.documentElement ?? doc.body).append(host);
+}
+
+export function hideHeldBar(): void {
+  const doc = (globalThis as unknown as { document?: Document }).document;
+  doc?.getElementById('buddi-held-bar')?.remove();
+}
+
+/** The frame the worker sends the gateway when the owner pressed Take over in the working bar, or Give it back in the held one. */
+export interface OwnerEventMessage { type: 'event'; name: 'takeover' | 'giveback'; session: string }

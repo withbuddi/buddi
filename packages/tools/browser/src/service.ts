@@ -4,7 +4,7 @@ import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
 import { APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
-import { ownerCard, siteOf, type OwnerCard, type CardKind } from './routes.js';
+import { ownerCard, siteOf, type ChromeLink, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
 import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
 
@@ -73,6 +73,8 @@ export interface RouteStatus {
   /** Chrome: a pairing exists / the extension is connected right now. */
   paired?: boolean;
   connected?: boolean;
+  /** Chrome: `paired` and `connected` in one word: `unpaired`, `closed` (paired, Chrome not connected) or `connected`. */
+  link?: ChromeLink;
   /** Apps: the yes/no/ask switch. */
   mode?: 'off' | 'ask' | 'on';
 }
@@ -98,6 +100,14 @@ export interface BrowserStatus {
   hasScreenshot: boolean;
   /** The card this page is parked on, waiting for the owner. */
   needsOwner?: OwnerCard;
+  /**
+   * The owner holds this page where it already is, so there is no picture to
+   * stream: a take-over of a page in the owner's Chrome brings its tab to the
+   * front of their Chrome instead. Present only while paused that way; the
+   * Canvas says where the page is and offers Give it back (`resume`), and the
+   * bar in the tab offers the same. Absent: a take-over streams frames as before.
+   */
+  held?: BrowserHeld;
   /** Owner dashboard only; agent tools receive just their conversation. */
   sessions?: BrowserStatus[];
   /** The agents' own browser on this machine: what launches, and how. */
@@ -110,7 +120,11 @@ export interface BrowserStatus {
   pin?: string;
   /** Sites buddi added to "needs my sign-in" itself, beside the owner's own `settings.signInSites`. */
   learnedSignInSites?: string[];
+  /** The owner's Chrome and this buddi: `unpaired`, `closed` (paired, not connected now) or `connected`. Same as the chrome route's `link`. */
+  chrome?: ChromeLink;
 }
+/** Who holds a page in place, and where: today only the owner, in their own Chrome. */
+export interface BrowserHeld { by: 'owner'; where: 'chrome' }
 /** What the agents' own browser is here, and what the owner can do about it. */
 export interface BrowserEngineStatus {
   /** `none`: nothing to launch until the owner installs one. */
@@ -176,6 +190,8 @@ export interface BrowserServiceOptions {
   route?: RouteKind;
   /** The owner pressed Take over in the page itself (the extension's bar): the controller decides, one page at a time. */
   requestTakeover?: (sessionId: string) => void;
+  /** The owner pressed Give it back in the page itself: the controller resumes it, so the waiting run hears of it. */
+  requestResume?: (sessionId: string) => void;
 }
 
 /** A result that carries a card: the run stops and the surface draws it. */
@@ -197,6 +213,8 @@ export class BrowserService {
   #picture?: Buffer;
   #busy = false;
   #handless = false;
+  /** The owner holds the page in place (their Chrome brought it forward): no frames, no hand. */
+  #held = false;
   #controller?: AbortController;
   #expiry?: ReturnType<typeof setTimeout>;
   #lastAction?: string;
@@ -227,6 +245,13 @@ export class BrowserService {
       if (this.options.requestTakeover) this.options.requestTakeover(id);
       else void this.control('takeover').catch(() => undefined);
     });
+    // Give it back pressed in the held tab's bar is the Canvas's Give it back.
+    this.driver.onOwnerGiveBack?.(() => {
+      const id = this.#session?.id;
+      if (!id || this.#state !== 'paused') return;
+      if (this.options.requestResume) this.options.requestResume(id);
+      else void this.control('resume').catch(() => undefined);
+    });
     this.#state = 'idle';
     this.#enabled = true;
   }
@@ -238,6 +263,7 @@ export class BrowserService {
       ...(session ? { session: { ...session, route: this.#route } as NonNullable<BrowserStatus['session']>, route: this.#route, mode: modeOf(this.#route) } : {}),
       ...(this.#observation ? { page: page as Omit<Observation, 'tree' | 'targets'> } : {}),
       ...(this.#card ? { needsOwner: this.#card } : {}),
+      ...(this.#state === 'paused' && this.#held && this.driver.holdsInPlace ? { held: { by: 'owner' as const, where: this.driver.holdsInPlace } } : {}),
       lastAction: this.#lastAction, message: this.#message, hasScreenshot: !!this.#picture };
   }
 
@@ -259,6 +285,7 @@ export class BrowserService {
    * take-over state, the only one in which a dashboard may drive.
    */
   hand(_scope?: BrowserScope): BrowserHandOffer {
+    if (this.#held && this.#state === 'paused') return { supported: false, message: 'The page is in front of you in your Chrome.' };
     if (this.driver.supportsHand === false || !this.driver.hand) {
       return { supported: false, message: this.driver.handMessage ?? 'Take over at the computer for this route.' };
     }
@@ -675,6 +702,7 @@ export class BrowserService {
     }
     if (this.#observation?.url) this.#lastUrl = this.#observation.url;
     this.#handless = false;
+    if (this.#held) { this.#held = false; this.driver.resume?.(); }
     this.#state = state;
     this.#controller?.abort(new Error(`Browser ${state}. An in-flight submission may have completed; inspect before retrying.`));
     clearTimeout(this.#expiry);
@@ -686,6 +714,31 @@ export class BrowserService {
     this.#card = undefined;
     this.#targetingFailures = 0;
     await this.driver.close();
+  }
+
+  /**
+   * Take over a page in the owner's own Chrome: no stream, the tab itself.
+   * An action in flight is abandoned first (the tab is kept), then the tab is
+   * brought to the front of their Chrome with its bar saying buddi waits.
+   * When Chrome cannot do that (closed, an extension too old to know how),
+   * the page stays paused and the message says where it is instead.
+   */
+  async #holdInPlace(): Promise<void> {
+    this.#held = false;
+    if (this.#busy) {
+      this.#controller?.abort(new Error('Owner took control during an action. Inspect the site before retrying.'));
+      this.#picture = undefined;
+      this.#observation = undefined;
+      await this.#interrupt();
+    }
+    try {
+      await this.driver.takeover?.();
+      this.#held = true;
+      this.#message = 'The page is in front of you in your Chrome. Give it back when you are done.';
+    } catch (error) {
+      const why = error instanceof Error ? error.message.replace(/\.$/, '') : String(error);
+      this.#message = `Your Chrome couldn't bring the page forward (${why}). It is in the buddi tab group there; give it back when you are done.`;
+    }
   }
 
   /** Only authenticated owner UI handlers call this; it is not an agent tool. */
@@ -701,7 +754,9 @@ export class BrowserService {
         this.#state = 'paused';
         this.#message = undefined;
         this.#card = undefined;
-        if (this.#busy) {
+        if (this.driver.holdsInPlace) {
+          await this.#holdInPlace();
+        } else if (this.#busy) {
           // Take over is pressed most often *while* the agent works on a login:
           // the action is abandoned and the page kept, when the driver can.
           this.#controller?.abort(new Error('Owner took control during an action. Inspect the site before retrying.'));
@@ -720,6 +775,7 @@ export class BrowserService {
         if (this.#busy) throw new Error('Wait for the interrupted action to settle before giving it back.');
         this.driver.resume?.();
         this.#handless = false;
+        this.#held = false;
         this.#observation = undefined;
         this.#picture = undefined;
         // The owner acted: a fresh budget, and the agent's next action returns the page as the owner left it.

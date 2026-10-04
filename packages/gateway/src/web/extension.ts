@@ -266,14 +266,16 @@ export class ExtensionEndpoint implements ExtensionBridge {
   }
 
   /**
-   * What the owner did in a tab itself: Take over in the in-tab bar. Handed to
+   * What the owner did in a tab itself: Take over in the in-tab bar, or Give
+   * it back in the bar a held tab shows. Handed to
    * that session's listener (the driver, which tells the browser runtime) and
    * kept nowhere. Only from the paired socket, only a known event name.
    */
   #event(ws: WebSocket, frame: Record<string, unknown>): void {
-    if (ws !== this.#socket || frame.name !== 'takeover' || typeof frame.session !== 'string') return;
+    if (ws !== this.#socket || (frame.name !== 'takeover' && frame.name !== 'giveback') || typeof frame.session !== 'string') return;
+    const event: ExtensionEvent = frame.name;
     for (const listener of this.#events.get(frame.session) ?? []) {
-      try { listener('takeover'); } catch { /* a listener never breaks the socket */ }
+      try { listener(event); } catch { /* a listener never breaks the socket */ }
     }
   }
 

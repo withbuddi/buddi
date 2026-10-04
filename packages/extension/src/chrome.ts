@@ -28,6 +28,8 @@ export interface ChromeLike {
     get(tabId: number): Promise<TabInfo>;
     remove(tabIds: number[]): Promise<void>;
     query(query: { windowId?: number }): Promise<TabInfo[]>;
+    /** A tab finished loading (or changed): a held tab's bar is drawn again on its new page. */
+    onUpdated?: { addListener(listener: (tabId: number, change: { status?: string }, tab: TabInfo) => void): void };
   };
   tabGroups: {
     update(groupId: number, properties: { title?: string; collapsed?: boolean }): Promise<unknown>;
@@ -43,6 +45,8 @@ export interface ChromeLike {
     getLastFocused?(options: { windowTypes?: WindowType[] }): Promise<WindowInfo>;
     getAll?(options: { windowTypes?: WindowType[] }): Promise<WindowInfo[]>;
     create?(data: { url?: string; focused?: boolean; state?: 'normal' }): Promise<WindowInfo & { tabs?: TabInfo[] }>;
+    /** Bring a window to the front: a take-over in place focuses the held tab's window. */
+    update?(windowId: number, data: { focused?: boolean }): Promise<WindowInfo>;
   };
   scripting: {
     executeScript<Args extends unknown[] = [], Result = unknown>(injection: {

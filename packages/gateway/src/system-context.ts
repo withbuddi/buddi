@@ -81,6 +81,7 @@ export async function systemContext(
     (owner === '' ? '' : `\n\n${owner}`) + (places === '' ? '' : `\n\n${places}`) + (learning === '' ? '' : `\n\n${learning}`) +
     (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') +
     (run ? `\n\n${resourcefulLines(run.tools)}` : '') +
+    (run?.tools.includes('browser.act') ? `\n\n${LIST_ANSWER_LINE}` : '') +
     (run ? `\n\n${DECISION_LINES}` : '') };
 }
 
@@ -132,6 +133,15 @@ export const DECISION_LINES = [
   '- Do not ask about details with a sensible default: use it and state it in the confirmation or the approval preview — an evening dinner lasts 2 hours, a meeting 1 hour, the place is where they said.',
   'Ask only what you cannot read or reasonably assume; a name you can look up in contacts or past mail is not a question.',
 ].join('\n');
+
+/**
+ * How a browser answer reads in the chat column: a 4-item cart came back as a
+ * 6-column table, which a phone cannot read. Beside the try-first and
+ * decide-or-ask rules, for an agent that holds the browser; the browser
+ * tool's own description says the same.
+ */
+export const LIST_ANSWER_LINE =
+  'Lists of items (cart, orders, results) go as a short list, one line per item with name · price · one fact; tables only when the owner asks for a comparison.';
 
 /** For an agent that holds `owner.notify`: when to use it, and when not. */
 export const NOTIFY_LINE =

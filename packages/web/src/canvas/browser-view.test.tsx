@@ -279,6 +279,26 @@ describe('the Page tab', () => {
     expect(vi.mocked(api.browserControl).mock.calls.filter(([action]) => action === 'takeover')).toHaveLength(1);
   });
 
+  it('a page held in your Chrome: it is in front there, so no hand is asked for and no frame waited on; Give it back resumes', async () => {
+    device('desktop');
+    vi.stubGlobal('WebSocket', FakeSocket);
+    vi.mocked(api.browserControl).mockResolvedValue(status);
+    const inChrome: BrowserStatus = { ...status, state: 'paused', route: 'chrome', held: { by: 'owner', where: 'chrome' }, page: { ...status.page!, url: 'https://www.amazon.com/cart', title: 'Your cart' } };
+    render(<BrowserView status={inChrome} error={null} reload={() => {}} live agentName="Home Manager" />);
+    expect(screen.getByText('You have the page · in your Chrome · it’s in front')).toBeInTheDocument();
+    expect(screen.getByText('Finish in Chrome, then give it back.')).toBeInTheDocument();
+    // No reattach on a desktop, no Drive it here, no socket.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(api.browserControl).not.toHaveBeenCalledWith('takeover', 's1');
+    expect(screen.queryByRole('button', { name: 'Drive it here' })).toBeNull();
+    expect(screen.queryByTestId('remote-hand')).toBeNull();
+    expect(FakeSocket.all).toHaveLength(0);
+    // The window's bar is asleep.
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Give it back' }));
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume', 's1'));
+  });
+
   it('on a phone, the keyboard button says Type into the page, with a hint', async () => {
     device('phone');
     vi.stubGlobal('WebSocket', FakeSocket);
