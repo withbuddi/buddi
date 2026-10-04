@@ -1391,7 +1391,7 @@ describe('chapter 5: your assistant', () => {
   it('turns a refusal into a notice with the way to Agents, and keeps the button down', async () => {
     atAssistant();
     const message = 'You already have an agent of your own. Add another one from the Agents page.';
-    vi.mocked(api.createFirstAgent).mockRejectedValue(new ApiError(409, message));
+    vi.mocked(api.createFirstAgent).mockRejectedValue(new ApiError(409, message, { error: message, code: 'assistant-exists' }));
     const navigate = vi.fn();
     render(meet(navigate));
     const submit = await screen.findByRole('button', { name: SCRIPT.assistant.submit });
@@ -1402,6 +1402,25 @@ describe('chapter 5: your assistant', () => {
     fireEvent.click(screen.getByRole('link', { name: SCRIPT.assistant.toAgents }));
     expect(navigate).toHaveBeenCalledWith('#/agents');
     expect(api.createFirstAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps any other 409 inline and lets the owner correct it and try again', async () => {
+    atAssistant();
+    const message = '@sam is already Sam. Pick another one.';
+    vi.mocked(api.createFirstAgent)
+      .mockRejectedValueOnce(new ApiError(409, message, { error: message }))
+      .mockResolvedValueOnce({ agent: null, id: 'samwise', handle: 'samwise', file: '', live: true, accountId: null });
+    render(meet());
+    const submit = await screen.findByRole('button', { name: SCRIPT.assistant.submit });
+    fireEvent.click(submit);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText(SCRIPT.assistant.refusedTitle)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue(DEFAULT_ASSISTANT_NAME), { target: { value: 'Samwise' } });
+    const again = screen.getByRole('button', { name: SCRIPT.assistant.submit });
+    expect(again).toBeEnabled();
+    fireEvent.click(again);
+    await waitFor(() => expect(api.createFirstAgent).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.createFirstAgent).mock.calls[1]![0]).toMatchObject({ name: 'Samwise', handle: 'samwise' });
   });
 });
 

@@ -212,6 +212,17 @@ export function hasAssistant(catalog: AgentCatalog): boolean {
   return assistantCandidates(catalog).length > 0;
 }
 
+/**
+ * Does this installation hold any agent of the owner's, proposed teammates
+ * included? Examples are not one. This is the first-run restore's "nothing to
+ * lose" test, which is wider than `hasAssistant`: Mail Triage accepted in
+ * chapter 3 is a private file a restore would overwrite.
+ */
+export function hasOwnerAgent(catalog: AgentCatalog): boolean {
+  const list = typeof catalog?.list === 'function' ? catalog.list() : [];
+  return list.some((agent) => agent.source !== 'example');
+}
+
 /** The proposed teammates already here, by name: the assistant's hello mentions them. */
 export function proposedTeammates(catalog: AgentCatalog): string[] {
   const list = typeof catalog?.list === 'function' ? catalog.list() : [];
@@ -258,7 +269,12 @@ export async function readOnboarding(deps: OnboardingDeps): Promise<OnboardingVi
 
 /** A refusal with the status the route answers with. */
 export class OnboardingRefusal extends Error {
-  constructor(readonly status: number, message: string) {
+  /**
+   * A machine-readable reason, for the refusals a screen treats differently
+   * from "fix it and try again". `assistant-exists`: `/api/onboarding/agent`
+   * will never write one here, so the chapter offers Agents instead.
+   */
+  constructor(readonly status: number, message: string, readonly code?: string) {
     super(message);
     this.name = 'OnboardingRefusal';
   }
@@ -514,7 +530,7 @@ async function writeFirstAgent(
   // approved rather than assumed. A teammate a plugin proposed earlier in first
   // run is not an assistant and does not close the route.
   if (hasAssistant(deps.catalog)) {
-    throw new OnboardingRefusal(409, 'You already have an agent of your own. Add another one from the Agents page.');
+    throw new OnboardingRefusal(409, 'You already have an agent of your own. Add another one from the Agents page.', 'assistant-exists');
   }
   const name = input.name.trim();
   if (name === '' || name.length > 60) {
@@ -656,7 +672,12 @@ function generatedPersona(body: string, name: string, description: string): { in
 /** The owner's assistant, if they have one. Examples and proposed teammates are not it. */
 export function privateAgent(catalog: AgentCatalog): { id: string; handle: string; file: string; name: string; description: string } | undefined {
   const own = assistantCandidates(catalog);
-  const summary = own.find((agent) => agent.isDefault) ?? own[0];
+  // A proposed teammate the owner made the default is a candidate, but when an
+  // assistant first run wrote is also here, that one is what these routes
+  // edit: the recorded default wins only when it is the sole candidate.
+  const written = own.filter((agent) => !proposedAgent(catalog, agent.id));
+  const pool = written.length > 0 ? written : own;
+  const summary = pool.find((agent) => agent.isDefault) ?? pool[0];
   // The summary says who; the whole agent says which file, which is what an
   // edit needs.
   const chosen = summary && typeof catalog.get === 'function' ? catalog.get(summary.id) : undefined;

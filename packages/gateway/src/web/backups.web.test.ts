@@ -9,7 +9,7 @@
  * installation has an agent of its own.
  */
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readdir } from 'node:fs/promises';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
@@ -63,12 +63,24 @@ function fakePool(state: { preferredName: string | null; onboarding: string }) {
   };
 }
 
-async function dashboard(env: NodeJS.ProcessEnv, over: { agents?: string[]; pool?: unknown } = {}) {
-  const agents = (over.agents ?? []).map((id) => ({ id, source: 'private' as const }));
+async function dashboard(env: NodeJS.ProcessEnv, over: { agents?: string[]; proposed?: string[]; pool?: unknown } = {}) {
+  const agents = [...(over.agents ?? []), ...(over.proposed ?? [])].map((id) => ({ id, name: id, source: 'private' as const }));
+  // A proposed agent has the plugin provenance sidecar beside its file.
+  const files = new Map<string, string>();
+  for (const id of over.proposed ?? []) {
+    const dir = await mkdtemp(path.join(tmpdir(), `buddi-proposed-${id}-`));
+    await writeFile(path.join(dir, 'agent.md'), `---\nid: ${id}\n---\n`, 'utf8');
+    await writeFile(path.join(dir, 'plugin.json'), JSON.stringify({ plugin: 'email', agent: id }), 'utf8');
+    files.set(id, path.join(dir, 'agent.md'));
+  }
   const app = await startWebServer({
     pool: (over.pool ?? fakePool({ preferredName: null, onboarding: 'pending' })) as never,
     registry: new ToolRegistry(),
-    catalog: { list: () => agents, get: () => undefined, reload: () => {} } as unknown as AgentCatalog,
+    catalog: {
+      list: () => agents,
+      get: (id: string) => (files.has(id) ? { id, file: files.get(id) } : undefined),
+      reload: () => {},
+    } as unknown as AgentCatalog,
     ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', env,
   });
@@ -148,6 +160,18 @@ it('is the first-run restore only while nothing has been answered and no agent e
   const refusedAgent = await fetch(`${withAgent.origin}/api/onboarding/restore`, { method: 'POST', headers: json(withAgent.headers), body });
   expect(refusedAgent.status).toBe(409);
   expect(((await refusedAgent.json()) as any).error).toMatch(/already has an agent/);
+
+  // A teammate a plugin proposed is not an assistant, but it is a private
+  // file a restore would overwrite: that needs the confirmation too.
+  const withTeammate = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket }, { proposed: ['mail-triage'] });
+  expect(((await (await fetch(`${withTeammate.origin}/api/onboarding`, { headers: withTeammate.headers })).json()) as any).needs.agent).toBe(true);
+  const refusedTeammate = await fetch(`${withTeammate.origin}/api/onboarding/restore`, { method: 'POST', headers: json(withTeammate.headers), body });
+  expect(refusedTeammate.status).toBe(409);
+  expect(((await refusedTeammate.json()) as any).error).toMatch(/already has an agent/);
+  const refusedUpload = await fetch(`${withTeammate.origin}/api/onboarding/restore`, {
+    method: 'POST', headers: { ...withTeammate.headers, 'Content-Type': 'application/octet-stream', 'X-Filename': 'b.tar.gz' }, body: 'bytes',
+  });
+  expect(refusedUpload.status).toBe(409);
 
   const done = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket }, { pool: fakePool({ preferredName: 'Amen', onboarding: 'done' }) });
   const refusedDone = await fetch(`${done.origin}/api/onboarding/restore`, { method: 'POST', headers: json(done.headers), body });

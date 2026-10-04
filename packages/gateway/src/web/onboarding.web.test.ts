@@ -842,7 +842,10 @@ it('still refuses a second assistant when the default agent is already the owner
       body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'A second assistant.' }),
     });
     expect(res.status).toBe(409);
-    expect((await json(res)).error).toMatch(/already have an agent/);
+    const refused = await json(res);
+    expect(refused.error).toMatch(/already have an agent/);
+    // The one 409 the chapter treats as final carries its own code.
+    expect(refused.code).toBe('assistant-exists');
   } finally {
     setRecordedDefaultAgent(undefined);
   }
@@ -861,4 +864,60 @@ it('still refuses a second assistant when the default agent is already the owner
     body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'A second assistant.' }),
   });
   expect(res.status).toBe(409);
+});
+
+it('a taken handle is a plain 409, without the assistant-exists code', async () => {
+  const dir = agentsDir();
+  acceptedPluginAgent(dir);
+  const { origin, headers } = await boot({ pool: fakePool(), agentsDir: dir, providerAccounts: accounts([]) });
+  const res = await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Mail', handle: 'mail', description: 'My assistant.' }),
+  });
+  expect(res.status).toBe(409);
+  const body = await json(res);
+  expect(body.error).toMatch(/@mail is already Mail Triage/);
+  expect(body.code).toBeUndefined();
+});
+
+it('edits the assistant first run wrote, not a proposed teammate the owner made the default', async () => {
+  setRecordedDefaultAgent('mail-triage');
+  try {
+    const dir = agentsDir();
+    acceptedPluginAgent(dir);
+    mkdirSync(path.join(dir, 'ada'), { recursive: true });
+    writeFileSync(
+      path.join(dir, 'ada', 'agent.md'),
+      ['---', 'id: ada', 'handle: ada', 'name: Ada', 'description: My assistant.', 'tools: [memory.*]', '---', '', 'You are Ada.', ''].join('\n'),
+      'utf8',
+    );
+    const { origin, headers } = await boot({ pool: fakePool(), agentsDir: dir, providerAccounts: accounts([]) });
+    const listed = await json(await fetch(`${origin}/api/agents`, { headers }));
+    expect(listed.agents.find((a: { id: string }) => a.id === 'mail-triage').isDefault).toBe(true);
+    expect((await json(await fetch(`${origin}/api/onboarding/agent`, { headers }))).id).toBe('ada');
+    const updated = await fetch(`${origin}/api/onboarding/agent/update`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Ada Lovelace' }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await json(updated)).id).toBe('ada');
+    expect(readFileSync(path.join(dir, 'ada', 'agent.md'), 'utf8')).toMatch(/^name: Ada Lovelace$/m);
+    expect(readFileSync(path.join(dir, 'mail-triage', 'agent.md'), 'utf8')).toMatch(/^name: Mail Triage$/m);
+  } finally {
+    setRecordedDefaultAgent(undefined);
+  }
+});
+
+it('falls back to the recorded default teammate when it is the only candidate', async () => {
+  setRecordedDefaultAgent('mail-triage');
+  try {
+    const dir = agentsDir();
+    acceptedPluginAgent(dir);
+    const { origin, headers } = await boot({ pool: fakePool(), agentsDir: dir, providerAccounts: accounts([]) });
+    expect((await json(await fetch(`${origin}/api/onboarding/agent`, { headers }))).id).toBe('mail-triage');
+  } finally {
+    setRecordedDefaultAgent(undefined);
+  }
 });

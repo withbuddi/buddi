@@ -192,6 +192,14 @@ The colour is the Blob of that accent (`public/mascot/`), uploaded through
 assistant that already wears a picture or an emoji keeps it unless a colour is
 picked.
 
+A teammate a plugin proposed and the owner accepted in chapter 3 (Mail Triage)
+is not an assistant and does not close this chapter. If the owner really does
+have an assistant already, the route refuses with `code: 'assistant-exists'`;
+the chapter shows that refusal as a notice with **Open Agents** and keeps
+Introduce us down. Any other refusal (a taken handle, a model account this
+installation cannot run on) is said inline, and the owner corrects it and
+tries again.
+
 The assistant is the concierge, so it is granted nearly everything built in
 (`FIRST_AGENT_TOOLS` in `packages/gateway/src/web/onboarding.ts`): `system.*`,
 `email.*`, `memory.*`, `artifacts.*`, `web.*`, `browser.*`, `secret.*`, `host.*`,
@@ -213,7 +221,8 @@ The card does not leave: every chapter is ticked on the map, and the assistant
 speaks first, on the model, with a first message it is prompted to make. The
 server puts what exists in front of the instruction: the owner's name, the
 assistant's, the owner's clock and the time there, the plugins chapter 3
-installed, the weather at home when Weather is in and answers (the weather
+installed, the teammates accepted during setup (named in the hello as its
+teammates), the weather at home when Weather is in and answers (the weather
 page's own `today` read, never waited on for more than three seconds), and
 whether Mail Triage has a mailbox. The assistant introduces itself in two or
 three sentences, says what it already knows and can do today, and asks no

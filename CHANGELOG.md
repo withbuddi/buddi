@@ -5,7 +5,7 @@ What changes in buddi from one release to the next, newest first.
 ## Unreleased
 
 - buddi.app for Mac: the DMG downloads from the GitHub release (withbuddi.com/download/mac and the update feed point there), so a release larger than 300 MiB still publishes.
-- First run: accepting the agent a plugin proposes no longer blocks meeting your assistant. Your assistant becomes the default agent and mentions the teammates already there when it introduces itself; if you really do have an assistant already, the chapter says so with a link to Agents instead of a button that does nothing.
+- First run: accepting the agent a plugin proposes no longer blocks meeting your assistant. Your assistant becomes the default agent and mentions the teammates already there when it introduces itself; if you really do have an assistant already, the chapter says so with a link to Agents instead of a button that does nothing, while a taken name or an unusable model account stays a message you can fix and retry. Restoring a backup from the first-run screen still asks you to confirm once any agent of yours is here, an accepted teammate included, and changing your assistant from first run edits the assistant rather than a teammate you made the default.
 
 ## 0.1.0-pre.39 — 2026-10-04
 

@@ -77,6 +77,7 @@ import { mlxhBaseUrl, probeMlxh } from '../mlxh.js';
 import { PullRefusal, createOllamaPulls, ollamaMachine, type OllamaMachine, type OllamaPulls } from '../ollama-local.js';
 import {
   OnboardingRefusal,
+  hasOwnerAgent,
   WEB_ONBOARDING_STEPS,
   WEB_ONBOARDING_SURFACE,
   claimOpeningTurn,
@@ -1668,7 +1669,9 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (view.state !== 'pending') {
         return { status: 409, message: 'This buddi has already been set up. Restore from Settings, where it asks you to confirm.' };
       }
-      if (!view.needs.agent) {
+      // Any agent of the owner's, a teammate a plugin proposed included: it is
+      // a private file a restore would overwrite. Wider than `needs.agent`.
+      if (hasOwnerAgent(deps.catalog)) {
         return { status: 409, message: 'This buddi already has an agent. Restore from Settings, where it asks you to confirm.' };
       }
       return null;
@@ -3923,7 +3926,9 @@ export function createWebApp(deps: WebServerDeps): Server {
           accountId: created.assigned,
         });
       } catch (error) {
-        if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+        if (error instanceof OnboardingRefusal) {
+          return sendJson(res, error.status, { error: error.message, ...(error.code ? { code: error.code } : {}) });
+        }
         return sendJson(res, 500, { error: error instanceof Error ? error.message : 'The agent could not be written.' });
       }
     }

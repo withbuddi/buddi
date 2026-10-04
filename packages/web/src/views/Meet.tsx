@@ -3166,7 +3166,8 @@ function AssistantChapter({ answers, existing, navigate, onSettled, onTrouble, o
   }, [existing?.id]);
   const [saving, setSaving] = useState(false);
   /*
-   * The server said no for good (409: there is an assistant already). Said as
+   * The server said no for good (409 `assistant-exists`: there is an
+   * assistant already). Said as
    * a notice with the way out, and the button stays down: pressing it again
    * would only hear the same no.
    */
@@ -3203,7 +3204,10 @@ function AssistantChapter({ answers, existing, navigate, onSettled, onTrouble, o
       try {
         saved = await written;
       } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
+        // Only the existing-assistant refusal is final. A taken handle or a
+        // model account this install cannot run on also answer 409, and those
+        // are fixed here and sent again.
+        if (err instanceof ApiError && err.status === 409 && (err.detail as { code?: unknown } | undefined)?.code === 'assistant-exists') {
           setRefused(err.message);
           onTrouble(null);
         } else {
