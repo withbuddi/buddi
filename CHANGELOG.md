@@ -4,6 +4,7 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- Releases are tagged by CI after the gate passes: `pnpm release pre.N` pushes a release commit to main, and the release workflow tags it and publishes once the full gate is green. A red gate is fixed with a normal push on top; nothing is tagged until then (docs/release.md).
 - Plugins now learn which of your model accounts can listen and speak: an OpenAI key and Gemini can, a ChatGPT subscription and Claude can't, and Ollama or another compatible server is "try it and see". Settings → Speech uses this to offer only accounts that work, with the reason beside the ones that don't. (Host API 1.30.)
 ### Added
 

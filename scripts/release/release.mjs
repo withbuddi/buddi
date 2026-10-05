@@ -10,18 +10,22 @@
  *   3. CHANGELOG.md: Unreleased becomes `## <version> — <date>` under a fresh,
  *      empty Unreleased.
  *   4. `pnpm docs:api` and `pnpm docs:cli`.
- *   5. Commit "Release <version>", tag `v<version>`, push main and the tag.
- *   6. Print the release workflow run and the command that watches it.
+ *   5. Write release/REQUEST.json ({ version, from }: the release request),
+ *      commit everything as "Release <version>" and push main. No tag: the
+ *      release workflow tags the commit once the gate passes (release flow v2,
+ *      docs/release.md and plan.mjs).
+ *   6. Print the release workflow run for that push and the command that watches it.
  *
  * `--dry-run` reports every preflight problem and what each step would do, and
  * writes nothing to the tree (it may build the gateway's dist to read routes).
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ChangelogError, cutRelease, sectionOf, today } from './changelog.mjs';
+import { REQUEST_PATH, requestFile } from './plan.mjs';
 import { missingSince, parseVersion, ReleaseError, stampSince } from './version.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -112,10 +116,13 @@ async function main() {
   if (missing.length === 0) say('API_SINCE: every route already has a version.');
   else say(`API_SINCE: stamp ${missing.length} route(s) with ${rel.version}: ${missing.join(', ')}`);
   say(`CHANGELOG.md: Unreleased becomes "## ${rel.version} — ${date}".`);
+  const from = git('rev-parse', 'HEAD').out;
 
   if (dryRun) {
     say('Run pnpm docs:api and pnpm docs:cli.');
-    say(`Commit "Release ${rel.version}", tag ${rel.tag}, push main and ${rel.tag}.`);
+    say(`Write ${REQUEST_PATH}: ${JSON.stringify({ version: rel.version, from })}.`);
+    say(`Commit "Release ${rel.version}" and push main (no tag).`);
+    say(`CI then runs the gate on that push and, when it is green, tags it ${rel.tag} and publishes from the tag.`);
     say('Print the release workflow run to watch.');
     return problems.length > 0 ? 1 : 0;
   }
@@ -124,26 +131,34 @@ async function main() {
   writeFileSync(CHANGELOG, changelog);
   run('pnpm', ['docs:api']);
   run('pnpm', ['docs:cli']);
+  mkdirSync(path.join(root, path.dirname(REQUEST_PATH)), { recursive: true });
+  writeFileSync(path.join(root, REQUEST_PATH), requestFile(rel.version, from));
   run('git', ['add', '-A']);
   run('git', ['commit', '-q', '-m', `Release ${rel.version}`]);
-  run('git', ['tag', rel.tag]);
-  run('git', ['push', 'origin', 'main']);
-  run('git', ['push', 'origin', rel.tag]);
+  const sha = git('rev-parse', 'HEAD').out;
+  console.log('$ git push origin main');
+  const pushed = spawnSync('git', ['push', 'origin', 'main'], { cwd: root, stdio: 'inherit' });
+  if (pushed.status !== 0) {
+    throw new ReleaseError(`Pushing main failed; the release commit is only here. \`git reset --hard ${from}\` drops it; then pull and run \`pnpm release ${rel.version}\` again.`);
+  }
 
-  // The run shows up a few seconds after the tag lands.
+  // The run for this push shows up a few seconds after it lands.
   let line;
   for (let i = 0; i < 15 && !line; i++) {
-    const r = spawnSync('gh', ['run', 'list', '--workflow', 'release', '--limit', '1', '--json', 'databaseId,headBranch,status,url'], { cwd: root, encoding: 'utf8' });
-    const runInfo = r.status === 0 ? JSON.parse(r.stdout || '[]')[0] : undefined;
-    if (runInfo && runInfo.headBranch === rel.tag) line = runInfo;
+    const r = spawnSync('gh', ['run', 'list', '--workflow', 'release', '--branch', 'main', '--limit', '5', '--json', 'databaseId,headSha,status,url'], { cwd: root, encoding: 'utf8' });
+    const runInfo = r.status === 0 ? JSON.parse(r.stdout || '[]').find((x) => x.headSha === sha) : undefined;
+    if (runInfo) line = runInfo;
     else await sleep(2000);
   }
+  console.log(`Pushed "Release ${rel.version}" (${sha.slice(0, 8)}). CI runs the gate, tags it ${rel.tag} when green, then publishes in a second run on the tag.`);
   if (line) {
     console.log(`Release run ${line.databaseId} (${line.status}): ${line.url}`);
     console.log(`Watch it: gh run watch ${line.databaseId} --exit-status`);
   } else {
-    console.log('The release run has not shown up yet: gh run list --workflow release --limit 1, then gh run watch <id> --exit-status');
+    console.log('The release run has not shown up yet: gh run list --workflow release --limit 3, then gh run watch <id> --exit-status');
   }
+  console.log('The publish run (npm, GitHub release, buddi.app) appears once it tags: gh run list --workflow release --limit 3');
+  console.log('A red gate: fix it and push to main; the next green push tags the release, fix included (docs/release.md).');
   return 0;
 }
 

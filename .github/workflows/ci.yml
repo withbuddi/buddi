@@ -39,5 +39,20 @@ jobs:
             exit 1
           fi
           echo "Changelog check passed."
+  # A push that release.yml will tag (a release commit, or fixes on top of
+  # one, whose version is untagged: scripts/release/plan.mjs) gets the gate
+  # there, so it is not run twice. Never fails here; release.yml reports a bad plan.
+  release-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: plan
+        run: node scripts/release/plan.mjs --github || true
   gate:
+    needs: [release-plan]
+    if: always() && (github.event_name != 'push' || needs.release-plan.outputs.action != 'tag')
     uses: ./.github/workflows/gate.yml

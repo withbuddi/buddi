@@ -151,9 +151,12 @@ to run when `DATABASE_URL` already points at the dev database's port 55433.
 **Releasing.** `pnpm release pre.N` (or `0.1.0-pre.N`) checks the tree is
 clean, on main and level with origin, stamps new routes into `API_SINCE`,
 moves the `## Unreleased` lines of `CHANGELOG.md` under a dated heading,
-refreshes `docs/api.md` and `docs/cli.md`, commits, tags `v0.1.0-pre.N`,
-pushes both and prints the workflow run to watch. `--dry-run` shows the plan
-and writes nothing.
+refreshes `docs/api.md` and `docs/cli.md`, commits `Release 0.1.0-pre.N`
+with `release/REQUEST.json`, pushes main (no tag) and prints the workflow run
+to watch. CI tags `v0.1.0-pre.N` once the full gate is green and publishes
+from the tag; a red gate is fixed with a normal push on top
+([docs/release.md](docs/release.md)). `--dry-run` shows the plan and writes
+nothing.
 
 **Reviewing a release.** Before `pnpm release`, `pnpm review` finds the last
 `v0.1.0-pre.N` tag, writes the release-review prompt (the Unreleased lines of
@@ -209,8 +212,8 @@ Issues and pull requests are welcome at
 - **CI.** A push to `main` runs the quick lane (web, gateway, typecheck, the
   rest) without a database. The full gate, with Postgres, runs on pull
   requests, nightly and before every release.
-- **Releases.** A tag `v<version>` runs the gate, builds the tarball,
-  publishes `@withbuddi/buddi` to npm with provenance and creates the GitHub
+- **Releases.** A release commit on main runs the gate; on green CI tags
+  `v<version>`, and a run on that tag builds the tarball, publishes `@withbuddi/buddi` to npm with provenance and creates the GitHub
   release. The npm page is [scripts/release/npm-readme.md](scripts/release/npm-readme.md),
   not this file.
 

@@ -1,4 +1,21 @@
-# A release: a tag `v<version>` builds the one tarball the trial and the
+# Release flow v2 (docs/release.md). `pnpm release pre.N` pushes a release
+# commit to main ("Release <version>" with release/REQUEST.json); nobody pushes
+# a tag by hand. Two runs of this workflow make a release:
+#
+#  1. The push to main: `plan` (scripts/release/plan.mjs) asks whether HEAD is,
+#     or sits up to 50 commits on top of, a release commit whose tag does not
+#     exist yet. If not, the run ends with a notice (ci.yml gates ordinary
+#     pushes). If so: the full gate, then `tag` tags HEAD `v<version>` and
+#     starts run 2. A red gate tags nothing: fix it on main, and the next green
+#     push tags the release with the fix in it (or re-run the failed jobs).
+#  2. workflow_dispatch on the tag (`publish: true`, started by `tag`): publish,
+#     mac-check, mac-app. It has to run on the tag ref, not main: npm's
+#     provenance names the ref the workflow ran for, and installers and
+#     buddi.app accept only `release.yml@refs/tags/v<version>`
+#     (packages/install/src/provenance.ts). A tag pushed with the workflow's
+#     own token starts no workflow, but a dispatch does.
+#
+# The publish run builds the one tarball the trial and the
 # packaged install use (`pnpm release:pack`) and publishes it to npmjs.com
 # with provenance, through npm's trusted publishing (OIDC: no token lives in
 # this repository). A pre-release version (`v0.1.0-pre.14`) goes under the
@@ -16,24 +33,103 @@
 # After the npm publish, `mac-app` builds buddi.app around that same tarball,
 # signs and notarizes it, and publishes the DMG and its Sparkle feed (see the
 # job). The npm release is out by then, so the job can be run again on its own:
-# Actions → release → Run workflow, with the version (`0.1.0-pre.39`).
+# Actions → release → Run workflow, with the version (`0.1.0-pre.39`) and
+# `publish` left off.
 name: release
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: 'A buddi version already on npm, to build buddi.app for (0.1.0-pre.39). Runs only the Mac app jobs.'
+        description: 'A buddi version (0.1.0-pre.39). Without publish: build buddi.app for a version already on npm (only the Mac app jobs).'
         required: true
+      publish:
+        description: 'Publish the version (npm, GitHub release, buddi.app). Run from its tag v<version>; the tag job starts this itself.'
+        type: boolean
+        default: false
+# Pushes to main queue (a newer push replaces one still waiting), so two runs
+# never race to tag; a publish run has its own lane per version.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'release-main' || format('release-{0}-{1}', inputs.version, inputs.publish) }}
+  cancel-in-progress: false
 jobs:
-  # The full gate first: a tag publishes only what passed everything.
+  # What this run is: a push that tags a release (`action: tag`) or not, a
+  # publish run on a tag (`mode: publish`), or a Mac-app-only run (`mode: mac`).
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      action: ${{ steps.push.outputs.action }}
+      version: ${{ steps.push.outputs.version || steps.dispatch.outputs.version }}
+      tag: ${{ steps.push.outputs.tag }}
+      sha: ${{ steps.push.outputs.sha }}
+      mode: ${{ steps.dispatch.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: A release to tag?
+        id: push
+        if: github.event_name == 'push'
+        run: node scripts/release/plan.mjs --github
+      - name: Publish or Mac app
+        id: dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ASKED: ${{ inputs.version }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          v="${ASKED#v}"
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$' || { echo "::error::\"$v\" is not a buddi version like 0.1.0-pre.39"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISH" = "true" ]; then
+            [ "$GITHUB_REF" = "refs/tags/v$v" ] || { echo "::error::Publishing $v runs on its tag v$v, not $GITHUB_REF (npm provenance names the ref)."; exit 1; }
+            node scripts/release/plan.mjs --github --verify "$v"
+            echo "mode=publish" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=mac" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The full gate first: only what passed everything is tagged.
   gate:
-    if: github.event_name == 'push'
+    needs: [plan]
+    if: needs.plan.outputs.action == 'tag'
     uses: ./.github/workflows/gate.yml
+
+  tag:
+    needs: [plan, gate]
+    if: needs.plan.outputs.action == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # push the tag
+      actions: write    # start the publish run
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.plan.outputs.sha }}' }
+      - name: Tag the gated commit
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG appeared on origin while the gate ran; not moving it. Check which commit it names."
+            exit 1
+          fi
+          git tag "$TAG" "$SHA"
+          git push origin "refs/tags/$TAG"
+          echo "::notice title=Tagged $TAG::${SHA:0:8} passed the gate and is $TAG."
+      - name: Start the publish run on the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml --ref "$TAG" -f version="$VERSION" -f publish=true
+          echo "Publish run started on $TAG: gh run list --workflow release --limit 3"
+
   publish:
-    needs: [gate]
-    if: github.event_name == 'push'
+    needs: [plan]
+    if: needs.plan.outputs.mode == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm
@@ -58,10 +154,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The tarball is built from the workspace's dist output.
       - run: pnpm -r build
-      - name: Version from the tag
+      - name: Version from the plan
         id: v
+        env:
+          PLANNED: ${{ needs.plan.outputs.version }}
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="$PLANNED"
           echo "version=$v" >> "$GITHUB_OUTPUT"
           # Until a stable version exists, a pre-release IS the latest buddi:
           # it goes out as `latest`, and its GitHub release is marked latest.
@@ -105,7 +203,7 @@ jobs:
           notes="$section
 
           npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }})."
-          gh release create "$GITHUB_REF_NAME" $pre --title "buddi ${{ steps.v.outputs.version }}" \
+          gh release create "v${{ steps.v.outputs.version }}" --verify-tag $pre --title "buddi ${{ steps.v.outputs.version }}" \
             --notes "$notes" \
             "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install-linux.sh
       - name: Tell withbuddi.com
@@ -154,8 +252,8 @@ jobs:
   # the feed are still attached to the GitHub release; appcast.xml and
   # latest.json point at the release asset either way.
   mac-check:
-    needs: [publish]
-    if: always() && (github.event_name == 'workflow_dispatch' || needs.publish.result == 'success')
+    needs: [plan, publish]
+    if: always() && (needs.plan.outputs.mode == 'mac' || needs.publish.result == 'success')
     runs-on: ubuntu-latest
     outputs:
       ok: ${{ steps.check.outputs.ok }}
@@ -169,10 +267,9 @@ jobs:
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
           NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          ASKED: ${{ inputs.version }}
+          PLANNED: ${{ needs.plan.outputs.version }}
         run: |
-          v="${ASKED:-${GITHUB_REF_NAME#v}}"
-          v="${v#v}"
+          v="$PLANNED"
           echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$' || { echo "::error::\"$v\" is not a buddi version like 0.1.0-pre.39"; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
           missing=""
@@ -187,7 +284,7 @@ jobs:
           fi
 
   mac-app:
-    needs: [publish, mac-check]
+    needs: [plan, publish, mac-check]
     if: always() && needs.mac-check.outputs.ok == 'true'
     runs-on: macos-latest
     timeout-minutes: 120
@@ -196,6 +293,7 @@ jobs:
     env:
       VERSION: ${{ needs.mac-check.outputs.version }}
       PUBLISHED_TAG: ${{ needs.publish.outputs.dist_tag }}
+      MODE: ${{ needs.plan.outputs.mode }}
       R2_BUCKET: ${{ vars.R2_BUCKET || 'buddi-releases' }}
     defaults:
       run:
@@ -216,12 +314,12 @@ jobs:
           # Only the version npm calls latest moves the download button and the
           # feed; a pre-release under `next` (once a stable exists) is attached
           # to its GitHub release and uploaded, and nothing points at it.
-          # The tag push's first attempt takes the publish job's word: npm
+          # The publish run's first attempt takes the publish job's word: npm
           # answered the previous version right after pre.40 went out. A dispatch
           # (no publish) or a hand re-run asks npm, waiting up to 5 minutes for
           # the version to show under some dist-tag, so a re-run of an old
           # release never moves the feed back past a newer latest.
-          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_RUN_ATTEMPT" = "1" ] && [ -n "$PUBLISHED_TAG" ]; then
+          if [ "$MODE" = "publish" ] && [ "$GITHUB_RUN_ATTEMPT" = "1" ] && [ -n "$PUBLISHED_TAG" ]; then
             latest_tag="$PUBLISHED_TAG"
             echo "published under $PUBLISHED_TAG (publish job)"
           else
