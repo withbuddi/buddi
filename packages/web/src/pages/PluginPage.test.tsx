@@ -1096,10 +1096,78 @@ describe('a sensitive query', () => {
     visibility.mockRestore();
   });
 
+  it('masks a section whose own query is sensitive, and asks for it only after Show', async () => {
+    const own: PluginPageDescriptor = {
+      ...money,
+      body: [
+        {
+          kind: 'section',
+          title: 'Own',
+          query: { query: 'settings' },
+          body: [{ kind: 'notice', text: { path: 'everyMinutes' } }],
+        },
+        { kind: 'notice', text: 'Drawn.' },
+      ],
+    };
+    render(<PluginPage page={own} navigate={navigate} timezone="UTC" siblings={[own]} />);
+    expect(await screen.findByText('Drawn.')).toBeInTheDocument();
+    expect(screen.getByText('Hidden until you show it.')).toBeInTheDocument();
+    expect(asked()).not.toContain('settings');
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }));
+    expect(await screen.findByText('15')).toBeInTheDocument();
+    expect(asked()).toContain('settings');
+  });
+
   it('leaves a page with no sensitive query exactly as it was', async () => {
     draw('board');
     expect(await screen.findByText('Things in all')).toBeInTheDocument();
     expect(screen.queryByText('Hidden until you show it.')).not.toBeInTheDocument();
+  });
+});
+
+describe('a list-detail switching conversations', () => {
+  const threads: PluginPageDescriptor = {
+    plugin: 'demo',
+    id: 'inbox',
+    title: 'Inbox',
+    place: 'rail',
+    body: [
+      {
+        kind: 'list-detail',
+        param: 'item',
+        list: { kind: 'list', query: { query: 'items' }, rows: 'items', key: 'id', item: { title: { path: 'title' }, to: { page: 'inbox', item: { path: 'id' } } } },
+        detail: [
+          {
+            kind: 'detail',
+            title: 'The thread',
+            query: { query: 'item', params: { id: { param: 'item' } } },
+            fields: [{ label: 'Title', value: { path: 'title' } }],
+            body: [{ kind: 'button', action: { tool: 'demo.archive', label: 'Archive {title}', args: { id: { path: 'id' } } } }],
+          },
+        ],
+      },
+    ],
+  };
+
+  it("never draws the last thread's buttons while the next one loads", async () => {
+    let release: (value: { data: unknown }) => void = () => undefined;
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string, params?: Record<string, string>) => {
+      if (query === 'item' && params?.id === 'a2') return new Promise<{ data: unknown }>((resolve) => { release = resolve; });
+      if (query === 'item') return Promise.resolve({ data: { id: 'a1', title: 'Thread one' } });
+      return Promise.resolve({ data: DATA[query] });
+    }) as unknown as typeof api.pageQuery);
+    const view = render(<PluginPage page={threads} item="a1" navigate={navigate} timezone="UTC" siblings={[threads]} />);
+    expect(await screen.findByRole('button', { name: 'Archive Thread one' })).toBeInTheDocument();
+
+    view.rerender(<PluginPage page={threads} item="a2" navigate={navigate} timezone="UTC" siblings={[threads]} />);
+    expect(screen.queryByRole('button', { name: 'Archive Thread one' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Thread one')).not.toBeInTheDocument();
+
+    await act(async () => release({ data: { id: 'a2', title: 'Thread two' } }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive Thread two' }));
+    await waitFor(() =>
+      expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.archive', args: { id: 'a2' } }),
+    );
   });
 });
 

@@ -427,14 +427,31 @@ function usePageQuery(
   extra?: Record<string, string>,
 ): { data: unknown; error: string | null; loading: boolean } {
   const scope = useScope();
-  const params = ref ? { ...resolveParams(ref.params, data, scope), ...extra } : {};
+  const own = ref ? resolveParams(ref.params, data, scope) : {};
+  const params = ref ? { ...own, ...extra } : {};
+  /*
+   * Which question this is: the query and the parameters the descriptor
+   * names (another thread is another question), and never shown another
+   * question's answer. Not the refresh counter, and not what the component
+   * adds itself (a calendar's range), so a refresh or a step to next month
+   * keeps the last answer up until the new one lands.
+   */
+  const asked = JSON.stringify([ref?.query ?? null, own]);
   const key = JSON.stringify([ref?.query ?? null, params, scope.version]);
-  const state = useAsync<unknown>(
-    () => (ref ? api.pageQuery(scope.plugin, ref.query, params).then((body) => body.data) : Promise.resolve(undefined)),
+  const state = useAsync<{ asked: string; data: unknown }>(
+    () =>
+      ref
+        ? api.pageQuery(scope.plugin, ref.query, params).then((body) => ({ asked, data: body.data }))
+        : Promise.resolve({ asked, data: undefined }),
     [key],
     pollMs,
   );
-  return { data: state.data, error: state.error, loading: state.loading };
+  const current = state.data !== undefined && state.data.asked === asked;
+  return {
+    data: current ? state.data!.data : undefined,
+    error: current || !state.loading ? state.error : null,
+    loading: state.loading,
+  };
 }
 
 interface ActState {
@@ -1218,15 +1235,17 @@ type Of<K extends Component['kind']> = Extract<Component, { kind: K }>;
  */
 function SectionPiece({ component, data: given }: { component: Of<'section'>; data: unknown }): JSX.Element {
   const scope = useScope();
-  // 1.30: a section that reads a query draws its body against the answer.
-  const read = usePageQuery(component.query, given);
-  const data = component.query ? read.data : given;
-  const heading = component.heading ? readRef(data, component.heading) : undefined;
-  const title = heading === undefined || heading === null || heading === '' ? component.title : String(heading);
   const unmasked = useContext(Unmasked);
   const [revealed, toggle] = useReveal();
-  const gated = !unmasked && readsSensitive(component.body, scope.sensitive);
+  // The section's own query counts too: a sensitive read in the head is as
+  // masked as one in the body, and is not asked for until Show.
+  const gated = !unmasked && readsSensitive([component.query, component.body], scope.sensitive);
   const masked = gated && !revealed;
+  // 1.30: a section that reads a query draws its body against the answer.
+  const read = usePageQuery(masked ? undefined : component.query, given);
+  const data = component.query ? read.data : given;
+  const heading = component.heading && !masked ? readRef(data, component.heading) : undefined;
+  const title = heading === undefined || heading === null || heading === '' ? component.title : String(heading);
   const boxed = useContext(Boxed);
   /*
    * Boxed, a button, a link or a drawer's button that ends the body is something done to the
@@ -1267,11 +1286,11 @@ function SectionPiece({ component, data: given }: { component: Of<'section'>; da
     >
       <Stack gap="lg" divided={boxed}>
         {headNote}
-        {component.query ? <ErrorBanner message={read.error} /> : null}
-        {component.query && read.data === undefined && !read.error ? (
-          <Empty>Loading…</Empty>
-        ) : masked ? (
+        {component.query && !masked ? <ErrorBanner message={read.error} /> : null}
+        {masked ? (
           <MaskedNote />
+        ) : component.query && read.data === undefined && !read.error ? (
+          <Empty>Loading…</Empty>
         ) : (
           <Unmasked.Provider value={unmasked || gated}>
             <HeadNote.Provider value={null}>
@@ -2788,8 +2807,13 @@ function ListDetailPiece({ component, data }: { component: Of<'list-detail'>; da
   const [here, setHere] = useState<string | null>(null);
   const chosen = local ? here : (scope.params[component.param] ?? scope.item);
   const inner = local && here !== null ? { ...scope, params: { ...scope.params, [component.param]: here } } : null;
+  /*
+   * Keyed by the chosen item: a new choice is a new subtree, so nothing the
+   * last thread drew (its buttons, its open sheets) can stand while the next
+   * one loads and act on the wrong conversation.
+   */
   const detail = (
-    <Stack gap="lg" divided>
+    <Stack key={chosen ?? ''} gap="lg" divided>
       {component.detail.map((child, index) => (
         <Piece key={index} component={child} data={data} />
       ))}
