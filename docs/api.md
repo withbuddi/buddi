@@ -656,7 +656,7 @@ curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "
 | GET | `/api/overview` | Home's whole first read: plugin blocks and glances, and counts of approvals, jobs, missions, reminders, watchers. | yes |
 | GET | `/api/tips` | Every tip and its state. | yes |
 | GET | `/api/tips/current` | Today's tip on Home, if any (picking one is remembered). | yes |
-| GET | `/api/tips/queue` | The stack the lightbulb on Home opens: today's tip first, then every other one that is ready (picking the first is remembered). | yes |
+| GET | `/api/tips/queue` | The stack the lightbulb on Home opens: today's tip first, then every other one that holds and is not dismissed, ready ones before those in their cooldown (picking the first is remembered). | yes |
 | POST | `/api/tips/seen-page` | Record that a page was opened (tips about it stop). | yes |
 | POST | `/api/tips/:id/dismiss` | Never show this tip again. | yes |
 | POST | `/api/tips/:id/later` | Show this tip another day. | yes |
@@ -715,11 +715,11 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/current"
 
 #### `GET /api/tips/queue`
 
-The stack the lightbulb on Home opens: today's tip first, then every other one that is ready (picking the first is remembered).
+The stack the lightbulb on Home opens: today's tip first, then every other one that holds and is not dismissed, ready ones before those in their cooldown (picking the first is remembered).
 
 - **Auth:** Session or API token.
-- **Query:** `preview?: tip ids, comma-separated  // stack those as they would look, touching nothing; peek?: '1'  // the same, marking nothing shown`
-- **Answer:** `{ tips: Tip[] }`
+- **Query:** `preview?: tip ids, comma-separated  // stack those as they would look, touching nothing; peek?: '1'  // today's and the ready ones only, marking nothing shown`
+- **Answer:** `{ tips: Tip[], dismissed: number }`
 - **Errors:** 404 no tip by a preview id
 - **Since:** 0.1.0-pre.45
 

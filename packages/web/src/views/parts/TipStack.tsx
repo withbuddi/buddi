@@ -47,6 +47,8 @@ export interface TipQueue {
   shown: boolean;
   /** The gateway has answered (or failed). */
   loaded: boolean;
+  /** Every tip that holds is dismissed: none left, and none only put off. */
+  allDismissed: boolean;
   error: string | null;
   /** A card leaves: at once here, the gateway told on the side. */
   leave: (id: string, how: TipLeave) => void;
@@ -63,12 +65,14 @@ export interface TipQueue {
 export function useTipQueue(preview?: string, peek = false): TipQueue {
   const queue = useAsync(() => api.tipQueue(preview, peek), [preview, peek]);
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  const [putOff, setPutOff] = useState(false);
   const [folded, setFolded] = useState(false);
   const all = queue.data?.tips ?? [];
   const tips = all.filter((tip) => !gone.has(tip.id));
   const quiet = Boolean(preview || queue.data?.preview);
   const leave = useCallback((id: string, how: TipLeave): void => {
     setGone((current) => new Set(current).add(id));
+    if (how === 'later') setPutOff(true);
     if (quiet) return;
     void (how === 'dismiss' ? api.dismissTip(id) : api.laterTip(id)).catch(() => {});
   }, [quiet]);
@@ -76,6 +80,7 @@ export function useTipQueue(preview?: string, peek = false): TipQueue {
     tips,
     shown: all.length > 0 && !(tips.length === 0 && folded),
     loaded: queue.data !== undefined || queue.error !== null,
+    allDismissed: tips.length === 0 && !putOff && ((queue.data?.dismissed ?? 0) > 0 || all.length > 0),
     error: queue.error,
     leave,
     folded: useCallback(() => setFolded(true), []),

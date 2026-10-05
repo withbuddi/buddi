@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { facts } from '../__fixtures__/tip-facts.js';
-import { daysBetween, dayIn, dismissTip, laterTip, listTips, pickTip, restoreTip, type TipsState } from './engine.js';
+import { daysBetween, dayIn, dismissTip, laterTip, listTips, pickQueue, pickTip, restoreTip, type TipsState } from './engine.js';
 import type { Facts } from './facts.js';
 import type { TipRule } from './rules.js';
 
@@ -95,6 +95,43 @@ describe('pickTip', () => {
 
   it('treats a rule that throws as not holding', () => {
     expect(pickTip([rule('a', () => { throw new Error('no'); })], facts(), {}, '2026-09-01').tip).toBeNull();
+  });
+});
+
+describe('pickQueue', () => {
+  const ids = (out: { tips: { id: string }[] }) => out.tips.map((t) => t.id);
+
+  it('opened: today first, then ready, then those in their cooldown, most recently shown last', () => {
+    const rules = [rule('a', always), rule('b', always), rule('c', always), rule('d', always, { holdsForDays: 5 }), rule('e', always)];
+    const state: TipsState = {
+      a: { firstHeld: '2026-08-01', shownAt: '2026-08-31' },
+      b: { firstHeld: '2026-08-01', laterAt: '2026-08-29' },
+      c: { firstHeld: '2026-08-10' },
+      d: { firstHeld: '2026-09-01' },
+      e: { firstHeld: '2026-08-05' },
+    };
+    const open = pickQueue(rules, facts(), state, '2026-09-01', { open: true });
+    expect(ids(open)).toEqual(['e', 'c', 'd', 'b', 'a']);
+    expect(open.state.e!.shownAt).toBe('2026-09-01');
+    // A peek keeps only today's and the ready ones.
+    expect(ids(pickQueue(rules, facts(), state, '2026-09-01'))).toEqual(['e', 'c']);
+  });
+
+  it('opened: one put off today goes to the back; dismissed never shows, and is counted', () => {
+    const rules = [rule('a', always), rule('b', always), rule('c', always), rule('q', () => false)];
+    const state: TipsState = {
+      a: { firstHeld: '2026-08-01', shownAt: '2026-09-01', laterAt: '2026-09-01' },
+      b: { firstHeld: '2026-08-01', dismissed: true },
+      q: { dismissed: true },
+    };
+    const open = pickQueue(rules, facts(), state, '2026-09-01', { open: true });
+    expect(ids(open)).toEqual(['c', 'a']);
+    expect(open.dismissed).toBe(1);
+    expect(ids(pickQueue(rules, facts(), state, '2026-09-01'))).toEqual(['c']);
+  });
+
+  it('is empty during first run', () => {
+    expect(ids(pickQueue([rule('a', always)], facts({ firstRun: true }), {}, '2026-09-01', { open: true }))).toEqual([]);
   });
 });
 

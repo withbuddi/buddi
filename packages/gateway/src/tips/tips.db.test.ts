@@ -178,7 +178,6 @@ suite('tips against Postgres', () => {
     // One agent past day three: the teammate tip.
     // Held since yesterday: every rule waits a day before it shows.
     await webSettingsStore(pool).write(TIPS_STATE_KEY, { 'second-agent': { firstHeld: '2026-09-27' } });
-    expect((await call('GET', '/settings')).body).toEqual({ enabled: true });
     const current = await call('GET', '/current');
     expect(current.status).toBe(200);
     expect(current.body.tip?.id).toBe('second-agent');
@@ -193,8 +192,10 @@ suite('tips against Postgres', () => {
     expect((await call('POST', '/second-agent/restore', {})).body).toEqual({ ok: true });
     expect((await call('GET', '')).body.tips.find((t: any) => t.id === 'second-agent').status).toBe('shown');
     await call('POST', '/second-agent/dismiss', {});
-    expect((await call('PUT', '/settings', { enabled: false })).body).toEqual({ enabled: false });
-    expect((await call('GET', '/current')).body).toEqual({ tip: null, enabled: false });
+    // The opened stack leaves the dismissed tip out and counts it.
+    const queue = (await call('GET', '/queue')).body;
+    expect(queue.tips.map((t: any) => t.id)).not.toContain('second-agent');
+    expect(queue.dismissed).toBe(1);
     expect((await call('POST', '/seen-page', { page: 'home' })).status).toBe(200);
   });
 });

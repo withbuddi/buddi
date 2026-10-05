@@ -3,8 +3,10 @@
  *
  *   GET  /api/tips                 { tips: [...rows] }   every rule and where it stands
  *   GET  /api/tips/current         { tip | null }   today's tip, if any
- *   GET  /api/tips/queue           { tips: [...] }   the bulb's stack: today's tip first, then every other one ready
- *                                  (`?peek=1`: the same, nothing marked shown: for the bulb's dot)
+ *   GET  /api/tips/queue           { tips: [...], dismissed }   the bulb's stack: today's tip first, then every other
+ *                                  one that holds and is not dismissed, ready ones before those in their cooldown;
+ *                                  `dismissed` counts the dismissed ones that hold
+ *                                  (`?peek=1`: today's and the ready ones only, nothing marked shown: for the bulb's dot)
  *   POST /api/tips/:id/dismiss     "Not this again": never again
  *   POST /api/tips/:id/later       ×: not before its cooldown has passed
  *   POST /api/tips/:id/restore     "Bring back": forget a dismissal
@@ -86,7 +88,7 @@ export async function tipsRoute(
       return { status: 200, body: { tips: ids.map((id) => viewOf(rules.find((r) => r.id === id)!, f)), preview: true } };
     }
     const previous = await readState(deps.store);
-    const { tips, state } = pickQueue(rules, await deps.facts(), previous, today);
+    const { tips, state, dismissed } = pickQueue(rules, await deps.facts(), previous, today, { open: !request.peek });
     // A peek keeps the holds counting but marks nothing shown: the owner has
     // not opened the stack, so no tip's cooldown starts.
     const front = tips[0]?.id;
@@ -99,7 +101,7 @@ export async function tipsRoute(
       }
     }
     if (JSON.stringify(state) !== JSON.stringify(previous)) await deps.store.write(TIPS_STATE_KEY, state);
-    return { status: 200, body: { tips } };
+    return { status: 200, body: { tips, dismissed } };
   }
 
   if (path === '/api/tips/seen-page') {

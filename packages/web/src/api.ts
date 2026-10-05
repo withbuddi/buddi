@@ -2892,10 +2892,12 @@ export const api = {
   /** Today's tip, or null: at most one a day. */
   currentTip: (preview?: string) => get<{ tip: TipView | null; preview?: boolean }>(preview ? `/tips/current?preview=${encodeURIComponent(preview)}` : '/tips/current'),
   /**
-   * The bulb's stack: today's tip first, then every other one that is ready.
-   * `peek` marks nothing shown (for the bulb's dot, before the stack is opened).
+   * The bulb's stack: today's tip first, then every other one that holds and
+   * is not dismissed (ready ones before those in their cooldown); `dismissed`
+   * counts the dismissed ones that hold. `peek` keeps today's and the ready
+   * ones only and marks nothing shown (for the bulb's dot, before the stack is opened).
    */
-  tipQueue: (preview?: string, peek?: boolean) => get<{ tips: TipView[]; preview?: boolean }>(
+  tipQueue: (preview?: string, peek?: boolean) => get<{ tips: TipView[]; dismissed?: number; preview?: boolean }>(
     preview ? `/tips/queue?preview=${encodeURIComponent(preview)}` : peek ? '/tips/queue?peek=1' : '/tips/queue',
   ),
   /** Every tip and where it stands; reads only. */

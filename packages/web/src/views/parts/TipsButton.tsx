@@ -1,8 +1,10 @@
 /**
  * The lightbulb on Home's greeting row (docs/dashboard.md, Home) and the Tips
  * panel it opens right under the glance: the stack of tips (parts/TipStack),
- * every one that is ready, today's in front. A tip dismissed for good is not
- * there; one put off with "Not now" comes back in its turn.
+ * every one whose condition holds, today's in front, the ones in their
+ * cooldown at the back. A tip dismissed for good is not there; one put off
+ * with "Not now" goes to the back. Empty, the panel says whether nothing
+ * applies or the owner turned off every tip that does.
  *
  * The bulb carries a dot while a tip is ready that the owner has not had in
  * the stack yet; opening the panel clears it. The bulb shows pressed while
@@ -119,7 +121,13 @@ export function TipsSection({ tips, navigate }: { tips: Tips; navigate: (route: 
     <div className="home-tips" data-testid="tips-section">
       <Section title="Tips" actions={<Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Close</Button>}>
         <ErrorBanner message={queue.error} />
-        {empty && !queue.error ? <p className="home-tips-empty">No tips right now.</p> : <TipStack queue={queue} navigate={navigate} />}
+        {empty && !queue.error ? (
+          <p className="home-tips-empty">
+            {queue.allDismissed ? "You've turned off every tip that applies." : 'No tips right now. New ones appear as you use buddi.'}
+          </p>
+        ) : (
+          <TipStack queue={queue} navigate={navigate} />
+        )}
       </Section>
     </div>
   );

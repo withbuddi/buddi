@@ -125,10 +125,18 @@ describe('TipsButton', () => {
   it('says there are none, with Close, when the stack is empty', async () => {
     await mount([]);
     const panel = await openPanel();
-    expect(within(panel).getByText('No tips right now.')).toBeInTheDocument();
+    expect(within(panel).getByText('No tips right now. New ones appear as you use buddi.')).toBeInTheDocument();
     expect(within(panel).queryByTestId('tip-stack')).not.toBeInTheDocument();
     await act(async () => { fireEvent.click(within(panel).getByRole('button', { name: 'Close' })); });
     expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
+  });
+
+  it('says so when every tip that applies is turned off', async () => {
+    vi.mocked(api.tipQueue).mockResolvedValue({ tips: [], dismissed: 2 });
+    await act(async () => { render(<Harness navigate={vi.fn()} />); });
+    const panel = await openPanel();
+    expect(within(panel).getByText("You've turned off every tip that applies.")).toBeInTheDocument();
+    expect(within(panel).queryByText(/No tips right now/)).not.toBeInTheDocument();
   });
 
   it('a ?tip= preview opens the panel with that tip in front, remembering nothing', async () => {

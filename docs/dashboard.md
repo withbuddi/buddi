@@ -188,12 +188,17 @@ first), a mailbox or money connected, or a week of use; it opens Settings →
 Lock screen.
 Tips live behind the lightbulb on the date line. It opens a Tips panel under
 the glance (Close at its right, and the browser remembers it open): a small
-stack of cards, today's in front and every other tip that is ready behind it
-(two peek out), with "1 of N" under it. Slide the front card left (or ←, or
+stack of cards, today's in front and every other tip that applies behind it
+(two peek out), with "1 of N" under it. Opened on purpose, the stack holds
+every tip that applies and is not dismissed, the ones shown or put off
+recently at the back; cooldowns only govern the unsolicited daily pick and
+the bulb's dot. Slide the front card left (or ←, or
 "Not now") to put it off for a week, right (→, "Not this again") to remove it
 for good; the button on the card, or Enter, goes where it points. A tip put
-off comes back in its turn; one removed for good does not. With none ready the
-panel says "No tips right now." The bulb wears a dot ("A new tip") while a
+off goes to the back; one removed for good does not come back. With none
+that applies the panel says "No tips right now. New ones appear as you use
+buddi."; with every one that applies removed, "You've turned off every tip
+that applies." The bulb wears a dot ("A new tip") while a
 ready tip has not been in the open stack yet; opening the panel clears it.
 Tips are never in "Needs you", which is only what asks something of you.
 Never during first run, and never about a plugin that is not installed. A tip

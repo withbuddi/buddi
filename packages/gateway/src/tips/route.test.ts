@@ -106,10 +106,11 @@ describe('tips routes', () => {
     // The current tip agrees with the stack's front.
     expect((await call('GET', '/api/tips/current')).body).toMatchObject({ tip: { id: 'a' } });
 
+    // Put off, it moves to the back of the opened stack; dismissed, it leaves.
     await call('POST', '/api/tips/a/later');
-    expect(await ids()).toEqual(['b', 'c']);
+    expect(await ids()).toEqual(['b', 'c', 'a']);
     await call('POST', '/api/tips/b/dismiss');
-    expect(await ids()).toEqual(['c']);
+    expect(await ids()).toEqual(['c', 'a']);
     now = new Date(now.getTime() + 8 * 86_400_000);
     expect(await ids()).toEqual(['a', 'c']);
     expect((await call('POST', '/api/tips/queue')).status).toBe(405);
@@ -140,6 +141,24 @@ describe('tips routes', () => {
     await tipsRoute(deps, { method: 'GET', path: '/api/tips/queue' });
     expect(await peek()).toEqual(['a', 'b', 'c']);
     expect((store.data.get(TIPS_STATE_KEY) as Record<string, { shownAt?: string }>).a!.shownAt).toBe('2026-09-04');
+  });
+
+  it('opened, stacks tips in their cooldown too; a peek leaves them out; dismissed never', async () => {
+    const store = memoryStore();
+    const RULES3: TipRule[] = [...RULES, { id: 'c', when: () => true, holdsForDays: 0, text: 'Tip c.', action: { label: 'Do c', route: '#/c' }, cooldownDays: 7 }];
+    store.data.set(TIPS_STATE_KEY, {
+      a: { firstHeld: '2026-08-01', shownAt: '2026-08-30' },
+      b: { firstHeld: '2026-08-01', shownAt: '2026-08-31' },
+      c: { firstHeld: '2026-08-01', dismissed: true },
+    });
+    const deps = { store, facts: async () => facts(), now: () => new Date('2026-09-01T10:00:00Z'), timezone: 'UTC', rules: RULES3 };
+    const get = async (peek: boolean) => (await tipsRoute(deps, { method: 'GET', path: '/api/tips/queue', peek })).body as { tips: { id: string }[]; dismissed: number };
+    expect(await get(true)).toEqual({ tips: [], dismissed: 1 });
+    const opened = await get(false);
+    expect(opened.tips.map((t) => t.id)).toEqual(['a', 'b']);
+    expect(opened.dismissed).toBe(1);
+    // Opening marked nothing shown: no tip was due today.
+    expect((store.data.get(TIPS_STATE_KEY) as Record<string, { shownAt?: string }>).a!.shownAt).toBe('2026-08-30');
   });
 
   it('stacks previews touching nothing', async () => {

@@ -275,8 +275,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
     errors: '404 no tip by the preview id',
   },
   {
-    method: 'GET', path: '/api/tips/queue', area: 'home', summary: "The stack the lightbulb on Home opens: today's tip first, then every other one that is ready (picking the first is remembered).",
-    query: "preview?: tip ids, comma-separated  // stack those as they would look, touching nothing; peek?: '1'  // the same, marking nothing shown", answer: '{ tips: Tip[] }',
+    method: 'GET', path: '/api/tips/queue', area: 'home', summary: "The stack the lightbulb on Home opens: today's tip first, then every other one that holds and is not dismissed, ready ones before those in their cooldown (picking the first is remembered).",
+    query: "preview?: tip ids, comma-separated  // stack those as they would look, touching nothing; peek?: '1'  // today's and the ready ones only, marking nothing shown", answer: '{ tips: Tip[], dismissed: number }',
     errors: '404 no tip by a preview id',
   },
   { method: 'POST', path: '/api/tips/seen-page', area: 'home', summary: 'Record that a page was opened (tips about it stop).', body: '{ page: string }', answer: '{ ok: true }' },

@@ -123,40 +123,57 @@ export function pickTip(
 }
 
 /**
- * The stack the lightbulb on Home opens: today's tip in front, then every
- * other tip that is ready, in the engine's order (held longest, then first in
- * `TIPS`), at most `max` (all of them by default).
+ * The stack the lightbulb on Home opens.
+ *
+ * Opened (`open`, the owner asked to look): every tip whose condition holds
+ * and that is not dismissed, whatever its hold or cooldown: today's tip in
+ * front, then the ready ones (held longest, then first in `TIPS`), then the
+ * ones inside their cooldown or put off today, the most recently shown last.
+ *
+ * A peek (not `open`, for the bulb's dot): today's tip, then only the ready
+ * ones; cooldowns and "Not now" today keep the others out.
  *
  * Only the front one is remembered as shown (`pickTip`'s state); the cards
- * behind it are a peek, and each is shown or put off when the owner swipes to
- * it and acts (`later`/`dismiss` per tip). One put off or dismissed today
- * leaves the stack, and the rest move up.
+ * behind it are shown or put off when the owner swipes to them and acts
+ * (`later`/`dismiss` per tip). `dismissed` counts the tips that hold but were
+ * dismissed, so an empty stack can say why. At most `max` tips (all by default).
  */
 export function pickQueue(
   rules: readonly TipRule[],
   facts: Facts,
   previous: TipsState,
   today: string,
-  max = Number.POSITIVE_INFINITY,
-): { tips: TipView[]; state: TipsState } {
+  { open = false, max = Number.POSITIVE_INFINITY }: { open?: boolean; max?: number } = {},
+): { tips: TipView[]; state: TipsState; dismissed: number } {
   const { tip, state } = pickTip(rules, facts, previous, today);
-  if (facts.firstRun || max <= 0) return { tips: [], state };
+  if (facts.firstRun || max <= 0) return { tips: [], state, dismissed: 0 };
   const tips: TipView[] = tip ? [tip] : [];
-  const ready = rules
-    .map((rule, index) => ({ rule, index, entry: state[rule.id] }))
-    .filter(({ rule, entry }) => {
-      if (rule.id === tip?.id || !entry?.firstHeld || entry.dismissed || !applies(rule, facts)) return false;
-      if (entry.laterAt === today || entry.shownAt === today) return false;
-      if (daysBetween(entry.firstHeld, today) < rule.holdsForDays) return false;
-      const last = [entry.shownAt, entry.laterAt].filter((d): d is string => !!d).sort().pop();
-      return !last || daysBetween(last, today) >= rule.cooldownDays;
-    })
-    .sort((a, b) => a.entry!.firstHeld!.localeCompare(b.entry!.firstHeld!) || a.index - b.index);
-  for (const { rule } of ready) {
+  let dismissed = 0;
+  const ready: { rule: TipRule; index: number; held: string }[] = [];
+  const resting: { rule: TipRule; index: number; last: string }[] = [];
+  rules.forEach((rule, index) => {
+    const entry = state[rule.id];
+    if (!entry?.firstHeld || !applies(rule, facts)) return;
+    if (entry.dismissed) {
+      dismissed++;
+      return;
+    }
+    if (rule.id === tip?.id) return;
+    const last = [entry.shownAt, entry.laterAt].filter((d): d is string => !!d).sort().pop();
+    const cooling = !!last && (last === today || daysBetween(last, today) < rule.cooldownDays);
+    if (cooling) {
+      if (open) resting.push({ rule, index, last: last! });
+      return;
+    }
+    if (open || daysBetween(entry.firstHeld, today) >= rule.holdsForDays) ready.push({ rule, index, held: entry.firstHeld });
+  });
+  ready.sort((a, b) => a.held.localeCompare(b.held) || a.index - b.index);
+  resting.sort((a, b) => a.last.localeCompare(b.last) || a.index - b.index);
+  for (const { rule } of [...ready, ...resting]) {
     if (tips.length >= max) break;
     tips.push(viewOf(rule, facts));
   }
-  return { tips, state };
+  return { tips, state, dismissed };
 }
 
 /** "Not this again": never again, until the Tips list brings it back. */
