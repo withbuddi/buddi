@@ -424,6 +424,22 @@ class ImapFlowClient implements ImapWriter {
     return null;
   }
 
+  /** One message's HTML part, peeked (see `ImapClient.fetchHtml`). */
+  async fetchHtml(mailbox: string, uid: number, maxBytes: number): Promise<string | null> {
+    if (this.#open !== mailbox) await this.open(mailbox);
+    let structure: Record<string, any> | null = null;
+    for await (const msg of this.client.fetch(String(uid), { uid: true, bodyStructure: true }, { uid: true })) {
+      if (Number(msg.uid) === uid) structure = (msg.bodyStructure ?? null) as Record<string, any> | null;
+    }
+    if (!structure) return null;
+    const part = findHtmlPart(structure);
+    if (!part) return null;
+    // BODY.PEEK, like every body read here: opening it never marks it seen.
+    const downloaded = await this.client.download(String(uid), part, { uid: true });
+    const raw = await readAll(downloaded?.content ?? null, maxBytes);
+    return raw === '' ? null : raw;
+  }
+
   /**
    * One attachment's bytes.
    *

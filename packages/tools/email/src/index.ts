@@ -39,6 +39,7 @@ import { mailAgents } from './agent.js';
 import type { EnvLike } from './config.js';
 import { accountDestination } from './credentials.js';
 import { createSelfChannel } from './channel.js';
+import { MailWorker } from './worker.js';
 import type { ImapClientFactory, ImapIdleFactory, SmtpClientFactory } from './ports.js';
 
 /** Absolute path to this plugin's migrations, resolved from the built file. */
@@ -76,10 +77,11 @@ export interface EmailPluginOptions {
  * the convenience for a caller that wants to drive one poll itself (a test, a
  * one-shot CLI) without going through a manifest.
  */
-export function createEmailSources(opts: EmailPluginOptions = {}): Source[] {
+export function createEmailSources(opts: EmailPluginOptions = {}, worker?: MailWorker): Source[] {
   return [
     createInboxPollSource({
       connect: opts.connect ?? imapflowFactory,
+      ...(worker ? { worker } : {}),
       ...(opts.env ? { env: opts.env } : {}),
       ...(opts.idle ? { idle: opts.idle } : opts.connect ? {} : { idle: imapflowIdleFactory }),
     }),
@@ -93,6 +95,9 @@ export function createEmailSources(opts: EmailPluginOptions = {}): Source[] {
 export function createEmailManifest(
   opts: EmailPluginOptions = {},
 ): PluginManifest {
+  // One per plugin start: the hand the poll gives its context to, which the
+  // reading pane asks for an older message's HTML (`worker.ts`).
+  const worker = new MailWorker({ connect: opts.connect ?? imapflowFactory, ...(opts.env ? { env: opts.env } : {}) });
   return {
     name: 'email',
     version: '0.1.0',
@@ -147,8 +152,8 @@ export function createEmailManifest(
     agents: mailAgents,
     // The Mail place and the Email settings tab, and the reads they make.
     pages: emailPages(),
-    queries: emailQueries(),
-    sources: createEmailSources(opts),
+    queries: emailQueries(worker),
+    sources: createEmailSources(opts, worker),
     // The numbers a goal can watch: what is waiting on the owner, and what is
     // unread in the inbox. Read-only, and measured on core's schedule
     // (`metrics.ts`).
@@ -697,4 +702,7 @@ export {
   type UnansweredAsk,
   type WatcherSettingsPatch,
 } from './watchers.js';
+export { MailWorker, LAZY_HTML_RETRY_MS, LAZY_HTML_WAIT_MS, type HtmlFetcher, type MailWorkerOptions } from './worker.js';
+export { cleanText, htmlToText, INVISIBLE } from './text.js';
+export { cleanOlderText, textCleanupLogLine, TEXT_CLEANUP_BATCH, TEXT_CLEANUP_KEY, type TextCleanupOutcome } from './text-cleanup.js';
 export { mailAgents, MAIL_TRIAGE_TOOLS, TRIAGE_OFFER_QUERY, TRIAGE_OFFER_TEXT } from './agent.js';

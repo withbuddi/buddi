@@ -195,6 +195,14 @@ export interface ImapClient {
     maxBytes: number,
   ): Promise<Buffer | null>;
   /**
+   * One message's HTML part, peeked, undecoded beyond its transfer encoding
+   * and cut at `maxBytes`: what the reading pane fetches once for a message
+   * synced before HTML was kept (docs/email.md, "Reading mail"). `null` when
+   * the message is not there or has no HTML part. Optional: without it, an
+   * older message is read as its text.
+   */
+  fetchHtml?(mailbox: string, uid: number, maxBytes: number): Promise<string | null>;
+  /**
    * Which of the messages buddi holds in `[fromUid, toUid]` have left this
    * mailbox (archived, moved or deleted in another app). Optional: a client
    * without it simply never notices.

@@ -6,7 +6,10 @@
  * one difference that is the whole point of the port: a query is handed a pool
  * that refuses anything but a `select`, so the page's data cannot come from
  * something that also wrote. Nothing here opens a transaction, calls IMAP or
- * touches the vault; every write the pages make is a tool (`tools.ts`).
+ * touches the vault; every write the pages make is a tool (`tools.ts`). The
+ * one exception is not made here: `message` asks the plugin's worker for an
+ * older message's HTML, and the worker fetches and stores it with the poll's
+ * own context (`worker.ts`).
  *
  * Two smaller rules shape what a query returns:
  *
@@ -47,6 +50,7 @@ import {
 import { policyLists, threadChoices } from '../tools/policies.js';
 import { loadWatcherSettings, DEFAULT_WATCHER_SETTINGS } from '../watchers.js';
 import type { AttachmentInfo } from '../ports.js';
+import type { HtmlFetcher } from '../worker.js';
 import { draftStatusLine, isoOf, policyLine, relative } from './format.js';
 import { describeUndo, movedSince, plural, recentActions, undoRefusal, verbOf, type ActionRecord } from '../mailbox/actions.js';
 import { learnedRules } from '../policies/auto.js';
@@ -690,7 +694,7 @@ export function draftQuery(): PageQuery {
 }
 
 /** One message's body, on request, with its attachments' listing. */
-export function messageQuery(): PageQuery {
+export function messageQuery(worker?: HtmlFetcher): PageQuery {
   return {
     name: 'message',
     params: byId,
@@ -710,7 +714,14 @@ export function messageQuery(): PageQuery {
       const messageId = String(row.id);
       const purged = row.body_purged_at !== null;
       const purgedNote = 'The body of this message has been purged under your retention setting. Its headers are kept.';
-      const html = !purged && typeof row.body_html === 'string' && row.body_html !== '' ? (row.body_html as string) : null;
+      let html = !purged && typeof row.body_html === 'string' && row.body_html !== '' ? (row.body_html as string) : null;
+      /*
+       * A message synced before pre.44 has no HTML kept. The plugin's worker
+       * fetches it once, stores it and hands it back, within a bounded wait
+       * (`worker.ts`); the query itself still only reads. Without it, the
+       * text is drawn, as before.
+       */
+      if (html === null && !purged && row.body_html === null && worker) html = await worker.htmlFor(messageId);
       const text = purged ? '' : truncateBody(String(row.body_text ?? ''), html ? TEXT_WITH_HTML_BYTES : MAX_BODY_BYTES);
       const toList: string[] = Array.isArray(row.to_addrs) ? row.to_addrs : [];
       const ccList: string[] = Array.isArray(row.cc) ? row.cc : [];
@@ -719,8 +730,9 @@ export function messageQuery(): PageQuery {
         /*
          * The `message` component's shape (host API 1.30): who, to whom,
          * when (the server's arrival time, as the thread orders by), the
-         * stored HTML — sanitised at ingest, and again by the dashboard — and
-         * the text it falls back to. Never anything fetched now.
+         * stored HTML — sanitised at ingest (or at the one fetch an older
+         * message gets, above), and again by the dashboard — and the text it
+         * falls back to.
          */
         from: addressRow(String(row.from_addr), typeof row.from_name === 'string' ? row.from_name : null),
         to: toList.map((address) => addressRow(address)),
@@ -1244,13 +1256,13 @@ export function learnedRulesQuery(): PageQuery {
   };
 }
 
-export function emailPageQueries(): PageQuery[] {
+export function emailPageQueries(worker?: HtmlFetcher): PageQuery[] {
   return [
     triageOfferQuery(),
     threadsQuery(),
     threadQuery(),
     draftQuery(),
-    messageQuery(),
+    messageQuery(worker),
     accountsQuery(),
     mailStatusQuery(),
     policiesQuery(),

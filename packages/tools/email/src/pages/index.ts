@@ -21,6 +21,7 @@ import { createThreadDoneTool } from './thread-tools.js';
 import { emailPageDescriptors } from './descriptors.js';
 import { createUndoChangeTool, createUndoLearnedTool } from '../tools/mailbox.js';
 import { emailPageQueries } from './queries.js';
+import type { HtmlFetcher } from '../worker.js';
 
 export * from './accounts.js';
 export * from './descriptors.js';
@@ -47,8 +48,8 @@ export function emailPageTools(opts: AccountToolOptions): ToolDefinition<never, 
 }
 
 /** Every read the two pages make. */
-export function emailQueries(): PageQuery[] {
-  return emailPageQueries();
+export function emailQueries(worker?: HtmlFetcher): PageQuery[] {
+  return emailPageQueries(worker);
 }
 
 /** The two screens: the Mail place, and the Email settings tab. */

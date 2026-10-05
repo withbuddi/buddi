@@ -117,6 +117,10 @@ export class FakeImapServer {
   readonly departureChecks: Array<{ mailbox: string; via: 'vanished' | 'search'; fromUid: number; toUid: number }> = [];
   /** Uids that left a QRESYNC mailbox, with the mod-sequence they left at. */
   readonly vanishedLog: Array<{ mailbox: string; uid: number; modseq: number }> = [];
+  /** Every HTML part served (`fetchHtml`), for the reading pane's fetch-once. */
+  readonly htmlFetches: Array<{ mailbox: string; uid: number; maxBytes: number }> = [];
+  /** How long `fetchHtml` takes to answer, for the pane's bounded wait. */
+  htmlDelayMs = 0;
   /** How many times an IDLE session asked for Sent's UIDNEXT. */
   sentChecks = 0;
 
@@ -576,6 +580,15 @@ class FakeImapClient implements ImapWriter {
       );
     }
     return Buffer.from(bytes);
+  }
+
+  async fetchHtml(mailbox: string, uid: number, maxBytes: number): Promise<string | null> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    this.server.htmlFetches.push({ mailbox, uid, maxBytes });
+    if (this.server.htmlDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.server.htmlDelayMs));
+    const message = this.server.mailbox(mailbox).messages.find((m) => m.uid === uid);
+    if (!message || !message.bodyHtml) return null;
+    return message.bodyHtml.slice(0, maxBytes);
   }
 
   async capabilities(): Promise<string[]> {

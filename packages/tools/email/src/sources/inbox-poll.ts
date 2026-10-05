@@ -195,6 +195,12 @@ export interface InboxPollOptions {
   idleTuning?: Pick<IdleWatchersOptions, 'debounceMs' | 'backoffFirstMs' | 'backoffMaxMs' | 'stableMs' | 'sentCheckMs'>;
   /** The poll period, in seconds, for an account whose IDLE is live. Default 15 minutes. */
   slowPollSeconds?: number;
+  /**
+   * The plugin's background hand (`worker.ts`): handed this poll's context
+   * at the start of every poll, so the reading pane can fetch an older
+   * message's HTML and the text clean-up can run.
+   */
+  worker?: { attach(ctx: SourceContext): void };
 }
 
 /**
@@ -851,6 +857,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
 
     async poll(ctx: SourceContext): Promise<void> {
       const log = ctx.buddi?.log ?? ((line: string) => console.error(line));
+      opts.worker?.attach(ctx);
 
       // Accounts are plural (docs/email.md §2). Every enabled one is polled in
       // this pass, each with its own folders and its own cursor per folder. No

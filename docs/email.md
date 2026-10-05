@@ -1068,11 +1068,37 @@ stored in `messages.body_html` only when the result is at most 256 KB (over
 it, the text is what is read). The From header's display name is kept in
 `messages.from_name`, and each attachment's Content-ID in its listing, so a
 `cid:` picture can be drawn from the file once it is fetched. Both columns
-(migration 028) are empty for mail synced before them; nothing is fetched to
-fill them. Retention purges `body_html` with `body_text`; the pane then says
-the body was purged and keeps the headers.
+(migration 028) are empty for mail synced before them. Retention purges
+`body_html` with `body_text`; the pane then says the body was purged and
+keeps the headers.
 
-**What is never fetched.** Nothing is fetched to draw a message. A remote
+**The text.** An HTML-only message's `body_text` (and the `snippet` cut from
+it) is made at sync by `text.ts`: parsed with `parse5`, which decodes every
+entity, text nodes only (scripts, styles, the head, templates and inline-hidden
+elements skipped), block elements and `<br>` as line breaks, the invisible
+padding newsletters put in their preview line (zero-width characters, word
+joiners, hair and thin spaces) dropped, spaces collapsed, at most one blank
+line in a row. Rows synced before pre.44 were made by regular expressions that
+decoded five entities; the first poll of each plugin start runs a background
+pass (`text-cleanup.ts`) that decodes and tidies those rows' text and cuts
+their snippet again, 200 rows at a time, recording where it got to in
+`email.settings` (`text_cleanup`) so a restart carries on and a finished pass
+never runs again. It logs one line at the end.
+
+**Older messages, on open.** A message synced before migration 028 has no
+`body_html`. When the pane opens one — not purged, with a uid, on an enabled
+mailbox — the `message` query asks the plugin's worker (`worker.ts`), which
+holds the poll's context because a page query may neither write nor log in to
+a mailbox. The worker fetches that message's HTML part once (a peek, after the
+same UIDVALIDITY check as `email.fetch_attachment`), sanitises and caps it
+like the sync, stores it in `body_html` and hands it back. The pane waits at
+most 6 seconds; on a timeout or any failure it draws the text, and the message
+is not tried again for an hour. A fetch that finishes after the wait still
+stores its result for the next open. Before the first poll of a start there is
+no worker context, and the text is drawn.
+
+**What is never fetched.** Nothing is fetched to draw a message but that one
+HTML part of an older message, from the owner's own mail server. A remote
 picture in the HTML is kept as an address; the dashboard sanitises the body
 again before drawing it and does not create an `<img>` for it until the owner
 presses Show images, a choice it remembers for that sender in this browser
