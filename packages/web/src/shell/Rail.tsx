@@ -23,6 +23,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useState, type ReactNode } from 'react';
 import { api, type FocusDuration, type FocusMode, type FocusState } from '../api';
 import { isStandalone } from '../build';
+import { inBuddiApp } from '../views/parts/KeepClose';
 import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
 import { pageIcon } from '../pages/icons';
@@ -170,8 +171,8 @@ function OwnerMenu({
   };
   const name = owner.data?.preferredName?.trim() || null;
   const initial = (name ?? 'You').slice(0, 1).toUpperCase();
-  // An installed app has no toolbar, so no reload button: this is it.
-  const [standalone] = useState(isStandalone);
+  // An installed app has no reload button of its own, and neither does buddi.app's window.
+  const [standalone] = useState(() => isStandalone() || inBuddiApp());
   const [hint] = useState(reloadHint);
   // The browser offered an install, and this is not already the app.
   const install = useInstallPrompt();

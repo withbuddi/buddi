@@ -648,6 +648,19 @@ describe('the plugins row', () => {
     expect(row.detail).toContain('weather changed on disk since it was approved');
   });
 
+  it('lists the pages the running buddi registered, and warns about an installed plugin it has not', () => {
+    const loaded = [{ name: 'weather', version: '0.1.5' }, { name: 'calendar', version: '0.2.1' }];
+    const all = checkPlugins({ record, loaded, problems: [], pages: { expected: ['weather', 'calendar'], registered: ['calendar', 'email', 'weather'] } });
+    expect(all.status).toBe('ok');
+    expect(all.detail).toContain('pages registered: weather, calendar');
+    const short = checkPlugins({ record, loaded, problems: [], pages: { expected: ['weather', 'calendar'], registered: ['email', 'weather'] } });
+    expect(short.status).toBe('warn');
+    expect(short.detail).toContain('pages registered: weather');
+    expect(short.detail).toContain('installed but not in the running buddi: calendar — restart buddi to load it');
+    // No running buddi said: nothing about pages.
+    expect(checkPlugins({ record, loaded, problems: [] }).detail).not.toContain('pages registered');
+  });
+
   it('is never critical: a broken plugin does not make the installation broken', async () => {
     const checks = await collectChecks(
       fakeProbes({

@@ -759,6 +759,12 @@ export interface PluginFacts {
   changed?: ReadonlyArray<{ name: string; message: string }>;
   /** Installed and disabled by the owner: not loaded, on purpose, so not a problem. */
   disabled?: readonly string[];
+  /**
+   * Pages, as the running gateway serves them (`run/pages.json`): `expected`
+   * is every loaded plugin whose manifest has pages, `registered` those whose
+   * pages the gateway lists now. Absent when no running buddi said.
+   */
+  pages?: { expected: readonly string[]; registered: readonly string[] };
 }
 
 /** `finance@1.2.3 (npm …)`, or just the version when nothing recorded a source. */
@@ -777,10 +783,27 @@ function named(plugin: { name: string; version: string; source?: string }): stri
  * which is the command an owner runs when something feels wrong, did not ask.
  */
 export function checkPlugins(facts: PluginFacts): ProbeResult {
-  const result = checkLoadedPlugins(facts);
+  let result = checkLoadedPlugins(facts);
   const disabled = facts.disabled ?? [];
-  if (disabled.length === 0) return result;
-  return { ...result, detail: `${result.detail}; disabled: ${disabled.join(', ')}` };
+  if (disabled.length > 0) result = { ...result, detail: `${result.detail}; disabled: ${disabled.join(', ')}` };
+  return withPages(result, facts.pages);
+}
+
+/**
+ * "pages registered: calendar, weather", against what is installed: a plugin
+ * installed while buddi ran that the running buddi did not load has no page in
+ * the rail until a restart, and that is a warning with its fix.
+ */
+function withPages(result: ProbeResult, pages: PluginFacts['pages']): ProbeResult {
+  if (pages === undefined || pages.expected.length === 0) return result;
+  const registered = pages.expected.filter((name) => pages.registered.includes(name));
+  const missing = pages.expected.filter((name) => !pages.registered.includes(name));
+  const detail = `${result.detail}; pages registered: ${registered.length === 0 ? 'none' : registered.join(', ')}`;
+  if (missing.length === 0) return { ...result, detail };
+  return {
+    status: result.status === 'fail' ? 'fail' : 'warn',
+    detail: `${detail}; installed but not in the running buddi: ${missing.join(', ')} — restart buddi to load ${missing.length === 1 ? 'it' : 'them'}`,
+  };
 }
 
 function checkLoadedPlugins(facts: PluginFacts): ProbeResult {

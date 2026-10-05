@@ -112,6 +112,13 @@ describe('Reload in the owner menu', { timeout: 180_000 }, () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
+  it('is there inside buddi.app, whose window has no reload of its own', async () => {
+    displayMode(false);
+    vi.stubGlobal('navigator', { ...navigator, userAgent: `${navigator.userAgent} buddi-mac/0.1.0` });
+    await openMenu();
+    expect(screen.getByRole('menuitem', { name: /^Reload/ })).toBeInTheDocument();
+  });
+
   it('reads Reload to update, in any mode, when the served build is newer', async () => {
     displayMode(false);
     const reload = vi.fn();

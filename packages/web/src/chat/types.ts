@@ -309,6 +309,9 @@ export type ChatEventName =
   // The attention stream's only frame: "some agent's claim on you may have
   // changed, ask again". It carries no payload on purpose.
   | 'attention'
+  // Also on the attention stream: a plugin was loaded live or toggled, so the
+  // shell reads `/api/pages` again (the rail's plugin places, Settings tabs).
+  | 'plugins-changed'
   // Every stream's last frame from a gateway about to close (a restart, a
   // stop): the shell draws "Restarting buddi" and reloads when it is back.
   | 'closing'

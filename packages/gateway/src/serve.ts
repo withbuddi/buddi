@@ -97,6 +97,7 @@ import { LEARNING_DIGEST_ID, ensureDigestMission, runLearningDigest } from './ag
 import { ownerFollowingDeclarations } from './missions/zone-provenance.js';
 import { startLoop } from './loop.js';
 import { createRequirements } from './plugins/requires.js';
+import { writePagesState } from './plugins/pages-state.js';
 import { dashboardRouteUrl, ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { agentSearchPath, memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
 import { skillBundlesFor } from './web/skills.js';
@@ -1181,6 +1182,10 @@ export async function main(): Promise<void> {
       },
       log: logErr,
     });
+    // What `buddi doctor` reads: the plugins whose pages this process serves,
+    // now and after every live load or toggle (plugins/pages-state.ts).
+    writePagesState(process.env, wiring.registry);
+    wiring.registry.onChange(() => writePagesState(process.env, wiring.registry));
     // A plugin's rules proposed before they came through core move here once.
     if (!recovering) await adoptPluginPolicies(pool, wiring.registry.manifests(), now(), (line) => console.log(line), wiring.timezone);
     // The dates buddi acts on: the owner's birthday greeting and each person's

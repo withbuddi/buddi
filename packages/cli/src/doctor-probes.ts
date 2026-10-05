@@ -45,6 +45,7 @@ import {
   loadGatewayCatalog,
   adoptedPlugins,
   loadInstalledPlugins,
+  readPagesState,
   verifyInstalledHash,
   TelegramApi,
   telegramFetchOn,
@@ -733,6 +734,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         problems: plugins.problems.map((p) => ({ name: p.name, message: p.message })),
         changed,
         disabled: (plugins.disabled ?? []).map((r) => r.name),
+        ...pagesFacts(plugins.loaded, env),
       });
     },
 
@@ -983,4 +985,15 @@ function binaryOnPath(name: string, fallbacks: string[]): boolean {
     } catch { /* not this one */ }
   }
   return false;
+}
+
+/** The running gateway's pages against the loaded plugins that have any; nothing when no buddi is running. */
+function pagesFacts(
+  loaded: ReadonlyArray<{ record: { name: string }; manifest: { pages?: readonly unknown[] } }>,
+  env: NodeJS.ProcessEnv = process.env,
+): { pages?: { expected: string[]; registered: string[] } } {
+  const state = readPagesState(env);
+  if (state === undefined) return {};
+  const expected = loaded.filter((p) => (p.manifest.pages ?? []).length > 0).map((p) => p.record.name);
+  return { pages: { expected, registered: state.plugins } };
 }

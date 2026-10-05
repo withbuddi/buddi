@@ -45,6 +45,7 @@ import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
 import { HomeSuggestions, teamIsNew } from './parts/CatalogueSuggest';
+import { WakesAfterRestart } from './parts/WakesAfterRestart';
 import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
@@ -341,6 +342,9 @@ export function Home({
         </Section>
         </div>
       ) : null}
+
+      {/* A plugin first run installed that only a restart can load: said, with Restart. */}
+      <WakesAfterRestart />
 
       {/* Small live panels from the plugins, in the owner's order. */}
       <HomeWidgets widgets={widgets} navigate={navigate} />

@@ -98,6 +98,8 @@ import {
 } from './meet/machine';
 import { PairingTile, useTelegramPairing } from './parts/TelegramPairing';
 import { HandoverTeam } from './parts/CatalogueSuggest';
+import { WakesAfterRestart } from './parts/WakesAfterRestart';
+import { announcePagesChanged } from '../pages/usePages';
 import { fmtClock } from '../format';
 
 /**
@@ -3518,13 +3520,21 @@ function Handover({ answers, assistantAgent, met, onMet, navigate, onPickAnother
   // "Who do you want on your team?": catalogue teammates picked from what chapters 3 and 4 set up.
   const setUp = { days: tiles.includes('days'), mailbox: answers.reach?.mailbox === true, money: tiles.includes('money'), pictures: tiles.includes('pictures') };
   const waiting = progress?.waiting ?? [];
+  /**
+   * Into the shell. The rail read the plugin pages when this page loaded,
+   * before chapter 3's installs finished: it reads them again on the way in.
+   */
+  const leave = (route: string): void => {
+    announcePagesChanged();
+    navigate(route, true);
+  };
   /** A first question, sent as the owner's first message; the conversation carries on in the shell. */
   const ask = (text: string): void => {
     if (!assistant || !conversationId || asking) return;
     setAsking(true);
     void Promise.resolve()
       .then(() => chatApi.send(assistant.id, { conversationId, text }))
-      .then(() => navigate(chatRoute(assistant.id, conversationId), true))
+      .then(() => leave(chatRoute(assistant.id, conversationId)))
       .catch(() => setAsking(false));
   };
 
@@ -3577,14 +3587,16 @@ function Handover({ answers, assistantAgent, met, onMet, navigate, onPickAnother
         </div>
       ) : null}
 
-      {spoken ? <HandoverTeam setUp={setUp} navigate={(route) => navigate(route, true)} /> : null}
+      {spoken ? <HandoverTeam setUp={setUp} navigate={leave} /> : null}
+
+      {spoken ? <WakesAfterRestart plugins={progress?.plugins ?? []} /> : null}
 
       {spoken && waiting.length > 0 ? (
         <Notice
           tone="warm"
           title={SCRIPT.handover.waitingTitle(waiting.length)}
           action={
-            <Button variant="accent" onClick={() => navigate(HOME_ROUTE, true)}>
+            <Button variant="accent" onClick={() => leave(HOME_ROUTE)}>
               {SCRIPT.handover.home}
             </Button>
           }
@@ -3602,7 +3614,7 @@ function Handover({ answers, assistantAgent, met, onMet, navigate, onPickAnother
               href={carriesOn}
               onClick={(event) => {
                 event.preventDefault();
-                navigate(carriesOn, true);
+                leave(carriesOn);
               }}
             >
               {SCRIPT.done.open}

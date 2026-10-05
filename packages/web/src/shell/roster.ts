@@ -30,6 +30,7 @@ import { get } from '../api';
 import { openChatStream } from '../chat/stream';
 import { announceReconnect } from './freshness';
 import { noticeClosing } from './restart';
+import { announcePagesChanged } from '../pages/usePages';
 import type { ChatAgent } from '../chat/types';
 
 /** One agent's claim on the owner, exactly as the attention endpoint sends it. */
@@ -166,7 +167,13 @@ export function useAttention(): Map<string, AgentAttention> {
     // Its last frame before a restart says so: the shell draws "Restarting buddi" (`restart.ts`).
     const handle = openChatStream({
       url: ATTENTION_STREAM,
-      onEvent: (event) => (event.name === 'closing' ? noticeClosing(event.data) : refresh()),
+      onEvent: (event) => {
+        if (event.name === 'closing') noticeClosing(event.data);
+        // A plugin was loaded live or toggled (first run's installs, another tab):
+        // the rail and Settings read `/api/pages` again.
+        else if (event.name === 'plugins-changed') announcePagesChanged();
+        else refresh();
+      },
       onReconnect: announceReconnect,
     });
     return () => {

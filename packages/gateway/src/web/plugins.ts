@@ -47,6 +47,7 @@ import { PLATFORM_PLUGIN, pluginAgentProposals } from '../agents/platform.js';
 import { REMINDER_PLUGIN, SCHEDULE_PLUGIN } from '../missions/reminders.js';
 import { SYSTEM_PLUGIN } from '../system-context.js';
 import * as engine from '../plugins/index.js';
+import { announcePluginsChanged } from './attention.js';
 import { acceptAgentSteps } from '../plugins/install.js';
 import { driftFor, type Drift } from '../plugins/provenance.js';
 import { adoptedPlugins, RECORD_ITSELF, staticNeeds, type PluginNeed } from '../plugins/load.js';
@@ -862,6 +863,8 @@ export async function toggleRoute(deps: PluginsDeps, name: string, enabled: bool
     // What requires this plugin follows it in or out at once.
     deps.requirements?.readiness.forget();
     await deps.requirements?.reconcile().catch(() => undefined);
+    // Every other open page (another tab, buddi.app) reads the rail again too.
+    if (registry !== undefined && deps.pool !== undefined && !outcome.restartNeeded) await announcePluginsChanged(deps.pool, [name]);
     return { status: 200, body: { ...outcome, notes: engine.toggleNotes(outcome) } };
   } catch (err) {
     return refusalReply(err);

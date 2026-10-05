@@ -8,7 +8,7 @@
  * network, the owner's record or the live database.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createRequire } from 'node:module';
@@ -16,7 +16,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readPluginsFile } from '@buddi/core';
+import { readPluginsFile, ToolRegistry } from '@buddi/core';
+import { listPageDescriptors } from './pages.js';
+import { setPluginEnabled } from '../plugins/toggle.js';
 import { resetMarketCache } from './market.js';
 import { pluginJobRoute } from './plugins.js';
 import { approveStaged } from '../plugins/approve.js';
@@ -283,14 +285,15 @@ describe('installing in the background', () => {
     expect(view.waiting).toContain('Image did not install: withbuddi.com did not answer. Settings → Plugins can fetch it later');
   });
 
-  it('says a plugin it could not load live wakes up on the next restart', async () => {
+  it('says a plugin it could not load live wakes up after a restart', async () => {
     const pool = fakePool();
     const { api } = fakeEngine();
     await startTakeOn(deps(pool, { engine: api }), ['days']);
     await takeOnSettled();
     const view = await readTakeOn(deps(pool, { agentIds: () => [] }));
     expect(view.plugins.every((p) => p.wakesOnRestart === true)).toBe(true);
-    expect(view.waiting).toContain('Weather is installed; it wakes up on the next restart');
+    // Drawn with its Restart button from the mark, not as a line under "Things still waiting".
+    expect(view.waiting.some((line) => line.includes('restart'))).toBe(false);
   });
 });
 
@@ -311,6 +314,9 @@ describe('what is still waiting', () => {
       'Calendar wants your calendar’s private link',
       'Mail Triage is ready to be introduced',
     ]);
+    // The clean path: a mailbox, Mail Triage created with it, a calendar linked. Nothing waits.
+    const clean = await readTakeOn(deps(pool, { mailboxSet: async () => true, agentIds: () => ['mail-triage'], calendarLinked: async () => true }));
+    expect(clean.waiting).toEqual([]);
   });
 });
 
@@ -321,6 +327,24 @@ describe('what is still waiting', () => {
 function packFixture(into: string): string {
   const staging = mkdtempSync(path.join(tmpdir(), 'buddi-pack-'));
   cpSync(MARKER_FIXTURE, path.join(staging, 'package'), { recursive: true });
+  mkdirSync(into, { recursive: true });
+  const tgz = path.join(into, 'fixture.tgz');
+  execFileSync('tar', ['-czf', tgz, '-C', staging, 'package']);
+  rmSync(staging, { recursive: true, force: true });
+  return tgz;
+}
+
+/** The marker fixture with a rail page and no tables of its own, packed. */
+function packPagedFixture(into: string): string {
+  const staging = mkdtempSync(path.join(tmpdir(), 'buddi-pack-'));
+  const pkg = path.join(staging, 'package');
+  cpSync(MARKER_FIXTURE, pkg, { recursive: true });
+  rmSync(path.join(pkg, 'migrations'), { recursive: true, force: true });
+  const source = readFileSync(path.join(pkg, 'index.js'), 'utf8').replace(
+    "migrationsDir: path.join(import.meta.dirname, 'migrations'),",
+    "migrationsDir: '',\n  pages: [{ id: 'beds', title: 'Marker', place: 'rail', body: [{ kind: 'notice', text: 'Beds.' }] }],",
+  );
+  writeFileSync(path.join(pkg, 'index.js'), source);
   mkdirSync(into, { recursive: true });
   const tgz = path.join(into, 'fixture.tgz');
   execFileSync('tar', ['-czf', tgz, '-C', staging, 'package']);
@@ -370,6 +394,30 @@ describe('with the real staging and approval', () => {
     expect(record).toHaveLength(1);
     expect(record[0]!.provenance?.integrity).toBe(integrity);
     expect((await readTakeOn(deps(pool))).plugins[0]).toMatchObject({ plugin: 'weather', state: 'ready', wakesOnRestart: true });
+  });
+
+  it('loads the plugin live, so its page is on /api/pages without a restart', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'buddi-fake-npm-'));
+    temporary.push(dir);
+    const tarball = packPagedFixture(dir);
+    const integrity = integrityOfFile(tarball);
+    index = () => ({ status: 200, body: { plugins: [listing('weather', { npm: 'buddi-plugin-fixture-marker', version: '1.0.0', integrity })] } });
+    const live = new ToolRegistry();
+    const pool = fakePool();
+    const engine = { ...realEngine(fakeNpm(tarball)), setPluginEnabled } as unknown as TakeOnEngine;
+    await startTakeOn(deps(pool, { engine, registry: live }), ['days']);
+    await takeOnSettled();
+    // The very list `GET /api/pages` answers, read off the live registry.
+    const pages = listPageDescriptors({ registry: live, ctx: {} as never, now: () => new Date(), log: () => {} });
+    expect((pages.body as { pages: Array<{ plugin: string; id: string }> }).pages.map((p) => `${p.plugin}/${p.id}`)).toEqual(['fixture-marker/beds']);
+    const view = await readTakeOn(deps(pool));
+    expect(view.plugins[0]).toMatchObject({ plugin: 'weather', state: 'ready' });
+    expect(view.plugins[0]!.wakesOnRestart).toBeUndefined();
+    expect(view.waiting.some((line) => line.includes('restart'))).toBe(false);
+    // And the dashboard's stream was told, so the rail reads the pages again.
+    const announced = pool.query.mock.calls.filter(([sql, params]) => /insert into core\.events/.test(String(sql)) && (params as unknown[])?.[0] === 'plugins.changed');
+    expect(announced).toHaveLength(1);
+    expect(JSON.parse(String((announced[0]![1] as unknown[])[1]))).toEqual({ plugins: ['fixture-marker'] });
   });
 
   it('installs nothing when the listed integrity is not the tarball’s', async () => {

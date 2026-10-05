@@ -45,6 +45,23 @@ export const QUESTION_ASKED = 'chat.question.asked';
 /** The owner wrote to that agent again, so it is no longer holding. */
 export const QUESTION_CLEARED = 'chat.question.cleared';
 
+/**
+ * The set of loaded plugins changed in the running gateway: one was installed
+ * and loaded live (first run's chapter 3, the catalogue), enabled or disabled.
+ * Payload: `{ plugins: string[] }`. Not a badge: the attention stream carries
+ * it as its own `plugins-changed` frame so the rail reads `/api/pages` again.
+ */
+export const PLUGINS_CHANGED = 'plugins.changed';
+
+/** Say on the dashboard's stream that the plugins changed. Never throws. */
+export async function announcePluginsChanged(pool: Queryable, plugins: readonly string[]): Promise<void> {
+  try {
+    await pool.query(`insert into core.events (kind, payload) values ($1, $2::jsonb)`, [PLUGINS_CHANGED, JSON.stringify({ plugins })]);
+  } catch {
+    /* A page that misses it reads the pages again on its next load. */
+  }
+}
+
 /** Pending approvals read in one pass. Far more than any owner should have. */
 const APPROVAL_SCAN_LIMIT = 200;
 
@@ -52,7 +69,8 @@ const APPROVAL_SCAN_LIMIT = 200;
  * Log kinds that can change the answer. `action.created` opens an approval,
  * `approval.decided` and `approval.expired` close one, and the two question
  * kinds are this module's own. Nothing else moves the badge, which is what
- * keeps the attention stream quiet enough to be worth tailing.
+ * keeps the attention stream quiet enough to be worth tailing. The stream also
+ * carries `plugins.changed` (rare: an install or a toggle), as its own frame.
  */
 export const ATTENTION_KINDS: readonly string[] = [
   'action.created',
@@ -60,6 +78,7 @@ export const ATTENTION_KINDS: readonly string[] = [
   'approval.expired',
   QUESTION_ASKED,
   QUESTION_CLEARED,
+  PLUGINS_CHANGED,
 ];
 
 /** One agent's claim on the owner. Absent from the list when it has none. */
@@ -209,7 +228,10 @@ export async function streamAttention(
     ...opts,
     head: () => head(opts.pool),
     tail: (cursor, limit) => tail(opts.pool, cursor, limit),
-    project: (row: LogRow) => ({ event: 'attention', data: { at: row.createdAt.toISOString() } }),
+    project: (row: LogRow) =>
+      row.kind === PLUGINS_CHANGED
+        ? { event: 'plugins-changed', data: { at: row.createdAt.toISOString(), plugins: row.payload.plugins ?? [] } }
+        : { event: 'attention', data: { at: row.createdAt.toISOString() } },
   });
 }
 

@@ -29,6 +29,7 @@ import type { StagePhase } from '../plugins/index.js';
 import { loadMarketIndex, type MarketDeps, type MarketEntry, type MarketIndex } from './market.js';
 import { installedRecord, startJob, type PluginsEngine, type StageJob } from './plugins.js';
 import * as engine from '../plugins/index.js';
+import { announcePluginsChanged } from './attention.js';
 
 /** The six outcomes, in the order the chapter draws them. */
 export const TAKE_ON_TILES = ['days', 'mail', 'money', 'voice', 'code', 'pictures'] as const;
@@ -127,7 +128,7 @@ export interface TakeOnProgress {
   state: TakeOnState;
   /** Why it failed, in a sentence the owner can read. */
   reason?: string;
-  /** Installed, but this process could not load it live: it wakes up on the next restart. */
+  /** Installed, but this process could not load it live: it wakes up after a restart. */
   wakesOnRestart?: boolean;
 }
 
@@ -157,6 +158,8 @@ export interface TakeOnDeps {
   mailboxSet?: () => Promise<boolean>;
   /** The agents the roster holds, for "ready to be introduced". */
   agentIds?: () => string[];
+  /** Does the calendar plugin have a calendar yet? Its own `settings` read. */
+  calendarLinked?: () => Promise<boolean>;
 }
 
 export class TakeOnRefusal extends Error {
@@ -382,6 +385,10 @@ export async function installListedPlugin(
         ...pool,
       });
       wakesOnRestart = toggled.restartNeeded || toggled.loadProblem !== undefined;
+      if (toggled.loadProblem !== undefined) deps.log(`plugins: ${listing.name} is installed but did not load live: ${toggled.loadProblem}`);
+      else if (toggled.restartFor !== undefined) deps.log(`plugins: ${listing.name} is installed; ${toggled.restartFor}`);
+      // Loaded: the rail and Settings read `/api/pages` again on this frame.
+      if (!wakesOnRestart) await announcePluginsChanged(deps.pool, [outcome.record.name]);
     } catch (err) {
       deps.log(`plugins: ${listing.name} is installed but did not load live: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -441,11 +448,14 @@ async function waitingFor(deps: TakeOnDeps, tiles: readonly string[], plugins: r
     if (!mailbox) waiting.push('Mail Triage is waiting for a mailbox');
   }
   if (tiles.includes('days') && state('calendar')?.state !== 'failed') {
-    waiting.push('Calendar wants your calendar’s private link');
+    // Linked in chapter 4 (a private link or Google): nothing is waiting.
+    const linked = deps.calendarLinked ? await deps.calendarLinked().catch(() => false) : false;
+    if (!linked) waiting.push('Calendar wants your calendar’s private link');
   }
   for (const p of plugins) {
     if (p.state === 'failed') waiting.push(`${p.title} did not install: ${p.reason ?? 'no reason was given'}`);
-    else if (p.state === 'ready' && p.wakesOnRestart) waiting.push(`${p.title} is installed; it wakes up on the next restart`);
+    // One installed and waiting for a restart is not here: the handover and
+    // Home draw it with its Restart button, from `wakesOnRestart`.
   }
   for (const tile of TAKE_ON_TILES) {
     const mate = TILE_TEAMMATES[tile];
