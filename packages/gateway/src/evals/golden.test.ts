@@ -7,6 +7,7 @@ import {
   oneCalendarManifest,
   OPENAI_AGENT,
   parseEvalArgs,
+  PROFILE_CASE_NAME,
   stubbed,
 } from './golden.js';
 
@@ -104,5 +105,39 @@ describe('the one-writable-calendar case', () => {
     const create = oneCalendarManifest().tools.find((t) => t.name === 'calendar.create_event')!;
     await expect(create.execute({ calendar: 'Holidays' } as never, {} as never)).resolves.toMatchObject({ refused: expect.stringContaining('Agents may change: Home') });
     await expect(create.execute({ calendar: 'home' } as never, {} as never)).resolves.toMatchObject({ pending: true });
+  });
+});
+
+describe('the one-writable-field case', () => {
+  const theCase = GOLDEN_CASES.find((c) => c.id === 'one-writable-field-asked-once')!;
+  const turn = (text: string, calls: Array<{ name: string; input: unknown }> = []) => ({ question: 'q', text, calls, inputTokens: 0, outputTokens: 0 });
+  const set = { name: 'owner.set_profile', input: { fullName: PROFILE_CASE_NAME } };
+
+  it('runs on the front desk with an owner who has a name but no full name', () => {
+    expect(theCase.agent).toBe('concierge');
+    expect(theCase.seed?.join(' ')).toContain('full_name = null');
+    expect(theCase.turns).toHaveLength(3);
+  });
+
+  it('passes one question, the answer recorded, and no second ask', () => {
+    expect(theCase.check([
+      turn('Happy to. What full name should I sign it with?'),
+      turn(`Dear landlord, ... Best regards, ${PROFILE_CASE_NAME}`, [set]),
+      turn(`Dear bank, ... ${PROFILE_CASE_NAME}`),
+    ])).toEqual([]);
+  });
+
+  it('fails a list of questions, an invented name, and asking again', () => {
+    const fails = theCase.check([
+      turn("What is your full name? And your address? And the landlord's name?", [{ name: 'owner.set_profile', input: { fullName: 'Sam' } }]),
+      turn('Here it is, signed Sam.'),
+      turn('What full name should I use?'),
+    ]);
+    expect(fails).toEqual(expect.arrayContaining([
+      'asked more than one question at once',
+      'recorded a full name the owner had not said',
+      'never recorded the full name once the owner said it',
+      'asked for the full name a second time',
+    ]));
   });
 });

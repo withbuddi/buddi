@@ -124,7 +124,7 @@ import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
 import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
 import { createVault } from '@buddi/core';
@@ -305,7 +305,8 @@ import { placesList, placesRoute } from './places.js';
 import { peopleRoute } from './people.js';
 import { syncDateMissions } from '../missions/dates.js';
 import { resumeParkedForPage } from '../missions/parked.js';
-import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS, validDayMonth, type HttpArea } from '@buddi/core';
+import { type HttpArea } from '@buddi/core';
+import { checkProfilePatch } from '../owner-profile-edit.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
@@ -878,6 +879,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       updateNote: (input) => updateNote(deps.pool, input),
       forgetNote: (id) => forgetNote(deps.pool, { id, now: deps.now() }),
     },
+    // buddi.profile_update: Settings → Profile's save, places through the same geocoder.
+    profile: { env: deps.env ?? process.env, log, ...(deps.placesHttp ? { http: deps.placesHttp } : {}) },
   });
   // The binding is the credential: loopback is open, anything else keeps the
   // ticket-and-session gate. The override is a test seam, nothing more.
@@ -4127,36 +4130,10 @@ export function createWebApp(deps: WebServerDeps): Server {
      * the owner may write here directly; the same validation, the same row.
      */
     if (path === '/api/owner') {
-      const patch: OwnerProfilePatch = {};
-      for (const key of ['preferredName', 'timezone', 'language', 'about', 'fullName', 'pronouns'] as const) {
-        const given = body[key];
-        if (given === undefined) continue;
-        if (given !== null && typeof given !== 'string') return sendJson(res, 400, { error: `\`${key}\` must be a string or null` });
-        patch[key] = given as string | null;
-      }
-      // How times and dates read: a known word, or null for Auto.
-      if (body.timeFormat !== undefined) {
-        if (body.timeFormat !== null && !(OWNER_TIME_FORMATS as readonly unknown[]).includes(body.timeFormat)) return sendJson(res, 400, { error: '`timeFormat` is 12h, 24h or null (Auto).' });
-        patch.timeFormat = body.timeFormat as OwnerProfilePatch['timeFormat'];
-      }
-      if (body.dateFormat !== undefined) {
-        if (body.dateFormat !== null && !(OWNER_DATE_FORMATS as readonly unknown[]).includes(body.dateFormat)) return sendJson(res, 400, { error: '`dateFormat` is short, long, iso or null (Auto).' });
-        patch.dateFormat = body.dateFormat as OwnerProfilePatch['dateFormat'];
-      }
-      if (patch.timezone && !isKnownTimezone(patch.timezone)) return sendJson(res, 400, { error: `"${patch.timezone}" is not a timezone this host knows.` });
-      if (patch.preferredName && patch.preferredName.length > 80) return sendJson(res, 400, { error: 'The name is too long (80 characters at most).' });
-      if (patch.about && patch.about.length > 1000) return sendJson(res, 400, { error: 'Keep the line about you under 1,000 characters.' });
-      if (patch.fullName && patch.fullName.length > 120) return sendJson(res, 400, { error: 'The full name is too long (120 characters at most).' });
-      if (patch.pronouns && patch.pronouns.length > 40) return sendJson(res, 400, { error: 'Keep the pronouns under 40 characters.' });
-      // The birthday: day and month (the year optional), or null to clear it.
-      if (body.birthday !== undefined) {
-        if (body.birthday === null) patch.birthday = null;
-        else {
-          const birthday = validDayMonth(body.birthday as Record<string, unknown>);
-          if (!birthday) return sendJson(res, 400, { error: 'The birthday needs a real day and month; the year is optional.' });
-          patch.birthday = birthday;
-        }
-      }
+      // The same checks as owner.set_profile and buddi.profile_update (owner-profile-edit.ts).
+      const checked = checkProfilePatch(body);
+      if (!checked.ok) return sendJson(res, 400, { error: checked.error });
+      const patch = checked.patch;
       // The zone applies at once; schedules kept in the old one move with it.
       const { profile, zoneChange } = await saveOwnerProfile(deps.pool, patch, deps.env ?? process.env);
       // The birthday greeting follows the new day at once (missions/dates.ts).

@@ -100,11 +100,16 @@ describe('the examples this repository ships', () => {
     // Its own grant is the argument it makes to the owner: it writes agents, it
     // does not read their money or their mail. Proposing what it learned
     // changes nothing until the owner keeps it.
+    // owner.profile_gaps is a read of which profile fields are empty, so a new
+    // agent's persona never guesses the owner's details.
     expect(
       father.tools.every(
-        (name) => name.startsWith('platform.') || name.startsWith('memory.') || name.startsWith('learning.'),
+        (name) =>
+          name.startsWith('platform.') || name.startsWith('memory.') || name.startsWith('learning.') ||
+          name === 'owner.profile_gaps',
       ),
     ).toBe(true);
+    expect(father.tools).toContain('owner.profile_gaps');
     // Only one agent in a fresh clone may write.
     const writers = loaded
       .list()
@@ -162,6 +167,38 @@ describe('the examples this repository ships', () => {
     expect(shipped.tools).toContain('owner.get_profile');
     expect(shipped.tools).toContain('owner.finish_onboarding');
     expect(shipped.skills.map((s) => s.name)).toContain('first-run');
+  });
+
+  it('let the front desk and Agent Father see what the profile is missing', () => {
+    const loaded = catalog();
+    expect(loaded.resolve('concierge').tools).toContain('owner.profile_gaps');
+    expect(loaded.resolve('concierge').tools).toContain('owner.set_profile');
+    expect(loaded.resolve('father').tools).not.toContain('owner.set_profile');
+  });
+
+  it('have Agent Father answer "make me yours" in three lines of owner words', () => {
+    const persona = catalog().resolve('father').systemPromptTemplate;
+    expect(persona).toContain("I'm one of buddi's built-in agents, so I can't change myself in place.");
+    expect(persona).toContain("I can make a copy that's yours, same name and handle, and from then on it's whatever you want.");
+    expect(persona).toContain('What should be different?');
+    expect(persona).not.toContain('Your own file is one of the shipped examples');
+  });
+
+  it('keep implementation talk out of how the front desk describes itself', () => {
+    const persona = catalog().resolve('concierge').systemPromptTemplate;
+    for (const phrase of ['shipped in this repository are examples', 'same id as an example', 'a default this repository shipped', 'replaces it wholesale']) {
+      expect(persona, phrase).not.toContain(phrase);
+    }
+    expect(persona).toContain("can make a copy that is the owner's, with the same name and handle");
+  });
+
+  it('have the front desk ask for a missing field once, for the task in hand, and nudge at most weekly', () => {
+    const persona = catalog().resolve('concierge').systemPromptTemplate;
+    expect(persona).toContain('owner.profile_gaps');
+    expect(persona).toContain('ask once, one question, then set it');
+    expect(persona).toContain('At most once a week');
+    expect(persona).toContain('Never mid-task, never more than one, never twice for the same field');
+    expect(persona).toContain('knowing_you_dont_ask');
   });
 
   it('carry the shared example skill into the prompt', () => {

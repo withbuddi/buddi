@@ -4,6 +4,7 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- Your front desk can now fill in everything Settings → Profile has, from what you tell it: your full name, pronouns, 12- or 24-hour time, how dates read, and places like Home and Work (it looks up the address, tells you which town it matched, and keeps that town's timezone), as well as your name, timezone, language, birthday and a few lines about you. It only records what you said, refuses what the Profile page refuses, and every agent uses it from its next message. When a task needs something missing (a letter needs your full name, "how long to work?" needs Work) it asks once, in one question; otherwise at most one "knowing you" question a week, never twice about the same thing, and "don't ask" is remembered. Agent Father sees what is missing too, and when you ask it or the front desk to become yours, it answers plainly: it can't change itself in place, but it can make a copy that's yours, same name and handle. From Claude Code, `buddi.profile_update` makes the same change as an approval card.
 - Plugins now learn which of your model accounts can listen and speak: an OpenAI key and Gemini can, a ChatGPT subscription and Claude can't, and Ollama or another compatible server is "try it and see". Settings → Speech uses this to offer only accounts that work, with the reason beside the ones that don't. (Host API 1.30.)
 
 ## 0.1.0-pre.43 — 2026-10-05

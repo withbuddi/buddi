@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ToolRegistry, type Queryable, type CoreToolContext } from '@buddi/core';
+import { ToolRegistry, type Queryable, type CoreToolContext, type HttpArea } from '@buddi/core';
 import { EXAMPLES_AGENTS_DIR } from './catalog.js';
 import {
   EXAMPLES_TREE_REFUSAL,
@@ -32,16 +32,40 @@ class StubDb implements Queryable {
   steps: string[] = [];
   rezonedFrom: string[] = [];
   state = 'in-progress';
+  places: Array<Record<string, unknown>> = [];
+  preferences: Array<{ key: string; value: string; created_at: Date }> = [];
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
     if (text.startsWith('select preferred_name')) return { rows: [this.profile] };
+    if (text.startsWith('update core.owner_places')) {
+      const place = this.places.find((p) => p.id === params[0]);
+      if (!place) return { rows: [] };
+      Object.assign(place, { label: params[1], address: params[2], place_name: params[3], latitude: params[4], longitude: params[5], timezone: params[6] });
+      return { rows: [place] };
+    }
     if (text.startsWith('update core.owner')) {
-      const [, setName, name, setTz, tz, setLang, lang] = params;
-      if (setName) this.profile.preferred_name = name;
-      if (setTz) this.profile.timezone = tz;
-      if (setLang) this.profile.language = lang;
+      const columns = ['preferred_name', 'timezone', 'language', 'about', 'time_format', 'date_format', 'full_name', 'pronouns'];
+      columns.forEach((column, i) => {
+        if (params[1 + i * 2]) this.profile[column] = params[2 + i * 2];
+      });
+      if (params[17]) Object.assign(this.profile, { birthday_day: params[18], birthday_month: params[19], birthday_year: params[20] });
       return { rows: [this.profile] };
+    }
+    if (text.startsWith('select id, label, address, place_name')) return { rows: [...this.places] };
+    if (text.startsWith('insert into core.owner_places')) {
+      const [id, label, address, place_name, latitude, longitude, timezone, position] = params;
+      const place = { id, label, address, place_name, latitude, longitude, timezone, position };
+      this.places.push(place);
+      return { rows: [place] };
+    }
+    if (text.startsWith('delete from core.owner_places')) {
+      const at = this.places.findIndex((p) => p.id === params[0]);
+      return { rows: at < 0 ? [] : this.places.splice(at, 1) };
+    }
+    if (text.includes('from memory.preferences')) {
+      const keys = params[0] as string[];
+      return { rows: this.preferences.filter((p) => keys.includes(p.key)).sort((a, b) => b.created_at.getTime() - a.created_at.getTime()) };
     }
     if (text.startsWith('insert into core.owner')) return { rows: [{ id: 'owner' }] };
     if (text.startsWith('select owner_id, state')) {
@@ -134,6 +158,25 @@ function catalogOf(agents: CatalogAgent[]): AgentCatalog {
   return catalog;
 }
 
+/** Open-Meteo, as far as these tests go: Lyon and Portland (twice), nothing else. */
+const geocoded: string[] = [];
+const geocoder: HttpArea = {
+  async request(req) {
+    const name = new URL(req.url).searchParams.get('name') ?? '';
+    geocoded.push(name);
+    const results =
+      name === 'Lyon'
+        ? [{ name: 'Lyon', latitude: 45.75, longitude: 4.85, timezone: 'Europe/Paris', admin1: 'Auvergne-Rhône-Alpes', country: 'France' }]
+        : name === 'Portland'
+          ? [
+              { name: 'Portland', latitude: 45.52, longitude: -122.68, timezone: 'America/Los_Angeles', admin1: 'Oregon', country: 'United States' },
+              { name: 'Portland', latitude: 43.66, longitude: -70.26, timezone: 'America/New_York', admin1: 'Maine', country: 'United States' },
+            ]
+          : [];
+    return { ok: true, status: 200, headers: {}, json: async () => ({ results }), text: async () => '' } as never;
+  },
+};
+
 interface Harness {
   tool(name: string): { execute(input: any, ctx: CoreToolContext): Promise<any> };
   ctx: CoreToolContext;
@@ -147,7 +190,7 @@ function harness(opts: { file?: string; others?: CatalogAgent[]; agentId?: strin
   const self = stubAgent('scribe', 'scribe', 'Scribe', file);
   const registry = new ToolRegistry();
   const manifest = createOwnerManifest(registry);
-  bindOwnerTools(registry, { catalog: catalogOf([self, ...(opts.others ?? [])]), surface: 'cli' });
+  bindOwnerTools(registry, { catalog: catalogOf([self, ...(opts.others ?? [])]), surface: 'cli', placesHttp: geocoder });
   const db = new StubDb();
   const ctx = {
     db: db as unknown as CoreToolContext['db'],
@@ -221,6 +264,156 @@ describe('owner.set_profile', () => {
     const profile = await h.tool('owner.get_profile').execute({}, h.ctx);
     expect(profile.detectedTimezone).toBe('America/New_York');
     expect(profile.preferredName).toBeNull();
+  });
+
+  it.each([
+    ['preferredName', 'Amen', 'preferred_name', 'Amen'],
+    ['fullName', 'Amenophis Ouzou', 'full_name', 'Amenophis Ouzou'],
+    ['pronouns', 'he/him', 'pronouns', 'he/him'],
+    ['language', 'French', 'language', 'French'],
+    ['about', 'Short answers, please.', 'about', 'Short answers, please.'],
+    ['timeFormat', '24h', 'time_format', '24h'],
+    ['dateFormat', 'long', 'date_format', 'long'],
+  ] as const)('records %s as said', async (field, value, column, stored) => {
+    const h = harness();
+    const result = await h.tool('owner.set_profile').execute({ [field]: value }, h.ctx);
+    expect(result.ok).toBe(true);
+    expect(result[field]).toBe(value);
+    expect(h.db.profile[column]).toBe(stored);
+  });
+
+  it('records the birthday, the year only when given, and refuses a day that does not exist', async () => {
+    const h = harness();
+    expect((await h.tool('owner.set_profile').execute({ birthday: { day: 29, month: 2 } }, h.ctx)).birthday).toEqual({ day: 29, month: 2, year: null });
+    const bad = await h.tool('owner.set_profile').execute({ birthday: { day: 31, month: 4 } }, h.ctx);
+    expect(bad).toMatchObject({ ok: false, reason: 'unknown-day' });
+    expect(bad.message).toContain('nothing was recorded');
+    expect(h.db.profile.birthday_month).toBe(2);
+  });
+
+  it('refuses what Settings → Profile refuses, in its words', async () => {
+    const h = harness();
+    const long = await h.tool('owner.set_profile').execute({ about: 'x'.repeat(1001) }, h.ctx);
+    // Over the tool's own schema too, but the execute path says the page's sentence.
+    expect(long.ok).toBe(false);
+    expect(long.message).toContain('Keep the line about you under 1,000 characters.');
+    expect(h.db.profile.about).toBeUndefined();
+  });
+
+  it('clears a field the owner asked to forget, and a cleared format is Auto', async () => {
+    const h = harness();
+    await h.tool('owner.set_profile').execute({ pronouns: 'she/her', timeFormat: '12h' }, h.ctx);
+    const result = await h.tool('owner.set_profile').execute({ clear: ['pronouns', 'timeFormat'] }, h.ctx);
+    expect(result).toMatchObject({ ok: true, pronouns: null, timeFormat: null });
+    const both = await h.tool('owner.set_profile').execute({ pronouns: 'they/them', clear: ['pronouns'] }, h.ctx);
+    expect(both).toMatchObject({ ok: false, reason: 'conflict' });
+  });
+
+  it('refuses an empty change rather than claiming to have recorded it', async () => {
+    const h = harness();
+    expect(await h.tool('owner.set_profile').execute({}, h.ctx)).toMatchObject({ ok: false, reason: 'nothing-to-do' });
+  });
+
+  it('saves a place through the geocoder, with the town and its zone, and says what it matched', async () => {
+    const h = harness();
+    const result = await h.tool('owner.set_profile').execute({ places: [{ label: 'Work', address: '12 rue Neuve, Lyon' }] }, h.ctx);
+    expect(result.ok).toBe(true);
+    expect(result.placesSaved).toEqual([
+      { label: 'Work', address: '12 rue Neuve, Lyon', matched: 'Lyon, Auvergne-Rhône-Alpes, France', timezone: 'Europe/Paris', otherMatches: [] },
+    ]);
+    expect(h.db.places).toHaveLength(1);
+    expect(h.db.places[0]).toMatchObject({ id: 'work', label: 'Work', address: '12 rue Neuve, Lyon', timezone: 'Europe/Paris', position: 1 });
+    // The street stays here: only the town's parts were asked for.
+    expect(geocoded).not.toContain('12 rue Neuve');
+  });
+
+  it('changes a place already called that instead of adding a second, and reports the other towns', async () => {
+    const h = harness();
+    await h.tool('owner.set_profile').execute({ places: [{ label: 'Home', address: 'Lyon' }] }, h.ctx);
+    const result = await h.tool('owner.set_profile').execute({ places: [{ label: 'home', address: 'Portland' }] }, h.ctx);
+    expect(h.db.places).toHaveLength(1);
+    expect(h.db.places[0]).toMatchObject({ id: 'home', label: 'Home', timezone: 'America/Los_Angeles' });
+    expect(result.placesSaved[0].otherMatches).toEqual(['Portland, Maine, United States']);
+  });
+
+  it('says which place it could not find, saves the rest, and removes by label', async () => {
+    const h = harness();
+    await h.tool('owner.set_profile').execute({ places: [{ label: 'Home', address: 'Lyon' }] }, h.ctx);
+    const result = await h.tool('owner.set_profile').execute(
+      { places: [{ label: 'Gym', address: 'Nowhereville' }], removePlaces: ['Home', 'Cabin'] },
+      h.ctx,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.placesNotSaved).toEqual([{ label: 'Gym', reason: expect.stringContaining('Nothing matched "Nowhereville"') }]);
+    expect(result.placesRemoved).toEqual(['Home']);
+    expect(result.placesNotFound).toEqual(['Cabin']);
+    expect(h.db.places).toEqual([]);
+  });
+
+  it('refuses a place with no address before looking anything up', async () => {
+    const h = harness();
+    const before = geocoded.length;
+    const result = await h.tool('owner.set_profile').execute({ places: [{ label: 'Work', address: ' x ' }] }, h.ctx);
+    expect(result).toMatchObject({ ok: false, reason: 'invalid-place' });
+    expect(geocoded.length).toBe(before);
+  });
+
+  it('get_profile carries every field and the places', async () => {
+    const h = harness();
+    await h.tool('owner.set_profile').execute({ fullName: 'Ada Lovelace', places: [{ label: 'Home', address: 'Lyon' }] }, h.ctx);
+    const profile = await h.tool('owner.get_profile').execute({}, h.ctx);
+    expect(profile).toMatchObject({ fullName: 'Ada Lovelace', pronouns: null, timeFormat: null, dateFormat: null, birthday: null });
+    expect(profile.places).toEqual([{ label: 'Home', address: 'Lyon', matched: 'Lyon, Auvergne-Rhône-Alpes, France', timezone: 'Europe/Paris' }]);
+  });
+});
+
+describe('owner.profile_gaps', () => {
+  it('lists the empty useful fields, each with why it matters, and never pronouns or the language', async () => {
+    const h = harness();
+    const result = await h.tool('owner.profile_gaps').execute({}, h.ctx);
+    const fields = result.gaps.map((g: any) => g.field);
+    expect(fields).toEqual(['preferredName', 'timezone', 'fullName', 'places.home', 'places.work', 'birthday', 'timeFormat', 'dateFormat', 'about']);
+    expect(fields).not.toContain('pronouns');
+    expect(fields).not.toContain('language');
+    expect(result.gaps.find((g: any) => g.field === 'fullName').why).toBe('letters, forms and bookings');
+    expect(result.gaps.find((g: any) => g.field === 'places.work').why).toContain('"how long to work?"');
+    expect(result.nudge).toEqual({ field: 'preferredName', why: 'what every agent calls you' });
+    expect(result).toMatchObject({ filled: 0, of: 9, lastAskedAt: null });
+  });
+
+  it('drops a field once it is filled', async () => {
+    const h = harness();
+    await h.tool('owner.set_profile').execute({ fullName: 'Ada Lovelace', places: [{ label: 'Work', address: 'Lyon' }] }, h.ctx);
+    const fields = (await h.tool('owner.profile_gaps').execute({}, h.ctx)).gaps.map((g: any) => g.field);
+    expect(fields).not.toContain('fullName');
+    expect(fields).not.toContain('places.work');
+    expect(fields).toContain('places.home');
+  });
+
+  it('never nudges twice for one field, nor about a declined one, and at most once a week', async () => {
+    const h = harness();
+    h.db.preferences.push(
+      { key: 'knowing_you_asked', value: 'preferredName, timezone', created_at: new Date('2026-09-10T09:00:00Z') },
+      { key: 'knowing_you_dont_ask', value: 'fullName', created_at: new Date('2026-09-01T09:00:00Z') },
+    );
+    const result = await h.tool('owner.profile_gaps').execute({}, h.ctx);
+    expect(result.gaps.find((g: any) => g.field === 'timezone')).toMatchObject({ asked: true, declined: false });
+    expect(result.gaps.find((g: any) => g.field === 'fullName')).toMatchObject({ asked: false, declined: true });
+    // Four days since the last one: no nudge yet.
+    expect(result.nudge).toBeNull();
+    expect(result.lastAskedAt).toBe('2026-09-10T09:00:00.000Z');
+
+    h.db.preferences[0]!.created_at = new Date('2026-09-06T09:00:00Z');
+    const later = await h.tool('owner.profile_gaps').execute({}, h.ctx);
+    expect(later.nudge?.field).toBe('places.home');
+  });
+
+  it('stops nudging altogether when the owner said not to ask at all', async () => {
+    const h = harness();
+    h.db.preferences.push({ key: 'knowing_you_dont_ask', value: 'all of it', created_at: new Date('2026-09-01T09:00:00Z') });
+    const result = await h.tool('owner.profile_gaps').execute({}, h.ctx);
+    expect(result.nudge).toBeNull();
+    expect(result.gaps.every((g: any) => g.declined)).toBe(true);
   });
 });
 
