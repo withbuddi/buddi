@@ -473,6 +473,15 @@ export class StreamedAnswer {
     return (this.#opts.now ?? Date.now)();
   }
 
+  /**
+   * Everything pushed so far is withdrawn (the grounding guard held that
+   * answer back); the next push starts the text again in the same message.
+   */
+  restart(): void {
+    if (this.#closed) return;
+    this.#text = '';
+  }
+
   /** A piece of the answer, as the model writes it. */
   push(delta: string): void {
     if (this.#closed || delta === '') return;

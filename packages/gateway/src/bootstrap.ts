@@ -585,6 +585,8 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
         systemContext({ db: pool, ownerId: OWNER_ID, now, timezone: zone() }, run, {
           // Only the front desk is told the owner's places (docs/agents.md).
           isFrontDesk: (agentId) => catalog.agentsWithRole(ROLE_FRONT_DESK).some((agent) => agent.id === agentId),
+          // The edition origin line names the agent that delivered it by handle.
+          handleOf: (agentId) => catalog.get(agentId)?.handle ?? null,
         }),
       /*
        * A getter, not a value: this object is built before anything is bound,

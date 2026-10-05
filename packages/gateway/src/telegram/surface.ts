@@ -575,6 +575,8 @@ export interface RunRequest {
    * run's returned text is still the answer that lands last.
    */
   onTextDelta?: (text: string) => void;
+  /** The text streamed so far is withdrawn; the answer starts again. */
+  onTextRetract?: () => void;
   /**
    * Where this run hears about a message the owner sends while it works. The
    * runtime drains it between tool calls; a runner that ignores it simply
@@ -2212,7 +2214,7 @@ export class TelegramSurface {
             onToolCall: (name) => progress.noteToolCall(name),
             // A spoken answer is not streamed: it arrives as a voice note with
             // its text underneath, and the progress line holds until then.
-            ...(spoken ? {} : { onTextDelta: (delta: string) => stream.push(delta) }),
+            ...(spoken ? {} : { onTextDelta: (delta: string) => stream.push(delta), onTextRetract: () => stream.restart() }),
           });
           const reply = replyText(produced);
           askedOwner = turnAskedOwner(
@@ -2433,6 +2435,7 @@ export class TelegramSurface {
             ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
             onToolCall: (name) => progress.noteToolCall(name),
             onTextDelta: (delta) => stream.push(delta),
+            onTextRetract: () => stream.restart(),
           }),
         ),
       handleLabel(agent.handle),

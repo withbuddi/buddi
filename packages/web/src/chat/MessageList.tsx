@@ -145,6 +145,7 @@ export function MessageList({
 
   const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible)).map(joinAdjacentText);
   const stops = budgetStops(shown, runs ?? []);
+  const unchecked = uncheckedAnswers(shown, runs ?? []);
 
   // The face beside a name: the member in a room, else the thread's agent.
   const roster = speakers ?? agents ?? [];
@@ -365,6 +366,9 @@ export function MessageList({
                   <Button size="sm" className="wb-msg-budget-continue" data-testid="budget-continue" onClick={onContinue}>Continue</Button>
                 ) : null}
               </div>
+            ) : null}
+            {unchecked.has(message.id) ? (
+              <div className="wb-msg-unchecked" data-testid="unchecked-answer">{UNCHECKED_LINE}</div>
             ) : null}
             {message.feedback && !mine && !interjected ? <FeedbackMark feedback={message.feedback} /> : null}
             {said !== '' ? <ReplyActions messageId={message.id} text={said} onReadAloud={onReadAloud} /> : null}
@@ -660,6 +664,23 @@ function files(message: ChatMessage, messages: ChatMessage[]): AttachmentBlock[]
  * there is no closing line to sit under, and they are not marked.
  */
 function budgetStops(shown: readonly ChatMessage[], runs: readonly ChatRun[]): Map<string, ChatRun> {
+  return lastMessageOf(shown, runs, (run) =>
+    (run.stopped === 'max_turns' || run.stopped === 'max_tokens') && run.noticed === true);
+}
+
+/** The runtime's grounding verdict, as the page says it (runtime `UNCHECKED_LINE`). */
+export const UNCHECKED_LINE = 'Answered from memory, not checked';
+
+/**
+ * The answers delivered from memory after the grounding guard asked for a
+ * check: the last message of each such run, found the way a budget stop's is.
+ */
+function uncheckedAnswers(shown: readonly ChatMessage[], runs: readonly ChatRun[]): Map<string, ChatRun> {
+  return lastMessageOf(shown, runs, (run) => run.unchecked === true);
+}
+
+/** The last assistant message of each run `marked` picks, by the run's window. */
+function lastMessageOf(shown: readonly ChatMessage[], runs: readonly ChatRun[], marked: (run: ChatRun) => boolean): Map<string, ChatRun> {
   /*
    * Both ends or nothing. A run row with no start (an unpaired `run.finished`
    * from an older installation) has no window, and a message with no timestamp
@@ -679,11 +700,10 @@ function budgetStops(shown: readonly ChatMessage[], runs: readonly ChatRun[]): M
 
   const out = new Map<string, ChatRun>();
   for (const run of windowed) {
-    if (run.stopped !== 'max_turns' && run.stopped !== 'max_tokens') continue;
     // Only a run that said so, and only a run that knows which one it is. An
     // unnamed finish event is paired positionally by the server, onto the
     // first run still open — which in a room is somebody else's.
-    if (run.noticed !== true || run.runId === null) continue;
+    if (!marked(run) || run.runId === null) continue;
     let last: ChatMessage | null = null;
     for (const message of shown) {
       if (message.role !== 'assistant' || !holds(run, message)) continue;

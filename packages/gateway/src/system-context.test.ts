@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
-import { birthdayLine, createSystemManifest, DECISION_LINES, formatLine, hostFacts, LIST_ANSWER_LINE, NOTIFY_LINE, ownerLines, resourcefulLines, systemContext, systemTime } from './system-context.js';
+import { birthdayLine, createSystemManifest, DECISION_LINES, GROUNDING_LINES, formatLine, hostFacts, LIST_ANSWER_LINE, NOTIFY_LINE, ownerLines, resourcefulLines, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
@@ -61,6 +61,29 @@ describe('shared platform context', () => {
     expect(DECISION_LINES).toContain('an evening dinner lasts 2 hours');
     expect((await systemContext(ctx, { agentId: 'scout', tools: [] })).prompt).toContain(DECISION_LINES);
     expect((await systemContext(ctx)).prompt).not.toContain('Exactly one valid option');
+  });
+  it('tells every run to read, never recall: the news, mail, money, sources it did not read', async () => {
+    const { ctx } = fixture();
+    expect(GROUNDING_LINES).toMatch(/^Read, never recall:/);
+    expect(GROUNDING_LINES).toContain('Today, the news, mail, calendar, money, prices');
+    expect(GROUNDING_LINES).toContain('never answer from memory. Read it or delegate it.');
+    expect(GROUNDING_LINES).toContain('Never name a source, figure or quote you did not read in this conversation');
+    expect(GROUNDING_LINES).toContain('say so in one line');
+    // A few lines, not a paragraph.
+    expect(GROUNDING_LINES.split('\n')).toHaveLength(4);
+    const prompt = (await systemContext(ctx, { agentId: 'concierge', tools: [] })).prompt;
+    expect(prompt).toContain(GROUNDING_LINES);
+    // Beside the try-first rule, before the decide-or-ask one.
+    expect(prompt.indexOf('Before you say you cannot')).toBeLessThan(prompt.indexOf('Read, never recall'));
+    expect(prompt.indexOf('Read, never recall')).toBeLessThan(prompt.indexOf('When a step needs a choice'));
+    expect((await systemContext(ctx)).prompt).not.toContain('Read, never recall');
+  });
+  it('adds no edition line when the turn carries no message, and none when no edition matches', async () => {
+    const { ctx, query } = fixture();
+    await systemContext(ctx, { agentId: 'concierge', tools: [] });
+    expect(query.mock.calls.some(([sql]) => /mission\.delivered/.test(String(sql)))).toBe(false);
+    const prompt = (await systemContext(ctx, { agentId: 'concierge', tools: [], message: 'tell me about the housing bills in Spain' })).prompt;
+    expect(prompt).not.toContain("today's edition");
   });
   it('tells only the front desk the owner\'s places, with address, town and zone', async () => {
     const query = vi.fn(async (sql: string) =>

@@ -24,6 +24,7 @@ import type {
 } from './anthropic.js';
 import { ProviderError, isThinkingBlock } from './anthropic.js';
 import { NATIVE_SEARCH_SYSTEM_NOTE, planNativeSearch } from './search.js';
+import { GROUNDING_RETRY_TEXT, citationSignals, citesUnread } from './grounding.js';
 import { compactObservations } from './projection.js';
 import {
   degradeMessages,
@@ -101,6 +102,13 @@ export interface RunAgentOptions {
    * is `onText`.
    */
   onDelta?: (delta: CompletionDelta) => void;
+  /**
+   * The words streamed through `onDelta` for the turn just written are
+   * withdrawn: the grounding guard held that answer back (it cited sources
+   * nothing in the run had read) and the model is answering again. A surface
+   * drawing the live text clears it; nothing of it was stored. Never awaited.
+   */
+  onRetract?: () => void;
   /**
    * Whether a run that runs out of budget says so in the transcript. Default
    * true — the owner is owed the sentence.
@@ -382,6 +390,12 @@ export interface RunResult {
   usage: Usage;
   /** Set only when `stopped === 'awaiting-approval'`. */
   pendingActionId?: string;
+  /**
+   * The grounding guard's verdict: the answer cited sources, nothing in the
+   * run read anything, and asked once to verify it still did not. It was
+   * delivered all the same, and the surfaces draw `UNCHECKED_LINE` under it.
+   */
+  unchecked?: boolean;
   /**
    * What this run actually ran on (docs/architecture.md, "Runtime provider port").
    * Pinned provider, pinned model, credential kind — plus the concrete model
@@ -912,7 +926,13 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
   const memory = opts.memoryPreamble ? await opts.memoryPreamble(agent.id) : '';
   // The run's own agent and grant go along: a paragraph that is only for an
   // agent holding certain tools (the learning one) is decided by the grant.
-  const platformContext = await ctx.systemContext?.({ agentId: agent.id, tools: tools.map((t) => t.name) });
+  // The owner's words ride along, so the context can name a story of today's
+  // edition the message is about (the gateway's edition origin line).
+  const platformContext = await ctx.systemContext?.({
+    agentId: agent.id,
+    tools: tools.map((t) => t.name),
+    ...(userMessage !== undefined ? { message: userMessage } : {}),
+  });
   const system = composeSystem(
     agent.systemPrompt,
     [opts.systemSuffix, platformContext?.prompt].filter(Boolean).join('\n\n'),
@@ -1075,6 +1095,15 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
   /** Turns spent only on own-budget tools: not counted against maxTurns. */
   let exemptTurns = 0;
   /**
+   * The grounding guard (docs/system-context.md, Grounding). `read` turns true
+   * at the first tool call, delegation or native search of the run; until
+   * then an answer that cites sources cited them from memory. `regrounded`:
+   * that answer was held back once and the model asked to verify.
+   */
+  let read = false;
+  let regrounded = false;
+  let unchecked = false;
+  /**
    * What the owner added, leased for the step that has not happened yet.
    *
    * Held between the safe point that took it and the provider call that shows
@@ -1167,7 +1196,6 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
     // What is *sent back* keeps the provider's own blocks — a paused turn is
     // only continuable with them. What is *stored* does not: see `persistable`.
     messages.push({ role: 'assistant', content: assistantContent });
-    await persistMessage(pool, conversationId, 'assistant', persistable(assistantContent), opts.transcript?.speaker);
 
     // The audit line for a search nobody dispatched. Written before the run can
     // end, and before the next request, so the order in the log is the order it
@@ -1193,6 +1221,45 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
     );
 
     const turnText = textOf(assistantContent);
+    if (toolUses.length > 0 || (res.searches?.length ?? 0) > 0) read = true;
+
+    /*
+     * The grounding guard. A final answer, in a run that read nothing — no
+     * tool, no colleague, no search, not a decided approval coming back — that
+     * names sources the conversation never held was written from memory. It is
+     * not delivered: not stored, not said, its streamed words withdrawn. The
+     * model is told so once, in a turn the transcript does not keep, and
+     * answers again. A second answer that still reads nothing is delivered
+     * with the run marked `unchecked`, which the surfaces draw as a quiet
+     * line under it. `citesUnread` is precision-first; see grounding.ts.
+     */
+    const finalAnswer = toolUses.length === 0 && res.stopReason !== 'pause_turn' && res.stopReason !== 'max_tokens';
+    if (finalAnswer && !read && resume === undefined && !waitingForOwner && turnText !== '') {
+      if (regrounded) {
+        unchecked = true;
+        await appendEvent(pool, 'run.grounding', { stage: 'unchecked', agentId: agent.id, ...(opts.runId ? { runId: opts.runId } : {}) }, conversationId);
+      } else {
+        const known = knownText(messages.slice(0, -1));
+        if (citesUnread(turnText, known)) {
+          regrounded = true;
+          const budgetLeft = turns - exemptTurns < agent.maxTurns && turns < agent.maxTurns + MAX_EXEMPT_TURNS;
+          await appendEvent(pool, 'run.grounding', {
+            stage: budgetLeft ? 'retried' : 'unchecked',
+            agentId: agent.id,
+            sources: citationSignals(turnText, known).sources.slice(0, 8),
+            ...(opts.runId ? { runId: opts.runId } : {}),
+          }, conversationId);
+          if (budgetLeft) {
+            try { opts.onRetract?.(); } catch { /* a surface's drawing never decides a run */ }
+            messages.push({ role: 'user', content: [{ type: 'text', text: GROUNDING_RETRY_TEXT }] });
+            continue;
+          }
+          unchecked = true;
+        }
+      }
+    }
+
+    await persistMessage(pool, conversationId, 'assistant', persistable(assistantContent), opts.transcript?.speaker);
     if (turnText) {
       spoken.push({ text: turnText, beforeToolCall: toolUses.length > 0 });
       await opts.onText?.(turnText);
@@ -1505,6 +1572,8 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
       ...(opts.surface ? { surface: opts.surface.id } : {}),
       ...(opts.runId ? { runId: opts.runId } : {}),
       ...(pendingActionId ? { actionId: pendingActionId } : {}),
+      // Delivered from memory after the grounding guard asked for a check.
+      ...(unchecked ? { unchecked: true } : {}),
     },
     conversationId,
   );
@@ -1516,5 +1585,23 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
     usage,
     snapshot,
     ...(pendingActionId ? { pendingActionId } : {}),
+    ...(unchecked ? { unchecked: true } : {}),
   };
+}
+
+/**
+ * Everything the conversation held before an answer, as one string, for the
+ * grounding guard: a source the owner named, or a tool returned earlier, is
+ * not one the answer invented.
+ */
+function knownText(messages: readonly NeutralMessage[]): string {
+  const parts: string[] = [];
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === 'text') parts.push(block.text);
+      else if (block.type === 'tool_result') parts.push(typeof block.content === 'string' ? block.content : JSON.stringify(block.content));
+      else if (block.type === 'tool_use') parts.push(JSON.stringify(block.input));
+    }
+  }
+  return parts.join('\n');
 }

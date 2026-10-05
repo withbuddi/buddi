@@ -45,8 +45,12 @@ export interface ToolContext {
    * `CoreToolContext` carries the facts it is built from.
    */
   buddi?: BuddiHost;
-  /** Fresh owner timezone and host facts, supplied by the composition root. */
-  systemContext?: (run?: { agentId: string; tools: readonly string[] }) => Promise<SystemContext>;
+  /**
+   * Fresh owner timezone and host facts, supplied by the composition root.
+   * `message` is the turn's opening words when they are the owner's (or a
+   * delegating colleague's), so the context can name what they are about.
+   */
+  systemContext?: (run?: { agentId: string; tools: readonly string[]; message?: string }) => Promise<SystemContext>;
   /** Issued by an authenticated interactive surface, never by a model/tool. */
   ownerRequest?: { id: string; text: string; expiresAt: number };
   /**

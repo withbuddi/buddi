@@ -34,6 +34,7 @@ import {
   selectTools,
   type Queryable,
 } from './loop.js';
+import { GROUNDING_RETRY_TEXT, UNCHECKED_LINE } from './grounding.js';
 
 /* ---------------- in-memory fake DB (only `query`) ---------------- */
 
@@ -2415,7 +2416,7 @@ describe('provenance for a tool call', () => {
     await runAgent({ agent: { ...agent, tools: ['page.probe'] }, provider, registry: registryWithPage(seen), ctx: runCtx, pool: db,
       conversationId: await createConversation(db, agent.id), userMessage: 'hello' });
     expect(seen).toEqual([{ runId: null, turn: 1, step: 1, sources: [], texts: [] }]);
-    expect(asked).toEqual([{ agentId: 'finance', tools: ['page.probe'] }]);
+    expect(asked).toEqual([{ agentId: 'finance', tools: ['page.probe'], message: 'hello' }]);
   });
 });
 
@@ -2691,5 +2692,87 @@ describe('reasoning from an Ollama model, stored', () => {
     expect(answer).not.toMatch(thought);
     expect(stored.filter((b) => b.type === 'thinking').map((b) => b.text).join('')).toMatch(thought);
     expect(live.filter((d) => d.kind === 'text').map((d) => d.text).join('')).not.toMatch(thought);
+  });
+});
+
+describe('the grounding guard', () => {
+  const INVENTED = 'The court ruled today, CBS News reported. According to the Associated Press, the vote was 6-3, and NPR (Oct 5) has the dissent.';
+  const say = (text: string): CompletionResponse => ({ content: [{ type: 'text', text }], stopReason: 'end_turn', usage, model: 'claude-sonnet-5' });
+  const call = (n: number): CompletionResponse => ({
+    content: [{ type: 'tool_use', id: `tu_${n}`, name: 'demo.double', input: { n } }], stopReason: 'tool_use', usage, model: 'claude-sonnet-5',
+  });
+  async function run(script: CompletionResponse[], extra: Partial<Parameters<typeof runAgent>[0]> = {}) {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider(script);
+    const onText = vi.fn();
+    const onRetract = vi.fn();
+    const result = await runAgent({
+      agent, provider, registry: registryWithDouble(), ctx, pool: db, conversationId,
+      userMessage: 'tell me more about the court ruling in the news today', onText, onRetract, ...extra,
+    });
+    return { db, provider, result, onText, onRetract };
+  }
+
+  it('holds back an answer that cites sources with no tool call, and asks once to verify', async () => {
+    const { db, provider, result, onText, onRetract } = await run([say(INVENTED), call(2), say('Checked: the ruling was 6-3.')]);
+    expect(result.text).toBe('Checked: the ruling was 6-3.');
+    expect(result.unchecked).toBeUndefined();
+    // The invented answer was never said or stored; its streamed words withdrawn.
+    expect(onText).not.toHaveBeenCalledWith(INVENTED);
+    expect(onRetract).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(db.messages)).not.toContain('CBS News reported');
+    // The retry saw its draft and the system-authored turn, which is not stored.
+    expect(provider.calls[1]?.messages.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: GROUNDING_RETRY_TEXT }] });
+    expect(JSON.stringify(db.messages)).not.toContain(GROUNDING_RETRY_TEXT);
+    expect(db.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    const fired = db.events.filter((e) => e.kind === 'run.grounding');
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.payload).toMatchObject({ stage: 'retried', agentId: 'finance', sources: expect.arrayContaining(['cbs', 'associated press']) });
+    expect(db.events.at(-1)?.payload).not.toHaveProperty('unchecked');
+  });
+
+  it('delivers a retry that still reads nothing, flagged as answered from memory', async () => {
+    const { db, result, onText } = await run([say(INVENTED), say('From memory: I believe the ruling was 6-3, but I could not check it.')]);
+    expect(result.text).toBe('From memory: I believe the ruling was 6-3, but I could not check it.');
+    expect(result.unchecked).toBe(true);
+    expect(onText).toHaveBeenCalledTimes(1);
+    expect(db.events.filter((e) => e.kind === 'run.grounding').map((e) => (e.payload as { stage: string }).stage)).toEqual(['retried', 'unchecked']);
+    expect(db.events.at(-1)).toMatchObject({ kind: 'run.finished', payload: { unchecked: true, stopped: 'end_turn' } });
+    expect(UNCHECKED_LINE).toBe('Answered from memory, not checked');
+  });
+
+  it('stays silent on a tool-backed answer that cites sources', async () => {
+    const { db, provider, result, onRetract } = await run([call(2), say(INVENTED)]);
+    expect(result.text).toBe(INVENTED);
+    expect(result.unchecked).toBeUndefined();
+    expect(provider.calls).toHaveLength(2);
+    expect(onRetract).not.toHaveBeenCalled();
+    expect(db.eventKinds()).not.toContain('run.grounding');
+  });
+
+  it('stays silent on plain chat', async () => {
+    const { db, provider, result } = await run([say('Hello! Paris is the capital of France; the BBC is a broadcaster.')]);
+    expect(result.text).toContain('Paris');
+    expect(provider.calls).toHaveLength(1);
+    expect(db.eventKinds()).not.toContain('run.grounding');
+  });
+
+  it('stays silent when the sources are ones the conversation already held', async () => {
+    const { db, provider } = await run([say(INVENTED)], { userMessage: 'CBS, the Associated Press and NPR all covered the ruling — what did they say?' });
+    expect(provider.calls).toHaveLength(1);
+    expect(db.eventKinds()).not.toContain('run.grounding');
+  });
+
+  it('stays silent on a decided approval coming back', async () => {
+    const { db, provider } = await run([say(INVENTED)], { userMessage: undefined, resume: { actionId: ACTION_ID, state: 'succeeded', result: {} } });
+    expect(provider.calls).toHaveLength(1);
+    expect(db.eventKinds()).not.toContain('run.grounding');
+  });
+
+  it("passes the owner's words to the platform context, so it can name an edition story", async () => {
+    const systemContext = vi.fn(async () => ({ timezone: 'UTC', prompt: 'ctx' }));
+    await run([say('ok')], { ctx: { ...ctx, systemContext } });
+    expect(systemContext).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'finance', message: 'tell me more about the court ruling in the news today' }));
   });
 });

@@ -31,7 +31,7 @@ import {
   conversationGroup,
   type ActionRecord,
 } from '@buddi/core';
-import { producedArtifactIds, runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
+import { UNCHECKED_LINE, producedArtifactIds, runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import { canvasAfterCall, type CanvasView } from './outbound.js';
 import { TelegramProposals, type DecideProposal } from './proposals.js';
 import { goalsText, missionsText, upcomingMissions } from './commands.js';
@@ -513,7 +513,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
     ...(publicOrigin ? { publicOrigin } : {}),
-    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, onTextDelta, systemSuffix, resume, approval, interjections, spoken, spokenLanguage }) => {
+    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, onTextDelta, onTextRetract, systemSuffix, resume, approval, interjections, spoken, spokenLanguage }) => {
       // Interactive turns stay inline — they are user-facing and already
       // serialized per chat — but they are not exempt from a global pause.
       const blocked = deps.gate ? await deps.gate() : null;
@@ -616,6 +616,12 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
                 broke = false;
                 onTextDelta(delta.text);
               },
+              // The grounding guard held the answer back: the stream starts again.
+              onRetract: () => {
+                spoke = false;
+                broke = false;
+                onTextRetract?.();
+              },
             }
           : {}),
         // Presentation only, and never awaited: the photo is queued on its own
@@ -676,7 +682,8 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
           })
         : null;
       return {
-        text: result.text,
+        // The grounding guard's verdict, one quiet line under the answer.
+        text: result.unchecked ? `${result.text}\n\n_${UNCHECKED_LINE}_` : result.text,
         askedOwner: sink.asked !== undefined,
         ...(produced.length > 0 ? { artifacts: [...new Set(produced)] } : {}),
         ...(canvas ? { canvas } : {}),

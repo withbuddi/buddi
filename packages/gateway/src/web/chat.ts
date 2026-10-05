@@ -432,6 +432,12 @@ export interface ChatRunView {
    * only where there is a message saying so to draw it under.
    */
   noticed: boolean;
+  /**
+   * The answer cited sources nothing in the run had read, and asked once to
+   * verify, the agent still read nothing (the runtime's grounding guard). The
+   * page draws "Answered from memory, not checked" under it.
+   */
+  unchecked: boolean;
   usage: UsageView;
   actionId: string | null;
   resumed: boolean;
@@ -1059,6 +1065,7 @@ async function runsOf(
         turns: null,
         stopped: null,
         noticed: false,
+        unchecked: false,
         usage: { input: 0, output: 0 },
         actionId: typeof p.actionId === 'string' ? p.actionId : null,
         resumed: event.kind === 'run.resumed',
@@ -1087,6 +1094,7 @@ async function runsOf(
       // Absent on every row written before the loop said so out loud, which is
       // the honest answer for those runs: they did not.
       noticed: p.noticed === true,
+      unchecked: p.unchecked === true,
       usage: usageView(p.usage),
     };
     if (open) {
@@ -2319,6 +2327,8 @@ export class WebChat {
         this.live.settle(conversationId, runId);
       },
       onDelta: (delta) => this.live.append(conversationId, runId, delta),
+      // The grounding guard held the answer back: its streamed words go.
+      onRetract: () => this.live.settle(conversationId, runId),
       // Counted only so a failed turn knows whether offering to run it again
       // would be honest — work that already happened cannot be un-happened.
       onToolCall: () => {

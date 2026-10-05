@@ -309,6 +309,18 @@ describe('streaming', () => {
     expect(calls.map((c) => [c.method, c.args[1], c.args[2]])).toEqual([['editMessageText', 7, 'Hi']]);
   });
 
+  it('starts the text again in the same message when the answer is withdrawn', async () => {
+    const { api, calls } = fakeApi();
+    const stream = new StreamedAnswer({ api, log }, 'c1', 7, { now: () => Date.now() });
+    stream.push('CBS News reported');
+    await vi.advanceTimersByTimeAsync(0);
+    stream.restart();
+    stream.push('Checked: 6-3');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(edits(calls)).toEqual(['CBS News reported', 'Checked: 6-3']);
+    expect(calls.every((c) => c.method !== 'sendMessage')).toBe(true);
+  });
+
   it('cuts a growing answer at 4,000 characters with an ellipsis', async () => {
     const { api, calls } = fakeApi();
     const stream = new StreamedAnswer({ api, log }, 'c1', 7, { now: () => Date.now() });

@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
 import { ASK_TOOL } from './surfaces/pending-question.js';
+import { editionOriginLine, findEditionOrigin } from './edition-origin.js';
 import { MAX_QUESTION_OPTIONS, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
@@ -67,23 +68,51 @@ export async function systemInfo(ctx: CoreToolContext) {
 
 export async function systemContext(
   ctx: CoreToolContext,
-  run?: { agentId: string; tools: readonly string[] },
-  opts: { isFrontDesk?: (agentId: string) => boolean } = {},
+  run?: { agentId: string; tools: readonly string[]; message?: string },
+  opts: { isFrontDesk?: (agentId: string) => boolean; handleOf?: (agentId: string) => string | null } = {},
 ): Promise<SystemContext> {
-  const [info, owner, learning, places] = await Promise.all([
+  const [info, owner, learning, places, edition] = await Promise.all([
     systemInfo(ctx),
     ownerLines(ctx),
     run ? learningContext(ctx.db, run, ctx.now()) : Promise.resolve(''),
     run && opts.isFrontDesk?.(run.agentId) ? placeLines(ctx) : Promise.resolve(''),
+    run?.message ? editionLine(ctx, run, opts.handleOf) : Promise.resolve(''),
   ]);
   return { timezone: info.time.timezone, prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
     (owner === '' ? '' : `\n\n${owner}`) + (places === '' ? '' : `\n\n${places}`) + (learning === '' ? '' : `\n\n${learning}`) +
     (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') +
     (run ? `\n\n${resourcefulLines(run.tools)}` : '') +
+    (run ? `\n\n${GROUNDING_LINES}` : '') +
     (run?.tools.includes('browser.act') ? `\n\n${LIST_ANSWER_LINE}` : '') +
-    (run ? `\n\n${DECISION_LINES}` : '') };
+    (run ? `\n\n${DECISION_LINES}` : '') +
+    (edition === '' ? '' : `\n\n${edition}`) };
 }
+
+/** The edition origin line for this turn, or nothing; never fails the turn. */
+async function editionLine(
+  ctx: CoreToolContext,
+  run: { agentId: string; tools: readonly string[]; message?: string },
+  handleOf?: (agentId: string) => string | null,
+): Promise<string> {
+  try {
+    const origin = await findEditionOrigin(ctx, run.message ?? '');
+    return origin ? editionOriginLine(origin, run, handleOf) : '';
+  } catch { return ''; }
+}
+
+/**
+ * Read, never recall (docs/system-context.md, Grounding). An owner asked about
+ * a headline in today's news and got a long answer citing CBS, AP and NPR,
+ * all invented, with no tool call. In every agent's prompt, beside the
+ * try-first rule; the runtime's grounding guard is the check behind it.
+ */
+export const GROUNDING_LINES = [
+  'Read, never recall:',
+  '- Today, the news, mail, calendar, money, prices, or anything a tool or a colleague can read: never answer from memory. Read it or delegate it.',
+  '- Never name a source, figure or quote you did not read in this conversation; attribute what you read to where it came from ("reuters.com says…").',
+  '- If nothing you can reach has it, say so in one line.',
+].join('\n');
 
 /**
  * Try everything before declining (docs/agents.md, "Before saying no"). In

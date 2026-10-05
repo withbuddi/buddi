@@ -267,6 +267,12 @@ export interface ChatRun {
    * draw the marker. Optional: an older server does not send it.
    */
   noticed?: boolean;
+  /**
+   * The answer was delivered from memory after the grounding guard asked the
+   * agent to verify the sources it cited, and it read nothing. Optional: an
+   * older server does not send it.
+   */
+  unchecked?: boolean;
   usage: TokenUsage;
   actionId: string | null;
   resumed: boolean;

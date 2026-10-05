@@ -1,7 +1,7 @@
 ---
 title: "Built-in system context"
 status: reference
-updated: 2026-09-25
+updated: 2026-10-05
 ---
 
 # Built-in system context
@@ -58,6 +58,53 @@ scheduled runs and delegates. No agent-file edits or approval grants are needed.
   address as typed, the town it was matched to and its zone — as context, the
   way it is told the timezone. Other agents are not; a plugin reads them only
   through its declared `owner:places`.
+
+## Grounding
+
+Every run's context carries three lines beside the try-first rule
+(`GROUNDING_LINES`, "Read, never recall"): anything about today, the news,
+mail, calendar, money, prices, or anything a tool or a colleague can read is
+read or delegated, never answered from memory; no source, figure or quote the
+conversation did not read is named, and what was read is attributed to where
+it came from; when nothing can reach it, the agent says so in one line. The
+native-search paragraph (`packages/runtime/src/search.ts`) keeps its own,
+search-specific "cite as you go".
+
+The runtime checks it (`packages/runtime/src/grounding.ts`). When the final
+answer of a turn that read nothing — no tool call, no delegation, no native
+search, not a decided approval coming back — cites sources, it is not
+delivered: not stored, not sent, and its streamed words are withdrawn
+(`onRetract`; the web chat clears the live text, Telegram restarts the
+streamed message). The model gets one turn, not kept in the transcript:
+"You cited sources without reading anything. Verify with your tools or a
+colleague, or remove the claims." If that answer still reads nothing, it is
+delivered with `unchecked: true` on the run's result and `run.finished`, and
+the surfaces draw "Answered from memory, not checked" as a quiet line under
+it. Each firing writes a `run.grounding` event (`stage: retried`, then
+`unchecked` when it comes to that), visible in the activity log.
+
+"Cites" is deliberately narrow, since a false alarm is worse than a miss: an
+outlet from a known list (CBS, AP, Reuters, Le Monde…) or a domain counts only
+in a citation position (in parentheses, after "according to" / "selon" /
+"d'après" / "per" / "via", before "reports" / "said" / "writes", or as a link);
+a capitalised name after "according to" / "selon" / "d'après" counts too; a
+bare URL counts. It fires on two distinct such sources, or one with numbered
+markers (`[1]`) or a "Sources:" line. Sources the conversation already holds
+(the owner named them, an earlier tool returned them) are not counted; code
+and email addresses are ignored; figures alone never count.
+
+## Edition origin
+
+When the turn's opening words name a headline from today's edition — case
+and accents ignored, at least 70% of the headline's words in order, or five
+words of it (the whole of a shorter one) word for word — the context gets one
+more line naming the story, the agent that delivered it and its plugin
+("a story from today's edition by @anchor (News)"), and how to read it: the
+agent's own tool of that plugin, else a delegation to that agent, else the
+handle to name. The edition is found in core's own record, in one query: a
+`mission.report` whose link names a saved edition (`#/p/<plugin>/…?edition=…`)
+in a run with a `mission.delivered` event today. A message of a word or two
+does not query at all.
 
 Host means the machine/environment running the Buddi server, not the browser
 or Telegram client. macOS product version and hardware model identifier are read

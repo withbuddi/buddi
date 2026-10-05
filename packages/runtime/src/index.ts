@@ -8,6 +8,7 @@ export * from './rate-limit.js';
 export * from './transport.js';
 export * from './attachments.js';
 export * from './loop.js';
+export * from './grounding.js';
 export * from './delegate.js';
 export * from './projection.js';
 export * from './context-window.js';
