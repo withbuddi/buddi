@@ -11,7 +11,6 @@ What changes in buddi from one release to the next, newest first.
 - When an answer still cites sources and nothing in that turn read anything (no tool, no colleague, no search), buddi holds it back and asks the agent once to check with its tools or a colleague, or drop the claims. If it still reads nothing, the answer arrives with a quiet "Answered from memory, not checked" line under it in the chat and on Telegram. Each time this happens it is in the activity log (`run.grounding`). The check only counts real citations (two different sources, or one with [1]-style markers or a Sources line), so ordinary chat is left alone.
 - Asking about a headline from today's edition ("tell me more about …") now tells the agent where the story came from — which edition, which agent (@anchor) and plugin — and how to read it: its own news tool, or by asking that agent.
 - Approvals: the card's heading now says what is being asked, in plain words ("Add to Work (Google)", "Generate one square image…"), instead of the tool's internal name like `mail.send`. The internal name is still on the card's small print and in the envelope.
-
 - Approvals that buddi itself asks for (from Claude Code through buddi's MCP server, from a plugin, or from the dashboard) now say "Asked by buddi", in lowercase, with the Blob beside it, on Home, in chat and on Telegram, instead of an initials badge.
 
 ### Added
