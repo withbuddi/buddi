@@ -1876,22 +1876,41 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 
 /* ---- the grip between the two halves ---- */
 
+/* The grip: a 12px target over the seam, taking no width of its own from the
+   two halves, and a 2px bar drawn only while it is hovered, held or focused.
+   `touch-action: none` lets a finger drag it instead of scrolling the page. */
 .wb-grip {
+  position: relative;
   flex: 0 0 auto;
-  width: 9px;
-  /* Over the seam, taking no width of its own from the two halves. */
-  margin: 0 -4px 0 -5px;
+  width: var(--space-3);
+  margin: 0 calc(var(--space-3) / -2);
   cursor: col-resize;
   background: transparent;
-  border: 0;
-  padding: 0;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
   z-index: 2;
 }
-.wb-grip:hover, .wb-grip:focus-visible { background: var(--accent-soft); }
+.wb-grip::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  left: calc(50% - var(--space-0) / 2);
+  width: var(--space-0);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  transition: background var(--dur-fast) ease;
+}
+.wb-grip:hover::after, .wb-grip[data-dragging='true']::after, .wb-grip:focus-visible::after { background: var(--accent); }
+.wb-grip:focus-visible { outline: none; }
+/* While a drag is on, the whole page says so and nothing under the pointer
+   (a selection, a preview's frame) takes the gesture. */
+:root[data-resizing='true'], :root[data-resizing='true'] * { cursor: col-resize !important; user-select: none; }
+:root[data-resizing='true'] iframe { pointer-events: none; }
 
 /* ---- the canvas ---- */
 
-.wb-chat[data-sized='true'] { flex: 0 0 auto; max-width: none; }
+.wb-chat[data-sized='true'] { flex: 0 1 auto; min-width: calc(var(--space-10) * 8); max-width: none; width: var(--wb-chat-w); }
 
 .wb-canvas {
   flex: 1 1 380px;

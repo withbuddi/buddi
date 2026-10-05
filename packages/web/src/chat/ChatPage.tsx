@@ -18,9 +18,11 @@ import { leaveDraft, takeDraft } from './draft';
 import type { ChatCommandName } from './commands';
 import { leadingMention } from './composer-text';
 import { effectiveProviderKind, thinkingIsHonoured } from '../shell/thinking';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
+import { Splitter, WIDTH_VAR } from '../canvas/Splitter';
+import { readWidth } from '../canvas/split-math';
 import { awaitingPreviews, inspectToolCall, previewKey, renderablesFrom, sourcesHolding, type SourcesPanelProps } from '../canvas/renderables';
 import { useServedPreviews } from '../canvas/served';
 import { FILES_TAB_ID, filesRenderable, useAgentWorkspace, workspaceChanges } from '../canvas/files';
@@ -55,10 +57,9 @@ import { groupProblem, namesSentence, type GroupAction } from '../shell/GroupRoo
 import { accentAttrs, accentOf } from '../shell/accent';
 import { useThisMachine } from '../useThisMachine';
 
-const MIN_WIDTH = 320;
 /* Until the owner drags the grip, the column has no width of its own: the
-   kit's flex (420px basis, 600px at most) shares the window with the canvas. */
-const WIDTH_KEY = 'buddi.chatWidth';
+   kit's flex (420px basis, 600px at most) shares the window with the canvas.
+   The grip and its arithmetic are `canvas/Splitter.tsx` and `canvas/split-math.ts`. */
 
 export interface ChatPageProps {
   requestedConversationId?: string | undefined;
@@ -1023,31 +1024,6 @@ export function ChatPage({
     if (action.state !== 'pending') setAwaiting((current) => new Map([...current].filter(([, id]) => id !== action.id)));
   };
 
-  /* ---- the split ---- */
-
-  const dragging = useRef(false);
-  useEffect(() => {
-    const onMove = (event: PointerEvent): void => {
-      if (!dragging.current) return;
-      const next = Math.max(MIN_WIDTH, Math.min(720, event.clientX - 52));
-      setWidth(next);
-    };
-    const onUp = (): void => {
-      if (!dragging.current) return;
-      dragging.current = false;
-      try {
-        if (width !== null) window.localStorage.setItem(WIDTH_KEY, String(width));
-      } catch {
-        /* a private window keeps the default; nothing breaks */
-      }
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-  }, [width]);
 
   /**
    * What an empty thread with one agent shows: its face, what it says it does,
@@ -1158,7 +1134,7 @@ export function ChatPage({
       <section
         className="wb-chat"
         ref={columnRef}
-        style={narrow || width === null ? undefined : { width }}
+        style={narrow || width === null ? undefined : ({ [WIDTH_VAR]: `${width}px` } as CSSProperties)}
         data-sized={!narrow && width !== null ? 'true' : undefined}
         data-testid="chat-column"
         data-dropping={dropping || undefined}
@@ -1499,34 +1475,12 @@ export function ChatPage({
         ) : null
       ) : (
         <>
-          <button
-            className="wb-grip"
-            aria-label="Resize the conversation column"
-            onPointerDown={(event) => {
-              dragging.current = true;
-              event.currentTarget.setPointerCapture?.(event.pointerId);
-            }}
-            onKeyDown={(event) => {
-              const from = (current: number | null): number => current ?? columnRef.current?.offsetWidth ?? MIN_WIDTH;
-              if (event.key === 'ArrowLeft') setWidth((current) => Math.max(MIN_WIDTH, from(current) - 16));
-              if (event.key === 'ArrowRight') setWidth((current) => Math.min(720, from(current) + 16));
-            }}
-          />
+          <Splitter columnRef={columnRef} width={width} onChange={setWidth} />
           {canvas}
         </>
       )}
     </>
   );
-}
-
-function readWidth(): number | null {
-  try {
-    const raw = window.localStorage.getItem(WIDTH_KEY);
-    const stored = Number(raw);
-    return raw !== null && Number.isFinite(stored) && stored >= MIN_WIDTH ? stored : null;
-  } catch {
-    return null;
-  }
 }
 
 function byRecency(a: { lastMessageAt: string | null; createdAt?: string; startedAt?: string | null }, b: { lastMessageAt: string | null; createdAt?: string; startedAt?: string | null }): number {
