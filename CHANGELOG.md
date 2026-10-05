@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- Mail: newsletters no longer show codes like `&#8202;`, `&zwnj;` or `&#38;` in their text, previews and search. buddi now reads an HTML-only message the way a browser would: every character comes out as itself, styles and hidden parts are left out, and the invisible padding newsletters put in their preview line is dropped.
+
 ## 0.1.0-pre.44 — 2026-10-05
 
 - Cloudflare Access, "Set it up for me": buddi now runs Cloudflare's connector itself, as part of its own service, so the last step is "Starting the connector…" then "Connected" — no `sudo` command to copy. If cloudflared isn't installed, buddi downloads Cloudflare's official release and checks it against Cloudflare's published checksum before running it (or install it with `brew install cloudflared`). If an earlier setup left Cloudflare's system service on this computer, the step says so, explains why two connectors would fight, and gives the one line that removes it — or choose "Use the system daemon instead". Remove what buddi made stops the connector and deletes the copy of cloudflared buddi downloaded.

@@ -32,6 +32,7 @@ import type {
 } from '../ports.js';
 import { authenticatedDomain, isBulkHeaders, normalizeMessageId, parseReferences, trustedAuthResults } from '../mail.js';
 import { isPartId, safeFilename } from '../attachments/safety.js';
+import { htmlToText, INVISIBLE } from '../text.js';
 
 /** Only what this adapter uses. Keeps the port independent of imapflow's d.ts. */
 interface ImapFlowLike {
@@ -169,23 +170,6 @@ export function collectAttachments(node: Record<string, any> | undefined): Attac
   };
   walk(node);
   return out;
-}
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 async function readAll(content: AsyncIterable<Buffer> | null, maxBytes: number): Promise<string> {
@@ -365,7 +349,9 @@ class ImapFlowClient implements ImapWriter {
         // BODY.PEEK — reading never marks the message seen.
         const downloaded = await this.client.download(String(uid), text.part, { uid: true });
         const raw = await readAll(downloaded?.content ?? null, MAX_BODY_BYTES);
-        bodyText = text.type === 'text/html' ? stripHtml(raw) : raw;
+        // HTML becomes its words (`text.ts`); a plain part loses only the
+        // invisible padding newsletters put in their preview line.
+        bodyText = text.type === 'text/html' ? htmlToText(raw) : raw.replace(INVISIBLE, '');
         if (text.type === 'text/html') bodyHtml = raw;
       }
       /*
