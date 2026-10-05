@@ -15,6 +15,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Plugin pages: a plugin's own page on the rail now offers the catalogue agent that would use it while nobody on the team does — the Money page says "Nobody keeps your books yet" with Add CFO (the same add, and the one approval, as Home and the plugin's settings tab) and Not now, which also closes the suggestion on Home.
 - Mail: a message that arrived before pre.44 now opens with its formatting and pictures (pictures from the web still wait for Show images). buddi fetches it from your mail server the first time you open it, keeps it, and reads its own copy after that; if your server is slow it shows the text within a few seconds instead and doesn't try again for an hour.
 
 ### Changed

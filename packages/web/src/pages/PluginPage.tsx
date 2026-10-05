@@ -68,6 +68,7 @@ import {
   Tag,
 } from '../ui';
 import { AgentOffer } from '../views/parts/AgentOffer';
+import { PluginTeammatePanel } from '../views/parts/CatalogueSuggest';
 import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
 import { messageOf, playOf, playSound, stopSound, usePlaying } from './play';
 import { todayIn, toEvents, whenOf, type CalEvent } from './calendar';
@@ -4207,6 +4208,14 @@ function PageWithData({ page, embedded, lede: given }: { page: PluginPageDescrip
   ) : undefined;
   return (
     <PageFrame embedded={embedded} title={page.title} lede={lede} actions={actions}>
+      {/*
+        The plugin's own place on the rail, while the catalogue agent that
+        would use it is not on the team: "Nobody keeps your books yet · Add
+        CFO", first, with Not now. Its settings tab draws the same line.
+      */}
+      {!embedded && page.place === 'rail' ? (
+        <PluginTeammatePanel key={page.plugin} plugin={page.plugin} navigate={scope.navigate} dismissible />
+      ) : null}
       <PageBody page={page} boxed={embedded} root={gated ? undefined : root} />
     </PageFrame>
   );

@@ -164,6 +164,12 @@ needs me, what is my team up to, what is coming.
   Finance is in; then Researcher and Tutor), each with **Add**, and the
   section's link reads **See all teammates**. After that, one dashed **Add a
   teammate** tile closes the faces and opens the catalogue.
+  At any time, a loaded plugin that no agent on the team uses (Finance and no
+  CFO, Image and no Illustrator: the catalogue agent whose `requires` names
+  it) puts that agent first, with its ×. The same line ("Nobody keeps your
+  books yet · Add CFO") opens the plugin's settings tab and its own page on
+  the rail, the Money page, where **Not now** closes it on Home as well; Add
+  opens the catalogue's install sheet in place.
 - **On offer**: up to six next steps your agents suggested, each a chip.
   Under it, when the browser has offered an install, one quiet line to
   install buddi as an app.

@@ -19,6 +19,8 @@ import { HandoverTeam, HomeSuggestions, PluginTeammatePanel, pluginTeammates, su
 import { UpdateSheet } from './parts/CatalogueSheets';
 import { reachRows } from './parts/catalogue-words';
 import { Plugins } from './Plugins';
+import { PluginPage } from '../pages/PluginPage';
+import type { PluginPageDescriptor } from '../pages/types';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -39,6 +41,8 @@ vi.mock('../api', async (load) => {
       market: vi.fn(),
       acceptPluginAgent: vi.fn(),
       agents: vi.fn(),
+      overview: vi.fn(),
+      homeDismiss: vi.fn(),
     },
   };
 });
@@ -601,6 +605,34 @@ describe('a plugin nobody on the team uses', () => {
     expect(await screen.findByText('Nobody makes pictures yet')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add Illustrator' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  const moneyPage = (place: 'rail' | 'settings'): PluginPageDescriptor =>
+    ({ plugin: 'finance', id: 'money', title: 'Money', place, body: [{ kind: 'link', label: 'Open Settings', to: { page: 'settings' } }] }) as unknown as PluginPageDescriptor;
+
+  it('offers the teammate at the top of the plugin’s rail page, and Not now closes Home’s slot for it', async () => {
+    vi.mocked(api.overview).mockResolvedValue({ dismissed: {} } as never);
+    vi.mocked(api.homeDismiss).mockResolvedValue({ dismissed: { 'teammate:finance': 'cfo' } });
+    render(<PluginPage page={moneyPage('rail')} navigate={vi.fn()} timezone="UTC" />);
+    expect(await screen.findByText('Nobody keeps your books yet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add CFO' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(api.homeDismiss).toHaveBeenCalledWith('teammate:finance', 'cfo');
+    expect(screen.queryByTestId('plugin-teammate')).not.toBeInTheDocument();
+  });
+
+  it('keeps quiet on the rail page once the teammate was closed on Home', async () => {
+    vi.mocked(api.overview).mockResolvedValue({ dismissed: { 'teammate:finance': 'cfo' } } as never);
+    render(<PluginPage page={moneyPage('rail')} navigate={vi.fn()} timezone="UTC" />);
+    await waitFor(() => expect(api.overview).toHaveBeenCalled());
+    await waitFor(() => expect(api.catalogue).toHaveBeenCalled());
+    expect(screen.queryByTestId('plugin-teammate')).not.toBeInTheDocument();
+  });
+
+  it('is not drawn twice inside a settings tab (Settings draws its own)', async () => {
+    render(<PluginPage page={moneyPage('settings')} navigate={vi.fn()} timezone="UTC" embedded />);
+    expect(await screen.findByText('Open Settings')).toBeInTheDocument();
+    expect(api.catalogue).not.toHaveBeenCalled();
   });
 
   it('draws nothing on a plugin whose teammate is on the team or that has none', async () => {

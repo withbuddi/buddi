@@ -139,29 +139,63 @@ export function pluginTeammates(agents: readonly CatalogueAgent[], loaded: Reado
 export const teammateSlot = (plugin: string): string => `teammate:${plugin}`;
 
 /**
- * At the top of a plugin's settings page whose teammate is not on the team:
+ * At the top of a plugin's page whose teammate is not on the team:
  * "Nobody makes pictures yet · Add Illustrator", Add opening the catalogue's
- * install sheet here. Nothing once one is added, or when the catalogue cannot
- * be read.
+ * install sheet here (the one approval Home's suggestion runs). Its settings
+ * tab draws it, and so does its own place on the rail (the Money page), where
+ * `dismissible` adds Not now: the same closed slot as Home's × for that
+ * teammate, so a no said on either is heard on both. Nothing once one is
+ * added, or when the catalogue cannot be read.
  */
-export function PluginTeammatePanel({ plugin, title, navigate }: { plugin: string; title?: string; navigate: (route: string) => void }): JSX.Element | null {
+export function PluginTeammatePanel({
+  plugin,
+  title,
+  navigate,
+  dismissible = false,
+}: {
+  plugin: string;
+  title?: string;
+  navigate: (route: string) => void;
+  dismissible?: boolean;
+}): JSX.Element | null {
   const [entry, setEntry] = useState<CatalogueAgent | null>(null);
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
+  const [closed, setClosed] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    // Home's closed slots, only where the panel can be closed; a failed read is "not closed".
+    const closedSlots = dismissible
+      ? Promise.resolve().then(() => api.overview()).then((o) => o.dismissed ?? {}, () => ({}) as Record<string, string>)
+      : Promise.resolve({} as Record<string, string>);
     Promise.resolve()
-      .then(() => api.catalogue())
-      .then((v) => { if (!cancelled) setEntry(v.unavailable ? null : teammateForPlugin(v.agents, plugin) ?? null); })
+      .then(() => Promise.all([api.catalogue(), closedSlots]))
+      .then(([v, slots]) => {
+        if (cancelled) return;
+        const found = v.unavailable ? undefined : teammateForPlugin(v.agents, plugin);
+        setEntry(found && slots[teammateSlot(plugin)] !== found.name ? found : null);
+      })
       .catch(() => { if (!cancelled) setEntry(null); });
     return () => {
       cancelled = true;
     };
-  }, [plugin]);
-  if (!entry || added) return null;
+  }, [plugin, dismissible]);
+  if (!entry || added || closed) return null;
+  const close = (): void => {
+    setClosed(true);
+    // Not kept: show it again rather than pretend.
+    void api.homeDismiss(teammateSlot(plugin), entry.name).catch(() => setClosed(false));
+  };
   return (
     <>
-      <Notice action={<Button size="sm" onClick={() => setAdding(true)}>Add {entry.title}</Button>}>
+      <Notice
+        action={
+          <Toolbar>
+            {dismissible ? <Button size="sm" variant="ghost" onClick={close}>Not now</Button> : null}
+            <Button size="sm" onClick={() => setAdding(true)}>Add {entry.title}</Button>
+          </Toolbar>
+        }
+      >
         <span data-testid="plugin-teammate">{nobodyLine(plugin, title)}</span>
       </Notice>
       {adding ? (
