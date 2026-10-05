@@ -975,6 +975,14 @@ async function pollFolder(
     const effectiveBackfill = folder.kind === 'sent' ? 0 : backfill;
     const startUid = Math.max(0, status.uidNext - 1 - effectiveBackfill);
     current = await plantCursor(ctx.buddi!.db, current.id, status.uidValidity, startUid);
+    // A true first contact with the inbox: what was there and not fetched is
+    // what the Mail page's first state counts ("412 older messages left alone").
+    if (!changed && folder.kind === 'inbox') {
+      await ctx.buddi!.db.query(
+        `update email.folders set first_contact_at = $2, left_alone = $3 where id = $1 and first_contact_at is null`,
+        [current.id, ctx.buddi!.clock.now(), Math.max(0, status.exists - effectiveBackfill)],
+      );
+    }
     log(
       `email.inbox-poll: initial sync on ${account.address}/${name} — ` +
         `uidvalidity ${status.uidValidity}, uidnext ${status.uidNext}, ` +

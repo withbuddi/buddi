@@ -32,7 +32,7 @@ import {
   type SearchFilters,
   type SearchRow,
 } from '../search.js';
-import { lastSyncByAccount, listAccounts } from '../config.js';
+import { lastSyncedByAccount, listAccounts } from '../config.js';
 import { ACCOUNT_KIND } from '../credentials.js';
 import type { AccountRecord } from '../ports.js';
 import { attentionReasons, findThread, listThreadRows, threadMessages } from '../threads.js';
@@ -545,10 +545,20 @@ export function accountsQuery(): PageQuery {
     async produce(_params, ctx: ToolContext) {
       const now = ctx.buddi!.clock.now();
       const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
-      const synced = await lastSyncByAccount(ctx.buddi!.db);
+      // When each mailbox last *finished* a poll: "connected, synced 3 min
+      // ago" is true of a quiet mailbox too, where "when mail last landed"
+      // read "no mail has arrived yet" on the day it was connected.
+      const synced = await lastSyncedByAccount(ctx.buddi!.db);
       const waiting = await triageWaitingByAccount(ctx.buddi!.db);
       const needed = await passwordsNeeded(accounts, ctx);
+      const { rows: storedRows } = await ctx.buddi!.db.query(
+        `select a.id from email.accounts a where exists (select 1 from email.messages m where m.account_id = a.id)`,
+      );
+      const stored = new Set(storedRows.map((row: Record<string, unknown>) => String(row.id)));
       return {
+        // A connected mailbox with nothing stored yet: the Mail page's "Read
+        // the last 7 days" lands here, and the note it lands on reads this.
+        anyFresh: accounts.some((account) => account.enabled && !stored.has(account.id)),
         /*
          * Whether new mail has anybody to triage it. `needs-agent` is what
          * the page's offer line is drawn against: a mailbox, and no agent
@@ -584,9 +594,11 @@ export function accountsQuery(): PageQuery {
             : idleLive(account.id)
               ? 'Instant'
               : `Checking every ${Math.round(POLL_EVERY_SECONDS / 60)} min`,
-          lastSync: synced.get(account.id)
-            ? relative(synced.get(account.id) ?? null, now)
-            : 'no mail has arrived yet',
+          lastSync: !account.enabled
+            ? '—'
+            : synced.get(account.id)
+              ? relative(synced.get(account.id)!.toISOString(), now)
+              : 'not yet',
           /*
            * Facts about a mailbox, not one sentence to be parsed: whether
            * buddi is reading it, and whether it is a mailbox `.env` used to
@@ -596,9 +608,13 @@ export function accountsQuery(): PageQuery {
            * carry the tone.
            */
           state: [
-            account.enabled
-              ? { value: 'on', tone: 'neutral' }
-              : { value: 'off', tone: 'warning' },
+            // Connected once a poll has finished with the password it has;
+            // until the first one, "connecting".
+            !account.enabled
+              ? { value: 'off', tone: 'warning' }
+              : synced.get(account.id) && !needed.has(account.id)
+                ? { value: 'connected', tone: 'neutral' }
+                : { value: needed.has(account.id) ? 'on' : 'connecting', tone: 'neutral' },
             // A mailbox `.env` used to name that could not be adopted is a
             // password nobody can read here: Set password brings it back.
             ...(account.addedVia === 'env' ? [{ value: 'password needed', tone: 'neutral' }] : []),
@@ -609,6 +625,57 @@ export function accountsQuery(): PageQuery {
       };
     },
   };
+}
+
+/**
+ * The Mail page's own read: which mailboxes are connected, and which of them
+ * are fresh — connected, and nothing stored yet. A fresh mailbox gets a first
+ * state instead of an empty list ("Connected to you@example.com. Reading new
+ * mail from now on; 412 older messages left alone."), because "No
+ * conversations here" on the day you connect reads as a fault.
+ */
+export function mailStatusQuery(): PageQuery {
+  return {
+    name: 'mail_status',
+    params: noParams,
+    async produce(_params, ctx: ToolContext) {
+      const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: true });
+      const { rows } = await ctx.buddi!.db.query(
+        `select a.id,
+                exists (select 1 from email.messages m where m.account_id = a.id) as stored,
+                (select f.left_alone from email.folders f
+                  where f.account_id = a.id and f.kind = 'inbox' order by f.first_contact_at nulls last limit 1) as left_alone
+           from email.accounts a where a.enabled`,
+      );
+      const facts = new Map(rows.map((row: Record<string, unknown>) => [String(row.id), row]));
+      const fresh = accounts.filter((account) => facts.get(account.id)?.stored !== true);
+      const hasMail = fresh.length < accounts.length;
+      return {
+        connected: accounts.length
+          ? `Connected: ${accounts.map((account) => account.address).join(' · ')}`
+          : '',
+        hasAccounts: accounts.length > 0,
+        anyFresh: fresh.length > 0,
+        // The list is drawn when there is mail to list, or nothing connected
+        // at all (its empty sentence is then the honest one).
+        showList: hasMail || accounts.length === 0,
+        fresh: fresh.map((account) => ({
+          id: account.id,
+          address: account.address,
+          line: freshLine(account.address, facts.get(account.id)?.left_alone),
+        })),
+      };
+    },
+  };
+}
+
+/** The first-state sentence for one fresh mailbox. */
+export function freshLine(address: string, leftAlone: unknown): string {
+  const older = leftAlone === null || leftAlone === undefined ? null : Number(leftAlone);
+  const head = `Connected to ${address}. Reading new mail from now on`;
+  if (older === null || !Number.isFinite(older)) return `${head}; older messages left alone.`;
+  if (older === 0) return `${head}.`;
+  return `${head}; ${older.toLocaleString('en-US')} older ${older === 1 ? 'message' : 'messages'} left alone.`;
 }
 
 /**
@@ -909,6 +976,7 @@ export function emailPageQueries(): PageQuery[] {
     draftQuery(),
     messageQuery(),
     accountsQuery(),
+    mailStatusQuery(),
     policiesQuery(),
     ruleThreadsQuery(),
     watcherSettingsQuery(),

@@ -23,6 +23,7 @@ What changes in buddi from one release to the next, newest first.
 - Groups: a room whose coordinator isn't buddi can now ask its own members ("researcher may not ask anchor" is gone). Being in the room is the permission, for that room only; nothing is added to any agent's settings. And an @mention of a member always reaches it, whether you type its handle, its id or its name.
 - ChatGPT accounts list GPT-6.1 Sol again: buddi now asks ChatGPT for its models as the current Codex version, so newer models are no longer hidden. If ChatGPT can't be reached, the built-in list starts with GPT-6.1 Sol. Under the model picker you now see where the list came from ("from ChatGPT · refreshed 3 min ago" or "built-in list"), and Refresh models always asks ChatGPT afresh.
 - Settings → Notifications no longer says "Telegram is not set up" under a working Telegram. The line now matches the row: "Telegram: paired with your phone", or "Telegram is running; pair your phone" with a link when no phone is paired yet.
+- Mail: a mailbox you just connected no longer shows "No conversations here". It says "Connected to you@example.com. Reading new mail from now on; 412 older messages left alone." The top of the page names your connected mailboxes, and Mailboxes and rules shows each one as connected, with when it last synced. "Read the last 7 days" opens Mailboxes and rules for now, which tells you that reading older mail isn't available yet.
 
 ## 0.1.0-pre.42 — 2026-10-04
 

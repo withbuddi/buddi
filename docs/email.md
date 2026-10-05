@@ -248,6 +248,19 @@ triage agent yet — accept the Mail offer on the dashboard" once per poll, and
 records `accounts.triage_waiting_since` (migration `016`), which the mailbox
 row shows as "triage waiting".
 
+**A fresh mailbox has a first state.** A first contact plants the inbox cursor
+at `UIDNEXT-1` (less `EMAIL_BACKFILL`), so nothing older is read; migration
+`027` records when and how many messages were left alone
+(`folders.first_contact_at`, `left_alone`). While a connected mailbox has no
+stored mail, the Mail page (its `mail_status` read) shows "Connected to
+<address>. Reading new mail from now on; <n> older messages left alone." in
+place of the empty list, under a head line naming the connected mailboxes.
+Its **Read the last 7 days** opens Mailboxes and rules, which says that
+reading older mail on request is not built yet: there is no bounded backfill
+tool. The mailbox row reads "connected" once a poll has finished, "Last sync"
+being when the last poll finished (`accounts.last_synced_at`), not when mail
+last landed.
+
 ## 4a. New mail almost instantly (IMAP IDLE)
 
 The poll (`email.inbox-poll`, every 5 minutes) is the safety net. Beside it

@@ -349,12 +349,38 @@ const mail: PageDescriptor = {
   place: 'rail',
   icon: 'mail',
   order: 10,
+  // Which mailboxes are connected, and which are fresh: what the head line,
+  // the first state and the list's own visibility are drawn against.
+  data: { query: 'mail_status' },
   body: [
     {
       kind: 'notice',
       // The page's intro: one line under the title. A conversation with a
       // reply waiting carries a Draft pill, which says the rest.
       text: 'What buddi has read, newest first. Open a conversation to read it, or the reply written for it.',
+    },
+    // The head says which mailboxes this is: "Connected: you@example.com".
+    { kind: 'notice', look: 'quiet', text: { path: 'connected' }, when: { path: 'hasAccounts', equals: true } },
+    /*
+     * A fresh mailbox's first state, in place of "No conversations here":
+     * what buddi is doing (reading from now on) and what it left alone. There
+     * is no backfill tool yet, so "Read the last 7 days" goes to Mailboxes
+     * and rules, which says so.
+     */
+    {
+      kind: 'repeat',
+      when: { path: 'anyFresh', equals: true },
+      query: { query: 'mail_status' },
+      rows: 'fresh',
+      key: 'id',
+      body: [
+        {
+          kind: 'section',
+          title: 'Just connected',
+          actions: [{ kind: 'link', label: 'Read the last 7 days', to: { page: 'settings' }, tone: 'accent' }],
+          body: [{ kind: 'notice', text: { path: 'line' } }],
+        },
+      ],
     },
     /*
      * Four filters and a phrase, and not one more (docs/email.md §9):
@@ -419,6 +445,7 @@ const mail: PageDescriptor = {
        */
       kind: 'section',
       title: 'Conversations',
+      when: { path: 'showList', equals: true },
       actions: [{ kind: 'link', label: 'Mailboxes and rules', to: { page: 'settings' } }],
       body: [
         {
@@ -860,6 +887,16 @@ const settings: PageDescriptor = {
          * starts no run until @mail exists. One line, and the same gated
          * accept the Plugins page runs — the approval card is drawn here.
          */
+        /*
+         * Where the Mail page's "Read the last 7 days" lands while a mailbox
+         * is fresh: reading older mail on request is not built yet, and the
+         * page says so rather than pretending.
+         */
+        {
+          kind: 'notice',
+          when: { path: 'anyFresh', equals: true },
+          text: 'Reading older mail on request is not available yet. buddi reads what arrives from the moment a mailbox is connected; mail already there is left alone.',
+        },
         {
           kind: 'agent-offer',
           agent: TRIAGE_AGENT_ID,

@@ -321,6 +321,7 @@ suite('the mail pages, over postgres', () => {
       message: await ask('message', { id: ids.messageId }),
       draft: await ask('draft', { id: ids.draftId }),
       accounts: await ask('accounts'),
+      mail_status: await ask('mail_status'),
       policies: await ask('policies'),
       rule_threads: await ask('rule_threads'),
       watcher_settings: await ask('watcher_settings'),
@@ -351,6 +352,7 @@ suite('the mail pages, over postgres', () => {
     for (const page of emailPageDescriptors) walk(page.body, null);
     // Every list, repeat and search on both pages, and no fewer.
     expect(seen).toEqual([
+      'mail_status.fresh',
       'threads.items',
       'threads.threads',
       'thread.messages',
@@ -444,6 +446,12 @@ suite('the mail pages, over postgres', () => {
         const data: any = await answer(component.query, root);
         const rows = readPath(data, component.rows) as unknown[];
         expect(Array.isArray(rows), `${where}: ${component.rows} is an array`).toBe(true);
+        // The first state is drawn only for a mailbox with no mail, which the
+        // seeded one is not; its own test above walks it against a fresh one.
+        if (component.query.query === 'mail_status') {
+          for (const child of component.body ?? []) if (child.when) throw new Error('mail_status rows are not walked here');
+          return;
+        }
         // A row is what the body is handed; with none, the body is unchecked,
         // so the fixture above makes sure every repeat on the page has one.
         expect(rows.length, `${where}: the seeded fixture has no ${component.rows} to draw`).toBeGreaterThan(0);
@@ -463,17 +471,23 @@ suite('the mail pages, over postgres', () => {
     }
     // The conditions that are left, and where each one stands.
     expect(checked).toEqual([
+      // The Mail page's head and first state, asked of its own mail_status read.
+      'mail.body.1.when(hasAccounts)',
+      'mail.body.2.when(anyFresh)',
+      'mail.body.4.when(showList)',
       // An attachment's Fetch and its link, each asked of its own row: the
       // button gives way to the link the moment there is a file.
-      'mail.body.2.0.conversations.0.detail.1.0.1.1.when(artifactId)',
-      'mail.body.2.0.conversations.0.detail.1.0.1.2.when(artifactId)',
+      'mail.body.4.0.conversations.0.detail.1.0.1.1.when(artifactId)',
+      'mail.body.4.0.conversations.0.detail.1.0.1.2.when(artifactId)',
       // The two draft notices, each asked of the draft the editor is about.
-      'mail.body.2.0.conversations.0.detail.2.0.when(unresolved)',
-      'mail.body.2.0.conversations.0.detail.2.1.when(notLive)',
-      // The offer of @mail, asked of the settings page's own accounts read.
-      'settings.body.2.0.when(triage)',
+      'mail.body.4.0.conversations.0.detail.2.0.when(unresolved)',
+      'mail.body.4.0.conversations.0.detail.2.1.when(notLive)',
+      // The note "Read the last 7 days" lands on, and the offer of @mail,
+      // asked of the settings page's own accounts read.
+      'settings.body.2.0.when(anyFresh)',
+      'settings.body.2.1.when(triage)',
     ]);
-    expect(roots).toContain('mail.body.2.0.conversations.0.detail.3 → thread');
+    expect(roots).toContain('mail.body.4.0.conversations.0.detail.3 → thread');
   });
 
   /**
@@ -790,9 +804,49 @@ suite('the mail pages, over postgres', () => {
     const secret = (await findSecret(pool, account.secretName))!;
     expect(await vault.get(ownerSecretVaultName(secret.id))).toBe('from-the-page');
     const row = (await ask('accounts')).accounts.find((a: { id: string }) => a.id === id);
-    expect(row.state).toEqual([{ value: 'on', tone: 'neutral' }]);
+    // Its password is good and no poll has finished yet.
+    expect(row.state).toEqual([{ value: 'connecting', tone: 'neutral' }]);
+    expect(row.lastSync).toBe('not yet');
     expect(row.passwordNeeded).toBe(false);
+    // A finished poll is what "connected" means, with when it finished.
+    await pool.query(`update email.accounts set last_synced_at = $2 where id = $1`, [id, new Date(clock.getTime() - 3 * 60_000)]);
+    const synced = (await ask('accounts')).accounts.find((a: { id: string }) => a.id === id);
+    expect(synced.state).toEqual([{ value: 'connected', tone: 'neutral' }]);
+    expect(synced.lastSync).toBe('3 minutes ago');
     await act('email.remove_account', { id });
+  });
+
+  it('gives a fresh mailbox a first state: connected, reading from now on, and what it left alone', async () => {
+    // The seeded mailbox has mail: the list, and no first state.
+    const seeded = await ask('mail_status');
+    expect(seeded).toMatchObject({ connected: `Connected: ${OWNER}`, hasAccounts: true, anyFresh: false, showList: true, fresh: [] });
+
+    // A mailbox opened the way a new one is: no backfill, three messages already there.
+    await pool.query(
+      'truncate email.drafts, email.policies, email.triage, email.messages, email.threads, email.folders, email.accounts cascade',
+    );
+    imap = new FakeImapServer();
+    for (const n of [1, 2, 3]) {
+      imap.add('INBOX', fakeMessage({ messageId: `<old-${n}@client.test>`, from: 'a@client.test', to: [OWNER], subject: `Old ${n}`, bodyText: 'x', date: new Date('2026-09-01T08:00:00Z') }));
+    }
+    await writeGmailAccount(pool, OWNER);
+    const source = createInboxPollSource({ connect: (async () => imap.client()) as ImapClientFactory, env, backfill: 0 });
+    await source.poll(hosted({ db: pool, now: ctx.now, timezone: 'UTC', log: () => {}, enqueueRun: async () => {} }));
+
+    const fresh = await ask('mail_status');
+    expect(fresh).toMatchObject({ anyFresh: true, showList: false, connected: `Connected: ${OWNER}` });
+    expect(fresh.fresh).toEqual([
+      { id: expect.any(String), address: OWNER, line: `Connected to ${OWNER}. Reading new mail from now on; 3 older messages left alone.` },
+    ]);
+    // Settings reads the same fact, for the note "Read the last 7 days" lands on.
+    expect((await ask('accounts')).anyFresh).toBe(true);
+
+    // Every path the Mail page draws against its own data is there.
+    const page = emailPageDescriptors.find((p) => p.id === 'mail')!;
+    expect(page.data).toEqual({ query: 'mail_status' });
+    for (const node of page.body) {
+      if (node.when) expect(readPath(fresh, node.when.path), `mail: ${node.when.path}`).not.toBeUndefined();
+    }
   });
 
   it('refuses a password for a mailbox that is not here', async () => {
