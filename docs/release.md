@@ -1,3 +1,9 @@
+---
+title: Releasing buddi
+status: reference
+updated: 2026-10-05
+---
+
 # Releasing buddi
 
 Release flow v2: you ask for a release by pushing a release commit to main;
