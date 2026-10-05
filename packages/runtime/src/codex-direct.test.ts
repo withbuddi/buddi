@@ -187,7 +187,7 @@ describe('Codex model list', () => {
     expect(out).toEqual({ models: [{ id: 'gpt-6-sol', name: 'GPT-6 Sol', isDefault: true }, { id: 'gpt-5.5', name: 'GPT-5.5', isDefault: false }], truncated: false, source: 'provider' });
     const [url, init] = send.mock.calls[0]!;
     expect(url).toBe(`https://chatgpt.com/backend-api/codex/models?client_version=${CODEX_CLIENT_VERSION}`);
-    expect(CODEX_CLIENT_VERSION).toBe('0.160.0');
+    expect(CODEX_CLIENT_VERSION).toBe('0.160.1');
     expect(init.headers).toMatchObject({ authorization: 'Bearer t', 'chatgpt-account-id': 'a' });
   });
   it('carries the backend context window, clamped, and ignores odd values', async () => {
