@@ -113,8 +113,8 @@ jobs:
         # (buddi-site's scripts/sync-release.mjs runs in its build), so a rebuild
         # is all a release needs. SITE_DEPLOY_HOOK is the site's Cloudflare
         # deploy hook (the same secret site-docs.yml uses). npm's dist-tag can
-        # lag publish by a minute or two, so wait for it before asking for the
-        # build. Without the hook, a notice; the site's hourly check catches up.
+        # lag publish by five minutes or more, so wait up to 15 for it before
+        # asking for the build. Without the hook, a notice; the site's hourly check catches up.
         if: steps.v.outputs.tag == 'latest'
         env:
           HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
@@ -124,7 +124,7 @@ jobs:
             echo "::notice::SITE_DEPLOY_HOOK is not set; withbuddi.com picks up $VERSION at its next hourly check."
             exit 0
           fi
-          for i in $(seq 1 20); do
+          for _ in $(seq 1 60); do
             latest=$(curl -fsS https://registry.npmjs.org/-/package/@withbuddi/buddi/dist-tags | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).latest||''))" 2>/dev/null || true)
             [ "$latest" = "$VERSION" ] && break
             sleep 15
