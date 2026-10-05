@@ -103,7 +103,6 @@ describe('group.ask', () => {
     provider: () => ({ complete: async () => ok }),
     registry: {} as ToolRegistry,
     transcript: async (_c, agentId) => ({ load: async () => [], speaker: agentId, openingSpeaker: 'concierge' }),
-    allowlistFor: (id) => (id === 'concierge' ? ['ledger', 'outsider'] : []),
     runAgent,
     pool: {} as any,
   });
@@ -128,15 +127,16 @@ describe('group.ask', () => {
     await expect(tool.execute({ agent: 'ledger', task: 'x' }, base())).rejects.toThrow(/group run/);
   });
 
-  it('refuses outside a group, from a member, for a non-member, and against the allowlist', async () => {
+  it('refuses outside a group, from a member, and for a non-member; membership alone grants the ask', async () => {
     await expect(tool.execute({ agent: 'ledger', request: 'x' }, base({ group: undefined }))).rejects.toThrow(/not a group run/);
     await expect(tool.execute({ agent: 'concierge', request: 'x' }, base({ agentId: 'ledger' }))).rejects.toThrow(/only the coordinator/);
     await expect(tool.execute({ agent: 'outsider', request: 'x' }, base())).rejects.toThrow(/not a member/);
     const strict = createGroupAskTool({
       catalog: () => ({ get: (id) => agents.get(id) }), provider: () => ({ complete: async () => ok }), registry: {} as ToolRegistry,
-      transcript: async () => undefined, allowlistFor: () => [], runAgent, pool: {} as any,
+      transcript: async () => undefined, runAgent, pool: {} as any,
     });
-    await expect(strict.execute({ agent: 'ledger', request: 'x' }, base())).rejects.toThrow(/may not ask/);
+    // A coordinator other than buddi, with no delegation allowlist at all, still asks its own room.
+    await expect(strict.execute({ agent: 'ledger', request: 'x' }, base())).resolves.toMatchObject({ agent: 'ledger', status: 'answered' });
   });
 
   it('reports a member that stopped on an approval, tells the orchestration, and suspends the caller', async () => {
@@ -144,7 +144,7 @@ describe('group.ask', () => {
     const suspend = vi.fn();
     const paused = createGroupAskTool({
       catalog: () => ({ get: (id) => agents.get(id) }), provider: () => ({ complete: async () => ok }), registry: {} as ToolRegistry,
-      transcript: async () => undefined, allowlistFor: () => ['ledger'], pool: {} as any, onSuspended,
+      transcript: async () => undefined, pool: {} as any, onSuspended,
       runAgent: async () => ({ text: '', turns: 1, stopped: 'awaiting-approval', pendingActionId: 'a-9', usage: { input: 0, output: 0 }, snapshot: {} } as any),
     });
     const out = await paused.execute({ agent: 'ledger', request: 'x' }, base({ suspend }));
@@ -157,7 +157,7 @@ describe('group.ask', () => {
   it('says out-of-budget instead of throwing when the member draws a blank', async () => {
     const dry = createGroupAskTool({
       catalog: () => ({ get: (id) => agents.get(id) }), provider: () => ({ complete: async () => ok }), registry: {} as ToolRegistry,
-      transcript: async () => undefined, allowlistFor: () => ['ledger'], pool: {} as any,
+      transcript: async () => undefined, pool: {} as any,
       runAgent: async () => { throw new BudgetExhausted(); },
     });
     expect(await dry.execute({ agent: 'ledger', request: 'x' }, base())).toMatchObject({ status: 'out-of-budget' });

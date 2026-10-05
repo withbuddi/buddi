@@ -1127,8 +1127,6 @@ export interface WebChatDeps {
   memoryPreamble?: ((agentId: string) => Promise<string>) | undefined;
   /** What a group run remembers: shared plus the room's scope, never private. */
   groupMemoryPreamble?: ((groupId: string) => Promise<string>) | undefined;
-  /** The coordinator's delegation allowlist: the room does not widen who may ask whom. */
-  allowlistFor?: ((agentId: string) => string[]) | undefined;
   /** Refuse the turn with this sentence — the global pause, in practice. */
   gate?: (() => Promise<string | null>) | undefined;
   log?: ((line: string) => void) | undefined;
@@ -1823,12 +1821,24 @@ export class WebChat {
     return run;
   }
 
-  /** The members a message names with `@handle`, in the order named. */
+  /**
+   * The members a message names with `@`, in the order named. A member is
+   * reached by its handle, its id, or its one-word name: "@anchor" reaches
+   * the room's Anchor whatever its handle is, so a mention never falls
+   * through to the coordinator unanswered.
+   */
   #mentioned(group: GroupRow, text: string): CatalogAgent[] {
+    const members = group.members
+      .map((id) => this.#deps.catalog.get(id))
+      .filter((a): a is CatalogAgent => Boolean(a));
     const out: CatalogAgent[] = [];
     for (const match of text.matchAll(/(^|[^\w@])@([a-z0-9][a-z0-9_-]*)/gi)) {
-      const agent = this.#deps.catalog.byHandle(match[2]!.toLowerCase());
-      if (agent && group.members.includes(agent.id) && !out.some((a) => a.id === agent.id)) out.push(agent);
+      const word = match[2]!.toLowerCase();
+      const byHandle = this.#deps.catalog.byHandle(word);
+      const agent = (byHandle && group.members.includes(byHandle.id) ? byHandle : undefined)
+        ?? members.find((a) => a.id.toLowerCase() === word)
+        ?? members.find((a) => a.name.trim().toLowerCase() === word);
+      if (agent && !out.some((a) => a.id === agent.id)) out.push(agent);
     }
     return out;
   }
@@ -2477,7 +2487,6 @@ export class WebChat {
           provider: (member) => budgetedProvider(deps.providerFor(member as CatalogAgent), ledger, { canSynthesise: false }),
           registry: deps.registry,
           transcript: async (conversationId, agentId) => transcriptFor(conversationId, agentId, group.row.coordinator),
-          allowlistFor: (id) => deps.allowlistFor?.(id) ?? [],
           ...(deps.groupMemoryPreamble ? { memoryPreamble: () => deps.groupMemoryPreamble!(context.id) } : {}),
           onSuspended: async ({ agentId, actionId }) => {
             await setGroupRequestState(pool, requestId, { state: 'suspended', from: ['running'], awaitingActionId: actionId, awaitingAgentId: agentId });

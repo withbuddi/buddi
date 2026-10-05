@@ -133,8 +133,10 @@ again, and a group run is not a delegate.
 
 A request is a structured, validated call, not prose. Mentioning another member
 in generated text schedules nothing. The call is checked against the group's
-membership and against the requesting agent's delegation allowlist, both
-explicitly, before anything is queued.
+membership explicitly before anything is queued. Membership is the grant: the
+coordinator may ask the room's members in that room's conversation, whatever
+its own delegation allowlist says, and nothing is written to any agent's file.
+An `@mention` of a member by its handle, id or one-word name always reaches it.
 
 ## Memory
 

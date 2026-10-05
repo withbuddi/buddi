@@ -21,8 +21,11 @@
  * **`group.ask`** runs one member against the shared transcript, sequentially,
  * inside the coordinator's tool call, and returns what the member said. It is
  * a structured, validated request: the caller must be the coordinator, the
- * target must be a member, the allowlist must permit it, and a member may not
- * be asked to ask. Mentioning a colleague in prose schedules nothing.
+ * target must be a member, and a member may not be asked to ask. Room
+ * membership is the grant: the coordinator may ask the room's members in
+ * this room's conversation, whatever its own delegation allowlist says, and
+ * nothing is written to any agent's file. Mentioning a colleague in prose
+ * schedules nothing.
  */
 import { z } from 'zod';
 import type { AgentDefinition, GroupContext, CoreToolContext, ToolDefinition, ToolRegistry } from '@buddi/core';
@@ -160,8 +163,6 @@ export interface GroupAskDeps {
   registry: ToolRegistry;
   /** The projection for `agentId`, loaded fresh at the start of the member's run. */
   transcript: (conversationId: string, agentId: string) => Promise<RunAgentOptions['transcript']>;
-  /** The caller's delegation allowlist: the room does not widen who may ask whom. */
-  allowlistFor(agentId: string): string[];
   memoryPreamble?: (agentId: string) => Promise<string>;
   /** Told the moment a member stops on an approval, so the request can be marked suspended. */
   onSuspended?: (input: { agentId: string; actionId: string }) => Promise<void> | void;
@@ -213,10 +214,8 @@ export function createGroupAskTool(deps: GroupAskDeps): ToolDefinition<GroupAskI
       if (!group.members.includes(target.id)) {
         throw new Error(`group.ask refused: @${target.handle} is not a member of "${group.name}" (members: ${group.members.join(', ')})`);
       }
-      const allowed = deps.allowlistFor(from);
-      if (!allowed.includes(target.id)) {
-        throw new Error(`group.ask refused: "${from}" may not ask "${target.id}" (allowed: ${allowed.join(', ') || 'none'})`);
-      }
+      // Membership is the grant, scoped to this room's run: no allowlist is
+      // consulted, and none is widened beyond it.
       if (!ctx.conversationId) throw new Error('group.ask refused: no conversation');
 
       const pool = deps.pool ?? (ctx.db as unknown as Queryable);

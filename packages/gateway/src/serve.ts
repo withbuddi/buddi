@@ -103,7 +103,6 @@ import { agentSearchPath, memoryPreambleFor, memoryPreambleForGroup } from './ag
 import { skillBundlesFor } from './web/skills.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
-import { delegateAllowlist } from './agents/delegation.js';
 import { createTelegramChannel } from './telegram/channel.js';
 import { createLocalNotificationChannel } from './channels/local-notification.js';
 import { notifyApproval, ownerDeliver, ownerText } from './owner-notify.js';
@@ -1277,7 +1276,6 @@ export async function main(): Promise<void> {
             artifacts: createCoreArtifactStore({ pool, env: process.env }),
             memoryPreamble: memoryPreambleFor(pool),
             groupMemoryPreamble: memoryPreambleForGroup(pool),
-            allowlistFor: (agentId) => delegateAllowlist(agentId, wiring.catalog),
             gate,
           },
           log: logErr,

@@ -20,6 +20,7 @@ What changes in buddi from one release to the next, newest first.
 - A Gemini key that is refused Pro models now says why: your Google AI plan covers the Gemini app, not the key, and the key's Google Cloud project has no billing. Pick a Flash model, or enable billing on that project at aistudio.google.com.
 - Lock screen: the buddi version sits quietly in the bottom-right corner ("buddi 0.1.0-pre.43"), with "· update ready" when a newer buddi is ready to install, the same answer as the status bar.
 - Removing buddi asks the same question everywhere: "Remove buddi from this Mac?", in Settings → System and in buddi.app's Uninstall buddi… sheet.
+- Groups: a room whose coordinator isn't buddi can now ask its own members ("researcher may not ask anchor" is gone). Being in the room is the permission, for that room only; nothing is added to any agent's settings. And an @mention of a member always reaches it, whether you type its handle, its id or its name.
 
 ## 0.1.0-pre.42 — 2026-10-04
 
