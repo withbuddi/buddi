@@ -18,7 +18,8 @@
  *    more than one blank line is kept in a row.
  *
  * `cleanText` is the same clean-up for text that was stored before this
- * existed and has no HTML left to re-read (`text-cleanup.ts`).
+ * existed and has no HTML left to re-read (`text-cleanup.ts`, which runs it
+ * only on text that came from HTML: plain-text mail is left as written).
  */
 import { parse, parseFragment } from 'parse5';
 
@@ -56,6 +57,16 @@ export const INVISIBLE = /[​-‍⁠﻿­͏  ]/g;
  */
 export const ENTITY_PATTERN = '&(#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]*);';
 export const PADDING_PATTERN = '[\u200B-\u200D\u2060\uFEFF\u200A\u2009]';
+
+/**
+ * The same padding written as entities, as the regexes before pre.44 left it
+ * in the text of an HTML-only message (`&zwnj;`, `&#8202;`, `&#x200b;`…).
+ * Only an HTML mailer writes these, so `text-cleanup.ts` takes them, like the
+ * padding characters, as the mark of text that came from HTML. A Postgres
+ * pattern, matched case-insensitively.
+ */
+export const PADDING_ENTITY_PATTERN =
+  '&(zwn?j|shy|hairsp|thinsp|zerowidthspace|verythinspace|thinspace|nobreak|#(820[1-5]|8288|847|173|65279)|#x0*(200[9a-d]|2060|34f|ad|feff));';
 
 function hidden(node: P5Node): boolean {
   for (const { name, value } of node.attrs ?? []) {

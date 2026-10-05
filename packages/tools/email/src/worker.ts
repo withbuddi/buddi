@@ -15,7 +15,9 @@
  *    `body_html`; the pane asks for it here, and this fetches that message's
  *    HTML part once — peeked, so nothing is marked read — runs it through the
  *    same sanitiser and cap as the sync (`html.ts`), stores it, and returns
- *    it. The pane waits at most `LAZY_HTML_WAIT_MS`; on a timeout or any
+ *    it. A message found to have no HTML part (or one the sanitiser refuses)
+ *    is stored as `''`, as the sync stores text-only mail, so it is never
+ *    asked for again; only a null `body_html` is fetched. The pane waits at most `LAZY_HTML_WAIT_MS`; on a timeout or any
  *    failure it draws the text as before, and the message is not tried again
  *    for `LAZY_HTML_RETRY_MS`, so opening it again does not wait again. A
  *    fetch that finishes after the wait still stores what it got, and the
@@ -154,15 +156,19 @@ export class MailWorker implements HtmlFetcher {
       if (typeof client.fetchHtml !== 'function') return null;
       // A uid means nothing across a UIDVALIDITY change: the mailbox was
       // recreated, and this uid may be somebody else's message now.
+      // The uid no longer names this message, the message has no HTML part,
+      // or the sanitiser refused it: none of that changes by asking again, so
+      // it is stored as '' ("checked, there is none") and never fetched again.
+      // A failure (a throw, the wait) stores nothing and is retried later.
       const status = await client.open(row.folder);
-      if (status.uidValidity !== Number(row.uidvalidity)) return null;
-      const raw = await client.fetchHtml(row.folder, Number(row.uid), MAX_HTML_INPUT_BYTES);
+      const raw = status.uidValidity === Number(row.uidvalidity)
+        ? await client.fetchHtml(row.folder, Number(row.uid), MAX_HTML_INPUT_BYTES)
+        : null;
       const html = sanitizeEmailHtml(raw);
-      if (html === null) return null;
       await db.query(
         `update email.messages set body_html = $2
           where id = $1::uuid and body_html is null and body_purged_at is null`,
-        [messageId, html],
+        [messageId, html ?? ''],
       );
       return html;
     } finally {

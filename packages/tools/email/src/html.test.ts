@@ -115,10 +115,12 @@ describe('ingest', () => {
     ...over,
   });
 
-  it('stores the HTML sanitised and the display name, and nothing when there is no HTML', () => {
+  it("stores the HTML sanitised and the display name, and '' (checked, none) when there is no HTML", () => {
     const ingested = prepareForIngest(fetched({ bodyHtml: '<p>Hello<script>x()</script></p>', fromName: 'Ana Duarte' }));
     expect(ingested.bodyHtml).toBe('<p>Hello</p>');
     expect(ingested.fromName).toBe('Ana Duarte');
-    expect(prepareForIngest(fetched({})).bodyHtml).toBeNull();
+    expect(prepareForIngest(fetched({})).bodyHtml).toBe('');
+    // An HTML part the server would not hand over stays unknown, for the pane to fetch later.
+    expect(prepareForIngest(fetched({ htmlUnread: true })).bodyHtml).toBeNull();
   });
 });

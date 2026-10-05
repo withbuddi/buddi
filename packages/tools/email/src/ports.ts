@@ -91,6 +91,13 @@ export interface FetchedMessage {
    * null for a text-only message.
    */
   bodyHtml?: string | null;
+  /**
+   * True when the message has an HTML part the server would not hand over at
+   * sync. Its `body_html` stays null ("not known yet"), so the reading pane
+   * may fetch it later (`worker.ts`); every other message without stored HTML
+   * is kept as `''`, "checked, there is none", and never fetched.
+   */
+  htmlUnread?: boolean;
   /** The display name on the From header, when the sender gave one. */
   fromName?: string | null;
   hasAttachments: boolean;

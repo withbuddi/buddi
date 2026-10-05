@@ -788,7 +788,10 @@ export function prepareForIngest(message: FetchedMessage, now: Date = new Date()
     date: clampFutureDate(message.date, now),
     snippet: snippetOf(message.bodyText),
     // Sanitised at the door: what is stored can hold nothing that runs (html.ts).
-    bodyHtml: sanitizeEmailHtml(message.bodyHtml ?? null),
+    // No HTML part, or one the sanitiser refused, is stored as '' — checked,
+    // there is none — so the reading pane never goes back to the server for
+    // it (`worker.ts`). Only a part the server would not give stays null.
+    bodyHtml: sanitizeEmailHtml(message.bodyHtml ?? null) ?? (message.htmlUnread === true ? null : ''),
     fromName: message.fromName ?? null,
   };
 }

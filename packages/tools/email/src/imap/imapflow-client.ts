@@ -345,6 +345,7 @@ class ImapFlowClient implements ImapWriter {
       const text = findTextPart(msg.bodyStructure as Record<string, any>);
       let bodyText = '';
       let bodyHtml: string | null = null;
+      let htmlUnread = false;
       if (text) {
         // BODY.PEEK — reading never marks the message seen.
         const downloaded = await this.client.download(String(uid), text.part, { uid: true });
@@ -367,6 +368,7 @@ class ImapFlowClient implements ImapWriter {
         } catch {
           // The text is already in hand; a part the server will not give is no reason to lose the message.
           bodyHtml = null;
+          htmlUnread = true;
         }
       }
       const attachments = collectAttachments(msg.bodyStructure as Record<string, any>);
@@ -396,6 +398,7 @@ class ImapFlowClient implements ImapWriter {
         internalDate: msg.internalDate ? new Date(msg.internalDate as string | Date) : null,
         bodyText,
         bodyHtml,
+        htmlUnread,
         hasAttachments: attachments.length > 0,
         attachments,
         flags: [...(msg.flags instanceof Set ? msg.flags : new Set<string>())].map(String),

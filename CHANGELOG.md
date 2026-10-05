@@ -6,7 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
-- Mail: newsletters no longer show codes like `&#8202;`, `&zwnj;` or `&#38;` in their text, previews and search. buddi now reads an HTML-only message the way a browser would: every character comes out as itself, styles and hidden parts are left out, and the invisible padding newsletters put in their preview line is dropped. Mail that arrived before is cleaned too, quietly in the background after buddi starts.
+- Mail: newsletters no longer show codes like `&#8202;`, `&zwnj;` or `&#38;` in their text, previews and search. buddi now reads an HTML-only message the way a browser would: every character comes out as itself, styles and hidden parts are left out, and the invisible padding newsletters put in their preview line is dropped. Mail that arrived before is cleaned too, quietly in the background after buddi starts; only text that came from an HTML message is touched, so a plain-text email that really says `&copy;` or is indented stays exactly as written.
 - Agents no longer make up sources. An agent asked about today's news once answered at length citing CBS, AP and NPR without reading anything. Every agent is now told to read or delegate anything about today, the news, mail, calendar, money or prices, and never to name a source, figure or quote it did not read in the conversation.
 - When an answer still cites sources and nothing in that turn read anything (no tool, no colleague, no search), buddi holds it back and asks the agent once to check with its tools or a colleague, or drop the claims. If it still reads nothing, the answer arrives with a quiet "Answered from memory, not checked" line under it in the chat and on Telegram. Each time this happens it is in the activity log (`run.grounding`). The check only counts real citations (two different sources, or one with [1]-style markers or a Sources line), so ordinary chat is left alone.
 - Asking about a headline from today's edition ("tell me more about …") now tells the agent where the story came from — which edition, which agent (@anchor) and plugin — and how to read it: its own news tool, or by asking that agent.
@@ -16,7 +16,7 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - Plugin pages: a plugin's own page on the rail now offers the catalogue agent that would use it while nobody on the team does — the Money page says "Nobody keeps your books yet" with Add CFO (the same add, and the one approval, as Home and the plugin's settings tab) and Not now, which also closes the suggestion on Home.
-- Mail: a message that arrived before pre.44 now opens with its formatting and pictures (pictures from the web still wait for Show images). buddi fetches it from your mail server the first time you open it, keeps it, and reads its own copy after that; if your server is slow it shows the text within a few seconds instead and doesn't try again for an hour.
+- Mail: a message that arrived before pre.44 now opens with its formatting and pictures (pictures from the web still wait for Show images). buddi fetches it from your mail server the first time you open it, keeps it, and reads its own copy after that; if your server is slow it shows the text within a few seconds instead and doesn't try again for an hour. A message that turns out to have no formatting (plain-text mail, old or new) is remembered as such and never fetched again.
 
 ### Changed
 

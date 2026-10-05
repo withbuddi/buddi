@@ -1065,7 +1065,9 @@ media, SVG and event attributes dropped; links kept only when http(s) or
 mailto, pictures only when http(s), `cid:` or a small inline picture; a safe
 subset of inline style; only the classes that mark a quoted reply — and
 stored in `messages.body_html` only when the result is at most 256 KB (over
-it, the text is what is read). The From header's display name is kept in
+it, the text is what is read). A message with no HTML part, or one over the
+cap, is stored with `body_html = ''` ("checked, there is none"); null means
+not known yet (synced before 028, or a part the server would not hand over). The From header's display name is kept in
 `messages.from_name`, and each attachment's Content-ID in its listing, so a
 `cid:` picture can be drawn from the file once it is fetched. Both columns
 (migration 028) are empty for mail synced before them. Retention purges
@@ -1081,7 +1083,11 @@ joiners, hair and thin spaces) dropped, spaces collapsed, at most one blank
 line in a row. Rows synced before pre.44 were made by regular expressions that
 decoded five entities; the first poll of each plugin start runs a background
 pass (`text-cleanup.ts`) that decodes and tidies those rows' text and cuts
-their snippet again, 200 rows at a time, recording where it got to in
+their snippet again, 200 rows at a time — only rows whose text came from HTML
+(an HTML part kept, or the preview-line padding as characters or entities;
+never a row with `body_html = ''`), so plain-text mail is left as written —
+each batch committed with its cursor in one transaction so no row is decoded
+twice, recording where it got to in
 `email.settings` (`text_cleanup`) so a restart carries on and a finished pass
 never runs again. It logs one line at the end.
 
@@ -1091,7 +1097,9 @@ mailbox — the `message` query asks the plugin's worker (`worker.ts`), which
 holds the poll's context because a page query may neither write nor log in to
 a mailbox. The worker fetches that message's HTML part once (a peek, after the
 same UIDVALIDITY check as `email.fetch_attachment`), sanitises and caps it
-like the sync, stores it in `body_html` and hands it back. The pane waits at
+like the sync, stores it in `body_html` and hands it back. A message found to
+have no HTML part (or one the sanitiser refuses) is stored as `''`, so it is
+never fetched again, across restarts. The pane waits at
 most 6 seconds; on a timeout or any failure it draws the text, and the message
 is not tried again for an hour. A fetch that finishes after the wait still
 stores its result for the next open. Before the first poll of a start there is
