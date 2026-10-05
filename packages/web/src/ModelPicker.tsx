@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { Button, Field } from './ui';
 import { MLXH_IMAGE_MODEL } from './mlxh';
+import { fmtAgo } from './format';
 
 /**
  * Remount when the account/revision changes; fetching never selects a model.
@@ -9,8 +10,10 @@ import { MLXH_IMAGE_MODEL } from './mlxh';
  * Renders as a run of toolbar items, not a block: the field, its refresh
  * button, the custom entry when asked for, and one full-width note beneath.
  */
-export function ModelPicker({ accountId, label, value, onChange, disabled = false }: {
+export function ModelPicker({ accountId, label, value, onChange, disabled = false, origin = 'from the provider' }: {
   accountId?: string; label: string; value: string; onChange(value: string): void; disabled?: boolean;
+  /** Whose list it is, for the footer when the gateway says where it came from ("from ChatGPT"). */
+  origin?: string;
 }): JSX.Element {
   const [list, setList] = useState<Awaited<ReturnType<typeof api.accountModels>> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,6 +51,8 @@ export function ModelPicker({ accountId, label, value, onChange, disabled = fals
     list?.truncated ? 'Showing the first part of this provider’s list. Custom model entry is available.' : null,
     list ? 'Uses saved account settings. Listed models may not support every agent tool. Your selection is unchanged until you save.' : null,
   ].filter(Boolean);
+  const provenance = list?.source === 'built-in' ? 'built-in list'
+    : list?.source === 'provider' ? [origin, list.fetchedAt ? `refreshed ${fmtAgo(list.fetchedAt)}` : ''].filter(Boolean).join(' · ') : '';
   return (
     <>
       <Field label={label}>
@@ -69,6 +74,7 @@ export function ModelPicker({ accountId, label, value, onChange, disabled = fals
       )}
       {error && <p role="alert" className="ui-toolbar-note critical">{error}</p>}
       {notes.length > 0 && <p className="ui-toolbar-note">{notes.join(' ')}</p>}
+      {provenance && <p className="ui-toolbar-note muted" data-testid="model-list-source">{provenance}</p>}
     </>
   );
 }

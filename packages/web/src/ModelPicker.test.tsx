@@ -40,3 +40,17 @@ it('ignores a late response from a previously selected account', async () => {
   await waitFor(() => expect(screen.queryByRole('option', { name: /Astra/ })).not.toBeInTheDocument());
   expect(change).not.toHaveBeenCalled();
 });
+it('says where a ChatGPT list came from: the live list with its age, or the built-in one', async () => {
+  vi.mocked(api.accountModels).mockResolvedValueOnce({ ...list, source: 'provider', fetchedAt: new Date(Date.now() - 3 * 60_000).toISOString() });
+  const view = render(<ModelPicker accountId="one" label="Model" value="astra" onChange={vi.fn()} origin="from ChatGPT" />);
+  expect(await screen.findByTestId('model-list-source')).toHaveTextContent('from ChatGPT · refreshed 3 min ago');
+  view.unmount();
+  vi.mocked(api.accountModels).mockResolvedValueOnce({ ...list, source: 'built-in', fetchedAt: new Date().toISOString() });
+  render(<ModelPicker accountId="one" label="Model" value="astra" onChange={vi.fn()} origin="from ChatGPT" />);
+  expect(await screen.findByTestId('model-list-source')).toHaveTextContent(/^built-in list$/);
+});
+it('shows no provenance for a list that does not say', async () => {
+  render(<Harness />);
+  await screen.findByRole('option', { name: /Astra/ });
+  expect(screen.queryByTestId('model-list-source')).not.toBeInTheDocument();
+});

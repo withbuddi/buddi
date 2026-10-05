@@ -109,12 +109,14 @@ suite('named provider accounts', () => {
     const f = fixture(); await f.service.initialize();
     const a = await f.service.save(settings);
     const b = await f.service.save({ ...settings, secret: 'second-fixture-key' });
-    await f.service.models(a.id); await f.service.models(a.id);
+    const first = await f.service.models(a.id); const again = await f.service.models(a.id);
     expect(f.listModels).toHaveBeenCalledTimes(1);
+    expect(first.fetchedAt).toMatch(/^\d{4}-/); expect(again.fetchedAt).toBe(first.fetchedAt);
     expect(f.listModels.mock.calls[0]?.[0]).toMatchObject({ secret: settings.secret });
     await f.service.models(b.id);
     expect(f.listModels.mock.calls[1]?.[0]).toMatchObject({ secret: 'second-fixture-key' });
-    await f.service.models(a.id, true); expect(f.listModels).toHaveBeenCalledTimes(3);
+    const refreshed = await f.service.models(a.id, true); expect(f.listModels).toHaveBeenCalledTimes(3);
+    expect(Date.parse(refreshed.fetchedAt!)).toBeGreaterThanOrEqual(Date.parse(first.fetchedAt!));
     await f.service.save({ ...settings, id: a.id, revision: 1, secret: 'rotated-fixture' });
     await f.service.models(a.id); expect(f.listModels.mock.calls[3]?.[0]).toMatchObject({ secret: 'rotated-fixture' });
     expect(f.test).not.toHaveBeenCalled();

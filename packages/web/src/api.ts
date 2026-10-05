@@ -2580,7 +2580,7 @@ export const api = {
   providerAccounts: () => get<ProviderAccountsView>('/provider-accounts'),
   probeModels: (body: { kind: 'anthropic' | 'openai' | 'openai-compatible'; auth: 'api-key' | 'none'; baseUrl?: string; secret?: string }) =>
     post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean }>('/provider-accounts/probe-models', body),
-  accountModels: (id: string, refresh = false) => post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean; image?: boolean }>; truncated: boolean }>(`/provider-accounts/${encodeURIComponent(id)}/models`, { refresh }),
+  accountModels: (id: string, refresh = false) => post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean; image?: boolean }>; truncated: boolean; source?: 'provider' | 'built-in'; fetchedAt?: string }>(`/provider-accounts/${encodeURIComponent(id)}/models`, { refresh }),
   saveProviderAccount: (body: SaveProviderAccount) => post<{ id: string; warning?: string }>('/provider-accounts/save', body),
   testProviderAccount: (id: string) => post<ConnectionVerdict>(`/provider-accounts/${encodeURIComponent(id)}/test`),
   removeProviderAccount: (id: string, revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/remove`, { revision }),

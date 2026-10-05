@@ -13,7 +13,14 @@ export interface AccountModel {
   /** The host says this is an image model, not one to chat with. Only known for hosts that say (mlxh, once loaded). */
   image?: boolean;
 }
-export interface AccountModels { models: AccountModel[]; truncated: boolean }
+export interface AccountModels {
+  models: AccountModel[];
+  truncated: boolean;
+  /** Where the list came from, when a lister falls back: the host's answer, or buddi's built-in list (ChatGPT). */
+  source?: 'provider' | 'built-in';
+  /** When the gateway fetched it (ISO), so the picker can say how fresh it is. */
+  fetchedAt?: string;
+}
 
 /** Only picker metadata crosses this boundary, never arbitrary provider fields. */
 export function modelOptions(items: unknown[], native = false): AccountModel[] {

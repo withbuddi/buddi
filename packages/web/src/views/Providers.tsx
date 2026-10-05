@@ -440,7 +440,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
           </Field>
         </>}
         <Toolbar valign="end">
-          <ModelPicker key={`${a?.id}:${a?.revision}`} accountId={a?.configured && a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} />
+          <ModelPicker key={`${a?.id}:${a?.revision}`} accountId={a?.configured && a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} {...(a?.kind === 'codex' ? { origin: 'from ChatGPT' } : {})} />
         </Toolbar>
         <Field label="Context window" hint={isMlxhAccount(a)
           ? 'mlxh refuses a prompt over its max_prompt_tokens, and its model manager does not report the number, so buddi assumes 8,192. After `mlxh config max_prompt_tokens 40960`, enter the same number here.'
@@ -555,7 +555,7 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
  * subscription can be connected. The default model is chosen from a real
  * list, not typed from memory before there is anything to check it against.
  */
-const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: 'gpt-5.5' };
+const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: 'gpt-6.1-sol' };
 
 /** The name the form proposes for a provider, before the owner touches it. */
 export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAccount['auth'], taken: string[]): string {
@@ -827,7 +827,7 @@ function ModelStep({ account: a, busy, run, anthropicOAuthEnabled, onDone }: { a
         <>
           <p className="ui-page-lede">Pick the model this account offers by default. An agent can still choose another when you assign it.</p>
           <Toolbar valign="end">
-            <ModelPicker key={`${a.id}:${a.revision}`} accountId={a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} />
+            <ModelPicker key={`${a.id}:${a.revision}`} accountId={a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} {...(a.kind === 'codex' ? { origin: 'from ChatGPT' } : {})} />
           </Toolbar>
           <Toolbar align="end">
             <Button onClick={onDone}>Skip for now</Button>

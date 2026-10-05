@@ -338,6 +338,7 @@ export class ProviderAccounts {
         }
         const current = await this.#row(id);
         if (current.revision !== row.revision || !current.enabled || current.deleting) throw new ProviderAccountError(409, 'Account changed. Refresh models again.');
+        value = { ...value, fetchedAt: new Date().toISOString() };
         this.#modelLists.set(id, { revision: row.revision, until: Date.now() + 60_000, value });
         await this.#rememberWindows(current, value).catch(() => {});
         return value;

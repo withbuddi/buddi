@@ -35,10 +35,14 @@ import { SseParser, frameJson } from './sse.js';
 import { defaultHttpTransport, type HttpTransport, type TransportResponse } from './transport.js';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api';
-export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
-export const CODEX_FALLBACK_MODELS = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'] as const;
-/** The client version the model list is asked for; the backend filters by it. */
-const CLIENT_VERSION = '0.156.1';
+export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
+export const CODEX_FALLBACK_MODELS = [CODEX_DEFAULT_MODEL, 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'] as const;
+/**
+ * The Codex CLI version the model list is asked for. The backend filters the
+ * list by it, so a stale number hides new models; a network test in
+ * codex-version.test.ts fails when npm's latest @openai/codex is newer.
+ */
+export const CODEX_CLIENT_VERSION = '0.160.0';
 /** Wire names the backend reserves for its own tools. */
 const RESERVED_TOOL_NAMES = ['request_user_input', 'skills'];
 
@@ -309,9 +313,9 @@ export function createCodexDirectAdapter(options: CodexDirectOptions): RuntimePr
 
 /** The account's models, from the backend; the known list when it will not say. */
 export async function listCodexModels(options: { accessToken: string; accountId: string; transport?: HttpTransport; baseUrl?: string }): Promise<AccountModels> {
-  const fallback: AccountModels = { models: CODEX_FALLBACK_MODELS.map(id => ({ id, name: id, isDefault: id === CODEX_DEFAULT_MODEL })), truncated: false };
+  const fallback: AccountModels = { models: CODEX_FALLBACK_MODELS.map(id => ({ id, name: id, isDefault: id === CODEX_DEFAULT_MODEL })), truncated: false, source: 'built-in' };
   try {
-    const res = await (options.transport ?? defaultHttpTransport)(`${base(options.baseUrl)}/codex/models?client_version=${CLIENT_VERSION}`, {
+    const res = await (options.transport ?? defaultHttpTransport)(`${base(options.baseUrl)}/codex/models?client_version=${CODEX_CLIENT_VERSION}`, {
       method: 'GET', headers: headers(options.accessToken, options.accountId, 'application/json'),
       signal: AbortSignal.timeout(20_000), maxBytes: 4 * 1024 * 1024,
     });
@@ -330,7 +334,7 @@ export async function listCodexModels(options: { accessToken: string; accountId:
         ? Math.min(MAX_CONTEXT_WINDOW_TOKENS, Math.max(MIN_CONTEXT_WINDOW_TOKENS, window)) : undefined;
       if (!models.has(id)) models.set(id, { id, name: label, isDefault: models.size === 0, ...(contextWindow ? { contextWindow } : {}) });
     }
-    return models.size ? { models: [...models.values()], truncated: listed.length > 1000 } : fallback;
+    return models.size ? { models: [...models.values()], truncated: listed.length > 1000, source: 'provider' } : fallback;
   } catch { return fallback; }
 }
 

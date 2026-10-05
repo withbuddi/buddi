@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CODEX_DEFAULT_MODEL, createCodexDirectAdapter, generateCodexImage, listCodexModels } from './codex-direct.js';
+import { CODEX_CLIENT_VERSION, CODEX_DEFAULT_MODEL, createCodexDirectAdapter, generateCodexImage, listCodexModels } from './codex-direct.js';
 import type { CompletionRequest } from './anthropic.js';
 import type { HttpTransport, TransportRequest, TransportResponse } from './transport.js';
 
@@ -184,9 +184,10 @@ describe('Codex model list', () => {
       { slug: 'gpt-6-sol', display_name: 'GPT-6 Sol', visibility: 'list', priority: 1 },
     ] });
     const out = await listCodexModels({ accessToken: 't', accountId: 'a', transport: send });
-    expect(out).toEqual({ models: [{ id: 'gpt-6-sol', name: 'GPT-6 Sol', isDefault: true }, { id: 'gpt-5.5', name: 'GPT-5.5', isDefault: false }], truncated: false });
+    expect(out).toEqual({ models: [{ id: 'gpt-6-sol', name: 'GPT-6 Sol', isDefault: true }, { id: 'gpt-5.5', name: 'GPT-5.5', isDefault: false }], truncated: false, source: 'provider' });
     const [url, init] = send.mock.calls[0]!;
-    expect(url).toBe('https://chatgpt.com/backend-api/codex/models?client_version=0.156.1');
+    expect(url).toBe(`https://chatgpt.com/backend-api/codex/models?client_version=${CODEX_CLIENT_VERSION}`);
+    expect(CODEX_CLIENT_VERSION).toBe('0.160.0');
     expect(init.headers).toMatchObject({ authorization: 'Bearer t', 'chatgpt-account-id': 'a' });
   });
   it('carries the backend context window, clamped, and ignores odd values', async () => {
@@ -207,8 +208,10 @@ describe('Codex model list', () => {
     for (const send of [get(500, {}), get(200, { nope: 1 }), vi.fn<HttpTransport>().mockRejectedValue(new Error('x'))]) {
       const out = await listCodexModels({ accessToken: 't', accountId: 'a', transport: send });
       expect(out.truncated).toBe(false);
-      expect(out.models.map(m => m.id)).toContain(CODEX_DEFAULT_MODEL);
-      expect(out.models[0]!.id).toBe('gpt-6-astra');
+      expect(out.source).toBe('built-in');
+      expect(CODEX_DEFAULT_MODEL).toBe('gpt-6.1-sol');
+      expect(out.models[0]).toEqual({ id: 'gpt-6.1-sol', name: 'gpt-6.1-sol', isDefault: true });
+      expect(out.models.filter(m => m.isDefault)).toHaveLength(1);
     }
   });
 });
