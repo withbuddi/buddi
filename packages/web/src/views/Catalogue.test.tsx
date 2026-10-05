@@ -15,7 +15,7 @@ import { DRAFT_KEY } from '../chat/draft';
 import { NEEDS_ROUTE } from '../routes';
 import { Catalogue, CatCard, cardState } from './Catalogue';
 import { CatalogueLine, RemoveFromTeam } from './parts/AgentCatalogueBits';
-import { HandoverTeam, suggestFrom, suggestNames, suggestWithReasons, teamIsNew } from './parts/CatalogueSuggest';
+import { HandoverTeam, HomeSuggestions, PluginTeammatePanel, pluginTeammates, suggestFrom, suggestNames, suggestWithReasons, teamIsNew, teammateForPlugin } from './parts/CatalogueSuggest';
 import { UpdateSheet } from './parts/CatalogueSheets';
 import { reachRows } from './parts/catalogue-words';
 import { Plugins } from './Plugins';
@@ -576,6 +576,54 @@ describe('suggestions', () => {
     expect(await screen.findByTestId('cat-pick-tutor')).toHaveTextContent('popular');
     expect(screen.queryByText(/Picked from what you just set up/)).not.toBeInTheDocument();
     expect(screen.getByText('A few teammates people often start with. One click adds the ones you tick.')).toBeInTheDocument();
+  });
+});
+
+describe('a plugin nobody on the team uses', () => {
+  const imageLoaded = (): void => {
+    vi.mocked(api.plugins).mockResolvedValue({
+      installed: [{ name: 'image', loaded: true }, { name: 'weather', loaded: true }],
+      staged: [], trust: '', restartNeeded: false, checkout: false,
+    } as never);
+  };
+
+  it('finds the catalogue agent whose requires names the plugin, until one is added', () => {
+    expect(teammateForPlugin(VIEW.agents, 'image')?.name).toBe('illustrator');
+    expect(teammateForPlugin(VIEW.agents, 'weather')).toBeUndefined();
+    const added = VIEW.agents.map((a) => (a.name === 'illustrator' ? { ...a, state: 'installed' as const, installed: { agentId: 'art', handle: 'art', version: '1.0.0', drift: 'current' as const } } : a));
+    expect(teammateForPlugin(added, 'image')).toBeUndefined();
+    expect(pluginTeammates(VIEW.agents, new Set(['image', 'finance', 'weather'])).map((m) => [m.plugin, m.entry.name])).toEqual([['image', 'illustrator'], ['finance', 'cfo']]);
+  });
+
+  it('says so at the top of its settings page, and Add opens the install sheet', async () => {
+    vi.mocked(api.cataloguePlan).mockReturnValue(new Promise(() => {}));
+    render(<PluginTeammatePanel plugin="image" title="Image" navigate={vi.fn()} />);
+    expect(await screen.findByText('Nobody makes pictures yet')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Illustrator' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('draws nothing on a plugin whose teammate is on the team or that has none', async () => {
+    const { container } = render(<PluginTeammatePanel plugin="weather" navigate={vi.fn()} />);
+    await waitFor(() => expect(api.catalogue).toHaveBeenCalled());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('is first among Home’s suggestions, even past a new team, until closed', async () => {
+    imageLoaded();
+    const close = vi.fn();
+    const closedNone = { is: () => false, close };
+    const { unmount } = render(<HomeSuggestions navigate={vi.fn()} newTeam={false} closed={closedNone} />);
+    const art = await screen.findByTestId('cat-suggest-illustrator');
+    expect(art).toHaveTextContent('Nobody makes pictures yet');
+    // Past a new team, only the missing teammate shows.
+    expect(screen.getAllByTestId(/^cat-suggest-/)).toHaveLength(1);
+    fireEvent.click(within(art).getByRole('button', { name: 'Not now: Illustrator' }));
+    expect(close).toHaveBeenCalledWith('teammate:image', 'illustrator');
+    unmount();
+    render(<HomeSuggestions navigate={vi.fn()} newTeam={false} closed={{ is: (slot, token) => slot === 'teammate:image' && token === 'illustrator', close }} />);
+    await waitFor(() => expect(api.catalogue).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('cat-suggest-illustrator')).not.toBeInTheDocument();
   });
 });
 

@@ -17,6 +17,7 @@ import { fmtRelative, fmtTime } from '../format';
 import { SECRETS_ADD_ROUTE, SETTINGS_ROUTE, parseAccountRoute, parseConnectionRoute, parseProposalsFilter, parseSecretRoute, parseSecretsAdd, parsePluginSettingsRoute, pluginRouteParams, resolvePluginSettingsRoute, settingsSectionOf } from '../routes';
 import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
 import { PluginSettingsPage } from '../pages/PluginPage';
+import { PluginTeammatePanel } from './parts/CatalogueSuggest';
 import { usePluginPages } from '../pages/usePages';
 import { useAppearance, type Ground, type PageWidth } from '../appearance';
 import type { ThemeChoice } from '../theme';
@@ -115,6 +116,8 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
             </header>
           )}
           {narrow ? <SettingsMenu {...list} /> : null}
+          {/* A plugin whose catalogue teammate is not on the team says so first, with Add. */}
+          {pluginPage ? <PluginTeammatePanel key={pluginPage.plugin} plugin={pluginPage.plugin} title={pluginPage.title} navigate={navigate} /> : null}
           {pluginPage ? (
             <PluginSettingsPage
               page={pluginPage}

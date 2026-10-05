@@ -391,8 +391,9 @@ export function Home({
             )}
           </div>
         )}
-        {/* While the team is new: teammates suggested from what was set up, each with Add. */}
-        {newTeam ? <HomeSuggestions navigate={navigate} /> : null}
+        {/* While the team is new: teammates suggested from what was set up, each with Add;
+            at any time, the teammate of a plugin nobody uses, until added or closed. */}
+        <HomeSuggestions navigate={navigate} newTeam={newTeam} closed={closed} />
       </Section>
 
       {onOffer.length > 0 ? (

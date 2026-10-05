@@ -1639,6 +1639,40 @@ describe('the handover', () => {
     expect(within(card).getByRole('button', { name: 'Add these' })).toBeEnabled();
   });
 
+  it('picks from chapter 3 as the take-on record keeps it, and names who is already on the team', async () => {
+    // The page reloaded since chapter 3: its own answers lost the tiles; the record has them.
+    ready({ accountId: 'a0', conversationId: 'c1', takeOn: [], reach: {} });
+    hello();
+    vi.mocked(api.takeOnProgress).mockResolvedValue(progress({ tiles: ['pictures', 'mail'] }));
+    vi.mocked(chatApi.agents).mockResolvedValue({
+      agents: [
+        { id: 'ada', handle: 'ada', name: 'Ada', roles: ['front-desk'] },
+        { id: 'mail-triage', handle: 'mail', name: 'Mail Triage', roles: [] },
+        { id: 'agent-father', handle: 'father', name: 'Agent Father', roles: ['maker'] },
+      ] as never,
+      defaultAgentId: 'ada',
+    });
+    const listed = (name: string, title: string) => ({
+      name, version: '1.0.0', handle: name, title, pitch: `${title} pitch.`, description: '', about: '', category: 'work', trust: 'by-buddi',
+      author: { name: 'withbuddi' }, requires: {}, optional: {}, needs: [], tools: ['memory.*'], missions: [], fills: [], examples: [],
+      skills: [], changes: '', replaces: [], avatar: null, page: null, state: 'ready' as const, addable: true,
+    });
+    vi.mocked(api.catalogue).mockResolvedValue({
+      agents: [listed('chief-of-staff', 'Chief of Staff'), listed('illustrator', 'Illustrator'), listed('researcher', 'Researcher')],
+      fromPlugins: [], delisted: [],
+    });
+    render(meet());
+    const card = await screen.findByTestId('handover-team');
+    await waitFor(() =>
+      expect([...card.querySelectorAll('.cat-pick-name')].map((n) => n.textContent)).toEqual([
+        'Chief of Staffbecause you set up My mail',
+        'Illustratorbecause you set up Pictures',
+        'Researcherpopular',
+      ]),
+    );
+    expect(await within(card).findByTestId('handover-team-now')).toHaveTextContent('On your team: Ada and Mail Triage.');
+  });
+
   it('shows the warm card with exactly what is still waiting, and Open Home', async () => {
     ready({ accountId: 'a0', conversationId: 'c1', takeOn: ['days', 'mail'], reach: {} });
     hello();

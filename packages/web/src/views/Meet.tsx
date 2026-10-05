@@ -3570,10 +3570,12 @@ function Handover({ answers, assistantAgent, met, onMet, navigate, onPickAnother
     if (spoken && carriesOn) onSpoken(carriesOn);
   }, [spoken, carriesOn, onSpoken]);
 
-  const tiles = answers.takeOn ?? [];
+  // Chapter 3's picks as the take-on record keeps them (a reload in between
+  // loses the page's own answers), else as this page remembers them.
+  const tiles = progress?.tiles && progress.tiles.length > 0 ? progress.tiles : answers.takeOn ?? [];
   const starters = SCRIPT.handover.starters({ days: tiles.includes('days'), mail: tiles.includes('mail'), mailbox: answers.reach?.mailbox === true });
   // "Who do you want on your team?": catalogue teammates picked from what chapters 3 and 4 set up.
-  const setUp = { days: tiles.includes('days'), mailbox: answers.reach?.mailbox === true, money: tiles.includes('money'), pictures: tiles.includes('pictures') };
+  const setUp = { days: tiles.includes('days'), mailbox: answers.reach?.mailbox === true, mail: tiles.includes('mail'), money: tiles.includes('money'), pictures: tiles.includes('pictures') };
   const waiting = progress?.waiting ?? [];
   /**
    * Into the shell. The rail read the plugin pages when this page loaded,

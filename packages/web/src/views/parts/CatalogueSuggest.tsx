@@ -9,7 +9,7 @@
  * that Add can bring in now are suggested.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { api, AGENTS_CHANGED, ApiError, type CatalogueAgent, type CatalogueJob } from '../../api';
+import { api, chatApi, AGENTS_CHANGED, ApiError, type CatalogueAgent, type CatalogueJob } from '../../api';
 import type { ChatAgent } from '../../chat/types';
 import { catalogueRoute } from '../../routes';
 import { ROLE_MAKER } from '../../shell/roster';
@@ -23,14 +23,16 @@ import { and, missingFix, missingTitle } from './catalogue-words';
 export interface SetUp {
   days?: boolean;
   mailbox?: boolean;
+  /** My mail was picked in chapter 3 (a mailbox may come later). */
+  mail?: boolean;
   money?: boolean;
   pictures?: boolean;
 }
 
 /** The suggestion rule, as package names in order; at most four. */
-export function suggestNames({ days, mailbox, money, pictures }: SetUp): string[] {
+export function suggestNames({ days, mailbox, mail, money, pictures }: SetUp): string[] {
   const names: string[] = [];
-  if (mailbox || days) names.push('chief-of-staff');
+  if (mailbox || mail || days) names.push('chief-of-staff');
   if (money) names.push('cfo');
   if (pictures) names.push('illustrator');
   for (const filler of ['researcher', 'tutor']) if (names.length < 3) names.push(filler);
@@ -62,7 +64,7 @@ const FILLERS = ['researcher', 'tutor'];
 
 /** Why the rule picked a package, from what was set up. */
 function reasonFor(name: string, setUp: SetUp): string {
-  if (name === 'chief-of-staff') return setUp.days ? 'because you set up My days' : 'because you added a mailbox';
+  if (name === 'chief-of-staff') return setUp.days ? 'because you set up My days' : setUp.mailbox ? 'because you added a mailbox' : 'because you set up My mail';
   if (name === 'cfo') return 'because you set up My money';
   if (name === 'illustrator') return 'because you set up Pictures';
   return 'popular';
@@ -96,6 +98,85 @@ export function suggestWithReasons(agents: readonly CatalogueAgent[], setUp: Set
     if (entry && cardState(entry) === 'ready' && entry.addable) out.push({ entry, reason: 'popular' });
   }
   return out.slice(0, max);
+}
+
+/** What a plugin's teammate does, for "Nobody makes pictures yet". */
+const PLUGIN_WORK: Record<string, string> = {
+  image: 'makes pictures',
+  finance: 'keeps your books',
+  calendar: 'looks after your days',
+  email: 'reads your mail',
+};
+
+/** "Nobody makes pictures yet", or "Nobody uses Weather yet" for a plugin without words of its own. */
+export function nobodyLine(plugin: string, title?: string): string {
+  const work = PLUGIN_WORK[plugin];
+  return work ? `Nobody ${work} yet` : `Nobody uses ${title ?? plugin.charAt(0).toUpperCase() + plugin.slice(1)} yet`;
+}
+
+/**
+ * The catalogue agent that would use a plugin nobody on the team uses: one
+ * whose `requires` names the plugin, not added yet, while no added catalogue
+ * agent requires it either. Undefined when the plugin is used or has none.
+ */
+export function teammateForPlugin(agents: readonly CatalogueAgent[], plugin: string): CatalogueAgent | undefined {
+  const using = agents.filter((a) => Object.keys(a.requires ?? {}).includes(plugin));
+  if (using.some((a) => cardState(a) !== 'ready' && cardState(a) !== 'unavailable')) return undefined;
+  return using.find((a) => cardState(a) === 'ready');
+}
+
+/** Every loaded plugin's missing teammate, in the order the plugins are listed. */
+export function pluginTeammates(agents: readonly CatalogueAgent[], loaded: ReadonlySet<string>): Array<{ plugin: string; entry: CatalogueAgent }> {
+  const out: Array<{ plugin: string; entry: CatalogueAgent }> = [];
+  for (const plugin of loaded) {
+    const entry = teammateForPlugin(agents, plugin);
+    if (entry && !out.some((o) => o.entry.name === entry.name)) out.push({ plugin, entry });
+  }
+  return out;
+}
+
+/** The Home slot a missing teammate's × closes, for that agent. */
+export const teammateSlot = (plugin: string): string => `teammate:${plugin}`;
+
+/**
+ * At the top of a plugin's settings page whose teammate is not on the team:
+ * "Nobody makes pictures yet · Add Illustrator", Add opening the catalogue's
+ * install sheet here. Nothing once one is added, or when the catalogue cannot
+ * be read.
+ */
+export function PluginTeammatePanel({ plugin, title, navigate }: { plugin: string; title?: string; navigate: (route: string) => void }): JSX.Element | null {
+  const [entry, setEntry] = useState<CatalogueAgent | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.catalogue())
+      .then((v) => { if (!cancelled) setEntry(v.unavailable ? null : teammateForPlugin(v.agents, plugin) ?? null); })
+      .catch(() => { if (!cancelled) setEntry(null); });
+    return () => {
+      cancelled = true;
+    };
+  }, [plugin]);
+  if (!entry || added) return null;
+  return (
+    <>
+      <Notice action={<Button size="sm" onClick={() => setAdding(true)}>Add {entry.title}</Button>}>
+        <span data-testid="plugin-teammate">{nobodyLine(plugin, title)}</span>
+      </Notice>
+      {adding ? (
+        <InstallSheet
+          entry={entry}
+          navigate={navigate}
+          onClose={() => setAdding(false)}
+          onAdded={() => {
+            setAdded(true);
+            window.dispatchEvent(new Event(AGENTS_CHANGED));
+          }}
+        />
+      ) : null}
+    </>
+  );
 }
 
 /**
@@ -166,7 +247,23 @@ export function CatPickBlocked({ suggestion, onFix }: { suggestion: Suggestion; 
 }
 
 /** A suggestion as a compact card (Home): face, title, pitch, Add on the right. */
-export function CatSuggest({ entry, added, onOpen, onAdd }: { entry: CatalogueAgent; added: boolean; onOpen: () => void; onAdd: () => void }): JSX.Element {
+export function CatSuggest({
+  entry,
+  added,
+  onOpen,
+  onAdd,
+  why,
+  onDismiss,
+}: {
+  entry: CatalogueAgent;
+  added: boolean;
+  onOpen: () => void;
+  onAdd: () => void;
+  /** Why it is here, when it is a plugin's missing teammate: "Nobody makes pictures yet". */
+  why?: string;
+  /** Its ×: not this one (Home keeps it closed). */
+  onDismiss?: () => void;
+}): JSX.Element {
   return (
     <div
       className="cat-suggest"
@@ -179,7 +276,10 @@ export function CatSuggest({ entry, added, onOpen, onAdd }: { entry: CatalogueAg
     >
       <CatFace entry={entry} size="lg" />
       <span className="cat-pick-text">
-        <span className="cat-pick-name">{entry.title}</span>
+        <span className="cat-pick-name">
+          {entry.title}
+          {why ? <span className="cat-pick-why">{why}</span> : null}
+        </span>
         <span className="cat-pick-pitch">{entry.pitch}</span>
       </span>
       {added ? (
@@ -187,15 +287,38 @@ export function CatSuggest({ entry, added, onOpen, onAdd }: { entry: CatalogueAg
       ) : (
         <Button size="sm" variant="accent" aria-label={`Add ${entry.title}`} onClick={(e) => { e.stopPropagation(); onAdd(); }}>Add</Button>
       )}
+      {onDismiss ? (
+        <button
+          type="button"
+          className="ui-icon-btn"
+          data-size="sm"
+          aria-label={`Not now: ${entry.title}`}
+          title="Not now"
+          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+        >
+          <Icon name="close" />
+        </button>
+      ) : null}
     </div>
   );
 }
 
 /**
- * Home's suggestions while the team is new: three cards, each with Add (the
- * install sheet opens here). Nothing when the catalogue cannot be read.
+ * Home's suggestions. While the team is new: three cards from what was set up,
+ * each with Add (the install sheet opens here). At any time: the teammate of a
+ * loaded plugin nobody uses (Image and no Illustrator), first, with its × —
+ * until it is added or closed. Nothing when the catalogue cannot be read.
  */
-export function HomeSuggestions({ navigate }: { navigate: (route: string) => void }): JSX.Element | null {
+export function HomeSuggestions({
+  navigate,
+  newTeam = true,
+  closed,
+}: {
+  navigate: (route: string) => void;
+  newTeam?: boolean;
+  /** Home's own closed slots (`useHomeClosed`): a missing teammate's × is kept by the installation. */
+  closed?: { is: (slot: string, token: string) => boolean; close: (slot: string, token: string) => void };
+}): JSX.Element | null {
   const [listed, setListed] = useState<CatalogueAgent[] | null>(null);
   const [adding, setAdding] = useState<CatalogueAgent | null>(null);
   const [added, setAdded] = useState<string[]>([]);
@@ -210,26 +333,42 @@ export function HomeSuggestions({ navigate }: { navigate: (route: string) => voi
       cancelled = true;
     };
   }, []);
+  // A plugin with no teammate on the team comes first, not closed for that agent.
+  const missing = useMemo(
+    () => (listed === null ? [] : pluginTeammates(listed, loaded).filter((m) => !closed?.is(teammateSlot(m.plugin), m.entry.name))),
+    [listed, loaded, closed],
+  );
   // What was set up, as this installation shows it: a day's plugins and a mailbox are the default
   // reading; Finance and Image count once they are loaded.
-  const view = useMemo(
-    () => (listed === null ? null : suggestFrom(listed, { days: true, mailbox: true, money: loaded.has('finance'), pictures: loaded.has('image') }, 3)),
-    [listed, loaded],
-  );
+  const view = useMemo(() => {
+    if (listed === null) return null;
+    const first = missing.map((m) => m.entry);
+    if (!newTeam) return first;
+    const rest = suggestFrom(listed, { days: true, mailbox: true, money: loaded.has('finance'), pictures: loaded.has('image') }, 3).filter(
+      (e) => !first.some((f) => f.name === e.name),
+    );
+    return [...first, ...rest].slice(0, Math.max(3, first.length));
+  }, [listed, loaded, missing, newTeam]);
   if (!view || view.length === 0) return null;
   return (
     <>
       <p className="cat-suggest-lede">Teammates who could take a job off your hands, from what you set up:</p>
       <div className="cat-suggests" data-testid="home-suggestions">
-        {view.map((entry) => (
-          <CatSuggest
-            key={entry.name}
-            entry={entry}
-            added={added.includes(entry.name)}
-            onOpen={() => navigate(catalogueRoute(entry.name))}
-            onAdd={() => setAdding(entry)}
-          />
-        ))}
+        {view.map((entry) => {
+          const forPlugin = missing.find((m) => m.entry.name === entry.name);
+          return (
+            <CatSuggest
+              key={entry.name}
+              entry={entry}
+              added={added.includes(entry.name)}
+              onOpen={() => navigate(catalogueRoute(entry.name))}
+              onAdd={() => setAdding(entry)}
+              {...(forPlugin && closed && !added.includes(entry.name)
+                ? { onDismiss: () => closed.close(teammateSlot(forPlugin.plugin), entry.name), why: nobodyLine(forPlugin.plugin) }
+                : {})}
+            />
+          );
+        })}
       </div>
       {adding ? (
         <InstallSheet
@@ -247,11 +386,39 @@ export function HomeSuggestions({ navigate }: { navigate: (route: string) => voi
 }
 
 /**
+ * Who is on the team now, by name, for the handover's card: every agent the
+ * roster holds except the maker (the door to settings, not a teammate). Read
+ * again when an agent joins (Mail Triage with the mailbox, Add these here).
+ */
+export function useTeamNames(): string[] | null {
+  const [team, setTeam] = useState<string[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const read = (): void => {
+      Promise.resolve()
+        .then(() => chatApi.agents())
+        .then((view) => {
+          if (!cancelled) setTeam((view?.agents ?? []).filter((a) => !a.roles.includes(ROLE_MAKER)).map((a) => a.name));
+        })
+        .catch(() => { if (!cancelled) setTeam((now) => now ?? []); });
+    };
+    read();
+    window.addEventListener(AGENTS_CHANGED, read);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(AGENTS_CHANGED, read);
+    };
+  }, []);
+  return team;
+}
+
+/**
  * The first-run handover's card: "Who do you want on your team?", the
  * suggestions ticked, Add these adds the ticked ones in one go (their plugins
  * are already in), See all teammates opens the catalogue.
  */
 export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (route: string) => void }): JSX.Element | null {
+  const team = useTeamNames();
   const [offered, setOffered] = useState<Suggestion[] | null>(null);
   const [ticked, setTicked] = useState<string[]>([]);
   const [phase, setPhase] = useState<'picking' | 'adding' | 'added'>('picking');
@@ -274,7 +441,14 @@ export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (rou
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  if (!offered || offered.length === 0) return null;
+  const onTeam = team ?? [];
+  if (!offered || (offered.length === 0 && onTeam.length === 0)) return null;
+  // Already here: the assistant, and Mail Triage when chapter 4's mailbox brought it in.
+  const teamLine = onTeam.length === 0 ? null : (
+    <p className="cat-small" data-testid="handover-team-now">
+      On your team: {and(onTeam)}.
+    </p>
+  );
   // Only the ones Add can bring in now are ticked and counted; a blocked pick shows its step instead.
   const suggested = offered.filter((s) => !s.blocked).map((s) => s.entry);
   const fromSetUp = offered.some((s) => !s.blocked && s.reason !== 'popular');
@@ -332,13 +506,17 @@ export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (rou
       ) : (
         <>
           <div className="handover-team-head">
-            <h2 className="handover-team-title">Who do you want on your team?</h2>
-            <p className="cat-small">
-              {fromSetUp
-                ? 'Picked from what you just set up. Their plugins are already in, so one click adds them all.'
-                : 'A few teammates people often start with. One click adds the ones you tick.'}
-            </p>
+            <h2 className="handover-team-title">{offered.length === 0 ? 'Your team' : 'Who do you want on your team?'}</h2>
+            {teamLine}
+            {offered.length === 0 ? null : (
+              <p className="cat-small">
+                {fromSetUp
+                  ? 'Picked from what you just set up. Their plugins are already in, so one click adds them all.'
+                  : 'A few teammates people often start with. One click adds the ones you tick.'}
+              </p>
+            )}
           </div>
+          {offered.length === 0 ? null : (<>
           <div className="cat-picks">
             {offered.map((s) =>
               s.blocked ? (
@@ -361,6 +539,7 @@ export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (rou
               <Button variant="accent" disabled={count === 0 || phase === 'adding' || suggested.length === 0} onClick={() => void add()}>{label}</Button>
             </Toolbar>
           </div>
+          </>)}
         </>
       )}
     </section>
