@@ -137,7 +137,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
     method: 'PUT', path: '/api/lock/settings', area: 'session', token: 'access',
     summary: 'Lock after, background and clock.',
     body: "{ delayMinutes?: 1|5|15|60|null, background?: string, clock?: { time, date, zone } }",
-    answer: 'the lock state', errors: '400 a value out of range; 409 the picture background with no picture',
+    answer: 'the lock state', errors: '400 a value out of range, or a picture:<id> not in backgrounds/manifest.json; 409 the picture background with no picture',
   },
   {
     method: 'GET', path: '/api/lock/background', area: 'session', whileLocked: true, kind: 'bytes',
@@ -150,7 +150,20 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'DELETE', path: '/api/lock/background', area: 'session', token: 'access',
-    summary: 'Remove the lock screen picture (the background goes back to a built-in one).', answer: 'the lock state',
+    summary: 'Remove the lock screen picture and its portrait version (the background goes back to a built-in one).', answer: 'the lock state',
+  },
+  {
+    method: 'GET', path: '/api/lock/background/portrait', area: 'session', whileLocked: true, kind: 'bytes',
+    summary: "The portrait version of the lock screen's own picture, drawn on a phone, as JPEG.", answer: 'image/jpeg, with an ETag', errors: '404 there is none',
+  },
+  {
+    method: 'POST', path: '/api/lock/background/portrait', area: 'session', kind: 'upload', token: 'access',
+    summary: 'Upload a portrait version of the lock screen picture for phones.', body: 'multipart/form-data with one image file, at most 10 MB',
+    answer: 'the lock state', errors: '409 no picture yet; 413 too large; 415 not a picture',
+  },
+  {
+    method: 'DELETE', path: '/api/lock/background/portrait', area: 'session', token: 'access',
+    summary: 'Remove the portrait version (phones show the picture itself).', answer: 'the lock state',
   },
   {
     method: 'GET', path: '/api/access', area: 'session',
@@ -1357,6 +1370,9 @@ export const API_SINCE: Readonly<Record<string, string>> = {
   'GET /api/lock/background': '0.1.0-pre.29',
   'POST /api/lock/background': '0.1.0-pre.29',
   'DELETE /api/lock/background': '0.1.0-pre.29',
+  'GET /api/lock/background/portrait': '0.1.0-pre.44',
+  'POST /api/lock/background/portrait': '0.1.0-pre.44',
+  'DELETE /api/lock/background/portrait': '0.1.0-pre.44',
   'GET /api/api-tokens': '0.1.0-pre.29',
   'POST /api/api-tokens': '0.1.0-pre.29',
   'DELETE /api/api-tokens/:id': '0.1.0-pre.29',

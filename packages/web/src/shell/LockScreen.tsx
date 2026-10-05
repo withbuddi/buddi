@@ -22,6 +22,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, isUnreachable, type FocusState, type LockBackground, type LockClockView, type LockScreenData, type LockState } from '../api';
 import { earthSource } from './earth';
+import { ownImageSource, pictureIdOf, pictureSource, useLockPictures } from './backgrounds';
 import { useMediaQuery } from '../useMediaQuery';
 import { useMinute } from './useMinute';
 import { WidgetBodyView } from '../views/parts/WidgetBody';
@@ -42,6 +43,8 @@ export function lockBackgroundOf(background: LockBackground | undefined, image: 
 
 /** A phone: the glance first, then the pad. */
 export const LOCK_PHONE_QUERY = '(max-width: 720px)';
+/** A tall screen: a picture's portrait file, when it has one. */
+export const LOCK_PORTRAIT_QUERY = '(orientation: portrait)';
 /** How often the lock screen asks again: the time, the counts, an unlock elsewhere. */
 export const LOCK_SCREEN_POLL_MS = 30_000;
 /** Refocused or restored at least this long after the last ask: ask again at once. */
@@ -319,6 +322,7 @@ export interface LockFaceData {
   timezone: string;
   background: LockState['background'];
   image: string | null;
+  imagePortrait?: string | null;
   focus: FocusState | null;
   approvals: number;
   needs: number;
@@ -327,11 +331,51 @@ export interface LockFaceData {
 }
 
 /**
+ * What the face stands on. Earth and the owner's picture are photos under a
+ * scrim; a shipped picture takes the file for the screen's shape
+ * (shell/backgrounds.ts) — a portrait-only one on a wide screen stands whole
+ * in the middle of the field — and the field shows until the list is read.
+ * The colours are the field itself.
+ */
+function LockGround({ background, image, imagePortrait, phone, portrait }: { background: LockBackground; image: string | null | undefined; imagePortrait: string | null | undefined; phone: boolean; portrait: boolean }): JSX.Element {
+  const pictureId = pictureIdOf(background);
+  const pictures = useLockPictures(pictureId !== null);
+  if (background === 'earth' || (pictureId !== null && pictures !== null && !pictures.some((p) => p.id === pictureId))) {
+    return (
+      <div className="lk-ground" aria-hidden="true">
+        <img className="lk-photo" data-earth="true" src={earthSource(phone)} alt="" decoding="async" />
+        <div className="lk-scrim" />
+      </div>
+    );
+  }
+  if (background === 'image' && image) {
+    return (
+      <div className="lk-ground" aria-hidden="true">
+        <img className="lk-photo" src={ownImageSource(image, imagePortrait, portrait)} alt="" />
+        <div className="lk-scrim" />
+      </div>
+    );
+  }
+  const picture = pictureId !== null ? pictures?.find((p) => p.id === pictureId) : undefined;
+  if (picture) {
+    const { src, fit } = pictureSource(picture, portrait);
+    return (
+      <div className={fit === 'contain' ? 'ui-fieldbg lk-ground' : 'lk-ground'} data-fit={fit} aria-hidden="true">
+        <img className="lk-photo" data-fit={fit} data-picture={picture.id} src={src} alt="" decoding="async" />
+        <div className="lk-scrim" />
+      </div>
+    );
+  }
+  return <div className="ui-fieldbg lk-ground" aria-hidden="true" />;
+}
+
+/**
  * The face: the ground, the top line, the clock, the counts and the widgets.
  * The lock screen draws it over the unlock; the editor's preview draws it
- * alone, scaled.
+ * alone, scaled. `portrait` says the screen is tall (a phone's file); it
+ * follows `phone` unless given.
  */
-export function LockFace({ data, now, phone, pad = false, after, onPick }: { data: LockFaceData | null; now: Date; phone: boolean; pad?: boolean; after?: LockAfter | null; onPick?: (next: LockAfter | null) => void }): JSX.Element {
+export function LockFace({ data, now, phone, portrait = phone, pad = false, after, onPick }: { data: LockFaceData | null; now: Date; phone: boolean; portrait?: boolean; pad?: boolean; after?: LockAfter | null; onPick?: (next: LockAfter | null) => void }): JSX.Element {
   const timezone = data?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const clock = lockClockText(now, timezone, data?.clockView);
   const background = lockBackgroundOf(data?.background, data?.image);
@@ -339,19 +383,7 @@ export function LockFace({ data, now, phone, pad = false, after, onPick }: { dat
   const focusText = focus ? inLockFormats(data?.clockView, () => (phone ? capital(focusUntilLabel(focus, timezone, now)) : `${FOCUS_LABELS[focus.mode]} ${focusUntilLabel(focus, timezone, now)}`)) : '';
   return (
     <>
-      {background === 'earth' ? (
-        <div className="lk-ground" aria-hidden="true">
-          <img className="lk-photo" data-earth="true" src={earthSource(phone)} alt="" decoding="async" />
-          <div className="lk-scrim" />
-        </div>
-      ) : background === 'image' && data?.image ? (
-        <div className="lk-ground" aria-hidden="true">
-          <img className="lk-photo" src={data.image} alt="" />
-          <div className="lk-scrim" />
-        </div>
-      ) : (
-        <div className="ui-fieldbg lk-ground" aria-hidden="true" />
-      )}
+      <LockGround background={background} image={data?.image} imagePortrait={data?.imagePortrait} phone={phone} portrait={portrait} />
       <header className="lk-top">
         <span className="lk-brand"><Mark size="sm" /><span>buddi</span></span>
         <span className="lk-top-spacer" />
@@ -395,6 +427,8 @@ function Pad({ value, disabled, onDigit, onBack, onSubmit }: { value: string; di
 
 export function LockScreen({ initial, onUnlocked }: { initial: LockState | null; onUnlocked: (state: LockState) => void }): JSX.Element {
   const phone = useMediaQuery(LOCK_PHONE_QUERY);
+  // The picture follows how the screen is held: a phone on its side gets the landscape file.
+  const tall = useMediaQuery(LOCK_PORTRAIT_QUERY) || phone;
   const now = useMinute();
   const [data, setData] = useState<LockScreenData | null>(null);
   const state: LockState | null = data ?? initial;
@@ -549,7 +583,7 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
       aria-label="buddi is locked"
       data-testid="lock-screen"
     >
-      <LockFace data={data ?? (state ? { ...emptyFace(state) } : null)} now={now} phone={phone} pad={pad} after={after} onPick={pick} />
+      <LockFace data={data ?? (state ? { ...emptyFace(state) } : null)} now={now} phone={phone} portrait={tall} pad={pad} after={after} onPick={pick} />
 
       <footer className="lk-unlock">
         {phone && !pad ? (
@@ -619,5 +653,5 @@ function capital(text: string): string {
 
 /** The face before the first answer: the state's ground, nothing else yet. */
 function emptyFace(state: LockState): LockFaceData {
-  return { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, background: state.background, image: state.image, focus: null, approvals: 0, needs: 0, widgets: [] };
+  return { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, background: state.background, image: state.image, imagePortrait: state.imagePortrait ?? null, focus: null, approvals: 0, needs: 0, widgets: [] };
 }

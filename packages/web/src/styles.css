@@ -4232,10 +4232,15 @@ a.wg-body:focus-visible { outline: none; border-radius: var(--radius); box-shado
 [data-theme='dark'] .lk[data-bg='sea'] { --field-a: #12606a; --field-b: #1d4f9c; --field-c: #0f4a44; --field-base: #0a191d; }
 [data-theme='dark'] .lk[data-bg='moss'] { --field-a: #3d6129; --field-b: #5f5626; --field-c: #22503a; --field-base: #0f170f; }
 [data-theme='dark'] .lk[data-bg='dusk'] { --field-a: #4b3a9c; --field-b: #7a3366; --field-c: #2c3f8f; --field-base: #120f22; }
-/* The owner's picture: light ink over a scrim, whatever the theme. */
-.lk[data-bg='image'], .lk[data-bg='earth'] { color-scheme: dark; --text: #f4f7fb; --text-muted: rgb(244 247 251 / 80%); --text-faint: rgb(244 247 251 / 62%); --surface: #101b2e; --surface-sunken: rgb(255 255 255 / 10%); --line: rgb(255 255 255 / 22%); --accent: #7db3ff; --accent-contrast: #0b1426; --accent-soft: rgb(125 179 255 / 18%); --critical: #ff9e93; --field-base: #101b2e;
+/* The owner's picture and the shipped ones: light ink over a scrim, whatever the theme. */
+.lk[data-bg='image'], .lk[data-bg='earth'], .lk[data-bg^='picture:'] { color-scheme: dark; --text: #f4f7fb; --text-muted: rgb(244 247 251 / 80%); --text-faint: rgb(244 247 251 / 62%); --surface: #101b2e; --surface-sunken: rgb(255 255 255 / 10%); --line: rgb(255 255 255 / 22%); --accent: #7db3ff; --accent-contrast: #0b1426; --accent-soft: rgb(125 179 255 / 18%); --critical: #ff9e93; --field-base: #101b2e;
   --lk-glass: rgb(16 27 46 / 46%); --lk-glass-line: rgb(255 255 255 / 18%); }
-.lk[data-bg='image'] .lk-time, .lk[data-bg='image'] .lk-date, .lk[data-bg='earth'] .lk-time, .lk[data-bg='earth'] .lk-date { text-shadow: 0 1px var(--space-4) rgb(0 0 0 / 30%); }
+.lk[data-bg='image'] .lk-time, .lk[data-bg='image'] .lk-date, .lk[data-bg='earth'] .lk-time, .lk[data-bg='earth'] .lk-date,
+.lk[data-bg^='picture:'] .lk-time, .lk[data-bg^='picture:'] .lk-date { text-shadow: 0 1px var(--space-4) rgb(0 0 0 / 30%); }
+/* A portrait-only picture on a wide screen: whole, in the middle, its sides fading into Buddi's dark field. */
+.lk-ground[data-fit='contain'] { --field-a: #1d4f9c; --field-b: #6b4a2a; --field-c: #173a70; --field-base: #0c1627; --field-opacity: 0.75; }
+.lk-photo[data-fit='contain'] { left: 50%; right: auto; width: auto; max-width: 100%; transform: translateX(-50%);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
 /* Earth, the default: a photo that ships with buddi, the same in light and dark.
        Until it loads, the ground is the photo's own colours — deep space over the
        blue limb and the land, tilted like its horizon. The dark sky carries the
@@ -4352,6 +4357,10 @@ body:has(.lk) .ui-modal { z-index: 62; }
 .lk-pref[data-off='true'] .ui-tabs, .lk-pref[data-off='true'] .ui-segment { opacity: 0.5; pointer-events: none; }
 .lk-kbd { display: inline-block; padding: 0 var(--space-1); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-sunken); font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text); }
 .lk-swatches { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+/* Background: Colours, then Pictures, each a labelled row. */
+.lk-bg-rows { display: flex; flex-direction: column; gap: var(--space-4); }
+.lk-bg-row { display: flex; flex-direction: column; gap: var(--space-2); }
+.lk-bg-row-label { margin: 0; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-muted); }
 .lk-swatch { position: relative; display: flex; flex-direction: column; align-items: center; gap: var(--space-1); padding: 0; border: 0; background: none; color: var(--text-muted); font: inherit; font-size: var(--text-xs); cursor: pointer; }
 .lk-swatch > img, .lk-swatch-field { display: block; width: calc(var(--space-12) + var(--space-6)); aspect-ratio: 4 / 3; border: 1px solid var(--line); border-radius: var(--radius); object-fit: cover; box-shadow: 0 0 0 0 var(--accent); transition: box-shadow var(--dur-fast) var(--ease); }
 .lk-swatch-field { background: var(--field-base); background-image: radial-gradient(70% 80% at 62% 18%, var(--field-a), transparent 70%), radial-gradient(60% 70% at 92% 82%, var(--field-b), transparent 70%), radial-gradient(55% 65% at 8% 96%, var(--field-c), transparent 72%); }
@@ -4366,6 +4375,8 @@ body:has(.lk) .ui-modal { z-index: 62; }
 .lk-swatch-field[data-kind='add'] { display: inline-flex; align-items: center; justify-content: center; border-style: dashed; border-color: var(--line-strong); background: var(--surface); background-image: none; color: var(--text-muted); }
 .lk-swatch[aria-pressed='true'] > img, .lk-swatch[aria-pressed='true'] .lk-swatch-field { box-shadow: 0 0 0 var(--space-0) var(--surface), 0 0 0 calc(var(--space-0) * 2) var(--accent); }
 .lk-swatch[aria-pressed='true'] .lk-swatch-label { color: var(--text); font-weight: var(--weight-medium); }
+/* A long title wraps under its tile rather than widening the row. */
+.lk-swatch-label { max-width: calc(var(--space-12) + var(--space-6) + var(--space-4)); text-align: center; line-height: var(--leading-tight, 1.25); }
 .lk-credit { flex-basis: 100%; margin: 0; font-size: var(--text-xs); color: var(--text-faint); }
 .lk-credit a { color: var(--text-muted); text-decoration: underline; text-underline-offset: 0.2em; }
 .lk-credit a:hover { color: var(--text); }

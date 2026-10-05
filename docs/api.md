@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-04
+updated: 2026-10-05
 ---
 
 # The HTTP API
@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-322 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+325 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -197,7 +197,10 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 | PUT | `/api/lock/settings` | Lock after, background and clock. | no |
 | GET | `/api/lock/background` | The lock screen's own picture, as JPEG. | yes |
 | POST | `/api/lock/background` | Upload the lock screen picture. | no |
-| DELETE | `/api/lock/background` | Remove the lock screen picture (the background goes back to a built-in one). | no |
+| DELETE | `/api/lock/background` | Remove the lock screen picture and its portrait version (the background goes back to a built-in one). | no |
+| GET | `/api/lock/background/portrait` | The portrait version of the lock screen's own picture, drawn on a phone, as JPEG. | yes |
+| POST | `/api/lock/background/portrait` | Upload a portrait version of the lock screen picture for phones. | no |
+| DELETE | `/api/lock/background/portrait` | Remove the portrait version (phones show the picture itself). | no |
 | GET | `/api/access` | Sign in from elsewhere: every trusted access provider (Tailscale, Cloudflare Access) with its status in one line, and whether this request came through one (the block is then read-only). | yes |
 | GET | `/api/access/tailscale` | Tailscale sign-in: the stored setting, the daemon, and the command that serves this dashboard on the tailnet. | yes |
 | PUT | `/api/access/tailscale` | Turn Tailscale sign-in on or off, for one login. Every Tailscale session ends. | no |
@@ -325,7 +328,7 @@ Lock after, background and clock.
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Body:** `{ delayMinutes?: 1|5|15|60|null, background?: string, clock?: { time, date, zone } }`
 - **Answer:** `the lock state`
-- **Errors:** 400 a value out of range; 409 the picture background with no picture
+- **Errors:** 400 a value out of range, or a picture:<id> not in backgrounds/manifest.json; 409 the picture background with no picture
 - **Since:** 0.1.0-pre.29
 
 ```sh
@@ -363,7 +366,7 @@ curl -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -F "file=@.
 
 #### `DELETE /api/lock/background`
 
-Remove the lock screen picture (the background goes back to a built-in one).
+Remove the lock screen picture and its portrait version (the background goes back to a built-in one).
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Answer:** `the lock state`
@@ -371,6 +374,47 @@ Remove the lock screen picture (the background goes back to a built-in one).
 
 ```sh
 curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/lock/background"
+```
+
+#### `GET /api/lock/background/portrait`
+
+The portrait version of the lock screen's own picture, drawn on a phone, as JPEG.
+
+- **Auth:** Session or API token; answered while locked.
+- **Kind:** bytes, not JSON
+- **Answer:** `image/jpeg, with an ETag`
+- **Errors:** 404 there is none
+- **Since:** 0.1.0-pre.44
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/lock/background/portrait" -o out
+```
+
+#### `POST /api/lock/background/portrait`
+
+Upload a portrait version of the lock screen picture for phones.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Kind:** an upload
+- **Body:** `multipart/form-data with one image file, at most 10 MB`
+- **Answer:** `the lock state`
+- **Errors:** 409 no picture yet; 413 too large; 415 not a picture
+- **Since:** 0.1.0-pre.44
+
+```sh
+curl -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -F "file=@./file" "$BUDDI_URL/api/lock/background/portrait"
+```
+
+#### `DELETE /api/lock/background/portrait`
+
+Remove the portrait version (phones show the picture itself).
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
+- **Answer:** `the lock state`
+- **Since:** 0.1.0-pre.44
+
+```sh
+curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/lock/background/portrait"
 ```
 
 #### `GET /api/access`

@@ -5,6 +5,7 @@ What changes in buddi from one release to the next, newest first.
 ## Unreleased
 
 - Cloudflare Access, "Set it up for me": buddi now runs Cloudflare's connector itself, as part of its own service, so the last step is "Starting the connector…" then "Connected" — no `sudo` command to copy. If cloudflared isn't installed, buddi downloads Cloudflare's official release and checks it against Cloudflare's published checksum before running it (or install it with `brew install cloudflared`). If an earlier setup left Cloudflare's system service on this computer, the step says so, explains why two connectors would fight, and gives the one line that removes it — or choose "Use the system daemon instead". Remove what buddi made stops the connector and deletes the copy of cloudflared buddi downloaded.
+- The lock screen has two new pictures: Peoria autumn waterfront and Golden streak. Settings → Lock screen → Background now shows Colours and Pictures as two rows, with the chosen picture's credit underneath. Phones get a picture's portrait version when it has one. Your own picture can have a second, portrait version for phones too.
 - Plugins now learn which of your model accounts can listen and speak: an OpenAI key and Gemini can, a ChatGPT subscription and Claude can't, and Ollama or another compatible server is "try it and see". Settings → Speech uses this to offer only accounts that work, with the reason beside the ones that don't. (Host API 1.30.)
 ### Added
 

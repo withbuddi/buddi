@@ -46,7 +46,30 @@ export const DEFAULT_LOCK_DELAY: LockDelay = 5;
  * are gradients, `image` is the owner's picture.
  */
 export const LOCK_BACKGROUNDS = ['earth', 'field', 'dawn', 'sea', 'moss', 'dusk', 'image'] as const;
-export type LockBackground = (typeof LOCK_BACKGROUNDS)[number];
+/**
+ * One of the pictures the dashboard ships beside Earth
+ * (`packages/web/public/backgrounds/manifest.json`), by its manifest id:
+ * `picture:peoria-autumn-waterfront`. Core keeps any well-formed one; the
+ * gateway checks it against the manifest when it is picked and reads one the
+ * manifest no longer lists as the default.
+ */
+export type LockPictureBackground = `picture:${string}`;
+export type LockBackground = (typeof LOCK_BACKGROUNDS)[number] | LockPictureBackground;
+/** A manifest id: lower-case words joined by hyphens. */
+export const LOCK_PICTURE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const PICTURE_PREFIX = 'picture:';
+
+/** The manifest id of a picture background, or null for any other value. */
+export function lockPictureId(background: unknown): string | null {
+  if (typeof background !== 'string' || !background.startsWith(PICTURE_PREFIX)) return null;
+  const id = background.slice(PICTURE_PREFIX.length);
+  return id.length <= 64 && LOCK_PICTURE_ID.test(id) ? id : null;
+}
+
+/** A background the settings may hold: a built-in one or a well-formed picture. */
+export function isLockBackground(value: unknown): value is LockBackground {
+  return (LOCK_BACKGROUNDS as readonly unknown[]).includes(value) || lockPictureId(value) !== null;
+}
 /** What the lock screen is drawn on until the owner picks another. */
 export const DEFAULT_LOCK_BACKGROUND: LockBackground = 'earth';
 /**
@@ -205,7 +228,7 @@ export async function readLockSettings(db: Queryable): Promise<LockSettings> {
   const value = (await readWebSetting<Partial<Record<string, unknown>>>(db, LOCK_SETTINGS_KEY)) ?? {};
   const delay = value.delayMinutes;
   const background = value.background;
-  const picked = (LOCK_BACKGROUNDS as readonly unknown[]).includes(background) && (background !== 'field' || value.v === LOCK_SETTINGS_VERSION);
+  const picked = isLockBackground(background) && (background !== 'field' || value.v === LOCK_SETTINGS_VERSION);
   return {
     delayMinutes: delay === null ? null : (LOCK_DELAYS as readonly unknown[]).includes(delay) ? (delay as LockDelay) : DEFAULT_LOCK_DELAY,
     background: picked ? (background as LockBackground) : DEFAULT_LOCK_BACKGROUND,
