@@ -436,7 +436,9 @@ export const Composer = forwardRef<ComposerHandle, {
    * old bargain — type it, wait, type it again — and it cost the owner the
    * one minute in which saying "actually, in euros" is worth anything.
    */
-  const canSend = !disabled && !uploading && !filesWait && text.trim() !== '';
+  // Files alone are a message too: three statements need no words to go with them.
+  const holdingReady = attachments.some((attachment) => attachment.state === 'ready' && attachment.uploaded);
+  const canSend = !disabled && !uploading && !filesWait && (text.trim() !== '' || holdingReady);
 
   /** Upload files as they arrive; answers each one's tray key. */
   const take = (files: FileList | File[] | null): string[] => {

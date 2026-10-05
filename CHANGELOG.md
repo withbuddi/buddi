@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- The chat sends files on their own: drop three statements, press Enter, and they go with no words needed. An empty box with nothing attached still sends nothing.
+
 ## 0.1.0-pre.45 — 2026-10-05
 
 ### Fixed

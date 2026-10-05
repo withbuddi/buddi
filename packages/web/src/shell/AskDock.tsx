@@ -325,7 +325,17 @@ function DockThread({
   const send = (text: string, attachments: UploadedAttachment[]): void => {
     setSending(true);
     setError(null);
-    const local: ChatMessage = { id: `local-${Date.now()}`, role: 'user', at: new Date().toISOString(), blocks: [{ type: 'text', text }] };
+    const local: ChatMessage = {
+      id: `local-${Date.now()}`,
+      role: 'user',
+      at: new Date().toISOString(),
+      blocks: [
+        ...(text.trim() === '' ? [] : [{ type: 'text' as const, text }]),
+        ...attachments.map((file): ChatMessage['blocks'][number] => ({
+          type: 'attachment', artifactId: file.artifactId, filename: file.filename, mime: file.mime, kind: file.kind, sizeBytes: file.sizeBytes,
+        })),
+      ],
+    };
     setOptimistic((pending) => [...pending, local]);
     void (async () => {
       try {

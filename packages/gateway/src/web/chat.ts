@@ -1398,12 +1398,13 @@ export class WebChat {
     }
 
     const text = request.text.trim();
-    if (text === '') return { ok: false, status: 400, error: '`text` must not be empty' };
+    const attachmentIds = request.attachmentIds ?? [];
+    // Files alone are a message: the words are optional when something rides.
+    if (text === '' && attachmentIds.length === 0) return { ok: false, status: 400, error: '`text` must not be empty' };
     if (text.length > MAX_CHAT_MESSAGE_CHARS) {
       return { ok: false, status: 413, error: `a message may be at most ${MAX_CHAT_MESSAGE_CHARS} characters` };
     }
 
-    const attachmentIds = request.attachmentIds ?? [];
     if (attachmentIds.length > MAX_ATTACHMENTS_PER_MESSAGE) {
       return {
         ok: false,
@@ -1764,9 +1765,9 @@ export class WebChat {
     let group = await getGroup(pool, request.groupId);
     if (!group) return { ok: false, status: 404, error: 'no such group' };
     const text = request.text.trim();
-    if (text === '') return { ok: false, status: 400, error: '`text` must not be empty' };
-    if (text.length > MAX_CHAT_MESSAGE_CHARS) return { ok: false, status: 413, error: `a message may be at most ${MAX_CHAT_MESSAGE_CHARS} characters` };
     const attachmentIds = request.attachmentIds ?? [];
+    if (text === '' && attachmentIds.length === 0) return { ok: false, status: 400, error: '`text` must not be empty' };
+    if (text.length > MAX_CHAT_MESSAGE_CHARS) return { ok: false, status: 413, error: `a message may be at most ${MAX_CHAT_MESSAGE_CHARS} characters` };
     if (attachmentIds.length > MAX_ATTACHMENTS_PER_MESSAGE) return { ok: false, status: 400, error: `at most ${MAX_ATTACHMENTS_PER_MESSAGE} files may ride with one message` };
     const coordinator = this.#deps.catalog.get(group.coordinator);
     if (!coordinator) return { ok: false, status: 409, error: `the coordinator (${group.coordinator}) is not installed` };

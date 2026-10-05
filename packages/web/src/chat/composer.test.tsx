@@ -146,6 +146,56 @@ describe('the composer', () => {
     expect(onSend).toHaveBeenCalledWith('hi', []);
   });
 
+  it('sends files alone, with no words, by the button and by Enter; nothing at all stays unsendable', async () => {
+    let n = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        n += 1;
+        return new Response(
+          JSON.stringify({ artifactId: `art-${n}`, filename: `statement-${n}.csv`, mime: 'text/csv', kind: 'table', sizeBytes: 10 }),
+          { status: 200 },
+        );
+      }),
+    );
+    const onSend = vi.fn();
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={onSend} onStop={() => {}} agentName="Ada" />);
+
+    // An empty box with nothing in the tray has nothing to send.
+    expect(screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled')).toBe(true);
+
+    await act(async () => {
+      dropFile(new File(['a,b'], 'statement-1.csv', { type: 'text/csv' }));
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled')).toBe(false));
+    await act(async () => {
+      screen.getByRole('button', { name: 'Send' }).click();
+    });
+    expect(onSend).toHaveBeenLastCalledWith('', [
+      { artifactId: 'art-1', filename: 'statement-1.csv', mime: 'text/csv', kind: 'table', sizeBytes: 10 },
+    ]);
+    // The tray is empty again, so the button is too.
+    expect(screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled')).toBe(true);
+
+    await act(async () => {
+      dropFile(new File(['c,d'], 'statement-2.csv', { type: 'text/csv' }));
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled')).toBe(false));
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText(/Message Ada/), { key: 'Enter' });
+    });
+    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(onSend).toHaveBeenLastCalledWith('', [
+      { artifactId: 'art-2', filename: 'statement-2.csv', mime: 'text/csv', kind: 'table', sizeBytes: 10 },
+    ]);
+
+    // Enter on an empty box with an empty tray sends nothing.
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText(/Message Ada/), { key: 'Enter' });
+    });
+    expect(onSend).toHaveBeenCalledTimes(2);
+  });
+
   it('will not send while a file is still uploading', async () => {
     let release: ((value: Response) => void) | null = null;
     vi.stubGlobal(

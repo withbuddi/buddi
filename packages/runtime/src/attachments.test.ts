@@ -164,6 +164,33 @@ describe('runAgent with attachments', () => {
     ]);
   });
 
+  it('sends files that came with no words as the files alone, with no empty text block', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider();
+
+    await runAgent({
+      agent,
+      provider,
+      registry: emptyRegistry(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: '',
+      attachments: [{ artifactId: 'pdf-1', mime: 'application/pdf', kind: 'document', filename: 'statement.pdf', sizeBytes: 2048 }],
+      loadArtifact: loader,
+    });
+
+    const stored = db.messages.find((m) => m.role === 'user');
+    expect(stored?.content).toEqual([
+      { type: 'artifact_ref', artifactId: 'pdf-1', mime: 'application/pdf', kind: 'document', filename: 'statement.pdf', sizeBytes: 2048 },
+    ]);
+    expect(provider.calls[0]?.messages.at(-1)?.content).toEqual([
+      { type: 'text', text: '[Attached file: statement.pdf (application/pdf, 2.0 KB), artifact id pdf-1. It is attached to this message.]' },
+      { type: 'document', mime: 'application/pdf', data: PDF_B64 },
+    ]);
+  });
+
   it('rehydrates references when replaying history', async () => {
     const db = new FakeDb();
     const conversationId = await createConversation(db, 'finance');

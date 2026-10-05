@@ -864,7 +864,8 @@ export function ChatPage({
       role: 'user',
       at: new Date().toISOString(),
       blocks: [
-        { type: 'text', text },
+        // Files sent alone carry no words, and no empty bubble stands in for them.
+        ...(text.trim() === '' ? [] : [{ type: 'text' as const, text }]),
         ...attachments.map((file): ChatMessage['blocks'][number] => ({
           type: 'attachment', artifactId: file.artifactId, filename: file.filename, mime: file.mime, kind: file.kind, sizeBytes: file.sizeBytes,
         })),

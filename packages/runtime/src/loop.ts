@@ -985,8 +985,10 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
   // Stored history carries artifact_ref blocks; the provider needs the bytes.
   const replayed = await hydrateMessages(history, opts.loadArtifact);
 
+  // Files sent with no words: the turn is the files alone. Providers refuse an
+  // empty text block, and each file already carries its own note to the model.
   const userBlocks: ContentBlock[] = [
-    { type: 'text', text: openingText },
+    ...(openingText.trim() === '' && attachments.length > 0 ? [] : [{ type: 'text' as const, text: openingText }]),
     ...toArtifactRefBlocks(attachments),
   ];
   const sentUserBlocks = await hydrateContent(userBlocks, opts.loadArtifact, {

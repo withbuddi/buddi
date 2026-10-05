@@ -844,6 +844,32 @@ suite('the dashboard chat API', () => {
     expect(body).toMatchObject({ filename: 'clip.mp4', mime: 'video/mp4' });
   });
 
+  it('takes files with no words, and still refuses a message with neither', async () => {
+    const client = await signedIn();
+    const empty = await client.post(`/api/chat/${AGENT_ID}/messages`, { text: '   ' });
+    expect(empty.status).toBe(400);
+
+    const res = await client.upload('/api/chat/attachments', {
+      name: 'statement.csv',
+      type: 'text/csv',
+      bytes: Buffer.from('date,amount\n2026-10-01,12.50\n'),
+    });
+    const stored = (await res.json()) as any;
+    provider.script = [say('Got the statement.')];
+    const sent = await client.post(`/api/chat/${AGENT_ID}/messages`, { text: '', attachmentIds: [stored.artifactId] });
+    expect(sent.status).toBe(202);
+    const { conversationId } = (await sent.json()) as any;
+    await settled(conversationId);
+
+    // The stored turn is the file alone: no empty words beside it.
+    const transcript = await client.json<any>(`/api/chat/conversations/${conversationId}`);
+    expect(transcript.messages[0].blocks.map((b: any) => b.type)).toEqual(['attachment']);
+    // The model is sent the file's note, never an empty text block.
+    const userTurn = provider.seen[0]?.messages.at(-1) as any;
+    expect(userTurn.content.every((b: any) => b.type !== 'text' || b.text.trim() !== '')).toBe(true);
+    expect(JSON.stringify(userTurn)).toContain(stored.artifactId);
+  });
+
   it('refuses a message naming an attachment that does not exist', async () => {
     const client = await signedIn();
     const res = await client.post(`/api/chat/${AGENT_ID}/messages`, {
