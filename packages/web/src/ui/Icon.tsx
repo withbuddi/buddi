@@ -101,6 +101,8 @@ const GLYPHS = {
 
   // ---- the thread ----
   thought: [13, 1.4, <><path d="M4.2 9.6a3.6 3.6 0 1 1 4.6 0v1.2H4.2z" /><path d="M5.2 12.2h2.6" /></>],
+  // A four-point spark, and a small one beside it: the composer's Thinking switch.
+  spark: [16, 1.5, <><path d="M7 2.6c.5 2.6 1.4 3.5 4 4-2.6.5-3.5 1.4-4 4-.5-2.6-1.4-3.5-4-4 2.6-.5 3.5-1.4 4-4Z" /><path d="M12.2 10.4c.2 1 .6 1.4 1.6 1.6-1 .2-1.4.6-1.6 1.6-.2-1-.6-1.4-1.6-1.6 1-.2 1.4-.6 1.6-1.6Z" /></>],
   chevron: [11, 1.5, <path d="M2.8 4.2 5.5 6.9l2.7-2.7" />],
   arrow: [13, 1.5, <path d="M4.8 2.6 9 6.5l-4.2 3.9" />],
   // The page window's own buttons (the Page tab), in the inline 16px hand.

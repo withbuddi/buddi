@@ -901,16 +901,19 @@ export const Composer = forwardRef<ComposerHandle, {
               <Icon name="camera" />
             </button>}
 
+            {/* The model stays on the row: it cuts its name short before
+                anything else gives way, and a narrow box says only the short
+                name ("sonnet-5"). The whole name is on hover. */}
             {model && !phone ? (
               setupHref ? (
-                <a className="wb-composer-model" href={setupHref} title="The model this agent runs on. Click to change it.">
+                <a className="wb-composer-model" href={setupHref} title={`${model} — the model this agent runs on. Click to change it.`}>
                   <span className="wb-composer-model-dot" aria-hidden="true" />
-                  <span className="wb-composer-chip-label">{model}</span>
+                  <ModelName model={model} />
                 </a>
               ) : (
-                <span className="wb-composer-model" title="The model this agent runs on">
+                <span className="wb-composer-model" title={`${model} — the model this agent runs on`}>
                   <span className="wb-composer-model-dot" aria-hidden="true" />
-                  <span className="wb-composer-chip-label">{model}</span>
+                  <ModelName model={model} />
                 </span>
               )
             ) : null}
@@ -924,23 +927,25 @@ export const Composer = forwardRef<ComposerHandle, {
               changing the file mid-flight would say something that is not true
               of the answer being written — so it waits, and says why.
             */}
+            {/* An icon with its lamp: it takes no width the model needs, and
+                the dot still says which way it is set at a glance. */}
             {onThinking ? (
               <button
                 type="button"
-                className="wb-composer-think"
+                className="ui-icon-btn wb-composer-thinking"
+                data-size="sm"
+                aria-label="Thinking"
                 aria-pressed={thinkingOn(thinking)}
                 disabled={disabled || running}
                 title={
                   running
-                    ? `Wait for ${agentName} to finish — this run started with thinking ${thinkingOn(thinking) ? 'on' : 'off'}`
-                    : thinkingOn(thinking)
-                      ? 'Reasoning before the answer is on. Click to turn it off — answers come back faster.'
-                      : 'Reasoning before the answer is off. Click to turn it on.'
+                    ? `Thinking: ${thinkingOn(thinking) ? 'on' : 'off'} — wait for ${agentName} to finish to change it`
+                    : `Thinking: ${thinkingOn(thinking) ? 'on' : 'off'}`
                 }
                 onClick={() => onThinking(thinkingOn(thinking) ? 'off' : 'on')}
               >
+                <Icon name="spark" />
                 <span className="wb-composer-think-dot" aria-hidden="true" />
-                <span className="wb-composer-chip-label">Thinking</span>
               </button>
             ) : null}
 
@@ -1021,6 +1026,28 @@ export const Composer = forwardRef<ComposerHandle, {
     </div>
   );
 });
+
+/**
+ * The name a narrow chip can afford: no provider path, no `claude-` (every
+ * Claude model has it, so it tells nothing apart), no date stamp.
+ * `anthropic/claude-sonnet-5-20260901` → `sonnet-5`.
+ */
+export function shortModelName(model: string): string {
+  const bare = model.slice(model.lastIndexOf('/') + 1).replace(/[:@].*$/, '');
+  const short = bare.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+  return short === '' ? model : short;
+}
+
+/** Both names, so the stylesheet can pick by the box's width without a measure. */
+function ModelName({ model }: { model: string }): JSX.Element {
+  const short = shortModelName(model);
+  return (
+    <>
+      <span className="wb-composer-chip-label wb-composer-model-full">{model}</span>
+      <span className="wb-composer-chip-label wb-composer-model-short" aria-hidden="true">{short}</span>
+    </>
+  );
+}
 
 /** Absent means the model's own default, and every model here thinks by default. */
 function thinkingOn(thinking: 'on' | 'off' | null | undefined): boolean {

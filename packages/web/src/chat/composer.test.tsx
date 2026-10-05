@@ -268,7 +268,7 @@ describe('the thinking switch', () => {
     draw({ thinking: 'on', running: true, onThinking });
     const toggle = screen.getByRole('button', { name: 'Thinking' });
     expect((toggle as HTMLButtonElement).disabled).toBe(true);
-    expect(toggle.getAttribute('title')).toContain('Wait for Ada to finish');
+    expect(toggle.getAttribute('title')).toContain('wait for Ada to finish');
     toggle.click();
     expect(onThinking).not.toHaveBeenCalled();
   });
@@ -562,8 +562,119 @@ describe('the send button beside every chip', () => {
     expect(rule('.wb-composer-chip-label')).toMatch(/text-overflow: ellipsis/);
     expect(rule(".wb-composer-row > .wb-send, .wb-composer-row > .ui-btn[data-variant='stop']")).toMatch(/flex: 0 0 auto/);
     expect(styles).toMatch(/\.wb-composer-box \{ container-type: inline-size; \}/);
-    expect(styles).toMatch(/@container \(max-width: \d+px\) \{\s*\.wb-composer-row > \.wb-composer-model \{ display: none; \}/);
     expect(styles).toMatch(/@container \(max-width: \d+px\) \{\s*\.wb-composer-chip-lead \{ display: none; \}/);
     expect(styles).not.toMatch(/\.cv \.wb-composer-model \{[^}]*flex: 0 0 auto/);
+    // The model gives way first and stops at 72px; nothing in the sheet hides it.
+    expect(rule('.wb-composer-row > .wb-composer-model')).toMatch(/flex-shrink: 4; min-width: calc\(var\(--space-12\) \+ var\(--space-6\)\)/);
+    expect(styles).not.toMatch(/\.cv \.wb-composer-model \{[^}]*min-width: 0/);
+  });
+});
+
+/**
+ * The row at three composer widths. jsdom has no container queries, so the
+ * test does what the browser would: it takes the `@container (max-width: N)`
+ * blocks that apply at a width, lays them over the base sheet, and asks
+ * what is shown. 520: everything says its whole name. 420: "Use my Chrome"
+ * says "Chrome", the model still says its whole name (cut short by the box
+ * if it must). 360: the model says its short name. At every width the model
+ * is there, Thinking is an icon, and Send is the last thing, never shrunk.
+ */
+function containerBlocks(sheet: string): Array<{ max: number; body: string; whole: string }> {
+  const blocks: Array<{ max: number; body: string; whole: string }> = [];
+  const head = /@container \(max-width: (\d+)px\) \{/g;
+  let match: RegExpExecArray | null;
+  while ((match = head.exec(sheet)) !== null) {
+    let depth = 1;
+    let at = head.lastIndex;
+    while (depth > 0 && at < sheet.length) {
+      if (sheet[at] === '{') depth += 1;
+      if (sheet[at] === '}') depth -= 1;
+      at += 1;
+    }
+    blocks.push({ max: Number(match[1]), body: sheet.slice(head.lastIndex, at - 1), whole: sheet.slice(match.index, at) });
+  }
+  return blocks;
+}
+
+describe('the composer row at 520, 420 and 360 px', () => {
+  const blocks = containerBlocks(styles);
+  const base = blocks.reduce((sheet, block) => sheet.replace(block.whole, ''), styles);
+
+  const drawAt = (width: number): (() => void) => {
+    const style = document.createElement('style');
+    style.textContent = `${base}\n${blocks.filter((block) => width <= block.max).map((block) => block.body).join('\n')}`;
+    document.head.appendChild(style);
+    render(
+      <div style={{ width }}>
+        <Composer
+          disabled={false}
+          running={false}
+          onSend={() => {}}
+          onStop={() => {}}
+          agentName="Ada"
+          model="claude-sonnet-5"
+          setupHref="/agents/ada/setup"
+          thinking="off"
+          onThinking={() => {}}
+          chrome={{ on: false, onChange: () => {} }}
+        />
+      </div>,
+    );
+    return () => style.remove();
+  };
+
+  const common = (): void => {
+    const model = screen.getByRole('link', { name: /claude-sonnet-5/ });
+    expect(model).toBeVisible();
+    const thinking = screen.getByRole('button', { name: 'Thinking' });
+    expect(thinking).toHaveClass('ui-icon-btn');
+    expect(thinking.title).toBe('Thinking: off');
+    expect(thinking.getAttribute('aria-pressed')).toBe('false');
+    expect(thinking.textContent).toBe('');
+    expect(screen.getByRole('button', { name: /Chrome/ })).toBeVisible();
+    const send = screen.getByRole('button', { name: 'Send' });
+    expect(send).toBeVisible();
+    expect((send.parentElement as HTMLElement).lastElementChild).toBe(send);
+    expect(getComputedStyle(send).flexShrink).toBe('0');
+    // No width hides the model.
+    for (const block of blocks) expect(block.body).not.toMatch(/\.wb-composer-model(?![-\w])[^{]*\{[^}]*display: none/);
+  };
+
+  it('520: the whole model name and "Use my Chrome"', () => {
+    const done = drawAt(520);
+    try {
+      common();
+      expect(screen.getByText('claude-sonnet-5')).toBeVisible();
+      expect(screen.getByText('sonnet-5')).not.toBeVisible();
+      expect(screen.getByText('Use my')).toBeVisible();
+    } finally { done(); }
+  });
+
+  it('420: "Chrome" alone; the model keeps its whole name', () => {
+    const done = drawAt(420);
+    try {
+      common();
+      expect(screen.getByText('claude-sonnet-5')).toBeVisible();
+      expect(screen.getByText('sonnet-5')).not.toBeVisible();
+      expect(screen.getByText('Use my')).not.toBeVisible();
+    } finally { done(); }
+  });
+
+  it('360: the model says its short name', () => {
+    const done = drawAt(360);
+    try {
+      common();
+      expect(screen.getByText('claude-sonnet-5')).not.toBeVisible();
+      expect(screen.getByText('sonnet-5')).toBeVisible();
+      expect(screen.getByText('Use my')).not.toBeVisible();
+    } finally { done(); }
+  });
+
+  it('shortens model names the way the chip needs', async () => {
+    const { shortModelName } = await import('./Composer');
+    expect(shortModelName('claude-sonnet-5')).toBe('sonnet-5');
+    expect(shortModelName('anthropic/claude-opus-5-5-20260901')).toBe('opus-5-5');
+    expect(shortModelName('gpt-5.1-codex')).toBe('gpt-5.1-codex');
+    expect(shortModelName('ollama/llama3:8b')).toBe('llama3');
   });
 });

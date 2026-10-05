@@ -1759,21 +1759,34 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-composer-think[aria-pressed='true'] .wb-composer-think-dot { background: var(--accent); border-color: var(--accent); }
 .wb-hint[data-tone='critical'] { color: var(--critical); white-space: normal; overflow: visible; text-overflow: clip; }
 
-/* Send is never pushed out of the box. The chips give way first: they shrink
-   and cut their words short, then a narrow box (the corner chat, a squeezed
-   column) drops the model chip and says "Chrome" for "Use my Chrome". Send
-   and Stop keep their size, at the end of the row. */
+/* Send is never pushed out of the box. The chips give way first: the model
+   cuts its name short (never under 72px, and it gives way before the Chrome
+   chip does), a narrow box (the corner chat, a squeezed column) says
+   "Chrome" for "Use my Chrome", and under 380px the model says only its short
+   name. Nothing hides the model. Send and Stop keep their size, at the end of
+   the row; the icon buttons keep theirs. */
 .wb-composer-box { container-type: inline-size; }
 .wb-composer-model, .wb-composer-think { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.wb-composer-row > .wb-composer-model { flex-shrink: 4; min-width: calc(var(--space-12) + var(--space-6)); }
 .wb-composer-chip-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wb-composer-model-short { display: none; }
 .wb-composer-row > .wb-send, .wb-composer-row > .ui-btn[data-variant='stop'] { flex: 0 0 auto; }
+.wb-composer-row > .ui-icon-btn, .wb-composer-row > .wb-mic { flex: 0 0 auto; }
 .wb-composer-row > .wb-send { margin-left: auto; }
-@container (max-width: 560px) {
-  .wb-composer-row > .wb-composer-model { display: none; }
-}
 @container (max-width: 440px) {
   .wb-composer-chip-lead { display: none; }
 }
+@container (max-width: 380px) {
+  .wb-composer-model-full { display: none; }
+  .wb-composer-model-short { display: inline; }
+}
+
+/* Thinking as an icon, with the same lamp the chips had: hollow off, filled on. */
+.wb-composer-thinking { position: relative; }
+.wb-composer-thinking .wb-composer-think-dot { position: absolute; top: var(--space-0); right: var(--space-0); width: calc(var(--space-1) + var(--space-0)); height: calc(var(--space-1) + var(--space-0)); background: var(--surface); }
+.wb-composer-thinking[aria-pressed='true'] { color: var(--text); }
+.wb-composer-thinking[aria-pressed='true'] .wb-composer-think-dot { background: var(--accent); border-color: var(--accent); }
+.wb-composer-thinking:disabled { opacity: 0.5; cursor: default; }
 
 /* ---- talking to buddi: the microphone and the speaker ---- */
 
@@ -5187,7 +5200,7 @@ button.lk-chip:disabled { cursor: default; }
 .cv[data-phone='true'] .wb-composer-row { gap: var(--space-1); }
 .cv[data-phone='true'] .cv-note { flex-wrap: wrap; }
 
-.cv .wb-composer-model { white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+.cv .wb-composer-model { white-space: nowrap; }
 .cv-hint { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity var(--dur-fast) ease; }
 .cv-hint[data-shown='true'] { opacity: 1; }
 .cv:not([data-phone='true']) .cv-pop { right: auto; width: min(100%, calc(var(--space-12) * 10)); }
