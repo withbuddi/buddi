@@ -30,25 +30,68 @@ export function wakesSentence(plugins: readonly TakeOnPlugin[]): string {
   return `${titles(plugins)} ${plugins.length === 1 ? 'is' : 'are'} installed; ${plugins.length === 1 ? 'it wakes' : 'they wake'} up after a restart.`;
 }
 
+/** First run as the shell read it: finished (done or skipped), still open, or not read yet. */
+export type OnboardingPhase = 'done' | 'open' | 'unknown';
+
+/** Where this device keeps whether the handover's progress had a plugin waiting for a restart. */
+export const HANDOVER_WAKES_KEY = 'buddi.handoverWakes';
+
+/** Keep whether these plugins have one waiting for a restart. Never throws. */
+export function noteHandoverWakes(plugins: readonly TakeOnPlugin[]): void {
+  try {
+    window.localStorage.setItem(HANDOVER_WAKES_KEY, waitingForRestart(plugins).length > 0 ? '1' : '0');
+  } catch {
+    /* storage refused: Home reads the progress again, which is only slower */
+  }
+}
+
+/** Whether the handover's progress is known to have had nothing waiting. */
+function handoverHadNoWakes(): boolean {
+  try {
+    return window.localStorage.getItem(HANDOVER_WAKES_KEY) === '0';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The notice. Given `plugins` (the handover has the progress already) it draws
  * those; without, it reads the progress once itself (Home).
+ *
+ * Only first run's take-on marks a plugin `wakesOnRestart`. So once first run
+ * is finished and its progress was seen with nothing waiting, Home does not
+ * ask again: there is nothing left that could appear. Until the shell has
+ * read first run's state, it waits rather than ask early.
  */
-export function WakesAfterRestart({ plugins }: { plugins?: readonly TakeOnPlugin[] }): JSX.Element | null {
+export function WakesAfterRestart({ plugins, onboarding = 'open' }: { plugins?: readonly TakeOnPlugin[]; onboarding?: OnboardingPhase }): JSX.Element | null {
   const [read, setRead] = useState<TakeOnPlugin[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
-    if (plugins !== undefined) return undefined;
+    if (plugins !== undefined) {
+      // An empty list may only be progress not read yet: Home finds out itself.
+      if (plugins.length > 0) noteHandoverWakes(plugins);
+      return undefined;
+    }
+    if (onboarding === 'unknown') return undefined;
+    if (onboarding === 'done' && handoverHadNoWakes()) {
+      setRead([]);
+      return undefined;
+    }
     let cancelled = false;
     Promise.resolve()
       .then(() => api.takeOnProgress())
-      .then((view) => { if (!cancelled) setRead(view?.plugins ?? []); })
+      .then((view) => {
+        if (cancelled) return;
+        const found = view?.plugins ?? [];
+        setRead(found);
+        if (onboarding === 'done') noteHandoverWakes(found);
+      })
       .catch(() => { if (!cancelled) setRead([]); });
     return () => {
       cancelled = true;
     };
-  }, [plugins]);
+  }, [plugins, onboarding]);
   const waiting = waitingForRestart(plugins ?? read ?? []);
   if (waiting.length === 0) return null;
   const restart = (): void => {

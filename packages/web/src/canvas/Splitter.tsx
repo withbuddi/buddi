@@ -12,7 +12,7 @@
  * The arithmetic is in `split-math.ts`.
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { bounds, CHAT_MIN, dragWidth, keyWidth, saveWidth } from './split-math';
+import { bounds, CHAT_MIN, dragWidth, fitWidth, keyWidth, saveWidth, sharedRoom } from './split-math';
 
 export const WIDTH_VAR = '--wb-chat-w';
 
@@ -40,7 +40,9 @@ export function Splitter({
     const column = columnRef.current;
     const canvas = handle.current?.nextElementSibling as HTMLElement | null | undefined;
     const current = column?.getBoundingClientRect().width || column?.offsetWidth || width || CHAT_MIN;
-    const shared = (column?.getBoundingClientRect().width ?? 0) + (canvas?.getBoundingClientRect().width ?? 0);
+    const parent = column?.parentElement;
+    const overflow = parent ? parent.scrollWidth - parent.clientWidth : 0;
+    const shared = sharedRoom(column?.getBoundingClientRect().width ?? 0, canvas?.getBoundingClientRect().width ?? 0, overflow);
     return { shared, current, left: column?.getBoundingClientRect().left ?? 0 };
   };
 
@@ -80,6 +82,34 @@ export function Splitter({
     document.documentElement.removeAttribute('data-resizing');
     if (state.next !== null) commit(state.next);
   };
+
+  /*
+   * When the room changes under a committed width (the window narrows, a
+   * rail opens), the column is drawn at what fits — never wider than leaves
+   * the canvas its minimum — and the committed width is kept, so it comes
+   * back when the room does. Nothing is saved: the owner did not move it.
+   */
+  useEffect(() => {
+    if (width === null) return;
+    const parent = columnRef.current?.parentElement;
+    if (!parent) return;
+    const fit = (): void => {
+      if (drag.current) return;
+      const { shared } = measure();
+      if (shared <= 0) return;
+      const drawn = fitWidth(width, shared);
+      paint(drawn);
+      setMetrics({ now: drawn, max: bounds(shared).max });
+    };
+    fit();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
+    observer?.observe(parent);
+    window.addEventListener('resize', fit);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', fit);
+    };
+  }, [width]);
 
   // A drag that outlives the component (the canvas became a sheet) is let go.
   useEffect(() => () => {

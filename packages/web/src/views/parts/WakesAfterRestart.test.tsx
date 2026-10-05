@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api } from '../../api';
-import { WakesAfterRestart, wakesSentence } from './WakesAfterRestart';
+import { HANDOVER_WAKES_KEY, WakesAfterRestart, wakesSentence } from './WakesAfterRestart';
 
 vi.mock('../../api', async (load) => {
   const real = await load<typeof import('../../api')>();
@@ -35,5 +35,37 @@ describe('a plugin that wakes up after a restart', () => {
     const { container } = render(<WakesAfterRestart />);
     await waitFor(() => expect(api.takeOnProgress).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('skips the read once first run is finished and its progress had nothing waiting', async () => {
+    window.localStorage.removeItem(HANDOVER_WAKES_KEY);
+    vi.mocked(api.takeOnProgress).mockReset().mockResolvedValue({ tiles: ['days'], plugins: [weather], running: false, waiting: [] });
+    // Not read yet: it waits for the shell rather than asking early.
+    const first = render(<WakesAfterRestart onboarding="unknown" />);
+    await Promise.resolve();
+    expect(api.takeOnProgress).not.toHaveBeenCalled();
+    first.unmount();
+    // The handover saw its progress: nothing waiting.
+    render(<WakesAfterRestart plugins={[weather]} />).unmount();
+    expect(window.localStorage.getItem(HANDOVER_WAKES_KEY)).toBe('0');
+    const { container } = render(<WakesAfterRestart onboarding="done" />);
+    await Promise.resolve();
+    expect(api.takeOnProgress).not.toHaveBeenCalled();
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('still reads after first run when the handover had a plugin waiting, or was never seen here', async () => {
+    vi.mocked(api.takeOnProgress).mockReset().mockResolvedValue({ tiles: ['days'], plugins: [calendar], running: false, waiting: [] });
+    render(<WakesAfterRestart plugins={[calendar]} />).unmount();
+    expect(window.localStorage.getItem(HANDOVER_WAKES_KEY)).toBe('1');
+    const once = render(<WakesAfterRestart onboarding="done" />);
+    expect(await screen.findByText(/Calendar is installed/)).toBeInTheDocument();
+    once.unmount();
+    window.localStorage.removeItem(HANDOVER_WAKES_KEY);
+    vi.mocked(api.takeOnProgress).mockResolvedValue({ tiles: ['days'], plugins: [weather], running: false, waiting: [] });
+    render(<WakesAfterRestart onboarding="done" />);
+    await waitFor(() => expect(api.takeOnProgress).toHaveBeenCalledTimes(2));
+    // What it found is kept, so the next Home does not ask.
+    await waitFor(() => expect(window.localStorage.getItem(HANDOVER_WAKES_KEY)).toBe('0'));
   });
 });

@@ -29,6 +29,25 @@ export function bounds(shared: number): { min: number; max: number } {
   return { min: CHAT_MIN, max: Math.max(CHAT_MIN, Math.round(shared) - CANVAS_MIN) };
 }
 
+/**
+ * The room the two panes share, from what is drawn: the column, the canvas,
+ * less whatever spills past their container. A sized column does not shrink,
+ * so when the window narrows under it the canvas stops at its minimum and the
+ * rest spills over; taking the spill off is what tells the real room.
+ */
+export function sharedRoom(column: number, canvas: number, overflow: number): number {
+  return Math.max(0, Math.round(column + canvas - Math.max(0, overflow)));
+}
+
+/**
+ * The width a committed width is drawn at in this much room: itself when
+ * both panes fit, else held inside both minimums. The committed width is
+ * not changed, so the column comes back to it when the room does.
+ */
+export function fitWidth(committed: number, shared: number): number {
+  return clamp(committed, shared);
+}
+
 /** A width both panes can live with. Without a measure (0), only the floor holds. */
 export function clamp(width: number, shared: number): number {
   const { min, max } = bounds(shared);

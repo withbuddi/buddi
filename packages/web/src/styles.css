@@ -1910,7 +1910,10 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 
 /* ---- the canvas ---- */
 
-.wb-chat[data-sized='true'] { flex: 0 1 auto; min-width: calc(var(--space-10) * 8); max-width: none; width: var(--wb-chat-w); }
+/* A sized column is exactly its width: it does not shrink against the
+   canvas's basis, or near the minimum it would draw narrower than asked.
+   When the room narrows, the grip re-draws it at what fits (`Splitter`). */
+.wb-chat[data-sized='true'] { flex: 0 0 auto; min-width: calc(var(--space-10) * 8); max-width: none; width: var(--wb-chat-w); }
 
 .wb-canvas {
   flex: 1 1 380px;

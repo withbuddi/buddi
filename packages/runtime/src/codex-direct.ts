@@ -35,8 +35,13 @@ import { SseParser, frameJson } from './sse.js';
 import { defaultHttpTransport, type HttpTransport, type TransportResponse } from './transport.js';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api';
-export const CODEX_DEFAULT_MODEL = 'gpt-6.1-sol';
-export const CODEX_FALLBACK_MODELS = [CODEX_DEFAULT_MODEL, 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'] as const;
+/**
+ * What a ChatGPT account starts on when it will not say: `gpt-5.5`, which every
+ * plan serves. A newer default answered 400 on plans without it; the picker
+ * suggests a newer model when the account's own list has it.
+ */
+export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
+export const CODEX_FALLBACK_MODELS = ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', CODEX_DEFAULT_MODEL] as const;
 /**
  * The Codex CLI version the model list is asked for. The backend filters the
  * list by it, so a stale number hides new models; a network test in

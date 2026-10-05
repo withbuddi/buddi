@@ -5,18 +5,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { ApiError, api } from '../../api';
+import { ApiError, api, chatApi } from '../../api';
 import { BankSheet, CalendarSheet, MailboxSheet, SHEETS, SIGN_IN_PREPARE_MS, nameForLink } from './FirstRunSheets';
 
 vi.mock('../../api', async (load) => {
   const real = await load<typeof import('../../api')>();
-  return { ...real, api: { ...real.api, pageQuery: vi.fn(), pageAct: vi.fn(), acceptPluginAgent: vi.fn() } };
+  return { ...real, api: { ...real.api, pageQuery: vi.fn(), pageAct: vi.fn(), acceptPluginAgent: vi.fn() }, chatApi: { ...real.chatApi, agents: vi.fn() } };
 });
 
 beforeEach(() => {
   vi.mocked(api.pageQuery).mockReset();
   vi.mocked(api.pageAct).mockReset();
   vi.mocked(api.acceptPluginAgent).mockReset();
+  // A team without Mail Triage, as on a first run.
+  vi.mocked(chatApi.agents).mockReset().mockResolvedValue({ agents: [] } as never);
 });
 
 const sheet = (name: string): Promise<HTMLElement> => screen.findByRole('dialog', { name });
@@ -85,7 +87,7 @@ describe('the mailbox sheet', () => {
     const s = await sheet(SHEETS.mailbox.sheet);
     fireEvent.click(within(s).getByRole('button', { name: /Gmail/ }));
     // Said before the press: one Add it covers the mailbox and its teammate.
-    expect(within(s).getByText(SHEETS.mailbox.brings)).toBeInTheDocument();
+    expect(await within(s).findByText(SHEETS.mailbox.brings)).toBeInTheDocument();
     fireEvent.change(within(s).getByLabelText(SHEETS.mailbox.address), { target: { value: 'amen@gmail.com' } });
     fireEvent.change(within(s).getByLabelText(SHEETS.mailbox.password), { target: { value: 'abcd efgh' } });
     fireEvent.click(within(s).getByRole('button', { name: SHEETS.mailbox.submit }));
@@ -93,6 +95,23 @@ describe('the mailbox sheet', () => {
     expect(api.acceptPluginAgent).toHaveBeenCalledWith('email', 'mail-triage');
     expect(joined).toHaveBeenCalled();
     window.removeEventListener('buddi:agents-changed', joined);
+  });
+
+  it('does not promise Mail Triage when it is already on the team, or when the team cannot be read', async () => {
+    vi.mocked(chatApi.agents).mockResolvedValue({ agents: [{ id: 'mail-triage', handle: 'mail', name: 'Mail Triage', roles: [] }] } as never);
+    const { unmount } = render(<MailboxSheet onClose={vi.fn()} onAdded={vi.fn()} />);
+    let s = await sheet(SHEETS.mailbox.sheet);
+    fireEvent.click(within(s).getByRole('button', { name: /Gmail/ }));
+    await waitFor(() => expect(chatApi.agents).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+    expect(within(s).queryByText(SHEETS.mailbox.brings)).not.toBeInTheDocument();
+    unmount();
+    vi.mocked(chatApi.agents).mockRejectedValue(new Error('offline'));
+    render(<MailboxSheet onClose={vi.fn()} onAdded={vi.fn()} />);
+    s = await sheet(SHEETS.mailbox.sheet);
+    fireEvent.click(within(s).getByRole('button', { name: /Gmail/ }));
+    await act(async () => { await Promise.resolve(); });
+    expect(within(s).queryByText(SHEETS.mailbox.brings)).not.toBeInTheDocument();
   });
 
   it('keeps the mailbox and says where Mail Triage waits when it could not be created', async () => {

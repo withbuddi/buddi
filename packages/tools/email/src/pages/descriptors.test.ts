@@ -142,10 +142,10 @@ describe('the mail pages, as contributions', () => {
   it('refuses a page whose query was renamed on one side only', () => {
     const broken = copy(manifest.pages ?? []);
     const mail = broken.find((p) => p.id === 'mail');
-    (mail as { body: Array<{ query?: { query: string } }> }).body[3]!.query!.query = 'thredz';
+    (mail as { body: Array<{ query?: { query: string } }> }).body[4]!.query!.query = 'thredz';
     const registry = new ToolRegistry();
     expect(() => registry.register({ ...manifest, pages: broken })).toThrow(
-      /plugin email: page mail, body\[3\]\.query\.query: no query called thredz/,
+      /plugin email: page mail, body\[4\]\.query\.query: no query called thredz/,
     );
   });
 

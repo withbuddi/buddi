@@ -11,6 +11,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { OLLAMA_CLOUD_MODEL, api, keyRefused, type AccountRateLimit, type AccountTest, type MlxhProbe, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
+import { CODEX_STARTING_MODEL, codexSuggestion } from '../codex-models';
 import { GEMINI_FALLBACK_MODEL, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
 import { MLXH_IMAGE_MODEL, firstMlxhModel, isMlxhAccount, mlxhNotAnswering, mlxhWindowNote } from '../mlxh';
 import { SignInCode } from './parts/SignInCode';
@@ -440,7 +441,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
           </Field>
         </>}
         <Toolbar valign="end">
-          <ModelPicker key={`${a?.id}:${a?.revision}`} accountId={a?.configured && a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} {...(a?.kind === 'codex' ? { origin: 'from ChatGPT' } : {})} />
+          <ModelPicker key={`${a?.id}:${a?.revision}`} accountId={a?.configured && a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} {...(a?.kind === 'codex' ? { origin: 'from ChatGPT', suggest: codexSuggestion } : {})} />
         </Toolbar>
         <Field label="Context window" hint={isMlxhAccount(a)
           ? 'mlxh refuses a prompt over its max_prompt_tokens, and its model manager does not report the number, so buddi assumes 8,192. After `mlxh config max_prompt_tokens 40960`, enter the same number here.'
@@ -555,7 +556,7 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
  * subscription can be connected. The default model is chosen from a real
  * list, not typed from memory before there is anything to check it against.
  */
-const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: 'gpt-6.1-sol' };
+const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: CODEX_STARTING_MODEL };
 
 /** The name the form proposes for a provider, before the owner touches it. */
 export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAccount['auth'], taken: string[]): string {
@@ -827,7 +828,14 @@ function ModelStep({ account: a, busy, run, anthropicOAuthEnabled, onDone }: { a
         <>
           <p className="ui-page-lede">Pick the model this account offers by default. An agent can still choose another when you assign it.</p>
           <Toolbar valign="end">
-            <ModelPicker key={`${a.id}:${a.revision}`} accountId={a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} {...(a.kind === 'codex' ? { origin: 'from ChatGPT' } : {})} />
+            <ModelPicker key={`${a.id}:${a.revision}`} accountId={a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy}
+              {...(a.kind === 'codex' ? {
+                origin: 'from ChatGPT',
+                suggest: codexSuggestion,
+                // Still on the starting model: the suggestion is picked here,
+                // and saved only by Done.
+                onSuggest: (suggested: string) => setModel((current) => (current === CODEX_STARTING_MODEL && a.defaultModel === CODEX_STARTING_MODEL ? suggested : current)),
+              } : {})} />
           </Toolbar>
           <Toolbar align="end">
             <Button onClick={onDone}>Skip for now</Button>

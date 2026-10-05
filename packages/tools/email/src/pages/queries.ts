@@ -629,10 +629,12 @@ export function accountsQuery(): PageQuery {
 
 /**
  * The Mail page's own read: which mailboxes are connected, and which of them
- * are fresh — connected, and nothing stored yet. A fresh mailbox gets a first
- * state instead of an empty list ("Connected to you@example.com. Reading new
- * mail from now on; 412 older messages left alone."), because "No
- * conversations here" on the day you connect reads as a fault.
+ * are fresh — connected, a first poll finished, and nothing stored yet. A
+ * fresh mailbox gets a first state instead of an empty list ("Connected to
+ * you@example.com. Reading new mail from now on; 412 older messages left
+ * alone."), because "No conversations here" on the day you connect reads as a
+ * fault. Until that first poll has finished nothing is known about what was
+ * left alone, so the page says "Connecting to you@example.com…" instead.
  */
 export function mailStatusQuery(): PageQuery {
   return {
@@ -640,22 +642,39 @@ export function mailStatusQuery(): PageQuery {
     params: noParams,
     async produce(_params, ctx: ToolContext) {
       const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: true });
+      // The conversation list reads every mailbox, a disabled one's retained
+      // conversations included; whether there is mail to list asks the same.
+      const everyId = (await listAccounts(ctx.buddi!.db, { enabledOnly: false })).map((account) => account.id);
       const { rows } = await ctx.buddi!.db.query(
         `select a.id,
                 exists (select 1 from email.messages m where m.account_id = a.id) as stored,
+                (a.last_synced_at is not null
+                  or exists (select 1 from email.folders f
+                              where f.account_id = a.id and f.first_contact_at is not null)) as polled,
                 (select f.left_alone from email.folders f
                   where f.account_id = a.id and f.kind = 'inbox' order by f.first_contact_at nulls last limit 1) as left_alone
            from email.accounts a where a.enabled`,
       );
       const facts = new Map(rows.map((row: Record<string, unknown>) => [String(row.id), row]));
-      const fresh = accounts.filter((account) => facts.get(account.id)?.stored !== true);
-      const hasMail = fresh.length < accounts.length;
+      const empty = accounts.filter((account) => facts.get(account.id)?.stored !== true);
+      const fresh = empty.filter((account) => facts.get(account.id)?.polled === true);
+      const connecting = empty.filter((account) => facts.get(account.id)?.polled !== true);
+      const mail = everyId.length === 0
+        ? { rows: [] }
+        : await ctx.buddi!.db.query(
+            `select exists (select 1 from email.messages where account_id = any($1::uuid[])) as has_mail`,
+            [everyId],
+          );
+      const hasMail = (mail.rows[0] as { has_mail?: unknown } | undefined)?.has_mail === true;
       return {
         connected: accounts.length
           ? `Connected: ${accounts.map((account) => account.address).join(' · ')}`
           : '',
         hasAccounts: accounts.length > 0,
         anyFresh: fresh.length > 0,
+        anyConnecting: connecting.length > 0,
+        connecting: connecting.length > 0 ? connectingLine(connecting.map((account) => account.address)) : '',
+        hasMail,
         // The list is drawn when there is mail to list, or nothing connected
         // at all (its empty sentence is then the honest one).
         showList: hasMail || accounts.length === 0,
@@ -667,6 +686,14 @@ export function mailStatusQuery(): PageQuery {
       };
     },
   };
+}
+
+/** What the page says while a mailbox's first poll has not finished. */
+export function connectingLine(addresses: string[]): string {
+  const list = addresses.length <= 1
+    ? (addresses[0] ?? '')
+    : `${addresses.slice(0, -1).join(', ')} and ${addresses[addresses.length - 1]}`;
+  return `Connecting to ${list}…`;
 }
 
 /** The first-state sentence for one fresh mailbox. */

@@ -209,8 +209,9 @@ describe('Codex model list', () => {
       const out = await listCodexModels({ accessToken: 't', accountId: 'a', transport: send });
       expect(out.truncated).toBe(false);
       expect(out.source).toBe('built-in');
-      expect(CODEX_DEFAULT_MODEL).toBe('gpt-6.1-sol');
-      expect(out.models[0]).toEqual({ id: 'gpt-6.1-sol', name: 'gpt-6.1-sol', isDefault: true });
+      // Every plan serves gpt-5.5; a newer default answered 400 on plans without it.
+      expect(CODEX_DEFAULT_MODEL).toBe('gpt-5.5');
+      expect(out.models.find(m => m.isDefault)).toEqual({ id: 'gpt-5.5', name: 'gpt-5.5', isDefault: true });
       expect(out.models.filter(m => m.isDefault)).toHaveLength(1);
     }
   });

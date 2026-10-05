@@ -625,6 +625,21 @@ describe('a plugin nobody on the team uses', () => {
     await waitFor(() => expect(api.catalogue).toHaveBeenCalledTimes(2));
     expect(screen.queryByTestId('cat-suggest-illustrator')).not.toBeInTheDocument();
   });
+
+  it('stays closed on a new team: the set-up suggestions do not bring it back without its ×', async () => {
+    imageLoaded();
+    // Addable, so the set-up reading (Pictures) would pick it on its own.
+    const ready: CatalogueAgent = { ...ILLUSTRATOR, state: 'ready', addable: true, missing: [] };
+    vi.mocked(api.catalogue).mockResolvedValue({ ...VIEW, agents: VIEW.agents.map((a) => (a.name === 'illustrator' ? ready : a)) });
+    const close = vi.fn();
+    const { unmount } = render(<HomeSuggestions navigate={vi.fn()} newTeam closed={{ is: () => false, close }} />);
+    const art = await screen.findByTestId('cat-suggest-illustrator');
+    expect(within(art).getByRole('button', { name: 'Not now: Illustrator' })).toBeInTheDocument();
+    unmount();
+    render(<HomeSuggestions navigate={vi.fn()} newTeam closed={{ is: (slot, token) => slot === 'teammate:image' && token === 'illustrator', close }} />);
+    await screen.findByTestId('home-suggestions');
+    expect(screen.queryByTestId('cat-suggest-illustrator')).not.toBeInTheDocument();
+  });
 });
 
 describe('remove from team', () => {

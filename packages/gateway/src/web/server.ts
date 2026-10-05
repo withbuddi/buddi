@@ -353,6 +353,8 @@ import {
   type WriteResult,
 } from './write.js';
 
+/** How long one account's connection test answers again instead of calling the provider. */
+const ACCOUNT_TEST_COOLDOWN_MS = 10_000;
 
 /** How often approvals past their expiry are swept, and waiting delegations told. */
 export const EXPIRY_SWEEP_MS = 60_000;
@@ -3569,7 +3571,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           : accountRoute ? accountRoute[2] === 'models'
             ? await deps.providerAccounts.models(decodeURIComponent(accountRoute[1]!), body.refresh === true)
             : accountRoute[2] === 'test'
-            ? await deps.providerAccounts.test(decodeURIComponent(accountRoute[1]!))
+            ? await deps.providerAccounts.test(decodeURIComponent(accountRoute[1]!), { reuseWithinMs: ACCOUNT_TEST_COOLDOWN_MS })
             : accountRoute[2] === 'remove'
               ? await deps.providerAccounts.remove(decodeURIComponent(accountRoute[1]!), body.revision as number)
               : await deps.providerAccounts.codexAction(decodeURIComponent(accountRoute[1]!), accountRoute[2] as 'login' | 'cancel-login' | 'logout', body.revision)

@@ -57,6 +57,10 @@
       "types": "./dist/testing/global-setup.d.ts",
       "default": "./dist/testing/global-setup.js"
     },
+    "./testing/isolated-global-setup": {
+      "types": "./dist/testing/isolated-global-setup.d.ts",
+      "default": "./dist/testing/isolated-global-setup.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {

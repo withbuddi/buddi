@@ -87,7 +87,7 @@ export function MembersSheet({ group, agents, onClose, onSaved }: {
   return (
     <Sheet title="Members" onClose={onClose}>
       <p className="group-lede">
-        {group.name} · {group.members.length} agents. Each keeps its own account, tools and approvals; being here grants nothing.
+        {group.name} · {group.members.length} agents. The coordinator may ask members here; each keeps its own account, tools and approvals.
       </p>
       {orphaned ? <Notice tone="warning">{group.coordinator} coordinated this group and is no longer in buddi. Pick who coordinates now.</Notice> : null}
       {problem ? <Notice tone="critical">{problem}</Notice> : null}

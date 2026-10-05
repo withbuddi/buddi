@@ -25,10 +25,11 @@ import {
 import type { CompletionRequest, CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { testDatabaseUrl } from '@buddi/core/testing';
+import { isolatedTestDatabaseUrl } from '@buddi/core/testing';
 import { startWebServer, type WebServer } from './server.js';
 
-const databaseUrl = await testDatabaseUrl();
+// Isolated: an explicit DATABASE_URL only, never the dev database (55433), the memory vault.
+const databaseUrl = isolatedTestDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_group_runs_${process.pid}`;
 const TOKEN = 'a-test-dashboard-token-long-enough';

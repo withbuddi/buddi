@@ -10,10 +10,14 @@ import { fmtAgo } from './format';
  * Renders as a run of toolbar items, not a block: the field, its refresh
  * button, the custom entry when asked for, and one full-width note beneath.
  */
-export function ModelPicker({ accountId, label, value, onChange, disabled = false, origin = 'from the provider' }: {
+export function ModelPicker({ accountId, label, value, onChange, disabled = false, origin = 'from the provider', suggest, onSuggest }: {
   accountId?: string; label: string; value: string; onChange(value: string): void; disabled?: boolean;
   /** Whose list it is, for the footer when the gateway says where it came from ("from ChatGPT"). */
   origin?: string;
+  /** The model to mark "(suggested)" in a loaded list, if any. */
+  suggest?: (list: Awaited<ReturnType<typeof api.accountModels>>) => string | null;
+  /** Told the suggestion when a list brings one; the parent decides whether to pick it. Nothing is saved. */
+  onSuggest?: (model: string) => void;
 }): JSX.Element {
   const [list, setList] = useState<Awaited<ReturnType<typeof api.accountModels>> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,7 +30,11 @@ export function ModelPicker({ accountId, label, value, onChange, disabled = fals
     setBusy(true); setError('');
     try {
       const next = await api.accountModels(accountId, refresh);
-      if (attempt === sequence.current) setList(next);
+      if (attempt === sequence.current) {
+        setList(next);
+        const suggested = suggest?.(next) ?? null;
+        if (suggested) onSuggest?.(suggested);
+      }
     } catch (e) {
       if (attempt === sequence.current) setError(e instanceof Error ? e.message : 'Could not load models. Custom entry is still available.');
     } finally { if (attempt === sequence.current) setBusy(false); }
@@ -45,6 +53,7 @@ export function ModelPicker({ accountId, label, value, onChange, disabled = fals
     </>
   );
   const models = list?.models ?? [];
+  const suggested = list && suggest ? suggest(list) : null;
   const absent = !!value && !models.some(m => m.id === value);
   const notes = [
     list && !models.length ? 'This account returned no models. You can enter a custom model.' : null,
@@ -62,7 +71,7 @@ export function ModelPicker({ accountId, label, value, onChange, disabled = fals
         }}>
           <option value="" disabled>Choose a model</option>
           {absent && <option value={value}>{value} (current{list ? ', not listed' : ''})</option>}
-          {models.map(m => <option key={m.id} value={m.id}>{m.name === m.id ? m.id : `${m.name} — ${m.id}`}{m.isDefault ? ' (provider default)' : ''}{m.image ? ` — ${MLXH_IMAGE_MODEL}` : ''}</option>)}
+          {models.map(m => <option key={m.id} value={m.id}>{m.name === m.id ? m.id : `${m.name} — ${m.id}`}{m.id === suggested ? ' (suggested)' : m.isDefault ? ' (provider default)' : ''}{m.image ? ` — ${MLXH_IMAGE_MODEL}` : ''}</option>)}
           <option value="__buddi_custom__">Custom model…</option>
         </select>
       </Field>

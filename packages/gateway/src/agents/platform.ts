@@ -2087,6 +2087,20 @@ export function renderGroupUpdate(
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }
 
+/**
+ * What room membership means, said the same way in every tool description and
+ * on every approval card: the coordinator may ask members (group.ask) in the
+ * room's own conversations, and nothing else is granted.
+ */
+export const GROUP_MEMBERSHIP_NOTE =
+  "The coordinator may ask the room's members in that room's conversations; each member keeps its own tools and approvals.";
+
+/** The sentence the owner approves for a new group. */
+export function renderGroupCreate(name: string, coordinator: string, members: string[]): string {
+  const list = members.length <= 1 ? (members[0] ?? '') : `${members.slice(0, -1).join(', ')} and ${members[members.length - 1]}`;
+  return `Create the group "${name}": ${coordinator} coordinates, with ${list}. ${GROUP_MEMBERSHIP_NOTE}`;
+}
+
 export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
   const [catalogueTool, installAgent] = createCatalogueTools(registry, CATALOGUE_HELPERS);
 
@@ -2117,32 +2131,45 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
   const createGroupInput = z.object({
     name: z.string().min(1).max(80).describe('What the team is for, as the owner would say it: "Household finances".'),
     coordinator: z.string().min(1).describe('The agent that reads the owner\'s request and brings members in, by handle or id. Usually the front desk.'),
-    members: z.array(z.string().min(1)).min(1).max(12).describe('The other agents in the room, by handle or id. Membership grants no tool and no access; each keeps its own.'),
+    members: z.array(z.string().min(1)).min(1).max(12).describe(`The other agents in the room, by handle or id. ${GROUP_MEMBERSHIP_NOTE}`),
   }).strict();
+
+  /** The coordinator and members a create_group call names, or a refusal. */
+  const resolveNewGroup = (input: z.infer<typeof createGroupInput>): { coordinator: CatalogAgent; members: CatalogAgent[] } => {
+    const binding = resolved(registry);
+    const find = (ref: string): CatalogAgent | undefined => {
+      const wanted = ref.trim().replace(/^@/, '');
+      return binding.catalog.get(wanted) ?? binding.catalog.byHandle(wanted);
+    };
+    const coordinator = find(input.coordinator);
+    if (!coordinator) throw new PlatformRefusal('unknown-agent', `No installed agent is "${input.coordinator}". Use platform.list_agents.`);
+    const members: CatalogAgent[] = [];
+    for (const ref of input.members) {
+      const agent = find(ref);
+      if (!agent) throw new PlatformRefusal('unknown-agent', `No installed agent is "${ref}". Use platform.list_agents.`);
+      if (agent.id !== coordinator.id && !members.some((m) => m.id === agent.id)) members.push(agent);
+    }
+    if (members.length === 0) throw new PlatformRefusal('too-small', 'A group needs at least one member besides the coordinator.');
+    return { coordinator, members };
+  };
 
   const createGroup: ToolDefinition<z.infer<typeof createGroupInput>, unknown> = {
     name: 'platform.create_group',
     description:
       'Create a group: a named team of installed agents that share one conversation, with one coordinator. ' +
-      'Propose it in words first and create it only when the owner agrees. Membership grants nothing — each member ' +
-      'keeps its own account, tools and approvals — and what is said in the room is seen by the room.',
+      'Propose it in words first and create it only when the owner agrees. ' + GROUP_MEMBERSHIP_NOTE + ' ' +
+      'What is said in the room is seen by the room.',
     tier: 'gated',
     input: createGroupInput,
+    async describe(input) {
+      const { coordinator, members } = resolveNewGroup(input);
+      // The arguments stay the envelope, as they were before this tool had a
+      // preview, so an approval already waiting still matches.
+      return { envelope: input, preview: renderGroupCreate(input.name.trim(), coordinator.name, members.map((m) => m.name)) };
+    },
     async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
-      const find = (ref: string): CatalogAgent | undefined => {
-        const wanted = ref.trim().replace(/^@/, '');
-        return binding.catalog.get(wanted) ?? binding.catalog.byHandle(wanted);
-      };
-      const coordinator = find(input.coordinator);
-      if (!coordinator) throw new PlatformRefusal('unknown-agent', `No installed agent is "${input.coordinator}". Use platform.list_agents.`);
-      const members: CatalogAgent[] = [];
-      for (const ref of input.members) {
-        const agent = find(ref);
-        if (!agent) throw new PlatformRefusal('unknown-agent', `No installed agent is "${ref}". Use platform.list_agents.`);
-        if (agent.id !== coordinator.id && !members.some((m) => m.id === agent.id)) members.push(agent);
-      }
-      if (members.length === 0) throw new PlatformRefusal('too-small', 'A group needs at least one member besides the coordinator.');
+      const { coordinator, members } = resolveNewGroup(input);
       const existing = (await coreListGroups(ctx.db)).find((g) => g.name.trim().toLowerCase() === input.name.trim().toLowerCase());
       if (existing) throw new PlatformRefusal('duplicate-group', `A group called "${existing.name}" already exists.`);
       const group = await coreCreateGroup(ctx.db, { name: input.name.trim(), coordinator: coordinator.id, members: members.map((m) => m.id) });
@@ -2236,13 +2263,16 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       'conversation — a rename is THIS tool, never a new group and an archive. `members` REPLACES the ' +
       'membership, so pass everyone who should be in the room, the coordinator included; a member taken ' +
       'out keeps every turn it already spoke there. The coordinator has to be one of the members, a room ' +
-      'needs somebody besides it, and membership still grants nothing. ' +
+      'needs somebody besides it. ' + GROUP_MEMBERSHIP_NOTE + ' ' +
       CONDUCT,
     tier: 'gated',
     input: updateGroupInput,
     async describe(input, ctx: CoreToolContext) {
       const planned = await planGroupUpdate(input, ctx.db);
-      return { envelope: planned.envelope, preview: renderGroupUpdate(planned.envelope, planned.names) };
+      const { before, after } = planned.envelope;
+      const joins = after.members.some((id) => !before.members.includes(id)) || after.coordinator !== before.coordinator;
+      const sentence = renderGroupUpdate(planned.envelope, planned.names);
+      return { envelope: planned.envelope, preview: joins ? `${sentence}. ${GROUP_MEMBERSHIP_NOTE}` : sentence };
     },
     async execute(input, ctx: CoreToolContext) {
       const planned = await planGroupUpdate(input, ctx.db);

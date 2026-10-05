@@ -10,7 +10,7 @@
  * counters, access per calendar) stays on its own settings page.
  */
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { api, AGENTS_CHANGED, ApiError } from '../../api';
+import { api, chatApi, AGENTS_CHANGED, ApiError } from '../../api';
 import { Button, ButtonLink, Details, Field, Icon, Sheet, Spacer, Toolbar } from '../../ui';
 
 /* ------------------------------------------------------------------ *
@@ -212,6 +212,17 @@ function MailboxForm({
   const [smtpHost, setSmtpHost] = useState('');
   const [state, setState] = useState<{ kind: 'idle' } | { kind: 'busy' } | { kind: 'good'; line: string } | { kind: 'bad'; line: string }>({ kind: 'idle' });
   useCloseAfter(state.kind === 'good', onClose);
+  // Whether the roster lacks Mail Triage: the "brings in" line is a promise,
+  // so it is made only when the team is read and Mail Triage is not on it.
+  const [lacksTriage, setLacksTriage] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => chatApi.agents())
+      .then((view) => { if (!cancelled) setLacksTriage(!(view?.agents ?? []).some((a) => a.id === TRIAGE.agent)); })
+      .catch(() => { if (!cancelled) setLacksTriage(false); });
+    return () => { cancelled = true; };
+  }, []);
   const words = SHEETS.mailbox.providers[provider];
   const how = SHEETS.mailbox.how[provider];
   const ready = address.trim() !== '' && password.trim() !== '' && state.kind !== 'busy' && state.kind !== 'good';
@@ -299,7 +310,7 @@ function MailboxForm({
         {state.kind === 'busy' ? <Line state="busy">{SHEETS.checking}</Line> : null}
         {state.kind === 'good' ? <Line state="good">{state.line}</Line> : null}
         {state.kind === 'bad' ? <Line state="bad">{state.line}</Line> : null}
-        {state.kind === 'idle' ? <p className="frs-later">{SHEETS.mailbox.brings}</p> : null}
+        {state.kind === 'idle' && lacksTriage ? <p className="frs-later">{SHEETS.mailbox.brings}</p> : null}
         <p className="frs-later">{SHEETS.mailbox.later}</p>
       </div>
       <div className="ui-sheet-foot">

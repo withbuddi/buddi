@@ -78,7 +78,7 @@ function GroupForm({ agents, onClose, onCreated }: {
             {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
           </select>
         </Field>
-        <Field label="Members" hint="Each keeps its own account, tools and approvals. Membership grants nothing.">
+        <Field label="Members" hint="The coordinator may ask the room's members in this room's conversations; each member keeps its own account, tools and approvals.">
           <div className="group-pick" role="group" aria-label="Members">
             {agents.filter((agent) => agent.id !== coordinator).map((agent) => (
               <label key={agent.id} className="group-pick-row" data-on={members.includes(agent.id) || undefined}>

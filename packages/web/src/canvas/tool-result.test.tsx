@@ -135,6 +135,17 @@ describe('quiet tools', () => {
     expect(renderablesFrom({ messages, descriptors: [] }).length).toBeGreaterThan(0);
   });
 
+  it('keeps quiet to reads: a write keeps its Canvas tab', () => {
+    for (const write of ['owner.set_profile', 'owner.rename_me', 'owner.finish_onboarding', 'memory.note', 'memory.remember_preference']) {
+      expect(QUIET_TOOLS.has(write)).toBe(false);
+      const tabs = renderablesFrom({ messages: call('w1', write, PROFILE), descriptors: [], quiet: QUIET_TOOLS, titles: OWN_TOOL_TITLES });
+      expect(tabs).toHaveLength(1);
+    }
+    for (const read of ['owner.get_profile', 'memory.recall', 'memory.get_preferences', 'memory.people', 'memory.person', 'platform.list_agents', 'system.time']) {
+      expect(QUIET_TOOLS.has(read)).toBe(true);
+    }
+  });
+
   it('still keeps the tab of a quiet tool that failed', () => {
     const tabs = renderablesFrom({ messages: call('p1', 'owner.get_profile', null, false), descriptors: [], quiet: QUIET_TOOLS, titles: OWN_TOOL_TITLES });
     expect(tabs).toHaveLength(1);

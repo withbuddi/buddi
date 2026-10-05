@@ -45,7 +45,7 @@ import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
 import { HomeSuggestions, teamIsNew } from './parts/CatalogueSuggest';
-import { WakesAfterRestart } from './parts/WakesAfterRestart';
+import { WakesAfterRestart, type OnboardingPhase } from './parts/WakesAfterRestart';
 import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
@@ -67,6 +67,7 @@ export function Home({
   connectionSignals = [],
   hash = '',
   pluginPages,
+  onboarding,
 }: {
   timezone: string;
   /** The page's hash, for `#/?tip=<id>` previews. */
@@ -81,6 +82,8 @@ export function Home({
   connectionSignals?: ConnectionSignal[];
   /** The plugins' pages, read once by the shell: a card names a plugin by its page's title ("Mail"). */
   pluginPages?: PluginPages;
+  /** First run, as the shell read it: what the restart notice needs to skip its read. */
+  onboarding?: OnboardingPhase;
 }): JSX.Element {
   const overview = useAsync<Overview>(() => api.overview(), [], 15_000);
   const approvals = useAsync(() => api.approvals(), [], 10_000);
@@ -344,7 +347,7 @@ export function Home({
       ) : null}
 
       {/* A plugin first run installed that only a restart can load: said, with Restart. */}
-      <WakesAfterRestart />
+      <WakesAfterRestart {...(onboarding ? { onboarding } : {})} />
 
       {/* Small live panels from the plugins, in the owner's order. */}
       <HomeWidgets widgets={widgets} navigate={navigate} />

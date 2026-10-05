@@ -4,6 +4,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api } from './api';
 import { ModelPicker } from './ModelPicker';
+import { CODEX_STARTING_MODEL, codexSuggestion } from './codex-models';
 vi.mock('./api', () => ({ api: { accountModels: vi.fn() } }));
 const list = { models: [{ id: 'terra', name: 'Terra', isDefault: false }, { id: 'astra', name: 'Astra', isDefault: true }], truncated: false };
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.accountModels).mockResolvedValue(list); });
@@ -53,4 +54,25 @@ it('shows no provenance for a list that does not say', async () => {
   render(<Harness />);
   await screen.findByRole('option', { name: /Astra/ });
   expect(screen.queryByTestId('model-list-source')).not.toBeInTheDocument();
+});
+it('starts a ChatGPT account on gpt-5.5 and suggests gpt-6.1-sol only when the fetched list has it, without saving', async () => {
+  expect(CODEX_STARTING_MODEL).toBe('gpt-5.5');
+  const fetched = { models: [{ id: 'gpt-5.5', name: 'gpt-5.5', isDefault: true }, { id: 'gpt-6.1-sol', name: 'gpt-6.1-sol', isDefault: false }], truncated: false, source: 'provider' as const };
+  expect(codexSuggestion(fetched)).toBe('gpt-6.1-sol');
+  // The built-in list names it too, but says nothing about this plan.
+  expect(codexSuggestion({ ...fetched, source: 'built-in' })).toBeNull();
+  expect(codexSuggestion({ ...fetched, models: [fetched.models[0]!] })).toBeNull();
+
+  vi.mocked(api.accountModels).mockResolvedValue(fetched);
+  const picked = vi.fn();
+  function Starting() {
+    const [value, set] = useState(CODEX_STARTING_MODEL);
+    return <ModelPicker accountId="one" label="Model" value={value} onChange={set} suggest={codexSuggestion} onSuggest={(m) => { picked(m); set(m); }} />;
+  }
+  render(<Starting />);
+  expect(await screen.findByRole('option', { name: 'gpt-6.1-sol (suggested)' })).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByLabelText('Model')).toHaveValue('gpt-6.1-sol'));
+  expect(picked).toHaveBeenCalledWith('gpt-6.1-sol');
+  // Chosen in the picker; the picker itself asks for nothing more.
+  expect(api.accountModels).toHaveBeenCalledTimes(1);
 });

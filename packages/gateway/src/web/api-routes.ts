@@ -768,7 +768,12 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   { method: 'POST', path: '/api/provider-accounts/save', area: 'accounts', token: 'secret', summary: 'Add or change an account (a key, an address, a default model).', body: '{ id?, label, kind, apiKey?, baseUrl?, defaultModel, revision? }', errors: '400; 409 changed elsewhere' },
   { method: 'POST', path: '/api/provider-accounts/probe-models', area: 'accounts', summary: 'Ask a provider which models a key or address offers, before saving.', body: '{ kind, apiKey?, baseUrl?, accountId? }' },
-  { method: 'POST', path: '/api/provider-accounts/:id/test', area: 'accounts', summary: 'Test an account: ask its default model to reply "ready" (5 tokens, no tools) and say what came back, how long it took and about how many tokens.' },
+  {
+    method: 'POST', path: '/api/provider-accounts/:id/test', area: 'accounts', token: 'secret',
+    summary: 'Test an account: ask its default model to reply "ready" (5 tokens, no tools) and say what came back, how long it took and about how many tokens. Within 10 s of the last test of the same account, unchanged, the last result is answered again without calling the provider. Changed in 0.1.0-pre.43: refused to API tokens, the 10 s cooldown, and the reply scrubbed of the credential and every stored secret.',
+    answer: '{ state, message, httpStatus, retryAt, checkedAt, model?, reply?, elapsedMs?, tokens?, billing?: "key" | "plan" | null, detail?: string | null }',
+    errors: '400 a ChatGPT subscription; 404; 409 a test already running, or the account changed during it',
+  },
   { method: 'POST', path: '/api/provider-accounts/:id/models', area: 'accounts', summary: 'The account’s models.', body: '{ refresh?: boolean }' },
   { method: 'POST', path: '/api/provider-accounts/:id/remove', area: 'accounts', summary: 'Remove an account.', body: '{ revision: number }', errors: '404; 409 agents still use it, or changed elsewhere' },
   { method: 'POST', path: '/api/provider-accounts/:id/login', area: 'accounts', token: 'secret', summary: 'Start a ChatGPT (Codex) device sign-in.', body: '{ revision? }' },

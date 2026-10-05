@@ -382,6 +382,8 @@ const mail: PageDescriptor = {
         },
       ],
     },
+    // Until a mailbox's first poll has finished, nothing is known about it yet.
+    { kind: 'notice', look: 'quiet', text: { path: 'connecting' }, when: { path: 'anyConnecting', equals: true } },
     /*
      * Four filters and a phrase, and not one more (docs/email.md §9):
      * from, since, until and "has attachments" are the ones that answer a
@@ -391,6 +393,9 @@ const mail: PageDescriptor = {
      */
     {
       kind: 'search',
+      // Searching a mailbox with nothing stored answers nothing: the bar
+      // stands where the list does.
+      when: { path: 'showList', equals: true },
       fields: [
         {
           name: 'q',

@@ -116,6 +116,8 @@ export class ProviderAccounts {
   #bindings = new Map<string, Binding>();
   #configured = new Map<string, boolean>();
   #tests = new Map<string, TestResult>();
+  /** The account revision each kept test result was made against. */
+  #testedRevision = new Map<string, number>();
   #testing = new Set<string>();
   /** Limits a provider set on an account, as of the last load or call. */
   #limits = new Map<string, AccountRateLimit>();
@@ -612,11 +614,19 @@ export class ProviderAccounts {
     };
   }
 
-  async test(id: string): Promise<TestResult> {
+  /**
+   * Test an account. `reuseWithinMs` is the route's cooldown: a result this
+   * recent, for the account as it stands, is answered again rather than
+   * spending another call on the provider.
+   */
+  async test(id: string, options: { reuseWithinMs?: number; now?: number } = {}): Promise<TestResult> {
     if (this.#testing.has(id)) throw new ProviderAccountError(409, 'A connection test is already running for this account.');
     this.#testing.add(id);
     try {
       const row = await this.#row(id);
+      const recent = this.#tests.get(id);
+      if (recent && options.reuseWithinMs && this.#testedRevision.get(id) === row.revision
+        && (options.now ?? Date.now()) - Date.parse(recent.checkedAt) < options.reuseWithinMs) return recent;
       if (row.kind === 'codex') throw new ProviderAccountError(400, 'A ChatGPT subscription has no output-token cap for a connection test. Connect and send a test chat instead.');
       let result: Omit<TestResult, 'checkedAt'>;
       let secret: string | null = null;
@@ -631,7 +641,7 @@ export class ProviderAccounts {
           // a minute for a large one; a hosted provider answers in seconds or not at all.
           tools: [], signal: AbortSignal.timeout(isLocalAccount(row) ? 120_000 : 15_000),
         });
-        result = readyAnswer(row.defaultModel, answer ?? undefined, Math.round(performance.now() - started), billing);
+        result = readyAnswer(row.defaultModel, answer ?? undefined, Math.round(performance.now() - started), billing, secret);
       } catch (error) {
         result = { ...providerDiagnostic(error, { ...diagnosticContext(row), model: row.defaultModel }), model: row.defaultModel, detail: errorDetail(error, secret) };
         await this.#noteLimit(id, error);
@@ -639,7 +649,7 @@ export class ProviderAccounts {
       if (result.state === 'connected') await this.#noteLimit(id, null);
       if ((await this.#row(id)).revision !== row.revision) throw new ProviderAccountError(409, 'Account changed during the test. Test it again.');
       const tested = { ...result, checkedAt: new Date().toISOString() };
-      this.#tests.set(id, tested); return tested;
+      this.#tests.set(id, tested); this.#testedRevision.set(id, row.revision); return tested;
     } finally { this.#testing.delete(id); }
   }
 
@@ -940,8 +950,11 @@ function seconds(ms: number): string {
  * how long it took and roughly what it cost. A reasoning model may spend its
  * five tokens thinking and say nothing; the account still works.
  */
-export function readyAnswer(model: string, answer: CompletionResponse | undefined, elapsedMs: number, billing: 'key' | 'plan' | null): Omit<TestResult, 'checkedAt'> {
-  const text = (answer?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('').replace(/\s+/g, ' ').trim().slice(0, 40);
+export function readyAnswer(model: string, answer: CompletionResponse | undefined, elapsedMs: number, billing: 'key' | 'plan' | null, secret: string | null = null): Omit<TestResult, 'checkedAt'> {
+  // Scrubbed whole, before it is cut: a credential echoed across the cut would
+  // otherwise leave its first characters on the screen.
+  const raw = (answer?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+  const text = scrubbed(raw, secret).replace(/\s+/g, ' ').trim().slice(0, 40);
   const u = answer?.usage;
   const tokens = u ? u.input + u.output + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0) : undefined;
   const said = text ? `it said ‘${text}’ in ${seconds(elapsedMs)}` : `it answered in ${seconds(elapsedMs)}, with no words inside the five-token limit`;
@@ -957,9 +970,14 @@ export function readyAnswer(model: string, answer: CompletionResponse | undefine
 function errorDetail(error: unknown, secret: string | null): string | null {
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   if (!raw) return null;
-  let text = secret ? scrubValueFrom(secret, 'key', raw).text : raw;
-  text = scrubText(text).replace(/\b(sk|sk-ant|AIza|ghp|xox[abp])[-_A-Za-z0-9]{12,}/g, '‹key›').replace(/\s+/g, ' ').trim();
+  const text = scrubbed(raw, secret).replace(/\s+/g, ' ').trim();
   return text.length > 300 ? `${text.slice(0, 299)}…` : text;
+}
+
+/** A provider's text with the account's credential, every stored secret and anything key-shaped taken out. */
+function scrubbed(raw: string, secret: string | null): string {
+  const text = secret ? scrubValueFrom(secret, 'key', raw).text : raw;
+  return scrubText(text).replace(/\b(sk|sk-ant|AIza|ghp|xox[abp])[-_A-Za-z0-9]{12,}/g, '‹key›');
 }
 
 function isLocalAccount(row: { kind: string; baseUrl?: string | null }): boolean {

@@ -474,20 +474,22 @@ suite('the mail pages, over postgres', () => {
       // The Mail page's head and first state, asked of its own mail_status read.
       'mail.body.1.when(hasAccounts)',
       'mail.body.2.when(anyFresh)',
+      'mail.body.3.when(anyConnecting)',
       'mail.body.4.when(showList)',
+      'mail.body.5.when(showList)',
       // An attachment's Fetch and its link, each asked of its own row: the
       // button gives way to the link the moment there is a file.
-      'mail.body.4.0.conversations.0.detail.1.0.1.1.when(artifactId)',
-      'mail.body.4.0.conversations.0.detail.1.0.1.2.when(artifactId)',
+      'mail.body.5.0.conversations.0.detail.1.0.1.1.when(artifactId)',
+      'mail.body.5.0.conversations.0.detail.1.0.1.2.when(artifactId)',
       // The two draft notices, each asked of the draft the editor is about.
-      'mail.body.4.0.conversations.0.detail.2.0.when(unresolved)',
-      'mail.body.4.0.conversations.0.detail.2.1.when(notLive)',
+      'mail.body.5.0.conversations.0.detail.2.0.when(unresolved)',
+      'mail.body.5.0.conversations.0.detail.2.1.when(notLive)',
       // The note "Read the last 7 days" lands on, and the offer of @mail,
       // asked of the settings page's own accounts read.
       'settings.body.2.0.when(anyFresh)',
       'settings.body.2.1.when(triage)',
     ]);
-    expect(roots).toContain('mail.body.4.0.conversations.0.detail.3 → thread');
+    expect(roots).toContain('mail.body.5.0.conversations.0.detail.3 → thread');
   });
 
   /**
@@ -847,6 +849,40 @@ suite('the mail pages, over postgres', () => {
     for (const node of page.body) {
       if (node.when) expect(readPath(fresh, node.when.path), `mail: ${node.when.path}`).not.toBeUndefined();
     }
+  });
+
+  it('says "Connecting to …" until a first poll has finished, never "Connected … left alone"', async () => {
+    await pool.query(
+      'truncate email.drafts, email.policies, email.triage, email.messages, email.threads, email.folders, email.accounts cascade',
+    );
+    const account = await writeGmailAccount(pool, OWNER);
+    const before = await ask('mail_status');
+    expect(before).toMatchObject({
+      anyFresh: false,
+      fresh: [],
+      anyConnecting: true,
+      connecting: `Connecting to ${OWNER}…`,
+      hasMail: false,
+      showList: false,
+    });
+    // The poll finished with nothing stored: now it is fresh, and no longer connecting.
+    await pool.query(`update email.accounts set last_synced_at = $2 where id = $1`, [account.id, clock]);
+    const after = await ask('mail_status');
+    expect(after).toMatchObject({ anyFresh: true, anyConnecting: false, connecting: '' });
+    expect(after.fresh).toHaveLength(1);
+  });
+
+  it('keeps the list (and its search) for a disabled mailbox\'s retained conversations', async () => {
+    // The seeded mailbox has a conversation; turn it off, and connect an empty one.
+    await pool.query(`update email.accounts set enabled = false where address = $1`, [OWNER]);
+    await writeGmailAccount(pool, ADDED);
+    const status = await ask('mail_status');
+    expect(status).toMatchObject({ hasMail: true, showList: true, anyConnecting: true });
+    expect((await ask('threads')).threads.length).toBeGreaterThan(0);
+    // The search bar stands where the list does.
+    const page = emailPageDescriptors.find((p) => p.id === 'mail')!;
+    const search = page.body.find((node) => node.kind === 'search')!;
+    expect(search.when).toEqual({ path: 'showList', equals: true });
   });
 
   it('refuses a password for a mailbox that is not here', async () => {

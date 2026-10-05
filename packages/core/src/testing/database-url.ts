@@ -27,6 +27,7 @@
  */
 import { resolveDatabaseUrl, redactDatabaseUrl } from '../database-url.js';
 import { createVault } from '../vault/index.js';
+import { envValue } from '../vault/resolve.js';
 
 export interface TestDatabase {
   /** The connection string the suites should use, or `null` to skip. */
@@ -88,4 +89,38 @@ export function describeTestDatabase(db: TestDatabase): string {
   }
   const where = db.source === 'env' ? 'environment' : 'vault';
   return `database: ${redactDatabaseUrl(db.url)} (from the ${where}) — DB suites run${note}`;
+}
+
+/** The dev instance's Docker Postgres. No suite may ever point at it. */
+export const DEV_DATABASE_PORT = '55433';
+
+/**
+ * The isolated way to find a test database: an explicit `DATABASE_URL` in the
+ * environment and nothing else. The vault is never asked (a keychain on the
+ * developer's Mac answers with the dev database), the dev instance's port is
+ * refused outright, and a run that has a URL must use the memory vault, so no
+ * suite reads or writes the real keychain. Throws on a refusal: a run pointed
+ * at the wrong database stops, it does not skip.
+ */
+export function isolatedTestDatabase(env: NodeJS.ProcessEnv = process.env): TestDatabase {
+  const url = envValue(env, 'DATABASE_URL');
+  if (url === undefined) return { url: null, source: 'none', problem: 'DATABASE_URL is not set explicitly' };
+  let port: string;
+  try {
+    port = new URL(url).port;
+  } catch {
+    throw new Error('Refusing to run DB suites: DATABASE_URL is not a URL.');
+  }
+  if (port === DEV_DATABASE_PORT) {
+    throw new Error(`Refusing to run DB suites against port ${DEV_DATABASE_PORT}: that is the dev instance's database. Use a throwaway Postgres (pnpm test:db).`);
+  }
+  if (env.BUDDI_VAULT !== 'memory') {
+    throw new Error('Refusing to run DB suites without BUDDI_VAULT=memory: a test must never reach the real keychain.');
+  }
+  return { url, source: 'env' };
+}
+
+/** `isolatedTestDatabase`'s URL, or `undefined` to skip. */
+export function isolatedTestDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return isolatedTestDatabase(env).url ?? undefined;
 }

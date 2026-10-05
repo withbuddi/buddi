@@ -166,7 +166,23 @@ describe('platform.update_group', () => {
       { group: 'Test room', coordinator: 'concierge', members: ['concierge', 'ledger', 'garage'] },
       h.ctx,
     );
-    expect(described.preview).toBe('Add Garage to Test room; make Concierge the coordinator');
+    expect(described.preview).toBe(
+      "Add Garage to Test room; make Concierge the coordinator. The coordinator may ask the room's members in that room's conversations; each member keeps its own tools and approvals.",
+    );
+  });
+
+  it('says on the create card what membership lets the coordinator do', async () => {
+    const h = harness();
+    const tool = h.tool('platform.create_group');
+    const input = { name: 'Money', coordinator: 'concierge', members: ['ledger', '@garage'] };
+    const described = await tool.describe!(input, h.ctx);
+    expect(described.preview).toBe(
+      "Create the group \"Money\": Concierge coordinates, with Ledger and Garage. The coordinator may ask the room's members in that room's conversations; each member keeps its own tools and approvals.",
+    );
+    expect(described.envelope).toEqual(input);
+    expect(tool.description).toContain("The coordinator may ask the room's members");
+    expect(tool.description).not.toMatch(/grants nothing/);
+    expect(h.tool('platform.update_group').description).not.toMatch(/grants nothing/);
   });
 
   it('says a rename, a removal and "nothing" just as plainly', () => {

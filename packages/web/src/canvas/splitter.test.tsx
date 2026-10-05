@@ -7,7 +7,9 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useRef, useState, type CSSProperties } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { bounds, CANVAS_MIN, CHAT_MIN, clamp, DETENT, dragWidth, KEY_STEP, keyWidth, readWidth, saveWidth, snap, WIDTH_KEY } from './split-math';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { bounds, CANVAS_MIN, CHAT_MIN, clamp, DETENT, dragWidth, fitWidth, KEY_STEP, keyWidth, readWidth, saveWidth, sharedRoom, snap, WIDTH_KEY } from './split-math';
 import { Splitter, WIDTH_VAR } from './Splitter';
 
 afterEach(() => {
@@ -52,6 +54,21 @@ describe('the arithmetic', () => {
     expect(keyWidth(500, 'End', 1200)).toBe(1200 - CANVAS_MIN);
     expect(keyWidth(500, 'End', 0)).toBeNull();
     expect(keyWidth(500, 'Enter', 1200)).toBeNull();
+  });
+
+  it('draws a committed width exactly, and inside both minimums when the room narrows', () => {
+    // Both panes fit: the column is exactly what was asked, near the minimum too.
+    expect(fitWidth(CHAT_MIN + 4, 1200)).toBe(CHAT_MIN + 4);
+    expect(fitWidth(1200 - CANVAS_MIN, 1200)).toBe(1200 - CANVAS_MIN);
+    // The window narrowed to 900 under a 700px column: the canvas stopped at
+    // its minimum and 80px spilled over. The real room is 900, and the column
+    // is drawn at 620 so the canvas keeps its 280.
+    const shared = sharedRoom(700, CANVAS_MIN, 80);
+    expect(shared).toBe(900);
+    expect(fitWidth(700, shared)).toBe(900 - CANVAS_MIN);
+    expect(fitWidth(700, shared) + CANVAS_MIN).toBe(shared);
+    // No spill (a negative difference never adds room).
+    expect(sharedRoom(500, 700, -20)).toBe(1200);
   });
 
   it('reads and writes the width without ever throwing', () => {
@@ -169,6 +186,28 @@ describe('the grip on the page', () => {
     expect(window.localStorage.getItem(WIDTH_KEY)).toBe('600');
     expect(document.documentElement.hasAttribute('data-resizing')).toBe(false);
     expect(grip.getAttribute('data-dragging')).toBeNull();
+  });
+
+  it('does not let a sized column shrink against the canvas', () => {
+    const css = readFileSync(join(__dirname, '../styles.css'), 'utf8');
+    const rule = css.match(/\.wb-chat\[data-sized='true'\]\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(rule).toMatch(/flex:\s*0 0 auto/);
+  });
+
+  it('re-draws a committed width at what fits when the room narrows, and saves nothing', () => {
+    let resized: (() => void) | null = null;
+    vi.stubGlobal('ResizeObserver', class { constructor(run: () => void) { resized = run; } observe() {} disconnect() {} });
+    window.localStorage.setItem(WIDTH_KEY, '700');
+    render(<Harness />);
+    const column = screen.getByTestId('column');
+    const parent = column.parentElement!;
+    rect(column, 0, 700);
+    rect(screen.getByTestId('canvas'), 700, CANVAS_MIN);
+    Object.defineProperty(parent, 'clientWidth', { configurable: true, value: 900 });
+    Object.defineProperty(parent, 'scrollWidth', { configurable: true, value: 980 });
+    act(() => { resized?.(); });
+    expect(column.style.getPropertyValue(WIDTH_VAR)).toBe(`${900 - CANVAS_MIN}px`);
+    expect(window.localStorage.getItem(WIDTH_KEY)).toBe('700');
   });
 
   it('never lets a drag take either pane under its minimum', () => {

@@ -344,11 +344,16 @@ export function HomeSuggestions({
     if (listed === null) return null;
     const first = missing.map((m) => m.entry);
     if (!newTeam) return first;
-    const rest = suggestFrom(listed, { days: true, mailbox: true, money: loaded.has('finance'), pictures: loaded.has('image') }, 3).filter(
-      (e) => !first.some((f) => f.name === e.name),
+    // A plugin teammate the owner closed stays closed: the set-up reading
+    // must not bring it back, without its ×, a moment later.
+    const dismissed = new Set(
+      pluginTeammates(listed, loaded).filter((m) => closed?.is(teammateSlot(m.plugin), m.entry.name)).map((m) => m.entry.name),
+    );
+    const rest = suggestFrom(listed, { days: true, mailbox: true, money: loaded.has('finance'), pictures: loaded.has('image') }, 3 + dismissed.size).filter(
+      (e) => !first.some((f) => f.name === e.name) && !dismissed.has(e.name),
     );
     return [...first, ...rest].slice(0, Math.max(3, first.length));
-  }, [listed, loaded, missing, newTeam]);
+  }, [listed, loaded, missing, newTeam, closed]);
   if (!view || view.length === 0) return null;
   return (
     <>

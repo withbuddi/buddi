@@ -72,6 +72,7 @@ import { useRestart } from './shell/Restarting';
 import { buildDiffers } from './build';
 import { BUILD_CHECK_MS, useAutoReload, useCheckOnReconnect } from './shell/freshness';
 import { FORMATS_CHANGED, setDisplayFormats } from './format';
+import type { OnboardingPhase } from './views/parts/WakesAfterRestart';
 
 export { PLACES };
 
@@ -236,6 +237,7 @@ export function App(): JSX.Element {
    * bounce.
    */
   const [firstRunChecked, setFirstRunChecked] = useState(false);
+  const [onboarding, setOnboarding] = useState<OnboardingPhase>('unknown');
   useEffect(() => {
     if (firstRunChecked) return undefined;
     let cancelled = false;
@@ -244,6 +246,7 @@ export function App(): JSX.Element {
       .then((view) => {
         if (cancelled) return;
         setFirstRunChecked(true);
+        setOnboarding(view.state === 'done' || view.state === 'skipped' ? 'done' : 'open');
         if (view.state === 'pending' && view.needs.model && !parseWelcomeRoute(window.location.hash)) {
           navigate(WELCOME_ROUTE, true);
         }
@@ -251,7 +254,7 @@ export function App(): JSX.Element {
       .catch(() => {
         // No server, or an installation whose database has not migrated that
         // table. Either way the shell is what the owner gets.
-        if (!cancelled) setFirstRunChecked(true);
+        if (!cancelled) { setFirstRunChecked(true); setOnboarding('open'); }
       });
     return () => {
       cancelled = true;
@@ -575,6 +578,7 @@ export function App(): JSX.Element {
                 pluginPages={pluginPages}
                 update={update}
                 connectionSignals={connectionSignals}
+                onboarding={onboarding}
               />
             </main>
           )}
@@ -636,6 +640,8 @@ export interface PlaceProps {
   update?: VersionView | null;
   /** Connections that need the owner: Home says so under the greeting. */
   connectionSignals?: ConnectionSignal[];
+  /** First run, as the shell read it once: done (or skipped), still open, or not read yet. */
+  onboarding?: OnboardingPhase;
 }
 
 function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; pluginPages: PluginPages }): JSX.Element {

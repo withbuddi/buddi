@@ -19,16 +19,15 @@
  * row in the conversation still opens one on the Canvas when the owner
  * expands it, and a failure still keeps its tab — nothing that went wrong is
  * hidden.
+ *
+ * Reads only. A write (setting the profile, a rename, finishing the first run,
+ * a note or a preference kept) changed something the owner should see, so it
+ * keeps its tab like any other effect.
  */
 export const QUIET_TOOLS: ReadonlySet<string> = new Set([
   'owner.get_profile',
-  'owner.set_profile',
-  'owner.rename_me',
-  'owner.finish_onboarding',
   'memory.recall',
-  'memory.note',
   'memory.get_preferences',
-  'memory.remember_preference',
   'memory.people',
   'memory.person',
   'platform.list_agents',

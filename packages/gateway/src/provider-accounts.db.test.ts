@@ -339,6 +339,35 @@ suite('named provider accounts', () => {
     await f.service.save({ ...metadata(f, a.id), label: 'Updated' });
     finish(); await expect(testing).rejects.toThrow('changed');
   });
+  it('scrubs a credential the provider echoes in a successful reply, before the reply is cut short', async () => {
+    const f = fixture(); await f.service.initialize();
+    const a = await f.service.save(settings);
+    // The key straddles the 40-character cut: scrubbing after the cut would
+    // leave its first characters behind.
+    const echo = `${'x'.repeat(29)} private-fixture-value and more`;
+    f.test.mockResolvedValueOnce({ content: [{ type: 'text', text: echo }], usage: { input: 10, output: 5 } } as never);
+    const result = await f.service.test(a.id);
+    expect(result.state).toBe('connected');
+    for (const shown of [result.reply ?? '', result.message, JSON.stringify(f.service.view())]) {
+      expect(shown).not.toContain('private-fixture-value');
+      expect(shown).not.toContain('private-fi');
+    }
+  });
+  it('answers a test again within the cooldown, and calls the provider once it has passed or the account changed', async () => {
+    const f = fixture(); await f.service.initialize();
+    const a = await f.service.save(settings);
+    const first = await f.service.test(a.id, { reuseWithinMs: 10_000 });
+    expect(await f.service.test(a.id, { reuseWithinMs: 10_000 })).toBe(first);
+    expect(f.test).toHaveBeenCalledTimes(1);
+    await f.service.test(a.id, { reuseWithinMs: 10_000, now: Date.parse(first.checkedAt) + 10_001 });
+    expect(f.test).toHaveBeenCalledTimes(2);
+    await f.service.save({ ...metadata(f, a.id), label: 'Renamed' });
+    await f.service.test(a.id, { reuseWithinMs: 10_000 });
+    expect(f.test).toHaveBeenCalledTimes(3);
+    // Without the option (a direct caller), every test calls the provider.
+    await f.service.test(a.id);
+    expect(f.test).toHaveBeenCalledTimes(4);
+  });
   it('does not migrate a removed legacy credential back into service', async () => {
     const f = fixture();
     await pool.query("insert into core.provider_credential_state(name,removed) values ('OPENAI_API_KEY',true)");

@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
+import { matchApiRoute } from './api-routes.js';
 import type { ProviderSettings } from '../providers.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 const servers: WebServer[] = [];
@@ -78,4 +79,10 @@ it('protects named account creation and assignments and retires global credentia
   expect(assigned.status).toBe(200);
   expect(manager.assign).toHaveBeenCalledWith('ledger', { accountId: 'one', model: 'gpt-5' });
   expect((await fetch(`${origin}/api/providers/credentials/OPENAI_API_KEY/save`, { method: 'POST', headers, body: '{}' })).status).toBe(410);
+  // A connection test spends a call with the credential: dashboard only, and
+  // one account answers again within its cooldown rather than calling twice.
+  expect(matchApiRoute('POST', '/api/provider-accounts/one/test')?.token).toBe('secret');
+  const tested = await fetch(`${origin}/api/provider-accounts/one/test`, { method: 'POST', headers, body: '{}' });
+  expect(tested.status).toBe(200);
+  expect(manager.test).toHaveBeenCalledWith('one', { reuseWithinMs: 10_000 });
 });

@@ -2874,7 +2874,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/provider-accounts` | Every model account, its state, models and agents; never a key. | yes |
 | POST | `/api/provider-accounts/save` | Add or change an account (a key, an address, a default model). | no |
 | POST | `/api/provider-accounts/probe-models` | Ask a provider which models a key or address offers, before saving. | yes |
-| POST | `/api/provider-accounts/:id/test` | Test an account: ask its default model to reply "ready" (5 tokens, no tools) and say what came back, how long it took and about how many tokens. | yes |
+| POST | `/api/provider-accounts/:id/test` | Test an account: ask its default model to reply "ready" (5 tokens, no tools) and say what came back, how long it took and about how many tokens. Within 10 s of the last test of the same account, unchanged, the last result is answered again without calling the provider. Changed in 0.1.0-pre.43: refused to API tokens, the 10 s cooldown, and the reply scrubbed of the credential and every stored secret. | no |
 | POST | `/api/provider-accounts/:id/models` | The account’s models. | yes |
 | POST | `/api/provider-accounts/:id/remove` | Remove an account. | yes |
 | POST | `/api/provider-accounts/:id/login` | Start a ChatGPT (Codex) device sign-in. | no |
@@ -2937,14 +2937,15 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `POST /api/provider-accounts/:id/test`
 
-Test an account: ask its default model to reply "ready" (5 tokens, no tools) and say what came back, how long it took and about how many tokens.
+Test an account: ask its default model to reply "ready" (5 tokens, no tools) and say what came back, how long it took and about how many tokens. Within 10 s of the last test of the same account, unchanged, the last result is answered again without calling the provider. Changed in 0.1.0-pre.43: refused to API tokens, the 10 s cooldown, and the reply scrubbed of the credential and every stored secret.
 
-- **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Answer:** JSON
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It reads or stores a secret.
+- **Answer:** `{ state, message, httpStatus, retryAt, checkedAt, model?, reply?, elapsedMs?, tokens?, billing?: "key" | "plan" | null, detail?: string | null }`
+- **Errors:** 400 a ChatGPT subscription; 404; 409 a test already running, or the account changed during it
 - **Since:** 0.1.0-pre.15
 
 ```sh
-curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/provider-accounts/<id>/test"
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/provider-accounts/<id>/test"
 ```
 
 #### `POST /api/provider-accounts/:id/models`
