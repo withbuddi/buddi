@@ -429,3 +429,57 @@ function stubMatchMedia(narrow: boolean): void {
     removeEventListener: () => {},
   }));
 }
+
+/*
+ * Hiding the list. The control sits on the "Your team" line, the column ends
+ * on the maker with no empty row under it, and a hidden list leaves a thin
+ * tab that brings it back — wearing the waiting dot, so putting the team away
+ * never hides that someone needs the owner.
+ */
+describe('hiding the list', () => {
+  afterEach(() => { try { window.localStorage.clear(); } catch { /* fine */ } });
+
+  it('puts the hide control on the "Your team" line and ends the column on the maker', () => {
+    draw(new Map());
+    const hide = screen.getByRole('button', { name: 'Hide the list' });
+    expect(hide.title).toMatch(/^Hide the list \((⌘|Ctrl\+)\\\)$/);
+    expect(hide.closest('.wb-roster-head')?.textContent).toContain('Your team');
+    const rail = screen.getByTestId('agent-rail');
+    expect(rail.lastElementChild).toBe(screen.getByTestId('agent-face-father'));
+  });
+
+  it('collapses to a tab on the chat edge that reopens it, and remembers', () => {
+    draw(new Map());
+    fireEvent.click(screen.getByRole('button', { name: 'Hide the list' }));
+    expect(screen.queryByTestId('agent-rail')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show the list' })).toBeTruthy();
+    expect(window.localStorage.getItem('buddi.rosterHidden')).toBe('1');
+    cleanup();
+    draw(new Map());
+    fireEvent.click(screen.getByTestId('agent-rail-tab'));
+    expect(screen.getByTestId('agent-rail')).toBeTruthy();
+    expect(screen.queryByTestId('agent-rail-tab')).toBeNull();
+  });
+
+  it('answers ⌘\\ both ways, and the tab carries the waiting dot', () => {
+    const waiting: AgentAttention = { agentId: 'postman', approvals: 1, oldestApprovalAt: new Date().toISOString(), question: null };
+    draw(new Map([['postman', waiting]]));
+    fireEvent.keyDown(window, { key: '\\', metaKey: true });
+    const tab = screen.getByTestId('agent-rail-tab');
+    expect(tab.getAttribute('aria-label')).toBe('Show the list — someone is waiting for you');
+    expect(tab.querySelector('.wb-roster-tab-dot')).not.toBeNull();
+    fireEvent.keyDown(window, { key: '\\', ctrlKey: true });
+    expect(screen.getByTestId('agent-rail')).toBeTruthy();
+  });
+
+  it('never collapses the strip that lies down in the header', () => {
+    window.localStorage.setItem('buddi.rosterHidden', '1');
+    render(
+      <Tooltip.Provider>
+        <AgentRail agents={groupAgents(ROSTER, 'ledger')} currentId={null} attention={new Map()} onSelect={() => {}} orientation="horizontal" />
+      </Tooltip.Provider>,
+    );
+    expect(screen.getByTestId('agent-rail')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Hide the list' })).toBeNull();
+  });
+});

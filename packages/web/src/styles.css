@@ -373,7 +373,6 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
   border-right: 1px solid var(--line);
   background: var(--surface);
 }
-.wb-agent-rail[data-collapsed='true'] { width: 56px; padding: 14px 0 8px; align-items: center; gap: 6px; }
 .wb-agent-rail::-webkit-scrollbar { display: none; }
 
 /* The part that scrolls, so both ends of the rail stay pinned however many
@@ -395,7 +394,7 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
   padding-bottom: 10px;
 }
 /* Out to the rail's edge, so the open face's edge marker is not clipped. */
-.wb-agent-rail:not([data-collapsed='true']) .wb-agent-scroll { margin-inline: -8px; padding-inline: 8px; }
+.wb-agent-rail .wb-agent-scroll { margin-inline: -8px; padding-inline: 8px; }
 .wb-agent-scroll::-webkit-scrollbar { display: none; }
 
 .wb-agent-strip .wb-agent-scroll {
@@ -408,7 +407,6 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 
 /* The line between the front desk and the agents that act on the owner's life.
    Short, so it reads as a grouping and not as a border. */
-.wb-agent-rail[data-collapsed='true'] .wb-agent-scroll { align-items: center; gap: 6px; }
 .wb-agent-sep {
   flex: 0 0 auto;
   width: auto;
@@ -417,7 +415,6 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
   background: var(--line-strong);
   border-radius: var(--radius-pill);
 }
-.wb-agent-rail[data-collapsed='true'] .wb-agent-sep { width: 22px; margin: 5px 0; }
 .wb-agent-strip .wb-agent-sep {
   width: 1px;
   height: 22px;
@@ -426,7 +423,7 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 
 /* A roster row: the face, then the name and one quiet line. Only in the
    open column; collapsed and lain down, the row is the face alone. */
-.wb-agent-rail:not([data-collapsed='true']) .wb-face {
+.wb-agent-rail .wb-face {
   width: 100%;
   justify-content: flex-start;
   gap: 10px;
@@ -434,18 +431,18 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
   height: auto;
   text-align: left;
 }
-.wb-agent-rail:not([data-collapsed='true']) .wb-face:hover:not(:disabled) { transform: none; background: var(--surface-sunken); }
-.wb-agent-rail:not([data-collapsed='true']) .wb-face[data-active='true'] { background: color-mix(in oklab, var(--agent-fill, var(--accent)) 12%, var(--surface)); }
-.wb-agent-rail:not([data-collapsed='true']) .wb-face[data-active='true']::before { left: -8px; top: 8px; bottom: 8px; }
+.wb-agent-rail .wb-face:hover:not(:disabled) { transform: none; background: var(--surface-sunken); }
+.wb-agent-rail .wb-face[data-active='true'] { background: color-mix(in oklab, var(--agent-fill, var(--accent)) 12%, var(--surface)); }
+.wb-agent-rail .wb-face[data-active='true']::before { left: -8px; top: 8px; bottom: 8px; }
 .wb-face-text { display: none; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 1px; }
 /* The open roster is the kit's: a 36px face — big enough to tell agents apart
    at a glance — and the row's tint and edge marker say which one is open, no
    ring on the face as well. The row keeps its two-line height. */
-.wb-agent-rail:not([data-collapsed='true']) .wb-face { --face-size: calc(var(--space-8) + var(--space-1)); }
-.wb-agent-rail:not([data-collapsed='true']) .wb-face-mark { font-size: var(--text-sm); font-weight: var(--weight-bold); font-family: var(--font-display); }
-.wb-agent-rail:not([data-collapsed='true']) .wb-face[data-active='true'] .wb-face-mark { box-shadow: inset 0 0 0 1px rgb(21 38 66 / 5%); }
+.wb-agent-rail .wb-face { --face-size: calc(var(--space-8) + var(--space-1)); }
+.wb-agent-rail .wb-face-mark { font-size: var(--text-sm); font-weight: var(--weight-bold); font-family: var(--font-display); }
+.wb-agent-rail .wb-face[data-active='true'] .wb-face-mark { box-shadow: inset 0 0 0 1px rgb(21 38 66 / 5%); }
 .wb-roster-label { flex: 0 0 auto; padding: 8px 10px 4px; font-size: var(--text-2xs); font-weight: var(--weight-semibold); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
-.wb-agent-rail:not([data-collapsed='true']) .wb-face-text { display: flex; }
+.wb-agent-rail .wb-face-text { display: flex; }
 .wb-face-name { font-family: var(--font-display); font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-face[data-unavailable='true'] .wb-face-name { color: var(--text-muted); }
 .wb-head-name { color: inherit; text-decoration: none; }
@@ -454,12 +451,31 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .wb-face-status { font-size: var(--text-xs); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-face-status[data-tone='critical'] { color: var(--critical); font-weight: var(--weight-medium); }
 
-.wb-roster-toggle {
+/* "Your team", with the list's hide control at its right end. */
+.wb-roster-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--space-1); }
+.wb-roster-head > .wb-roster-label { flex: 1 1 auto; min-width: 0; }
+.wb-roster-toggle { flex: 0 0 auto; color: var(--text-faint); }
+.wb-roster-toggle:hover { color: var(--text); }
+
+/* Hidden, the list leaves a thin tab on the chat's left edge to bring it back. */
+.wb-roster-tab {
+  position: relative;
   flex: 0 0 auto;
-  align-self: flex-end;
-  margin-top: 6px;
+  width: var(--space-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
 }
-.wb-agent-rail[data-collapsed='true'] .wb-roster-toggle { align-self: center; }
+.wb-roster-tab:hover { background: var(--surface-sunken); color: var(--text); }
+.wb-roster-tab:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: -2px; }
+.wb-roster-tab-dot { position: absolute; top: var(--space-3); left: 50%; width: var(--space-2); height: var(--space-2); margin-left: calc(var(--space-1) * -1); border-radius: 50%; background: var(--attention); }
 
 /* Lain down: the same faces, in the conversation's header, on a phone.
    It *wraps* rather than scrolling sideways. A strip that scrolled would put
@@ -572,7 +588,7 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
   border-radius: var(--radius-pill);
   box-shadow: 0 0 0 var(--space-0) var(--surface);
 }
-.wb-agent-rail:not([data-collapsed='true']) .wb-face[data-active='true'] .wb-face-dot {
+.wb-agent-rail .wb-face[data-active='true'] .wb-face-dot {
   box-shadow: 0 0 0 var(--space-0) color-mix(in oklab, var(--agent-fill, var(--accent)) 12%, var(--surface));
 }
 .wb-face-dot[data-state='needs'] { background: var(--attention); }
@@ -805,17 +821,12 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .wb-groups { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .wb-groups-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 2px 12px; }
 .wb-groups-label { font-size: var(--text-2xs); font-weight: var(--weight-semibold); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
-.wb-agent-rail[data-collapsed='true'] .wb-groups-label { display: none; }
 /* With nobody to group yet, the heading stays and says what it needs. */
 .wb-groups-hint { margin: 0; padding: 0 10px 6px 12px; font-size: var(--text-xs); line-height: var(--leading); color: var(--text-faint); }
 .wb-groups-hint a { color: inherit; text-decoration: underline; }
-.wb-agent-rail[data-collapsed='true'] .wb-groups-hint { display: none; }
 /* Lain down, the groups block is a column of faces like the agents above it:
    the separator and the + sit on the rail's centre line, and a group's stacked
    faces are centred as one mark. */
-.wb-agent-rail[data-collapsed='true'] .wb-groups { align-items: center; }
-.wb-agent-rail[data-collapsed='true'] .wb-groups-head { padding: 0; justify-content: center; }
-.wb-agent-rail[data-collapsed='true'] .wb-group-face { justify-content: center; }
 .wb-group-stack { position: relative; flex: 0 0 var(--face-size); width: var(--face-size); height: var(--face-size); }
 /* The first two members' own faces — photo, emoji or tinted initial — crossed
    on the diagonal inside the face's square, the first on top so both initials

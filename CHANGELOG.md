@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- Chat: the list of your team hides from the chevron at the right of its "Your team" line (or ⌘\ — Ctrl+\ off a Mac). Hidden, it leaves a thin tab on the chat's left edge that brings it back, with a dot when someone is waiting for you. The empty row under Agent Father is gone.
+
 ## 0.1.0-pre.42 — 2026-10-04
 
 - buddi.app: the Dock icon and the menu-bar glyph are the Blob now, not a "b". The menu-bar Blob is dimmed while buddi starts or updates and carries a dot when it needs attention.

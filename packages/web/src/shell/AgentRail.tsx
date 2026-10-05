@@ -31,7 +31,7 @@
  *    and the reason anyone is waiting.
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { ChatAgent } from '../chat/types';
 import { fmtAgo } from '../format';
 import { canGroup, faceState, waitingShort, waitingText, type AgentAttention, type AgentGroups, type FaceState } from './roster';
@@ -60,7 +60,13 @@ export interface AgentRailProps {
   onNewGroup?: () => void;
 }
 
-const COLLAPSED_KEY = 'buddi.rosterCollapsed';
+/* A new key: the old one meant "faces only", and an owner who had chosen that
+   should not open the chat to find the whole list gone. */
+const COLLAPSED_KEY = 'buddi.rosterHidden';
+
+const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const SHORTCUT_LABEL = MAC ? '⌘\\' : 'Ctrl+\\';
+const SHORTCUT_ARIA = MAC ? 'Meta+\\' : 'Control+\\';
 
 function readCollapsed(): boolean {
   try { return window.localStorage.getItem(COLLAPSED_KEY) === '1'; } catch { return false; }
@@ -98,12 +104,48 @@ export function AgentRail({
     />
   );
 
+  const toggle = (): void => setCollapsed((value) => { storeCollapsed(!value); return !value; });
+
+  // ⌘\ (Ctrl+\ off a Mac) hides and shows the list from anywhere on the chat.
+  useEffect(() => {
+    if (orientation !== 'vertical') return;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== '\\' || !(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      setCollapsed((value) => { storeCollapsed(!value); return !value; });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [orientation]);
+
+  /*
+   * Hidden, the list is a thin tab on the chat's left edge: the one control
+   * that brings it back. It wears the waiting dot when somebody needs the
+   * owner, so putting the team away never puts that away.
+   */
+  if (orientation === 'vertical' && collapsed) {
+    const waiting = everyone.some((agent) => waitingText(attention.get(agent.id)) !== null);
+    return (
+      <button
+        type="button"
+        className="wb-roster-tab"
+        data-testid="agent-rail-tab"
+        aria-label={waiting ? 'Show the list — someone is waiting for you' : 'Show the list'}
+        aria-keyshortcuts={SHORTCUT_ARIA}
+        title={`Show the list (${SHORTCUT_LABEL})`}
+        onClick={toggle}
+      >
+        <Icon name="chevron-right" />
+        {waiting ? <span className="wb-roster-tab-dot" aria-hidden="true" /> : null}
+      </button>
+    );
+  }
+
   return (
     <nav
       className={orientation === 'vertical' ? 'wb-agent-rail' : 'wb-agent-strip'}
       aria-label="Agents"
       data-testid="agent-rail"
-      data-collapsed={orientation === 'vertical' && collapsed ? 'true' : undefined}
     >
       {agents.top.map(face)}
 
@@ -117,9 +159,23 @@ export function AgentRail({
       {agents.top.length > 0 && agents.middle.length > 0 ? (
         <span className="wb-agent-sep" data-testid="agent-rail-sep" aria-hidden="true" />
       ) : null}
-      {/* The kit's heading over the colleagues, in the open column only. */}
-      {orientation === 'vertical' && !collapsed && agents.middle.length > 0 ? (
-        <span className="wb-roster-label">Your team</span>
+      {/* The kit's heading over the colleagues, with the way to put the list
+          away at its right end: the control sits on the line it acts on. */}
+      {orientation === 'vertical' ? (
+        <div className="wb-roster-head">
+          <span className="wb-roster-label">Your team</span>
+          <button
+            type="button"
+            className="ui-icon-btn wb-roster-toggle"
+            data-size="sm"
+            aria-label="Hide the list"
+            aria-keyshortcuts={SHORTCUT_ARIA}
+            title={`Hide the list (${SHORTCUT_LABEL})`}
+            onClick={toggle}
+          >
+            <Icon name="chevron-left" />
+          </button>
+        </div>
       ) : null}
 
       {/*
@@ -196,20 +252,8 @@ export function AgentRail({
         already — the same way the theme control sits at the bottom of the rail
         beside this one.
       */}
+      {/* The maker is the last thing in the column: no row under it. */}
       {agents.bottom.map(face)}
-
-      {orientation === 'vertical' ? (
-        <button
-          type="button"
-          className="ui-icon-btn wb-roster-toggle"
-          data-size="sm"
-          aria-label={collapsed ? 'Show agent names' : 'Hide agent names'}
-          aria-pressed={collapsed}
-          onClick={() => setCollapsed((value) => { storeCollapsed(!value); return !value; })}
-        >
-          <Icon name={collapsed ? 'chevron-right' : 'chevron-left'} />
-        </button>
-      ) : null}
     </nav>
   );
 }
