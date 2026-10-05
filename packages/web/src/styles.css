@@ -2713,14 +2713,8 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .home-tips-btn { position: relative; }
 .home-tips-dot { position: absolute; top: var(--space-1); right: var(--space-1); width: var(--space-2); height: var(--space-2); border-radius: 50%; background: var(--accent); }
 .home-tips-btn[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
-/* The Tips section under the greeting: three cards across, then two, then one. */
-.tips-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
-@media (max-width: 1080px) { .tips-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 620px) { .tips-grid { grid-template-columns: minmax(0, 1fr); } }
-.tips-card { display: flex; min-width: 0; }
-.tips-card > .ui-card { flex: 1 1 auto; }
-.tips-card-text { margin: 0; flex: 1 1 auto; line-height: var(--leading); }
-.tips-card[data-status='dismissed'] .tips-card-text, .tips-card[data-status='quiet'] .tips-card-text { color: var(--text-muted); }
+/* The Tips panel the bulb opens: the stack, or one quiet line when there is none. */
+.home-tips-empty { margin: 0; color: var(--text-muted); }
 /* ---- Home's glance: the day on the left, a plugin's glance card (or the Blob alone) on the right ---- */
 .home-band { padding: var(--space-8) 0 var(--space-6); }
 .home-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); width: 100%; max-width: var(--page-max); margin-inline: auto; }

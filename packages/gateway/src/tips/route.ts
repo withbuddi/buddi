@@ -1,25 +1,24 @@
 /**
  * The tips' routes (docs/dashboard.md, Home):
  *
- *   GET  /api/tips                 { tips: [...rows], enabled }   every rule and where it stands (the Tips list)
- *   GET  /api/tips/current         { tip | null, enabled }   today's tip, if any
- *   GET  /api/tips/queue           { tips: [...up to 5], enabled }   Home's stack: today's tip first, then the others ready
+ *   GET  /api/tips                 { tips: [...rows] }   every rule and where it stands
+ *   GET  /api/tips/current         { tip | null }   today's tip, if any
+ *   GET  /api/tips/queue           { tips: [...] }   the bulb's stack: today's tip first, then every other one ready
+ *                                  (`?peek=1`: the same, nothing marked shown: for the bulb's dot)
  *   POST /api/tips/:id/dismiss     "Not this again": never again
  *   POST /api/tips/:id/later       ×: not before its cooldown has passed
  *   POST /api/tips/:id/restore     "Bring back": forget a dismissal
  *   POST /api/tips/seen-page { page }   the dashboard opened a page (once a day each)
- *   GET  /api/tips/settings        { enabled }
- *   PUT  /api/tips/settings { enabled }   Settings → Notifications → Tips on Home
  *
- * State lives in `core.web_settings`: `tips.state` (the engine's), `tips.enabled`
- * (absent is on) and `tips.pages`.
+ * State lives in `core.web_settings`: `tips.state` (the engine's) and
+ * `tips.pages`. A `tips.enabled` left from the old "Tips on Home" switch is
+ * ignored: tips sit behind the bulb, which is the owner's choice to look.
  */
-import { dayIn, dismissTip, laterTip, listTips, pickQueue, pickTip, restoreTip, TIP_QUEUE_MAX, viewOf, type TipsState } from './engine.js';
+import { dayIn, dismissTip, laterTip, listTips, pickQueue, pickTip, restoreTip, viewOf, type TipsState } from './engine.js';
 import { PAGE_NAME, recordPageSeen, type Facts, type SettingsStore } from './facts.js';
 import { TIPS, type TipRule } from './rules.js';
 
 export const TIPS_STATE_KEY = 'tips.state';
-export const TIPS_ENABLED_KEY = 'tips.enabled';
 
 export interface TipsRouteDeps {
   store: SettingsStore;
@@ -40,36 +39,20 @@ async function readState(store: SettingsStore): Promise<TipsState> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-/** Whether tips are on. Anything but an explicit `false` is on. */
-export async function tipsEnabled(store: SettingsStore): Promise<boolean> {
-  const value = await store.read<unknown>(TIPS_ENABLED_KEY).catch(() => null);
-  return value !== false;
-}
-
 export async function tipsRoute(
   deps: TipsRouteDeps,
-  request: { method: string; path: string; body?: Record<string, unknown>; preview?: string | null },
+  request: { method: string; path: string; body?: Record<string, unknown>; preview?: string | null; peek?: boolean },
 ): Promise<TipsReply> {
   const { method, path } = request;
   const body = request.body ?? {};
   const rules = deps.rules ?? TIPS;
   const today = dayIn(deps.now(), deps.timezone);
 
-  if (path === '/api/tips/settings') {
-    if (method === 'PUT') {
-      if (typeof body.enabled !== 'boolean') return { status: 400, body: { error: '`enabled` must be true or false.' } };
-      await deps.store.write(TIPS_ENABLED_KEY, body.enabled);
-    } else if (method !== 'GET') {
-      return { status: 405, body: { error: 'GET or PUT.' } };
-    }
-    return { status: 200, body: { enabled: await tipsEnabled(deps.store) } };
-  }
-
   if (path === '/api/tips') {
     if (method !== 'GET') return { status: 405, body: { error: 'GET only.' } };
-    // Reads only: listing never marks a tip shown. It reads while tips are off too.
+    // Reads only: listing never marks a tip shown.
     const tips = listTips(rules, await deps.facts(), await readState(deps.store), today);
-    return { status: 200, body: { tips, enabled: await tipsEnabled(deps.store) } };
+    return { status: 200, body: { tips } };
   }
 
   if (path === '/api/tips/current') {
@@ -80,14 +63,13 @@ export async function tipsRoute(
     if (preview !== null) {
       const rule = rules.find((r) => r.id === preview);
       return rule
-        ? { status: 200, body: { tip: viewOf(rule, await deps.facts()), enabled: true, preview: true } }
+        ? { status: 200, body: { tip: viewOf(rule, await deps.facts()), preview: true } }
         : { status: 404, body: { error: `No tip called "${preview}". Known: ${rules.map((r) => r.id).join(', ')}.` } };
     }
-    if (!(await tipsEnabled(deps.store))) return { status: 200, body: { tip: null, enabled: false } };
     const previous = await readState(deps.store);
     const { tip, state } = pickTip(rules, await deps.facts(), previous, today);
     if (JSON.stringify(state) !== JSON.stringify(previous)) await deps.store.write(TIPS_STATE_KEY, state);
-    return { status: 200, body: { tip, enabled: true } };
+    return { status: 200, body: { tip } };
   }
 
   if (path === '/api/tips/queue') {
@@ -101,13 +83,23 @@ export async function tipsRoute(
         return { status: 404, body: { error: `No tip called "${unknown[0] ?? preview}". Known: ${rules.map((r) => r.id).join(', ')}.` } };
       }
       const f = await deps.facts();
-      return { status: 200, body: { tips: ids.slice(0, TIP_QUEUE_MAX).map((id) => viewOf(rules.find((r) => r.id === id)!, f)), enabled: true, preview: true } };
+      return { status: 200, body: { tips: ids.map((id) => viewOf(rules.find((r) => r.id === id)!, f)), preview: true } };
     }
-    if (!(await tipsEnabled(deps.store))) return { status: 200, body: { tips: [], enabled: false } };
     const previous = await readState(deps.store);
     const { tips, state } = pickQueue(rules, await deps.facts(), previous, today);
+    // A peek keeps the holds counting but marks nothing shown: the owner has
+    // not opened the stack, so no tip's cooldown starts.
+    const front = tips[0]?.id;
+    if (request.peek && front && state[front]?.shownAt !== previous[front]?.shownAt) {
+      const before = previous[front]?.shownAt;
+      if (before) state[front] = { ...state[front], shownAt: before };
+      else {
+        const { shownAt: _s, ...rest } = state[front]!;
+        state[front] = rest;
+      }
+    }
     if (JSON.stringify(state) !== JSON.stringify(previous)) await deps.store.write(TIPS_STATE_KEY, state);
-    return { status: 200, body: { tips, enabled: true } };
+    return { status: 200, body: { tips } };
   }
 
   if (path === '/api/tips/seen-page') {

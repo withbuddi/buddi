@@ -2888,13 +2888,18 @@ export const api = {
   testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),
   setAgentMuted: (agentId: string, muted: boolean) =>
     post<{ agents: AgentMessageSettings }>('/notifications/agent-mute', { agentId, muted }),
-  /* ---- tips on Home (docs/dashboard.md, Home) ---- */
-  /** Today's tip, or null: at most one a day, none while tips are off. */
-  currentTip: (preview?: string) => get<{ tip: TipView | null; enabled: boolean; preview?: boolean }>(preview ? `/tips/current?preview=${encodeURIComponent(preview)}` : '/tips/current'),
-  /** Home's stack: today's tip first, then up to four more that are ready; none while tips are off. */
-  tipQueue: (preview?: string) => get<{ tips: TipView[]; enabled: boolean; preview?: boolean }>(preview ? `/tips/queue?preview=${encodeURIComponent(preview)}` : '/tips/queue'),
-  /** Every tip and where it stands; reads only, and reads while tips are off too. */
-  tips: () => get<{ tips: TipListRow[]; enabled: boolean }>('/tips'),
+  /* ---- tips, behind Home's lightbulb (docs/dashboard.md, Home) ---- */
+  /** Today's tip, or null: at most one a day. */
+  currentTip: (preview?: string) => get<{ tip: TipView | null; preview?: boolean }>(preview ? `/tips/current?preview=${encodeURIComponent(preview)}` : '/tips/current'),
+  /**
+   * The bulb's stack: today's tip first, then every other one that is ready.
+   * `peek` marks nothing shown (for the bulb's dot, before the stack is opened).
+   */
+  tipQueue: (preview?: string, peek?: boolean) => get<{ tips: TipView[]; preview?: boolean }>(
+    preview ? `/tips/queue?preview=${encodeURIComponent(preview)}` : peek ? '/tips/queue?peek=1' : '/tips/queue',
+  ),
+  /** Every tip and where it stands; reads only. */
+  tips: () => get<{ tips: TipListRow[] }>('/tips'),
   /** "Bring back": forget a dismissal. */
   restoreTip: (id: string) => post<{ ok: true }>(`/tips/${encodeURIComponent(id)}/restore`),
   /** "Not this again": the tip never comes back. */
@@ -2903,8 +2908,6 @@ export const api = {
   laterTip: (id: string) => post<{ ok: true }>(`/tips/${encodeURIComponent(id)}/later`),
   /** The dashboard opened a page; the gateway keeps one mark a day per page. */
   tipsSeenPage: (page: string) => post<{ ok: true }>('/tips/seen-page', { page }),
-  tipsSettings: () => get<{ enabled: boolean }>('/tips/settings'),
-  saveTipsSettings: (enabled: boolean) => put<{ enabled: boolean }>('/tips/settings', { enabled }),
   /** `active` while the page is in front, `away` when it leaves (docs/notifications.md). */
   presence: (state: 'active' | 'away') => post<{ ok: true }>('/presence', { state }),
   /* ---- the owner ---- */

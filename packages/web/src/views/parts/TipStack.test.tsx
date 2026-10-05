@@ -60,7 +60,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 async function stack(tips = TIPS, navigate = vi.fn(), preview?: string): Promise<void> {
-  vi.mocked(api.tipQueue).mockResolvedValue({ tips, enabled: true, ...(preview ? { preview: true } : {}) });
+  vi.mocked(api.tipQueue).mockResolvedValue({ tips, ...(preview ? { preview: true } : {}) });
   await act(async () => { render(<Harness navigate={navigate} {...(preview ? { preview } : {})} />); });
 }
 
@@ -197,7 +197,7 @@ describe('useTipQueue and the stack', () => {
 
   it('a preview stacks the tips and tells the gateway nothing', async () => {
     await stack(TIPS, vi.fn(), 'voice-note,make-group');
-    expect(api.tipQueue).toHaveBeenCalledWith('voice-note,make-group');
+    expect(api.tipQueue).toHaveBeenCalledWith('voice-note,make-group', false);
     fireEvent.keyDown(screen.getByTestId('tip-stack'), { key: 'ArrowRight' });
     await flown();
     expect(api.dismissTip).not.toHaveBeenCalled();

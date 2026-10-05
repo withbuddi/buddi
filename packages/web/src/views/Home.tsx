@@ -8,9 +8,10 @@
  *
  * The top is a glance: the date, a large greeting and the counts that need
  * the owner (each a link to its list) on the left; the Blob on the right. The
- * front desk's slim composer sits under it; then Needs you (the tips' stack
- * first, then approvals, questions, requests, the passphrase, the update,
- * errors, sign-ins, agents to set up, the restore), then the owner's
+ * front desk's slim composer sits under it (and the tips, when the bulb on the
+ * date line opens them); then Needs you (approvals, questions, requests, the
+ * passphrase, the update, errors, sign-ins, agents to set up, the restore),
+ * then the owner's
  * widgets (a glance card is one now); the install line, when the browser
  * offers one, at the foot.
  */
@@ -51,7 +52,7 @@ import { HomeSuggestions, teamIsNew } from './parts/CatalogueSuggest';
 import { WakesAfterRestart, type OnboardingPhase } from './parts/WakesAfterRestart';
 import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
-import { TipStack, previewTipOf, useTipQueue } from './parts/TipStack';
+import { previewTipOf } from './parts/TipStack';
 import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
 import { HomeGlances, useGlanceHiding } from './parts/HomeGlances';
 import { BirthdayCard } from './parts/BirthdayCard';
@@ -151,13 +152,12 @@ export function Home({
   const recovering = (data?.needsYou?.recovery ?? 0) > 0;
   // What Home draws as a card. Urgent alerts, failed jobs and proposals are
   // counted on the glance's line, each a link to its own list, not here.
-  // The tips' stack and the backup passphrase read their own; Home holds the reads so the section knows they are there.
-  const tips = useTips();
-  const tipQueue = useTipQueue(previewTipOf(hash));
+  // The tips (behind the bulb) and the backup passphrase read their own; Home holds the reads so the sections know they are there.
+  const tips = useTips(previewTipOf(hash));
   const passphrase = usePassphraseNotice();
   const updateShown = Boolean(update && update.updateAvailable && !update.checkout && update.latest && !closed.is('update', update.latest));
   const needs = pending.length + questions.length + toSetUp.length + told.length + signIns.length + (recovering ? 1 : 0)
-    + (tipQueue.shown && !tips.open ? 1 : 0) + (passphrase.shown ? 1 : 0) + (updateShown ? 1 : 0) + sentinelErrors.length + sourceErrors.length;
+    + (passphrase.shown ? 1 : 0) + (updateShown ? 1 : 0) + sentinelErrors.length + sourceErrors.length;
 
   // The footer's approvals land here: Home, scrolled to "Needs you".
   useEffect(() => {
@@ -215,7 +215,7 @@ export function Home({
     <div className="home">
       {/* The front desk, under the glance: writing to it is the commonest thing done here. */}
       {frontDesk ? <HomeAsk key={frontDesk.id} agent={frontDesk} navigate={navigate} /> : null}
-      {/* Every tip as a card, while the lightbulb is on. */}
+      {/* The tips' stack, while the lightbulb is on. */}
       <TipsSection tips={tips} navigate={navigate} />
       <ErrorBanner message={overview.error ?? approvals.error ?? failure} />
       {note ? <p className="home-note muted" role="status">{note}</p> : null}
@@ -239,8 +239,6 @@ export function Home({
               glance's counts above, each a link to its list. A paused queue
               is the shell's banner. */}
           <Stack>
-            {/* The tips first: a small hand of cards, slid away or acted on. */}
-            <TipStack queue={tipQueue} navigate={navigate} hidden={tips.open} />
             {pending.map((action) => (
               <ApprovalCard key={action.id} action={action} timezone={timezone} busy={busy === action.id} onDecide={decide} agentName={nameOf(action.agentId)} agents={agents} />
             ))}

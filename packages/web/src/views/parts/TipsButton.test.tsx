@@ -1,9 +1,9 @@
-/** The lightbulb on Home and the Tips section it opens: the cards, their statuses, "Bring back" and the switch. */
+/** The lightbulb on Home and the Tips panel it opens: the stack, the dot, Close, the empty state, the preview. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { api, type TipListRow } from '../../api';
-import { TIPS_OPEN_KEY, TipsButton, TipsSection, useTips } from './TipsButton';
+import { api, type TipView } from '../../api';
+import { TIPS_OPEN_KEY, TIPS_SEEN_KEY, TipsButton, TipsSection, useTips } from './TipsButton';
 
 vi.mock('../../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../api')>();
@@ -11,27 +11,18 @@ vi.mock('../../api', async (importOriginal) => {
     ...original,
     api: {
       ...original.api,
-      tips: vi.fn(),
-      restoreTip: vi.fn(async () => ({ ok: true })),
-      saveTipsSettings: vi.fn(async (enabled: boolean) => ({ enabled })),
+      tipQueue: vi.fn(),
+      laterTip: vi.fn(async () => ({ ok: true })),
+      dismissTip: vi.fn(async () => ({ ok: true })),
     },
   };
 });
 
-const row = (id: string, status: TipListRow['status'], extra: Partial<TipListRow> = {}): TipListRow => ({
-  id, text: `Tip ${id}.`, action: { label: `Do ${id}`, route: `#/${id}` }, status, ...extra,
-});
+const tip = (id: string): TipView => ({ id, text: `Tip ${id}.`, action: { label: `Do ${id}`, route: `#/${id}` } });
+const THREE = [tip('a'), tip('b'), tip('c')];
 
-const ROWS: TipListRow[] = [
-  row('a', 'today', { holdsSince: '2026-09-20' }),
-  row('b', 'holding'),
-  row('c', 'quiet'),
-  row('d', 'dismissed', { dismissedAt: '2026-09-25' }),
-  row('e', 'shown', { shownAt: '2026-09-27' }),
-];
-
-function Harness({ navigate }: { navigate: (route: string) => void }): JSX.Element {
-  const tips = useTips();
+function Harness({ navigate, preview }: { navigate: (route: string) => void; preview?: string }): JSX.Element {
+  const tips = useTips(preview);
   return (
     <>
       <TipsButton tips={tips} />
@@ -40,19 +31,17 @@ function Harness({ navigate }: { navigate: (route: string) => void }): JSX.Eleme
   );
 }
 
-async function mount(enabled = true, rows = ROWS, navigate = vi.fn()): Promise<void> {
-  vi.mocked(api.tips).mockResolvedValue({ tips: rows, enabled });
-  await act(async () => { render(<Harness navigate={navigate} />); });
+async function mount(tips: TipView[] = THREE, navigate = vi.fn(), preview?: string): Promise<void> {
+  vi.mocked(api.tipQueue).mockResolvedValue({ tips, ...(preview ? { preview: true } : {}) });
+  await act(async () => { render(<Harness navigate={navigate} preview={preview} />); });
 }
 
-const bulb = (): HTMLElement => screen.getByRole('button', { name: /^Tips/ });
+const bulb = (): HTMLElement => screen.getByRole('button', { name: /^(Tips|A new tip)$/ });
 
-async function openSheet(): Promise<HTMLElement> {
+async function openPanel(): Promise<HTMLElement> {
   await act(async () => { fireEvent.click(bulb()); });
   return screen.getByTestId('tips-section');
 }
-
-const rowOf = (section: HTMLElement, id: string): HTMLElement => section.querySelector(`[data-tip="${id}"]`) as HTMLElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -60,31 +49,56 @@ beforeEach(() => {
 });
 
 describe('TipsButton', () => {
-  it('is a quiet icon button called Tips, with no dot while Home shows the tip', async () => {
-    await mount(true);
-    const button = screen.getByRole('button', { name: 'Tips' });
-    expect(button).toHaveAttribute('title', 'Tips');
+  it('is a quiet icon button called Tips with no dot when nothing is ready', async () => {
+    await mount([]);
+    expect(bulb()).toHaveAttribute('title', 'Tips');
+    expect(bulb()).toHaveAccessibleName('Tips');
     expect(screen.queryByTestId('tips-dot')).not.toBeInTheDocument();
   });
 
-  it('wears a dot when a tip is due today and Home is not showing it', async () => {
-    await mount(false);
+  it('peeks while closed, so the gateway marks nothing shown', async () => {
+    await mount();
+    expect(api.tipQueue).toHaveBeenLastCalledWith(undefined, true);
+    await openPanel();
+    expect(api.tipQueue).toHaveBeenLastCalledWith(undefined, false);
+  });
+
+  it('wears a dot for an unseen tip, "A new tip", cleared when the panel opens', async () => {
+    await mount();
     expect(screen.getByTestId('tips-dot')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Tips, one due today' })).toBeInTheDocument();
+    expect(bulb()).toHaveAttribute('title', 'A new tip');
+    await openPanel();
+    expect(screen.queryByTestId('tips-dot')).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(TIPS_SEEN_KEY) ?? '[]')).toEqual(['a', 'b', 'c']);
+    await act(async () => { fireEvent.click(bulb()); });
+    expect(screen.queryByTestId('tips-dot')).not.toBeInTheDocument();
+    expect(bulb()).toHaveAttribute('title', 'Tips');
   });
 
-  it('no dot when nothing is due', async () => {
-    await mount(false, [row('b', 'holding')]);
+  it('a tip not seen before brings the dot back; one that left is forgotten', async () => {
+    window.localStorage.setItem(TIPS_SEEN_KEY, JSON.stringify(['a', 'z']));
+    await mount([tip('a'), tip('b')]);
+    expect(screen.getByTestId('tips-dot')).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(TIPS_SEEN_KEY) ?? '[]')).toEqual(['a']);
+  });
+
+  it('no dot when every ready tip was seen', async () => {
+    window.localStorage.setItem(TIPS_SEEN_KEY, JSON.stringify(['a', 'b', 'c']));
+    await mount();
     expect(screen.queryByTestId('tips-dot')).not.toBeInTheDocument();
   });
 
-  it('toggles the section, shows pressed while open, and remembers it', async () => {
+  it('opens the stack under the bulb, pressed while open, and remembers it', async () => {
     await mount();
     expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
     expect(bulb()).toHaveAttribute('aria-pressed', 'false');
-    await openSheet();
+    const panel = await openPanel();
     expect(bulb()).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(within(panel).getByText('Tips', { selector: 'h3' })).toBeInTheDocument();
+    expect(within(panel).getByTestId('tip-stack')).toBeInTheDocument();
+    expect(within(panel).getByText('Tip a.')).toBeInTheDocument();
+    expect(within(panel).getByText('1 of 3')).toBeInTheDocument();
+    expect(within(panel).queryByRole('checkbox')).not.toBeInTheDocument();
     expect(window.localStorage.getItem(TIPS_OPEN_KEY)).toBe('1');
     await act(async () => { fireEvent.click(bulb()); });
     expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
@@ -94,49 +108,36 @@ describe('TipsButton', () => {
   it('opens already when it was left open, and Close shuts it', async () => {
     window.localStorage.setItem(TIPS_OPEN_KEY, '1');
     await mount();
-    const section = screen.getByTestId('tips-section');
-    await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Close' })); });
+    const panel = screen.getByTestId('tips-section');
+    await act(async () => { fireEvent.click(within(panel).getByRole('button', { name: 'Close' })); });
     expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
     expect(bulb()).toHaveAttribute('aria-pressed', 'false');
   });
 
-  it('shows every tip as a card with its status pill and action', async () => {
+  it('the action on the front card navigates', async () => {
     const navigate = vi.fn();
-    await mount(true, ROWS, navigate);
-    const sheet = await openSheet();
-    expect(within(sheet).getByText('Tips', { selector: 'h3' })).toBeInTheDocument();
-    expect(sheet.querySelectorAll('.ui-card')).toHaveLength(5);
-    expect(within(rowOf(sheet, 'a')).getByText('Due today')).toHaveAttribute('data-tone', 'accent');
-    expect(within(rowOf(sheet, 'b')).getByText('Waiting')).toHaveAttribute('data-tone', 'muted');
-    expect(within(rowOf(sheet, 'b')).getByText('Waiting')).toBeInTheDocument();
-    expect(within(rowOf(sheet, 'c')).getByText('Not needed now')).toBeInTheDocument();
-    expect(within(rowOf(sheet, 'd')).getByText('Dismissed')).toBeInTheDocument();
-    expect(within(rowOf(sheet, 'e')).getByText('Shown on 27 Sep')).toBeInTheDocument();
-    expect(within(sheet).getAllByRole('button', { name: 'Bring back' })).toHaveLength(1);
-    expect(within(rowOf(sheet, 'd')).queryByRole('button', { name: 'Do d' })).not.toBeInTheDocument();
-    fireEvent.click(within(rowOf(sheet, 'b')).getByRole('button', { name: 'Do b' }));
-    expect(navigate).toHaveBeenCalledWith('#/b');
+    await mount(THREE, navigate);
+    const panel = await openPanel();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Do a' }));
+    expect(navigate).toHaveBeenCalledWith('#/a');
   });
 
-  it('"Bring back" restores a dismissed tip and reloads the list', async () => {
-    await mount();
-    const sheet = await openSheet();
-    const calls = vi.mocked(api.tips).mock.calls.length;
-    vi.mocked(api.tips).mockResolvedValue({ tips: ROWS.map((r) => (r.id === 'd' ? row('d', 'holding') : r)), enabled: true });
-    await act(async () => { fireEvent.click(within(rowOf(sheet, 'd')).getByRole('button', { name: 'Bring back' })); });
-    expect(api.restoreTip).toHaveBeenCalledWith('d');
-    expect(vi.mocked(api.tips).mock.calls.length).toBeGreaterThan(calls);
-    expect(within(rowOf(screen.getByTestId('tips-section'), 'd')).getByText('Waiting')).toBeInTheDocument();
+  it('says there are none, with Close, when the stack is empty', async () => {
+    await mount([]);
+    const panel = await openPanel();
+    expect(within(panel).getByText('No tips right now.')).toBeInTheDocument();
+    expect(within(panel).queryByTestId('tip-stack')).not.toBeInTheDocument();
+    await act(async () => { fireEvent.click(within(panel).getByRole('button', { name: 'Close' })); });
+    expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
   });
 
-  it('the switch reads while tips are off, and saves at once', async () => {
-    await mount(false);
-    const sheet = await openSheet();
-    expect(within(sheet).getByText('Tip a.')).toBeInTheDocument();
-    const box = within(sheet).getByRole('checkbox', { name: 'Tips on Home' });
-    expect(box).not.toBeChecked();
-    await act(async () => { fireEvent.click(box); });
-    expect(api.saveTipsSettings).toHaveBeenCalledWith(true);
-    expect(box).toBeChecked();
+  it('a ?tip= preview opens the panel with that tip in front, remembering nothing', async () => {
+    await mount([tip('make-group')], vi.fn(), 'make-group');
+    expect(api.tipQueue).toHaveBeenCalledWith('make-group', expect.anything());
+    const panel = screen.getByTestId('tips-section');
+    expect(within(panel).getByText('Tip make-group.')).toBeInTheDocument();
+    expect(screen.queryByTestId('tips-dot')).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(TIPS_OPEN_KEY)).toBeNull();
+    expect(window.localStorage.getItem(TIPS_SEEN_KEY)).toBeNull();
   });
 });

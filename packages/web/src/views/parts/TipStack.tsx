@@ -1,16 +1,14 @@
 /**
- * The tips on Home (docs/dashboard.md, Home), as a small hand of cards at the
- * top of "Needs you": today's tip in front, up to two more peeking out behind.
+ * The tips (docs/dashboard.md, Home), as a small hand of cards in the panel
+ * the lightbulb on Home opens: today's tip in front, up to two more peeking
+ * out behind, "1 of N" under them.
  *
  * Slide the front card left for "Not now" (it may come back after a while),
  * right for "Not this again" (never). The same under the stack as two buttons
  * and the arrow keys; the action on the card is a click and Enter. A drag
  * short of the threshold snaps back. With reduced motion the card crossfades
- * instead of flying. When the last card goes, the stack folds away so what is
- * under it does not jump.
- *
- * Tips are turned off on Settings → Notifications, and then the gateway
- * serves none and the stack is not drawn.
+ * instead of flying. When the last card goes, the stack folds away and the
+ * panel says there are none.
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { api, type TipView } from '../../api';
@@ -45,8 +43,11 @@ const TIP_TILT_MAX = 14;
 export interface TipQueue {
   /** The tips still in the stack, front first. */
   tips: TipView[];
-  /** Whether the stack takes room in "Needs you": true from the first tip until it has folded away. */
+  /** Whether the stack is drawn: true from the first tip until it has folded away. */
   shown: boolean;
+  /** The gateway has answered (or failed). */
+  loaded: boolean;
+  error: string | null;
   /** A card leaves: at once here, the gateway told on the side. */
   leave: (id: string, how: TipLeave) => void;
   /** The stack has folded away after its last card. */
@@ -54,11 +55,13 @@ export interface TipQueue {
 }
 
 /**
- * Home's tips: the queue (GET /api/tips/queue) and what the owner did with it
+ * The tips: the queue (GET /api/tips/queue) and what the owner did with it
  * here. A failed later/dismiss only means the tip may be back another day.
+ * `peek` while the stack is closed: the gateway marks nothing shown until the
+ * owner opens it.
  */
-export function useTipQueue(preview?: string): TipQueue {
-  const queue = useAsync(() => api.tipQueue(preview), [preview]);
+export function useTipQueue(preview?: string, peek = false): TipQueue {
+  const queue = useAsync(() => api.tipQueue(preview, peek), [preview, peek]);
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
   const [folded, setFolded] = useState(false);
   const all = queue.data?.tips ?? [];
@@ -69,7 +72,14 @@ export function useTipQueue(preview?: string): TipQueue {
     if (quiet) return;
     void (how === 'dismiss' ? api.dismissTip(id) : api.laterTip(id)).catch(() => {});
   }, [quiet]);
-  return { tips, shown: all.length > 0 && !(tips.length === 0 && folded), leave, folded: useCallback(() => setFolded(true), []) };
+  return {
+    tips,
+    shown: all.length > 0 && !(tips.length === 0 && folded),
+    loaded: queue.data !== undefined || queue.error !== null,
+    error: queue.error,
+    leave,
+    folded: useCallback(() => setFolded(true), []),
+  };
 }
 
 /** The card in front and where it is going. */
@@ -83,7 +93,7 @@ function tilt(dx: number): number {
   return Math.max(-TIP_TILT_MAX, Math.min(TIP_TILT_MAX, dx * TIP_TILT));
 }
 
-export function TipStack({ queue, navigate, hidden }: { queue: TipQueue; navigate: (route: string) => void; hidden?: boolean }): JSX.Element | null {
+export function TipStack({ queue, navigate }: { queue: TipQueue; navigate: (route: string) => void }): JSX.Element | null {
   const reduced = useMediaQuery('(prefers-reduced-motion: reduce)');
   const [motion, setMotion] = useState<Motion>({ kind: 'rest' });
   const front = useRef<HTMLDivElement | null>(null);
@@ -112,7 +122,7 @@ export function TipStack({ queue, navigate, hidden }: { queue: TipQueue; navigat
     }, reduced ? TIP_SETTLE_MS : TIP_FLY_MS);
   }, [tips, motion.kind, leave, reduced]);
 
-  if (hidden || !queue.shown) return null;
+  if (!queue.shown) return null;
 
   const tip = tips[0];
   const flying = motion.kind === 'fly';

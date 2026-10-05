@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { facts } from '../__fixtures__/tip-facts.js';
 import type { Facts, SettingsStore } from './facts.js';
 import { TIPS_PAGES_CAP, TIPS_PAGES_KEY } from './facts.js';
-import { TIPS_ENABLED_KEY, TIPS_STATE_KEY, tipsRoute } from './route.js';
+import { TIPS_STATE_KEY, tipsRoute } from './route.js';
 import type { TipRule } from './rules.js';
 
 function memoryStore(): SettingsStore & { data: Map<string, unknown> } {
@@ -31,7 +31,7 @@ describe('tips routes', () => {
   it('serves today’s tip, and remembers it was shown', async () => {
     const { store, call } = setup();
     const current = await call('GET', '/api/tips/current');
-    expect(current).toEqual({ status: 200, body: { enabled: true, tip: { id: 'a', text: 'Tip a.', action: { label: 'Do a', route: '#/a' } } } });
+    expect(current).toEqual({ status: 200, body: { tip: { id: 'a', text: 'Tip a.', action: { label: 'Do a', route: '#/a' } } } });
     expect((store.data.get(TIPS_STATE_KEY) as any).a.shownAt).toBe('2026-09-01');
   });
 
@@ -49,14 +49,11 @@ describe('tips routes', () => {
     expect((await call('POST', '/api/tips/nope/dismiss')).status).toBe(404);
   });
 
-  it('shows nothing while tips are off, and the switch says so', async () => {
+  it('has no on/off switch any more, and ignores an old one', async () => {
     const { store, call } = setup();
-    expect((await call('GET', '/api/tips/settings')).body).toEqual({ enabled: true });
-    expect((await call('PUT', '/api/tips/settings', { enabled: 'no' })).status).toBe(400);
-    expect((await call('PUT', '/api/tips/settings', { enabled: false })).body).toEqual({ enabled: false });
-    expect(store.data.get(TIPS_ENABLED_KEY)).toBe(false);
-    expect((await call('GET', '/api/tips/current')).body).toEqual({ tip: null, enabled: false });
-    expect(store.data.has(TIPS_STATE_KEY)).toBe(false);
+    expect((await call('GET', '/api/tips/settings')).status).toBe(404);
+    store.data.set('tips.enabled', false);
+    expect((await call('GET', '/api/tips/current')).body).toMatchObject({ tip: { id: 'a' } });
   });
 
   it('records a page once a day, capped', async () => {
@@ -75,9 +72,8 @@ describe('tips routes', () => {
     const { store } = setup({ groups: 1 });
     const RULES3: TipRule[] = [...RULES, { id: 'c', when: () => true, holdsForDays: 3, text: 'Tip c.', action: { label: 'Do c', route: '#/c' }, cooldownDays: 7 }];
     const deps = { store, facts: async () => facts({ groups: 1 }), now: () => new Date('2026-09-01T10:00:00Z'), timezone: 'UTC', rules: RULES3 };
-    const list = async () => (await tipsRoute(deps, { method: 'GET', path: '/api/tips' })).body as { tips: any[]; enabled: boolean };
+    const list = async () => (await tipsRoute(deps, { method: 'GET', path: '/api/tips' })).body as { tips: any[] };
     const first = await list();
-    expect(first.enabled).toBe(true);
     expect(first.tips.map((t) => [t.id, t.status])).toEqual([['a', 'quiet'], ['b', 'today'], ['c', 'holding']]);
     expect(first.tips[1]).toMatchObject({ text: 'Tip b.', action: { label: 'Do b', route: '#/b' }, holdsSince: '2026-09-01' });
     expect(store.data.has(TIPS_STATE_KEY)).toBe(false);
@@ -92,12 +88,6 @@ describe('tips routes', () => {
     expect((store.data.get(TIPS_STATE_KEY) as any).b).toEqual({ firstHeld: '2026-09-01', shownAt: '2026-09-01' });
     expect((await list()).tips[1].status).toBe('shown');
     expect((await tipsRoute(deps, { method: 'POST', path: '/api/tips/nope/restore' })).status).toBe(404);
-
-    // Off: the list still reads.
-    await tipsRoute(deps, { method: 'PUT', path: '/api/tips/settings', body: { enabled: false } });
-    const off = await list();
-    expect(off.enabled).toBe(false);
-    expect(off.tips).toHaveLength(3);
   });
 
   it('stacks today’s tip first, then the others ready; later and dismiss act per tip', async () => {
@@ -125,14 +115,39 @@ describe('tips routes', () => {
     expect((await call('POST', '/api/tips/queue')).status).toBe(405);
   });
 
-  it('stacks previews touching nothing, and says nothing while tips are off', async () => {
-    const { store, call } = setup();
+  it('stacks every ready tip, not five', async () => {
+    const store = memoryStore();
+    const many: TipRule[] = Array.from({ length: 8 }, (_, i) => ({ id: `t${i}`, when: () => true, holdsForDays: 0, text: `Tip ${i}.`, action: { label: 'Do', route: '#/x' }, cooldownDays: 7 }));
+    const deps = { store, facts: async () => facts(), now: () => new Date('2026-09-01T10:00:00Z'), timezone: 'UTC', rules: many };
+    const body = (await tipsRoute(deps, { method: 'GET', path: '/api/tips/queue' })).body as { tips: { id: string }[] };
+    expect(body.tips.map((t) => t.id)).toEqual(many.map((r) => r.id));
+  });
+
+  it('a peek keeps the holds but marks nothing shown', async () => {
+    const store = memoryStore();
+    const RULES3: TipRule[] = [...RULES, { id: 'c', when: () => true, holdsForDays: 2, text: 'Tip c.', action: { label: 'Do c', route: '#/c' }, cooldownDays: 7 }];
+    let now = new Date('2026-09-01T10:00:00Z');
+    const deps = { store, facts: async () => facts(), now: () => now, timezone: 'UTC', rules: RULES3 };
+    const peek = async () => ((await tipsRoute(deps, { method: 'GET', path: '/api/tips/queue', peek: true })).body as { tips: { id: string }[] }).tips.map((t) => t.id);
+    expect(await peek()).toEqual(['a', 'b']);
+    const state = store.data.get(TIPS_STATE_KEY) as Record<string, { shownAt?: string; firstHeld?: string }>;
+    expect(state.a).toEqual({ firstHeld: '2026-09-01' });
+    expect(state.c).toEqual({ firstHeld: '2026-09-01' });
+    // Days later, unopened: nothing went into a cooldown, and c's hold counted.
+    now = new Date('2026-09-04T10:00:00Z');
+    expect(await peek()).toEqual(['a', 'b', 'c']);
+    // Opening the stack marks the front shown; a peek after that keeps it.
+    await tipsRoute(deps, { method: 'GET', path: '/api/tips/queue' });
+    expect(await peek()).toEqual(['a', 'b', 'c']);
+    expect((store.data.get(TIPS_STATE_KEY) as Record<string, { shownAt?: string }>).a!.shownAt).toBe('2026-09-04');
+  });
+
+  it('stacks previews touching nothing', async () => {
+    const { store } = setup();
     const preview = await tipsRoute({ store, facts: async () => facts(), now: () => new Date('2026-09-01T10:00:00Z'), timezone: 'UTC', rules: RULES }, { method: 'GET', path: '/api/tips/queue', preview: 'b,a' });
     expect(preview.body).toMatchObject({ preview: true, tips: [{ id: 'b' }, { id: 'a' }] });
     expect(store.data.has(TIPS_STATE_KEY)).toBe(false);
     const missing = await tipsRoute({ store, facts: async () => facts(), now: () => new Date(), timezone: 'UTC', rules: RULES }, { method: 'GET', path: '/api/tips/queue', preview: 'a,nope' });
     expect(missing.status).toBe(404);
-    await call('PUT', '/api/tips/settings', { enabled: false });
-    expect((await call('GET', '/api/tips/queue')).body).toEqual({ tips: [], enabled: false });
   });
 });

@@ -1,39 +1,28 @@
 /**
  * The lightbulb on Home's greeting row (docs/dashboard.md, Home) and the Tips
- * section it opens right under that row: every tip and where it stands, one
- * card each. A small dot on the bulb when a tip is due today and Home is not
- * showing it (tips are off). The bulb shows pressed while the section is
- * open; whether it is open is kept in this browser (`buddi.tipsOpen`),
- * closed by default.
+ * panel it opens right under the glance: the stack of tips (parts/TipStack),
+ * every one that is ready, today's in front. A tip dismissed for good is not
+ * there; one put off with "Not now" comes back in its turn.
  *
- * Each card: a status pill, the sentence, and on the right the action, or
- * "Bring back" for a dismissed tip. Under the cards the same "Tips on Home"
- * switch as Settings → Notifications, saved at once, and "Close". The cards
- * read while tips are off.
+ * The bulb carries a dot while a tip is ready that the owner has not had in
+ * the stack yet; opening the panel clears it. The bulb shows pressed while
+ * the panel is open; whether it is open is kept in this browser
+ * (`buddi.tipsOpen`), closed by default. `#/?tip=<id>` opens it with that tip
+ * in front, touching nothing.
  */
-import { useCallback, useState } from 'react';
-import { api, ApiError, type TipListRow } from '../../api';
-import { Button, Card, ErrorBanner, Pill, Section, Spacer, Toolbar, useAsync } from '../../ui';
+import { useCallback, useEffect, useState } from 'react';
+import { Button, ErrorBanner, Section } from '../../ui';
 import { Icon } from '../../ui/Icon';
-import { fmtDay } from '../../format';
+import { TipStack, useTipQueue, type TipQueue } from './TipStack';
 
-/** Set to '1' while the Tips section on Home is open. */
+/** Set to '1' while the Tips panel on Home is open. */
 export const TIPS_OPEN_KEY = 'buddi.tipsOpen';
-
-/** `YYYY-MM-DD` as "Sep 27". */
-function fmtDate(day: string): string {
-  return fmtDay(day, { compact: true });
-}
-
-export function tipStatusWord(row: TipListRow): string {
-  switch (row.status) {
-    case 'today': return 'Due today';
-    case 'holding': return 'Waiting';
-    case 'quiet': return 'Not needed now';
-    case 'dismissed': return 'Dismissed';
-    case 'shown': return row.shownAt ? `Shown on ${fmtDate(row.shownAt)}` : 'Shown';
-  }
-}
+/**
+ * The ids of the ready tips the owner has had in the stack, as JSON. Kept to
+ * the ones still ready: a tip that leaves (put off, dismissed, no longer
+ * true) is forgotten, so its return is new again.
+ */
+export const TIPS_SEEN_KEY = 'buddi.tipsSeen';
 
 function readOpen(): boolean {
   try {
@@ -43,112 +32,94 @@ function readOpen(): boolean {
   }
 }
 
+function readSeen(): string[] {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(TIPS_SEEN_KEY) ?? '[]');
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeSeen(ids: string[]): void {
+  try {
+    if (ids.length) window.localStorage.setItem(TIPS_SEEN_KEY, JSON.stringify(ids));
+    else window.localStorage.removeItem(TIPS_SEEN_KEY);
+  } catch {
+    /* a private window: the dot comes back next visit */
+  }
+}
+
 export interface Tips {
   open: boolean;
   setOpen: (open: boolean) => void;
-  list: { data: { tips: TipListRow[]; enabled: boolean } | undefined; error: string | null; reload: () => void };
+  queue: TipQueue;
+  /** A ready tip the owner has not had in the stack. */
+  unseen: boolean;
+  /** A `?tip=` preview: nothing is remembered. */
+  preview: boolean;
 }
 
-/** The tips list and whether the section is open: shared by the bulb and the section. */
-export function useTips(): Tips {
-  const list = useAsync(() => api.tips(), []);
-  const [open, setOpenState] = useState(readOpen);
+/** The queue, whether the panel is open and the dot: shared by the bulb and the panel. */
+export function useTips(preview?: string): Tips {
+  const [open, setOpenState] = useState(() => Boolean(preview) || readOpen());
+  // A preview link opens the panel with its tips in front.
+  useEffect(() => { if (preview) setOpenState(true); }, [preview]);
   const setOpen = useCallback((next: boolean): void => {
     setOpenState(next);
+    if (preview) return;
     try {
       if (next) window.localStorage.setItem(TIPS_OPEN_KEY, '1');
       else window.localStorage.removeItem(TIPS_OPEN_KEY);
     } catch {
       /* a private window: open for this visit only */
     }
-  }, []);
-  return { open, setOpen, list };
+  }, [preview]);
+  const queue = useTipQueue(preview, !open);
+  const [seen, setSeen] = useState(readSeen);
+  const ids = queue.tips.map((tip) => tip.id).join(',');
+  useEffect(() => {
+    if (preview || !queue.loaded || queue.error) return;
+    const ready = ids ? ids.split(',') : [];
+    // Open: every tip in the stack is seen. Closed: forget the ones gone.
+    const next = open ? ready : seen.filter((id) => ready.includes(id));
+    if (next.join(',') !== seen.join(',')) {
+      setSeen(next);
+      writeSeen(next);
+    }
+  }, [open, ids, preview, queue.loaded, queue.error, seen]);
+  const unseen = !open && !preview && queue.tips.some((tip) => !seen.includes(tip.id));
+  return { open, setOpen, queue, unseen, preview: Boolean(preview) };
 }
 
 export function TipsButton({ tips }: { tips: Tips }): JSX.Element {
-  const { open, setOpen, list } = tips;
-  const due = !!list.data && !list.data.enabled && list.data.tips.some((t) => t.status === 'today');
+  const { open, setOpen, unseen } = tips;
+  const word = unseen ? 'A new tip' : 'Tips';
   return (
     <button
       type="button"
       className="ui-icon-btn home-tips-btn"
-      aria-label={due ? 'Tips, one due today' : 'Tips'}
+      aria-label={word}
       aria-pressed={open}
-      title="Tips"
+      title={word}
       data-open={open}
-      onClick={() => {
-        if (!open) list.reload();
-        setOpen(!open);
-      }}
+      onClick={() => setOpen(!open)}
     >
       <Icon name="bulb" />
-      {due ? <span className="home-tips-dot" data-testid="tips-dot" /> : null}
+      {unseen ? <span className="home-tips-dot" data-testid="tips-dot" /> : null}
     </button>
   );
 }
 
 export function TipsSection({ tips, navigate }: { tips: Tips; navigate: (route: string) => void }): JSX.Element | null {
-  const { open, setOpen, list } = tips;
-  const [failed, setFailed] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [on, setOn] = useState<boolean | null>(null);
+  const { open, setOpen, queue } = tips;
   if (!open) return null;
-
-  const rows = list.data?.tips ?? null;
-  const checked = on ?? list.data?.enabled ?? true;
-  const say = (e: unknown): void => setFailed(e instanceof ApiError ? e.message : String(e));
-
-  const restore = (id: string): void => {
-    setBusy(id);
-    setFailed(null);
-    api.restoreTip(id).then(() => list.reload(), say).finally(() => setBusy(null));
-  };
-
-  const change = (next: boolean): void => {
-    setBusy('switch');
-    setFailed(null);
-    setOn(next);
-    api
-      .saveTipsSettings(next)
-      .then((saved) => { setOn(saved.enabled); list.reload(); })
-      .catch((e: unknown) => { setOn(!next); say(e); })
-      .finally(() => setBusy(null));
-  };
-
+  const empty = queue.loaded && !queue.shown;
   return (
     <div className="home-tips" data-testid="tips-section">
-      <Section title="Tips">
-        <ErrorBanner message={list.error ?? failed} />
-        <div className="tips-grid">
-          {(rows ?? []).map((row) => (
-            <div className="tips-card" key={row.id} data-tip={row.id} data-status={row.status}>
-              <Card tone={row.status === 'today' ? 'accent' : undefined}>
-                <div>
-                  <Pill tone={row.status === 'today' ? 'accent' : 'muted'}>{tipStatusWord(row)}</Pill>
-                </div>
-                <p className="tips-card-text">{row.text}</p>
-                <Toolbar>
-                  <Spacer />
-                  {row.status === 'dismissed' ? (
-                    <Button size="sm" disabled={busy === row.id} onClick={() => restore(row.id)}>Bring back</Button>
-                  ) : (
-                    <Button size="sm" variant={row.status === 'today' ? 'accent' : undefined} onClick={() => navigate(row.action.route)}>
-                      {row.action.label}
-                    </Button>
-                  )}
-                </Toolbar>
-              </Card>
-            </div>
-          ))}
-        </div>
-        <Toolbar>
-          <label className="backup-check">
-            <input type="checkbox" checked={checked} disabled={busy === 'switch' || rows === null} onChange={(e) => change(e.target.checked)} />
-            <span>Tips on Home</span>
-          </label>
-          <Spacer />
-          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Close</Button>
-        </Toolbar>
+      <Section title="Tips" actions={<Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Close</Button>}>
+        <ErrorBanner message={queue.error} />
+        {empty && !queue.error ? <p className="home-tips-empty">No tips right now.</p> : <TipStack queue={queue} navigate={navigate} />}
       </Section>
     </div>
   );

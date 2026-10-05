@@ -33,8 +33,7 @@ vi.mock('../api', async (importOriginal) => {
       notificationsNeedingYou: vi.fn(async () => ({ notifications: [] })),
       notificationSeen: vi.fn(async () => ({ ok: true })),
       homeDismiss: vi.fn(async () => ({ dismissed: {} })),
-      tipQueue: vi.fn(async () => ({ tips: [], enabled: true })),
-      tips: vi.fn(async () => ({ tips: [], enabled: true })),
+      tipQueue: vi.fn(async () => ({ tips: [] })),
       catalogue: vi.fn(async () => ({ agents: [], fromPlugins: [], delisted: [] })),
       plugins: vi.fn(async () => ({ installed: [], staged: [], trust: '', restartNeeded: false, checkout: false })),
       passphraseNotice: vi.fn(async () => ({ show: false })),
@@ -74,7 +73,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
   vi.mocked(api.overview).mockResolvedValue(OVERVIEW as never);
+  vi.mocked(api.tipQueue).mockResolvedValue({ tips: [] });
 });
+
+const GROUP_TIP = { id: 'make-group', text: 'Put them in a group.', action: { label: 'Make a group', route: '#/chat?group=new' } };
 
 async function home(update?: VersionView | null, navigate = vi.fn()): Promise<void> {
   await act(async () => {
@@ -141,33 +143,40 @@ describe('the tip', () => {
     expect(bulb.parentElement).toHaveClass('home-date');
   });
 
-  it('heads Needs you, above the notices, which are inside it too', async () => {
-    vi.mocked(api.tipQueue).mockResolvedValueOnce({ tips: [{ id: 'make-group', text: 'Put them in a group.', action: { label: 'Make a group', route: '#/chat?group=new' } }], enabled: true });
+  it('opens the stack of tips under the glance, not in Needs you', async () => {
+    vi.mocked(api.tipQueue).mockResolvedValue({ tips: [GROUP_TIP, { ...GROUP_TIP, id: 'widgets', text: 'Pin the weather.' }] });
     await home(NEWER);
-    const tip = screen.getByText('Put them in a group.');
-    const upgrade = screen.getByText(/A newer buddi is ready:/);
-    expect(tip.compareDocumentPosition(upgrade) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText('Put them in a group.')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tips-dot')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'A new tip' })); });
+    const panel = screen.getByTestId('tips-section');
+    expect(panel.closest('.home')).not.toBeNull();
+    expect(within(panel).getByTestId('tip-stack')).toBeInTheDocument();
+    expect(within(panel).getByText('Put them in a group.')).toBeInTheDocument();
+    expect(within(panel).getByText('1 of 2')).toBeInTheDocument();
+    expect(screen.queryByTestId('tips-dot')).not.toBeInTheDocument();
     const needs = document.getElementById('home-needs')!;
-    expect(needs).toContainElement(tip);
-    expect(needs).toContainElement(upgrade);
-    expect(within(needs).getByRole('heading', { name: 'Needs you' }).compareDocumentPosition(tip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(needs).not.toContainElement(panel);
+    expect(within(needs).queryByTestId('tip-stack')).not.toBeInTheDocument();
+    expect(panel.compareDocumentPosition(needs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => { fireEvent.click(within(panel).getByRole('button', { name: 'Close' })); });
+    expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
+    expect(screen.queryByText('Put them in a group.')).not.toBeInTheDocument();
   });
 
-  it('opens the Tips section under the greeting and hides the tip card while it is open', async () => {
-    vi.mocked(api.tipQueue).mockResolvedValueOnce({ tips: [{ id: 'make-group', text: 'Put them in a group.', action: { label: 'Make a group', route: '#/chat?group=new' } }], enabled: true });
-    await home(undefined);
-    expect(screen.getByText('Put them in a group.')).toBeInTheDocument();
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Tips' })); });
-    expect(screen.getByTestId('tips-section').closest('.home')).not.toBeNull();
-    expect(screen.queryByText('Put them in a group.')).not.toBeInTheDocument();
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Tips' })); });
-    expect(screen.getByText('Put them in a group.')).toBeInTheDocument();
+  it('opens the panel for a ?tip= preview', async () => {
+    vi.mocked(api.tipQueue).mockResolvedValue({ tips: [GROUP_TIP], preview: true });
+    await act(async () => {
+      render(<Home timezone="UTC" navigate={vi.fn()} agents={[]} attention={new Map()} hash="#/?tip=make-group" />);
+    });
+    expect(api.tipQueue).toHaveBeenCalledWith('make-group', expect.anything());
+    expect(within(screen.getByTestId('tips-section')).getByText('Put them in a group.')).toBeInTheDocument();
   });
 });
 
 describe('Needs you', () => {
-  it('holds the tips, approvals, passphrase, update, errors and sign-ins, in that order', async () => {
-    vi.mocked(api.tipQueue).mockResolvedValueOnce({ tips: [{ id: 'make-group', text: 'Put them in a group.', action: { label: 'Make a group', route: '#/chat?group=new' } }], enabled: true });
+  it('holds the approvals, passphrase, update, errors and sign-ins, in that order, and no tips', async () => {
+    vi.mocked(api.tipQueue).mockResolvedValue({ tips: [GROUP_TIP] });
     vi.mocked(api.approvals).mockResolvedValueOnce({ pending: [APPROVAL], recent: [] } as never);
     vi.mocked(api.passphraseNotice).mockResolvedValueOnce({ show: true, passphrase: 'one two three four five six' } as never);
     vi.mocked(api.overview).mockResolvedValue({
@@ -183,21 +192,20 @@ describe('Needs you', () => {
       );
     });
     const needs = document.getElementById('home-needs')!;
-    const kinds = Array.from(needs.querySelectorAll('.needs-card')).map((card) => card.getAttribute('data-kind'))
-      // Only the front tip counts: the ones behind are its edges.
-      .filter((kind, i, all) => kind !== 'tip' || all.indexOf('tip') === i);
-    expect(kinds).toEqual(['tip', 'approval', 'passphrase', 'update', 'watcher-error', 'sign-in']);
+    const kinds = Array.from(needs.querySelectorAll('.needs-card')).map((card) => card.getAttribute('data-kind'));
+    expect(kinds).toEqual(['approval', 'passphrase', 'update', 'watcher-error', 'sign-in']);
+    expect(within(needs).queryByText('Put them in a group.')).not.toBeInTheDocument();
     // Nothing of it sits between the composer and the header any more.
     expect(document.querySelector('.home > .ui-card, .home > article')).toBeNull();
   });
 
-  it('shows for a tip alone, and not at all with nothing', async () => {
-    vi.mocked(api.tipQueue).mockResolvedValueOnce({ tips: [{ id: 'make-group', text: 'Put them in a group.', action: { label: 'Make a group', route: '#/chat?group=new' } }], enabled: true });
-    await home(undefined);
-    expect(screen.getByRole('heading', { name: 'Needs you' })).toBeInTheDocument();
-    cleanup();
+  it('a tip alone is not a reason for Needs you', async () => {
+    vi.mocked(api.tipQueue).mockResolvedValue({ tips: [GROUP_TIP] });
     await home(undefined);
     expect(screen.queryByRole('heading', { name: 'Needs you' })).not.toBeInTheDocument();
+    cleanup();
+    await home(NEWER);
+    expect(screen.getByRole('heading', { name: 'Needs you' })).toBeInTheDocument();
   });
 });
 

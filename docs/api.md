@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-326 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+324 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -656,9 +656,7 @@ curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "
 | GET | `/api/overview` | Home's whole first read: plugin blocks and glances, and counts of approvals, jobs, missions, reminders, watchers. | yes |
 | GET | `/api/tips` | Every tip and its state. | yes |
 | GET | `/api/tips/current` | Today's tip on Home, if any (picking one is remembered). | yes |
-| GET | `/api/tips/queue` | Home's stack of tips: today's first, then up to four more that are ready (picking the first is remembered). | yes |
-| GET | `/api/tips/settings` | Whether tips are on. | yes |
-| PUT | `/api/tips/settings` | Turn tips on or off. | yes |
+| GET | `/api/tips/queue` | The stack the lightbulb on Home opens: today's tip first, then every other one that is ready (picking the first is remembered). | yes |
 | POST | `/api/tips/seen-page` | Record that a page was opened (tips about it stop). | yes |
 | POST | `/api/tips/:id/dismiss` | Never show this tip again. | yes |
 | POST | `/api/tips/:id/later` | Show this tip another day. | yes |
@@ -694,7 +692,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/overview"
 Every tip and its state.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ tips: Tip[], enabled: boolean }`
+- **Answer:** `{ tips: Tip[] }`
 - **Since:** 0.1.0-pre.22
 
 ```sh
@@ -707,7 +705,7 @@ Today's tip on Home, if any (picking one is remembered).
 
 - **Auth:** Session or API token.
 - **Query:** `preview?: tip id  // show one as it would look, touching nothing`
-- **Answer:** `{ tip: Tip|null, enabled: boolean }`
+- **Answer:** `{ tip: Tip|null }`
 - **Errors:** 404 no tip by the preview id
 - **Since:** 0.1.0-pre.22
 
@@ -717,41 +715,16 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/current"
 
 #### `GET /api/tips/queue`
 
-Home's stack of tips: today's first, then up to four more that are ready (picking the first is remembered).
+The stack the lightbulb on Home opens: today's tip first, then every other one that is ready (picking the first is remembered).
 
 - **Auth:** Session or API token.
-- **Query:** `preview?: tip ids, comma-separated  // stack those as they would look, touching nothing`
-- **Answer:** `{ tips: Tip[], enabled: boolean }`
+- **Query:** `preview?: tip ids, comma-separated  // stack those as they would look, touching nothing; peek?: '1'  // the same, marking nothing shown`
+- **Answer:** `{ tips: Tip[] }`
 - **Errors:** 404 no tip by a preview id
 - **Since:** 0.1.0-pre.45
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/queue"
-```
-
-#### `GET /api/tips/settings`
-
-Whether tips are on.
-
-- **Auth:** Session or API token.
-- **Answer:** `{ enabled: boolean }`
-- **Since:** 0.1.0-pre.22
-
-```sh
-curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/settings"
-```
-
-#### `PUT /api/tips/settings`
-
-Turn tips on or off.
-
-- **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ enabled: boolean }`
-- **Answer:** `{ enabled: boolean }`
-- **Since:** 0.1.0-pre.22
-
-```sh
-curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"enabled":true}' "$BUDDI_URL/api/tips/settings"
 ```
 
 #### `POST /api/tips/seen-page`

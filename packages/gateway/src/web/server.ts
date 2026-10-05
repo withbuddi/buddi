@@ -1744,7 +1744,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       ...(deps.telegram ? { telegram: deps.telegram } : {}),
     });
 
-    // Tips on Home: one quiet card a day, the switch, the pages seen (tips/route.ts).
+    // Tips: the stack the lightbulb on Home opens, and the pages seen (tips/route.ts).
     if (path === '/api/tips' || path.startsWith('/api/tips/')) {
       let body: Record<string, unknown> = {};
       if (method === 'POST' || method === 'PUT') {
@@ -1791,7 +1791,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             },
           }),
         },
-        { method, path, body, preview: url.searchParams.get('preview') },
+        { method, path, body, preview: url.searchParams.get('preview'), peek: url.searchParams.get('peek') === '1' },
       );
       return sendJson(res, answer.status, answer.body);
     }

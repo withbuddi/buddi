@@ -122,12 +122,10 @@ export function pickTip(
   return { tip: viewOf(chosen.rule, facts), state };
 }
 
-/** How many tips Home's stack holds at most. */
-export const TIP_QUEUE_MAX = 5;
-
 /**
- * Home's stack: today's tip in front, then the others that are ready, in the
- * engine's order (held longest, then first in `TIPS`), at most `max`.
+ * The stack the lightbulb on Home opens: today's tip in front, then every
+ * other tip that is ready, in the engine's order (held longest, then first in
+ * `TIPS`), at most `max` (all of them by default).
  *
  * Only the front one is remembered as shown (`pickTip`'s state); the cards
  * behind it are a peek, and each is shown or put off when the owner swipes to
@@ -139,7 +137,7 @@ export function pickQueue(
   facts: Facts,
   previous: TipsState,
   today: string,
-  max = TIP_QUEUE_MAX,
+  max = Number.POSITIVE_INFINITY,
 ): { tips: TipView[]; state: TipsState } {
   const { tip, state } = pickTip(rules, facts, previous, today);
   if (facts.firstRun || max <= 0) return { tips: [], state };

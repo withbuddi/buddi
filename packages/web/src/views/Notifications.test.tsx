@@ -24,8 +24,6 @@ vi.mock('../api', async (importOriginal) => {
       saveTelegramToken: vi.fn(),
       telegramPairing: vi.fn(),
       unpairTelegramDevice: vi.fn(),
-      tipsSettings: vi.fn(),
-      saveTipsSettings: vi.fn(),
       agents: vi.fn(),
     },
   };
@@ -47,8 +45,6 @@ beforeEach(() => {
   vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: true });
   vi.mocked(api.telegramDevices).mockResolvedValue({ devices: [PHONE] });
   vi.mocked(api.unpairTelegramDevice).mockResolvedValue(null);
-  vi.mocked(api.tipsSettings).mockResolvedValue({ enabled: true });
-  vi.mocked(api.saveTipsSettings).mockImplementation(async (enabled) => ({ enabled }));
   vi.mocked(api.agents).mockResolvedValue({ agents: [{ id: 'scout', handle: 'scout', name: 'Scout' }] } as never);
   vi.mocked(api.notifications).mockResolvedValue({
     notifications: [
@@ -244,15 +240,8 @@ describe('Settings → Telegram', () => {
     expect(await screen.findByText('Work phone')).toBeInTheDocument();
   });
 
-  it('turns tips on Home off and on, saved at once', async () => {
+  it('has no Tips on Home switch any more', async () => {
     await page();
-    const box = screen.getByRole('checkbox', { name: 'Tips on Home' });
-    expect(box).toBeChecked();
-    await act(async () => { fireEvent.click(box); });
-    expect(api.saveTipsSettings).toHaveBeenCalledWith(false);
-    expect(box).not.toBeChecked();
-    await act(async () => { fireEvent.click(box); });
-    expect(api.saveTipsSettings).toHaveBeenLastCalledWith(true);
-    expect(box).toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: 'Tips on Home' })).toBeNull();
   });
 });
