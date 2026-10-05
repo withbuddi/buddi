@@ -34,6 +34,13 @@ import { stopChild } from './environment.js';
 /** The gateway's backoff: 2 s doubling to 30 s. */
 export function connectorRestartDelay(failures: number): number { return Math.min(30_000, 2000 * 2 ** Math.min(failures, 4)); }
 
+/**
+ * How long until a failed read of the plan or the token is tried again: 30 s
+ * doubling to 10 min. A read that throws is the database or the keychain not
+ * answering for now, not a missing setup, so the connector keeps asking.
+ */
+export function connectorReadRetryDelay(failures: number): number { return Math.min(10 * 60_000, 30_000 * 2 ** Math.min(failures, 5)); }
+
 export type ConnectorState = 'running' | 'starting' | 'stopped' | 'missing-binary' | 'system-daemon';
 
 /** What `GET /connector` answers, and what the setup step shows. */
@@ -247,6 +254,8 @@ export interface ConnectorDeps {
   log?: (line: string) => void;
   now?: () => number;
   restartDelay?: (failures: number) => number;
+  /** How long until a failed plan or token read is tried again. */
+  readRetryDelay?: (failures: number) => number;
 }
 
 export interface Connector {
@@ -267,6 +276,7 @@ export function createConnector(deps: ConnectorDeps): Connector {
   const say = deps.log ?? ((line: string) => console.error(line));
   const now = deps.now ?? Date.now;
   const delay = deps.restartDelay ?? connectorRestartDelay;
+  const readDelay = deps.readRetryDelay ?? connectorReadRetryDelay;
   const spawn = deps.spawn ?? nodeSpawn;
   const logFile = path.join(deps.data, 'logs', 'cloudflared.log');
   const download = deps.download ?? (() => downloadCloudflared({ data: deps.data, platform, arch }));
@@ -280,6 +290,8 @@ export function createConnector(deps: ConnectorDeps): Connector {
   let desired = false, closed = false;
   let tunnelId: string | null = null;
   let failures = 0, retry: NodeJS.Timeout | undefined, retryPending = false;
+  /** Failed plan or token reads in a row, and the sync that tries again. */
+  let readFailures = 0, readRetry: NodeJS.Timeout | undefined, readFailedThisPass = false;
   let downloadFailedAt = 0, downloadError: string | undefined;
   let log: WriteStream | undefined;
   let chain: Promise<unknown> = Promise.resolve();
@@ -372,11 +384,31 @@ export function createConnector(deps: ConnectorDeps): Connector {
     });
   }
 
+  /**
+   * A read that threw: say so, and sync again after the read backoff. The
+   * state is `starting` — buddi still means to run the connector — never the
+   * `stopped` a truly missing token is.
+   */
+  function readFailed(what: string): void {
+    readFailedThisPass = true;
+    const wait = readDelay(readFailures++);
+    state = 'starting';
+    detail = `buddi could not read ${what}; trying again in ${wait >= 60_000 ? `${Math.round(wait / 60_000)} min` : `${Math.round(wait / 1000)} s`}.`;
+    say(`supervisor: could not read ${what}; syncing the connector again in ${wait} ms.`);
+    clearTimeout(readRetry);
+    readRetry = setTimeout(() => { readRetry = undefined; void serial(reconcile); }, wait);
+    readRetry.unref?.();
+  }
+
   async function spawnWithToken(bin: string): Promise<void> {
     if (closed || !desired || alive()) return;
-    let token: string | null = null;
-    try { token = await deps.token(); } catch { token = null; }
+    let token: string | null;
+    try { token = await deps.token(); } catch {
+      readFailed('the connector token');
+      return;
+    }
     if (!token) {
+      // Truly none in the vault: nothing to retry until the owner sets it up.
       state = 'stopped';
       detail = 'buddi has no connector token for the tunnel. Set it up again.';
       return;
@@ -386,9 +418,19 @@ export function createConnector(deps: ConnectorDeps): Connector {
 
   async function reconcile(): Promise<ConnectorStatus> {
     if (closed) return status();
+    clearTimeout(readRetry);
+    readRetry = undefined;
+    readFailedThisPass = false;
+    const result = await reconcileOnce();
+    // A pass that read everything it needed ends the read backoff.
+    if (!readFailedThisPass) readFailures = 0;
+    return result;
+  }
+
+  async function reconcileOnce(): Promise<ConnectorStatus> {
     let plan: ConnectorPlan;
     try { plan = await deps.plan(); }
-    catch { detail = 'buddi could not read its Cloudflare setting.'; return status(); }
+    catch { readFailed('its Cloudflare setting'); return status(); }
     mode = plan.mode;
     brew = undefined;
     if (!plan.wanted) {
@@ -435,6 +477,8 @@ export function createConnector(deps: ConnectorDeps): Connector {
     }),
     close: () => serial(async () => {
       closed = true;
+      clearTimeout(readRetry);
+      readRetry = undefined;
       await stop();
       state = 'stopped';
       log?.end();

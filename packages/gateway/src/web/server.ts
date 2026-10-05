@@ -1009,6 +1009,13 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (!socket) return undefined;
     return supervisorConnector(socket, connectorTokenStore(deps.pool as never, createVault({ env: deps.env ?? process.env })));
   };
+  // Once at startup: a supervisor whose own boot sync could not read the
+  // setting yet (the gateway runs the migrations) catches up now, not at the
+  // next settings save or the hourly tick. Only when Access is on: off, the
+  // supervisor's boot sync already stopped it and there is nothing to catch up.
+  void readCloudflareSetting()
+    .then((setting) => (setting.enabled ? connectorControl()?.sync() : undefined))
+    .catch(() => undefined);
   const setupDepsFor = (token: string, lease: SetupLease, signal?: AbortSignal): SetupDeps => ({
     api: createCloudflareApi({ token, transport: deps.cloudflare?.api?.transport, baseUrl: deps.cloudflare?.api?.baseUrl }),
     ingressPort: ingress.port() ?? (askedIngressPort() || null) ?? accessCtx.dashboardPort() + 2,

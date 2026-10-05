@@ -752,7 +752,13 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       void upgrade!.tick().catch(err => console.error(`upgrade: the version check failed: ${err instanceof Error ? err.message : String(err)}`));
     };
     if (!briefly) {
-      upgradeTick = setInterval(tick, Number(ready.env.BUDDI_UPGRADE_TICK_MS) || TICK_INTERVAL_MS);
+      // The connector rides the same hour: a sync that failed at boot (the
+      // setting unreadable, a download refused) is tried again without
+      // waiting for a settings save. A sync of a healthy connector is a no-op.
+      upgradeTick = setInterval(() => {
+        tick();
+        if (migrationFailure === undefined) void connector!.sync();
+      }, Number(ready.env.BUDDI_UPGRADE_TICK_MS) || TICK_INTERVAL_MS);
       if (typeof upgradeTick.unref === 'function') upgradeTick.unref();
       tick();
     }

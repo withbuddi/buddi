@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
+  connectorReadRetryDelay,
   connectorEnv,
   createConnector,
   downloadCloudflared,
@@ -68,13 +69,13 @@ async function until(check: () => boolean, ms = 5_000): Promise<void> {
   }
 }
 
-async function setup(options: { plan?: ConnectorPlan; exists?: (file: string) => boolean; register?: boolean; platform?: NodeJS.Platform; download?: () => Promise<{ path: string }>; pathEnv?: string } = {}) {
+async function setup(options: { token?: () => Promise<string | null>; plan?: ConnectorPlan; exists?: (file: string) => boolean; register?: boolean; platform?: NodeJS.Platform; download?: () => Promise<{ path: string }>; pathEnv?: string } = {}) {
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-connector-'));
   const bin = path.join(data, 'pathbin');
   await mkdir(bin);
   const binary = await fakeCloudflared(bin, { register: options.register ?? true });
   let plan: ConnectorPlan = options.plan ?? { wanted: true, mode: 'buddi', tunnelId: 'tunnel-1' };
-  const tokenReads = vi.fn(async () => TOKEN);
+  const tokenReads = vi.fn(options.token ?? (async (): Promise<string | null> => TOKEN));
   const lines: string[] = [];
   const connector = createConnector({
     data, platform: options.platform ?? 'linux', arch: 'x64',
@@ -194,6 +195,51 @@ describe('Cloudflare’s system service', () => {
     const status = await w.connector.sync();
     expect(status).toMatchObject({ state: 'system-daemon', mode: 'system', pid: null });
     expect(w.tokenReads).not.toHaveBeenCalled();
+  });
+});
+
+describe('a read that fails', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  test('waits 30 s, doubling to 10 min', () => {
+    expect([0, 1, 2, 3, 4, 5, 6, 20].map(connectorReadRetryDelay)).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000, 600_000]);
+  });
+
+  test('retries a setting it could not read on that schedule, and stops once it reads', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const plan = vi.fn<() => Promise<ConnectorPlan>>()
+      .mockRejectedValueOnce(new Error('database down'))
+      .mockRejectedValueOnce(new Error('database down'))
+      .mockResolvedValue({ wanted: false, mode: 'buddi', tunnelId: null });
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-connector-'));
+    const connector = createConnector({ data, platform: 'linux', env: { PATH: '/nowhere' }, plan, token: async () => TOKEN, log: () => undefined });
+    connectors.push(connector);
+
+    expect(await connector.sync()).toMatchObject({ state: 'starting', detail: expect.stringContaining('trying again in 30 s') });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(plan).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(plan).toHaveBeenCalledTimes(2);
+    expect(connector.status().detail).toContain('trying again in 1 min');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(plan).toHaveBeenCalledTimes(3);
+    expect(connector.status()).toMatchObject({ state: 'stopped' });
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(plan).toHaveBeenCalledTimes(3);
+  });
+
+  test('retries a token read that threw, but a vault with no token is stopped and left alone', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const token = vi.fn<() => Promise<string | null>>()
+      .mockRejectedValueOnce(new Error('keychain locked'))
+      .mockResolvedValue(null);
+    const w = await setup({ token });
+    expect(await w.connector.sync()).toMatchObject({ state: 'starting', detail: expect.stringContaining('connector token; trying again in 30 s') });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(token).toHaveBeenCalledTimes(2);
+    expect(w.connector.status()).toMatchObject({ state: 'stopped', pid: null, detail: expect.stringContaining('no connector token') });
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(token).toHaveBeenCalledTimes(2);
   });
 });
 
