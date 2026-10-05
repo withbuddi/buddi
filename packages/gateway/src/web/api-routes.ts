@@ -429,6 +429,13 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   { method: 'POST', path: '/api/agents/default', area: 'agents', summary: 'Make an agent the default (where a chat that names nobody lands).', body: '{ agentId: string }', errors: '400; 404' },
   { method: 'GET', path: '/api/agents/:id/profile', area: 'agents', summary: "One agent whole: its grant with every tool's tier, engine, skills, delegates.", errors: '404 no such agent' },
+  {
+    method: 'GET', path: '/api/agents/:id/intro', area: 'agents',
+    summary: "A new agent's first-open strip in its chat: whether it is still due, whom the agent may ask and who may ask it.",
+    answer: "{ show: false } | { show: true, id, handle, asks: 'everyone' | IntroAgent[], askedBy: IntroAgent[] }  // IntroAgent: { id, handle, name, frontDesk? }",
+    errors: '404',
+  },
+  { method: 'POST', path: '/api/agents/:id/intro/dismiss', area: 'agents', summary: "Close a new agent's first-open strip for good.", answer: '{ ok: true }', errors: '404' },
   { method: 'GET', path: '/api/agents/:id/skills', area: 'agents', summary: 'Every skill the agent loads; learned ones with their versions.', errors: '404' },
   {
     method: 'POST', path: '/api/agents/:id/skills/:skill/remove', area: 'agents', summary: 'Remove a learned skill (its versions are kept).',
@@ -1436,6 +1443,8 @@ export const API_SINCE: Readonly<Record<string, string>> = {
   'GET /api/agents': '0.1.0-pre.15',
   'POST /api/agents/default': '0.1.0-pre.15',
   'GET /api/agents/:id/profile': '0.1.0-pre.15',
+  'GET /api/agents/:id/intro': '0.1.0-pre.45',
+  'POST /api/agents/:id/intro/dismiss': '0.1.0-pre.45',
   'GET /api/agents/:id/skills': '0.1.0-pre.15',
   'POST /api/agents/:id/skills/:skill/remove': '0.1.0-pre.15',
   'GET /api/agents/:id/tools': '0.1.0-pre.15',

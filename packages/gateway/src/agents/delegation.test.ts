@@ -8,6 +8,7 @@ import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js
 import {
   bindDelegation,
   createDelegationManifest,
+  defaultDelegatesFor,
   delegateAllowlist,
   readDelegates,
   readDelegatesFile,
@@ -78,6 +79,21 @@ describe('readDelegates', () => {
     }
     // And an agent with no file of its own delegates to nobody.
     expect(readDelegates('no-such-agent', AGENTS_DIR)).toEqual([]);
+  });
+});
+
+describe('delegation by default for a new agent', () => {
+  it('asks everyone when it holds agent.delegate and names nobody', () => {
+    expect(defaultDelegatesFor(['memory.note', 'agent.delegate'], null)).toEqual(['*']);
+  });
+
+  it('keeps an explicit list as given, the empty one too', () => {
+    expect(defaultDelegatesFor(['agent.delegate'], ['scout'])).toEqual(['scout']);
+    expect(defaultDelegatesFor(['agent.delegate'], [])).toEqual([]);
+  });
+
+  it('writes no file for an agent without the tool', () => {
+    expect(defaultDelegatesFor(['memory.note'], null)).toBeNull();
   });
 });
 

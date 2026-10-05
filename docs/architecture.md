@@ -214,8 +214,18 @@ Around the contract:
   everyone: every other agent, new ones included, minus any agent holding the
   write tools; its Team tab says "Can ask: everyone, as the front desk" (or
   "as the maker"), and **Limit to…** turns it into the explicit picker, whose
-  list then narrows it. Every other agent asks only its list, and new teammates
-  must be added to it there. Removing an agent takes its id off every other
+  list then narrows it. An agent Agent Father creates (`platform.create_agent`)
+  that holds `agent.delegate` and names no list is written `["*"]` by the
+  gateway, not the persona: delegation by default. The approval card says "May
+  ask: everyone. Change in Setup.", and the first time the owner opens its chat
+  a dismissible strip under the header says both directions ("New here. @x may
+  ask everyone, and can be asked by the front desk, @art.") with **Adjust** to
+  Setup → Team; closing it is kept per agent in `core.web_settings`
+  (`agent-intro`), and agents that existed before never show it
+  (`GET /api/agents/:id/intro`, `POST /api/agents/:id/intro/dismiss`). An
+  explicit list (even `[]`) and a catalogue package's `delegates` are written
+  as given, never rewritten. Every other agent asks only its list, and new
+  teammates must be added to it there. Removing an agent takes its id off every other
   owner allowlist (the remove preview names who stops handing it work); an id
   naming an agent that is not installed is ignored with one log line. An agent
   added later in a removed one's place (a catalogue `researcher` after a

@@ -310,6 +310,7 @@ import { resumeParkedForPage } from '../missions/parked.js';
 import { type HttpArea } from '@buddi/core';
 import { checkProfilePatch } from '../owner-profile-edit.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
+import { dismissAgentIntro, readAgentIntro } from '../agents/agent-intro.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
@@ -2642,6 +2643,13 @@ export function createWebApp(deps: WebServerDeps): Server {
         res.end(method === 'HEAD' ? undefined : file.text);
         return;
       }
+      // A new agent's chat: the once-only strip, both directions of delegation (agents/agent-intro.ts).
+      const agentIntro = /^\/api\/agents\/([^/]+)\/intro$/.exec(path);
+      if (agentIntro) {
+        const view = await readAgentIntro(deps.pool, deps.catalog, decodeURIComponent(agentIntro[1] as string));
+        if (!view) return sendJson(res, 404, { error: 'no such agent' });
+        return sendJson(res, 200, view);
+      }
       // The Skills tab: every skill the agent loads, learned ones with their versions.
       const agentSkills = /^\/api\/agents\/([^/]+)\/skills$/.exec(path);
       if (agentSkills) {
@@ -4278,6 +4286,14 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
       }
+    }
+
+    const introDismissed = /^\/api\/agents\/([^/]+)\/intro\/dismiss$/.exec(path);
+    if (introDismissed) {
+      const id = decodeURIComponent(introDismissed[1] as string);
+      if (!deps.catalog.get(id)) return sendJson(res, 404, { error: 'no such agent' });
+      await dismissAgentIntro(deps.pool, id);
+      return sendJson(res, 200, { ok: true });
     }
 
     const delegatesRoute = /^\/api\/agents\/([^/]+)\/delegates$/.exec(path);

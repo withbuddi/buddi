@@ -89,7 +89,8 @@ import {
 import { z } from 'zod';
 import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR, type ReloadableAgentCatalog } from './catalog.js';
-import { DELEGATES_FILE, applyDelegateEdits, readDelegates, stageDelegateStrip, type DelegateEdit } from './delegation.js';
+import { DELEGATES_FILE, applyDelegateEdits, defaultDelegatesFor, readDelegates, stageDelegateStrip, type DelegateEdit } from './delegation.js';
+import { markAgentIntro } from './agent-intro.js';
 import { insideExamples } from './owner-tools.js';
 import { withCoreTools } from './core-tools.js';
 import { storeBundledMascot } from './mascots.js';
@@ -630,16 +631,27 @@ function idleRolloverSentence(value: string): string {
   }
 }
 
-export function renderCreatePreview(envelope: CreateAgentEnvelope, specs: readonly ToolSpec[]): string {
+/** The approval card's one line when a new agent asks everyone by default. */
+export const DEFAULT_DELEGATES_LINE = 'May ask: everyone. Change in Setup.';
+
+export function renderCreatePreview(
+  envelope: CreateAgentEnvelope,
+  specs: readonly ToolSpec[],
+  /** `platform.create_agent` only: the `["*"]` it writes when the agent holds the tool and names nobody. */
+  opts: { defaultDelegates?: boolean } = {},
+): string {
+  const defaulted = opts.defaultDelegates === true && envelope.delegates === null && envelope.tools.includes('agent.delegate');
   return [
     `Create a new agent: ${envelope.name} (@${envelope.handle})`,
     envelope.description,
     '',
     ...grantBlock(envelope.handle, envelope.tools, specs),
     '',
-    ...(envelope.delegates && envelope.delegates.length > 0
-      ? [`It may also hand work to: ${envelope.delegates.map((d) => `@${d}`).join(', ')}.`]
-      : []),
+    ...(defaulted
+      ? [DEFAULT_DELEGATES_LINE]
+      : envelope.delegates && envelope.delegates.length > 0
+        ? [`It may also hand work to: ${envelope.delegates.map((d) => `@${d}`).join(', ')}.`]
+        : []),
     ...(envelope.replacesExample
       ? [
           `This file OVERRIDES the shipped example agent "${envelope.id}": from now on your copy is ` +
@@ -2500,7 +2512,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       return describing(
         (i: CreateInput) =>
           buildCreateEnvelope(withCore(i), { binding, registry, proposedBy: ctx.agentId ?? 'unknown' }),
-        (envelope) => renderCreatePreview(envelope, specsFor(registry)),
+        (envelope) => renderCreatePreview(envelope, specsFor(registry), { defaultDelegates: true }),
       )(input);
     },
     async execute(input, ctx: CoreToolContext) {
@@ -2512,12 +2524,18 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         proposedBy: ctx.agentId ?? 'unknown',
       });
       assertApprovedEffect(ctx, envelope);
+      // Delegation by default: holding `agent.delegate` and naming nobody is
+      // `["*"]`, decided here and nowhere in the persona. The envelope keeps
+      // what was asked, so an approval recorded before this hashes the same.
+      const delegates = defaultDelegatesFor(envelope.tools, envelope.delegates);
       createAgentDirAtomic(path.dirname(envelope.file), {
         [AGENT_FILE]: envelope.content,
-        ...(envelope.delegates === null
+        ...(delegates === null
           ? {}
-          : { [DELEGATES_FILE]: `${JSON.stringify(envelope.delegates, null, 2)}\n` }),
+          : { [DELEGATES_FILE]: `${JSON.stringify(delegates, null, 2)}\n` }),
       });
+      // Its chat opens once with who it may ask and who may ask it.
+      await markAgentIntro(ctx.db, envelope.id);
       const reload = reloadResult(binding);
       const assigned = await assignAccount(binding, envelope.id, envelope.account);
       return {

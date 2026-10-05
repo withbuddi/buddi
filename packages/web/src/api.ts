@@ -172,6 +172,20 @@ function safeJson(text: string): unknown {
 }
 
 /** One tip on Home: a sentence and one action. */
+/** An agent as a new agent's strip names it. */
+export interface IntroAgent {
+  id: string;
+  handle: string;
+  name: string;
+  /** The front desk, named "the front desk". */
+  frontDesk?: true;
+}
+
+/** GET /api/agents/:id/intro: the strip a new agent's chat opens with, once. */
+export type AgentIntro =
+  | { show: false }
+  | { show: true; id: string; handle: string; asks: 'everyone' | IntroAgent[]; askedBy: IntroAgent[] };
+
 export interface TipView {
   id: string;
   text: string;
@@ -2933,6 +2947,10 @@ export const api = {
   forgetPerson: (id: string) => post<{ people: PersonRow[] }>(`/memory/people/${encodeURIComponent(id)}/forget`),
   restorePerson: (id: string) => post<{ people: PersonRow[] }>(`/memory/people/${encodeURIComponent(id)}/restore`),
   birthday: () => get<BirthdayGlanceView>('/owner/birthday'),
+  /** A new agent's first-open strip: whether it is due, and both directions of delegation. */
+  agentIntro: (id: string) => get<AgentIntro>(`/agents/${encodeURIComponent(id)}/intro`),
+  /** Close that strip for good. */
+  dismissAgentIntro: (id: string) => post<{ ok: true }>(`/agents/${encodeURIComponent(id)}/intro/dismiss`),
   setDelegates: (id: string, delegates: string[]) => post<{ delegates: string[]; asksEveryone?: 'front-desk' | 'maker' | 'list' }>(`/agents/${encodeURIComponent(id)}/delegates`, { delegates }),
   agentProfile: (id: string) => get<AgentProfile>(`/agents/${encodeURIComponent(id)}/profile`),
   /** Every skill the agent loads; learned ones with their version and provenance. */

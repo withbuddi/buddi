@@ -41,6 +41,7 @@ import { agentRoute, chatRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import { AgentAvatar, FaceMark, GradientField, Icon } from '../ui';
+import { NewAgentStrip } from './NewAgentStrip';
 import { ROLE_MAKER, cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
@@ -1292,6 +1293,7 @@ export function ChatPage({
             />
           ) : null}
         </header>
+        {!group && agent ? <NewAgentStrip key={agent.id} agentId={agent.id} /> : null}
         {historyOpen && agentId ? <ConversationHistory agentId={agentId} {...(group ? { groupId: group.id } : {})} currentId={conversationId} timezone={timezone}
           onNew={() => { setHistoryOpen(false); startNew(); }}
           onSelect={id => {
