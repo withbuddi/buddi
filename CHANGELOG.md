@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.43 — 2026-10-05
+
 - Chat: dragging the edge between the conversation and the Canvas is smooth now, works with a finger, and settles gently at a third, a half and two thirds. A thin blue bar shows the edge when you point at it. Double-click it to go back to the usual layout; with it focused, ← and → move it. Neither side gets too narrow to use, the conversation is drawn exactly as wide as you set it (it no longer comes out a little narrower near the edge), and when the window narrows it gives way so the Canvas keeps its room, then comes back. The width you chose is kept on this device.
 
 - Chat, the message box: Thinking is a small spark button with its dot (hover says "Thinking: on" or "off"), so the model's name keeps its place. The model chip no longer disappears in a narrow chat; it cuts its name short, and in a very narrow box shows just the short name ("sonnet-5"). Send is never cut off.
