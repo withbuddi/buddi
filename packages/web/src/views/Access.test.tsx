@@ -291,7 +291,7 @@ describe('Set it up for me', () => {
     await waitFor(() => expect(api.startCloudflareSetup).toHaveBeenCalledWith({ host: 'buddi.example.com', email: 'owner@example.com', adopt: true }));
   });
 
-  it('shows the connector starting with no command, and a system service in the way with its line and Use the system daemon instead', async () => {
+  it('shows the connector starting with no command, and a system service in the way with its line and Use Cloudflare’s system service instead', async () => {
     vi.mocked(api.access).mockResolvedValue(ROWS);
     const why = 'Cloudflare’s system service from an earlier setup is installed on this computer. Two connectors for one tunnel fight over its connections.';
     const waiting = progress('waiting', 6, {
@@ -306,7 +306,7 @@ describe('Set it up for me', () => {
     expect(await screen.findByText(why)).toBeTruthy();
     expect(screen.getByText('sudo cloudflared service uninstall')).toBeTruthy();
     expect(screen.queryByText(/service install/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Use the system daemon instead' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use Cloudflare’s system service instead' }));
     await waitFor(() => expect(api.startCloudflareSetup).toHaveBeenCalledWith({ host: 'buddi.example.com', email: 'owner@example.com', useSystemDaemon: true }));
     expect(api.stopCloudflareSetup).toHaveBeenCalled();
   });

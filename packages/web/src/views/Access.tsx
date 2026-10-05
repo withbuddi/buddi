@@ -693,7 +693,7 @@ function ConnectorMore({ connector, live, busy, onUseSystem }: { connector: Clou
         <Command text={connector.systemDaemon.command} />
         {live && onUseSystem ? (
           <Toolbar align="end">
-            <Button disabled={busy} onClick={onUseSystem}>Use the system daemon instead</Button>
+            <Button disabled={busy} onClick={onUseSystem}>Use Cloudflare’s system service instead</Button>
           </Toolbar>
         ) : null}
       </div>

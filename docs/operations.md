@@ -461,8 +461,8 @@ that removes it (buddi never runs sudo):
 sudo cloudflared service uninstall
 ```
 
-buddi starts its own within seconds of it going. Or *Use the system daemon
-instead* (`--use-system-daemon`): buddi then never starts a connector, and shows
+buddi starts its own within seconds of it going. Or *Use Cloudflare’s system
+service instead* (`--use-system-daemon`): buddi then never starts a connector, and shows
 `sudo cloudflared service install <tunnel token>` for the case where that
 service runs another tunnel's token. Without a supervisor (a checkout's `buddi
 serve`) the step falls back to that same line to run by hand.

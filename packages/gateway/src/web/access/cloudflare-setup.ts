@@ -141,7 +141,7 @@ export interface SetupInput {
   zone?: string | undefined;
   /** "Use it anyway": take over an object of buddi's name that buddi didn't make. */
   adopt?: boolean | undefined;
-  /** "Use the system daemon instead": buddi starts no connector of its own. */
+  /** "Use Cloudflare’s system service instead": buddi starts no connector of its own. */
   useSystemDaemon?: boolean | undefined;
 }
 

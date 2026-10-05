@@ -87,7 +87,7 @@ function printer(): (p: SetupProgress) => void {
         console.log('');
         console.log(`    ${c.systemDaemon.command}`);
         console.log('');
-        console.log(dim('  Or use it instead: run this setup again with --use-system-daemon.'));
+        console.log(dim('  Or use Cloudflare’s system service instead: run this setup again with --use-system-daemon.'));
         console.log('');
       } else if (c.state === 'missing-binary') {
         console.log(`  … cloudflared isn’t on this computer. ${c.detail ?? ''}`);
