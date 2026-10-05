@@ -21,6 +21,9 @@ import { Button, ErrorBanner, Modal, Notice, Section, Stack, Toolbar } from '../
 type Step = 'plan' | 'backup' | 'words' | 'removing';
 type UninstallPlan = Extract<AnyPlan, { available: true }>;
 
+/** The dialog's question, the same words as buddi.app's native sheet (UninstallPolicy.confirmTitle). */
+export const REMOVE_TITLE = 'Remove buddi from this Mac?';
+
 export function RemoveBuddi(): JSX.Element {
   const [plan, setPlan] = useState<UninstallPlan | null>(null);
   const [open, setOpen] = useState(false);
@@ -132,7 +135,7 @@ function RemoveDialog({ plan, onClose }: { plan: UninstallPlan; onClose: () => v
   ) : null;
 
   return (
-    <Modal title="Remove buddi from this Mac" onClose={step === 'removing' ? () => {} : onClose} foot={foot}>
+    <Modal title={REMOVE_TITLE} onClose={step === 'removing' ? () => {} : onClose} foot={foot}>
       <Stack gap="sm">
         <ErrorBanner message={failed} />
         {step === 'plan' || step === 'backup' ? (

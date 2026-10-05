@@ -29,7 +29,7 @@ enum Uninstall {
         // 1. What goes.
         let keep = NSButton(checkboxWithTitle: "Keep my data for a reinstall", target: nil, action: nil)
         let first = NSAlert()
-        first.messageText = "Uninstall buddi?"
+        first.messageText = UninstallPolicy.confirmTitle
         var lines: [String] = []
         if let service = plan["service"] as? String { lines.append("• The background service (\(service)).") }
         lines.append("• Your data: agents, chats, memory, files and the database, in \(supervisor.data.path).")

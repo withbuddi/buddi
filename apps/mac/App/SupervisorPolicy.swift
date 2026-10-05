@@ -54,6 +54,8 @@ enum UninstallPolicy {
     /// `APP_UNINSTALL_EXIT` in product-uninstall.ts.
     static let exitStatus: Int32 = 76
     static let requestFile = "uninstall.json"
+    /// The first sheet's title, the same words as the dashboard's dialog.
+    static let confirmTitle = "Remove buddi from this Mac?"
 
     /// The backup and the passphrase are taken care of before this runs.
     static func launcherArguments(keepData: Bool) -> [String] {

@@ -51,6 +51,8 @@ describe('RemoveBuddi', { timeout: 180_000 }, () => {
     render(<RemoveBuddi />);
     await user.click(screen.getByRole('button', { name: 'Remove buddi from this Mac…' }));
     expect(await screen.findByText(/moved to the Trash/)).toBeInTheDocument();
+    // The same question as buddi.app's native sheet (UninstallPolicy.confirmTitle).
+    expect(screen.getByRole('alertdialog', { name: 'Remove buddi from this Mac?' })).toBeInTheDocument();
     await user.click(screen.getByLabelText('Keep my data for a reinstall'));
     await user.click(screen.getByRole('button', { name: 'Take the last backup' }));
     expect(await screen.findByText(PHRASE)).toBeInTheDocument();

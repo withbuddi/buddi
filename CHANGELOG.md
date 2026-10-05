@@ -19,6 +19,7 @@ What changes in buddi from one release to the next, newest first.
 - Settings → Model accounts: Test connection now asks the account's default model to reply with the single word "ready" and tells you in one sentence what happened ("Asked claude-sonnet-5 to say ready → it said 'ready' in 1.4 s · about 20 tokens, billed to this key"). When it fails you get one plain sentence and the next step; the HTTP code, the retry time and the provider's own words sit under Details. A rate limit and the test that met it show as one notice per account, and adding an account runs the same test and shows the same sentence.
 - A Gemini key that is refused Pro models now says why: your Google AI plan covers the Gemini app, not the key, and the key's Google Cloud project has no billing. Pick a Flash model, or enable billing on that project at aistudio.google.com.
 - Lock screen: the buddi version sits quietly in the bottom-right corner ("buddi 0.1.0-pre.43"), with "· update ready" when a newer buddi is ready to install, the same answer as the status bar.
+- Removing buddi asks the same question everywhere: "Remove buddi from this Mac?", in Settings → System and in buddi.app's Uninstall buddi… sheet.
 
 ## 0.1.0-pre.42 — 2026-10-04
 

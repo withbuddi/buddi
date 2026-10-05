@@ -53,6 +53,10 @@ final class AnotherBuddiTests: XCTestCase {
 }
 
 final class UninstallPolicyTests: XCTestCase {
+    func testTheFirstSheetAsksTheDashboardsQuestion() {
+        // packages/web/src/views/parts/RemoveBuddi.tsx says the same words.
+        XCTAssertEqual(UninstallPolicy.confirmTitle, "Remove buddi from this Mac?")
+    }
     func testOnlyACleanUninstallTrashesTheAppAndQuits() {
         XCTAssertEqual(UninstallPolicy.afterwards(status: 0, output: "Removed."), .trashAndQuit)
         XCTAssertEqual(UninstallPolicy.afterwards(status: 1, output: "Could not remove the keychain entries.\n"),
