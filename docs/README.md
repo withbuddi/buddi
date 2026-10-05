@@ -44,6 +44,7 @@ unbuilt specs are kept outside this repository.
 
 - [Architecture](architecture.md): the boundaries, the contracts and the
   rules the code holds to.
+- [Releasing](release.md): `pnpm release`, and how CI tags and publishes.
 
 ## Writing plugins
 
