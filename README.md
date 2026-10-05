@@ -38,9 +38,10 @@ You are my finance advisor. There is exactly one owner: the person you are
 talking to. Today is {{today}}.
 ```
 
-**The core has no tools.** Every capability is a plugin. Built in: `system`,
-`email`, `memory`, `artifacts`, `web`, `browser`, `host`, `reminder`,
-`schedule`, `goal`, `learning` and `canvas`. Domain plugins (`weather`,
+**The core has no tools.** Every capability is a plugin. Compiled in:
+`email`, `memory`, `artifacts`, `web`, `browser`, `host` and MCP connections
+(`packages/tools/*`), beside the gateway's own families (`system`, `reminder`,
+`schedule`, `goal`, `learning`, `canvas`, `owner`, `platform`). Domain plugins (`weather`,
 `calendar`, `finance`, `image`, `speech`, …) install from the
 [market](https://withbuddi.com/plugins/). An install shows every tool and its
 tier, the database schema the plugin will own, its timers and the hosts it
@@ -56,17 +57,19 @@ something on an interval and core decides whether a finding is worth waking
 the owner for; goals add a target with a date. All of it goes through one
 Postgres-backed queue.
 
-**Surfaces.** The dashboard (with a canvas beside the chat that shows what a
+**Surfaces.** The dashboard, in a browser or buddi.app's window (with a canvas beside the chat that shows what a
 run looked at), Telegram, the terminal, `buddi mcp` for Claude Code, and the
 Chrome extension for acting in the owner's own browser.
 
-**Data.** One data directory holds the Postgres cluster, agents, skills,
-files, logs and backups. Secrets live in the OS keychain (an encrypted file
+**Data.** In a packaged install one data directory holds the Postgres
+cluster, agents, skills, files, logs and backups; a checkout keeps Postgres
+in a Docker volume. Secrets live in the OS keychain (an encrypted file
 vault on Linux); no command, page or tool prints one back, and values are
 scrubbed from anything an agent sees. Each agent's context goes only to the
-provider its file names. Besides that: a daily npm version check, plugin
-installs on request, and the market list when Browse opens. No telemetry.
-[docs/operations.md](docs/operations.md) has the full list.
+provider its file names. Besides that: a daily npm version check (buddi.app's
+own shell updates come from its Sparkle feed), plugin installs on request, and the
+market list when Browse or the agent catalogue opens. No telemetry.
+[docs/install.md](docs/install.md) §10 has the full list.
 
 [docs/architecture.md](docs/architecture.md) is the design in full.
 
@@ -86,12 +89,18 @@ Under `packages/`:
 - `tools/*`: the built-in plugins (artifacts, browser, email, host, mcp,
   memory, web).
 
-Also: `examples/` (the shipped agents and skills, and an example plugin),
-`scripts/` (migrations, release, docs generators, boundary checks), `docs/`
-(the reference, also published at [withbuddi.com/docs](https://withbuddi.com/docs/)).
+Also: `apps/mac` (buddi.app, the native Mac shell around the npm release),
+`examples/` (the shipped agents and skills, and an example plugin),
+`scripts/` (install, migrations, test database, release and review, docs
+generators, boundary checks), `release/` (the release request CI reads),
+`docker-compose.yml` (the checkout's Postgres), `docs/` (the reference, also
+published at [withbuddi.com/docs](https://withbuddi.com/docs/)).
 
-The domain plugins live in a separate repository, `buddi-plugins`, and
-install like any other plugin. The roadmap is kept outside this repository.
+The domain plugins live in a separate repository,
+[buddi-plugins](https://github.com/withbuddi/buddi-plugins), and install like
+any other plugin. The plugin and agent listings on withbuddi.com come from
+[buddi-market](https://github.com/withbuddi/buddi-market). The roadmap is kept
+outside this repository.
 
 ## Development
 
@@ -107,7 +116,9 @@ pnpm test
 
 `./scripts/install.sh` runs `pnpm install`, `pnpm -r build` and
 `pnpm run link`, which puts a global `buddi` on your PATH pointing at this
-checkout. `buddi init` is interactive and idempotent (`--yes` asks nothing):
+checkout (`pnpm buddi …` from the checkout works without the link, and is
+the unambiguous form on a machine that also has buddi.app or the npm
+package). `buddi init` is interactive and idempotent (`--yes` asks nothing):
 it starts the Postgres container, applies migrations, installs the service
 and opens the setup wizard in the browser.
 
@@ -177,8 +188,9 @@ volume, without touching your machine.
 
 An agent is a folder with an `agent.md` and, optionally, `skills/` beside it.
 Owners' agents live in their data directory; Agent Father writes them there
-after an approval. The shipped ones are in `examples/agents` and
-`packages/gateway/src/agents/starter`. Grants, step budgets, rollover and the
+after an approval. A fresh install ships two, in `examples/agents`
+(the front desk and Agent Father); the catalogue agents are packages in
+[buddi-market](https://github.com/withbuddi/buddi-market). Grants, step budgets, rollover and the
 catalogue are in [docs/agents.md](docs/agents.md); providers and models in
 [docs/providers.md](docs/providers.md).
 
@@ -186,7 +198,8 @@ catalogue are in [docs/agents.md](docs/agents.md); providers and models in
 
 A plugin is an npm package with a manifest: its tools and their tiers, its
 own schema and migrations, its timers, the hosts it may reach, and optional
-dashboard pages and widgets. Start from `examples/plugins/weather` and run it
+dashboard pages and widgets. `buddi plugins init <name>` writes one you can
+build and install (`examples/plugins/weather` is a worked example); run it
 with `buddi plugins dev <folder>`.
 
 - [docs/plugins.md](docs/plugins.md): the guide.
@@ -204,25 +217,33 @@ Issues and pull requests are welcome at
 
 - **Changelog.** Every change an owner or plugin author could notice gets a
   line under Unreleased in `CHANGELOG.md`, in the same commit. CI refuses a
-  change to `packages/*/src` without one unless the commit message says
-  `[no changelog]`.
+  push that changes `packages/*/src` (or `packages/tools/*/src`) without one,
+  unless the head commit's message says `[no changelog]`.
 - **Boundaries.** `node scripts/check-boundaries.mjs` (also in CI): core never
   imports a tool or an upper layer.
 - **Docs.** A behaviour change updates its page in `docs/`. `pnpm docs:cli`
   and `pnpm docs:api` regenerate the CLI and API references.
-- **CI.** A push to `main` runs the quick lane (web, gateway, typecheck, the
-  rest) without a database. The full gate, with Postgres, runs on pull
-  requests, nightly and before every release.
+- **CI.** Every push to `main` runs the changelog check and the full gate
+  (`gate.yml`: boundaries, build, typecheck, every suite including the
+  database ones against Postgres, the generic-install check, the scripts'
+  tests). The gate also runs on pull requests, nightly and before every
+  release. `pnpm check` (boundaries and typecheck) is the quick local subset.
 - **Releases.** A release commit on main runs the gate; on green CI tags
-  `v<version>`, and a run on that tag builds the tarball, publishes `@withbuddi/buddi` to npm with provenance and creates the GitHub
-  release. The npm page is [scripts/release/npm-readme.md](scripts/release/npm-readme.md),
+  `v<version>`, and a run on that tag builds the tarball, publishes
+  `@withbuddi/buddi` to npm with provenance, creates the GitHub release (the
+  tarball, the extension zip, the Linux install script), rebuilds
+  withbuddi.com, and builds the signed, notarized buddi.app DMG and its
+  Sparkle feed. The Homebrew cask follows from the tap's own workflow; the
+  Chrome Web Store upload is by hand. The npm page is [scripts/release/npm-readme.md](scripts/release/npm-readme.md),
   not this file.
 
 ## Status
 
-buddi is a 0.1 pre-release. macOS is the reference platform; Linux works and
-is in trial; Windows is not supported yet. Native computer control is
-macOS-only. Host commands are approved, not sandboxed
+buddi is a 0.1 pre-release (`0.1.0-pre.N`, the latest on
+[GitHub releases](https://github.com/withbuddi/buddi/releases)). macOS is the
+reference platform, shipped as buddi.app, the Homebrew cask and the npm
+package; Linux installs from npm and is in trial; Windows is not supported
+yet. Computer control (the Computer plugin) is macOS-only. Host commands are approved, not sandboxed
 ([docs/host-execution.md](docs/host-execution.md)). Nothing an agent says is
 financial, legal or medical advice.
 
