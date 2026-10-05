@@ -2742,6 +2742,15 @@ describe('the grounding guard', () => {
     expect(UNCHECKED_LINE).toBe('Answered from memory, not checked');
   });
 
+  it('delivers the held-back answer, flagged, when the retry says nothing', async () => {
+    const { db, result, onText } = await run([say(INVENTED), say('   ')]);
+    expect(result.text).toBe(INVENTED);
+    expect(result.unchecked).toBe(true);
+    expect(onText).toHaveBeenCalledWith(INVENTED);
+    expect(JSON.stringify(db.messages.at(-1)?.content)).toContain('CBS News reported');
+    expect(db.events.at(-1)).toMatchObject({ kind: 'run.finished', payload: { unchecked: true } });
+  });
+
   it('stays silent on a tool-backed answer that cites sources', async () => {
     const { db, provider, result, onRetract } = await run([call(2), say(INVENTED)]);
     expect(result.text).toBe(INVENTED);

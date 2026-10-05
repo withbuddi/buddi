@@ -1102,6 +1102,8 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
    */
   let read = false;
   let regrounded = false;
+  /** The answer the guard held back, delivered (flagged) if the retry says nothing. */
+  let heldBack: { content: ContentBlock[]; text: string } | undefined;
   let unchecked = false;
   /**
    * What the owner added, leased for the step that has not happened yet.
@@ -1220,7 +1222,8 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
       (b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use',
     );
 
-    const turnText = textOf(assistantContent);
+    let turnText = textOf(assistantContent);
+    let delivered = assistantContent;
     if (toolUses.length > 0 || (res.searches?.length ?? 0) > 0) read = true;
 
     /*
@@ -1234,9 +1237,15 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
      * line under it. `citesUnread` is precision-first; see grounding.ts.
      */
     const finalAnswer = toolUses.length === 0 && res.stopReason !== 'pause_turn' && res.stopReason !== 'max_tokens';
-    if (finalAnswer && !read && resume === undefined && !waitingForOwner && turnText !== '') {
+    if (finalAnswer && !read && resume === undefined && !waitingForOwner && (turnText !== '' || regrounded)) {
       if (regrounded) {
         unchecked = true;
+        // A retry that said nothing: the held-back answer goes out, flagged,
+        // rather than an empty reply.
+        if (turnText === '' && heldBack) {
+          delivered = heldBack.content;
+          turnText = heldBack.text;
+        }
         await appendEvent(pool, 'run.grounding', { stage: 'unchecked', agentId: agent.id, ...(opts.runId ? { runId: opts.runId } : {}) }, conversationId);
       } else {
         const known = knownText(messages.slice(0, -1));
@@ -1250,6 +1259,7 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
             ...(opts.runId ? { runId: opts.runId } : {}),
           }, conversationId);
           if (budgetLeft) {
+            heldBack = { content: assistantContent, text: turnText };
             try { opts.onRetract?.(); } catch { /* a surface's drawing never decides a run */ }
             messages.push({ role: 'user', content: [{ type: 'text', text: GROUNDING_RETRY_TEXT }] });
             continue;
@@ -1259,7 +1269,7 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
       }
     }
 
-    await persistMessage(pool, conversationId, 'assistant', persistable(assistantContent), opts.transcript?.speaker);
+    await persistMessage(pool, conversationId, 'assistant', persistable(delivered), opts.transcript?.speaker);
     if (turnText) {
       spoken.push({ text: turnText, beforeToolCall: toolUses.length > 0 });
       await opts.onText?.(turnText);
