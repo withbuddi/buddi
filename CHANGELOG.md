@@ -12,14 +12,18 @@ What changes in buddi from one release to the next, newest first.
 - Asking about a headline from today's edition ("tell me more about …") now tells the agent where the story came from — which edition, which agent (@anchor) and plugin — and how to read it: its own news tool, or by asking that agent.
 - Approvals: the card's heading now says what is being asked, in plain words ("Add to Work (Google)", "Generate one square image…"), instead of the tool's internal name like `mail.send`. The internal name is still on the card's small print and in the envelope.
 
+- Approvals that buddi itself asks for (from Claude Code through buddi's MCP server, from a plugin, or from the dashboard) now say "Asked by buddi", in lowercase, with the Blob beside it, on Home, in chat and on Telegram, instead of an initials badge.
+
 ### Added
 
 - Mail: a message that arrived before pre.44 now opens with its formatting and pictures (pictures from the web still wait for Show images). buddi fetches it from your mail server the first time you open it, keeps it, and reads its own copy after that; if your server is slow it shows the text within a few seconds instead and doesn't try again for an hour.
 
 ### Changed
 
+- Agents: a new agent Agent Father makes can ask the rest of the team from its first message, when it has the delegation tool. The approval card says "May ask: everyone. Change in Setup.", and the first time you open its chat a short line under the header says who it may ask and who may ask it, with Adjust (to its Setup → Team) and a close; it does not come back once closed. A list you or a catalogue agent spelled out is kept as it is, and agents you already have are unchanged.
 - Home: everything under "Needs you" now looks the same — one white card with a small coloured mark, the ask, who it is from, and the buttons at the bottom right. Approvals, questions, requests, sign-ins, agents to set up, the restore, the backup passphrase, the update and watcher errors all use it, and the way to put something off is always a "Not now" button (no more ×). Urgent alerts, failed jobs and proposals are no longer repeated as coloured bars: they stay as links in the line under the greeting.
 - Home: the lightbulb next to the date now opens tips as a small stack of cards you can swipe, instead of a grid of every tip. Slide the front one left for "Not now" (it moves to the back), right for "Not this again", or use the arrow keys or the two buttons under it; the button on the card still does what the tip says. Every tip that applies is in the stack when you open it, even one you saw or put off recently (those sit at the back), two peek out behind the front one, with "1 of 3" underneath; with none it says "No tips right now. New ones appear as you use buddi.", or "You've turned off every tip that applies." when you have. A dot on the bulb means a tip you have not seen yet. Tips are no longer in "Needs you", and the "Tips on Home" switch is gone from Home and Settings → Notifications.
+- Home, Tips: a tip you slid away with "Not this again" can come back. When the stack is empty it says "2 dismissed · Show"; Show lists those tips, each with "Bring back", which puts it back in the stack.
 - Home: the backup passphrase, the update notice and watcher or source errors now sit inside "Needs you" instead of above it. The order is: approvals, questions, requests, passphrase, update, errors, sign-ins, agents to set up, then the restore.
 - Home: the mail card now says what is actually missing — "Mail arrives, but nobody sorts it as it lands: no labels, no ‘needs a reply’, no drafts waiting. buddi and your other agents still read mail when you ask." — and it no longer shows at all when one of your agents already has the mail role.
 

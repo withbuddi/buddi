@@ -30,6 +30,7 @@ import { useOwnerChoices } from '../views/parts/OwnerChoices';
 import { Button, ErrorBanner } from '../ui';
 import { gistFor } from './gist';
 import { SkillRunDock, skillRunOf } from './SkillRunDock';
+import { PLATFORM_NAME, isPlatformAsker } from '../views/parts/Avatar';
 
 export interface DockedApproval {
   approvalId: string;
@@ -182,7 +183,7 @@ function DockCard({
   // A skill bundle's script: its own card, asked every time (SkillRunDock).
   const skillRun = skillRunOf(action);
   if (action && skillRun) {
-    const name = action.agentId ? action.agentId.charAt(0).toUpperCase() + action.agentId.slice(1) : 'An agent';
+    const name = isPlatformAsker(action.agentId) ? PLATFORM_NAME : action.agentId ? action.agentId.charAt(0).toUpperCase() + action.agentId.slice(1) : 'An agent';
     return <SkillRunDock action={action} run={skillRun} agentName={name} count={count} busy={busy} error={error} onDecide={(d) => decide(d)} />;
   }
 

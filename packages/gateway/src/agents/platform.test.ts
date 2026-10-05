@@ -560,6 +560,26 @@ describe('create, approve, talk to it', () => {
     expect(result.message).toContain('no restart');
   });
 
+  it('writes ["*"] for an agent that holds agent.delegate and names nobody, and says so on the card', async () => {
+    const input = { ...baseCreate, tools: ['memory.*', 'agent.delegate'] };
+    const { preview } = described<CreateAgentEnvelope>(h, 'platform.create_agent', input);
+    expect(preview).toContain('May ask: everyone. Change in Setup.');
+    await h.tool('platform.create_agent').execute(input, h.ctx);
+    const file = path.join(h.agentsDir, 'bookkeeper', 'delegates.json');
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(['*']);
+  });
+
+  it('never rewrites an explicit list, and writes none without the tool', async () => {
+    const listed = { ...baseCreate, tools: ['memory.*', 'agent.delegate'], delegates: ['scout'] };
+    expect(described<CreateAgentEnvelope>(h, 'platform.create_agent', listed).preview).not.toContain('May ask: everyone');
+    await h.tool('platform.create_agent').execute(listed, h.ctx);
+    expect(JSON.parse(readFileSync(path.join(h.agentsDir, 'bookkeeper', 'delegates.json'), 'utf8'))).toEqual(['scout']);
+    const plain = { ...baseCreate, id: 'plain', handle: 'plain' };
+    expect(described<CreateAgentEnvelope>(h, 'platform.create_agent', plain).preview).not.toContain('May ask');
+    await h.tool('platform.create_agent').execute(plain, h.ctx);
+    expect(existsSync(path.join(h.agentsDir, 'plain', 'delegates.json'))).toBe(false);
+  });
+
   it('writes a delegates.json when one was asked for, in the same move', async () => {
     await h.tool('platform.create_agent').execute({ ...baseCreate, delegates: ['scout'] }, h.ctx);
     const file = path.join(h.agentsDir, 'bookkeeper', 'delegates.json');

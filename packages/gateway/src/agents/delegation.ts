@@ -11,7 +11,10 @@
  *    file means no delegation, which is the fail-closed default for every agent
  *    that never asked for one — except the front desk and the maker, which ask
  *    everyone unless a file narrows them, and `"*"` in a file means everyone
- *    (`@buddi/core`'s `delegates.ts` holds the rule).
+ *    (`@buddi/core`'s `delegates.ts` holds the rule). An agent the maker
+ *    creates holding `agent.delegate` and naming no list is written `["*"]`
+ *    (`defaultDelegatesFor`): delegation by default, chosen here in the
+ *    gateway, never by the persona.
  *  - **what the nested run uses** — the process catalog and the resolved
  *    provider, bound *after* the registry exists. The registry is built before
  *    the catalog (agent files are resolved against the registry), so the tool
@@ -79,6 +82,21 @@ export function readDelegatesFile(agentId: string, agentsDir: string = AGENTS_DI
   // permission either way, and a prompt that lists it twice reads as if there
   // were two of them.
   return [...new Set((parsed as string[]).map((id) => id.trim()))];
+}
+
+/** What a new agent from the maker may ask when it holds the tool and names nobody: everyone. */
+export const DEFAULT_NEW_AGENT_DELEGATES: readonly string[] = ['*'];
+
+/**
+ * The allowlist `platform.create_agent` writes. An explicit list (even `[]`)
+ * is written as given; an agent that holds `agent.delegate` and names none
+ * gets `["*"]`, so a new teammate can ask the others from its first message
+ * and the owner narrows it in Setup; one without the tool gets no file.
+ * Market packages bring their own `delegates` and never pass through here.
+ */
+export function defaultDelegatesFor(tools: readonly string[], delegates: readonly string[] | null): string[] | null {
+  if (delegates !== null) return [...delegates];
+  return tools.includes('agent.delegate') ? [...DEFAULT_NEW_AGENT_DELEGATES] : null;
 }
 
 export interface DelegationBinding {

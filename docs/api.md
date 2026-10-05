@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-324 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+327 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -657,6 +657,7 @@ curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "
 | GET | `/api/tips` | Every tip and its state. | yes |
 | GET | `/api/tips/current` | Today's tip on Home, if any (picking one is remembered). | yes |
 | GET | `/api/tips/queue` | The stack the lightbulb on Home opens: today's tip first, then every other one that holds and is not dismissed, ready ones before those in their cooldown (picking the first is remembered). | yes |
+| GET | `/api/tips/dismissed` | The dismissed tips the queue counts, for the empty stack's "Bring back" list. | yes |
 | POST | `/api/tips/seen-page` | Record that a page was opened (tips about it stop). | yes |
 | POST | `/api/tips/:id/dismiss` | Never show this tip again. | yes |
 | POST | `/api/tips/:id/later` | Show this tip another day. | yes |
@@ -725,6 +726,18 @@ The stack the lightbulb on Home opens: today's tip first, then every other one t
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/queue"
+```
+
+#### `GET /api/tips/dismissed`
+
+The dismissed tips the queue counts, for the empty stack's "Bring back" list.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ tips: Tip[] }`
+- **Since:** 0.1.0-pre.45
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/dismissed"
 ```
 
 #### `POST /api/tips/seen-page`
@@ -1355,6 +1368,8 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/agents` | Every agent, their engines, the model accounts, which agent is the default, and which came from the catalogue (package, version, the listed version, drift, delisted; read from the kept list, never fetched). | yes |
 | POST | `/api/agents/default` | Make an agent the default (where a chat that names nobody lands). | yes |
 | GET | `/api/agents/:id/profile` | One agent whole: its grant with every tool's tier, engine, skills, delegates. | yes |
+| GET | `/api/agents/:id/intro` | A new agent's first-open strip in its chat: whether it is still due, whom the agent may ask and who may ask it. | yes |
+| POST | `/api/agents/:id/intro/dismiss` | Close a new agent's first-open strip for good. | yes |
 | GET | `/api/agents/:id/skills` | Every skill the agent loads; learned ones with their versions. | yes |
 | POST | `/api/agents/:id/skills/:skill/remove` | Remove a learned skill (its versions are kept). | yes |
 | GET | `/api/skills` | The Skills page: every skill on this computer, grouped yours / learned / from plugins / from the catalogue, with who holds each. The shipped examples are not listed. | yes |
@@ -1430,6 +1445,32 @@ One agent whole: its grant with every tool's tier, engine, skills, delegates.
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/agents/<id>/profile"
+```
+
+#### `GET /api/agents/:id/intro`
+
+A new agent's first-open strip in its chat: whether it is still due, whom the agent may ask and who may ask it.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ show: false } | { show: true, id, handle, asks: 'everyone' | IntroAgent[], askedBy: IntroAgent[] }  // IntroAgent: { id, handle, name, frontDesk? }`
+- **Errors:** 404
+- **Since:** 0.1.0-pre.45
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/agents/<id>/intro"
+```
+
+#### `POST /api/agents/:id/intro/dismiss`
+
+Close a new agent's first-open strip for good.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `{ ok: true }`
+- **Errors:** 404
+- **Since:** 0.1.0-pre.45
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/agents/<id>/intro/dismiss"
 ```
 
 #### `GET /api/agents/:id/skills`

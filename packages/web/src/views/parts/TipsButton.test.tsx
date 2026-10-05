@@ -14,6 +14,8 @@ vi.mock('../../api', async (importOriginal) => {
       tipQueue: vi.fn(),
       laterTip: vi.fn(async () => ({ ok: true })),
       dismissTip: vi.fn(async () => ({ ok: true })),
+      dismissedTips: vi.fn(),
+      restoreTip: vi.fn(async () => ({ ok: true })),
     },
   };
 });
@@ -137,6 +139,24 @@ describe('TipsButton', () => {
     const panel = await openPanel();
     expect(within(panel).getByText("You've turned off every tip that applies.")).toBeInTheDocument();
     expect(within(panel).queryByText(/No tips right now/)).not.toBeInTheDocument();
+  });
+
+  it('shows the dismissed tips from the empty stack and brings one back into the queue', async () => {
+    vi.mocked(api.tipQueue).mockResolvedValue({ tips: [], dismissed: 2 });
+    vi.mocked(api.dismissedTips).mockResolvedValue({ tips: [tip('a'), tip('b')] });
+    await act(async () => { render(<Harness navigate={vi.fn()} />); });
+    const panel = await openPanel();
+    expect(within(panel).getByText('2 dismissed')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(within(panel).getByRole('button', { name: 'Show' })); });
+    const list = within(panel).getByTestId('tips-dismissed');
+    expect(within(list).getByText('Tip a.')).toBeInTheDocument();
+    expect(within(list).getAllByRole('button', { name: 'Bring back' })).toHaveLength(2);
+    // The gateway forgets the dismissal; the queue is read again and the tip is back in the stack.
+    vi.mocked(api.tipQueue).mockResolvedValue({ tips: [tip('a')], dismissed: 1 });
+    await act(async () => { fireEvent.click(within(list).getAllByRole('button', { name: 'Bring back' })[0]!); });
+    expect(api.restoreTip).toHaveBeenCalledWith('a');
+    expect(within(panel).getByTestId('tip-stack')).toBeInTheDocument();
+    expect(within(panel).getByText('Tip a.')).toBeInTheDocument();
   });
 
   it('a ?tip= preview opens the panel with that tip in front, remembering nothing', async () => {
