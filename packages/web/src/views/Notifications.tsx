@@ -21,6 +21,7 @@ import {
   type NotificationKind,
   type NotificationRow,
   type NotificationSettings,
+  type TelegramStatus,
 } from '../api';
 import { fmtRelative, fmtTime, notificationTitle } from '../format';
 import { NOTIFICATIONS_RECENT_ROUTE, settingsRoute } from '../routes';
@@ -61,6 +62,7 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
   const view = useAsync(() => api.notificationSettings(), []);
   const roster = useAsync(() => api.agents(), []);
   const recent = useAsync(() => api.notifications(20), [], 30_000);
+  const telegram = useAsync(() => api.telegram(), []);
   // Arrived from the lock screen's count: the list is what was asked for, not the settings above it.
   const scrolled = useRef(false);
   useEffect(() => {
@@ -120,9 +122,7 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
                     onPick={() => change({ defaultChannel: channel.kind })}
                   />
                 ))}
-                {!channels.some((channel) => channel.kind === 'telegram') ? (
-                  <p className="ui-card-meta">Telegram is not set up. <a href={settingsRoute('telegram')}>Set up Telegram</a></p>
-                ) : null}
+                <TelegramLine status={telegram.data} listed={channels.some((channel) => channel.kind.startsWith('telegram'))} />
               </Stack>
             )}
           </Section>
@@ -528,6 +528,21 @@ function CopyButton({ text }: { text: string }): JSX.Element {
       {copied ? <span className="ui-field-hint" role="status">{copied}</span> : null}
     </span>
   );
+}
+
+/**
+ * Telegram's state in one line under the channels, from the same answer as
+ * Settings → Telegram (the running surface and the paired-phone record), so a
+ * bot started from the dashboard and a phone paired by code read as such.
+ * Until that answer arrives, only a missing Telegram row says "not set up".
+ */
+export function TelegramLine({ status, listed }: { status: TelegramStatus | null | undefined; listed: boolean }): JSX.Element | null {
+  const link = settingsRoute('telegram');
+  if (status?.running && status.paired) return <p className="ui-card-meta">Telegram: paired with your phone</p>;
+  if (status?.running) return <p className="ui-card-meta">Telegram is running; <a href={link}>pair your phone</a></p>;
+  if (status?.configured) return <p className="ui-card-meta">Telegram's token is saved but the bot isn't running. <a href={link}>Open Telegram</a></p>;
+  if (status || !listed) return <p className="ui-card-meta">Telegram is not set up. <a href={link}>Set up Telegram</a></p>;
+  return null;
 }
 
 function ChannelRow({ channel, checked, onPick }: { channel: NotificationChannel; checked: boolean; onPick: () => void }): JSX.Element {

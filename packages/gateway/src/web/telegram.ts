@@ -73,9 +73,11 @@ export interface TelegramStatus {
 
 export async function telegramStatus(deps: TelegramWebDeps): Promise<TelegramStatus> {
   const devices = await listDevices(deps.pool).catch(() => []);
+  const running = deps.telegram?.running() ?? false;
   return {
-    configured: (deps.env.TELEGRAM_BOT_TOKEN ?? '').trim() !== '',
-    running: deps.telegram?.running() ?? false,
+    // A running surface has a token, wherever it came from.
+    configured: running || (deps.env.TELEGRAM_BOT_TOKEN ?? '').trim() !== '',
+    running,
     paired: devices.some((device) => device.surface === 'telegram'),
   };
 }

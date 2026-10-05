@@ -18,6 +18,7 @@ vi.mock('../api', async (importOriginal) => {
       saveNotificationSettings: vi.fn(),
       testChannel: vi.fn(),
       notifications: vi.fn(),
+      telegram: vi.fn(),
       telegramBot: vi.fn(),
       telegramDevices: vi.fn(),
       saveTelegramToken: vi.fn(),
@@ -43,6 +44,7 @@ beforeEach(() => {
   vi.mocked(api.saveNotificationSettings).mockImplementation(async (settings) => ({ settings, channels: VIEW.channels }));
   vi.mocked(api.testChannel).mockResolvedValue({ ok: true });
   vi.mocked(api.telegramBot).mockResolvedValue({ configured: true, running: true, username: 'buddi_bot' });
+  vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: true });
   vi.mocked(api.telegramDevices).mockResolvedValue({ devices: [PHONE] });
   vi.mocked(api.unpairTelegramDevice).mockResolvedValue(null);
   vi.mocked(api.tipsSettings).mockResolvedValue({ enabled: true });
@@ -161,6 +163,24 @@ describe('Settings → Notifications', () => {
     vi.mocked(api.testChannel).mockRejectedValue(new ApiError(502, 'The test did not go through: Telegram refused it.'));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send a test' })); });
     expect(screen.getByText('The test did not go through: Telegram refused it.')).toBeInTheDocument();
+  });
+
+  it('reads Telegram\'s line from the running bot and the paired phone, not the token file', async () => {
+    await page();
+    expect(screen.getByText('Telegram: paired with your phone')).toBeInTheDocument();
+    expect(screen.queryByText(/Telegram is not set up/)).toBeNull();
+    cleanup();
+    // Started from the dashboard in first run, no phone yet.
+    vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: false });
+    await page();
+    expect(screen.getByText(/Telegram is running;/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'pair your phone' })).toHaveAttribute('href', '#/settings/telegram');
+    expect(screen.queryByText(/Telegram is not set up/)).toBeNull();
+    cleanup();
+    vi.mocked(api.telegram).mockResolvedValue({ configured: false, running: false, paired: false });
+    vi.mocked(api.notificationSettings).mockResolvedValue({ ...VIEW, channels: [{ kind: 'local', label: 'This Mac', can: { offers: false, attachments: false, markdown: false } }] });
+    await page();
+    expect(screen.getByText(/Telegram is not set up/)).toBeInTheDocument();
   });
 
   it('says how to get a channel when there is none', async () => {
