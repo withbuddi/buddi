@@ -147,6 +147,46 @@ export interface ProviderAccountListing {
    * Gemini account from another compatible one. Absent for Codex. Since 1.8.
    */
   baseUrl?: string;
+  /**
+   * Whether the account can turn audio into text (`audioIn`) and text into
+   * audio (`audioOut`), as far as buddi can tell from its kind and address
+   * alone; nothing is asked of the server. Since 1.30.
+   */
+  capabilities?: AccountCapabilities;
+}
+
+/**
+ * What an account can do with audio, a hint for a plugin that lists accounts
+ * (Settings → Speech). `source` says how sure it is: `known`, the kind and
+ * address name a service whose audio routes buddi knows (an OpenAI key,
+ * Gemini) or knows to be absent (a ChatGPT subscription, Claude); `probe`, a
+ * server buddi cannot judge (Ollama, any other OpenAI-compatible address),
+ * which only trying a sample answers. Both flags are false for `probe`.
+ * Since host API 1.30.
+ */
+export interface AccountCapabilities {
+  audioIn: boolean;
+  audioOut: boolean;
+  source: 'known' | 'probe' | 'none';
+}
+
+/** Google's host for Gemini, the OpenAI-compatible address included. */
+export const GEMINI_HOST = 'generativelanguage.googleapis.com';
+
+/**
+ * An account's audio capabilities, from its kind, sign-in and address.
+ * `none` is an account that has no audio at all: a ChatGPT subscription's
+ * backend and Claude's API serve none.
+ */
+export function accountCapabilities(account: { kind: ProviderAccountKind; auth?: ProviderAccountAuth; baseUrl?: string }): AccountCapabilities {
+  if (account.kind === 'codex' || account.auth === 'chatgpt' || account.kind === 'anthropic') {
+    return { audioIn: false, audioOut: false, source: 'none' };
+  }
+  if (account.kind === 'openai') return { audioIn: true, audioOut: true, source: 'known' };
+  let host = '';
+  try { host = new URL(account.baseUrl ?? '').hostname.toLowerCase(); } catch { /* no address: unknown */ }
+  if (host === GEMINI_HOST) return { audioIn: true, audioOut: true, source: 'known' };
+  return { audioIn: false, audioOut: false, source: 'probe' };
 }
 
 /**

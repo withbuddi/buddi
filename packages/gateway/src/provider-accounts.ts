@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
-  GEMINI_BASE_URL, GEMINI_KEY_URL, MLXH_DEFAULT_MAX_PROMPT_TOKENS, OLLAMA_CLOUD_ACCOUNT_URL, isMlxhAccount, accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
+  GEMINI_BASE_URL, GEMINI_KEY_URL, MLXH_DEFAULT_MAX_PROMPT_TOKENS, OLLAMA_CLOUD_ACCOUNT_URL, isMlxhAccount, accountBaseUrl, accountCapabilities, accountModelProblem, accountProtocol, createVault, providerFromEnv,
   putOwnerSecret, registerSecretDestination, scrubText, scrubValueFrom, resolveProviderAccount, useOwnerSecret, vaultState,
   type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
@@ -663,6 +663,7 @@ export class ProviderAccounts {
       list: () => this.view().accounts.map((a) => ({
         id: a.id, label: a.label, kind: a.kind, enabled: a.enabled, configured: a.configured, defaultModel: a.defaultModel,
         ...(a.kind !== 'codex' && a.baseUrl ? { baseUrl: a.baseUrl } : {}),
+        capabilities: accountCapabilities(a),
       })),
       resolve: async (id, model, signal) => {
         const row = await this.#row(id);

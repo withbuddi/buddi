@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- Plugins now learn which of your model accounts can listen and speak: an OpenAI key and Gemini can, a ChatGPT subscription and Claude can't, and Ollama or another compatible server is "try it and see". Settings → Speech uses this to offer only accounts that work, with the reason beside the ones that don't. (Host API 1.30.)
+
 ## 0.1.0-pre.43 — 2026-10-05
 
 - Chat: dragging the edge between the conversation and the Canvas is smooth now, works with a finger, and settles gently at a third, a half and two thirds. A thin blue bar shows the edge when you point at it. Double-click it to go back to the usual layout; with it focused, ← and → move it. Neither side gets too narrow to use, the conversation is drawn exactly as wide as you set it (it no longer comes out a little narrower near the edge), and when the window narrows it gives way so the Canvas keeps its room, then comes back. The width you chose is kept on this device.

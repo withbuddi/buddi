@@ -303,7 +303,8 @@ account's lock and refresh, so the token never reaches the plugin.
 `resolve`, `generateCodexImage` and `withCodexProfile` are refused for an
 account the owner has not bound to this plugin; the binding is what the owner picks on the plugin's
 settings page, written through `accounts.bind(id)` from an `ownerOnly` tool.
-`list` never returns a key.
+`list` never returns a key; since 1.30 each account carries `capabilities`
+(`{ audioIn, audioOut, source }`, §7).
 
 **files.** The Files library.
 
@@ -473,7 +474,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.29`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.30`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -773,6 +774,17 @@ may declare `ownBudget` (its turns do not spend the run's `maxTurns`), and
 owner on an interactive surface. An older buddi ignores `routes` and treats
 a function `waitsForOwner` as false, so a plugin that relies on them asks for
 `^1.29`.
+
+1.30 adds `capabilities` to each account `accounts.list()` returns:
+`{ audioIn, audioOut, source }` (type `AccountCapabilities`), computed by
+`accountCapabilities` from the account's kind, sign-in and address. An
+OpenAI key and Gemini (an OpenAI-compatible account on
+`generativelanguage.googleapis.com`) are `known` with both true; a ChatGPT
+subscription and Claude are `none` with both false; Ollama and any other
+OpenAI-compatible address are `probe`, both false, since only a sample tells.
+Settings → Speech reads it to offer only accounts that can listen or speak.
+An older buddi leaves it out, so a plugin computes the same from `kind` and
+`baseUrl` when it is absent.
 
 ## 8. End to end
 

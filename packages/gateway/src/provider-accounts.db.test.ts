@@ -170,6 +170,22 @@ suite('named provider accounts', () => {
     expect(probe).not.toHaveBeenCalled();
     expect(service.view().accounts.find(x => x.id === other.id)).toMatchObject({ detectedContextWindowSource: 'table' });
   });
+  it('hands a plugin each account with its audio capabilities and never a key (host API 1.30)', async () => {
+    const f = fixture({}); await f.service.initialize();
+    const openai = await f.service.save({ label: 'OpenAI key', kind: 'openai', auth: 'api-key', defaultModel: 'gpt-5', enabled: true, secret: 'sk-fixture-openai-0123456789' });
+    const gemini = await f.service.save({ label: 'Gemini', kind: 'openai-compatible', auth: 'api-key', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', defaultModel: 'gemini-2.5-flash', enabled: true, secret: 'gemini-fixture-key-0123456789' });
+    const local = await f.service.save({ label: 'Local', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11434/v1', defaultModel: 'qwen3:8b', enabled: true });
+    const codex = await f.service.save(codexSettings);
+    const claude = await f.service.save(settings);
+    const listed = f.service.pluginAccess().list();
+    const caps = (id: string) => listed.find((a) => a.id === id)?.capabilities;
+    expect(caps(openai.id)).toEqual({ audioIn: true, audioOut: true, source: 'known' });
+    expect(caps(gemini.id)).toEqual({ audioIn: true, audioOut: true, source: 'known' });
+    expect(caps(local.id)).toEqual({ audioIn: false, audioOut: false, source: 'probe' });
+    expect(caps(codex.id)).toEqual({ audioIn: false, audioOut: false, source: 'none' });
+    expect(caps(claude.id)).toEqual({ audioIn: false, audioOut: false, source: 'none' });
+    expect(JSON.stringify(listed)).not.toMatch(/fixture-openai|gemini-fixture|private-fixture/);
+  });
   it('redacts discovery failures and never falls back to another credential', async () => {
     const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
     f.listModels.mockRejectedValue(Object.assign(new Error('SECRET-RESPONSE'), { status: 401 }));

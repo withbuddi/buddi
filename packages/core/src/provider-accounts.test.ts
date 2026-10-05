@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountBaseUrl, accountModelProblem, resolveProviderAccount, type ProviderAccount } from './provider-accounts.js';
+import { accountBaseUrl, accountCapabilities, accountModelProblem, GEMINI_BASE_URL, OLLAMA_CLOUD_ACCOUNT_URL, resolveProviderAccount, type ProviderAccount } from './provider-accounts.js';
 import { providerAuthHeaders, resolveProvider } from './provider.js';
 const local: ProviderAccount = { id: 'local', label: 'Local', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11434/v1', defaultModel: 'qwen3:8b', enabled: true, revision: 1 };
 describe('provider account domain', () => {
@@ -32,5 +32,23 @@ describe('provider account domain', () => {
     expect(() => resolveProviderAccount({ ...local, auth: 'api-key' }, local.defaultModel, null)).toThrow('missing');
     expect(() => resolveProviderAccount({ ...local, auth: 'anthropic-oauth' }, local.defaultModel, 'token')).toThrow('does not belong');
     expect(() => resolveProviderAccount({ ...local, kind: 'anthropic', auth: 'anthropic-oauth' }, 'claude-sonnet-5', 'token')).toThrow('custom endpoint');
+  });
+});
+
+describe('audio capabilities (host API 1.30)', () => {
+  it('knows an OpenAI key and Gemini, refuses a subscription and Claude, and leaves any other address to a probe', () => {
+    const known = { audioIn: true, audioOut: true, source: 'known' };
+    const none = { audioIn: false, audioOut: false, source: 'none' };
+    const probe = { audioIn: false, audioOut: false, source: 'probe' };
+    expect(accountCapabilities({ kind: 'openai', auth: 'api-key', baseUrl: 'https://api.openai.com/v1' })).toEqual(known);
+    expect(accountCapabilities({ kind: 'openai-compatible', auth: 'api-key', baseUrl: GEMINI_BASE_URL })).toEqual(known);
+    expect(accountCapabilities({ kind: 'codex', auth: 'chatgpt', baseUrl: 'https://chatgpt.com' })).toEqual(none);
+    expect(accountCapabilities({ kind: 'openai', auth: 'chatgpt' })).toEqual(none);
+    expect(accountCapabilities({ kind: 'anthropic', auth: 'api-key' })).toEqual(none);
+    expect(accountCapabilities({ kind: 'anthropic', auth: 'anthropic-oauth' })).toEqual(none);
+    expect(accountCapabilities({ kind: 'openai-compatible', auth: 'device-key', baseUrl: OLLAMA_CLOUD_ACCOUNT_URL })).toEqual(probe);
+    expect(accountCapabilities(local)).toEqual(probe);
+    expect(accountCapabilities({ kind: 'openai-compatible', auth: 'api-key', baseUrl: 'https://generativelanguage.googleapis.com.evil.example/v1' })).toEqual(probe);
+    expect(accountCapabilities({ kind: 'openai-compatible', auth: 'none' })).toEqual(probe);
   });
 });

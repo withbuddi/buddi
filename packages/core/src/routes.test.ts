@@ -14,7 +14,7 @@ const manifest = (routes: unknown[]): PluginManifest => ({ name: 'computer', ver
 
 describe('route providers (host API 1.29)', () => {
   it('a plugin may provide the apps route; the registry hands it out with its plugin', async () => {
-    expect(HOST_API_VERSION).toBe('1.29');
+    expect(Number(HOST_API_VERSION.split('.')[1])).toBeGreaterThanOrEqual(29);
     const registry = new ToolRegistry();
     registry.register(manifest([route]));
     const [provided] = registry.routeProviders();
