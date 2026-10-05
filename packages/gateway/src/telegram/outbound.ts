@@ -403,6 +403,9 @@ async function retrying<T>(deps: OutboundDeps, call: () => Promise<T>): Promise<
  * Streaming
  * ------------------------------------------------------------------ */
 
+/** What a withdrawn streamed answer shows while the agent checks. */
+export const RECHECKING_TEXT = 'Checking that…';
+
 /** The shortest gap between two edits of a streamed answer. */
 export const STREAM_EDIT_INTERVAL_MS = 1500;
 
@@ -475,11 +478,36 @@ export class StreamedAnswer {
 
   /**
    * Everything pushed so far is withdrawn (the grounding guard held that
-   * answer back); the next push starts the text again in the same message.
+   * answer back). Words already on the phone are replaced at once with a
+   * short placeholder — after any edit in flight, so an older edit never lands
+   * over it — and the next push starts the text again in the same message.
    */
   restart(): void {
     if (this.#closed) return;
     this.#text = '';
+    if (!this.#started) return;
+    if (this.#timer !== undefined) clearTimeout(this.#timer);
+    this.#timer = undefined;
+    this.#shown = RECHECKING_TEXT;
+    this.#lastEditAt = this.#now();
+    this.#inFlight = true;
+    this.#chain = this.#chain.then(async () => {
+      try {
+        const wait = this.#pausedUntil - this.#now();
+        if (wait > 0) await sleep(wait);
+        if (this.#closed || this.#messageId === undefined) return;
+        await this.#deps.api.editMessageText(this.#chatId, this.#messageId, RECHECKING_TEXT);
+      } catch (err) {
+        if (err instanceof TelegramApiError && err.retryAfter !== undefined) {
+          this.#pausedUntil = this.#now() + err.retryAfter * 1000;
+        }
+        this.#deps.log(`telegram: stream edit failed: ${message(err)}`);
+      } finally {
+        this.#inFlight = false;
+      }
+      // Text that arrived while the placeholder was going out follows it.
+      if (!this.#closed && this.#text.trim() !== '') this.#schedule();
+    });
   }
 
   /** A piece of the answer, as the model writes it. */

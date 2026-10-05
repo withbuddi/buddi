@@ -8,6 +8,7 @@ import type { ArtifactRow, ArtifactStore } from './attachments.js';
 import {
   CHART_TEXT,
   MAX_FILES_OUT,
+  RECHECKING_TEXT,
   StreamedAnswer,
   canvasAfterCall,
   csvName,
@@ -315,10 +316,46 @@ describe('streaming', () => {
     stream.push('CBS News reported');
     await vi.advanceTimersByTimeAsync(0);
     stream.restart();
+    // The withdrawn words leave the phone at once, before any new text.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(edits(calls)).toEqual(['CBS News reported', RECHECKING_TEXT]);
     stream.push('Checked: 6-3');
     await vi.advanceTimersByTimeAsync(1500);
-    expect(edits(calls)).toEqual(['CBS News reported', 'Checked: 6-3']);
+    expect(edits(calls)).toEqual(['CBS News reported', RECHECKING_TEXT, 'Checked: 6-3']);
     expect(calls.every((c) => c.method !== 'sendMessage')).toBe(true);
+  });
+
+  it('lands the placeholder after an edit already in flight, never under it', async () => {
+    let release: () => void = () => {};
+    const { api, calls } = fakeApi();
+    const edit = api.editMessageText;
+    let held = true;
+    api.editMessageText = (async (...args: Parameters<typeof edit>) => {
+      if (held) {
+        held = false;
+        await new Promise<void>((resolve) => { release = resolve; });
+      }
+      return edit(...args);
+    }) as typeof edit;
+    const stream = new StreamedAnswer({ api, log }, 'c1', 7, { now: () => Date.now() });
+    stream.push('CBS News reported');
+    await vi.advanceTimersByTimeAsync(0);
+    stream.restart();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(edits(calls)).toEqual([]);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(edits(calls)).toEqual(['CBS News reported', RECHECKING_TEXT]);
+    await stream.finish('Checked: 6-3.');
+    expect(edits(calls).at(-1)).toBe('Checked: 6-3.');
+  });
+
+  it('shows no placeholder when nothing was on the phone yet', async () => {
+    const { api, calls } = fakeApi();
+    const stream = new StreamedAnswer({ api, log }, 'c1', 7, { now: () => Date.now() });
+    stream.restart();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual([]);
   });
 
   it('cuts a growing answer at 4,000 characters with an ellipsis', async () => {

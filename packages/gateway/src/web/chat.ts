@@ -2328,7 +2328,7 @@ export class WebChat {
       },
       onDelta: (delta) => this.live.append(conversationId, runId, delta),
       // The grounding guard held the answer back: its streamed words go.
-      onRetract: () => this.live.settle(conversationId, runId),
+      onRetract: () => this.live.retract(conversationId, runId),
       // Counted only so a failed turn knows whether offering to run it again
       // would be honest — work that already happened cannot be un-happened.
       onToolCall: () => {

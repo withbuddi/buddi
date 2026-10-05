@@ -2760,6 +2760,29 @@ describe('the grounding guard', () => {
     expect(db.eventKinds()).not.toContain('run.grounding');
   });
 
+  it('still fires after a call that read nothing (unknown tool) and then invented citations', async () => {
+    const failed: CompletionResponse = {
+      content: [{ type: 'tool_use', id: 'tu_x', name: 'news.lookup', input: { q: 'ruling' } }], stopReason: 'tool_use', usage, model: 'claude-sonnet-5',
+    };
+    const { db, onText, onRetract } = await run([failed, say(INVENTED), say('I could not check that; I do not know the outcome.')]);
+    expect(onRetract).toHaveBeenCalledTimes(1);
+    expect(onText).not.toHaveBeenCalledWith(INVENTED);
+    expect(db.events.filter((e) => e.kind === 'run.grounding').map((e) => (e.payload as { stage: string }).stage)).toEqual(['retried', 'unchecked']);
+  });
+
+  it('stays silent when the sources come from the persona, memory or platform context', async () => {
+    const carried = { ...agent, systemPrompt: `${agent.systemPrompt}\nYour sources are CBS and NPR.` };
+    const systemContext = vi.fn(async () => ({ timezone: 'UTC', prompt: 'Recent coverage: the Associated Press.' }));
+    const { db, provider } = await run([say(INVENTED)], { agent: carried, ctx: { ...ctx, systemContext } });
+    expect(provider.calls).toHaveLength(1);
+    expect(db.eventKinds()).not.toContain('run.grounding');
+
+    const memoryPreamble = vi.fn(async () => 'Notes: the owner reads CBS, NPR and the Associated Press.');
+    const second = await run([say(INVENTED)], { memoryPreamble });
+    expect(second.provider.calls).toHaveLength(1);
+    expect(second.db.eventKinds()).not.toContain('run.grounding');
+  });
+
   it('stays silent on plain chat', async () => {
     const { db, provider, result } = await run([say('Hello! Paris is the capital of France; the BBC is a broadcaster.')]);
     expect(result.text).toContain('Paris');

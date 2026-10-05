@@ -120,6 +120,9 @@ export async function findEditionOrigin(
        from delivered d
        join core.conversations c on c.id = d.conversation_id
        join core.messages m on m.conversation_id = d.conversation_id and m.role = 'assistant'
+        -- The same window: a mission conversation months old is not expanded
+        -- in full on every turn (messages_conversation_idx covers it).
+        and m.created_at >= $1
        cross join lateral jsonb_array_elements(case when jsonb_typeof(m.content) = 'array' then m.content else '[]'::jsonb end) b
       where b->>'type' = 'tool_use' and b->>'name' = 'mission.report'
         and b->'input'->>'link' ~ '^#/p/[a-z0-9_-]+/.*[?&]edition='

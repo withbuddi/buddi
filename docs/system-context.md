@@ -71,11 +71,13 @@ native-search paragraph (`packages/runtime/src/search.ts`) keeps its own,
 search-specific "cite as you go".
 
 The runtime checks it (`packages/runtime/src/grounding.ts`). When the final
-answer of a turn that read nothing — no tool call, no delegation, no native
-search, not a decided approval coming back — cites sources, it is not
+answer of a turn that read nothing — no tool call or delegation that came
+back successfully (an unknown, refused, truncated or failed call reads
+nothing), no native search, not a decided approval coming back — cites sources, it is not
 delivered: not stored, not sent, and its streamed words are withdrawn
-(`onRetract`; the web chat clears the live text, Telegram restarts the
-streamed message). The model gets one turn, not kept in the transcript:
+(`onRetract`; the web chat gets `live.settle` with `retracted: true` and
+drops the live text at once, Telegram replaces the streamed message with
+"Checking that…" after any edit in flight, then streams the retry into it). The model gets one turn, not kept in the transcript:
 "You cited sources without reading anything. Verify with your tools or a
 colleague, or remove the claims." If that answer still reads nothing, it is
 delivered with `unchecked: true` on the run's result and `run.finished`, and
@@ -87,10 +89,14 @@ it. Each firing writes a `run.grounding` event (`stage: retried`, then
 outlet from a known list (CBS, AP, Reuters, Le Monde…) or a domain counts only
 in a citation position (in parentheses, after "according to" / "selon" /
 "d'après" / "per" / "via", before "reports" / "said" / "writes", or as a link);
-a capitalised name after "according to" / "selon" / "d'après" counts too; a
-bare URL counts. It fires on two distinct such sources, or one with numbered
-markers (`[1]`) or a "Sources:" line. Sources the conversation already holds
-(the owner named them, an earlier tool returned them) are not counted; code
+a capitalised name after "according to" / "selon" / "d'après" counts too. A
+bare URL outside a citation position is not a source; it only backs up
+numbered markers or a "Sources:" line. An outlet and its own domain
+("Reuters", reuters.com) are one source. It fires on two distinct sources, or
+one (or a bare link) with numbered markers (`[1]`) or a "Sources:" line.
+Sources the conversation already holds (the owner named them, an earlier tool
+returned them) or the agent carries (its persona, its memory preamble, the
+platform context) are not counted; code
 and email addresses are ignored; figures alone never count.
 
 ## Edition origin

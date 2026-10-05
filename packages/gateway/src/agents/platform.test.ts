@@ -569,6 +569,25 @@ describe('create, approve, talk to it', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(['*']);
   });
 
+  it('carries the default list in the approved envelope, so an approval from before it writes none', async () => {
+    const input = { ...baseCreate, tools: ['memory.*', 'agent.delegate'] };
+    const { envelope } = described<CreateAgentEnvelope>(h, 'platform.create_agent', input);
+    expect(envelope.defaultDelegates).toEqual(['*']);
+    // A pre.44 card: the same envelope with no delegation field at all.
+    const { defaultDelegates: _dropped, ...legacy } = envelope;
+    await h.tool('platform.create_agent').execute(input, { ...h.ctx, approvedEffect: { envelope: legacy } });
+    expect(existsSync(path.join(h.agentsDir, 'bookkeeper', 'agent.md'))).toBe(true);
+    expect(existsSync(path.join(h.agentsDir, 'bookkeeper', 'delegates.json'))).toBe(false);
+  });
+
+  it('refuses when the approved default list is not the one it would write', async () => {
+    const input = { ...baseCreate, tools: ['memory.*', 'agent.delegate'] };
+    const { envelope } = described<CreateAgentEnvelope>(h, 'platform.create_agent', input);
+    await expect(h.tool('platform.create_agent').execute(input, { ...h.ctx, approvedEffect: { envelope: { ...envelope, defaultDelegates: ['scout'] } } }))
+      .rejects.toThrow(/no longer matches the approved preview/);
+    expect(existsSync(path.join(h.agentsDir, 'bookkeeper'))).toBe(false);
+  });
+
   it('never rewrites an explicit list, and writes none without the tool', async () => {
     const listed = { ...baseCreate, tools: ['memory.*', 'agent.delegate'], delegates: ['scout'] };
     expect(described<CreateAgentEnvelope>(h, 'platform.create_agent', listed).preview).not.toContain('May ask: everyone');
