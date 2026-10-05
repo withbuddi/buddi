@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.45 — 2026-10-05
+
 ### Fixed
 
 - Mail: newsletters no longer show codes like `&#8202;`, `&zwnj;` or `&#38;` in their text, previews and search. buddi now reads an HTML-only message the way a browser would: every character comes out as itself, styles and hidden parts are left out, and the invisible padding newsletters put in their preview line is dropped. Mail that arrived before is cleaned too, quietly in the background after buddi starts; only text that came from an HTML message is touched, so a plain-text email that really says `&copy;` or is indented stays exactly as written.
