@@ -25,6 +25,7 @@ import {
   AgentAvatar,
   Avatar,
   Button,
+  ButtonLink,
   Empty,
   ErrorBanner,
   Icon,
@@ -54,7 +55,8 @@ import { HomeGlances, useGlanceHiding } from './parts/HomeGlances';
 import { BirthdayCard } from './parts/BirthdayCard';
 import { PassphraseCard } from './parts/PassphraseCard';
 import { HomeWidgets, placedIds, useWidgets } from './parts/HomeWidgets';
-import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
+import { NeedsCard, NeedsFrom } from './parts/NeedsCard';
+import { NeedsYouDeck, RequestCard, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 import { pluginTitle, type PluginPages } from '../pages/usePages';
 
 export function Home({
@@ -145,9 +147,9 @@ export function Home({
   const questions = heldQuestions(attention);
   const signIns = connectionSignals.filter((signal) => !closed.is(`connection:${signal.id}`, signal.sentence));
   const recovering = (data?.needsYou?.recovery ?? 0) > 0;
-  const needs =
-    pending.length + questions.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (proposed > 0 ? 1 : 0) +
-    toSetUp.length + told.length + signIns.length + (recovering ? 1 : 0);
+  // What Home draws as a card. Urgent alerts, failed jobs and proposals are
+  // counted on the glance's line, each a link to its own list, not here.
+  const needs = pending.length + questions.length + toSetUp.length + told.length + signIns.length + (recovering ? 1 : 0);
 
   // The footer's approvals land here: Home, scrolled to "Needs you".
   useEffect(() => {
@@ -171,7 +173,10 @@ export function Home({
   const counts = glanceCounts(data?.needsYou ?? {
     approvals: pending.length, questions: questions.length, failed: failedJobs, urgent, proposals: proposed, agentsToSetUp: toSetUp.length,
     asks: told.length, signIns: signIns.length, recovery: recovering ? 1 : 0,
-  }, data?.paused ?? false);
+  }, data?.paused ?? false).map((item) =>
+    // The urgent count says the first alert's owner line on hover: Needs you no longer repeats it.
+    item.key === 'urgent' ? { ...item, hint: alertsNeedYou(item.count ?? 0, data?.sentinels?.decisions ?? []) } : item,
+  );
 
   return (
     <>
@@ -211,30 +216,50 @@ export function Home({
       <PassphraseCard />
 
       {update && update.updateAvailable && !update.checkout && update.latest && !closed.is('update', update.latest) ? (
-        <Notice tone="accent" action={<CloseButton label="Not now — tell me at the next version" onClick={() => closed.close('update', update.latest!)} />}>
-          {/* One paragraph: the notice stacks its children, and this is one sentence. */}
-          <p>
-            A newer buddi is ready: <span className="mono">{update.latest}</span>.{' '}
-            <a href={settingsRoute('system')} onClick={go(settingsRoute('system'))}>Upgrade from Settings → Version.</a>
-          </p>
-        </Notice>
+        <NeedsCard
+          kind="update"
+          tone="accent"
+          icon="download"
+          title={<>A newer buddi is ready: <span className="mono">{update.latest}</span></>}
+          from={`buddi · you have ${update.current}`}
+          dismiss={{ onClick: () => closed.close('update', update.latest!), hint: 'Tell me at the next version' }}
+          actions={<ButtonLink variant="accent" href={settingsRoute('system')} onClick={go(settingsRoute('system'))}>Upgrade from Settings</ButtonLink>}
+        />
       ) : null}
 
-      {/* A watcher or a source that failed says so here, closable: there is no
-          step on Home that fixes it, so it is not in Needs you. */}
+      {/* A watcher or a source that failed says so here, closable until its
+          error changes: there is no step on Home that fixes it, so it is not
+          in Needs you. */}
       {sentinelErrors.map((err) => (
-        <Notice key={err.sentinelId} tone="warning" action={<CloseButton label="Hide until the error changes" onClick={() => closed.close(`watcher-error:${err.sentinelId}`, err.error)} />}>
-          Watcher {err.sentinelId} failed: {err.error}
-        </Notice>
+        <NeedsCard
+          key={err.sentinelId}
+          kind="watcher-error"
+          tone="warning"
+          icon="alert"
+          title={`Watcher ${err.sentinelId} failed`}
+          from="buddi · your watchers"
+          dismiss={{ onClick: () => closed.close(`watcher-error:${err.sentinelId}`, err.error), hint: 'Hide until the error changes' }}
+          actions={<ButtonLink href={settingsRoute('watchers')} onClick={go(settingsRoute('watchers'))}>Open Watchers</ButtonLink>}
+        >
+          <p>{err.error}</p>
+        </NeedsCard>
       ))}
       {sourceErrors.map((source) => (
-        <Notice key={source.sourceId} tone="warning" action={<CloseButton label="Hide until the error changes" onClick={() => closed.close(`source-error:${source.sourceId}`, source.lastError!)} />}>
-          Source {source.sourceId}: {source.lastError}
-        </Notice>
+        <NeedsCard
+          key={source.sourceId}
+          kind="source-error"
+          tone="warning"
+          icon="alert"
+          title={`Source ${source.sourceId} cannot be read`}
+          from="buddi · your sources"
+          dismiss={{ onClick: () => closed.close(`source-error:${source.sourceId}`, source.lastError!), hint: 'Hide until the error changes' }}
+        >
+          <p>{source.lastError}</p>
+        </NeedsCard>
       ))}
 
       <ErrorBanner message={overview.error ?? approvals.error ?? failure} />
-      {note ? <Notice tone="good" role="status">{note}</Notice> : null}
+      {note ? <p className="home-note muted" role="status">{note}</p> : null}
 
       {needs > 0 ? (
         <div id={NEEDS_ID} className="home-needs">
@@ -250,96 +275,79 @@ export function Home({
             />
           ) : undefined}
         >
+          {/* One card for everything here (parts/NeedsCard). What only routes
+              elsewhere — urgent alerts, failed jobs, proposals — is the
+              glance's counts above, each a link to its list. A paused queue
+              is the shell's banner. */}
           <Stack>
-            {/* A paused queue is the shell's banner now, not a line here. */}
             {pending.map((action) => (
-              <ApprovalCard key={action.id} action={action} timezone={timezone} busy={busy === action.id} onDecide={decide} agentName={nameOf(action.agentId)} />
+              <ApprovalCard key={action.id} action={action} timezone={timezone} busy={busy === action.id} onDecide={decide} agentName={nameOf(action.agentId)} agents={agents} />
             ))}
-            {/* The watchers' decisions, in their owner lines — the Alerts page's
-                rule: urgent only, a group once; what waits for the recap is not here. */}
-            {urgent > 0 ? (
-              <Notice tone="warning">
-                <a href={`${ACTIVITY_ROUTE}/alerts`} onClick={go(`${ACTIVITY_ROUTE}/alerts`)}>
-                  {alertsNeedYou(urgent, data?.sentinels?.decisions ?? [])}
-                </a>
-              </Notice>
-            ) : null}
-            {/* An agent holding its turn for the owner's answer, then the
-                messages that carry an action (the ask under the title), in one
-                list. Opening one is seeing it; a report without an action is
-                never here. As a deck, the messages are the deck and the
-                questions stay rows above it. */}
-            {questions.length > 0 || (told.length > 0 && needsView === 'list') ? (
-              <Panel flush>
-                <List>
-                  {questions.map((q) => (
-                    <ListRow
-                      key={q.agentId}
-                      href={q.route}
-                      onClick={() => navigate(q.route)}
-                      lead={<AgentAvatar agents={agents} id={q.agentId} size="sm" />}
-                      title="Asked you a question"
-                      sub={`${nameOf(q.agentId)} · waiting for your answer`}
-                      side={fmtRelative(q.at)}
-                    />
-                  ))}
-                  {needsView === 'list' ? unseen.map((row) => (
-                    <ListRow
-                      key={row.id}
-                      href={row.link ?? undefined}
-                      onClick={() => openRow(row)}
-                      lead={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}
-                      title={notificationTitle(row)}
-                      sub={row.action ? `${fromOf(row)} · ${row.action}` : fromOf(row)}
-                      side={row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}
-                    />
-                  )) : null}
-                </List>
-              </Panel>
+            {/* An agent holding its turn for the owner's answer: answered in its conversation. */}
+            {questions.map((q) => (
+              <NeedsCard
+                key={q.agentId}
+                kind="question"
+                tone="accent"
+                icon="chat"
+                title="Asked you a question"
+                href={q.route}
+                onOpen={() => navigate(q.route)}
+                time={fmtRelative(q.at)}
+                from={<NeedsFrom face={<AgentAvatar agents={agents} id={q.agentId} size="sm" />}>{nameOf(q.agentId)} · waiting for your answer</NeedsFrom>}
+                actions={<Button variant="accent" onClick={() => navigate(q.route)}>Answer</Button>}
+              />
+            ))}
+            {/* The messages that carry an action (the ask under the title):
+                compact cards in the list, one in front as a deck. Opening one
+                is seeing it; a report without an action is never here. */}
+            {told.length > 0 && needsView === 'list' ? (
+              <Stack gap="sm">
+                {unseen.map((row) => (
+                  <RequestCard key={row.id} row={row} agents={agents} label={fromOf} onOpen={openRow} onDone={seeRow} />
+                ))}
+              </Stack>
             ) : null}
             {told.length > 0 && needsView === 'deck' ? (
               <NeedsYouDeck rows={unseen} agents={agents} label={fromOf} onOpen={openRow} onDone={seeRow} />
             ) : null}
-            {failedJobs > 0 ? (
-              <Notice tone="critical">
-                <a href={`${ACTIVITY_ROUTE}/jobs?state=failed`} onClick={go(`${ACTIVITY_ROUTE}/jobs?state=failed`)}>
-                  {failedJobs} failed job{failedJobs === 1 ? '' : 's'}. See why, then retry or dismiss {failedJobs === 1 ? 'it' : 'them'}.
-                </a>
-              </Notice>
-            ) : null}
-            {proposed > 0 ? (
-              <Notice tone="accent">
-                <a href={settingsRoute('proposals')} onClick={go(settingsRoute('proposals'))}>
-                  {proposed} proposal{proposed === 1 ? '' : 's'} from your agents to keep or discard.
-                </a>
-              </Notice>
-            ) : null}
             {signIns.map((signal) => (
-              <Notice key={signal.id} tone="accent" action={<CloseButton label="Not now — tell me if it changes" onClick={() => closed.close(`connection:${signal.id}`, signal.sentence)} />}>
-                <p>
-                  {signal.sentence}{' '}
-                  <a href={settingsRoute('connections')} onClick={go(settingsRoute('connections'))}>Settings → Connections.</a>
-                </p>
-              </Notice>
+              <NeedsCard
+                key={signal.id}
+                kind="sign-in"
+                tone="accent"
+                icon="plug"
+                title={signal.sentence}
+                from={`${signal.name} · a connection`}
+                dismiss={{ onClick: () => closed.close(`connection:${signal.id}`, signal.sentence), hint: 'Tell me if it changes' }}
+                actions={<ButtonLink variant="accent" href={settingsRoute('connections')} onClick={go(settingsRoute('connections'))}>Open Connections</ButtonLink>}
+              />
             ))}
             {/* An agent a plugin needs and nobody has yet: the plugin's line,
                 the same accept the Plugins page runs, and a way to say no. */}
             {toSetUp.map((offer) => (
-              <Panel key={`${offer.plugin}/${offer.agent}`}>
-                <AgentOffer
-                  plugin={offer.plugin}
-                  agent={offer.agent}
-                  text={offer.text}
-                  label={`Create @${offer.handle}`}
-                  handle={offer.handle}
-                  onDismiss={() => { void api.dismissAgentOffer(offer.plugin, offer.agent).then(() => agentOffers.reload()); }}
-                />
-              </Panel>
+              <AgentOffer
+                key={`${offer.plugin}/${offer.agent}`}
+                plugin={offer.plugin}
+                agent={offer.agent}
+                text={offer.text}
+                label={`Create @${offer.handle}`}
+                handle={offer.handle}
+                card={{ from: pluginTitle(offer.plugin, pluginPages?.all) }}
+                onDismiss={() => { void api.dismissAgentOffer(offer.plugin, offer.agent).then(() => agentOffers.reload()); }}
+              />
             ))}
             {recovering ? (
-              <Notice tone="warning">
-                <p>{RECOVERY_BANNER} <a href={BACKUP_ROUTE} onClick={go(BACKUP_ROUTE)}>Open the checklist.</a></p>
-              </Notice>
+              <NeedsCard
+                kind="recovery"
+                tone="warning"
+                icon="archive"
+                title="Finish restoring this buddi"
+                from="buddi · restored from a backup"
+                actions={<ButtonLink variant="accent" href={BACKUP_ROUTE} onClick={go(BACKUP_ROUTE)}>Open the checklist</ButtonLink>}
+              >
+                <p>{RECOVERY_BANNER}</p>
+              </NeedsCard>
             ) : null}
           </Stack>
         </Section>
@@ -785,7 +793,7 @@ export function alertsNeedYou(count: number, decisions: Array<{ title: string; c
 const NEEDS_ID = 'home-needs';
 
 /** One count on the glance's line: a number and its words, and the list it opens (none: "Needs you" below). */
-export interface GlanceCount { key: string; count: number | null; label: string; tone?: 'critical'; route?: string }
+export interface GlanceCount { key: string; count: number | null; label: string; tone?: 'critical'; route?: string; hint?: string }
 
 /**
  * The counts under the greeting, each a door to its list: only what the owner
@@ -823,7 +831,7 @@ function GlanceCounts({ items, navigate }: { items: GlanceCount[]; navigate: (ro
           <Fragment key={item.key}>
             {i > 0 ? <span className="home-count-sep" aria-hidden="true">·</span> : null}
             {item.route ? (
-              <a className="home-count" data-tone={item.tone} href={item.route} onClick={(e) => { e.preventDefault(); navigate(item.route!); }}>{words}</a>
+              <a className="home-count" data-tone={item.tone} title={item.hint} href={item.route} onClick={(e) => { e.preventDefault(); navigate(item.route!); }}>{words}</a>
             ) : (
               <button type="button" className="home-count" data-tone={item.tone} onClick={toNeeds}>{words}</button>
             )}

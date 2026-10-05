@@ -3,13 +3,13 @@
  * unused, one sentence and one action, at most one a day.
  *
  * The action goes where the tip points. "Not this again" removes the tip for
- * good; the quiet × puts it off, and it may come back after a while. Tips are
+ * good; "Not now" puts it off, and it may come back after a while. Tips are
  * turned off on Settings → Notifications, and then the gateway serves none.
  */
 import { useState } from 'react';
 import { api, type TipView } from '../../api';
-import { Button, Notice, Spacer, Toolbar, useAsync } from '../../ui';
-import { Icon } from '../../ui/Icon';
+import { Button, useAsync } from '../../ui';
+import { NeedsCard } from './NeedsCard';
 
 /** `#/?tip=<id>` on Home shows that one tip as it would look, touching no state. */
 export function previewTipOf(hash: string): string | undefined {
@@ -36,19 +36,16 @@ export function TipCard({ navigate, preview, hidden }: { navigate: (route: strin
 
   return (
     <div className="home-tip" data-tip={tip.id}>
-      <Notice>
-        <div className="ui-notice-row">
-          <p className="ui-notice-body">{tip.text}</p>
-          <button type="button" className="ui-icon-btn" data-size="sm" aria-label="Not now" title="Not now" onClick={() => leave('later')}>
-            <Icon name="close" />
-          </button>
-        </div>
-        <Toolbar>
-          <Spacer />
-          <Button variant="ghost" size="sm" onClick={() => leave('dismiss')}>Not this again</Button>
-          <Button variant="accent" size="sm" onClick={() => navigate(tip.action.route)}>{tip.action.label}</Button>
-        </Toolbar>
-      </Notice>
+      <NeedsCard
+        kind="tip"
+        tone="accent"
+        icon="bulb"
+        title={tip.text}
+        from="A tip from buddi"
+        dismiss={{ onClick: () => leave('later'), hint: 'It may come back after a while' }}
+        extraDismiss={{ onClick: () => leave('dismiss'), hint: 'Never show this tip again' }}
+        actions={<Button variant="accent" onClick={() => navigate(tip.action.route)}>{tip.action.label}</Button>}
+      />
     </div>
   );
 }

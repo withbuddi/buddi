@@ -10,7 +10,8 @@
  */
 import { useState } from 'react';
 import { api, ApiError } from '../../api';
-import { Button, ErrorBanner, Field, Section, Stack, Toolbar, useAsync } from '../../ui';
+import { Button, ErrorBanner, Field, useAsync } from '../../ui';
+import { NeedsCard } from './NeedsCard';
 
 /** What the card says above the words. */
 export const PASSPHRASE_CARD_LINE = 'Write these down; they open your backups and only you have them.';
@@ -49,41 +50,46 @@ export function PassphraseCard(): JSX.Element | null {
       .finally(() => setBusy(false));
   };
   return (
-    <Section title="Your backup passphrase" panel>
-      <Stack gap="sm">
-        <ErrorBanner message={failed} />
-        <p className="ui-card-meta">{PASSPHRASE_CARD_LINE}</p>
-        {phrase !== null ? (
+    <NeedsCard
+      kind="passphrase"
+      tone="accent"
+      icon="key"
+      title="Your backup passphrase"
+      from="buddi · after your first backup"
+      actions={
+        phrase !== null ? (
           <>
-            <p className="backup-phrase mono" aria-label="Your backup passphrase">{phrase}</p>
-            <p className="ui-card-meta">Later, Settings → Backup shows them again behind your PIN.</p>
-            <Toolbar align="end">
-              <Button onClick={copy}>{copied === 'done' ? 'Copied' : copied === 'failed' ? 'Could not copy' : 'Copy'}</Button>
-              <Button variant="accent" disabled={busy} onClick={saved}>
-                I saved it
-              </Button>
-            </Toolbar>
+            <Button onClick={copy}>{copied === 'done' ? 'Copied' : copied === 'failed' ? 'Could not copy' : 'Copy'}</Button>
+            <Button variant="accent" disabled={busy} onClick={saved}>
+              I saved it
+            </Button>
           </>
         ) : (
-          <>
-            <Field label="Your PIN" hint="The one that unlocks this dashboard.">
-              <input
-                type="password"
-                inputMode="numeric"
-                autoComplete="off"
-                value={pin}
-                onChange={(event) => setPin(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter' && pin !== '') reveal(); }}
-              />
-            </Field>
-            <Toolbar align="end">
-              <Button variant="accent" disabled={busy || pin === ''} onClick={reveal}>
-                Show the words
-              </Button>
-            </Toolbar>
-          </>
-        )}
-      </Stack>
-    </Section>
+          <Button variant="accent" disabled={busy || pin === ''} onClick={reveal}>
+            Show the words
+          </Button>
+        )
+      }
+    >
+      <ErrorBanner message={failed} />
+      <p>{PASSPHRASE_CARD_LINE}</p>
+      {phrase !== null ? (
+        <>
+          <p className="backup-phrase mono" aria-label="Your backup passphrase">{phrase}</p>
+          <p className="ui-card-meta">Later, Settings → Backup shows them again behind your PIN.</p>
+        </>
+      ) : (
+        <Field label="Your PIN" hint="The one that unlocks this dashboard.">
+          <input
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            value={pin}
+            onChange={(event) => setPin(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter' && pin !== '') reveal(); }}
+          />
+        </Field>
+      )}
+    </NeedsCard>
   );
 }

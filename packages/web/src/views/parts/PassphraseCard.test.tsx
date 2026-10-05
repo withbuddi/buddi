@@ -35,6 +35,10 @@ describe('PassphraseCard', () => {
     expect(await screen.findByText(PHRASE)).toBeInTheDocument();
     expect(screen.getByText(PASSPHRASE_CARD_LINE)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    // The "Needs you" card: an article named by its heading, the accent last, no way out but "I saved it".
+    const article = screen.getByRole('article', { name: 'Your backup passphrase' });
+    expect(Array.from(article.querySelectorAll('.needs-card-actions button')).map((b) => b.textContent)).toEqual(['Copy', 'I saved it']);
+    expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeInTheDocument();
     // Leaving Home without pressing it: the next visit shows it again.
     cleanup();
     render(<PassphraseCard />);

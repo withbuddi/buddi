@@ -547,6 +547,8 @@ export function Card({
   onClick,
   label,
   as: As = 'div',
+  labelledBy,
+  density,
 }: {
   tone?: Tone;
   title?: ReactNode;
@@ -563,6 +565,10 @@ export function Card({
   /** Its name for a screen reader when it is clickable. */
   label?: string;
   as?: 'div' | 'section' | 'article';
+  /** The id of the heading that names it, for an article whose title is drawn inside. */
+  labelledBy?: string;
+  /** `compact`: smaller padding, for a list of many cards. */
+  density?: 'compact';
 }): JSX.Element {
   const interactive = onClick
     ? {
@@ -578,7 +584,7 @@ export function Card({
       }
     : {};
   return (
-    <As className="ui-card" data-tone={tone} {...interactive}>
+    <As className="ui-card" data-tone={tone} data-density={density} aria-labelledby={labelledBy} {...interactive}>
       {title || meta || actions ? (
         <div className="ui-card-head">
           {title ? <h3 className="ui-card-title">{title}</h3> : null}

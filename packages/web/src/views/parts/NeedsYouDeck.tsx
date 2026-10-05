@@ -12,7 +12,8 @@ import type { KeyboardEvent } from 'react';
 import type { NotificationRow } from '../../api';
 import type { ChatAgent } from '../../chat/types';
 import { fmtRelative, notificationTitle } from '../../format';
-import { AgentAvatar, Button, Card, Empty, Icon, Toolbar } from '../../ui';
+import { AgentAvatar, Button, Empty, Icon } from '../../ui';
+import { NeedsCard, NeedsFrom } from './NeedsCard';
 
 export type NeedsYouView = 'deck' | 'list';
 
@@ -82,13 +83,6 @@ export function NeedsYouDeck({
     else if ((event.key === 'd' || event.key === 'Delete') && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); done(); }
   };
 
-  const title = (
-    <span className="home-deck-from">
-      {row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : null}
-      <span>{label(row)}</span>
-    </span>
-  );
-
   return (
     <div
       className="home-deck"
@@ -99,35 +93,79 @@ export function NeedsYouDeck({
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
-      <Card
-        as="article"
-        title={title}
-        meta={<span className="ui-card-meta">{row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}</span>}
-        actions={
-          <>
-            <span className="home-deck-count" aria-live="polite">{at + 1} of {rows.length}</span>
+      <NeedsCard
+        kind="request"
+        tone="accent"
+        title={notificationTitle(row)}
+        time={row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}
+        from={<NeedsFrom face={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}>{label(row)}</NeedsFrom>}
+        lead={
+          <span className="home-deck-nav">
             <Button size="sm" variant="ghost" aria-label="Previous" disabled={!many} onClick={() => move(-1)}>
               <Icon name="chevron-left" />
             </Button>
+            <span className="home-deck-count" aria-live="polite">{at + 1} of {rows.length}</span>
             <Button size="sm" variant="ghost" aria-label="Next" disabled={!many} onClick={() => move(1)}>
               <Icon name="chevron-right" />
             </Button>
-          </>
+          </span>
         }
-        foot={
-          <Toolbar align="end">
+        actions={
+          <>
             <Button onClick={done}>Done</Button>
             {/* An ask with no link opens its agent's conversation (Home's openRow). */}
             {row.link || row.agentId ? <Button variant="accent" onClick={open}>Open</Button> : null}
-          </Toolbar>
+          </>
         }
       >
-        <div className="home-deck-body">
-          <p className="home-deck-title">{notificationTitle(row)}</p>
-          {row.text ? <p className="home-deck-text">{row.text}</p> : null}
-          {row.action ? <p className="home-deck-text"><strong>{row.action}</strong></p> : null}
-        </div>
-      </Card>
+        {row.text || row.action ? (
+          <div className="home-deck-body">
+            {row.text ? <p className="home-deck-text">{row.text}</p> : null}
+            {row.action ? <p className="home-deck-text"><strong>{row.action}</strong></p> : null}
+          </div>
+        ) : null}
+      </NeedsCard>
     </div>
+  );
+}
+
+/**
+ * One request in the list view: the deck's card, compact. The title opens it
+ * (and opening is seeing it); Done marks it seen without going anywhere.
+ */
+export function RequestCard({
+  row,
+  agents,
+  label,
+  onOpen,
+  onDone,
+}: {
+  row: NotificationRow;
+  agents: readonly ChatAgent[];
+  label: (row: NotificationRow) => string;
+  onOpen: (row: NotificationRow) => void;
+  onDone: (row: NotificationRow) => void;
+}): JSX.Element {
+  const opens = Boolean(row.link || row.agentId);
+  return (
+    <NeedsCard
+      kind="request"
+      tone="accent"
+      compact
+      title={notificationTitle(row)}
+      {...(opens ? { href: row.link ?? '#', onOpen: () => onOpen(row) } : {})}
+      time={row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}
+      from={
+        <NeedsFrom face={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}>
+          {row.action ? `${label(row)} · ${row.action}` : label(row)}
+        </NeedsFrom>
+      }
+      actions={
+        <>
+          <Button size="sm" onClick={() => onDone(row)}>Done</Button>
+          {opens ? <Button size="sm" variant="accent" onClick={() => onOpen(row)}>Open</Button> : null}
+        </>
+      }
+    />
   );
 }

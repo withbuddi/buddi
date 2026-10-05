@@ -6,7 +6,10 @@
 import { useState } from 'react';
 import { api, type ApprovalRow } from '../../api';
 import { fmtRelative, fmtTime, json, short } from '../../format';
-import { Button, Card, Code, Pill, Section, Toolbar } from '../../ui';
+import type { ChatAgent } from '../../chat/types';
+import { Button, Code, Section } from '../../ui';
+import { AgentAvatar } from './Avatar';
+import { NeedsCard, NeedsFrom } from './NeedsCard';
 import { useOwnerChoices } from './OwnerChoices';
 
 export type Decision = 'approve' | 'reject';
@@ -92,12 +95,15 @@ export function ApprovalCard({
   busy,
   onDecide,
   agentName,
+  agents,
 }: {
   action: ApprovalRow;
   timezone: string;
   busy: boolean;
   onDecide: (id: string, decision: Decision, scope?: Scope, choices?: Record<string, string>) => void;
   agentName?: string;
+  /** The team, for the asking agent's face on the "from" line. */
+  agents?: readonly ChatAgent[];
 }): JSX.Element {
   const [showEnvelope, setShowEnvelope] = useState(false);
   // The tool's own controls, above the buttons: they change what Approve
@@ -106,14 +112,42 @@ export function ApprovalCard({
   /** The decision, carrying the controls only when the tool declared any. */
   const approve = (scope?: Scope): void =>
     values ? onDecide(action.id, 'approve', scope, values) : onDecide(action.id, 'approve', scope);
+  const scoped = Boolean(action.permissionScopes?.length);
   return (
-    <Card
+    <NeedsCard
+      kind="approval"
       tone="accent"
-      title={action.tool}
-      meta={
+      icon="lock"
+      title={<span className="mono">{action.tool}</span>}
+      time={fmtRelative(action.createdAt)}
+      from={
+        <NeedsFrom face={agents ? <AgentAvatar agents={agents} id={action.agentId} size="sm" /> : undefined}>
+          Asked by {agentName ?? action.agentId} · v{action.toolVersion}
+        </NeedsFrom>
+      }
+      lead={
+        <Button variant="ghost" onClick={() => setShowEnvelope((v) => !v)} aria-expanded={showEnvelope}>
+          {showEnvelope ? 'Hide envelope' : 'Show envelope'}
+        </Button>
+      }
+      actions={
         <>
-          <Pill>v{action.toolVersion}</Pill>
-          <span className="muted">asked by {agentName ?? action.agentId}</span>
+          <Button variant="danger" disabled={busy} onClick={() => onDecide(action.id, 'reject')}>
+            Reject
+          </Button>
+          {scoped ? (
+            <>
+              <Button disabled={busy} onClick={() => approve('conversation')}>
+                Auto: this conversation
+              </Button>
+              <Button disabled={busy} onClick={() => approve('always')}>
+                Always: this agent
+              </Button>
+            </>
+          ) : null}
+          <Button variant="accent" disabled={busy} onClick={() => approve()}>
+            {scoped ? 'Allow once' : 'Approve'}
+          </Button>
         </>
       }
     >
@@ -124,27 +158,6 @@ export function ApprovalCard({
         {action.jobId ? `, job ${short(action.jobId)}` : ''}.
       </p>
       {controls}
-      <Toolbar>
-        <Button variant="good" disabled={busy} onClick={() => approve()}>
-          {action.permissionScopes?.length ? 'Allow once' : 'Approve'}
-        </Button>
-        {action.permissionScopes?.length ? (
-          <>
-            <Button disabled={busy} onClick={() => approve('conversation')}>
-              Auto: this conversation
-            </Button>
-            <Button disabled={busy} onClick={() => approve('always')}>
-              Always: this agent
-            </Button>
-          </>
-        ) : null}
-        <Button variant="danger" disabled={busy} onClick={() => onDecide(action.id, 'reject')}>
-          Reject
-        </Button>
-        <Button variant="ghost" onClick={() => setShowEnvelope((v) => !v)} aria-expanded={showEnvelope}>
-          {showEnvelope ? 'Hide envelope' : 'Show envelope'}
-        </Button>
-      </Toolbar>
       {showEnvelope ? (
         <div className="ui-card-foot">
           <Section title="Envelope: everything that decides what the world will see">
@@ -155,6 +168,6 @@ export function ApprovalCard({
           </Section>
         </div>
       ) : null}
-    </Card>
+    </NeedsCard>
   );
 }

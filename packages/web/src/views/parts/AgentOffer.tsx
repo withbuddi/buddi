@@ -14,7 +14,8 @@
  */
 import { useState } from 'react';
 import { api, ApiError, type AgentOfferRow, type ApprovalRow } from '../../api';
-import { Button, ErrorBanner, Notice, Section, Spacer, Stack, Toolbar, useAsync } from '../../ui';
+import { Button, ButtonLink, ErrorBanner, Notice, Section, Spacer, Stack, Toolbar, useAsync } from '../../ui';
+import { NeedsCard } from './NeedsCard';
 import { chatRoute } from '../../routes';
 import { ApprovalCard, useDecide } from './ApprovalCard';
 
@@ -123,6 +124,7 @@ export function AgentOffer({
   label,
   handle,
   onDismiss,
+  card,
 }: {
   plugin: string;
   agent: string;
@@ -131,28 +133,62 @@ export function AgentOffer({
   /** The agent's handle, for the "ready" line after a card is approved. */
   handle?: string;
   onDismiss?: () => void;
+  /** Draw it as Home's "Needs you" card, with the plugin's name on the "from" line. */
+  card?: { from: string };
 }): JSX.Element {
   const offer = useAcceptPluginAgent(plugin, agent);
   const waiting = usePendingAccept(plugin, agent);
   const [approved, setApproved] = useState<AcceptedAgent | null>(null);
   const ready = offer.created ?? approved;
+  const said = handle ?? /@(\S+)/.exec(label)?.[1] ?? agent;
+  if (ready && card) {
+    return (
+      <NeedsCard
+        kind="offer"
+        tone="accent"
+        icon="check"
+        title={`@${ready.handle} is ready`}
+        from={card.from}
+        actions={<ButtonLink variant="accent" href={chatRoute(ready.id)}>Talk to @{ready.handle}</ButtonLink>}
+      />
+    );
+  }
   if (ready) return <AgentReady agent={ready} />;
   if (waiting.action) {
-    const said = handle ?? /@(\S+)/.exec(label)?.[1] ?? agent;
+    const decided = (outcome?: { decision: 'approve' | 'reject'; state?: string }): void => {
+      if (outcome?.decision === 'approve' && outcome.state === 'succeeded') {
+        setApproved({ id: agent, handle: said, name: said });
+      } else {
+        waiting.reload();
+      }
+    };
+    // The waiting approval is itself a "Needs you" card: drawn alone, not inside another.
+    if (card) return <WaitingAccept action={waiting.action} onDecided={decided} />;
     return (
       <Stack gap="sm">
         <span>{text}</span>
-        <WaitingAccept
-          action={waiting.action}
-          onDecided={(outcome) => {
-            if (outcome?.decision === 'approve' && outcome.state === 'succeeded') {
-              setApproved({ id: agent, handle: said, name: said });
-            } else {
-              waiting.reload();
-            }
-          }}
-        />
+        <WaitingAccept action={waiting.action} onDecided={decided} />
       </Stack>
+    );
+  }
+  if (card) {
+    return (
+      <NeedsCard
+        kind="offer"
+        tone="accent"
+        icon="agents"
+        title={`Set up @${said}`}
+        from={card.from}
+        {...(onDismiss ? { dismiss: { onClick: onDismiss, disabled: offer.busy, hint: 'Hide this offer' } } : {})}
+        actions={
+          <Button variant="accent" disabled={offer.busy} onClick={offer.accept}>
+            {label}
+          </Button>
+        }
+      >
+        <p>{text}</p>
+        <ErrorBanner message={offer.failure} />
+      </NeedsCard>
     );
   }
   return (

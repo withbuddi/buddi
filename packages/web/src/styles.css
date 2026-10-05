@@ -2905,6 +2905,64 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .home-offer-x:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
 .home-offer-x[disabled] { cursor: default; opacity: 0.5; }
 
+/* One thing that needs the owner (parts/NeedsCard.tsx): the kit's card, a
+   tone mark on the left, the ask and its time, who it is from, the body, and
+   the actions at the bottom right. The tone is the mark's alone: no tinted
+   fill, no tinted border. */
+.needs-card { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--space-3); align-items: start; min-width: 0; }
+.needs-card-mark {
+  --mark: var(--accent);
+  --mark-soft: var(--accent-soft);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--space-6); height: var(--space-6);
+  border-radius: var(--radius);
+  background: var(--mark-soft);
+  color: var(--mark);
+}
+.needs-card[data-tone='warning'] .needs-card-mark { --mark: var(--warning); --mark-soft: var(--warning-soft); }
+.needs-card[data-tone='critical'] .needs-card-mark { --mark: var(--critical); --mark-soft: var(--critical-soft); }
+.needs-card-dot { display: block; width: var(--space-2); height: var(--space-2); border-radius: 50%; background: var(--mark); }
+.needs-card[data-compact='true'] .needs-card-mark { width: var(--space-5); height: var(--space-5); border-radius: var(--radius-sm); }
+.needs-card-main { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.needs-card-head { display: flex; align-items: baseline; gap: var(--space-3); min-width: 0; min-height: var(--space-6); }
+.needs-card[data-compact='true'] .needs-card-head { min-height: var(--space-5); }
+.needs-card-title {
+  margin: 0; flex: 1 1 auto; min-width: 0;
+  font-size: var(--text-lg); font-weight: var(--weight-semibold); line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+  align-self: center;
+}
+.needs-card[data-compact='true'] .needs-card-title { font-size: var(--text-base); font-weight: var(--weight-medium); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.needs-card-title a { color: inherit; text-decoration: none; }
+.needs-card-title a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: var(--space-0); }
+.needs-card-title a:focus-visible { outline: none; border-radius: var(--radius-sm); box-shadow: var(--shadow-focus); }
+.needs-card-time { flex: 0 0 auto; color: var(--text-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.needs-card-from { display: flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text-muted); font-size: var(--text-md); }
+.needs-card-from-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.needs-card-body { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; color: var(--text); line-height: var(--leading); overflow-wrap: anywhere; }
+.needs-card-body > p { margin: 0; }
+/* The way out on the left, the decisions on the right; when a phone wraps
+   the row, the decisions keep to the right on their own line. */
+.needs-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-1); min-width: 0; }
+.needs-card[data-compact='true'] .needs-card-actions { margin-top: 0; }
+.needs-card-out { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
+/* A ghost's label lines up with the text above it. */
+.needs-card-out > .ui-btn[data-variant='ghost']:first-child { margin-inline-start: calc(-1 * var(--space-3)); }
+.needs-card-out > .ui-btn[data-variant='ghost'][data-size='sm']:first-child { margin-inline-start: calc(-1 * var(--space-2)); }
+.needs-card-do { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--space-2); margin-inline-start: auto; min-width: 0; }
+/* Compact (the list of requests): on a wide screen the actions sit on the
+   "from" line's right, so a row is two lines, not three. */
+@media (min-width: 721px) {
+  .needs-card[data-compact='true'] .needs-card-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-3); row-gap: var(--space-1); align-items: center; }
+  .needs-card[data-compact='true'] .needs-card-head { grid-column: 1 / -1; }
+  .needs-card[data-compact='true'] .needs-card-body { grid-column: 1 / -1; }
+  .needs-card[data-compact='true'] .needs-card-from { grid-column: 1; }
+  .needs-card[data-compact='true'] .needs-card-actions { grid-column: 2; grid-row: 2; }
+}
+@media (max-width: 720px) {
+  .needs-card { column-gap: var(--space-2); }
+}
+
 /* "Needs you" as a deck: the front card, and up to two edges behind it. The
    edges are the ground's own pseudo-elements, so there is nothing to draw
    when one card is left. */
@@ -2927,10 +2985,10 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .home-deck[data-depth='1']::before,
 .home-deck[data-depth='2']::before,
 .home-deck[data-depth='2']::after { display: block; }
-.home-deck-from { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.home-deck-nav { display: inline-flex; align-items: center; gap: var(--space-1); }
 .home-deck-count { color: var(--text-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .home-deck-body { display: flex; flex-direction: column; gap: var(--space-2); max-height: calc(var(--space-12) * 6); overflow-y: auto; overscroll-behavior: contain; }
-.home-deck-title { margin: 0; font-weight: var(--weight-medium); line-height: var(--leading-read); white-space: pre-wrap; overflow-wrap: anywhere; }
+.home-note { margin: 0; font-size: var(--text-sm); }
 .home-deck-text { margin: 0; color: var(--text); line-height: var(--leading-read); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .home-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--space-5); align-items: start; }

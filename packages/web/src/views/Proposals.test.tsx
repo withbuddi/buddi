@@ -231,7 +231,7 @@ describe('the Proposals inbox', () => {
 });
 
 describe('Home', () => {
-  it('counts open proposals under "Needs you" and links to the inbox', async () => {
+  it("counts open proposals on the glance's line, linking to the inbox, and not again under 'Needs you'", async () => {
     vi.mocked(api.overview).mockResolvedValue({
       now: '2026-09-23T12:00:00Z', timezone: 'UTC', paused: false, home: [],
       approvals: { pending: 0, oldestPendingAt: null },
@@ -248,9 +248,10 @@ describe('Home', () => {
     await act(async () => {
       render(<Home timezone="UTC" navigate={() => {}} agents={[]} attention={new Map()} />);
     });
-    expect(await screen.findByRole('link', { name: '2 proposals from your agents to keep or discard.' })).toHaveAttribute('href', '#/settings/proposals');
-    // And on the glance's counts line, a link to the same inbox.
-    expect(screen.getByRole('link', { name: '2 proposals' })).toHaveAttribute('href', '#/settings/proposals');
+    // On the glance's counts line, a link to the inbox; Needs you does not repeat it.
+    expect(await screen.findByRole('link', { name: '2 proposals' })).toHaveAttribute('href', '#/settings/proposals');
+    expect(screen.queryByText(/proposals from your agents to keep or discard/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Needs you')).not.toBeInTheDocument();
   });
 
   it('draws a later version of a kept skill as a diff, with the page\'s sentence highlighted in it', async () => {

@@ -80,16 +80,11 @@ describe('the upgrade notice', () => {
     const navigate = vi.fn();
     await home(NEWER, navigate);
     expect(screen.getByText('Nothing needs you. Your agents are on it.')).toBeInTheDocument();
-    expect(screen.getByText(/A newer buddi is ready:/)).toHaveTextContent('A newer buddi is ready: 0.1.1. Upgrade from Settings → Version.');
-    // One line: the sentence, the version and the link share one paragraph,
-    // not three stacked rows of the notice.
-    const line = screen.getByText(/A newer buddi is ready:/);
-    expect(line.tagName).toBe('P');
-    expect(line.closest('.ui-notice')).not.toBeNull();
-    expect(line.parentElement?.children).toHaveLength(1);
-    expect(line.querySelector('.mono')).toHaveTextContent('0.1.1');
-    const link = screen.getByRole('link', { name: 'Upgrade from Settings → Version.' });
-    expect(line).toContainElement(link);
+    // A "Needs you" card: the ask as its heading, the version in it, no tinted notice.
+    const card = screen.getByRole('article', { name: /A newer buddi is ready: 0\.1\.1/ });
+    expect(card.querySelector('.ui-notice')).toBeNull();
+    expect(within(card).getByRole('heading').querySelector('.mono')).toHaveTextContent('0.1.1');
+    const link = within(card).getByRole('link', { name: 'Upgrade from Settings' });
     expect(link).toHaveAttribute('href', '#/settings/system');
     fireEvent.click(link);
     expect(navigate).toHaveBeenCalledWith('#/settings/system');
@@ -97,9 +92,11 @@ describe('the upgrade notice', () => {
     expect(api.version).not.toHaveBeenCalled();
   });
 
-  it('closes with × until the next version, kept by the server', async () => {
+  it('"Not now" closes it until the next version, kept by the server', async () => {
     await home(NEWER);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Not now — tell me at the next version/ })); });
+    const notNow = screen.getByRole('button', { name: 'Not now' });
+    expect(notNow).toHaveAttribute('title', 'Tell me at the next version');
+    await act(async () => { fireEvent.click(notNow); });
     expect(api.homeDismiss).toHaveBeenCalledWith('update', '0.1.1');
     expect(screen.queryByText(/A newer buddi is ready/)).not.toBeInTheDocument();
   });
@@ -171,11 +168,11 @@ describe('connections that need the owner', () => {
         />,
       );
     });
-    const line = screen.getByText(/GitHub needs you to sign in again\./);
-    expect(line.tagName).toBe('P');
-    expect(line.closest('.ui-notice')).not.toBeNull();
-    expect(screen.getByText(/Notion changed its tools; review them\./)).toBeInTheDocument();
-    const links = screen.getAllByRole('link', { name: 'Settings → Connections.' });
+    const card = screen.getByRole('article', { name: 'GitHub needs you to sign in again.' });
+    expect(card.querySelector('.ui-notice')).toBeNull();
+    expect(within(card).getByRole('button', { name: 'Not now' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Notion changed its tools; review them.' })).toBeInTheDocument();
+    const links = screen.getAllByRole('link', { name: 'Open Connections' });
     expect(links).toHaveLength(2);
     expect(links[0]).toHaveAttribute('href', '#/settings/connections');
     fireEvent.click(links[0]!);
@@ -184,7 +181,7 @@ describe('connections that need the owner', () => {
 
   it('says nothing when every connection is fine', async () => {
     await home(undefined);
-    expect(screen.queryByText(/Settings → Connections/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open Connections' })).not.toBeInTheDocument();
   });
 });
 
@@ -211,8 +208,9 @@ describe('what buddi kept for you, under "Needs you"', () => {
     window.localStorage.setItem('buddi.needsYouView', 'list');
     await home(null, navigate);
     expect(screen.getByRole('button', { name: '1 request' })).toBeInTheDocument();
-    // Its ask is said under the title, after who sent it.
-    expect(screen.getByRole('link', { name: /A mail from the bank/ })).toHaveTextContent('Check it');
+    // A compact card: the title opens it, its ask is said on the "from" line.
+    const card = screen.getByRole('article', { name: 'A mail from the bank' });
+    expect(card).toHaveTextContent('Watcher · Check it');
     expect(screen.getByText('Needs you')).toBeInTheDocument();
     expect(screen.queryByText('The weekly recap')).not.toBeInTheDocument();
     expect(screen.queryByText('Send the invoice?')).not.toBeInTheDocument();
@@ -242,9 +240,11 @@ describe('what buddi kept for you, under "Needs you"', () => {
       render(<Home timezone="UTC" navigate={navigate} agents={[DESK]} attention={attention} />);
     });
     expect(screen.getByRole('button', { name: '1 question' })).toBeInTheDocument();
-    const row = within(document.getElementById('home-needs')!).getByRole('link', { name: /Asked you a question/ });
-    expect(row).toHaveTextContent('Concierge · waiting for your answer');
-    fireEvent.click(row);
+    const card = within(document.getElementById('home-needs')!).getByRole('article', { name: 'Asked you a question' });
+    expect(card).toHaveTextContent('Concierge · waiting for your answer');
+    // Deciding is the only way out: no "Not now" on a question.
+    expect(within(card).queryByRole('button', { name: 'Not now' })).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: 'Answer' }));
     expect(navigate).toHaveBeenCalledWith('#/chat/concierge/c9');
   });
 
@@ -259,6 +259,25 @@ describe('what buddi kept for you, under "Needs you"', () => {
     expect(screen.getByRole('link', { name: '2 urgent alerts' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '1 request' })).toBeInTheDocument();
     expect(screen.queryByText(/message/)).not.toBeInTheDocument();
+  });
+
+  it('urgent alerts, failed jobs and proposals are counts on the glance, in critical where they fail, never cards in Needs you', async () => {
+    vi.mocked(api.overview).mockResolvedValue({
+      ...OVERVIEW,
+      jobs: { ...OVERVIEW.jobs, failed: 2 },
+      sentinels: { ...OVERVIEW.sentinels, openUrgent: 1, decisions: [{ title: 'Your reply has sat as a draft.', count: 1 }] },
+      needsYou: { approvals: 0, questions: 0, urgent: 1, failed: 2, proposals: 3, asks: 0, agentsToSetUp: 0, signIns: 0, recovery: 0, total: 6 },
+    } as never);
+    vi.mocked(api.notificationsNeedingYou).mockResolvedValue({ notifications: [] });
+    await home(null);
+    const urgent = screen.getByRole('link', { name: '1 urgent alert' });
+    expect(urgent).toHaveAttribute('data-tone', 'critical');
+    expect(urgent).toHaveAttribute('href', '#/activity/alerts');
+    expect(urgent).toHaveAttribute('title', 'Your reply has sat as a draft.');
+    expect(screen.getByRole('link', { name: '2 failed jobs' })).toHaveAttribute('data-tone', 'critical');
+    expect(screen.getByRole('link', { name: '3 proposals' })).toHaveAttribute('href', '#/settings/proposals');
+    expect(document.getElementById('home-needs')).toBeNull();
+    expect(document.querySelector('.home .ui-notice')).toBeNull();
   });
 
   it('Done is kept by the server: once it says seen, the row does not come back on reload', async () => {
@@ -454,8 +473,9 @@ describe('"Needs you" as a deck', () => {
     });
     const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
     expect(region).toHaveTextContent('Concierge · also Mail Triage');
+    expect(within(region).getByRole('article', { name: /A mail from the bank/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('radio', { name: 'List' }));
-    expect(screen.getByRole('link', { name: /A mail from the bank/ })).toHaveTextContent('Concierge · also Mail Triage');
+    expect(screen.getByRole('article', { name: /A mail from the bank/ })).toHaveTextContent('Concierge · also Mail Triage');
   });
 
   it("drops the \"@handle: \" signature of an agent's own message, which the card and the row already name", async () => {
@@ -562,7 +582,11 @@ describe('notices with a way out', () => {
   it('a watcher error closes until its text changes', async () => {
     vi.mocked(api.overview).mockResolvedValue({ ...OVERVIEW, sentinels: { ...OVERVIEW.sentinels, errors: [{ sentinelId: 'mail-watch', error: 'IMAP timed out' }] } } as never);
     await home(null);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hide until the error changes' })); });
+    const card = screen.getByRole('article', { name: 'Watcher mail-watch failed' });
+    expect(card.querySelector('.needs-card')).toHaveAttribute('data-tone', 'warning');
+    const notNow = within(card).getByRole('button', { name: 'Not now' });
+    expect(notNow).toHaveAttribute('title', 'Hide until the error changes');
+    await act(async () => { fireEvent.click(notNow); });
     expect(api.homeDismiss).toHaveBeenCalledWith('watcher-error:mail-watch', 'IMAP timed out');
     expect(screen.queryByText(/IMAP timed out/)).not.toBeInTheDocument();
     cleanup();

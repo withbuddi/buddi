@@ -14,6 +14,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Home: everything under "Needs you" now looks the same — one white card with a small coloured mark, the ask, who it is from, and the buttons at the bottom right. Approvals, questions, requests, sign-ins, agents to set up, the restore, the tip, the backup passphrase, the update and watcher errors all use it, and the way to put something off is always a "Not now" button (no more ×). Urgent alerts, failed jobs and proposals are no longer repeated as coloured bars: they stay as links in the line under the greeting.
 - Home: the mail card now says what is actually missing — "Mail arrives, but nobody sorts it as it lands: no labels, no ‘needs a reply’, no drafts waiting. buddi and your other agents still read mail when you ask." — and it no longer shows at all when one of your agents already has the mail role.
 
 ## 0.1.0-pre.44 — 2026-10-05

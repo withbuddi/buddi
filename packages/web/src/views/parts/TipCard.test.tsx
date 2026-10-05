@@ -1,4 +1,4 @@
-/** The tip on Home: the sentence, the action, "Not this again" and the quiet ×. */
+/** The tip on Home: the sentence, the action, "Not now" and "Not this again", on the one "Needs you" card. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
@@ -49,7 +49,15 @@ describe('TipCard', () => {
     expect(screen.queryByText(TIP.text)).not.toBeInTheDocument();
   });
 
-  it('× puts it off', async () => {
+  it('is a "Needs you" card: the sentence as its heading, both ways out as ghost buttons on the left, no ×', async () => {
+    await card(TIP);
+    const article = screen.getByRole('article', { name: TIP.text });
+    const buttons = Array.from(article.querySelectorAll('button')).map((b) => [b.textContent, b.getAttribute('data-variant')]);
+    expect(buttons).toEqual([['Not now', 'ghost'], ['Not this again', 'ghost'], ['Send a voice note', 'accent']]);
+    expect(article.querySelector('.ui-icon-btn')).toBeNull();
+  });
+
+  it('"Not now" puts it off', async () => {
     await card(TIP);
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
     expect(api.laterTip).toHaveBeenCalledWith('voice-note');

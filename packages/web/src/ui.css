@@ -502,6 +502,7 @@ fieldset:disabled { opacity: 0.6; }
 .ui-card[data-tone='accent'] { border-color: color-mix(in oklab, var(--accent) 35%, var(--line)); }
 .ui-card[data-tone='warning'] { border-color: color-mix(in oklab, var(--warning) 40%, var(--line)); background: color-mix(in oklab, var(--warning) 4%, var(--surface)); }
 .ui-card[data-tone='critical'] { border-color: color-mix(in oklab, var(--critical) 40%, var(--line)); }
+.ui-card[data-density='compact'] { padding: var(--space-3) var(--space-4); gap: var(--space-2); }
 .ui-card[data-interactive='true'] { cursor: pointer; transition: border-color var(--dur-fast) ease, transform var(--dur) var(--ease), box-shadow var(--dur) ease; }
 .ui-card[data-interactive='true']:hover { border-color: var(--line-strong); transform: translateY(-1px); box-shadow: var(--shadow-pop); }
 .ui-card[data-interactive='true']:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--space-0); }

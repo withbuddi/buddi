@@ -190,7 +190,7 @@ describe('the card an agent’s change raises', () => {
     expect(screen.getByText('calendar.update_event')).toBeInTheDocument();
     const block = screen.getByText(/Change “Team lunch” on Work \(iCloud\)/);
     expect(block.textContent).toBe(preview);
-    expect(screen.getByText(/asked by Tempo/)).toBeInTheDocument();
+    expect(screen.getByText(/Asked by Tempo/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(onDecide).toHaveBeenCalledWith('act-9', 'approve', undefined);
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
