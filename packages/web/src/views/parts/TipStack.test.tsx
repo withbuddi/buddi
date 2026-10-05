@@ -97,7 +97,7 @@ describe('useTipQueue and the stack', () => {
     expect(api.dismissTip).not.toHaveBeenCalled();
   });
 
-  it('a slide left is "Not now": the tip is put off and the next comes forward', async () => {
+  it('a slide left is "Not now": the tip is put off, goes to the back, and the next comes forward', async () => {
     await stack();
     dragBy(-200);
     // In flight: the next card is already in front.
@@ -107,7 +107,22 @@ describe('useTipQueue and the stack', () => {
     expect(api.laterTip).toHaveBeenCalledWith('voice-note');
     expect(api.dismissTip).not.toHaveBeenCalled();
     expect(screen.getByRole('article', { name: TIPS[1]!.text })).toBeInTheDocument();
-    expect(screen.getByText('1 of 2')).toBeInTheDocument();
+    // Still in the stack, behind the others: the count does not shrink.
+    expect(screen.getByText('1 of 3')).toBeInTheDocument();
+    expect(document.querySelector('.tip-stack-card[data-depth="2"]')).toHaveAttribute('data-tip', 'voice-note');
+  });
+
+  it('"Not now" cycles through every tip without shrinking the stack', async () => {
+    await stack();
+    const seen: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      seen.push(frontCard().getAttribute('data-tip')!);
+      fireEvent.click(screen.getByRole('button', { name: /Not now/ }));
+      await flown();
+      expect(screen.getByText('1 of 3')).toBeInTheDocument();
+    }
+    expect(seen).toEqual(['voice-note', 'make-group', 'widgets', 'voice-note']);
+    expect(api.dismissTip).not.toHaveBeenCalled();
   });
 
   it('a slide right is "Not this again"', async () => {
@@ -147,7 +162,7 @@ describe('useTipQueue and the stack', () => {
     fireEvent.keyDown(group, { key: 'ArrowRight' });
     await flown();
     expect(api.dismissTip).toHaveBeenCalledWith('make-group');
-    expect(screen.getByText('1 of 1')).toBeInTheDocument();
+    expect(screen.getByText('1 of 2')).toBeInTheDocument();
   });
 
   it('the buttons under the stack do the same', async () => {
@@ -187,7 +202,7 @@ describe('useTipQueue and the stack', () => {
   it('folds away after the last card, then is gone', async () => {
     await stack([TIPS[0]!]);
     expect(screen.getByTestId('shown')).toHaveTextContent('true');
-    fireEvent.keyDown(screen.getByTestId('tip-stack'), { key: 'ArrowLeft' });
+    fireEvent.keyDown(screen.getByTestId('tip-stack'), { key: 'ArrowRight' });
     await flown();
     expect(document.querySelector('.tip-stack-fold')).toHaveAttribute('data-empty', 'true');
     await flown(220);

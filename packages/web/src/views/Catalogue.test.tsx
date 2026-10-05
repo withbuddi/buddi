@@ -8,7 +8,7 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type CatalogueAgent, type CatalogueJob, type CataloguePlan, type CatalogueView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { DRAFT_KEY } from '../chat/draft';
@@ -627,6 +627,24 @@ describe('a plugin nobody on the team uses', () => {
     await waitFor(() => expect(api.overview).toHaveBeenCalled());
     await waitFor(() => expect(api.catalogue).toHaveBeenCalled());
     expect(screen.queryByTestId('plugin-teammate')).not.toBeInTheDocument();
+  });
+
+  it('reads the catalogue first, and Home’s closed slots only when a teammate is missing', async () => {
+    vi.mocked(api.overview).mockResolvedValue({ dismissed: {} } as never);
+    const weather = { plugin: 'weather', id: 'weather', title: 'Weather', place: 'rail', body: [{ kind: 'link', label: 'Open Settings', to: { page: 'settings' } }] } as unknown as PluginPageDescriptor;
+    const { container } = render(<PluginTeammatePanel plugin="weather" navigate={vi.fn()} dismissible />);
+    await waitFor(() => expect(api.catalogue).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(container).toBeEmptyDOMElement();
+    expect(api.overview).not.toHaveBeenCalled();
+    cleanup();
+    render(<PluginPage page={weather} navigate={vi.fn()} timezone="UTC" />);
+    expect(await screen.findByText('Open Settings')).toBeInTheDocument();
+    expect(api.overview).not.toHaveBeenCalled();
+    cleanup();
+    render(<PluginPage page={moneyPage('rail')} navigate={vi.fn()} timezone="UTC" />);
+    expect(await screen.findByText('Nobody keeps your books yet')).toBeInTheDocument();
+    expect(api.overview).toHaveBeenCalledTimes(1);
   });
 
   it('is not drawn twice inside a settings tab (Settings draws its own)', async () => {

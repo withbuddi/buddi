@@ -253,6 +253,12 @@ function DockThread({
           case 'live.settle': {
             const runId = str(event.data['runId']) ?? '';
             const turn = Number(event.data['turn'] ?? 0);
+            // Withdrawn by the grounding guard: gone at once, never read aloud.
+            if (event.data['retracted'] === true) {
+              if (lastTurn.current?.runId === runId && lastTurn.current.turn === turn) lastTurn.current = null;
+              setPartial((current) => (current && current.runId === runId && current.turn === turn ? null : current));
+              break;
+            }
             setPartial((current) => (current && current.runId === runId && current.turn === turn ? { ...current, settled: true } : current));
             break;
           }

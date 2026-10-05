@@ -3,8 +3,9 @@
  * the lightbulb on Home opens: today's tip in front, up to two more peeking
  * out behind, "1 of N" under them.
  *
- * Slide the front card left for "Not now" (it may come back after a while),
- * right for "Not this again" (never). The same under the stack as two buttons
+ * Slide the front card left for "Not now" (it goes to the back of the stack
+ * here, and the gateway puts it off for a while), right for "Not this again"
+ * (never; it leaves the stack). The same under the stack as two buttons
  * and the arrow keys; the action on the card is a click and Enter. A drag
  * short of the threshold snaps back. With reduced motion the card crossfades
  * instead of flying. When the last card goes, the stack folds away and the
@@ -41,20 +42,20 @@ const TIP_TILT = 0.06;
 const TIP_TILT_MAX = 14;
 
 export interface TipQueue {
-  /** The tips still in the stack, front first. */
+  /** The tips still in the stack, front first ("Not now" ones at the back). */
   tips: TipView[];
   /** Whether the stack is drawn: true from the first tip until it has folded away. */
   shown: boolean;
   /** The gateway has answered (or failed). */
   loaded: boolean;
-  /** Every tip that holds is dismissed: none left, and none only put off. */
+  /** Every tip that holds is dismissed: none left. */
   allDismissed: boolean;
   error: string | null;
   /** How many tips that hold are dismissed for good, counting the ones dismissed here. */
   dismissed: number;
   /** "Bring back": forget a dismissal; the queue is read again, so the tip re-enters it. */
   restore: (id: string) => Promise<void>;
-  /** A card leaves: at once here, the gateway told on the side. */
+  /** A card leaves the front: to the back ("later") or out ("dismiss"), at once here, the gateway told on the side. */
   leave: (id: string, how: TipLeave) => void;
   /** The stack has folded away after its last card. */
   folded: () => void;
@@ -68,16 +69,22 @@ export interface TipQueue {
  */
 export function useTipQueue(preview?: string, peek = false): TipQueue {
   const queue = useAsync(() => api.tipQueue(preview, peek), [preview, peek]);
-  const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  // Two states, kept apart: what was dismissed here (out of the stack for
+  // good) and the rotation "Not now" makes (to the back, still counted).
   const [dismissedHere, setDismissedHere] = useState<ReadonlySet<string>>(new Set());
-  const [putOff, setPutOff] = useState(false);
+  const [back, setBack] = useState<readonly string[]>([]);
   const [folded, setFolded] = useState(false);
   const all = queue.data?.tips ?? [];
-  const tips = all.filter((tip) => !gone.has(tip.id));
+  // A fresh answer from the gateway carries its own order: the rotation starts over.
+  useEffect(() => { setBack([]); }, [queue.data]);
+  const kept = all.filter((tip) => !dismissedHere.has(tip.id));
+  const tips = [
+    ...kept.filter((tip) => !back.includes(tip.id)),
+    ...back.flatMap((id) => kept.find((tip) => tip.id === id) ?? []),
+  ];
   const quiet = Boolean(preview || queue.data?.preview);
   const leave = useCallback((id: string, how: TipLeave): void => {
-    setGone((current) => new Set(current).add(id));
-    if (how === 'later') setPutOff(true);
+    if (how === 'later') setBack((current) => [...current.filter((other) => other !== id), id]);
     else setDismissedHere((current) => new Set(current).add(id));
     if (quiet) return;
     void (how === 'dismiss' ? api.dismissTip(id) : api.laterTip(id)).catch(() => {});
@@ -90,7 +97,6 @@ export function useTipQueue(preview?: string, peek = false): TipQueue {
       next.delete(id);
       return next;
     };
-    setGone(forget);
     setDismissedHere(forget);
     setFolded(false);
     reload();
@@ -101,7 +107,7 @@ export function useTipQueue(preview?: string, peek = false): TipQueue {
     tips,
     shown: all.length > 0 && !(tips.length === 0 && folded),
     loaded: queue.data !== undefined || queue.error !== null,
-    allDismissed: tips.length === 0 && !putOff && ((queue.data?.dismissed ?? 0) > 0 || all.length > 0),
+    allDismissed: tips.length === 0 && ((queue.data?.dismissed ?? 0) > 0 || all.length > 0),
     error: queue.error,
     dismissed,
     restore,

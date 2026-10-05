@@ -1096,8 +1096,10 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
   let exemptTurns = 0;
   /**
    * The grounding guard (docs/system-context.md, Grounding). `read` turns true
-   * at the first tool call, delegation or native search of the run; until
-   * then an answer that cites sources cited them from memory. `regrounded`:
+   * at the first tool call or delegation that came back successfully, or the
+   * first native search of the run. A call that was unknown, refused,
+   * truncated, failed or still waits on the owner read nothing; until
+   * something did, an answer that cites sources cited them from memory. `regrounded`:
    * that answer was held back once and the model asked to verify.
    */
   let read = false;
@@ -1224,7 +1226,7 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
 
     let turnText = textOf(assistantContent);
     let delivered = assistantContent;
-    if (toolUses.length > 0 || (res.searches?.length ?? 0) > 0) read = true;
+    if ((res.searches?.length ?? 0) > 0) read = true;
 
     /*
      * The grounding guard. A final answer, in a run that read nothing — no
@@ -1248,7 +1250,9 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
         }
         await appendEvent(pool, 'run.grounding', { stage: 'unchecked', agentId: agent.id, ...(opts.runId ? { runId: opts.runId } : {}) }, conversationId);
       } else {
-        const known = knownText(messages.slice(0, -1));
+        // What the agent legitimately carries counts as held too: its own
+        // prompt, its memory notes, the platform context it was given.
+        const known = [knownText(messages.slice(0, -1)), agent.systemPrompt, memory, platformContext?.prompt ?? ''].join('\n');
         if (citesUnread(turnText, known)) {
           regrounded = true;
           const budgetLeft = turns - exemptTurns < agent.maxTurns && turns < agent.maxTurns + MAX_EXEMPT_TURNS;
@@ -1367,6 +1371,8 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
         } catch { /* a surface's drawing never decides a run */ }
       }
       if (outcome.ok) {
+        // Something came back: from here on the run has read (the guard).
+        read = true;
         if (registry.waitsForOwner(call.name, outcome.output)) waitingForOwner = true;
         // A tool that declares it saves files, and names them in its output,
         // has each one recorded as produced here by this agent — with the

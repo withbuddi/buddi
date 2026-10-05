@@ -519,6 +519,13 @@ export interface CreateAgentEnvelope {
   declaredTools: string[];
   delegates: string[] | null;
   delegatesFile: string | null;
+  /**
+   * `platform.create_agent` only: the list it writes when the agent holds
+   * `agent.delegate` and names nobody (`["*"]`). In the envelope so the
+   * approval's hash covers it; absent otherwise, and absent from an approval
+   * recorded before delegation by default, which therefore writes nothing.
+   */
+  defaultDelegates?: string[];
   provider: string | null;
   model: string | null;
   /** The named account it will be assigned to once written. Null on legacy installs. */
@@ -640,7 +647,8 @@ export function renderCreatePreview(
   /** `platform.create_agent` only: the `["*"]` it writes when the agent holds the tool and names nobody. */
   opts: { defaultDelegates?: boolean } = {},
 ): string {
-  const defaulted = opts.defaultDelegates === true && envelope.delegates === null && envelope.tools.includes('agent.delegate');
+  const defaulted = envelope.defaultDelegates !== undefined
+    || (opts.defaultDelegates === true && envelope.delegates === null && envelope.tools.includes('agent.delegate'));
   return [
     `Create a new agent: ${envelope.name} (@${envelope.handle})`,
     envelope.description,
@@ -2497,6 +2505,15 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     tools: withCoreTools(input.tools, registry, input.withoutMemory === true),
   });
 
+  // Delegation by default, decided here and nowhere in the persona: holding
+  // `agent.delegate` and naming nobody is `["*"]`, and the envelope says so,
+  // so the owner approves the list that will be written.
+  const withDefaultDelegates = (envelope: CreateAgentEnvelope): CreateAgentEnvelope => {
+    if (envelope.delegates !== null) return envelope;
+    const delegates = defaultDelegatesFor(envelope.tools, null);
+    return delegates === null ? envelope : { ...envelope, defaultDelegates: delegates };
+  };
+
   const createAgent: ToolDefinition<CreateInput, unknown> = {
     name: 'platform.create_agent',
     description:
@@ -2511,23 +2528,31 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       const binding = resolved(registry);
       return describing(
         (i: CreateInput) =>
-          buildCreateEnvelope(withCore(i), { binding, registry, proposedBy: ctx.agentId ?? 'unknown' }),
+          withDefaultDelegates(buildCreateEnvelope(withCore(i), { binding, registry, proposedBy: ctx.agentId ?? 'unknown' })),
         (envelope) => renderCreatePreview(envelope, specsFor(registry), { defaultDelegates: true }),
       )(input);
     },
     async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       // Rebuild and compare at the write boundary, after the executor's check.
-      const envelope = buildCreateEnvelope(withCore(input), {
+      const envelope = withDefaultDelegates(buildCreateEnvelope(withCore(input), {
         binding,
         registry,
         proposedBy: ctx.agentId ?? 'unknown',
-      });
-      assertApprovedEffect(ctx, envelope);
-      // Delegation by default: holding `agent.delegate` and naming nobody is
-      // `["*"]`, decided here and nowhere in the persona. The envelope keeps
-      // what was asked, so an approval recorded before this hashes the same.
-      const delegates = defaultDelegatesFor(envelope.tools, envelope.delegates);
+      }));
+      // The list written is the one the approved envelope carried. An approval
+      // recorded before delegation by default carries none: it still matches
+      // the envelope without the default, and writes no list, as it showed.
+      let delegates: string[] | null;
+      if (envelope.defaultDelegates !== undefined && ctx.approvedEffect !== undefined
+        && (ctx.approvedEffect.envelope as Partial<CreateAgentEnvelope> | null)?.defaultDelegates === undefined) {
+        const { defaultDelegates: _unapproved, ...legacy } = envelope;
+        assertApprovedEffect(ctx, legacy);
+        delegates = null;
+      } else {
+        assertApprovedEffect(ctx, envelope);
+        delegates = envelope.delegates ?? envelope.defaultDelegates ?? null;
+      }
       createAgentDirAtomic(path.dirname(envelope.file), {
         [AGENT_FILE]: envelope.content,
         ...(delegates === null

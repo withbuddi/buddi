@@ -87,6 +87,21 @@ suite('the first-open strip of a new agent', () => {
     expect(await readWebSetting(pool, AGENT_INTRO_KEY)).toEqual({ pending: [] });
   });
 
+  it('keeps every id straight under concurrent creations and dismissals', async () => {
+    await pool.query('delete from core.web_settings where key = $1', [AGENT_INTRO_KEY]);
+    const first = Array.from({ length: 8 }, (_, i) => `early${i}`);
+    const second = Array.from({ length: 8 }, (_, i) => `late${i}`);
+    await Promise.all(first.map((id) => markAgentIntro(pool, id)));
+    expect((await readWebSetting<{ pending: string[] }>(pool, AGENT_INTRO_KEY))?.pending).toEqual([...first].sort());
+
+    // Every early strip closed while the late agents are created, all at once.
+    await Promise.all([
+      ...first.map((id) => dismissAgentIntro(pool, id)),
+      ...second.map((id) => markAgentIntro(pool, id)),
+    ]);
+    expect((await readWebSetting<{ pending: string[] }>(pool, AGENT_INTRO_KEY))?.pending).toEqual([...second].sort());
+  });
+
   it('marks nothing without a database, and never throws', async () => {
     await expect(markAgentIntro(null, 'newbie')).resolves.toBeUndefined();
   });

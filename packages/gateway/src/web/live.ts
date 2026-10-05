@@ -26,7 +26,7 @@ export interface LiveTurn {
 
 export type LiveFrame =
   | { event: 'live'; data: { runId: string; turn: number; kind: 'text' | 'thinking'; text: string } }
-  | { event: 'live.settle'; data: { runId: string; turn: number } }
+  | { event: 'live.settle'; data: { runId: string; turn: number; retracted?: true } }
   | { event: 'live.snapshot'; data: LiveTurn };
 
 type Listener = (frame: LiveFrame) => void;
@@ -61,6 +61,18 @@ export class LiveTurns {
     if (!turn || turn.runId !== runId) return;
     this.#turns.delete(conversationId);
     this.#emit(conversationId, { event: 'live.settle', data: { runId, turn: turn.turn } });
+  }
+
+  /**
+   * The turn's words are withdrawn, not kept: the grounding guard held the
+   * answer back. A page drops them at once instead of waiting for a message
+   * that will never carry them.
+   */
+  retract(conversationId: string, runId: string): void {
+    const turn = this.#turns.get(conversationId);
+    if (!turn || turn.runId !== runId) return;
+    this.#turns.delete(conversationId);
+    this.#emit(conversationId, { event: 'live.settle', data: { runId, turn: turn.turn, retracted: true } });
   }
 
   /** The run is over, however it ended. Nothing may stay half-written. */

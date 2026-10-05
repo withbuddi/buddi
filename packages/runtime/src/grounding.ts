@@ -12,10 +12,13 @@
  *
  *  - an outlet or a domain counts only where it is *cited* — in parentheses,
  *    after "according to" / "selon" / "d'après" / "per" / "via", before
- *    "reports" / "said" / "writes", or as a link. "The BBC is a broadcaster"
- *    is a mention, not a citation;
+ *    "reports" / "said" / "writes", or as a markdown link. "The BBC is a
+ *    broadcaster" is a mention, not a citation, and so is a bare link ("open
+ *    https://github.com"): a bare link only backs up markers or a "Sources:"
+ *    line, it never counts as a source on its own;
  *  - one citation is not enough on its own: it takes two distinct sources, or
- *    one with numbered markers ([1]) or a "Sources:" line;
+ *    one (or a bare link) with numbered markers ([1]) or a "Sources:" line;
+ *  - an outlet and its own domain ("Reuters", "reuters.com") are one source;
  *  - a source the conversation already holds (the owner named it, a tool
  *    returned it earlier) is not counted;
  *  - code is ignored, and so is an email address.
@@ -61,6 +64,8 @@ const SOURCES_LINE = /^\s*(?:[*_#>-]+\s*)?(?:Sources?|R[ée]f[ée]rences?|Refere
 export interface CitationSignals {
   /** Distinct sources cited, normalised, that the conversation did not already hold. */
   sources: string[];
+  /** Bare links outside a citation position: they back up markers, nothing more. */
+  links: string[];
   /** Distinct numbered citation markers ([1], ²). */
   markers: number;
   /** A "Sources:" / "References:" line. */
@@ -76,6 +81,20 @@ const norm = (token: string): string =>
   token.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/^www\./, '').replace(/^the\s+/, '').trim();
 
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const compact = (name: string): string => norm(name).replace(/[^a-z0-9]/g, '');
+/** Each outlet under the keys its own domain is likely to carry: "reuters", "cbsnews", "theguardian". */
+const OUTLET_KEYS: ReadonlyMap<string, string> = new Map(OUTLETS.flatMap((outlet) => {
+  const key = compact(outlet);
+  const raw = outlet.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return [...new Set([key, `${key}news`, raw, `${raw}news`])].map((k) => [k, norm(outlet)] as [string, string]);
+}));
+const TLD_SUFFIX = new RegExp(`\\.(?:${TLDS})$`, 'i');
+/** The outlet a host belongs to ("www.reuters.com" → "reuters"), or the host itself. */
+function sourceOfHost(host: string): string {
+  const label = norm(host).replace(TLD_SUFFIX, '').split('.').pop() ?? '';
+  return OUTLET_KEYS.get(label) ?? host;
+}
 
 /** Is the occurrence at [start, end) in a citation position? */
 function cited(text: string, start: number, end: number): boolean {
@@ -105,9 +124,10 @@ function cited(text: string, start: number, end: number): boolean {
 export function citationSignals(reply: string, known = ''): CitationSignals {
   const text = stripCode(reply);
   const found = new Set<string>();
-  const add = (token: string): void => {
+  const bare = new Set<string>();
+  const add = (token: string, into: Set<string> = found): void => {
     const n = norm(token);
-    if (n.length >= 2) found.add(n);
+    if (n.length >= 2) into.add(n);
   };
 
   for (const outlet of OUTLETS) {
@@ -118,10 +138,10 @@ export function citationSignals(reply: string, known = ''): CitationSignals {
   }
   for (const m of text.matchAll(URL)) {
     const host = /^https?:\/\/(?:www\.)?([^/:?#]+)/i.exec(m[0])?.[1];
-    if (host) add(host);
+    if (host) add(sourceOfHost(host), cited(text, m.index!, m.index! + m[0].length) ? found : bare);
   }
   for (const m of text.matchAll(DOMAIN)) {
-    if (cited(text, m.index!, m.index! + m[0].length)) add(m[1]!);
+    if (cited(text, m.index!, m.index! + m[0].length)) add(sourceOfHost(m[1]!));
   }
   for (const m of text.matchAll(ATTRIBUTION)) {
     const name = m[1]!.replace(/[.,;:'’]+$/, '');
@@ -131,13 +151,13 @@ export function citationSignals(reply: string, known = ''): CitationSignals {
   }
 
   const held = known.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
-  const sources = [...found].filter((token) => !new RegExp(`(?<![\\p{L}\\p{N}])${escape(token)}(?![\\p{L}\\p{N}])`, 'u').test(held));
-  // An outlet and its own domain ("CBS", "cbsnews.com") are still two cited
-  // things the model claims to have read; no attempt to fold them.
+  const unheld = (token: string): boolean => !new RegExp(`(?<![\\p{L}\\p{N}])${escape(token)}(?![\\p{L}\\p{N}])`, 'u').test(held);
+  const sources = [...found].filter(unheld);
+  const links = [...bare].filter((token) => !found.has(token) && unheld(token));
 
   const markers = new Set<string>();
   for (const m of text.matchAll(MARKER)) markers.add(m[1] ?? m[0]);
-  return { sources, markers: markers.size, sourcesLine: SOURCES_LINE.test(text) };
+  return { sources, links, markers: markers.size, sourcesLine: SOURCES_LINE.test(text) };
 }
 
 /**
@@ -148,6 +168,6 @@ export function citationSignals(reply: string, known = ''): CitationSignals {
 export function citesUnread(reply: string, known = ''): boolean {
   const s = citationSignals(reply, known);
   if (s.sources.length >= 2) return true;
-  if (s.sources.length >= 1 && (s.markers >= 1 || s.sourcesLine)) return true;
+  if (s.sources.length + s.links.length >= 1 && (s.markers >= 1 || s.sourcesLine)) return true;
   return s.markers >= 2 && s.sourcesLine;
 }

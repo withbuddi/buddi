@@ -31,6 +31,18 @@ describe('citesUnread', () => {
       '1. Buy milk\n2. Call the bank [done]\n3. Book the flight',
     ]) expect(citesUnread(text), text).toBe(false);
   });
+  it('does not count bare navigation links as sources', () => {
+    expect(citesUnread('You can open https://github.com or https://gitlab.com to host it.')).toBe(false);
+    expect(citesUnread('The docs are at https://docs.python.org and https://nodejs.org.')).toBe(false);
+    // A bare link still backs up numbered markers or a Sources line.
+    expect(citesUnread('The vote passed [1].\n\nSources: https://lemonde.fr/x')).toBe(true);
+  });
+  it('counts an outlet and its own domain as one source', () => {
+    const reply = 'According to [Reuters](https://www.reuters.com/markets/ecb), the ECB held rates.';
+    expect(citationSignals(reply).sources).toEqual(['reuters']);
+    expect(citesUnread(reply)).toBe(false);
+    expect(citationSignals('The vote passed, CBS News reported (cbsnews.com).').sources).toEqual(['cbs']);
+  });
   it('lets one attribution alone through: precision first', () => {
     expect(citesUnread('According to Reuters, the ECB held rates.')).toBe(false);
   });

@@ -164,17 +164,19 @@ export function PluginTeammatePanel({
   const [closed, setClosed] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    // Home's closed slots, only where the panel can be closed; a failed read is "not closed".
-    const closedSlots = dismissible
-      ? Promise.resolve().then(() => api.overview()).then((o) => o.dismissed ?? {}, () => ({}) as Record<string, string>)
-      : Promise.resolve({} as Record<string, string>);
+    // The catalogue first: most plugins have no missing teammate, and their
+    // page reads nothing more. Home's closed slots (there is no lighter read
+    // than the overview) only on a hit, and only where the panel can be
+    // closed; a failed read is "not closed".
     Promise.resolve()
-      .then(() => Promise.all([api.catalogue(), closedSlots]))
-      .then(([v, slots]) => {
-        if (cancelled) return;
+      .then(() => api.catalogue())
+      .then(async (v) => {
         const found = v.unavailable ? undefined : teammateForPlugin(v.agents, plugin);
-        setEntry(found && slots[teammateSlot(plugin)] !== found.name ? found : null);
+        if (!found || !dismissible) return found ?? null;
+        const slots = await Promise.resolve().then(() => api.overview()).then((o) => o.dismissed ?? {}, () => ({}) as Record<string, string>);
+        return slots[teammateSlot(plugin)] !== found.name ? found : null;
       })
+      .then((found) => { if (!cancelled) setEntry(found); })
       .catch(() => { if (!cancelled) setEntry(null); });
     return () => {
       cancelled = true;

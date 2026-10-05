@@ -410,6 +410,13 @@ export function ChatPage({
           case 'live.settle': {
             const runId = str(event.data['runId']) ?? '';
             const turn = Number(event.data['turn'] ?? 0);
+            // Withdrawn by the grounding guard: no message will carry these
+            // words, so they go now, and are never read aloud.
+            if (event.data['retracted'] === true) {
+              if (lastTurn.current?.runId === runId && lastTurn.current.turn === turn) lastTurn.current = null;
+              setPartial((current) => current && current.runId === runId && current.turn === turn ? null : current);
+              break;
+            }
             // Marked, not dropped: it stays on screen until the refresh that
             // carries the real message has landed, so the words never blink.
             setPartial((current) => current && current.runId === runId && current.turn === turn ? { ...current, settled: true } : current);

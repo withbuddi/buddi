@@ -10,7 +10,7 @@
  * strip. Agents that existed before this never enter it.
  */
 import path from 'node:path';
-import { delegateScope, readWebSetting, writeWebSetting, type AgentCatalog, type Queryable } from '@buddi/core';
+import { delegateScope, readWebSetting, type AgentCatalog, type Queryable } from '@buddi/core';
 import { readDelegatesFile, resolveAllowlist } from './delegation.js';
 
 /** The `core.web_settings` key. */
@@ -43,13 +43,31 @@ async function readPending(db: Queryable): Promise<string[]> {
   }
 }
 
+/*
+ * Both writes change one id in one statement, never read-modify-write the
+ * whole list: a creation and a dismissal landing together (or two of either)
+ * must not resurrect a closed strip or drop another agent's pending one. The
+ * upsert's row lock serialises them, and each sees the other's result.
+ */
+const PENDING_ARRAY = `case when jsonb_typeof(core.web_settings.value -> 'pending') = 'array'
+  then core.web_settings.value -> 'pending' else '[]'::jsonb end`;
+
 /** Owe this agent its first-open strip. Best effort: a failed write costs a line, never the agent. */
 export async function markAgentIntro(db: Queryable | null | undefined, agentId: string): Promise<void> {
   if (!db || typeof (db as { query?: unknown }).query !== 'function') return;
   try {
-    const pending = new Set(await readPending(db));
-    pending.add(agentId);
-    await writeWebSetting(db, AGENT_INTRO_KEY, { pending: [...pending].sort() });
+    await db.query(
+      `insert into core.web_settings (key, value, updated_at)
+       values ($1, jsonb_build_object('pending', jsonb_build_array($2::text)), now())
+       on conflict (key) do update set
+         value = jsonb_set(
+           case when jsonb_typeof(core.web_settings.value) = 'object' then core.web_settings.value else '{}'::jsonb end,
+           '{pending}',
+           (select coalesce(jsonb_agg(distinct id order by id), '[]'::jsonb)
+              from (select jsonb_array_elements_text(${PENDING_ARRAY}) as id union select $2::text) ids)),
+         updated_at = now()`,
+      [AGENT_INTRO_KEY, agentId],
+    );
   } catch {
     /* the agent exists either way; it just opens without the strip */
   }
@@ -57,9 +75,12 @@ export async function markAgentIntro(db: Queryable | null | undefined, agentId: 
 
 /** The owner closed the strip (or followed "Adjust"): it does not come back. */
 export async function dismissAgentIntro(db: Queryable, agentId: string): Promise<void> {
-  const pending = await readPending(db);
-  if (!pending.includes(agentId)) return;
-  await writeWebSetting(db, AGENT_INTRO_KEY, { pending: pending.filter((id) => id !== agentId) });
+  await db.query(
+    `update core.web_settings
+        set value = jsonb_set(value, '{pending}', (value -> 'pending') - $2::text), updated_at = now()
+      where key = $1 and jsonb_typeof(value -> 'pending') = 'array' and (value -> 'pending') ? $2::text`,
+    [AGENT_INTRO_KEY, agentId],
+  );
 }
 
 function introAgent(catalog: AgentCatalog, id: string): IntroAgent | null {
