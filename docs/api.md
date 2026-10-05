@@ -2874,7 +2874,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/provider-accounts` | Every model account, its state, models and agents; never a key. | yes |
 | POST | `/api/provider-accounts/save` | Add or change an account (a key, an address, a default model). | no |
 | POST | `/api/provider-accounts/probe-models` | Ask a provider which models a key or address offers, before saving. | yes |
-| POST | `/api/provider-accounts/:id/test` | Test an account with one small call. | yes |
+| POST | `/api/provider-accounts/:id/test` | Test an account: ask its default model to reply "ready" (5 tokens, no tools) and say what came back, how long it took and about how many tokens. | yes |
 | POST | `/api/provider-accounts/:id/models` | The account’s models. | yes |
 | POST | `/api/provider-accounts/:id/remove` | Remove an account. | yes |
 | POST | `/api/provider-accounts/:id/login` | Start a ChatGPT (Codex) device sign-in. | no |
@@ -2937,7 +2937,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `POST /api/provider-accounts/:id/test`
 
-Test an account with one small call.
+Test an account: ask its default model to reply "ready" (5 tokens, no tools) and say what came back, how long it took and about how many tokens.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** JSON
