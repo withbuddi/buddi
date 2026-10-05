@@ -622,11 +622,18 @@ minutes unless you pick 1, 15 or 60, or Never — and whenever you lock it:
 **Lock now** in the owner menu, the padlock at the end of the status line,
 **⌃⌘L** on a Mac or **Ctrl+Alt+L** elsewhere, from any page, a text field
 included. The same panel changes or removes the PIN (each asks for the current
-one), picks the background — Earth, the default, a photo of the planet's
-limb from high above that is the same in light and dark (a phone gets its own
-portrait crop); Buddi, Dawn, Sea, Moss, Dusk, each with a light and a dark; or
-your own picture (a JPEG or PNG; buddi keeps it as a JPEG of at most 2560
-pixels, turned upright, without its location or any other details). A
+one), and picks the background from two rows. **Colours**: Buddi, Dawn, Sea,
+Moss, Dusk, each with a light and a dark. **Pictures**: Earth, the default, a
+photo of the planet's limb from high above that is the same in light and dark
+(a phone gets its own portrait crop); Peoria autumn waterfront (made with AI);
+Golden streak (after a photo by Valentine Rutto on Unsplash, reworked with AI;
+made for phones, so a wide screen shows it whole in the middle over the Buddi
+field); and your own picture (a JPEG or PNG; buddi keeps it as a JPEG of at
+most 2560 pixels, turned upright, without its location or any other details),
+with an optional portrait version phones show instead. The chosen picture's
+credit is under the row. Each shipped picture has a landscape file, a portrait
+file or both, listed in `packages/web/public/backgrounds/manifest.json`; a
+screen held upright gets the portrait one, a wide one the landscape one. A
 background you picked stays yours; until you pick one, the lock screen is on
 Earth.
 

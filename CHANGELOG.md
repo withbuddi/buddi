@@ -4,6 +4,7 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- The lock screen has two new pictures: Peoria autumn waterfront and Golden streak. Settings → Lock screen → Background now shows Colours and Pictures as two rows, with the chosen picture's credit underneath. Phones get a picture's portrait version when it has one. Your own picture can have a second, portrait version for phones too.
 - Plugins now learn which of your model accounts can listen and speak: an OpenAI key and Gemini can, a ChatGPT subscription and Claude can't, and Ollama or another compatible server is "try it and see". Settings → Speech uses this to offer only accounts that work, with the reason beside the ones that don't. (Host API 1.30.)
 
 ## 0.1.0-pre.43 — 2026-10-05

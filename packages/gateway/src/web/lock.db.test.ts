@@ -511,6 +511,71 @@ suite('the lock screen', () => {
     expect((await b.del('/api/lock/background')).body).toMatchObject({ background: 'earth', image: null });
   });
 
+  it('takes a shipped picture only by an id the manifest lists, and reads a retired one as Earth', async () => {
+    const b = await browser();
+    expect((await b.put('/api/lock/settings', { background: 'picture:peoria-autumn-waterfront' })).body).toMatchObject({ background: 'picture:peoria-autumn-waterfront' });
+    expect((await b.put('/api/lock/settings', { background: 'picture:golden-streak' })).body).toMatchObject({ background: 'picture:golden-streak' });
+    const unknown = await b.put('/api/lock/settings', { background: 'picture:nowhere' });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body?.error).toBe('That picture isn’t one this dashboard has.');
+    expect((await b.put('/api/lock/settings', { background: 'peoria-autumn-waterfront' })).status).toBe(400);
+    expect((await b.put('/api/lock/settings', { background: 'picture:../etc' })).status).toBe(400);
+    expect((await b.get('/api/lock')).body).toMatchObject({ background: 'picture:golden-streak' });
+    // A release that drops a picture: the stored pick stays, the screen draws Earth.
+    await pool.query("update core.web_settings set value = jsonb_set(value, '{background}', '\"picture:retired\"') where key = 'lock'");
+    advance(5_000);
+    expect((await b.get('/api/lock')).body).toMatchObject({ background: 'earth' });
+  });
+
+  it('keeps a portrait version of the owner’s picture for phones, served while locked, removed with the picture', async () => {
+    const b = await browser();
+    await b.put('/api/lock/pin', { pin: '2468' });
+    const send = (target: string, width: number, height: number) => {
+      const png = new pngjs.PNG({ width, height });
+      png.data.fill(120);
+      const bytes = pngjs.PNG.sync.write(png);
+      const boundary = 'x-lock-portrait';
+      const body = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.png"\r\nContent-Type: image/png\r\n\r\n`),
+        bytes,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+      return new Promise<{ status: number; body: any }>((resolve, reject) => {
+        const req = request({
+          host: '127.0.0.1', port: app.port, path: target, method: 'POST',
+          headers: { Cookie: b.cookie, Origin: base(), 'X-Buddi-CSRF': b.csrf, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(body.length) },
+        }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+        });
+        req.on('error', reject);
+        req.end(body);
+      });
+    };
+
+    const early = await send('/api/lock/background/portrait', 30, 50);
+    expect(early.status).toBe(409);
+    expect((await send('/api/lock/background', 50, 30)).body).toMatchObject({ background: 'image', imagePortrait: null });
+    const tall = await send('/api/lock/background/portrait', 30, 50);
+    expect(tall.status).toBe(200);
+    expect(tall.body).toMatchObject({ background: 'image' });
+    expect(tall.body.imagePortrait).toMatch(/^\/api\/lock\/background\/portrait\?v=[0-9a-f]{16}$/);
+    const rows = await pool.query('select id, width, height from core.lock_background order by id');
+    expect(rows.rows).toEqual([{ id: 1, width: 50, height: 30 }, { id: 2, width: 30, height: 50 }]);
+
+    await b.post('/api/lock');
+    const picture = await hostFetch(`${base()}/api/lock/background/portrait`, { headers: { Cookie: b.cookie } });
+    expect(picture.status).toBe(200);
+    expect(picture.headers.get('content-type')).toBe('image/jpeg');
+    await b.post('/api/lock/unlock', { pin: '2468' });
+
+    expect((await b.del('/api/lock/background/portrait')).body).toMatchObject({ background: 'image', imagePortrait: null });
+    await send('/api/lock/background/portrait', 30, 50);
+    expect((await b.del('/api/lock/background')).body).toMatchObject({ background: 'earth', image: null, imagePortrait: null });
+    expect((await pool.query('select count(*)::int as n from core.lock_background')).rows[0].n).toBe(0);
+  });
+
   it('fails closed when the PIN cannot be read: a locked session stays locked, a new one is refused', async () => {
     let failing = false;
     // The same database, but reading the PIN fails while `failing` is set.

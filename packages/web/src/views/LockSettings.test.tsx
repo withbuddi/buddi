@@ -1,15 +1,25 @@
 /** Settings → Lock screen: set a PIN, then the delay, the background, change and remove — each through the server. */
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { ApiError, api, type LockState } from '../api';
+import manifest from '../../public/backgrounds/manifest.json';
+import { forgetLockPictures } from '../shell/backgrounds';
 import { LockSettings } from './LockSettings';
 
 const none: LockState = { pin: false, locked: false, lockedAt: null, reason: null, delayMinutes: 5, background: 'field', image: null, waitUntil: null, triesLeft: null };
 const set: LockState = { ...none, pin: true };
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+beforeEach(() => {
+  forgetLockPictures();
+  // The manifest answers; anything else fails as an unbuilt page's relative fetch does.
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+      if (String(url) === 'backgrounds/manifest.json') return new Response(JSON.stringify(manifest), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      throw new TypeError('Failed to parse URL');
+    }));
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); forgetLockPictures(); });
 
 describe('Settings → Lock screen', { timeout: 180_000 }, () => {
   const user = () => userEvent.setup({ delay: null, pointerEventsCheck: 0 });
@@ -51,15 +61,71 @@ describe('Settings → Lock screen', { timeout: 180_000 }, () => {
     expect(screen.getByRole('button', { name: 'Buddi' })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('offers Earth first, pressed when it is the background, with the photo’s credit linked under the swatches', async () => {
+  it('puts the colours in one row and the pictures in another: Earth, the shipped ones, then Add', async () => {
+    vi.spyOn(api, 'lockState').mockResolvedValue({ ...set, background: 'earth' });
+    render(<LockSettings navigate={() => {}} />);
+    const colours = within(await screen.findByRole('group', { name: 'Colours' })).getAllByRole('button');
+    expect(colours.map((b) => b.getAttribute('aria-label'))).toEqual(['Buddi', 'Dawn', 'Sea', 'Moss', 'Dusk']);
+    const pictures = screen.getByRole('group', { name: 'Pictures' });
+    await waitFor(() => expect(within(pictures).getAllByRole('button')).toHaveLength(3));
+    expect(within(pictures).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Earth', 'Peoria autumn waterfront', 'Golden streak']);
+    expect(within(pictures).getByRole('button', { name: 'Golden streak' }).querySelector('img')).toHaveAttribute('src', 'backgrounds/golden-streak-thumb.jpg');
+    expect(within(pictures).getByText('Add')).toBeInTheDocument();
+    expect(within(pictures).getByLabelText('Add your picture')).toHaveAttribute('type', 'file');
+  });
+
+  it('says the chosen picture’s credit under the pictures, and none for a colour', async () => {
+    const state = vi.spyOn(api, 'lockState').mockResolvedValue({ ...set, background: 'picture:peoria-autumn-waterfront' });
+    const save = vi.spyOn(api, 'setLockSettings').mockResolvedValue({ ...set, background: 'picture:golden-streak' });
+    render(<LockSettings navigate={() => {}} />);
+    const peoria = await screen.findByRole('button', { name: 'Peoria autumn waterfront' });
+    expect(peoria).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Made with AI')).toHaveClass('lk-credit');
+    state.mockResolvedValue({ ...set, background: 'picture:golden-streak' });
+    await user().click(screen.getByRole('button', { name: 'Golden streak' }));
+    expect(save).toHaveBeenLastCalledWith({ background: 'picture:golden-streak' });
+    expect(await screen.findByText(/^After a photo by Valentine Rutto on Unsplash, reworked with AI/)).toHaveTextContent(
+      'After a photo by Valentine Rutto on Unsplash, reworked with AI. Made for phones: a wide screen shows it whole, in the middle.',
+    );
+    // Credits are text: no link to a host the page does not fetch.
+    expect(screen.queryByRole('link', { name: /Valentine Rutto|Unsplash/ })).toBeNull();
+    state.mockResolvedValue({ ...set, background: 'moss' });
+    save.mockResolvedValue({ ...set, background: 'moss' });
+    await user().click(screen.getByRole('button', { name: 'Moss' }));
+    await waitFor(() => expect(screen.queryByText(/Valentine Rutto/)).toBeNull());
+    expect(document.querySelector('.lk-credit')).toBeNull();
+  });
+
+  it('takes a portrait version of the owner’s picture for phones, and removes it', async () => {
+    const withImage: LockState = { ...set, background: 'image', image: '/api/lock/background?v=1', imagePortrait: null };
+    const state = vi.spyOn(api, 'lockState').mockResolvedValue(withImage);
+    const withPortrait: LockState = { ...withImage, imagePortrait: '/api/lock/background/portrait?v=2' };
+    const upload = vi.spyOn(api, 'uploadLockPortrait').mockResolvedValue(withPortrait);
+    const remove = vi.spyOn(api, 'removeLockPortrait').mockResolvedValue(withImage);
+    render(<LockSettings navigate={() => {}} />);
+    expect(await screen.findByRole('button', { name: 'Your picture' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/Phones show the middle of it/)).toBeInTheDocument();
+    expect(screen.getByText('Replace')).toBeInTheDocument();
+    const u = user();
+    const file = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'tall.jpg', { type: 'image/jpeg' });
+    state.mockResolvedValue(withPortrait);
+    await u.upload(screen.getByLabelText('Portrait version for phones'), file);
+    expect(upload).toHaveBeenCalledWith(file);
+    expect(await screen.findByText('Phones show its portrait version.')).toBeInTheDocument();
+    state.mockResolvedValue(withImage);
+    await u.click(screen.getByRole('button', { name: 'Remove portrait' }));
+    expect(remove).toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Add portrait…' })).toBeInTheDocument();
+  });
+
+  it('offers Earth first among the pictures, pressed when it is the background, with the photo’s credit linked under the swatches', async () => {
     vi.spyOn(api, 'lockState').mockResolvedValue({ ...set, background: 'earth' });
     const save = vi.spyOn(api, 'setLockSettings').mockResolvedValue({ ...set, background: 'field' });
     render(<LockSettings navigate={() => {}} />);
     const earth = await screen.findByRole('button', { name: 'Earth' });
     expect(earth).toHaveAttribute('aria-pressed', 'true');
     expect(earth.querySelector('img')).not.toBeNull();
-    const swatches = within(screen.getByRole('group', { name: 'Background' })).getAllByRole('button');
-    expect(swatches.map((b) => b.getAttribute('aria-label'))).toEqual(['Earth', 'Buddi', 'Dawn', 'Sea', 'Moss', 'Dusk']);
+    expect(within(screen.getByRole('group', { name: 'Pictures' })).getAllByRole('button')[0]).toBe(earth);
     expect(screen.getByText(/Earth: photo by/)).toHaveTextContent('Earth: photo by ActionVance on Unsplash');
     expect(screen.getByRole('link', { name: 'ActionVance' })).toHaveAttribute('href', 'https://unsplash.com/@actionvance');
     expect(screen.getByRole('link', { name: 'Unsplash' })).toHaveAttribute('href', 'https://unsplash.com/photos/outer-space-photography-of-earth-t7EL2iG3jMc');

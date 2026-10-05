@@ -1248,6 +1248,8 @@ export interface LockState {
   background: LockBackground;
   /** The owner's picture, when there is one. */
   image: string | null;
+  /** Its portrait version, drawn on a phone, when there is one. */
+  imagePortrait?: string | null;
   /** No try is checked before this moment. */
   waitUntil: string | null;
   /** Wrong tries left before a wait; null while none were wrong. */
@@ -1270,8 +1272,11 @@ export interface LockClockView {
   zone: { label: string; timezone: string } | null;
 }
 
-/** Earth (the default) is the photo the dashboard ships; field (Buddi) and the four colours are gradients; image is the owner's picture. */
-export type LockBackground = 'earth' | 'field' | 'dawn' | 'sea' | 'moss' | 'dusk' | 'image';
+/**
+ * Earth (the default) is the photo the dashboard ships; field (Buddi) and the four colours are gradients; image is the
+ * owner's picture; `picture:<id>` is one of the pictures in `backgrounds/manifest.json` (shell/backgrounds.ts).
+ */
+export type LockBackground = 'earth' | 'field' | 'dawn' | 'sea' | 'moss' | 'dusk' | 'image' | `picture:${string}`;
 
 /** What the lock screen draws (GET /api/lock/screen): counts only, and the widgets that are not sensitive. */
 export interface LockScreenData extends LockState {
@@ -2858,6 +2863,12 @@ export const api = {
     return upload<LockState>('/lock/background', form);
   },
   removeLockBackground: () => del<LockState>('/lock/background'),
+  uploadLockPortrait: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return upload<LockState>('/lock/background/portrait', form);
+  },
+  removeLockPortrait: () => del<LockState>('/lock/background/portrait'),
   setFocus: (mode: FocusMode, duration?: FocusDuration) =>
     put<{ focus: FocusState | null }>('/notifications/focus', duration ? { mode, duration } : { mode }).then(statusChanged),
   testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),

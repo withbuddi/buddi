@@ -28,24 +28,33 @@
  *   GET  /api/lock                 the state: PIN set, locked, why, the delay, the background, the wait
  *   GET  /api/lock/screen          the lock screen's data (also the state)
  *   GET  /api/lock/background      the owner's picture
+ *   GET  /api/lock/background/portrait   its portrait version, drawn on a phone
  *   POST /api/lock                 Lock now { reason?: 'owner' | 'idle' }
  *   POST /api/lock/unlock          { pin }
  *   POST /api/lock/activity        the owner used this session
  *   PUT  /api/lock/pin             { pin, current? }: set or change
  *   POST /api/lock/pin/remove      { current }
  *   PUT  /api/lock/settings        { delayMinutes?, background?, clock? }
- *   POST /api/lock/background      a JPEG or PNG (multipart), DELETE to remove
+ *   POST /api/lock/background      a JPEG or PNG (multipart), DELETE to remove (its portrait too)
+ *   POST /api/lock/background/portrait   the same, for phones; DELETE to remove
+ *
+ * A background is a built-in one (Earth, the gradients), the owner's picture
+ * (`image`), or one of the pictures the dashboard ships
+ * (`picture:<manifest id>`, `backgrounds/manifest.json`): a pick of one the
+ * manifest does not list is refused, and a stored one it no longer lists is
+ * answered as Earth.
  */
 import {
   ASSET_ROUTE,
   DEFAULT_LOCK_CLOCK,
   getOwnerProfile,
   hashPin,
+  isLockBackground,
+  lockPictureId,
   listOwnerPlaces,
   lockClockOf,
   isValidPin,
   listPendingActions,
-  LOCK_BACKGROUNDS,
   LOCK_DELAYS,
   PIN_FREE_TRIES,
   pinWaitMs,
@@ -94,7 +103,7 @@ export function allowedWhileLocked(method: string, path: string): boolean {
   const read = method === 'GET' || method === 'HEAD';
   // Plugin assets are logos core re-drew as PNGs (an outlet's, a bank's): the lock screen's widget rows draw them.
   if (read && path.startsWith(`${ASSET_ROUTE}/`)) return true;
-  if (read) return path === '/api/session' || path === '/api/lock' || path === '/api/lock/screen' || path === '/api/lock/background';
+  if (read) return path === '/api/session' || path === '/api/lock' || path === '/api/lock/screen' || path === '/api/lock/background' || path === '/api/lock/background/portrait';
   return method === 'POST' && (path === '/api/lock' || path === '/api/lock/unlock');
 }
 
@@ -121,6 +130,8 @@ export interface LockStateView {
   background: LockBackground;
   /** The owner's picture, versioned, when there is one. */
   image: string | null;
+  /** Its portrait version for phones, versioned, when there is one. */
+  imagePortrait: string | null;
   /** No try is checked before this moment. */
   waitUntil: string | null;
   /** Wrong tries left before a wait; null while none have been wrong. */
@@ -165,7 +176,13 @@ export interface LockDeps {
   /** The running version, from the same answer as `GET /api/version`; absent or null leaves the line off. */
   version?: () => Promise<LockVersion | null>;
   log?: (line: string) => void;
+  /** The manifest ids of the pictures the dashboard ships (web/lock-backgrounds.ts); absent, none is offered. */
+  pictures?: () => ReadonlySet<string>;
 }
+
+/** The owner's picture as stored: row 1 the picture, row 2 its portrait version. */
+const LANDSCAPE_ROW = 1;
+const PORTRAIT_ROW = 2;
 
 interface Answer {
   status: number;
@@ -175,7 +192,7 @@ interface Answer {
 type Listener = (session: Session) => void;
 
 export function createLock(deps: LockDeps) {
-  let cached: { at: number; pin: LockPinRecord | null; settings: LockSettings; image: string | null } | null = null;
+  let cached: { at: number; pin: LockPinRecord | null; settings: LockSettings; image: string | null; portrait: string | null } | null = null;
   const listeners = new Set<Listener>();
   /** Every PIN check, one after another: two wrong tries at once are two tries. */
   let checking: Promise<unknown> = Promise.resolve();
@@ -192,10 +209,10 @@ export function createLock(deps: LockDeps) {
      * certain stands until a read answers; with none, the lock cannot say,
      * and the request is refused (LockUnavailable, a 503) rather than let in.
      */
-    const [pinRead, settingsRead, image] = await Promise.all([
+    const [pinRead, settingsRead, { image, portrait }] = await Promise.all([
       readLockPin(deps.pool).then((pin) => ({ ok: true as const, pin }), () => ({ ok: false as const })),
       readLockSettings(deps.pool).then((settings) => ({ ok: true as const, settings }), () => ({ ok: false as const })),
-      imageVersion(deps.pool),
+      imageVersions(deps.pool),
     ]);
     if (!pinRead.ok && !known) throw new LockUnavailable();
     const pin = pinRead.ok ? pinRead.pin : known!.pin;
@@ -206,8 +223,8 @@ export function createLock(deps: LockDeps) {
     if (pinRead.ok) known = { pin, settings };
     else if (settingsRead.ok && known) known = { ...known, settings };
     // A failed read is not cached: the next request asks again.
-    if (!pinRead.ok) return { at: now, pin, settings, image };
-    cached = { at: now, pin, settings, image };
+    if (!pinRead.ok) return { at: now, pin, settings, image, portrait };
+    cached = { at: now, pin, settings, image, portrait };
     // The PIN went away underneath us (`buddi dashboard --remove-pin`): every session opens.
     if (hadPin && !pin) deps.sessions.unlockCached();
     return cached;
@@ -258,6 +275,20 @@ export function createLock(deps: LockDeps) {
     return false;
   }
 
+  /** A picture background the manifest lists. */
+  function shipped(background: unknown): boolean {
+    const id = lockPictureId(background);
+    return id !== null && (deps.pictures?.().has(id) ?? false);
+  }
+
+  /** What the lock screen is drawn on: the stored pick, unless its picture is gone. */
+  function backgroundOf(state: NonNullable<typeof cached>): LockBackground {
+    const b = state.settings.background;
+    if (b === 'image' && !state.image) return DEFAULT_LOCK_BACKGROUND;
+    if (lockPictureId(b) !== null && !shipped(b)) return DEFAULT_LOCK_BACKGROUND;
+    return b;
+  }
+
   function stateOf(session: Session, state: NonNullable<typeof cached>): LockStateView {
     const pin = state.pin;
     const waitUntil = pin?.waitUntil && Date.parse(pin.waitUntil) > deps.now().getTime() ? pin.waitUntil : null;
@@ -267,8 +298,9 @@ export function createLock(deps: LockDeps) {
       lockedAt: pin && session.lockedAt ? session.lockedAt.toISOString() : null,
       reason: pin && session.lockedAt ? (session.lockReason ?? 'owner') : null,
       delayMinutes: state.settings.delayMinutes,
-      background: state.settings.background === 'image' && !state.image ? DEFAULT_LOCK_BACKGROUND : state.settings.background,
+      background: backgroundOf(state),
       image: state.image ? `/api/lock/background?v=${state.image.slice(0, 16)}` : null,
+      imagePortrait: state.image && state.portrait ? `/api/lock/background/portrait?v=${state.portrait.slice(0, 16)}` : null,
       waitUntil,
       triesLeft: pin && pin.failures > 0 ? Math.max(0, PIN_FREE_TRIES - pin.failures) : null,
       clock: state.settings.clock,
@@ -454,8 +486,9 @@ export function createLock(deps: LockDeps) {
       }
       if ('background' in body) {
         const b = body.background;
-        if (!(LOCK_BACKGROUNDS as readonly unknown[]).includes(b)) return { status: 400, body: { error: `\`background\` is one of ${LOCK_BACKGROUNDS.join(', ')}.` } };
+        if (!isLockBackground(b)) return { status: 400, body: { error: '`background` is earth, field, dawn, sea, moss, dusk, image or picture:<id>.' } };
         if (b === 'image' && !state.image) return { status: 409, body: { error: 'Add a picture first.' } };
+        if (lockPictureId(b) !== null && !shipped(b)) return { status: 400, body: { error: 'That picture isn’t one this dashboard has.' } };
         next.background = b as LockBackground;
       }
       if ('clock' in body) {
@@ -468,14 +501,38 @@ export function createLock(deps: LockDeps) {
       return { status: 200, body: stateOf(session, await current(true)) };
     }
 
+    if (path === '/api/lock/background/portrait') {
+      if (method === 'GET' || method === 'HEAD') {
+        const row = await readImage(deps.pool, PORTRAIT_ROW);
+        if (!row) return { status: 404, body: { error: 'There is no portrait picture.' } };
+        return { status: 200, image: row };
+      }
+      if (method === 'DELETE') {
+        await deps.pool.query('delete from core.lock_background where id = $1', [PORTRAIT_ROW]);
+        invalidate();
+        return { status: 200, body: stateOf(session, await current(true)) };
+      }
+      if (method === 'POST') {
+        if (!req.upload) return { status: 400, body: { error: 'send the picture as multipart/form-data' } };
+        if (!(await current(true)).image) return { status: 409, body: { error: 'Add your picture first; the portrait one goes with it.' } };
+        const upload = await req.upload();
+        if (!upload.ok) return { status: upload.status, body: { error: upload.error } };
+        await storeImage(deps.pool, PORTRAIT_ROW, upload.image);
+        invalidate();
+        return { status: 200, body: stateOf(session, await current(true)) };
+      }
+      return { status: 405, body: { error: 'GET, POST or DELETE' } };
+    }
+
     if (path === '/api/lock/background') {
       if (method === 'GET' || method === 'HEAD') {
-        const row = await readImage(deps.pool);
+        const row = await readImage(deps.pool, LANDSCAPE_ROW);
         if (!row) return { status: 404, body: { error: 'There is no picture.' } };
         return { status: 200, image: row };
       }
       if (method === 'DELETE') {
-        await deps.pool.query('delete from core.lock_background where id = 1');
+        // The portrait version goes with it: it never stands alone.
+        await deps.pool.query('delete from core.lock_background');
         const state = await current(true);
         if (state.settings.background === 'image') await writeLockSettings(deps.pool, { ...state.settings, background: DEFAULT_LOCK_BACKGROUND });
         invalidate();
@@ -485,14 +542,7 @@ export function createLock(deps: LockDeps) {
         if (!req.upload) return { status: 400, body: { error: 'send the picture as multipart/form-data' } };
         const upload = await req.upload();
         if (!upload.ok) return { status: upload.status, body: { error: upload.error } };
-        const { image } = upload;
-        await deps.pool.query(
-          `insert into core.lock_background (id, jpeg, sha256, width, height, updated_at)
-           values (1, $1, $2, $3, $4, now())
-           on conflict (id) do update set jpeg = excluded.jpeg, sha256 = excluded.sha256,
-             width = excluded.width, height = excluded.height, updated_at = now()`,
-          [image.jpeg, image.sha256, image.width, image.height],
-        );
+        await storeImage(deps.pool, LANDSCAPE_ROW, upload.image);
         const state = await current(true);
         await writeLockSettings(deps.pool, { ...state.settings, background: 'image' });
         invalidate();
@@ -533,18 +583,32 @@ export function createLock(deps: LockDeps) {
 
 export type LockService = ReturnType<typeof createLock>;
 
-async function imageVersion(pool: Queryable): Promise<string | null> {
+async function imageVersions(pool: Queryable): Promise<{ image: string | null; portrait: string | null }> {
   try {
-    const { rows } = await pool.query('select sha256 from core.lock_background where id = 1');
-    return rows[0] ? String(rows[0].sha256) : null;
+    const { rows } = await pool.query('select id, sha256 from core.lock_background');
+    const of = (id: number): string | null => {
+      const row = rows.find((r) => Number(r.id) === id);
+      return row ? String(row.sha256) : null;
+    };
+    return { image: of(LANDSCAPE_ROW), portrait: of(PORTRAIT_ROW) };
   } catch {
-    return null;
+    return { image: null, portrait: null };
   }
 }
 
-async function readImage(pool: Queryable): Promise<{ jpeg: Buffer; sha256: string } | null> {
-  const { rows } = await pool.query('select jpeg, sha256 from core.lock_background where id = 1');
+async function readImage(pool: Queryable, id: number): Promise<{ jpeg: Buffer; sha256: string } | null> {
+  const { rows } = await pool.query('select jpeg, sha256 from core.lock_background where id = $1', [id]);
   return rows[0] ? { jpeg: rows[0].jpeg as Buffer, sha256: String(rows[0].sha256) } : null;
+}
+
+async function storeImage(pool: Queryable, id: number, image: LockImage): Promise<void> {
+  await pool.query(
+    `insert into core.lock_background (id, jpeg, sha256, width, height, updated_at)
+     values ($1, $2, $3, $4, $5, now())
+     on conflict (id) do update set jpeg = excluded.jpeg, sha256 = excluded.sha256,
+       width = excluded.width, height = excluded.height, updated_at = now()`,
+    [id, image.jpeg, image.sha256, image.width, image.height],
+  );
 }
 
 /**

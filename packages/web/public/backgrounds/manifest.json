@@ -1,0 +1,18 @@
+{
+  "pictures": [
+    {
+      "id": "peoria-autumn-waterfront",
+      "title": "Peoria autumn waterfront",
+      "credit": "Made with AI",
+      "landscape": "peoria-autumn-waterfront.jpg",
+      "thumb": "peoria-autumn-waterfront-thumb.jpg"
+    },
+    {
+      "id": "golden-streak",
+      "title": "Golden streak",
+      "credit": "After a photo by Valentine Rutto on Unsplash, reworked with AI",
+      "portrait": "golden-streak-portrait.jpg",
+      "thumb": "golden-streak-thumb.jpg"
+    }
+  ]
+}

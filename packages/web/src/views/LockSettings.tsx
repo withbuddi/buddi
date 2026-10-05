@@ -1,7 +1,10 @@
 /**
  * Settings → Lock screen (docs/dashboard.md, "Lock screen"; the kit's
  * `LockSettings`): the honest sentence, the PIN (set, change, remove — each
- * in a small dialog), how long before it locks and the background; then What
+ * in a small dialog), how long before it locks and the background — a row of
+ * Colours, then a row of Pictures (Earth, the ones the dashboard ships, the
+ * owner's own with an optional portrait version for phones) with the chosen
+ * picture's credit under them; then What
  * it shows (`LockFaceEditor`): a live preview beside the clock's options and
  * the lock screen's own widgets. Kept by the installation, so every device
  * signed in to this dashboard gets the same.
@@ -10,18 +13,34 @@ import { useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, type LockBackground, type LockState } from '../api';
 import { LockFaceEditor } from './LockFaceEditor';
 import { EARTH_CREDIT, EARTH_PHOTO } from '../shell/earth';
+import { pictureBackground, pictureIdOf, useLockPictures, type LockPicture } from '../shell/backgrounds';
 import { useLock } from '../shell/lock';
 import { Button, ErrorBanner, Field, Icon, Modal, Notice, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
 
-/** Earth first: the default, a photo; then the gradients. */
-const BACKGROUNDS: ReadonlyArray<{ id: Exclude<LockBackground, 'image'>; label: string }> = [
-  { id: 'earth', label: 'Earth' },
+/** The gradients: Buddi's own field, then the four colours. */
+const COLOURS: ReadonlyArray<{ id: LockBackground; label: string }> = [
   { id: 'field', label: 'Buddi' },
   { id: 'dawn', label: 'Dawn' },
   { id: 'sea', label: 'Sea' },
   { id: 'moss', label: 'Moss' },
   { id: 'dusk', label: 'Dusk' },
 ];
+
+/** What is said under the pictures for the one chosen; nothing for a colour. */
+export function PictureCredit({ background, pictures }: { background: LockBackground; pictures: readonly LockPicture[] | null }): JSX.Element | null {
+  if (background === 'earth') {
+    return <p className="lk-credit">Earth: photo by <a href={EARTH_CREDIT.authorUrl} target="_blank" rel="noreferrer">{EARTH_CREDIT.author}</a> on <a href={EARTH_CREDIT.photoUrl} target="_blank" rel="noreferrer">Unsplash</a></p>;
+  }
+  const id = pictureIdOf(background);
+  const picture = id ? pictures?.find((p) => p.id === id) : undefined;
+  if (!picture) return null;
+  return (
+    <p className="lk-credit">
+      {picture.credit}
+      {picture.landscape ? null : '. Made for phones: a wide screen shows it whole, in the middle.'}
+    </p>
+  );
+}
 
 const DELAYS = [
   { value: '1', label: '1 min' },
@@ -122,8 +141,10 @@ export function LockSettings(_props: { navigate: (route: string) => void }): JSX
   const read = useAsync(() => api.lockState(), []);
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState<'image' | 'portrait' | null>(null);
   const file = useRef<HTMLInputElement>(null);
+  const portraitFile = useRef<HTMLInputElement>(null);
+  const pictures = useLockPictures();
   const state = read.data ?? lock.state;
 
   const take = (next: LockState): void => {
@@ -134,13 +155,14 @@ export function LockSettings(_props: { navigate: (route: string) => void }): JSX
     setFailed(null);
     call.then(take).catch((err: unknown) => setFailed(failure(err)));
   };
-  const upload = (picked: File | undefined): void => {
+  const upload = (picked: File | undefined, which: 'image' | 'portrait'): void => {
     if (!picked) return;
-    setUploading(true);
+    setUploading(which);
     setFailed(null);
-    api.uploadLockBackground(picked).then(take).catch((err: unknown) => setFailed(failure(err))).finally(() => {
-      setUploading(false);
-      if (file.current) file.current.value = '';
+    (which === 'portrait' ? api.uploadLockPortrait(picked) : api.uploadLockBackground(picked)).then(take).catch((err: unknown) => setFailed(failure(err))).finally(() => {
+      setUploading(null);
+      const input = which === 'portrait' ? portraitFile.current : file.current;
+      if (input) input.value = '';
     });
   };
 
@@ -148,7 +170,7 @@ export function LockSettings(_props: { navigate: (route: string) => void }): JSX
     return <Section title="Lock screen" panel><ErrorBanner message={read.error ? 'Couldn’t read the lock screen’s settings.' : null} /></Section>;
   }
   const pin = state.pin;
-  const swatch = (id: LockBackground, label: string): JSX.Element => (
+  const swatch = (id: LockBackground, label: string, thumb?: string | null): JSX.Element => (
     <button
       key={id}
       type="button"
@@ -159,7 +181,7 @@ export function LockSettings(_props: { navigate: (route: string) => void }): JSX
       title={label}
       onClick={() => change(api.setLockSettings({ background: id }))}
     >
-      {id === 'image' && state.image ? <img src={state.image} alt="" /> : id === 'earth' ? <img src={EARTH_PHOTO.thumb} alt="" /> : <span className="lk-swatch-field" />}
+      {id === 'image' && state.image ? <img src={state.image} alt="" /> : id === 'earth' ? <img src={EARTH_PHOTO.thumb} alt="" /> : thumb ? <img src={thumb} alt="" /> : <span className="lk-swatch-field" />}
       <span className="lk-swatch-label">{label}</span>
     </button>
   );
@@ -208,26 +230,48 @@ export function LockSettings(_props: { navigate: (route: string) => void }): JSX
             <div className="lk-pref-label">Background</div>
             <div className="ui-field-hint">Behind the time and your widgets, on every device. A picture is kept as a JPEG of at most 2560 pixels, without its location or other details.</div>
           </div>
-          <div className="lk-swatches" role="group" aria-label="Background">
-            {BACKGROUNDS.map((b) => swatch(b.id, b.label))}
-            {state.image ? swatch('image', 'Your picture') : null}
-            <label className="lk-swatch" data-kind="add" aria-busy={uploading ? 'true' : undefined}>
-              <input ref={file} type="file" accept="image/jpeg,image/png" className="lk-sr" disabled={uploading} onChange={(e) => upload(e.target.files?.[0])} />
-              <span className="lk-swatch-field" data-kind="add"><Icon name="plus" size={16} /></span>
-              <span className="lk-swatch-label">{uploading ? 'Adding…' : state.image ? 'Replace' : 'Your picture'}</span>
-            </label>
+          <div className="lk-bg-rows">
+            <div className="lk-bg-row" role="group" aria-labelledby="lk-bg-colours">
+              <p className="lk-bg-row-label" id="lk-bg-colours">Colours</p>
+              <div className="lk-swatches">{COLOURS.map((c) => swatch(c.id, c.label))}</div>
+            </div>
+            <div className="lk-bg-row" role="group" aria-labelledby="lk-bg-pictures">
+              <p className="lk-bg-row-label" id="lk-bg-pictures">Pictures</p>
+              <div className="lk-swatches">
+                {swatch('earth', 'Earth')}
+                {(pictures ?? []).map((p) => swatch(pictureBackground(p.id), p.title, p.thumb))}
+                {state.image ? swatch('image', 'Your picture') : null}
+                <label className="lk-swatch" data-kind="add" aria-busy={uploading === 'image' ? 'true' : undefined}>
+                  <input ref={file} type="file" accept="image/jpeg,image/png" className="lk-sr" aria-label={state.image ? 'Replace your picture' : 'Add your picture'} disabled={uploading !== null} onChange={(e) => upload(e.target.files?.[0], 'image')} />
+                  <span className="lk-swatch-field" data-kind="add"><Icon name="plus" size={16} /></span>
+                  <span className="lk-swatch-label">{uploading === 'image' ? 'Adding…' : state.image ? 'Replace' : 'Add'}</span>
+                </label>
+              </div>
+              <PictureCredit background={state.background} pictures={pictures} />
+            </div>
           </div>
-          <p className="lk-credit">Earth: photo by <a href={EARTH_CREDIT.authorUrl} target="_blank" rel="noreferrer">{EARTH_CREDIT.author}</a> on <a href={EARTH_CREDIT.photoUrl} target="_blank" rel="noreferrer">Unsplash</a></p>
           {state.image ? (
-            <Toolbar align="end">
-              <Button size="sm" variant="ghost" onClick={() => change(api.removeLockBackground())}>Remove picture</Button>
-            </Toolbar>
+            <div className="lk-pref" data-sub="true">
+              <div className="lk-pref-text">
+                <div className="ui-field-hint">{state.imagePortrait
+                  ? 'Phones show its portrait version.'
+                  : 'Phones show the middle of it. Add a portrait version to choose what they show.'}</div>
+              </div>
+              <Toolbar align="end">
+                <input ref={portraitFile} type="file" accept="image/jpeg,image/png" className="lk-sr" aria-label="Portrait version for phones" disabled={uploading !== null} onChange={(e) => upload(e.target.files?.[0], 'portrait')} />
+                <Button size="sm" variant="ghost" onClick={() => change(api.removeLockBackground())}>Remove picture</Button>
+                {state.imagePortrait ? <Button size="sm" variant="ghost" onClick={() => change(api.removeLockPortrait())}>Remove portrait</Button> : null}
+                <Button size="sm" disabled={uploading !== null} onClick={() => portraitFile.current?.click()}>
+                  {uploading === 'portrait' ? 'Adding…' : state.imagePortrait ? 'Replace portrait…' : 'Add portrait…'}
+                </Button>
+              </Toolbar>
+            </div>
           ) : null}
         </div>
       </Stack>
       {dialog ? <PinDialog kind={dialog} onClose={() => setDialog(null)} onDone={(next) => { setDialog(null); take(next); }} /> : null}
     </Section>
-    <LockFaceEditor clock={state.clock} onClock={(clock) => change(api.setLockSettings({ clock }))} version={`${state.background}:${state.image ?? ''}:${JSON.stringify(state.clock ?? null)}`} />
+    <LockFaceEditor clock={state.clock} onClock={(clock) => change(api.setLockSettings({ clock }))} version={`${state.background}:${state.image ?? ''}:${state.imagePortrait ?? ''}:${JSON.stringify(state.clock ?? null)}`} />
     </>
   );
 }

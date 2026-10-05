@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LOCK_BACKGROUND, PIN_FIRST_WAIT_MS, PIN_MAX_WAIT_MS, hashPin, isValidPin, pinWaitMs, readLockSettings, verifyPin, writeLockSettings } from './lock.js';
+import { DEFAULT_LOCK_BACKGROUND, PIN_FIRST_WAIT_MS, isLockBackground, lockPictureId, PIN_MAX_WAIT_MS, hashPin, isValidPin, pinWaitMs, readLockSettings, verifyPin, writeLockSettings } from './lock.js';
 import type { Queryable } from './owner.js';
 
 describe('the lock screen PIN', () => {
@@ -57,6 +57,18 @@ describe('the lock screen background', () => {
     expect((await readLockSettings(settingsTable({ delayMinutes: 5, background: 'image' }).db)).background).toBe('image');
     // Before version 2 a delay change wrote `field` too: it says nothing about a pick.
     expect((await readLockSettings(settingsTable({ delayMinutes: 15, background: 'field' }).db)).background).toBe('earth');
+  });
+
+  it('keeps a well-formed picture by its manifest id, and nothing else that claims to be one', async () => {
+    expect((await readLockSettings(settingsTable({ v: 2, background: 'picture:golden-streak' }).db)).background).toBe('picture:golden-streak');
+    expect((await readLockSettings(settingsTable({ v: 2, background: 'picture:../etc' }).db)).background).toBe('earth');
+    expect(lockPictureId('picture:peoria-autumn-waterfront')).toBe('peoria-autumn-waterfront');
+    expect(lockPictureId('peoria-autumn-waterfront')).toBeNull();
+    expect(lockPictureId('picture:')).toBeNull();
+    expect(lockPictureId('picture:Upper')).toBeNull();
+    expect(isLockBackground('moss')).toBe(true);
+    expect(isLockBackground('picture:x')).toBe(true);
+    expect(isLockBackground('nebula')).toBe(false);
   });
 
   it('keeps Buddi once the owner picks it, through later changes to the delay', async () => {

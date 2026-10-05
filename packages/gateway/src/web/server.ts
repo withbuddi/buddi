@@ -333,6 +333,7 @@ import { QUIET_UNAVAILABLE_TEXT, pluginCommands } from './composer.js';
 import { createEngagementHooks } from '../missions/engagement.js';
 import { apiTokensRoute, bearerOf, verifyApiToken, type ApiTokenView } from './api-tokens.js';
 import { LockImageRefusal, MAX_LOCK_IMAGE_BYTES, normaliseLockImage } from './lock-image.js';
+import { lockPicturesFrom } from './lock-backgrounds.js';
 import {
   cancelJobFromWeb,
   cancelReminderFromWeb,
@@ -729,6 +730,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   /** Remove buddi from this Mac: the token its plan mints (web/uninstall.ts). */
   const uninstallTokens = createTokenStore();
   const lock = createLock({ pool: deps.pool, sessions, now: deps.now, get timezone() { return deps.timezone; }, widgets, needsYou, log,
+    pictures: () => lockPicturesFrom(assetsDir),
     // The status bar's answer, so the lock screen's version line never disagrees with it.
     version: async () => lockVersion(await versionRoute({ env: deps.env ?? process.env, log, assetsDir })) });
   const openStreams = new Map<string, { session: Session; responses: Set<ServerResponse> }>();
@@ -1766,7 +1768,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     // The lock screen: its state and data, Lock now, Unlock, the PIN, its settings and picture (web/lock.ts).
     if (path === '/api/lock' || path.startsWith('/api/lock/')) {
       let body: unknown = {};
-      const upload = method === 'POST' && path === '/api/lock/background';
+      const upload = method === 'POST' && (path === '/api/lock/background' || path === '/api/lock/background/portrait');
       if ((method === 'POST' || method === 'PUT') && !upload) {
         try {
           body = await readJsonBody(req);
