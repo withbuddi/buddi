@@ -99,4 +99,40 @@ describe('tips routes', () => {
     expect(off.enabled).toBe(false);
     expect(off.tips).toHaveLength(3);
   });
+
+  it('stacks today’s tip first, then the others ready; later and dismiss act per tip', async () => {
+    const store = memoryStore();
+    let now = new Date('2026-09-01T10:00:00Z');
+    const RULES3: TipRule[] = [...RULES, { id: 'c', when: () => true, holdsForDays: 0, text: 'Tip c.', action: { label: 'Do c', route: '#/c' }, cooldownDays: 7 }];
+    const deps = { store, facts: async () => facts(), now: () => now, timezone: 'UTC', rules: RULES3 };
+    const call = (method: string, path: string, preview?: string) => tipsRoute(deps, { method, path, ...(preview ? { preview } : {}) });
+    const ids = async () => ((await call('GET', '/api/tips/queue')).body as { tips: { id: string }[] }).tips.map((t) => t.id);
+
+    expect(await ids()).toEqual(['a', 'b', 'c']);
+    // Only the front one is remembered as shown.
+    const state = store.data.get(TIPS_STATE_KEY) as Record<string, { shownAt?: string }>;
+    expect(state.a!.shownAt).toBe('2026-09-01');
+    expect(state.b!.shownAt).toBeUndefined();
+    // The current tip agrees with the stack's front.
+    expect((await call('GET', '/api/tips/current')).body).toMatchObject({ tip: { id: 'a' } });
+
+    await call('POST', '/api/tips/a/later');
+    expect(await ids()).toEqual(['b', 'c']);
+    await call('POST', '/api/tips/b/dismiss');
+    expect(await ids()).toEqual(['c']);
+    now = new Date(now.getTime() + 8 * 86_400_000);
+    expect(await ids()).toEqual(['a', 'c']);
+    expect((await call('POST', '/api/tips/queue')).status).toBe(405);
+  });
+
+  it('stacks previews touching nothing, and says nothing while tips are off', async () => {
+    const { store, call } = setup();
+    const preview = await tipsRoute({ store, facts: async () => facts(), now: () => new Date('2026-09-01T10:00:00Z'), timezone: 'UTC', rules: RULES }, { method: 'GET', path: '/api/tips/queue', preview: 'b,a' });
+    expect(preview.body).toMatchObject({ preview: true, tips: [{ id: 'b' }, { id: 'a' }] });
+    expect(store.data.has(TIPS_STATE_KEY)).toBe(false);
+    const missing = await tipsRoute({ store, facts: async () => facts(), now: () => new Date(), timezone: 'UTC', rules: RULES }, { method: 'GET', path: '/api/tips/queue', preview: 'a,nope' });
+    expect(missing.status).toBe(404);
+    await call('PUT', '/api/tips/settings', { enabled: false });
+    expect((await call('GET', '/api/tips/queue')).body).toEqual({ tips: [], enabled: false });
+  });
 });

@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-325 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+326 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -656,6 +656,7 @@ curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "
 | GET | `/api/overview` | Home's whole first read: plugin blocks and glances, and counts of approvals, jobs, missions, reminders, watchers. | yes |
 | GET | `/api/tips` | Every tip and its state. | yes |
 | GET | `/api/tips/current` | Today's tip on Home, if any (picking one is remembered). | yes |
+| GET | `/api/tips/queue` | Home's stack of tips: today's first, then up to four more that are ready (picking the first is remembered). | yes |
 | GET | `/api/tips/settings` | Whether tips are on. | yes |
 | PUT | `/api/tips/settings` | Turn tips on or off. | yes |
 | POST | `/api/tips/seen-page` | Record that a page was opened (tips about it stop). | yes |
@@ -712,6 +713,20 @@ Today's tip on Home, if any (picking one is remembered).
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/current"
+```
+
+#### `GET /api/tips/queue`
+
+Home's stack of tips: today's first, then up to four more that are ready (picking the first is remembered).
+
+- **Auth:** Session or API token.
+- **Query:** `preview?: tip ids, comma-separated  // stack those as they would look, touching nothing`
+- **Answer:** `{ tips: Tip[], enabled: boolean }`
+- **Errors:** 404 no tip by a preview id
+- **Since:** 0.1.0-pre.45
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/queue"
 ```
 
 #### `GET /api/tips/settings`

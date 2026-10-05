@@ -3,6 +3,7 @@
  *
  *   GET  /api/tips                 { tips: [...rows], enabled }   every rule and where it stands (the Tips list)
  *   GET  /api/tips/current         { tip | null, enabled }   today's tip, if any
+ *   GET  /api/tips/queue           { tips: [...up to 5], enabled }   Home's stack: today's tip first, then the others ready
  *   POST /api/tips/:id/dismiss     "Not this again": never again
  *   POST /api/tips/:id/later       ×: not before its cooldown has passed
  *   POST /api/tips/:id/restore     "Bring back": forget a dismissal
@@ -13,7 +14,7 @@
  * State lives in `core.web_settings`: `tips.state` (the engine's), `tips.enabled`
  * (absent is on) and `tips.pages`.
  */
-import { dayIn, dismissTip, laterTip, listTips, pickTip, restoreTip, viewOf, type TipsState } from './engine.js';
+import { dayIn, dismissTip, laterTip, listTips, pickQueue, pickTip, restoreTip, TIP_QUEUE_MAX, viewOf, type TipsState } from './engine.js';
 import { PAGE_NAME, recordPageSeen, type Facts, type SettingsStore } from './facts.js';
 import { TIPS, type TipRule } from './rules.js';
 
@@ -87,6 +88,26 @@ export async function tipsRoute(
     const { tip, state } = pickTip(rules, await deps.facts(), previous, today);
     if (JSON.stringify(state) !== JSON.stringify(previous)) await deps.store.write(TIPS_STATE_KEY, state);
     return { status: 200, body: { tip, enabled: true } };
+  }
+
+  if (path === '/api/tips/queue') {
+    if (method !== 'GET') return { status: 405, body: { error: 'GET only.' } };
+    // `?preview=a,b,c` stacks those rules' cards as they would look, touching no state.
+    const preview = request.preview ?? null;
+    if (preview !== null) {
+      const ids = preview.split(',').map((id) => id.trim()).filter(Boolean);
+      const unknown = ids.filter((id) => !rules.some((r) => r.id === id));
+      if (ids.length === 0 || unknown.length) {
+        return { status: 404, body: { error: `No tip called "${unknown[0] ?? preview}". Known: ${rules.map((r) => r.id).join(', ')}.` } };
+      }
+      const f = await deps.facts();
+      return { status: 200, body: { tips: ids.slice(0, TIP_QUEUE_MAX).map((id) => viewOf(rules.find((r) => r.id === id)!, f)), enabled: true, preview: true } };
+    }
+    if (!(await tipsEnabled(deps.store))) return { status: 200, body: { tips: [], enabled: false } };
+    const previous = await readState(deps.store);
+    const { tips, state } = pickQueue(rules, await deps.facts(), previous, today);
+    if (JSON.stringify(state) !== JSON.stringify(previous)) await deps.store.write(TIPS_STATE_KEY, state);
+    return { status: 200, body: { tips, enabled: true } };
   }
 
   if (path === '/api/tips/seen-page') {

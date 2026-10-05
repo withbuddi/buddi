@@ -2963,6 +2963,65 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
   .needs-card { column-gap: var(--space-2); }
 }
 
+/* Home's tips: a small hand of cards (parts/TipStack). Every card sits in
+   one grid cell, so the hand is as tall as its tallest; the ones behind step
+   down and right by `--space-2` each and shrink a little, their words hidden
+   so only the edges show. The front card follows the pointer while dragged
+   (inline transform) and flies off over `--dur-slow`; the next one settles
+   over `--dur`. Reduced motion: a crossfade, nothing moves. */
+.tip-stack-fold { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--dur) var(--ease), opacity var(--dur) var(--ease); }
+.tip-stack-fold[data-empty='true'] { grid-template-rows: 0fr; opacity: 0; }
+.tip-stack-fold[data-empty='true'] .tip-stack-fold-inner { overflow: hidden; }
+.tip-stack-fold-inner { min-height: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.tip-stack {
+  --step: var(--space-2);
+  display: grid; width: 100%; max-width: var(--tip-stack-max); border-radius: var(--radius-lg);
+  padding-block-end: calc(var(--peek, 0) * var(--step)); padding-inline-end: calc(var(--peek, 0) * var(--step));
+  transition: padding var(--dur) var(--ease);
+  touch-action: pan-y; user-select: none; -webkit-user-select: none;
+}
+.tip-stack[data-depth='1'] { --peek: 1; }
+.tip-stack[data-depth='2'] { --peek: 2; }
+.tip-stack:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.tip-stack-card {
+  --depth: 0;
+  grid-area: 1 / 1; display: grid; min-width: 0; cursor: grab;
+  /* Behind: shrunk toward the bottom-right corner, so that edge shows exactly one step per card. */
+  transform-origin: 100% 100%;
+  transform: translate(calc(var(--depth) * var(--step)), calc(var(--depth) * var(--step))) scale(calc(1 - var(--depth) * 0.025));
+  transition: transform var(--dur) var(--ease), opacity var(--dur) var(--ease);
+  animation: tip-stack-in var(--dur) var(--ease);
+}
+.tip-stack-card > .ui-card { height: 100%; }
+.tip-stack-card[data-depth='1'] { --depth: 1; cursor: default; }
+.tip-stack-card[data-depth='2'], .tip-stack-card[data-depth='3'] { --depth: 2; cursor: default; }
+.tip-stack-card[data-depth='3'] { opacity: 0; }
+.tip-stack-card[data-depth='1'] > .ui-card, .tip-stack-card[data-depth='2'] > .ui-card { box-shadow: var(--shadow-panel); }
+.tip-stack-card:not([data-depth='0']):not([data-depth='leaving']) .needs-card { opacity: 0; }
+.tip-stack-card .needs-card { transition: opacity var(--dur) var(--ease); }
+.tip-stack-card[data-dragging='true'] { cursor: grabbing; }
+/* In front (scale 1, no offset) the origin moves freely: the tilt turns about the bottom middle. */
+.tip-stack-card[data-dragging='true'], .tip-stack-card[data-depth='leaving'] { transform-origin: 50% 100%; }
+.tip-stack-card[data-dragging='true'] > .ui-card,
+.tip-stack-card[data-depth='leaving'] > .ui-card { box-shadow: var(--shadow-pop); }
+.tip-stack-card[data-depth='leaving'] { opacity: 0; pointer-events: none; transition: transform var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1), opacity var(--dur-slow) var(--ease); }
+.tip-stack[data-motion='reduced'] .tip-stack-card { transform: none; animation: none; transition: opacity var(--dur) var(--ease); }
+.tip-stack[data-motion='reduced'] .tip-stack-card[data-depth='leaving'] { transition: opacity var(--dur) var(--ease); }
+.tip-stack[data-motion='reduced'] .tip-stack-card[data-dragging='true'] { transition: none; }
+.tip-stack-nav { display: flex; align-items: center; gap: var(--space-1); max-width: var(--tip-stack-max); color: var(--text-muted); font-size: var(--text-sm); }
+.tip-stack-nav > .ui-btn:first-child { margin-inline-start: calc(-1 * var(--space-2)); }
+.tip-stack-count { margin-inline: auto; font-variant-numeric: tabular-nums; }
+@keyframes tip-stack-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .tip-stack-card, .tip-stack-fold { animation: none; }
+  .tip-stack-card { transform: none; }
+}
+@media (max-width: 720px) {
+  .tip-stack, .tip-stack-nav { max-width: none; }
+  /* Full width: a card flying off leaves by the screen's edge, not past it. */
+  .tip-stack-fold { overflow-x: clip; }
+}
+
 /* "Needs you" as a deck: the front card, and up to two edges behind it. The
    edges are the ground's own pseudo-elements, so there is nothing to draw
    when one card is left. */

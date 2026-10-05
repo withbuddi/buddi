@@ -89,6 +89,31 @@ export function useDecide(
   return { busy, note, failure, decide };
 }
 
+/**
+ * The card's heading: the gateway's `ask` (web/approval-ask.ts), the owner's
+ * words for what is being asked. A gateway older than it sends none; then the
+ * preview's first line, unless that is the dotted id, which never heads a card.
+ */
+export function approvalTitle(action: Pick<ApprovalRow, 'ask' | 'tool' | 'preview'>): string {
+  if (action.ask?.trim()) return action.ask.trim();
+  const first = action.preview.split('\n').map((line) => line.trim()).find(Boolean) ?? '';
+  const head = first.split(' — ')[0]!.trim();
+  if (head && head !== action.tool && !head.startsWith(`${action.tool} `) && !/^[[{"]/.test(head)) return head;
+  return 'An action needs your approval';
+}
+
+/**
+ * The preview without what the heading already says: the lines after the
+ * first when the heading is that line, the registry's reason after " — ",
+ * or all of it when the heading came from elsewhere. Empty when nothing is left.
+ */
+export function approvalBody(preview: string, title: string): string {
+  const text = preview.trim();
+  const plain = title.replace(/…$/, '');
+  if (!plain || !text.toLowerCase().startsWith(plain.toLowerCase()) || title.endsWith('…')) return text;
+  return text.slice(plain.length).replace(/^[:.\s]*(—\s*)?/, '').trim();
+}
+
 export function ApprovalCard({
   action,
   timezone,
@@ -113,16 +138,18 @@ export function ApprovalCard({
   const approve = (scope?: Scope): void =>
     values ? onDecide(action.id, 'approve', scope, values) : onDecide(action.id, 'approve', scope);
   const scoped = Boolean(action.permissionScopes?.length);
+  const title = approvalTitle(action);
+  const body = approvalBody(action.preview, title);
   return (
     <NeedsCard
       kind="approval"
       tone="accent"
       icon="lock"
-      title={<span className="mono">{action.tool}</span>}
+      title={title}
       time={fmtRelative(action.createdAt)}
       from={
         <NeedsFrom face={agents ? <AgentAvatar agents={agents} id={action.agentId} size="sm" /> : undefined}>
-          Asked by {agentName ?? action.agentId} · v{action.toolVersion}
+          Asked by {agentName ?? action.agentId}
         </NeedsFrom>
       }
       lead={
@@ -151,9 +178,9 @@ export function ApprovalCard({
         </>
       }
     >
-      <Code>{action.preview}</Code>
+      {body ? <Code>{body}</Code> : null}
       <p className="ui-card-meta">
-        Expires {fmtTime(action.expiresAt, timezone)} ({fmtRelative(action.expiresAt)}). Policy v{action.policyVersion},
+        <span className="mono">{action.tool}</span> v{action.toolVersion}. Expires {fmtTime(action.expiresAt, timezone)} ({fmtRelative(action.expiresAt)}). Policy v{action.policyVersion},
         args {short(action.argsHash, 12)}
         {action.jobId ? `, job ${short(action.jobId)}` : ''}.
       </p>

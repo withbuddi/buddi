@@ -300,6 +300,7 @@ import { createCatalogueService } from './catalogue-source.js';
 import { catalogueBindingOf } from '../agents/platform.js';
 import { pluginFoldersRoute } from './folders.js';
 import { tipsRoute } from '../tips/route.js';
+import { approvalAsk } from './approval-ask.js';
 import { createWidgets, widgetsRoute } from './widgets.js';
 import { createRequirements, type Requirements } from '../plugins/requires.js';
 import { placesList, placesRoute } from './places.js';
@@ -846,6 +847,11 @@ export function createWebApp(deps: WebServerDeps): Server {
   // A bundle script's run asks every time: its card offers no standing permission (`asksEachTime`).
   const permissionScopes = (tool: string, envelope?: unknown): Record<string, unknown> => deps.registry.lookup(tool)?.reusableApproval && !asksEachTime(envelope)
     ? { permissionScopes: ['conversation', 'always'] } : {};
+  /** What a card adds to an approval row: its scopes, and its heading in the owner's words (approval-ask.ts). */
+  const approvalExtras = (a: { tool: string; envelope?: unknown; preview: string }): Record<string, unknown> => ({
+    ...permissionScopes(a.tool, a.envelope),
+    ask: approvalAsk(a.tool, a.preview, deps.registry.list().find((t) => t.name === a.tool)?.description),
+  });
   writeDeps.resumeInteractive = (action, outcome) => chat?.resumeHost(action, outcome);
   /*
    * What an approved MCP write reaches: the functions the dashboard's own
@@ -2193,8 +2199,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         case '/api/approvals': {
           const approvals = await readApprovals(deps.pool, now, boundedLimit(q.get('limit'), 50));
-          return sendJson(res, 200, { pending: approvals.pending.map(a => ({ ...a, ...permissionScopes(a.tool, a.envelope) })),
-            recent: approvals.recent.map(a => ({ ...a, ...permissionScopes(a.tool, a.envelope) })) });
+          return sendJson(res, 200, { pending: approvals.pending.map(a => ({ ...a, ...approvalExtras(a) })),
+            recent: approvals.recent.map(a => ({ ...a, ...approvalExtras(a) })) });
         }
         case '/api/offers':
           // The roster goes in so the read can lapse an offer whose agent is
@@ -2674,7 +2680,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (approval) {
         const action = await getAction(deps.pool, decodeURIComponent(approval[1] as string));
         if (!action) return sendJson(res, 404, { error: 'no such action' });
-        return sendJson(res, 200, { action: { ...toApprovalView(action), ...permissionScopes(action.tool, action.envelope) } });
+        return sendJson(res, 200, { action: { ...toApprovalView(action), ...approvalExtras(action) } });
       }
 
       /* ---------------- chat ---------------- */

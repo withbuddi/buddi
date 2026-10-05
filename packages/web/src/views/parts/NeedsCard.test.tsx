@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { api, type ApprovalRow } from '../../api';
 import { Button } from '../../ui';
 import { NeedsCard } from './NeedsCard';
-import { ApprovalCard } from './ApprovalCard';
+import { ApprovalCard, approvalBody, approvalTitle } from './ApprovalCard';
 import { AgentOffer } from './AgentOffer';
 
 vi.mock('../../api', async (importOriginal) => {
@@ -80,12 +80,41 @@ describe('NeedsCard', () => {
 describe('the approval on the card', () => {
   it('decides only: no "Not now"; Reject is danger, Approve the one accent, last', () => {
     render(<ApprovalCard action={ACTION} timezone="UTC" busy={false} onDecide={vi.fn()} agentName="Concierge" />);
-    const article = screen.getByRole('article', { name: 'mail.send' });
+    const article = screen.getByRole('article', { name: 'To: bank' });
     expect(within(article).queryByRole('button', { name: 'Not now' })).not.toBeInTheDocument();
     expect(buttonsOf(article)).toEqual([['Show envelope', 'ghost'], ['Reject', 'danger'], ['Approve', 'accent']]);
     expect(article).toHaveTextContent('Asked by Concierge');
     fireEvent.click(within(article).getByRole('button', { name: 'Show envelope' }));
     expect(within(article).getByRole('button', { name: 'Hide envelope' })).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
+describe('the approval\'s heading', () => {
+  it('is the ask in the owner\'s words; the dotted id and the rest of the preview stay below', () => {
+    const action = { ...ACTION, ask: 'Send an email to the bank', preview: 'Send an email to the bank\nSubject: Card stolen' };
+    render(<ApprovalCard action={action} timezone="UTC" busy={false} onDecide={vi.fn()} agentName="Concierge" />);
+    const article = screen.getByRole('article', { name: 'Send an email to the bank' });
+    const heading = within(article).getByRole('heading', { level: 3 });
+    expect(heading).not.toHaveTextContent('mail.send');
+    expect(heading.querySelector('.mono')).toBeNull();
+    // The preview's other lines are the body; the id is on the meta line.
+    expect(article.querySelector('.ui-code, pre')).toHaveTextContent('Subject: Card stolen');
+    expect(article.querySelector('.ui-code, pre')).not.toHaveTextContent('Send an email to the bank');
+    expect(article.querySelector('.ui-card-meta .mono')).toHaveTextContent('mail.send');
+  });
+
+  it('falls back to the preview\'s first line, never the dotted id', () => {
+    expect(approvalTitle({ tool: 'mail.send', preview: 'Send to Ana — a new address.' })).toBe('Send to Ana');
+    expect(approvalTitle({ tool: 'mail.send', preview: 'mail.send {"to":"a"}' })).toBe('An action needs your approval');
+    expect(approvalTitle({ tool: 'mail.send', preview: '{"to":"a"}' })).toBe('An action needs your approval');
+    expect(approvalTitle({ tool: 'mail.send', preview: 'x', ask: '  Move the meeting  ' })).toBe('Move the meeting');
+  });
+
+  it('leaves out of the body only what the heading says', () => {
+    expect(approvalBody('Add to Work\n"Lunch"', 'Add to Work')).toBe('"Lunch"');
+    expect(approvalBody('Double one number. — npm reaches the network.', 'Double one number.')).toBe('npm reaches the network.');
+    expect(approvalBody('Send it', 'Send it')).toBe('');
+    expect(approvalBody('mail.send {"to":"a"}', 'Send an email')).toBe('mail.send {"to":"a"}');
   });
 });
 

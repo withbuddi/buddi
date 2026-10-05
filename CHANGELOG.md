@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Fixed
 
 - Mail: newsletters no longer show codes like `&#8202;`, `&zwnj;` or `&#38;` in their text, previews and search. buddi now reads an HTML-only message the way a browser would: every character comes out as itself, styles and hidden parts are left out, and the invisible padding newsletters put in their preview line is dropped. Mail that arrived before is cleaned too, quietly in the background after buddi starts.
+- Approvals: the card's heading now says what is being asked, in plain words ("Add to Work (Google)", "Generate one square image…"), instead of the tool's internal name like `mail.send`. The internal name is still on the card's small print and in the envelope.
 
 ### Added
 
@@ -15,6 +16,8 @@ What changes in buddi from one release to the next, newest first.
 ### Changed
 
 - Home: everything under "Needs you" now looks the same — one white card with a small coloured mark, the ask, who it is from, and the buttons at the bottom right. Approvals, questions, requests, sign-ins, agents to set up, the restore, the tip, the backup passphrase, the update and watcher errors all use it, and the way to put something off is always a "Not now" button (no more ×). Urgent alerts, failed jobs and proposals are no longer repeated as coloured bars: they stay as links in the line under the greeting.
+- Home: tips are now a small stack of cards you can swipe. Slide the front one left for "Not now", right for "Not this again", or use the arrow keys or the two buttons under it; the button on the card still does what the tip says. Up to two more tips peek out behind it, with "1 of 3" underneath, and the stack folds away when the last one goes.
+- Home: the tip, the backup passphrase, the update notice and watcher or source errors now sit inside "Needs you" instead of above it. The order is: tips, approvals, questions, requests, passphrase, update, errors, sign-ins, agents to set up, then the restore.
 - Home: the mail card now says what is actually missing — "Mail arrives, but nobody sorts it as it lands: no labels, no ‘needs a reply’, no drafts waiting. buddi and your other agents still read mail when you ask." — and it no longer shows at all when one of your agents already has the mail role.
 
 ## 0.1.0-pre.44 — 2026-10-05

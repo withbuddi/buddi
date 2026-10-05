@@ -8,7 +8,9 @@
  *
  * The top is a glance: the date, a large greeting and the counts that need
  * the owner (each a link to its list) on the left; the Blob on the right. The
- * front desk's slim composer sits under it; then Needs you, then the owner's
+ * front desk's slim composer sits under it; then Needs you (the tips' stack
+ * first, then approvals, questions, requests, the passphrase, the update,
+ * errors, sign-ins, agents to set up, the restore), then the owner's
  * widgets (a glance card is one now); the install line, when the browser
  * offers one, at the foot.
  */
@@ -49,11 +51,11 @@ import { HomeSuggestions, teamIsNew } from './parts/CatalogueSuggest';
 import { WakesAfterRestart, type OnboardingPhase } from './parts/WakesAfterRestart';
 import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
-import { TipCard, previewTipOf } from './parts/TipCard';
+import { TipStack, previewTipOf, useTipQueue } from './parts/TipStack';
 import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
 import { HomeGlances, useGlanceHiding } from './parts/HomeGlances';
 import { BirthdayCard } from './parts/BirthdayCard';
-import { PassphraseCard } from './parts/PassphraseCard';
+import { PassphraseCard, usePassphraseNotice } from './parts/PassphraseCard';
 import { HomeWidgets, placedIds, useWidgets } from './parts/HomeWidgets';
 import { NeedsCard, NeedsFrom } from './parts/NeedsCard';
 import { NeedsYouDeck, RequestCard, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
@@ -149,7 +151,13 @@ export function Home({
   const recovering = (data?.needsYou?.recovery ?? 0) > 0;
   // What Home draws as a card. Urgent alerts, failed jobs and proposals are
   // counted on the glance's line, each a link to its own list, not here.
-  const needs = pending.length + questions.length + toSetUp.length + told.length + signIns.length + (recovering ? 1 : 0);
+  // The tips' stack and the backup passphrase read their own; Home holds the reads so the section knows they are there.
+  const tips = useTips();
+  const tipQueue = useTipQueue(previewTipOf(hash));
+  const passphrase = usePassphraseNotice();
+  const updateShown = Boolean(update && update.updateAvailable && !update.checkout && update.latest && !closed.is('update', update.latest));
+  const needs = pending.length + questions.length + toSetUp.length + told.length + signIns.length + (recovering ? 1 : 0)
+    + (tipQueue.shown && !tips.open ? 1 : 0) + (passphrase.shown ? 1 : 0) + (updateShown ? 1 : 0) + sentinelErrors.length + sourceErrors.length;
 
   // The footer's approvals land here: Home, scrolled to "Needs you".
   useEffect(() => {
@@ -163,7 +171,6 @@ export function Home({
   // Six, not eight and not all of them: a row of chips is read at a glance or
   // not at all, and the rest are one click away on a page built to hold them.
   const onOffer = allOffers.slice(0, HOME_OFFERS);
-  const tips = useTips();
   const moreOffers = allOffers.length - onOffer.length;
   const hiding = useGlanceHiding(() => overview.reload());
   // A glance whose id is a widget on Home stays off the date line: the widget says it.
@@ -210,54 +217,6 @@ export function Home({
       {frontDesk ? <HomeAsk key={frontDesk.id} agent={frontDesk} navigate={navigate} /> : null}
       {/* Every tip as a card, while the lightbulb is on. */}
       <TipsSection tips={tips} navigate={navigate} />
-      {/* One quiet tip a day, when something in buddi has gone unused. */}
-      <TipCard navigate={navigate} preview={previewTipOf(hash)} hidden={tips.open} />
-      {/* After the first backup: the six words, until "I saved it". */}
-      <PassphraseCard />
-
-      {update && update.updateAvailable && !update.checkout && update.latest && !closed.is('update', update.latest) ? (
-        <NeedsCard
-          kind="update"
-          tone="accent"
-          icon="download"
-          title={<>A newer buddi is ready: <span className="mono">{update.latest}</span></>}
-          from={`buddi · you have ${update.current}`}
-          dismiss={{ onClick: () => closed.close('update', update.latest!), hint: 'Tell me at the next version' }}
-          actions={<ButtonLink variant="accent" href={settingsRoute('system')} onClick={go(settingsRoute('system'))}>Upgrade from Settings</ButtonLink>}
-        />
-      ) : null}
-
-      {/* A watcher or a source that failed says so here, closable until its
-          error changes: there is no step on Home that fixes it, so it is not
-          in Needs you. */}
-      {sentinelErrors.map((err) => (
-        <NeedsCard
-          key={err.sentinelId}
-          kind="watcher-error"
-          tone="warning"
-          icon="alert"
-          title={`Watcher ${err.sentinelId} failed`}
-          from="buddi · your watchers"
-          dismiss={{ onClick: () => closed.close(`watcher-error:${err.sentinelId}`, err.error), hint: 'Hide until the error changes' }}
-          actions={<ButtonLink href={settingsRoute('watchers')} onClick={go(settingsRoute('watchers'))}>Open Watchers</ButtonLink>}
-        >
-          <p>{err.error}</p>
-        </NeedsCard>
-      ))}
-      {sourceErrors.map((source) => (
-        <NeedsCard
-          key={source.sourceId}
-          kind="source-error"
-          tone="warning"
-          icon="alert"
-          title={`Source ${source.sourceId} cannot be read`}
-          from="buddi · your sources"
-          dismiss={{ onClick: () => closed.close(`source-error:${source.sourceId}`, source.lastError!), hint: 'Hide until the error changes' }}
-        >
-          <p>{source.lastError}</p>
-        </NeedsCard>
-      ))}
-
       <ErrorBanner message={overview.error ?? approvals.error ?? failure} />
       {note ? <p className="home-note muted" role="status">{note}</p> : null}
 
@@ -280,6 +239,8 @@ export function Home({
               glance's counts above, each a link to its list. A paused queue
               is the shell's banner. */}
           <Stack>
+            {/* The tips first: a small hand of cards, slid away or acted on. */}
+            <TipStack queue={tipQueue} navigate={navigate} hidden={tips.open} />
             {pending.map((action) => (
               <ApprovalCard key={action.id} action={action} timezone={timezone} busy={busy === action.id} onDecide={decide} agentName={nameOf(action.agentId)} agents={agents} />
             ))}
@@ -311,6 +272,49 @@ export function Home({
             {told.length > 0 && needsView === 'deck' ? (
               <NeedsYouDeck rows={unseen} agents={agents} label={fromOf} onOpen={openRow} onDone={seeRow} />
             ) : null}
+            {/* After the first backup: the six words, until "I saved it". */}
+            <PassphraseCard notice={passphrase} />
+            {updateShown && update ? (
+              <NeedsCard
+                kind="update"
+                tone="accent"
+                icon="download"
+                title={<>A newer buddi is ready: <span className="mono">{update.latest}</span></>}
+                from={`buddi · you have ${update.current}`}
+                dismiss={{ onClick: () => closed.close('update', update.latest!), hint: 'Tell me at the next version' }}
+                actions={<ButtonLink variant="accent" href={settingsRoute('system')} onClick={go(settingsRoute('system'))}>Upgrade from Settings</ButtonLink>}
+              />
+            ) : null}
+
+            {/* A watcher or a source that failed, closable until its error changes. */}
+            {sentinelErrors.map((err) => (
+              <NeedsCard
+                key={err.sentinelId}
+                kind="watcher-error"
+                tone="warning"
+                icon="alert"
+                title={`Watcher ${err.sentinelId} failed`}
+                from="buddi · your watchers"
+                dismiss={{ onClick: () => closed.close(`watcher-error:${err.sentinelId}`, err.error), hint: 'Hide until the error changes' }}
+                actions={<ButtonLink href={settingsRoute('watchers')} onClick={go(settingsRoute('watchers'))}>Open Watchers</ButtonLink>}
+              >
+                <p>{err.error}</p>
+              </NeedsCard>
+            ))}
+            {sourceErrors.map((source) => (
+              <NeedsCard
+                key={source.sourceId}
+                kind="source-error"
+                tone="warning"
+                icon="alert"
+                title={`Source ${source.sourceId} cannot be read`}
+                from="buddi · your sources"
+                dismiss={{ onClick: () => closed.close(`source-error:${source.sourceId}`, source.lastError!), hint: 'Hide until the error changes' }}
+              >
+                <p>{source.lastError}</p>
+              </NeedsCard>
+            ))}
+
             {signIns.map((signal) => (
               <NeedsCard
                 key={signal.id}

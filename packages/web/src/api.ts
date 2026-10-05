@@ -606,6 +606,8 @@ export interface OwnerChoiceRow {
 
 export interface ApprovalRow {
   permissionScopes?: ('conversation' | 'always')[];
+  /** The card's heading in the owner's words, from the preview or the tool's description; never the dotted id. */
+  ask?: string;
   /** Controls to draw above the buttons. Empty for almost every action. */
   choices?: OwnerChoiceRow[];
   /** What the owner picked, once decided. */
@@ -2889,6 +2891,8 @@ export const api = {
   /* ---- tips on Home (docs/dashboard.md, Home) ---- */
   /** Today's tip, or null: at most one a day, none while tips are off. */
   currentTip: (preview?: string) => get<{ tip: TipView | null; enabled: boolean; preview?: boolean }>(preview ? `/tips/current?preview=${encodeURIComponent(preview)}` : '/tips/current'),
+  /** Home's stack: today's tip first, then up to four more that are ready; none while tips are off. */
+  tipQueue: (preview?: string) => get<{ tips: TipView[]; enabled: boolean; preview?: boolean }>(preview ? `/tips/queue?preview=${encodeURIComponent(preview)}` : '/tips/queue'),
   /** Every tip and where it stands; reads only, and reads while tips are off too. */
   tips: () => get<{ tips: TipListRow[]; enabled: boolean }>('/tips'),
   /** "Bring back": forget a dismissal. */

@@ -181,21 +181,24 @@ needs me, what is my team up to, what is coming.
 **Tips.** When something in buddi has gone unused for a while, a second
 agent, a group, a mission, voice, the browser, a mailbox nobody reads, or no
 recommended plugin at all (finance, image, speech, weather, calendar), which
-points at Browse, Home may show one quiet card under the composer: one sentence and one action.
+points at Browse, Home shows it at the top of "Needs you": one sentence and one action.
 "Lock buddi with a PIN" comes while no PIN is set, once there is something to
 lock: a second device signed in (a session from another address than the
 first), a mailbox or money connected, or a week of use; it opens Settings →
 Lock screen, and its × silences it for good.
-At most one tip a day, never during first run, and never about a plugin that
-is not installed. "Not this again" removes that tip for good; the × puts it off
-for a week. A tip whose reason goes away disappears on its own. Settings →
+Tips come as a small stack of cards: today's in front, up to four more that
+are ready behind it (two peek out), with "1 of N" under it. Slide the front
+card left (or ← , or "Not now") to put it off for a week, right (→, "Not this
+again") to remove it for good; the button on the card, or Enter, goes where
+it points. Never during first run, and never about a plugin that is not
+installed. A tip whose reason goes away disappears on its own. Settings →
 Notifications → Tips on Home turns them off. The rules are data, one entry
 each in `packages/gateway/src/tips/rules.ts`; what they decide on is read from
 the installation, plus the pages the dashboard reports it opened, once a day
 each. The lightbulb left of the Blob opens a Tips section under the greeting:
 one card per tip with where it stands (due today, waiting, not needed now,
 dismissed with Bring back, shown on a day), and the same Tips on Home switch;
-while it is open the day's tip card is hidden, and the browser remembers it
+while it is open the stack is hidden, and the browser remembers it
 open. A dot marks one due today while tips are off.
 
 Try it: approve a waiting card from Needs you without opening the chat.

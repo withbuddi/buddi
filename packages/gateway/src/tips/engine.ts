@@ -122,6 +122,45 @@ export function pickTip(
   return { tip: viewOf(chosen.rule, facts), state };
 }
 
+/** How many tips Home's stack holds at most. */
+export const TIP_QUEUE_MAX = 5;
+
+/**
+ * Home's stack: today's tip in front, then the others that are ready, in the
+ * engine's order (held longest, then first in `TIPS`), at most `max`.
+ *
+ * Only the front one is remembered as shown (`pickTip`'s state); the cards
+ * behind it are a peek, and each is shown or put off when the owner swipes to
+ * it and acts (`later`/`dismiss` per tip). One put off or dismissed today
+ * leaves the stack, and the rest move up.
+ */
+export function pickQueue(
+  rules: readonly TipRule[],
+  facts: Facts,
+  previous: TipsState,
+  today: string,
+  max = TIP_QUEUE_MAX,
+): { tips: TipView[]; state: TipsState } {
+  const { tip, state } = pickTip(rules, facts, previous, today);
+  if (facts.firstRun || max <= 0) return { tips: [], state };
+  const tips: TipView[] = tip ? [tip] : [];
+  const ready = rules
+    .map((rule, index) => ({ rule, index, entry: state[rule.id] }))
+    .filter(({ rule, entry }) => {
+      if (rule.id === tip?.id || !entry?.firstHeld || entry.dismissed || !applies(rule, facts)) return false;
+      if (entry.laterAt === today || entry.shownAt === today) return false;
+      if (daysBetween(entry.firstHeld, today) < rule.holdsForDays) return false;
+      const last = [entry.shownAt, entry.laterAt].filter((d): d is string => !!d).sort().pop();
+      return !last || daysBetween(last, today) >= rule.cooldownDays;
+    })
+    .sort((a, b) => a.entry!.firstHeld!.localeCompare(b.entry!.firstHeld!) || a.index - b.index);
+  for (const { rule } of ready) {
+    if (tips.length >= max) break;
+    tips.push(viewOf(rule, facts));
+  }
+  return { tips, state };
+}
+
 /** "Not this again": never again, until the Tips list brings it back. */
 export function dismissTip(previous: TipsState, id: string, today?: string): TipsState {
   return { ...previous, [id]: { ...previous[id], dismissed: true, ...(today ? { dismissedAt: today } : {}) } };

@@ -187,9 +187,11 @@ describe('the card an agent’s change raises', () => {
     const onDecide = vi.fn();
     const preview = 'Change “Team lunch” on Work (iCloud)\nWhen:  Fri 9 Oct, 12:30–13:30  →  Fri 9 Oct, 13:00–14:00\nWhere: Café Lou  →  (none)';
     render(<ApprovalCard action={row('calendar.update_event', preview)} timezone="America/New_York" busy={false} onDecide={onDecide} agentName="Tempo" />);
+    // The preview's first line is the ask; the rest is the body; the tool id is small print.
+    expect(screen.getByRole('heading', { name: 'Change “Team lunch” on Work (iCloud)' })).toBeInTheDocument();
     expect(screen.getByText('calendar.update_event')).toBeInTheDocument();
-    const block = screen.getByText(/Change “Team lunch” on Work \(iCloud\)/);
-    expect(block.textContent).toBe(preview);
+    const block = document.querySelector('pre.ui-code')!;
+    expect(block.textContent).toBe(preview.split('\n').slice(1).join('\n'));
     expect(screen.getByText(/Asked by Tempo/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(onDecide).toHaveBeenCalledWith('act-9', 'approve', undefined);

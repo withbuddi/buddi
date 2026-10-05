@@ -16,16 +16,29 @@ import { NeedsCard } from './NeedsCard';
 /** What the card says above the words. */
 export const PASSPHRASE_CARD_LINE = 'Write these down; they open your backups and only you have them.';
 
-export function PassphraseCard(): JSX.Element | null {
+export interface PassphraseNotice {
+  data: Awaited<ReturnType<typeof api.passphraseNotice>> | undefined;
+  /** Whether the card is on Home: Home's "Needs you" counts it. */
+  shown: boolean;
+  /** "I saved it" went through. */
+  gone: () => void;
+}
+
+/** The card's read, held by Home so "Needs you" knows whether it is there. */
+export function usePassphraseNotice(): PassphraseNotice {
   const notice = useAsync(() => api.passphraseNotice(), []);
+  const [gone, setGone] = useState(false);
+  return { data: notice.data, shown: !gone && Boolean(notice.data?.show), gone: () => setGone(true) };
+}
+
+export function PassphraseCard({ notice }: { notice: PassphraseNotice }): JSX.Element | null {
   const [copied, setCopied] = useState<'done' | 'failed' | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const [gone, setGone] = useState(false);
   const [pin, setPin] = useState('');
   const [revealed, setRevealed] = useState<string | null>(null);
   const data = notice.data;
-  if (gone || !data || !data.show) return null;
+  if (!notice.shown || !data || !data.show) return null;
   const phrase = 'passphrase' in data ? data.passphrase : revealed;
   const copy = (): void => {
     if (phrase === null) return;
@@ -45,7 +58,7 @@ export function PassphraseCard(): JSX.Element | null {
     setFailed(null);
     api
       .acknowledgePassphrase()
-      .then(() => setGone(true))
+      .then(() => notice.gone())
       .catch((error: unknown) => setFailed(error instanceof ApiError ? error.message : String(error)))
       .finally(() => setBusy(false));
   };
