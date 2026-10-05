@@ -7,8 +7,8 @@
  * that used to be three paragraphs per card sit under "Details" where they
  * can be read once.
  */
-import { useEffect, useRef, useState } from 'react';
-import { OLLAMA_CLOUD_MODEL, api, keyRefused, type AccountRateLimit, type MlxhProbe, type ProviderAccount, type SaveProviderAccount } from '../api';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { OLLAMA_CLOUD_MODEL, api, keyRefused, type AccountRateLimit, type AccountTest, type MlxhProbe, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
 import { GEMINI_FALLBACK_MODEL, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
@@ -222,7 +222,7 @@ function CopyId({ id }: { id: string }): JSX.Element {
  * action: a daily quota says its size and when it resets; a short burst says
  * what buddi does about it and offers nothing.
  */
-function LimitNotice({ account: a, provider }: { account: ProviderAccount; provider: string }): JSX.Element | null {
+function LimitNotice({ account: a, provider, children }: { account: ProviderAccount; provider: string; children?: ReactNode }): JSX.Element | null {
   const limit = standingLimit(a);
   if (!limit) return null;
   const who = limit.provider ?? provider;
@@ -245,12 +245,49 @@ function LimitNotice({ account: a, provider }: { account: ProviderAccount; provi
         action={agents.length > 0 ? <ButtonLink size="sm" href={agents.length === 1 ? agentRoute(agents[0]!, 'setup', 'brain') : AGENTS_ROUTE}>{agents.length === 1 ? `Change ${agents[0]}'s account` : 'Change their accounts'}</ButtonLink> : undefined}
       >
         <p>It resets {/^tomorrow/.test(when) ? when : `at ${when}`}. Until then buddi doesn't send this account's requests to {who}, so {agents.length ? `${them}'s runs stop with this note` : 'a run on it stops with this note'} instead of failing again and again. To keep going {plan ? 'before then' : 'today'}, {agents.length ? `give ${them} another account` : 'use another account'}{billing}.</p>
+        {children}
       </Notice>
     );
   }
   return (
     <Notice tone="warning" title={`${who} asked buddi to slow down`}>
       <p>It said to wait until {when}. A run that meets this waits and tries again — up to a minute during a conversation, longer for work in the background.</p>
+      {children}
+    </Notice>
+  );
+}
+
+/** The engineer's half of a failed test: HTTP code, retry time, the provider's words. Never the sentence. */
+function TestDetails({ test: t }: { test: AccountTest }): JSX.Element | null {
+  if (t.state === 'connected') return null;
+  return (
+    <Details summary="Details">
+      <KV items={[
+        ...(t.httpStatus ? [{ label: 'HTTP', value: <span className="mono">{t.httpStatus}</span> }] : []),
+        { label: 'Retry after', value: t.retryAt ? new Date(t.retryAt).toLocaleString() : 'not given' },
+        ...(t.detail ? [{ label: 'Provider said', value: <span className="mono">{t.detail}</span> }] : []),
+        { label: 'Tested', value: new Date(t.checkedAt).toLocaleString() },
+      ]} />
+    </Details>
+  );
+}
+
+/**
+ * One notice per account. A standing limit and a test that met it are the
+ * same news, said once; any other test result replaces the limit, because a
+ * refused key matters before a limit does.
+ */
+function AccountNotice({ account: a, provider }: { account: ProviderAccount; provider: string }): JSX.Element | null {
+  const t = a.test;
+  const limit = standingLimit(a);
+  if (limit && (!t || ['rate-limited', 'quota-exhausted', 'connected'].includes(t.state))) {
+    return <LimitNotice account={a} provider={provider}>{t && <TestDetails test={t} />}</LimitNotice>;
+  }
+  if (!t) return null;
+  return (
+    <Notice role="status" tone={testTone(t.state)}>
+      <p>{t.message}</p>
+      <TestDetails test={t} />
     </Notice>
   );
 }
@@ -292,7 +329,6 @@ function AccountDetail({ account: a, provider, busy, run, anthropicOAuthEnabled 
           { label: 'ID', value: <CopyId id={a.id} /> },
         ]}
       />
-      <LimitNotice account={a} provider={provider} />
       {a.removalPending && <Notice tone="warning">Removal is pending. Unlock the vault, then retry Remove account.</Notice>}
       {a.reconnectRequired && <Notice tone="warning">Token refresh did not finish. Reconnect this {a.kind === 'codex' ? 'ChatGPT' : 'Claude'} account.</Notice>}
       {a.auth === 'anthropic-oauth' && <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} />}
@@ -301,17 +337,10 @@ function AccountDetail({ account: a, provider, busy, run, anthropicOAuthEnabled 
       <Toolbar>
         <Button disabled={busy || a.removalPending} onClick={() => setEditing(true)}>Edit account</Button>
         <Button disabled={busy || a.removalPending} onClick={() => void run(() => api.saveProviderAccount({ ...accountSettings(a), enabled: !a.enabled }), a.enabled ? 'Account disabled. Subsequent model calls will stop; already-sent requests cannot be recalled.' : 'Account enabled.')}>{a.enabled ? 'Disable' : 'Enable'}</Button>
-        {a.kind !== 'codex' && <Button disabled={busy || !a.enabled || !a.configured} onClick={() => void run(() => api.testProviderAccount(a.id), 'Connection test finished.')}>Test connection</Button>}
+        {a.kind !== 'codex' && <Button disabled={busy || !a.enabled || !a.configured} onClick={() => void run(async () => { await api.testProviderAccount(a.id); return { warning: '' }; }, '')}>Test connection</Button>}
         <Button variant="danger" disabled={busy || a.assignedAgents.length > 0} title={a.assignedAgents.length ? 'Reassign its agents before removing this account' : undefined} onClick={() => setRemoving(true)}>Remove account</Button>
       </Toolbar>
-      {a.test && <>
-        <Notice role="status" tone={testTone(a.test.state)}>
-          <p>{a.test.message}</p>
-          {a.test.retryAt ? <p>Provider suggested retry time: {new Date(a.test.retryAt).toLocaleString()}. This is retry advice, not a guaranteed quota reset.</p>
-            : ['rate-limited', 'quota-exhausted'].includes(a.test.state) && <p>The provider did not supply a usable Retry-After time. Reset time is unknown.</p>}
-        </Notice>
-        <p className="muted">Tested at {new Date(a.test.checkedAt).toLocaleString()}{a.test.httpStatus ? ` · HTTP ${a.test.httpStatus}` : ''}. This is not a quota reset or subscription renewal date.</p>
-      </>}
+      <AccountNotice account={a} provider={provider} />
       {editing && (
         <Sheet title={`Edit ${a.label}`} onClose={() => setEditing(false)}>
           <AccountForm account={a} busy={busy} run={run} onDone={() => setEditing(false)} />
@@ -333,7 +362,7 @@ function AccountDetail({ account: a, provider, busy, run, anthropicOAuthEnabled 
               <p>After connecting, assign this account to an agent and send a test message. Model turns use your subscription allowance.</p>
             </>
           ) : (
-            <p>Testing sends a small fixed prompt and may incur a charge. No conversation or files are sent. Configured does not mean verified.</p>
+            <p>Test connection asks the default model to reply with the single word “ready” (at most five tokens, no tools) and may incur a small charge. No conversation or files are sent. Configured does not mean verified.</p>
           )}
           {a.auth === 'device-key' && <p>Ollama Cloud with a device key: buddi made a key pair and keeps it in the vault; ollama.com only ever saw the public half and this computer’s name. Each request to ollama.com is signed with the key, and nothing else is sent with it. Disconnect asks ollama.com to forget the device and removes the key from buddi either way.</p>}
           {a.auth === 'anthropic-oauth' && <p>Claude subscription sign-in. Tokens remain in Buddi’s vault and refresh before use. Uses your plan’s monthly Agent SDK credits; after them, an API key. Remaining credits are unknown here.</p>}
@@ -652,7 +681,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           // One small call before anything else: a service may list its
           // models without a key (Ollama Cloud does), so a list proves nothing.
           const verdict = await api.testProviderAccount(created.id);
-          if (verdict.state === 'connected') return created;
+          if (verdict.state === 'connected') return { ...created, warning: `Account saved. ${verdict.message}` };
           if (keyRefused(verdict)) {
             // Nothing left behind, or every retry adds one more copy.
             const id = created.id;
@@ -671,7 +700,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
               await api.saveProviderAccount({ ...accountSettings(row), defaultModel: flash });
               const again = await api.testProviderAccount(created.id);
               if (again.state === 'connected') {
-                return { ...created, warning: `Account saved. Google's free tier has no Pro allowance, so it starts on ${flash}; turn on billing at Google to use Pro.` };
+                return { ...created, warning: `Account saved on ${flash}. Your Google AI plan covers the Gemini app, not this key. The key’s Google Cloud project has no billing, so Pro models aren’t included; enable billing on that project at aistudio.google.com to use Pro.` };
               }
             }
           }

@@ -10,7 +10,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentCatalog } from '@buddi/core';
-import { ProviderAccounts, legacyAccountsToSeed } from './provider-accounts.js';
+import { ProviderAccounts, legacyAccountsToSeed, readyAnswer } from './provider-accounts.js';
 
 /** A client that answers every read with no rows and records every write. */
 function recordingPool() {
@@ -79,5 +79,17 @@ describe('legacy accounts are named after variables, so an unset variable is not
     });
     await accounts.initialize();
     expect(seeded()).toEqual(['legacy-openai-api']);
+  });
+});
+
+describe('the ready sentence', () => {
+  const answer = (text: string) => ({ content: text ? [{ type: 'text' as const, text }] : [], stopReason: 'end_turn' as const, usage: { input: 15, output: 2, cacheRead: 3 }, model: 'm' });
+  it('names the model, the reply, the time and the tokens, and who pays when buddi knows', () => {
+    expect(readyAnswer('claude-sonnet-5', answer('ready'), 1_412, 'key').message).toBe('Asked claude-sonnet-5 to say ready → it said ‘ready’ in 1.4 s · about 20 tokens, billed to this key.');
+    expect(readyAnswer('claude-sonnet-5', answer(' Ready. '), 12_600, 'plan').message).toBe('Asked claude-sonnet-5 to say ready → it said ‘Ready.’ in 13 s · about 20 tokens, on your plan.');
+    expect(readyAnswer('qwen3', answer('ready'), 900, null).message).toBe('Asked qwen3 to say ready → it said ‘ready’ in 0.9 s · about 20 tokens.');
+  });
+  it('still reads as working when a thinking model spends its five tokens before a word', () => {
+    expect(readyAnswer('gpt-5', answer(''), 2_000, 'key')).toMatchObject({ state: 'connected', reply: '', message: 'Asked gpt-5 to say ready → it answered in 2.0 s, with no words inside the five-token limit · about 20 tokens, billed to this key.' });
   });
 });

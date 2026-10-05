@@ -24,7 +24,7 @@ it('tells a free Google AI key on a Pro model to start on Flash, without echoing
   const body = 'Quota exceeded for metric: generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro';
   const result = providerDiagnostic({ status: 429, type: 'http_error', message: body }, { provider: 'Google', model: 'gemini-3.1-pro', gemini: true });
   expect(result).toMatchObject({ state: 'rate-limited', httpStatus: 429 });
-  expect(result.message).toBe('Google says this key has no allowance for gemini-3.1-pro. A free Google AI key does not include Pro models: start with a Flash model, or turn on billing at aistudio.google.com.');
+  expect(result.message).toBe('Google says this key has no allowance for gemini-3.1-pro. Your Google AI plan covers the Gemini app, not this key. The key’s Google Cloud project has no billing, so Pro models aren’t included: pick a Flash model, or enable billing on that project at aistudio.google.com.');
   expect(result.message).not.toContain('generate_content');
   // Flash on the same key is an ordinary limit.
   expect(providerDiagnostic({ status: 429, message: body }, { provider: 'Google', model: 'gemini-3.8-flash', gemini: true }).message).toMatch(/^Google says this key has reached its limit for gemini-3.8-flash/);

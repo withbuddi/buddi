@@ -14,6 +14,12 @@ export interface DiagnosticContext {
   gemini?: boolean | undefined;
 }
 
+/**
+ * Why a Gemini key with a paid Google AI plan still has no Pro: the plan pays
+ * for the Gemini app, the key bills its own Cloud project.
+ */
+export const GEMINI_PRO_ADVICE = 'Your Google AI plan covers the Gemini app, not this key. The key’s Google Cloud project has no billing, so Pro models aren’t included: pick a Flash model, or enable billing on that project at aistudio.google.com.';
+
 /** A Pro model id, as Google names them: `gemini-3.1-pro`, `gemini-2.5-pro-preview`. */
 const PRO = /(^|[-/])pro($|-)/;
 
@@ -38,7 +44,7 @@ export function providerDiagnostic(error: unknown, context: DiagnosticContext = 
   else if (status === 429 && value.type === 'insufficient_quota') {
     state = 'quota-exhausted'; message = `${Who} says this account is out of credit. Add credit or raise its spending limit, then try again.`;
   } else if (status === 429 && context.gemini && model && PRO.test(model) && (body === '' || /quota|limit/i.test(body))) {
-    state = 'rate-limited'; message = `Google says this key has no allowance for ${model}. A free Google AI key does not include Pro models: start with a Flash model, or turn on billing at aistudio.google.com.`;
+    state = 'rate-limited'; message = `Google says this key has no allowance for ${model}. ${GEMINI_PRO_ADVICE}`;
   } else if (status === 429 && dailyLimit(value.limit)) {
     const limit = value.limit as { limit?: unknown; freeTier?: unknown; unit?: unknown };
     const size = typeof limit.limit === 'number' ? ` (${limit.limit} ${limit.unit === 'tokens' ? 'tokens' : 'requests'} a day${limit.freeTier === true ? ' on the free tier' : ''})` : '';

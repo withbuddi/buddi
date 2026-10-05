@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   GEMINI_BASE_URL, GEMINI_KEY_URL, MLXH_DEFAULT_MAX_PROMPT_TOKENS, OLLAMA_CLOUD_ACCOUNT_URL, isMlxhAccount, accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
-  putOwnerSecret, registerSecretDestination, resolveProviderAccount, useOwnerSecret, vaultState,
+  putOwnerSecret, registerSecretDestination, scrubText, scrubValueFrom, resolveProviderAccount, useOwnerSecret, vaultState,
   type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
-import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, readCodexTokens, type AccountModels, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
+import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, readCodexTokens, type AccountModels, type CompletionResponse, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type DiagnosticContext, type ProviderDiagnostic } from './provider-diagnostics.js';
@@ -38,7 +38,22 @@ function reportedWindow(map: Record<string, unknown> | null | undefined, model: 
 }
 
 type Binding = { agentId: string; accountId: string; model: string };
-type TestResult = ProviderDiagnostic & { checkedAt: string };
+/**
+ * One connection test: the sentence the owner reads, and what it was made of.
+ * `detail` is the provider's own words on a failure, scrubbed of the key and
+ * every stored secret — read only under Details, never as the sentence.
+ */
+type TestResult = ProviderDiagnostic & {
+  checkedAt: string;
+  model?: string;
+  reply?: string;
+  elapsedMs?: number;
+  tokens?: number;
+  billing?: 'key' | 'plan' | null;
+  detail?: string | null;
+};
+/** The one prompt a connection test sends: short, fixed, no conversation, no tools. */
+export const READY_PROMPT = 'Reply with the single word: ready';
 const columns = `id, label, kind, auth, base_url as "baseUrl", default_model as "defaultModel",
   context_window_tokens as "contextWindowTokens", reported_context_windows as "reportedContextWindows",
   enabled, deleting, revision, secret_ref as "secretRef", legacy_env as "legacyEnv"`;
@@ -113,7 +128,8 @@ export class ProviderAccounts {
   constructor(readonly deps: {
     pool: Pick<Pool, 'query' | 'connect'>; env: NodeJS.ProcessEnv;
     catalog: () => AgentCatalog; reload: () => void; vault?: Vault;
-    test?: (resolved: ResolvedProvider) => Promise<void>;
+    /** Replaces the one ready prompt in tests: a recorded answer, or a recorded refusal thrown. */
+    test?: (resolved: ResolvedProvider) => Promise<CompletionResponse | void>;
     listModels?: typeof listProviderModels;
     /** mlxh's read-only probe, replaceable in tests. */
     probeMlxh?: typeof probeMlxh;
@@ -601,24 +617,28 @@ export class ProviderAccounts {
     try {
       const row = await this.#row(id);
       if (row.kind === 'codex') throw new ProviderAccountError(400, 'A ChatGPT subscription has no output-token cap for a connection test. Connect and send a test chat instead.');
-      let diagnostic: ProviderDiagnostic = { state: 'connected', message: 'Connection succeeded.', httpStatus: null, retryAt: null };
+      let result: Omit<TestResult, 'checkedAt'>;
+      let secret: string | null = null;
+      const billing = testBilling(row);
       try {
-        const resolved = resolveProviderAccount(row, row.defaultModel, await this.#usableSecret(row));
-        if (this.deps.test) await this.deps.test(resolved);
-        else await createProvider(resolved, { maxTokens: 32, maxStatusRetries: 0 }).complete({
-          system: 'Reply with OK.', messages: [{ role: 'user', content: [{ type: 'text', text: 'Connection test. Reply OK.' }] }],
+        secret = await this.#usableSecret(row);
+        const resolved = resolveProviderAccount(row, row.defaultModel, secret);
+        const started = performance.now();
+        const answer = this.deps.test ? await this.deps.test(resolved) : await createProvider(resolved, { maxTokens: 5, maxStatusRetries: 0 }).complete({
+          system: 'You are checking that a connection works.', messages: [{ role: 'user', content: [{ type: 'text', text: READY_PROMPT }] }],
           // A model on this computer loads on its first request, which can take
           // a minute for a large one; a hosted provider answers in seconds or not at all.
           tools: [], signal: AbortSignal.timeout(isLocalAccount(row) ? 120_000 : 15_000),
         });
+        result = readyAnswer(row.defaultModel, answer ?? undefined, Math.round(performance.now() - started), billing);
       } catch (error) {
-        diagnostic = providerDiagnostic(error, { ...diagnosticContext(row), model: row.defaultModel });
+        result = { ...providerDiagnostic(error, { ...diagnosticContext(row), model: row.defaultModel }), model: row.defaultModel, detail: errorDetail(error, secret) };
         await this.#noteLimit(id, error);
       }
-      if (diagnostic.state === 'connected') await this.#noteLimit(id, null);
+      if (result.state === 'connected') await this.#noteLimit(id, null);
       if ((await this.#row(id)).revision !== row.revision) throw new ProviderAccountError(409, 'Account changed during the test. Test it again.');
-      const result = { ...diagnostic, checkedAt: new Date().toISOString() };
-      this.#tests.set(id, result); return result;
+      const tested = { ...result, checkedAt: new Date().toISOString() };
+      this.#tests.set(id, tested); return tested;
     } finally { this.#testing.delete(id); }
   }
 
@@ -899,6 +919,46 @@ export class ProviderAccounts {
 /** Every attempt that failed and is about to be retried, on the process log, as the bootstrap's own adapters do. */
 function logRetry(notice: { attempt: number; delayMs: number; kind: string; detail: string }): void {
   console.error(`provider: ${notice.kind} attempt ${notice.attempt} failed, retrying in ${notice.delayMs}ms — ${notice.detail}`);
+}
+
+/** Who pays for a test call, when buddi knows: a key bills itself, a sign-in uses the plan. */
+function testBilling(row: Pick<ProviderAccount, 'kind' | 'auth' | 'baseUrl'>): 'key' | 'plan' | null {
+  if (row.auth === 'anthropic-oauth' || row.auth === 'device-key' || row.auth === 'chatgpt') return 'plan';
+  if (row.auth === 'api-key' && !isLocalAccount(row)) return 'key';
+  return null;
+}
+
+/** "1.4 s": one decimal under ten seconds, whole seconds after. */
+function seconds(ms: number): string {
+  const s = ms / 1000;
+  return s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`;
+}
+
+/**
+ * The sentence for a test that got an answer: what was asked, what came back,
+ * how long it took and roughly what it cost. A reasoning model may spend its
+ * five tokens thinking and say nothing; the account still works.
+ */
+export function readyAnswer(model: string, answer: CompletionResponse | undefined, elapsedMs: number, billing: 'key' | 'plan' | null): Omit<TestResult, 'checkedAt'> {
+  const text = (answer?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const u = answer?.usage;
+  const tokens = u ? u.input + u.output + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0) : undefined;
+  const said = text ? `it said ‘${text}’ in ${seconds(elapsedMs)}` : `it answered in ${seconds(elapsedMs)}, with no words inside the five-token limit`;
+  const cost = tokens ? ` · about ${tokens} tokens` : '';
+  const who = billing === 'key' ? ', billed to this key' : billing === 'plan' ? ', on your plan' : '';
+  return {
+    state: 'connected', message: `Asked ${model} to say ready → ${said}${cost}${tokens ? who : ''}.`,
+    httpStatus: null, retryAt: null, model, reply: text, elapsedMs, ...(tokens !== undefined ? { tokens } : {}), billing,
+  };
+}
+
+/** The provider's own words for Details: the key and every stored secret scrubbed out, kept short. */
+function errorDetail(error: unknown, secret: string | null): string | null {
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  if (!raw) return null;
+  let text = secret ? scrubValueFrom(secret, 'key', raw).text : raw;
+  text = scrubText(text).replace(/\b(sk|sk-ant|AIza|ghp|xox[abp])[-_A-Za-z0-9]{12,}/g, '‹key›').replace(/\s+/g, ' ').trim();
+  return text.length > 300 ? `${text.slice(0, 299)}…` : text;
 }
 
 function isLocalAccount(row: { kind: string; baseUrl?: string | null }): boolean {

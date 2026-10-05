@@ -1528,7 +1528,7 @@ export interface ProviderAccount {
   /** Whose that number is: the provider's own model list, or buddi's table for the model name. */
   detectedContextWindowSource?: 'provider' | 'table' | 'mlxh';
   refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
-  assignedAgents: string[]; test: { state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null } | null;
+  assignedAgents: string[]; test: AccountTest | null;
   removalPending?: boolean;
   reconnectRequired?: boolean;
   login?: { state: 'pending' | 'connected' | 'failed' | 'cancelled'; verificationUrl?: string; userCode?: string; expiresAt?: string; message?: string; attemptId?: string; deviceName?: string; /** ChatGPT, once connected: the address it signed in with. */ account?: string } | null;
@@ -2554,7 +2554,16 @@ export const chatApi = {
 };
 
 /** What a connection test answers. */
-export type ConnectionVerdict = { state: string; message: string; httpStatus?: number | null };
+/**
+ * One connection test: the ready prompt's answer as one sentence. On a
+ * failure the sentence says what to do; the HTTP code, the retry time and the
+ * provider's own words (scrubbed of the key) are for Details only.
+ */
+export type AccountTest = {
+  state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null;
+  model?: string; reply?: string; elapsedMs?: number; tokens?: number; billing?: 'key' | 'plan' | null; detail?: string | null;
+};
+export type ConnectionVerdict = Omit<AccountTest, 'checkedAt'> & { checkedAt?: string };
 
 /**
  * Whether a connection test says the key itself was refused (401/403).

@@ -319,13 +319,16 @@ suite('named provider accounts', () => {
   it('redacts provider failures and discards a test result if its account changed', async () => {
     const f = fixture(); await f.service.initialize();
     const a = await f.service.save(settings);
-    f.test.mockRejectedValueOnce(Object.assign(new Error('SECRET RESPONSE'), { status: 401 }));
-    expect(await f.service.test(a.id)).toMatchObject({ state: 'authentication-error' });
-    expect(JSON.stringify(f.service.view())).not.toContain('SECRET');
+    // The provider's words reach Details only, and never with the key in them.
+    f.test.mockRejectedValueOnce(Object.assign(new Error('SECRET RESPONSE private-fixture-value'), { status: 401 }));
+    const refused = await f.service.test(a.id);
+    expect(refused).toMatchObject({ state: 'authentication-error', detail: expect.stringContaining('SECRET RESPONSE') });
+    expect(refused.message).not.toContain('SECRET');
+    expect(JSON.stringify(f.service.view())).not.toContain('private-fixture-value');
     f.test.mockRejectedValueOnce(Object.assign(new Error('SECRET RESPONSE'), { status: 429, retryAt: '2026-09-19T04:00:00.000Z' }));
     expect(await f.service.test(a.id)).toMatchObject({ state: 'rate-limited', httpStatus: 429, retryAt: '2026-09-19T04:00:00.000Z' });
     expect(f.service.view().accounts.find(row => row.id === a.id)?.test?.retryAt).toBe('2026-09-19T04:00:00.000Z');
-    expect(JSON.stringify(f.service.view())).not.toContain('SECRET');
+    expect(f.service.view().accounts.find(row => row.id === a.id)?.test?.message).not.toContain('SECRET');
     let finish!: () => void;
     f.test.mockImplementationOnce(() => new Promise<void>(r => { finish = r; }));
     const testing = f.service.test(a.id);
@@ -415,5 +418,71 @@ suite('named provider accounts', () => {
       expect(f.service.rateLimit(a.id)).toBeNull();
       expect((await pool.query('select count(*)::int as n from core.provider_account_limits')).rows[0].n).toBe(0);
     } finally { await new Promise<void>((r, reject) => server.close(e => e ? reject(e) : r())); }
+  });
+  describe('the ready prompt, against recorded provider answers', () => {
+    type Recorded = { status: number; headers?: Record<string, string>; body: unknown };
+    async function against(recorded: Recorded, run: (f: ReturnType<typeof fixture>, base: string, sent: () => Record<string, any>) => Promise<void>) {
+      const f = fixture();
+      // No test double: the real adapter talks to a server replaying the provider.
+      const service = new ProviderAccounts({ pool, env: f.env, vault: f.vault, catalog: () => f.catalog, reload: f.reload, listModels: f.listModels });
+      await service.initialize();
+      let body: Record<string, any> = {};
+      const server = createServer(async (req, res) => {
+        const chunks = []; for await (const chunk of req) chunks.push(chunk);
+        body = JSON.parse(Buffer.concat(chunks).toString());
+        res.statusCode = recorded.status;
+        res.setHeader('content-type', 'application/json');
+        for (const [k, v] of Object.entries(recorded.headers ?? {})) res.setHeader(k, v);
+        res.end(JSON.stringify(recorded.body));
+      });
+      await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+      try {
+        await run({ ...f, service }, `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, () => body);
+      } finally { await new Promise<void>((r, reject) => server.close(e => e ? reject(e) : r())); }
+    }
+    const account = (base: string, model = 'gemini-3.1-flash') => ({ label: 'Replay', kind: 'openai-compatible', auth: 'api-key', baseUrl: base, defaultModel: model, enabled: true, secret: 'replay-secret-key-0123456789' });
+
+    it('ok: sends one five-token prompt with no tools and says what came back', async () => {
+      await against({ status: 200, body: { model: 'gemini-3.1-flash', choices: [{ finish_reason: 'stop', message: { content: 'ready' } }], usage: { prompt_tokens: 14, completion_tokens: 2 } } }, async (f, base, sent) => {
+        const a = await f.service.save(account(base));
+        const result = await f.service.test(a.id);
+        expect(sent().messages.at(-1).content).toContain('Reply with the single word: ready');
+        expect(sent().max_tokens ?? sent().max_completion_tokens).toBe(5);
+        expect(sent().tools ?? []).toEqual([]);
+        expect(result).toMatchObject({ state: 'connected', model: 'gemini-3.1-flash', reply: 'ready', tokens: 16 });
+        expect(result.message).toMatch(/^Asked gemini-3\.1-flash to say ready → it said ‘ready’ in \d+\.\d s · about 16 tokens\.$/);
+      });
+    });
+    it('429 with a retry header: one sentence, the retry time and the raw words kept for Details', async () => {
+      await against({ status: 429, headers: { 'retry-after': '30' }, body: { error: { message: 'Resource has been exhausted (e.g. check quota). key=replay-secret-key-0123456789', type: 'rate_limit' } } }, async (f, base) => {
+        const a = await f.service.save(account(base));
+        const result = await f.service.test(a.id);
+        expect(result).toMatchObject({ state: 'rate-limited', httpStatus: 429 });
+        expect(result.retryAt).toMatch(/^\d{4}-/);
+        expect(result.message).toBe('Replay says this key has reached its limit for gemini-3.1-flash. Wait a little, or pick another model.');
+        expect(result.detail).toContain('Resource has been exhausted');
+        expect(JSON.stringify(f.service.view())).not.toContain('replay-secret-key-0123456789');
+      });
+    });
+    it('403 model not allowed: says the key may not use the model, and what to do', async () => {
+      await against({ status: 403, body: { error: { message: 'Permission denied: model gemini-3.1-pro is not allowed for this project.', type: 'permission_denied' } } }, async (f, base) => {
+        const a = await f.service.save(account(base, 'gemini-3.1-pro'));
+        const result = await f.service.test(a.id);
+        expect(result).toMatchObject({ state: 'access-denied', httpStatus: 403 });
+        expect(result.message).toBe('Replay says this key may not use gemini-3.1-pro. Check the key’s permissions, or pick another model.');
+        expect(result.message).not.toContain('Permission denied');
+        expect(result.detail).toContain('not allowed for this project');
+      });
+    });
+    it('bad key: asks for a new key, never echoes it', async () => {
+      await against({ status: 401, body: { error: { message: 'Incorrect API key provided: replay-secret-key-0123456789', type: 'invalid_request_error' } } }, async (f, base) => {
+        const a = await f.service.save(account(base));
+        const result = await f.service.test(a.id);
+        expect(result).toMatchObject({ state: 'authentication-error', httpStatus: 401 });
+        expect(result.message).toMatch(/^Replay did not accept this key\. Check it or paste a new one/);
+        expect(result.detail).toContain('Incorrect API key');
+        expect(result.detail).not.toContain('replay-secret-key-0123456789');
+      });
+    });
   });
 });

@@ -70,34 +70,46 @@ it('renders named accounts without modifying or testing them on load', async () 
   expect(api.testProviderAccount).not.toHaveBeenCalled();
   expect(api.saveProviderAccount).not.toHaveBeenCalled();
 });
-it('labels test time separately from provider retry advice', async () => {
+it('says a failed test in one sentence and keeps the HTTP code, retry time and raw words under Details', async () => {
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, test: {
-    state: 'rate-limited', message: 'Provider limit.', checkedAt: '2026-09-19T02:00:00Z', httpStatus: 429, retryAt: '2026-09-19T04:00:00.000Z',
+    state: 'access-denied', message: 'OpenAI says this key may not use gpt-5. Check the key’s permissions, or pick another model.', checkedAt: '2026-09-19T02:00:00Z',
+    httpStatus: 403, retryAt: null, detail: 'model_not_allowed: project lacks access',
   } }] });
   render(<Providers />);
-  expect(await screen.findByText(/HTTP 429/)).toBeInTheDocument();
-  expect(screen.getByText(/Tested at/)).toHaveTextContent('not a quota reset or subscription renewal date');
-  expect(screen.getByText(/Tested at/).closest('.ui-notice')).toBeNull();
-  expect(screen.getByText('Provider limit.').closest('.ui-notice')).toHaveAttribute('data-tone', 'warning');
-  expect(screen.getByText(/Provider suggested retry time:/)).toHaveTextContent('not a guaranteed quota reset');
+  const sentence = await screen.findByText(/may not use gpt-5/);
+  const notice = sentence.closest('.ui-notice')!;
+  expect(notice).toHaveAttribute('data-tone', 'critical');
+  const details = notice.querySelector('details')!;
+  expect(details).not.toBeNull();
+  expect(details).not.toHaveAttribute('open');
+  expect(details).toHaveTextContent('403');
+  expect(details).toHaveTextContent('model_not_allowed: project lacks access');
+  expect(details).toHaveTextContent('not given');
+  // Nothing technical outside the disclosure.
+  expect(sentence).not.toHaveTextContent(/HTTP|403/);
   expect(api.testProviderAccount).not.toHaveBeenCalled();
 });
-it('draws a successful test in the good tone without a state label', async () => {
+it('shows a working test as the ready sentence in the good tone, with no Details', async () => {
+  const message = 'Asked gpt-5 to say ready → it said ‘ready’ in 1.4 s · about 20 tokens, billed to this key.';
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, test: {
-    state: 'connected', message: 'Connection succeeded.', checkedAt: '2026-09-19T02:00:00Z',
+    state: 'connected', message, checkedAt: '2026-09-19T02:00:00Z', model: 'gpt-5', reply: 'ready', elapsedMs: 1400, tokens: 20, billing: 'key',
   } }] });
   render(<Providers />);
-  const verdict = await screen.findByText('Connection succeeded.');
+  const verdict = await screen.findByText(message);
   expect(verdict.closest('.ui-notice')).toHaveAttribute('data-tone', 'good');
-  expect(screen.queryByText(/connected:/)).not.toBeInTheDocument();
+  expect(verdict.closest('.ui-notice')!.querySelector('details')).toBeNull();
 });
-it('states reset time is unknown when no retry advice was supplied', async () => {
-  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, test: {
-    state: 'rate-limited', message: 'Provider limit.', checkedAt: '2026-09-19T02:00:00Z', retryAt: null,
-  } }] });
+it('merges a standing limit and the test that met it into one notice per account', async () => {
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!,
+    rateLimit: { until, scope: 'burst', provider: 'OpenAI', limit: null, unit: null, freeTier: false, model: 'gpt-5' },
+    test: { state: 'rate-limited', message: 'OpenAI says this key has reached its limit for gpt-5. Wait a little, or pick another model.', checkedAt: '2026-09-19T02:00:00Z', httpStatus: 429, retryAt: until, detail: 'Rate limit reached' },
+  }] });
   render(<Providers />);
-  expect(await screen.findByText(/Reset time is unknown/)).toBeInTheDocument();
-  expect(screen.queryByText(/Provider suggested retry time:/)).not.toBeInTheDocument();
+  expect(await screen.findByText(/asked buddi to slow down/)).toBeInTheDocument();
+  const detail = screen.getByRole('region', { name: 'Personal OpenAI' });
+  expect(detail.querySelectorAll('.ui-notice')).toHaveLength(1);
+  expect(detail.querySelector('.ui-notice details')).toHaveTextContent('429');
 });
 it('opens the add sheet with a proposed name, and explains the disabled save button once it is cleared', async () => {
   render(<Providers />);
@@ -325,7 +337,7 @@ it('starts the Gemini preset on the newest Flash when Google refuses Pro on its 
   fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'gemini' } });
   fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'AIza-fixture' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
-  expect(await screen.findByText(/free tier has no Pro allowance, so it starts on gemini-3\.8-flash/)).toBeInTheDocument();
+  expect(await screen.findByText(/Account saved on gemini-3\.8-flash\. Your Google AI plan covers the Gemini app, not this key\./)).toBeInTheDocument();
   expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'two', defaultModel: 'gemini-3.8-flash' });
   expect(api.testProviderAccount).toHaveBeenCalledTimes(2);
 });
