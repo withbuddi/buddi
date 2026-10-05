@@ -11,7 +11,7 @@ anything consequential. Everything runs on your machine, with your keys.
 `npm install -g @withbuddi/buddi && buddi`. This page is for working on buddi
 itself.
 
-[withbuddi.com](https://withbuddi.com) · [Download for Mac](https://withbuddi.com/download/mac) · [Homebrew](https://github.com/withbuddi/homebrew-tap) · [npm](https://www.npmjs.com/package/@withbuddi/buddi) · [docs](docs/README.md) · [plugins](https://withbuddi.com/plugins/) · [Chrome extension](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)
+<p align="center"><a href="https://withbuddi.com">withbuddi.com</a> · <a href="https://withbuddi.com/download/mac">Download for Mac</a> · <a href="https://github.com/withbuddi/homebrew-tap">Homebrew</a> · <a href="https://www.npmjs.com/package/@withbuddi/buddi">npm</a> · <a href="docs/README.md">docs</a> · <a href="https://withbuddi.com/plugins/">plugins</a> · <a href="https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah">Chrome extension</a></p>
 
 <img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/home.png" alt="The buddi dashboard's Home: Good evening, Sam, then three widgets — the weather in Lisbon, what is coming up and a world clock — and the team." width="100%">
 
