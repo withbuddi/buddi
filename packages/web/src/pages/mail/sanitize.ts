@@ -115,7 +115,7 @@ function lengthOf(raw: string | null): string | null {
   if (raw === null) return null;
   const value = raw.trim();
   if (/^\d{1,4}$/.test(value)) return `${value}px`;
-  if (/^\d{1,3}%$/.test(value)) return value;
+  if (/^\d{1,3}%$/.test(value)) return Number.parseInt(value, 10) > 100 ? '100%' : value;
   return null;
 }
 
@@ -124,6 +124,20 @@ function colourOf(raw: string | null): string | null {
   if (raw === null) return null;
   const value = raw.trim();
   return /^#[0-9a-f]{3,8}$/i.test(value) || /^[a-z]{3,20}$/i.test(value) ? value : null;
+}
+
+/** A negative length anywhere in a value: how a message pulls itself over the pane's own controls. */
+const NEGATIVE = /(^|[\s(,])-\s*(\d|\.\d)/;
+
+/** Sizes held to the pane: never wider or taller than it, never in viewport units. */
+const SIZES = new Set(['width', 'max-width', 'min-width', 'height', 'max-height', 'min-height']);
+
+/** A size value held to at most 100%, or null when it reaches past the pane by its unit. */
+function capSize(value: string): string | null {
+  if (/v(w|h|min|max)\b|calc\s*\(|fixed|fit-content\s*\(/i.test(value)) return null;
+  const percent = /^(\d+(?:\.\d+)?)%$/.exec(value);
+  if (percent) return Number(percent[1]) > 100 ? '100%' : value;
+  return value;
 }
 
 /** The safe subset of one element's inline style, as React wants it. */
@@ -137,7 +151,10 @@ function styleOf(el: Element): SafeStyle {
     const value = style.getPropertyValue(name).trim();
     if (value === '' || value.length > 200 || STYLE_REFUSED.test(value)) continue;
     if (name === 'display' && !DISPLAY_ALLOWED.has(value.toLowerCase())) continue;
-    out[camel(name)] = value;
+    if (NEGATIVE.test(value) || /calc\s*\(/i.test(value)) continue;
+    const kept = SIZES.has(name) ? capSize(value) : value;
+    if (kept === null) continue;
+    out[camel(name)] = kept;
   }
   return out;
 }

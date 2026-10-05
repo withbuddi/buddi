@@ -712,7 +712,6 @@ export function messageQuery(): PageQuery {
       const purgedNote = 'The body of this message has been purged under your retention setting. Its headers are kept.';
       const html = !purged && typeof row.body_html === 'string' && row.body_html !== '' ? (row.body_html as string) : null;
       const text = purged ? '' : truncateBody(String(row.body_text ?? ''), html ? TEXT_WITH_HTML_BYTES : MAX_BODY_BYTES);
-      const body = purged ? purgedNote : text;
       const toList: string[] = Array.isArray(row.to_addrs) ? row.to_addrs : [];
       const ccList: string[] = Array.isArray(row.cc) ? row.cc : [];
       return {
@@ -736,9 +735,9 @@ export function messageQuery(): PageQuery {
         subject: row.subject ?? '',
         date: isoOf(row.date),
         who: row.direction === 'out' ? 'you wrote' : 'they wrote',
-        // Null once retention has purged it: the headers stay, the body does
-        // not, and the page says so rather than drawing an empty message.
-        bodyText: body,
+        // The body rides once, as `text` (null once retention purged it, with
+        // `note` saying so): a second copy would put a long message over the
+        // gateway's megabyte per answer.
         purged,
         attachments: attachmentRows(messageId, row.attachments),
       };

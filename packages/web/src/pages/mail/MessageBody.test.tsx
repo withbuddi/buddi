@@ -44,6 +44,25 @@ const DANGEROUS_HTML = `<html><head><script>window.stolen = 1</script>
 <style>body { display: none }</style>
 </body></html>`;
 
+/** The quieter tricks: every one of them must be gone from what is drawn. */
+const HOSTILE_HTML = `<html><head><base href="https://evil.test/"><meta http-equiv="refresh" content="0;url=https://evil.test/meta">
+<style>@import "https://evil.test/import.css";</style></head><body>
+<p>Still readable</p>
+<img src="https://pics.test/a.png" srcset="https://evil.test/srcset.png 2x" alt="Hero">
+<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" alt="svg picture">
+<svg><foreignObject><div onclick="window.stolen = 8">inside svg</div></foreignObject></svg>
+<div style="color: red; background: @import 'https://evil.test/i.css'">imported</div>
+<form action="https://evil.test/post"><input name="pw"></form>
+<a href="https://ok.test/" onfocus="window.stolen = 9" onpointerdown="window.stolen = 10">ok</a>
+<div onmouseenter="window.stolen = 11" onanimationstart="window.stolen = 12">hover</div>
+</body></html>`;
+
+/** A message that tries to lay itself over the pane: pulled up, pushed out, floated wide. */
+const OVERLAY_HTML = `<div style="margin-top: -400px; margin-left: -2em; text-indent: -9999px; color: blue">Pulled up</div>
+<div style="width: 300%; height: 250vh; min-width: 150vw; max-width: calc(100% + 400px); float: right">Wide</div>
+<table width="900%"><tr><td>Cell</td></tr></table>
+<div style="width: 80%; margin: 8px 0">Fine</div>`;
+
 /** A picture carried in the message itself, named by its Content-ID. */
 const CID_IMAGE = `<p>Our logo, as agreed:</p><img src="cid:logo@studio.test" alt="Studio logo" width="120">`;
 
@@ -104,6 +123,19 @@ describe('a remote picture', () => {
     expect(other.container.querySelectorAll('img')).toHaveLength(0);
   });
 
+  it('keeps a choice to the sender it was made for when the pane is re-drawn for another', () => {
+    const view = render(<MessageBody html={TRACKING_PIXEL} sender="news@news.test" cidSrc={cidSrc} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show images' }));
+    expect(view.container.querySelectorAll('img')).toHaveLength(1);
+    // Same component, next conversation: the other sender's pictures stay held.
+    view.rerender(<MessageBody html={TRACKING_PIXEL} sender="other@else.test" cidSrc={cidSrc} />);
+    expect(view.container.querySelectorAll('img')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Show images' })).toBeInTheDocument();
+    // And back: the first sender's own answer still holds.
+    view.rerender(<MessageBody html={TRACKING_PIXEL} sender="News@news.test " cidSrc={cidSrc} />);
+    expect(view.container.querySelectorAll('img')).toHaveLength(1);
+  });
+
   it('still shows pictures for the view when storage is unavailable, and never throws', () => {
     // A private window or blocked site data: even reaching `localStorage` throws.
     vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => {
@@ -137,6 +169,43 @@ describe('dangerous HTML', () => {
     expect(bank).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.getByText('Pay attention')).toHaveStyle({ color: 'rgb(0, 128, 0)' });
     expect((window as { stolen?: unknown }).stolen).toBeUndefined();
+  });
+});
+
+describe('a hostile message', () => {
+  it('keeps none of srcset, base, svg foreignObject, svg data pictures, @import, meta refresh, forms or handlers', () => {
+    const { container } = render(<MessageBody html={HOSTILE_HTML} sender="someone@sender.test" cidSrc={cidSrc} />);
+    expect(screen.getByText('Still readable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show images' }));
+    for (const tag of ['base', 'meta', 'style', 'svg', 'foreignObject', 'form', 'input']) {
+      expect(container.querySelector(`.pl-mail-html ${tag}`), tag).toBeNull();
+    }
+    const html = container.innerHTML;
+    for (const gone of ['srcset', 'evil.test', 'data:image/svg', '@import', 'refresh', 'onfocus', 'onpointerdown', 'onmouseenter', 'onanimationstart', 'onclick', 'inside svg']) {
+      expect(html, gone).not.toContain(gone);
+    }
+    expect([...container.querySelectorAll('img')].map((img) => img.getAttribute('src'))).toEqual(['https://pics.test/a.png']);
+    expect(screen.getByRole('link', { name: 'ok' })).toHaveAttribute('href', 'https://ok.test/');
+    expect((window as { stolen?: unknown }).stolen).toBeUndefined();
+  });
+
+  it('cannot pull itself over the pane: no negative lengths, sizes held to 100%', () => {
+    const safe = sanitizeHtml(OVERLAY_HTML)!;
+    const styles: Record<string, string>[] = [];
+    const walk = (nodes: typeof safe.nodes): void => {
+      for (const node of nodes) {
+        if ('style' in node && node.style) styles.push(node.style);
+        if ('kids' in node) walk(node.kids);
+      }
+    };
+    walk(safe.nodes);
+    const all = JSON.stringify(styles);
+    expect(all).not.toMatch(/-\d/);
+    expect(all).not.toMatch(/vw|vh|calc/);
+    expect(styles).toContainEqual({ color: 'blue' });
+    expect(styles).toContainEqual({ width: '100%', float: 'right' });
+    expect(styles).toContainEqual({ width: '100%' });
+    expect(styles).toContainEqual(expect.objectContaining({ width: '80%' }));
   });
 });
 

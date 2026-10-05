@@ -42,6 +42,7 @@ import { createInboxPollSource } from '../sources/inbox-poll.js';
 import { purgeBodies } from '../retention.js';
 import { emailPageDescriptors } from './descriptors.js';
 import { MAX_BODY_BYTES, TRUNCATED_NOTE } from './queries.js';
+import { MAX_STORED_HTML_BYTES } from '../html.js';
 import type { ImapClientFactory } from '../ports.js';
 import type { CoreToolContext } from '@buddi/core/testing';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
@@ -301,7 +302,8 @@ suite('the mail pages, over postgres', () => {
   it('answers one message, one draft, the mailboxes and the watcher settings', async () => {
     const message = await ask('message', { id: ids.messageId });
     expect(message).toMatchObject({ purged: false });
-    expect(message.bodyText).toContain('resend invoice 42');
+    expect(message.text).toContain('resend invoice 42');
+    expect(message.bodyText).toBeUndefined();
     // The `message` block's shape (host API 1.30): who, to whom, when, and
     // the stored HTML — sanitised at ingest, nothing that runs, the pixel's
     // address kept but never fetched by buddi — with the text beside it.
@@ -359,12 +361,26 @@ suite('the mail pages, over postgres', () => {
       '語'.repeat(MAX_BODY_BYTES),
     ]);
     const long = await ask('message', { id: ids.messageId });
-    expect(Buffer.byteLength(long.bodyText, 'utf8')).toBeLessThanOrEqual(
+    expect(Buffer.byteLength(long.text, 'utf8')).toBeLessThanOrEqual(
       MAX_BODY_BYTES + Buffer.byteLength(`\n\n${TRUNCATED_NOTE}`, 'utf8'),
     );
-    expect(long.bodyText).toContain(TRUNCATED_NOTE);
-    expect(long.bodyText).not.toContain('\uFFFD');
-    expect(long.bodyText.startsWith('語語語')).toBe(true);
+    expect(long.text).toContain(TRUNCATED_NOTE);
+    expect(long.text).not.toContain('\uFFFD');
+    expect(long.text.startsWith('語語語')).toBe(true);
+    // The whole answer fits the gateway's page limit (PAGE_RESULT_LIMITS.bytes,
+    // `packages/gateway/src/web/pages.ts`): the body is sent once, not twice.
+    const PAGE_RESULT_BYTES = 1024 * 1024;
+    expect(Buffer.byteLength(JSON.stringify(long), 'utf8')).toBeLessThanOrEqual(PAGE_RESULT_BYTES);
+    // …and so does the worst case with HTML beside it: HTML at its stored cap, the text its fallback.
+    const { rows: kept } = await pool.query(`select body_html from email.messages where id = $1::uuid`, [ids.messageId]);
+    await pool.query(`update email.messages set body_html = $2 where id = $1::uuid`, [
+      ids.messageId,
+      `<p>${'語'.repeat(Math.floor(MAX_STORED_HTML_BYTES / 3) - 4)}</p>`,
+    ]);
+    const both = await ask('message', { id: ids.messageId });
+    expect(both.html).not.toBeNull();
+    expect(Buffer.byteLength(JSON.stringify(both), 'utf8')).toBeLessThanOrEqual(PAGE_RESULT_BYTES);
+    await pool.query(`update email.messages set body_html = $2 where id = $1::uuid`, [ids.messageId, kept[0]?.body_html ?? null]);
 
     expect(await ask('watcher_settings')).toMatchObject({ waitingDays: 2, dateConfidence: 0.6 });
     await act('email.set_settings', { waitingDays: 5 });

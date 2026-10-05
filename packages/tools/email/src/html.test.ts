@@ -39,6 +39,23 @@ describe('sanitizeEmailHtml', () => {
     expect(out).toContain('style="color: #333"');
   });
 
+  it('keeps none of srcset, base, svg foreignObject, svg data pictures, @import, meta refresh, forms or handlers', () => {
+    const out = sanitizeEmailHtml(`<html><head><base href="https://evil.test/"><meta http-equiv="refresh" content="0;url=https://evil.test/m">
+<style>@import url(https://evil.test/i.css);</style></head><body><p>Still readable</p>
+<img src="https://pics.test/a.png" srcset="https://evil.test/s.png 2x" alt="Hero">
+<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" alt="svg picture">
+<svg><foreignObject><div onclick="x()">inside svg</div></foreignObject></svg>
+<div style="color: red; background: @import 'https://evil.test/c.css'">imported</div>
+<form action="https://evil.test/post"><input name="pw"></form>
+<a href="https://ok.test/" onfocus="x()" onpointerdown="y()">ok</a><div onmouseenter="z()">hover</div></body></html>`)!;
+    expect(out).toContain('Still readable');
+    for (const gone of ['<base', '<meta', 'refresh', '<style', '@import', 'srcset', 'evil.test', '<svg', 'foreignObject', 'inside svg', 'data:image/svg', '<form', '<input', 'onfocus', 'onpointerdown', 'onmouseenter', 'onclick']) {
+      expect(out, gone).not.toContain(gone);
+    }
+    expect(out).toContain('<img src="https://pics.test/a.png" alt="Hero">');
+    expect(out).toContain('<a href="https://ok.test/">ok</a>');
+  });
+
   it('keeps the marks of a quoted reply, and only those classes', () => {
     const out = sanitizeEmailHtml(
       '<div class="gmail_quote big-red"><div class="gmail_attr">On Tue, Ana wrote:</div><blockquote type="cite" class="x">Earlier</blockquote></div><div id="divRplyFwdMsg">From: Bo</div>',

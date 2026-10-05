@@ -5537,6 +5537,8 @@ button.br-address:hover:not(:disabled) { border-color: var(--line-strong); }
   min-width: 0; overflow-x: auto; padding: var(--space-4); border-radius: var(--radius-lg);
   background: var(--mail-paper); color: var(--mail-ink); box-shadow: inset 0 0 0 1px var(--line);
   line-height: var(--leading); overflow-wrap: anywhere;
+  /* Nothing a message draws paints outside its own paper, over the pane's controls. */
+  contain: paint; isolation: isolate;
 }
 .pl-mail-html p { margin: 0 0 var(--space-3); }
 .pl-mail-html ul, .pl-mail-html ol { margin: 0 0 var(--space-3); padding-left: var(--space-6); }

@@ -164,9 +164,14 @@ export function MessageBody({
   cidSrc: (artifactId: string) => string;
 }): JSX.Element | null {
   const safe = useMemo(() => (html ? sanitizeHtml(html) : null), [html]);
-  const remembered = useMemo(() => imageSenders().has(sender.trim().toLowerCase()), [sender]);
-  const [shown, setShown] = useState<boolean | null>(null);
-  const showImages = shown ?? remembered;
+  const who = sender.trim().toLowerCase();
+  const remembered = useMemo(() => imageSenders().has(who), [who]);
+  // The owner's choice here is for this sender only: kept with the address it
+  // was made for, so the same pane re-drawn for another sender starts from
+  // that sender's own remembered answer, never from this one's.
+  const [choice, setChoice] = useState<{ who: string; show: boolean } | null>(null);
+  const showImages = choice !== null && choice.who === who ? choice.show : remembered;
+  const setShown = (show: boolean): void => setChoice({ who, show });
   const cid = (contentId: string): string | null => {
     const wanted = contentId.trim().replace(/^<|>$/g, '').toLowerCase();
     const found = (attachments ?? []).find(
