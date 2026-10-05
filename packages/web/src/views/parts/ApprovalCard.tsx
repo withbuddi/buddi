@@ -8,7 +8,7 @@ import { api, type ApprovalRow } from '../../api';
 import { fmtRelative, fmtTime, json, short } from '../../format';
 import type { ChatAgent } from '../../chat/types';
 import { Button, Code, Section } from '../../ui';
-import { AgentAvatar } from './Avatar';
+import { AgentAvatar, PLATFORM_NAME, PlatformAvatar, isPlatformAsker } from './Avatar';
 import { NeedsCard, NeedsFrom } from './NeedsCard';
 import { useOwnerChoices } from './OwnerChoices';
 
@@ -148,9 +148,14 @@ export function ApprovalCard({
       title={title}
       time={fmtRelative(action.createdAt)}
       from={
-        <NeedsFrom face={agents ? <AgentAvatar agents={agents} id={action.agentId} size="sm" /> : undefined}>
-          Asked by {agentName ?? action.agentId}
-        </NeedsFrom>
+        isPlatformAsker(action.agentId) ? (
+          // buddi itself asked (MCP, the plugin host, the dashboard): its own name and the Blob, whatever the caller passed.
+          <NeedsFrom face={<PlatformAvatar size="sm" />}>Asked by {PLATFORM_NAME}</NeedsFrom>
+        ) : (
+          <NeedsFrom face={agents ? <AgentAvatar agents={agents} id={action.agentId} size="sm" /> : undefined}>
+            Asked by {agentName ?? action.agentId}
+          </NeedsFrom>
+        )
       }
       lead={
         <Button variant="ghost" onClick={() => setShowEnvelope((v) => !v)} aria-expanded={showEnvelope}>

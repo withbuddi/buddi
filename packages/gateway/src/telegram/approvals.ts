@@ -41,6 +41,7 @@ import {
   type OwnerChoice,
   conversationGroup,
   asksEachTime,
+  OWNER_AGENT_ID,
 } from '@buddi/core';
 import {
   MAX_CALLBACK_DATA_BYTES,
@@ -192,6 +193,15 @@ export function approvalKeyboard(
 export const NO_KEYBOARD: InlineKeyboardMarkup = { inline_keyboard: [] };
 
 /**
+ * Who asked, as the message names them: "buddi" (lowercase, always) when the
+ * platform itself asked — MCP, the plugin host, the dashboard all act as
+ * `OWNER_AGENT_ID` — else the agent's id.
+ */
+export function askerLabel(agentId: string): string {
+  return agentId === OWNER_AGENT_ID ? 'buddi' : agentId;
+}
+
+/**
  * The message the owner is asked to decide.
  *
  * Every line comes from the stored action: the tool that will run, the preview
@@ -208,7 +218,7 @@ export function approvalRequestText(action: ActionRecord, timezone: string): str
     '',
     // No `@`: Telegram links `@name` in bot text to a Telegram user that does
     // not exist, and tapping it errors. The agent is named plainly instead.
-    `Asked by ${action.agentId}. Expires ${localDateString(action.expiresAt, timezone)}.`,
+    `Asked by ${askerLabel(action.agentId)}. Expires ${localDateString(action.expiresAt, timezone)}.`,
     `Action ${action.id}`,
   ].join('\n');
 }

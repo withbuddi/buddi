@@ -15,7 +15,7 @@ import { accentAttrs, accentOf } from '../../shell/accent';
 import { tintOf } from '../../shell/AgentRail';
 import { monogram } from '../../shell/roster';
 import { Blob, useIsBlobStill } from '../../ui/Blob';
-import type { MascotAnimState } from '../meet/script';
+import { mascotUrl, type MascotAnimState } from '../meet/script';
 
 export type Face = Pick<ChatAgent, 'avatar' | 'accent' | 'picture'> & {
   roles?: readonly string[] | undefined;
@@ -93,6 +93,36 @@ export function Avatar({
   return <FaceMark className="ui-avatar" id={id} tint={tintOf(id)} name={name} size={size} unavailable={unavailable} face={face} />;
 }
 
+/**
+ * The id an action carries when buddi itself asked, not an agent: the MCP
+ * server (`buddi.ask` and the admin writes), the dashboard's own flows and the
+ * plugin host all run as core's `OWNER_AGENT_ID`. No agent can hold it (it is
+ * a reserved id), so it never names a teammate.
+ */
+export const PLATFORM_ASKER_ID = 'owner';
+/** How the platform is named on a card: always lowercase, like the product. */
+export const PLATFORM_NAME = 'buddi';
+
+/** Whether this asker is buddi itself rather than one of the agents. */
+export function isPlatformAsker(id: string | null | undefined): boolean {
+  return id === PLATFORM_ASKER_ID;
+}
+
+/** Who asked, as a card names them: "buddi" for the platform, else the roster's name (or the id). */
+export function askerName(id: string, agents: readonly Pick<ChatAgent, 'id' | 'name'>[] = []): string {
+  if (isPlatformAsker(id)) return PLATFORM_NAME;
+  return agents.find((a) => a.id === id)?.name ?? id;
+}
+
+/**
+ * buddi's own face: the Blob, through the same `Avatar` the chat header draws
+ * the front desk with, so the mark matches wherever buddi speaks. A Blob that
+ * fails to load falls back to the monogram like any face.
+ */
+export function PlatformAvatar({ size }: { size?: 'sm' | 'lg' | 'xl' }): JSX.Element {
+  return <Avatar id={PLATFORM_ASKER_ID} name={PLATFORM_NAME} size={size} face={{ picture: mascotUrl('core') }} />;
+}
+
 /** The face of an agent in a roster, by id: falls back to initials for an id the roster does not know. */
 export function AgentAvatar({
   agents,
@@ -103,6 +133,7 @@ export function AgentAvatar({
   id: string;
   size?: 'sm' | 'lg' | 'xl';
 }): JSX.Element {
+  if (isPlatformAsker(id)) return <PlatformAvatar size={size} />;
   const agent = agents.find((a) => a.id === id);
   return <Avatar id={id} name={agent?.name ?? id} size={size} unavailable={agent ? !agent.available : false} face={agent} />;
 }

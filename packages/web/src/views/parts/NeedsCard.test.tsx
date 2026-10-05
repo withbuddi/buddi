@@ -7,6 +7,7 @@ import { Button } from '../../ui';
 import { NeedsCard } from './NeedsCard';
 import { ApprovalCard, approvalBody, approvalTitle } from './ApprovalCard';
 import { AgentOffer } from './AgentOffer';
+import { askerName } from './Avatar';
 
 vi.mock('../../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../api')>();
@@ -86,6 +87,28 @@ describe('the approval on the card', () => {
     expect(article).toHaveTextContent('Asked by Concierge');
     fireEvent.click(within(article).getByRole('button', { name: 'Show envelope' }));
     expect(within(article).getByRole('button', { name: 'Hide envelope' })).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
+describe('an approval buddi itself asked for', () => {
+  it('reads "Asked by buddi", lowercase, with the Blob, whatever name the caller passed', () => {
+    const action = { ...ACTION, agentId: 'owner' };
+    const agents = [{ id: 'concierge', handle: 'buddi', name: 'Buddi', available: true }] as never;
+    render(<ApprovalCard action={action} timezone="UTC" busy={false} onDecide={vi.fn()} agentName="Buddi" agents={agents} />);
+    const article = screen.getByRole('article', { name: 'To: bank' });
+    expect(article).toHaveTextContent('Asked by buddi');
+    expect(article).not.toHaveTextContent(/Asked by (Buddi|owner)/);
+    const face = article.querySelector('.ui-avatar')!;
+    expect(face.querySelector('img')).toHaveAttribute('src', './mascot/core.png');
+    expect(face).not.toHaveTextContent('BU');
+  });
+
+  it('names buddi so without a roster too, and an agent by its own name', () => {
+    expect(askerName('owner')).toBe('buddi');
+    expect(askerName('owner', [{ id: 'owner', name: 'Owner' }])).toBe('buddi');
+    expect(askerName('concierge', [{ id: 'concierge', name: 'Concierge' }])).toBe('Concierge');
+    render(<ApprovalCard action={{ ...ACTION, agentId: 'owner' }} timezone="UTC" busy={false} onDecide={vi.fn()} />);
+    expect(screen.getByRole('article', { name: 'To: bank' })).toHaveTextContent('Asked by buddi');
   });
 });
 

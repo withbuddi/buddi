@@ -46,6 +46,7 @@ import {
   useAsync,
 } from '../ui';
 import { ApprovalCard, useDecide } from './parts/ApprovalCard';
+import { askerName } from './parts/Avatar';
 import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
 import { HomeSuggestions, teamIsNew } from './parts/CatalogueSuggest';
@@ -112,7 +113,7 @@ export function Home({
 
   const data = overview.data;
   const frontDesk = agents.find((agent) => agent.id === defaultAgentId) ?? null;
-  const nameOf = (id: string): string => agents.find((a) => a.id === id)?.name ?? id;
+  const nameOf = (id: string): string => askerName(id, agents);
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
 
   const pending: ApprovalRow[] = approvals.data?.pending ?? [];

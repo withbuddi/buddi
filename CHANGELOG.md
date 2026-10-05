@@ -9,6 +9,8 @@ What changes in buddi from one release to the next, newest first.
 - Mail: newsletters no longer show codes like `&#8202;`, `&zwnj;` or `&#38;` in their text, previews and search. buddi now reads an HTML-only message the way a browser would: every character comes out as itself, styles and hidden parts are left out, and the invisible padding newsletters put in their preview line is dropped. Mail that arrived before is cleaned too, quietly in the background after buddi starts.
 - Approvals: the card's heading now says what is being asked, in plain words ("Add to Work (Google)", "Generate one square image…"), instead of the tool's internal name like `mail.send`. The internal name is still on the card's small print and in the envelope.
 
+- Approvals that buddi itself asks for (from Claude Code through buddi's MCP server, from a plugin, or from the dashboard) now say "Asked by buddi", in lowercase, with the Blob beside it, on Home, in chat and on Telegram, instead of an initials badge.
+
 ### Added
 
 - Mail: a message that arrived before pre.44 now opens with its formatting and pictures (pictures from the web still wait for Show images). buddi fetches it from your mail server the first time you open it, keeps it, and reads its own copy after that; if your server is slow it shows the text within a few seconds instead and doesn't try again for an hour.

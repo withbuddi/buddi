@@ -27,6 +27,7 @@ import {
   approvalCallbackData,
   approvalKeyboard,
   approvalRequestText,
+  askerLabel,
   choiceOverflowLine,
   decidedText,
   parseApprovalCallback,
@@ -152,6 +153,14 @@ describe('rendering', () => {
     expect(text).toContain('mail.send');
     expect(text).toContain('bcc archive@example.com');
     expect(text).toContain(ACTION_ID);
+  });
+
+  it('names the platform as "buddi", lowercase, when buddi itself asked', () => {
+    expect(askerLabel('owner')).toBe('buddi');
+    expect(askerLabel('finance-advisor')).toBe('finance-advisor');
+    const text = approvalRequestText({ ...sampleAction, agentId: 'owner' }, 'UTC');
+    expect(text).toContain('Asked by buddi.');
+    expect(text).not.toMatch(/Asked by (Buddi|owner)/);
   });
 
   it('says what happened once a decision lands', () => {
