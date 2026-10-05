@@ -602,9 +602,15 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
           </>
         )}
       </footer>
+      {data?.version ? <p className="lk-version">{lockVersionLine(data.version)}</p> : null}
       {forgot ? <Forgot onClose={() => setForgot(false)} /> : null}
     </div>
   );
+}
+
+/** The quiet line in the corner: "buddi 0.1.0-pre.43", and "· update ready" when the supervisor offers one. */
+export function lockVersionLine(version: { current: string; updateAvailable: boolean }): string {
+  return `buddi ${version.current}${version.updateAvailable ? ' · update ready' : ''}`;
 }
 
 function capital(text: string): string {

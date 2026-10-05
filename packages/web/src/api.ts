@@ -1284,6 +1284,8 @@ export interface LockScreenData extends LockState {
   focus: FocusState | null;
   widgets: Array<{ key: string; id: string; title: string; size: WidgetSize; view: { state: 'ok' | 'stale'; body: WidgetBody; updatedAt?: string } }>;
   clockView?: LockClockView;
+  /** What is running, and the newer one the supervisor has ready: the status bar's answer. */
+  version?: { current: string; latest?: string; updateAvailable: boolean };
 }
 
 export interface FocusState {

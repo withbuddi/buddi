@@ -176,6 +176,26 @@ describe('the lock screen', () => {
     expect(screen.getByRole('dialog', { name: 'buddi is locked' })).toBeInTheDocument();
   });
 
+  it('says the running version quietly in the corner, with "update ready" when the supervisor offers one, and nothing to tap', async () => {
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({ version: { current: '0.1.0-pre.43', updateAvailable: false } }));
+    const { unmount } = render(<LockScreen initial={locked} onUnlocked={() => {}} />);
+    const line = await screen.findByText('buddi 0.1.0-pre.43');
+    expect(line.tagName).toBe('P');
+    expect(line).toHaveClass('lk-version');
+    expect(line.closest('button, a')).toBeNull();
+    unmount();
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({ version: { current: '0.1.0-pre.43', latest: '0.1.0-pre.44', updateAvailable: true } }));
+    render(<LockScreen initial={locked} onUnlocked={() => {}} />);
+    expect(await screen.findByText('buddi 0.1.0-pre.43 · update ready')).toBeInTheDocument();
+  });
+
+  it('leaves the version line off when the gateway did not say one', async () => {
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData());
+    render(<LockScreen initial={locked} onUnlocked={() => {}} />);
+    await screen.findByLabelText('Waiting for you');
+    expect(screen.queryByText(/^buddi \d/)).toBeNull();
+  });
+
   it('unlocks with the right PIN, and says how many tries are left after a wrong one', async () => {
     vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData());
     const unlock = vi.spyOn(api, 'unlock')

@@ -4289,6 +4289,8 @@ a.wg-body:focus-visible { outline: none; border-radius: var(--radius); box-shado
 .lk-note[data-tone='critical'] { color: var(--critical); font-weight: var(--weight-medium); }
 .lk-link { border: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); background: none; color: var(--text-muted); font: inherit; font-size: var(--text-sm); text-decoration: underline; text-decoration-color: color-mix(in oklab, currentColor 40%, transparent); text-underline-offset: 0.2em; cursor: pointer; }
 .lk-link:hover { color: var(--text); }
+/* The version, quiet in the corner: read, never tapped. */
+.lk-version { position: fixed; right: var(--space-4); bottom: var(--space-3); margin: 0; font-size: var(--text-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; pointer-events: none; user-select: none; }
 .lk-enter { min-height: var(--control-h-lg); padding: 0 var(--space-5); font-size: var(--text-md); cursor: pointer; }
 @keyframes lk-shake { 0%, 100% { transform: none; } 20% { transform: translateX(calc(var(--space-2) * -1)); } 40% { transform: translateX(var(--space-2)); } 60% { transform: translateX(calc(var(--space-1) * -1)); } 80% { transform: translateX(var(--space-1)); } }
 

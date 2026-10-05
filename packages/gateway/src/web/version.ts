@@ -269,6 +269,18 @@ function dressed(reply: RouteReply): RouteReply {
  * Supervised, this is the supervisor's answer. Unsupervised, it is a checkout:
  * one version, no check, no history, and the line saying what to run instead.
  */
+/**
+ * The version line of the lock screen, from `GET /api/version`'s reply: what
+ * runs, and the newer one only when the supervisor offers it (a checkout
+ * upgrades through git, never here). Null when the reply is not a version.
+ */
+export function lockVersion(reply: RouteReply): { current: string; latest?: string; updateAvailable: boolean } | null {
+  const body = reply.status === 200 && reply.body && typeof reply.body === 'object' ? reply.body as Record<string, unknown> : null;
+  if (!body || typeof body.current !== 'string' || !body.current) return null;
+  const offered = body.checkout !== true && body.updateAvailable === true && typeof body.latest === 'string' && body.latest !== '';
+  return { current: body.current, ...(offered ? { latest: body.latest as string } : {}), updateAvailable: offered };
+}
+
 export async function versionRoute(deps: VersionDeps): Promise<RouteReply> {
   return withWeb(await versionReply(deps), deps);
 }

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, expect, it } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
+import { lockVersion } from './version.js';
 import { csrfCookieName } from './http.js';
 
 const servers: WebServer[] = [];
@@ -277,4 +278,15 @@ it('says which dashboard build it serves, from build.json, supervised or not', a
   const app = await dashboard({}, assets);
   const { origin, headers } = await open(app);
   expect(await (await fetch(`${origin}/api/version`, { headers })).json()).toMatchObject({ web: '0.1.1+def5678' });
+});
+
+it('gives the lock screen the status bar\'s version, and "update ready" only when the supervisor offers one', () => {
+  expect(lockVersion({ status: 200, body: { current: '0.1.0-pre.43', latest: '0.1.0-pre.44', updateAvailable: true, checkout: false } }))
+    .toEqual({ current: '0.1.0-pre.43', latest: '0.1.0-pre.44', updateAvailable: true });
+  expect(lockVersion({ status: 200, body: { current: '0.1.0-pre.43', latest: '0.1.0-pre.43', updateAvailable: false, checkout: false } }))
+    .toEqual({ current: '0.1.0-pre.43', updateAvailable: false });
+  // A checkout upgrades through git: never "update ready".
+  expect(lockVersion({ status: 200, body: { current: '0.1.0-pre.43', latest: '0.1.0-pre.44', updateAvailable: true, checkout: true } }))
+    .toEqual({ current: '0.1.0-pre.43', updateAvailable: false });
+  expect(lockVersion({ status: 503, body: { error: 'no supervisor' } })).toBeNull();
 });

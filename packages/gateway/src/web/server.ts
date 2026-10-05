@@ -310,6 +310,7 @@ import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
+  lockVersion,
   upgradeJobRoute,
   upgradeRoute,
   versionCheckRoute,
@@ -725,7 +726,9 @@ export function createWebApp(deps: WebServerDeps): Server {
     });
   /** Remove buddi from this Mac: the token its plan mints (web/uninstall.ts). */
   const uninstallTokens = createTokenStore();
-  const lock = createLock({ pool: deps.pool, sessions, now: deps.now, get timezone() { return deps.timezone; }, widgets, needsYou, log });
+  const lock = createLock({ pool: deps.pool, sessions, now: deps.now, get timezone() { return deps.timezone; }, widgets, needsYou, log,
+    // The status bar's answer, so the lock screen's version line never disagrees with it.
+    version: async () => lockVersion(await versionRoute({ env: deps.env ?? process.env, log, assetsDir })) });
   const openStreams = new Map<string, { session: Session; responses: Set<ServerResponse> }>();
   /*
    * This process's boot: answered by `/_buddi/ready`, so a page that watches a

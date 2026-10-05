@@ -140,7 +140,11 @@ export interface LockScreenView extends LockStateView {
   widgets: Array<{ key: string; id: string; title: string; size: string; view: unknown }>;
   /** The clock with the Profile applied. */
   clockView: LockClockView;
+  /** What is running, and the newer one the supervisor has ready: the status bar's answer. Absent when unknown. */
+  version?: LockVersion;
 }
+
+export interface LockVersion { current: string; latest?: string; updateAvailable: boolean }
 
 export interface LockClockView {
   /** `12h`, `24h`, or null for Auto. */
@@ -158,6 +162,8 @@ export interface LockDeps {
   widgets?: WidgetsService;
   /** What needs the owner (web/needs-you.ts); absent, the lock screen counts approvals alone. */
   needsYou?: () => Promise<NeedsYou>;
+  /** The running version, from the same answer as `GET /api/version`; absent or null leaves the line off. */
+  version?: () => Promise<LockVersion | null>;
   log?: (line: string) => void;
 }
 
@@ -313,11 +319,12 @@ export function createLock(deps: LockDeps) {
     const profile = await getOwnerProfile(deps.pool as never).catch(() => null);
     // One format for every time on the screen: the big clock's, which its widgets read as their Profile.
     const clockView = await lockClockView(deps.pool, state.settings.clock, profile, hour);
-    const [pending, needsYou, focus, widgets] = await Promise.all([
+    const [pending, needsYou, focus, widgets, version] = await Promise.all([
       listPendingActions(deps.pool, { now }).catch(() => []),
       deps.needsYou ? deps.needsYou().catch(() => null) : Promise.resolve(null),
       readFocusState(deps.pool, { now: deps.now, timezone: deps.timezone }).catch(() => null),
       lockWidgets(deps.widgets, hour, clockView.time),
+      deps.version ? deps.version().catch(() => null) : Promise.resolve(null),
     ]);
     const owner = profile?.preferredName?.trim() || profile?.displayName?.trim() || null;
     return {
@@ -330,6 +337,7 @@ export function createLock(deps: LockDeps) {
       focus,
       widgets,
       clockView,
+      ...(version ? { version } : {}),
     };
   }
 

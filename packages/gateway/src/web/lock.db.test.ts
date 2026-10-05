@@ -169,6 +169,8 @@ suite('the lock screen', () => {
     expect(screen.status).toBe(200);
     expect(screen.body).toMatchObject({ locked: true, timezone: 'Europe/Paris', owner: 'owner', approvals: 0, widgets: [] });
     expect(typeof screen.body!.needs).toBe('number');
+    // The status bar's version line, quietly: a checkout never says "update ready".
+    expect(screen.body!.version).toMatchObject({ current: expect.any(String), updateAvailable: false });
 
     const open = await b.post('/api/lock/unlock', { pin: '2468' });
     expect(open.status).toBe(200);
