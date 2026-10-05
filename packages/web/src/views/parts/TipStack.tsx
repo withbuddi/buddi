@@ -50,6 +50,10 @@ export interface TipQueue {
   /** Every tip that holds is dismissed: none left, and none only put off. */
   allDismissed: boolean;
   error: string | null;
+  /** How many tips that hold are dismissed for good, counting the ones dismissed here. */
+  dismissed: number;
+  /** "Bring back": forget a dismissal; the queue is read again, so the tip re-enters it. */
+  restore: (id: string) => Promise<void>;
   /** A card leaves: at once here, the gateway told on the side. */
   leave: (id: string, how: TipLeave) => void;
   /** The stack has folded away after its last card. */
@@ -65,6 +69,7 @@ export interface TipQueue {
 export function useTipQueue(preview?: string, peek = false): TipQueue {
   const queue = useAsync(() => api.tipQueue(preview, peek), [preview, peek]);
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  const [dismissedHere, setDismissedHere] = useState<ReadonlySet<string>>(new Set());
   const [putOff, setPutOff] = useState(false);
   const [folded, setFolded] = useState(false);
   const all = queue.data?.tips ?? [];
@@ -73,15 +78,33 @@ export function useTipQueue(preview?: string, peek = false): TipQueue {
   const leave = useCallback((id: string, how: TipLeave): void => {
     setGone((current) => new Set(current).add(id));
     if (how === 'later') setPutOff(true);
+    else setDismissedHere((current) => new Set(current).add(id));
     if (quiet) return;
     void (how === 'dismiss' ? api.dismissTip(id) : api.laterTip(id)).catch(() => {});
   }, [quiet]);
+  const { reload } = queue;
+  const restore = useCallback(async (id: string): Promise<void> => {
+    await api.restoreTip(id);
+    const forget = (current: ReadonlySet<string>): ReadonlySet<string> => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    };
+    setGone(forget);
+    setDismissedHere(forget);
+    setFolded(false);
+    reload();
+  }, [reload]);
+  // The gateway's count, plus the ones dismissed here since it last answered.
+  const dismissed = (queue.data?.dismissed ?? 0) + [...dismissedHere].filter((id) => all.some((tip) => tip.id === id)).length;
   return {
     tips,
     shown: all.length > 0 && !(tips.length === 0 && folded),
     loaded: queue.data !== undefined || queue.error !== null,
     allDismissed: tips.length === 0 && !putOff && ((queue.data?.dismissed ?? 0) > 0 || all.length > 0),
     error: queue.error,
+    dismissed,
+    restore,
     leave,
     folded: useCallback(() => setFolded(true), []),
   };

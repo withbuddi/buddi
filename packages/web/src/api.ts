@@ -2902,6 +2902,8 @@ export const api = {
   ),
   /** Every tip and where it stands; reads only. */
   tips: () => get<{ tips: TipListRow[] }>('/tips'),
+  /** The dismissed tips the queue counts, for the empty stack's "Bring back" list; reads only. */
+  dismissedTips: () => get<{ tips: Array<TipView & { dismissedAt?: string }> }>('/tips/dismissed'),
   /** "Bring back": forget a dismissal. */
   restoreTip: (id: string) => post<{ ok: true }>(`/tips/${encodeURIComponent(id)}/restore`),
   /** "Not this again": the tip never comes back. */

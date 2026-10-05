@@ -195,10 +195,13 @@ recently at the back; cooldowns only govern the unsolicited daily pick and
 the bulb's dot. Slide the front card left (or ←, or
 "Not now") to put it off for a week, right (→, "Not this again") to remove it
 for good; the button on the card, or Enter, goes where it points. A tip put
-off goes to the back; one removed for good does not come back. With none
+off goes to the back; one removed for good stays out of the stack until you
+bring it back. With none
 that applies the panel says "No tips right now. New ones appear as you use
 buddi."; with every one that applies removed, "You've turned off every tip
-that applies." The bulb wears a dot ("A new tip") while a
+that applies." Under either line, "N dismissed · Show" lists the tips removed
+for good, each with "Bring back", which returns it to the stack
+(`GET /api/tips/dismissed`, `POST /api/tips/:id/restore`). The bulb wears a dot ("A new tip") while a
 ready tip has not been in the open stack yet; opening the panel clears it.
 Tips are never in "Needs you", which is only what asks something of you.
 Never during first run, and never about a plugin that is not installed. A tip

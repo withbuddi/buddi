@@ -2715,6 +2715,8 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .home-tips-btn[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
 /* The Tips panel the bulb opens: the stack, or one quiet line when there is none. */
 .home-tips-empty { margin: 0; color: var(--text-muted); }
+.home-tips-dismissed { margin: var(--space-2) 0 0; display: flex; align-items: center; gap: var(--space-2); color: var(--text-muted); }
+.home-tips-dismissed-list { margin-top: var(--space-3); }
 /* ---- Home's glance: the day on the left, a plugin's glance card (or the Blob alone) on the right ---- */
 .home-band { padding: var(--space-8) 0 var(--space-6); }
 .home-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); width: 100%; max-width: var(--page-max); margin-inline: auto; }

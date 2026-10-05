@@ -4,7 +4,8 @@
  * every one whose condition holds, today's in front, the ones in their
  * cooldown at the back. A tip dismissed for good is not there; one put off
  * with "Not now" goes to the back. Empty, the panel says whether nothing
- * applies or the owner turned off every tip that does.
+ * applies or the owner turned off every tip that does, and "N dismissed ·
+ * Show" opens the dismissed ones as a flat list, each with "Bring back".
  *
  * The bulb carries a dot while a tip is ready that the owner has not had in
  * the stack yet; opening the panel clears it. The bulb shows pressed while
@@ -13,7 +14,8 @@
  * in front, touching nothing.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Button, ErrorBanner, Section } from '../../ui';
+import { api } from '../../api';
+import { Button, ErrorBanner, List, ListRow, Section, useAsync } from '../../ui';
 import { Icon } from '../../ui/Icon';
 import { TipStack, useTipQueue, type TipQueue } from './TipStack';
 
@@ -122,13 +124,77 @@ export function TipsSection({ tips, navigate }: { tips: Tips; navigate: (route: 
       <Section title="Tips" actions={<Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Close</Button>}>
         <ErrorBanner message={queue.error} />
         {empty && !queue.error ? (
-          <p className="home-tips-empty">
-            {queue.allDismissed ? "You've turned off every tip that applies." : 'No tips right now. New ones appear as you use buddi.'}
-          </p>
+          <>
+            <p className="home-tips-empty">
+              {queue.allDismissed ? "You've turned off every tip that applies." : 'No tips right now. New ones appear as you use buddi.'}
+            </p>
+            {queue.dismissed > 0 && !tips.preview ? <DismissedTips queue={queue} /> : null}
+          </>
         ) : (
           <TipStack queue={queue} navigate={navigate} />
         )}
       </Section>
+    </div>
+  );
+}
+
+/**
+ * The way back from "Not this again": under the empty stack, "N dismissed ·
+ * Show", then the dismissed tips as a flat list with "Bring back" on each.
+ * Bringing one back forgets the dismissal and reads the queue again, so the
+ * tip re-enters the stack.
+ */
+function DismissedTips({ queue }: { queue: TipQueue }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const count = queue.dismissed;
+  if (!open) {
+    return (
+      <p className="home-tips-dismissed">
+        <span>{count} dismissed</span>
+        <span aria-hidden="true">·</span>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>Show</Button>
+      </p>
+    );
+  }
+  return <DismissedList queue={queue} />;
+}
+
+function DismissedList({ queue }: { queue: TipQueue }): JSX.Element {
+  const list = useAsync(() => api.dismissedTips(), []);
+  const [back, setBack] = useState<ReadonlySet<string>>(new Set());
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const rows = (list.data?.tips ?? []).filter((tip) => !back.has(tip.id));
+  const bring = async (id: string): Promise<void> => {
+    setBusy(id);
+    setFailure(null);
+    try {
+      await queue.restore(id);
+      setBack((current) => new Set(current).add(id));
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="home-tips-dismissed-list" data-testid="tips-dismissed">
+      <ErrorBanner message={list.error ?? failure} />
+      {list.data && rows.length === 0 ? null : (
+        <List>
+          {rows.map((tip) => (
+            <ListRow
+              key={tip.id}
+              title={tip.text}
+              side={
+                <Button size="sm" disabled={busy !== null} onClick={() => void bring(tip.id)}>
+                  Bring back
+                </Button>
+              }
+            />
+          ))}
+        </List>
+      )}
     </div>
   );
 }

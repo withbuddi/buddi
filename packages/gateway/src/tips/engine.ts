@@ -176,6 +176,26 @@ export function pickQueue(
   return { tips, state, dismissed };
 }
 
+/**
+ * The tips the owner dismissed that would otherwise be in the stack: the ones
+ * `pickQueue` counts as `dismissed`, in `TIPS` order, for the empty stack's
+ * "Show" list and its "Bring back". Reads the state without changing it.
+ */
+export function listDismissed(
+  rules: readonly TipRule[],
+  facts: Facts,
+  previous: TipsState,
+  today: string,
+): Array<TipView & { dismissedAt?: string }> {
+  if (facts.firstRun) return [];
+  const { state } = pickTip(rules, facts, previous, today);
+  return rules.flatMap((rule) => {
+    const entry = state[rule.id];
+    if (!entry?.dismissed || !entry.firstHeld || !applies(rule, facts)) return [];
+    return [{ ...viewOf(rule, facts), ...(entry.dismissedAt ? { dismissedAt: entry.dismissedAt } : {}) }];
+  });
+}
+
 /** "Not this again": never again, until the Tips list brings it back. */
 export function dismissTip(previous: TipsState, id: string, today?: string): TipsState {
   return { ...previous, [id]: { ...previous[id], dismissed: true, ...(today ? { dismissedAt: today } : {}) } };

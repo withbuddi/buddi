@@ -7,6 +7,7 @@
  *                                  one that holds and is not dismissed, ready ones before those in their cooldown;
  *                                  `dismissed` counts the dismissed ones that hold
  *                                  (`?peek=1`: today's and the ready ones only, nothing marked shown: for the bulb's dot)
+ *   GET  /api/tips/dismissed       { tips: [...] }   the dismissed ones the queue counts, for "Bring back"
  *   POST /api/tips/:id/dismiss     "Not this again": never again
  *   POST /api/tips/:id/later       ×: not before its cooldown has passed
  *   POST /api/tips/:id/restore     "Bring back": forget a dismissal
@@ -16,7 +17,7 @@
  * `tips.pages`. A `tips.enabled` left from the old "Tips on Home" switch is
  * ignored: tips sit behind the bulb, which is the owner's choice to look.
  */
-import { dayIn, dismissTip, laterTip, listTips, pickQueue, pickTip, restoreTip, viewOf, type TipsState } from './engine.js';
+import { dayIn, dismissTip, laterTip, listDismissed, listTips, pickQueue, pickTip, restoreTip, viewOf, type TipsState } from './engine.js';
 import { PAGE_NAME, recordPageSeen, type Facts, type SettingsStore } from './facts.js';
 import { TIPS, type TipRule } from './rules.js';
 
@@ -102,6 +103,13 @@ export async function tipsRoute(
     }
     if (JSON.stringify(state) !== JSON.stringify(previous)) await deps.store.write(TIPS_STATE_KEY, state);
     return { status: 200, body: { tips, dismissed } };
+  }
+
+  if (path === '/api/tips/dismissed') {
+    if (method !== 'GET') return { status: 405, body: { error: 'GET only.' } };
+    // Reads only: the state is what the queue left it as.
+    const tips = listDismissed(rules, await deps.facts(), await readState(deps.store), today);
+    return { status: 200, body: { tips } };
   }
 
   if (path === '/api/tips/seen-page') {

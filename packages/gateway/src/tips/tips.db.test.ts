@@ -196,6 +196,18 @@ suite('tips against Postgres', () => {
     const queue = (await call('GET', '/queue')).body;
     expect(queue.tips.map((t: any) => t.id)).not.toContain('second-agent');
     expect(queue.dismissed).toBe(1);
+    // The empty stack's "Show": the dismissed ones the queue counts, then "Bring back".
+    const dismissed = await call('GET', '/dismissed');
+    expect(dismissed.status).toBe(200);
+    expect(dismissed.body.tips).toHaveLength(queue.dismissed);
+    expect(dismissed.body.tips[0]).toMatchObject({ id: 'second-agent', dismissedAt: '2026-09-28' });
+    expect((await call('POST', '/dismissed', {})).status).toBe(405);
+    expect((await call('POST', '/second-agent/restore', {})).body).toEqual({ ok: true });
+    expect((await call('GET', '/dismissed')).body.tips).toEqual([]);
+    const back = (await call('GET', '/queue')).body;
+    expect(back.tips.map((t: any) => t.id)).toContain('second-agent');
+    expect(back.dismissed).toBe(0);
+    expect((await call('POST', '/no-such-tip/restore', {})).status).toBe(404);
     expect((await call('POST', '/seen-page', { page: 'home' })).status).toBe(200);
   });
 });

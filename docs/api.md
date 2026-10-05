@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-324 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+325 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -657,6 +657,7 @@ curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "
 | GET | `/api/tips` | Every tip and its state. | yes |
 | GET | `/api/tips/current` | Today's tip on Home, if any (picking one is remembered). | yes |
 | GET | `/api/tips/queue` | The stack the lightbulb on Home opens: today's tip first, then every other one that holds and is not dismissed, ready ones before those in their cooldown (picking the first is remembered). | yes |
+| GET | `/api/tips/dismissed` | The dismissed tips the queue counts, for the empty stack's "Bring back" list. | yes |
 | POST | `/api/tips/seen-page` | Record that a page was opened (tips about it stop). | yes |
 | POST | `/api/tips/:id/dismiss` | Never show this tip again. | yes |
 | POST | `/api/tips/:id/later` | Show this tip another day. | yes |
@@ -725,6 +726,18 @@ The stack the lightbulb on Home opens: today's tip first, then every other one t
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/queue"
+```
+
+#### `GET /api/tips/dismissed`
+
+The dismissed tips the queue counts, for the empty stack's "Bring back" list.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ tips: Tip[] }`
+- **Since:** 0.1.0-pre.45
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/tips/dismissed"
 ```
 
 #### `POST /api/tips/seen-page`
