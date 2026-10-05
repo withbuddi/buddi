@@ -12,7 +12,6 @@ import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { SIZES, icon } from './icons.mjs';
 import { stampManifest } from './version.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,6 +32,9 @@ export const STATIC = [
   'manifest.json', 'popup.html', 'popup.css', 'blob.png',
   'fonts/dm-sans-latin-standard-normal.woff2', 'fonts/dm-sans-latin-ext-standard-normal.woff2',
   'fonts/dm-mono-latin-400-normal.woff2', 'fonts/dm-mono-latin-500-normal.woff2',
+  // The Blob at the four sizes Chrome asks for, drawn from the mascot rig by
+  // `node apps/mac/scripts/make-icons.mjs --extension` (the bolder small cut at 16 and 32).
+  'icons/16.png', 'icons/32.png', 'icons/48.png', 'icons/128.png',
 ];
 
 /**
@@ -62,13 +64,6 @@ export async function buildExtension({ clean = true } = {}) {
   }
 
   for (const asset of STATIC) await cp(path.join(root, 'static', asset), path.join(dist, asset));
-  // The Blob at the four sizes Chrome asks for, resized once from the
-  // dashboard's own app icon and kept in static/icons; the drawn mark in
-  // icons.mjs remains the fallback for a checkout without them.
-  for (const size of SIZES) {
-    const blob = path.join(root, 'static', 'icons', `${size}.png`);
-    await writeFile(path.join(dist, 'icons', `${size}.png`), await readFile(blob).catch(() => icon(size)));
-  }
 
   // The manifest's version is buddi's, in the four integers Chrome accepts
   // (`version.mjs`): one number for the popup, the hello frame and the tarball.

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { precacheList, precacheManifest } from './precache';
 
 const bundled = ['index.html', 'build.json', 'assets/index-abc12345.js', 'assets/index-abc12345.css', 'assets/lottie_light-x1y2z3w4.js', 'assets/dm-sans-latin-q1w2e3r4.woff2', 'assets/dm-mono-a1b2c3d4.woff'];
-const publicFiles = ['sw.js', 'manifest.webmanifest', 'favicon.png', 'icon-512.png', 'mascot', 'mascot/core.png', 'mascot/README.md', 'mascot/anim', 'mascot/anim/core-idle.json', 'api/secret.json', 'preview/x.png'];
+const publicFiles = ['sw.js', 'manifest.webmanifest', 'favicon.ico', 'favicon-16.png', 'favicon-32.png', 'apple-touch-icon.png', 'icon-512.png', 'mascot', 'mascot/core.png', 'mascot/README.md', 'mascot/anim', 'mascot/anim/core-idle.json', 'api/secret.json', 'preview/x.png'];
 
 describe('precacheList', () => {
   it('keeps the shell, its assets and the Blob, index.html first', () => {
@@ -13,7 +13,9 @@ describe('precacheList', () => {
       'assets/index-abc12345.css',
       'assets/index-abc12345.js',
       'assets/lottie_light-x1y2z3w4.js',
-      'favicon.png',
+      'favicon-16.png',
+      'favicon-32.png',
+      'favicon.ico',
       'mascot/anim/core-idle.json',
       'mascot/core.png',
     ]);

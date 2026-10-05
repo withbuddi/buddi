@@ -4,6 +4,7 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+- One buddi mark everywhere: the Blob is the icon in your Dock, your browser tab, the extension and the site. At the smallest sizes it gets bigger eyes and a bigger coral tip so it still reads as Buddi; the extension's new icon arrives with its next store update.
 - Plugins now learn which of your model accounts can listen and speak: an OpenAI key and Gemini can, a ChatGPT subscription and Claude can't, and Ollama or another compatible server is "try it and see". Settings → Speech uses this to offer only accounts that work, with the reason beside the ones that don't. (Host API 1.30.)
 ### Added
 

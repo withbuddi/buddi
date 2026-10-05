@@ -88,6 +88,7 @@ describe('the built extension', () => {
       manifest['background']['service_worker'],
       manifest['action']['default_popup'],
       ...Object.values(manifest['icons'] as Record<string, string>),
+      ...Object.values(manifest['action']['default_icon'] as Record<string, string>),
     ];
     for (const file of named) expect(await exists(file), `${file} is missing`).toBe(true);
     for (const bundle of BUNDLES) expect(await exists(bundle.out), `${bundle.out} is missing`).toBe(true);

@@ -85,7 +85,7 @@ third-party sign-ins (they open in the default browser).
 
 Screenshots: `docs/window-*.png` (light and dark).
 
-**Icons**: the dock icon and the menu-bar glyph (the Blob's silhouette; dimmed while starting, a dot when it needs attention) are drawn from the mascot rig by `node scripts/make-icons.mjs [buddi-design/mascot/rig/buddi-blob-core.svg]`, which refreshes `Design/` and the asset catalog.
+**Icons**: the dock icon and the menu-bar glyph (the Blob's silhouette; dimmed while starting, a dot when it needs attention) are drawn from the mascot rig by `node scripts/make-icons.mjs [buddi-design/mascot/rig/buddi-blob-core.svg]`, which refreshes `Design/` and the asset catalog. The same script draws the browser sets from the same rig: `--web` (the dashboard's favicons and app icons), `--extension` (its 16–128 icons), `--site[=dir]` (buddi-site's icons and og image), or `all` for every target.
 
 ## Environment
 

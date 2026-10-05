@@ -14,7 +14,7 @@ import type { Plugin } from 'vite';
 export function precacheList(bundled: readonly string[], publicFiles: readonly string[]): string[] {
   const keep = (file: string): boolean =>
     !/^(api|stream|preview)(\/|$)/.test(file) &&
-    (/^assets\/.+\.(js|css|woff2)$/.test(file) || /^mascot\/(anim\/)?[\w-]+\.(png|json)$/.test(file) || file === 'favicon.png');
+    (/^assets\/.+\.(js|css|woff2)$/.test(file) || /^mascot\/(anim\/)?[\w-]+\.(png|json)$/.test(file) || /^favicon(-\d+)?\.(png|ico)$/.test(file));
   return ['index.html', ...[...bundled, ...publicFiles].filter(keep).sort()];
 }
 
