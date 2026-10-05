@@ -1299,7 +1299,7 @@ describe('an agent offer', () => {
       {
         kind: 'agent-offer',
         agent: 'mail-triage',
-        text: 'Background triage needs a mail agent.',
+        text: 'Mail arrives, but nobody sorts it as it lands: no labels, no “needs a reply”, no drafts waiting. buddi and your other agents still read mail when you ask.',
         label: 'Create @mail',
         when: { path: 'triage', equals: 'needs-agent' },
       },
@@ -1318,7 +1318,7 @@ describe('an agent offer', () => {
       agent: { id: 'mail-triage', handle: 'mail', name: 'Mail' },
     });
     drawOffer('needs-agent');
-    expect(await screen.findByText('Background triage needs a mail agent.')).toBeInTheDocument();
+    expect(await screen.findByText('Mail arrives, but nobody sorts it as it lands: no labels, no “needs a reply”, no drafts waiting. buddi and your other agents still read mail when you ask.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Create @mail' }));
     await waitFor(() => expect(api.acceptPluginAgent).toHaveBeenCalledWith('email', 'mail-triage'));
     expect(await screen.findByText(/@mail is ready/)).toBeInTheDocument();
@@ -1352,7 +1352,7 @@ describe('an agent offer', () => {
   it('is not there once the agent is', async () => {
     drawOffer('ready');
     expect(await screen.findByText('Mailboxes.')).toBeInTheDocument();
-    expect(screen.queryByText('Background triage needs a mail agent.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Mail arrives, but nobody sorts it as it lands: no labels, no “needs a reply”, no drafts waiting. buddi and your other agents still read mail when you ask.')).not.toBeInTheDocument();
   });
 });
 

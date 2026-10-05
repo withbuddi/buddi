@@ -812,12 +812,13 @@ suite('the mail pages, over postgres', () => {
    * before then is mail with nobody to read it, so the save says so and the
    * settings page's data carries what its offer line is drawn against.
    */
-  it('says on save that background triage needs a mail agent, while there is none', async () => {
+  it('says on save that nobody sorts mail as it lands, while there is no mail agent', async () => {
     configurePluginHost({ hasAgent: (id) => id !== 'mail-triage' });
     try {
       const added = await act('email.add_account', { address: ADDED, password: 'letmein' });
       expect(added).toMatchObject({ added: true, triage: 'needs-agent' });
-      expect(added.note).toContain('Background triage needs a mail agent.');
+      expect(added.note).toContain('Mail arrives, but nobody sorts it as it lands');
+      expect(added.note).toContain('still read mail when you ask.');
       expect(added.note).toContain('Create @mail');
       expect((await ask('accounts')).triage).toBe('needs-agent');
       expect(await ask('triage_offer')).toEqual({ wanted: true });

@@ -54,11 +54,11 @@ beforeEach(() => {
  * agents' own, with both answers, and the no is the one Home hears.
  */
 it('lists what the plugins offer under Offers, with Create and Not now', async () => {
-  vi.mocked(api.agentOffers).mockResolvedValue({ offers: [{ plugin: 'email', agent: 'mail-triage', handle: 'mail', name: 'Mail', description: 'Triages mail.', text: 'Background triage needs a mail agent.' }] });
+  vi.mocked(api.agentOffers).mockResolvedValue({ offers: [{ plugin: 'email', agent: 'mail-triage', handle: 'mail', name: 'Mail', description: 'Triages mail.', text: 'Mail arrives, but nobody sorts it as it lands: no labels, no “needs a reply”, no drafts waiting. buddi and your other agents still read mail when you ask.' }] });
   vi.mocked(api.dismissAgentOffer).mockResolvedValue({ dismissed: true });
   render(<Harness start="#/agents?tab=offers" />);
   expect(await screen.findByText('From your plugins')).toBeInTheDocument();
-  expect(screen.getByText('Background triage needs a mail agent.')).toBeInTheDocument();
+  expect(screen.getByText('Mail arrives, but nobody sorts it as it lands: no labels, no “needs a reply”, no drafts waiting. buddi and your other agents still read mail when you ask.')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Create @mail' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
   await waitFor(() => expect(api.dismissAgentOffer).toHaveBeenCalledWith('email', 'mail-triage'));

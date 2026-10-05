@@ -6,7 +6,8 @@
  * something the owner already set up — the mail plugin polls every mailbox and
  * hands each new message to `mail-triage`, which nothing creates. Those carry
  * an `offer`, and Home shows it while nobody has that id, the plugin says it is
- * wanted, and the owner has not dismissed it.
+ * wanted, and the owner has not dismissed it. A mail agent is not offered
+ * while any agent on the team carries the `mail` role.
  *
  * Accepting is not here. It is `POST /api/plugins/<plugin>/agents/<id>/accept`
  * (`acceptAgentRoute`), the gated `platform.accept_plugin_agent` the Plugins
@@ -54,11 +55,26 @@ export interface AgentOffersDeps extends PagesDeps {
   /** The ids the roster holds right now. */
   agentIds: () => readonly string[];
   /**
+   * The roles the roster's agents carry right now. An offer is not made when
+   * somebody on the team already carries the `mail` role it would fill: mail
+   * is read, and the owner would read the card as a bug. Absent counts as none.
+   */
+  agentRoles?: () => readonly string[];
+  /**
    * Is first run not under way? While it runs, Home’s offers stay
    * quiet: chapter 4's mailbox sheet brings Mail Triage in itself. Absent
    * counts as over.
    */
   firstRunDone?: () => Promise<boolean>;
+}
+
+/** The role whose offer is not made while an agent already carries it. */
+export const MAIL_ROLE = 'mail';
+
+/** Whether the team already has an agent in the `mail` role this offered agent would fill. */
+function roleTaken(deps: AgentOffersDeps, roles: readonly string[] | undefined): boolean {
+  if (!roles?.includes(MAIL_ROLE) || !deps.agentRoles) return false;
+  return deps.agentRoles().includes(MAIL_ROLE);
 }
 
 function keyOf(plugin: string, agent: string): string {
@@ -113,6 +129,7 @@ export async function readAgentOffers(deps: AgentOffersDeps): Promise<{ offers: 
     const offer = agent.offer;
     if (!offer || typeof offer.text !== 'string' || offer.text.trim() === '') continue;
     if (present.has(agent.id) || dismissed.has(keyOf(plugin, agent.id))) continue;
+    if (roleTaken(deps, agent.roles)) continue;
     if (!(await wanted(deps, plugin, offer.query))) continue;
     offers.push({
       plugin,
@@ -185,6 +202,7 @@ export async function raiseAgentOffers(deps: RaiseAgentOffersDeps, plugin: strin
     const setting = await readSetting(deps.pool);
     if (listOf(setting.dismissed).has(key) || listOf(setting.raised).has(key)) continue;
     if (deps.agentIds().includes(agent.id)) continue;
+    if (roleTaken(deps, agent.roles)) continue;
     const pending = await listPendingActions(deps.pool as never, { now: deps.now() }).catch(() => [] as ActionRecord[]);
     if (pending.some((action) => isPendingAccept(action, plugin, agent.id))) continue;
     if (!(await wanted(deps, plugin, agent.offer?.query))) continue;

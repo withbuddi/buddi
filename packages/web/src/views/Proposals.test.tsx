@@ -71,7 +71,7 @@ const renderPage = async (): Promise<void> => {
 describe('the Proposals inbox', () => {
   it('lists the agents your plugins offer, and creates one in one click', async () => {
     vi.mocked(api.proposals).mockResolvedValue({ open: [], closed: [] });
-    vi.mocked(api.agentOffers).mockResolvedValue({ offers: [{ plugin: 'email', agent: 'mail-triage', handle: 'mail', name: 'Mail', description: 'Triages mail.', text: 'Background triage needs a mail agent.' }] });
+    vi.mocked(api.agentOffers).mockResolvedValue({ offers: [{ plugin: 'email', agent: 'mail-triage', handle: 'mail', name: 'Mail', description: 'Triages mail.', text: 'Mail arrives, but nobody sorts it as it lands: no labels, no “needs a reply”, no drafts waiting. buddi and your other agents still read mail when you ask.' }] });
     vi.mocked(api.acceptPluginAgent).mockResolvedValue({ approvalId: 'a-1', agent: { id: 'mail-triage', handle: 'mail', name: 'Mail' } });
     await renderPage();
     expect(await screen.findByText('From your plugins')).toBeInTheDocument();

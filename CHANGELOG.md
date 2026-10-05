@@ -12,6 +12,10 @@ What changes in buddi from one release to the next, newest first.
 
 - Mail: a message that arrived before pre.44 now opens with its formatting and pictures (pictures from the web still wait for Show images). buddi fetches it from your mail server the first time you open it, keeps it, and reads its own copy after that; if your server is slow it shows the text within a few seconds instead and doesn't try again for an hour.
 
+### Changed
+
+- Home: the mail card now says what is actually missing — "Mail arrives, but nobody sorts it as it lands: no labels, no ‘needs a reply’, no drafts waiting. buddi and your other agents still read mail when you ask." — and it no longer shows at all when one of your agents already has the mail role.
+
 ## 0.1.0-pre.44 — 2026-10-05
 
 - Cloudflare Access, "Set it up for me": buddi now runs Cloudflare's connector itself, as part of its own service, so the last step is "Starting the connector…" then "Connected" — no `sudo` command to copy. If cloudflared isn't installed, buddi downloads Cloudflare's official release and checks it against Cloudflare's published checksum before running it (or install it with `brew install cloudflared`). If an earlier setup left Cloudflare's system service on this computer, the step says so, explains why two connectors would fight, and gives the one line that removes it — or choose "Use the system daemon instead". Remove what buddi made stops the connector and deletes the copy of cloudflared buddi downloaded.

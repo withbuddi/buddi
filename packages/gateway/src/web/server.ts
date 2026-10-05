@@ -724,6 +724,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       agentOffers: async () =>
         (await readAgentOffers({
           registry: deps.registry, ctx: deps.ctx, now: deps.now, log, pool: deps.pool, agentIds: () => deps.catalog.list().map((a) => a.id),
+          agentRoles: () => deps.catalog.list().flatMap((a) => a.roles ?? []),
         })).offers,
       signals: async () => {
         const service = deps.connections ?? connectionsOf(deps.registry.manifests());
@@ -1622,6 +1623,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       ...pagesDeps(),
       pool: deps.pool,
       agentIds: () => deps.catalog.list().map((a) => a.id),
+      agentRoles: () => deps.catalog.list().flatMap((a) => a.roles ?? []),
       // Only a first run under way holds the offers back: an older install
       // that never ran it keeps them.
       firstRunDone: async () => (await getOnboarding(deps.pool)).state !== 'in-progress',

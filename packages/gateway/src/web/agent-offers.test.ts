@@ -7,7 +7,7 @@ import { ToolRegistry, type CoreToolContext, type PluginManifest } from '@buddi/
 import { describe, expect, it } from 'vitest';
 import { dismissAgentOffer, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 
-function manifest(wanted: { value: boolean }): PluginManifest {
+function manifest(wanted: { value: boolean }, roles?: string[]): PluginManifest {
   return {
     name: 'garden',
     version: '1.0.0',
@@ -23,6 +23,7 @@ function manifest(wanted: { value: boolean }): PluginManifest {
         persona: 'You water things.',
         tools: ['garden.plants'],
         offer: { text: 'The plants need someone to water them.', query: 'gardener_wanted' },
+        ...(roles ? { roles } : {}),
       },
       // No `offer`: only ever on the Plugins page.
       { id: 'pruner', handle: 'prune', name: 'Pruner', description: 'Prunes.', persona: 'You prune.', tools: ['garden.plants'] },
@@ -31,9 +32,9 @@ function manifest(wanted: { value: boolean }): PluginManifest {
   };
 }
 
-function deps(wanted: { value: boolean }, ids: string[] = []): AgentOffersDeps & { stored: Map<string, unknown> } {
+function deps(wanted: { value: boolean }, ids: string[] = [], roles?: string[]): AgentOffersDeps & { stored: Map<string, unknown> } {
   const registry = new ToolRegistry();
-  registry.register(manifest(wanted));
+  registry.register(manifest(wanted, roles));
   const stored = new Map<string, unknown>();
   const pool = {
     async query(sql: string, params?: unknown[]) {
@@ -76,6 +77,21 @@ describe('agent offers on Home', () => {
     expect((await readAgentOffers(during)).offers).toEqual([]);
     over = true;
     expect((await readAgentOffers(during)).offers.map((o) => o.agent)).toEqual(['gardener']);
+  });
+
+  it('does not offer a mail agent while somebody on the team already carries the mail role', async () => {
+    const wanted = { value: true };
+    // buddi or a Chief of Staff with the mail role already reads mail: no card.
+    const covered = { ...deps(wanted, ['concierge', 'chief'], ['mail']), agentRoles: () => ['front-desk', 'mail'] };
+    expect((await readAgentOffers(covered)).offers).toEqual([]);
+    covered.registry.invoke = (async () => { throw new Error('never invoked'); }) as never;
+    expect(await raiseAgentOffers(covered, 'garden')).toEqual([]);
+    // Nobody in the role: the card stands.
+    const open = { ...deps(wanted, ['concierge'], ['mail']), agentRoles: () => ['front-desk'] };
+    expect((await readAgentOffers(open)).offers.map((o) => o.agent)).toEqual(['gardener']);
+    // An agent that is not a mail agent is offered whoever carries the mail role.
+    const other = { ...deps(wanted), agentRoles: () => ['mail'] };
+    expect((await readAgentOffers(other)).offers.map((o) => o.agent)).toEqual(['gardener']);
   });
 
   it('stops offering once dismissed, and refuses to dismiss what nobody offers', async () => {

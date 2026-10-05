@@ -25,7 +25,13 @@ import { TRIAGE_AGENT_ID } from './sources/inbox-poll.js';
 /** The page query Home asks before offering the agent: is there a mailbox? */
 export const TRIAGE_OFFER_QUERY = 'triage_offer';
 
-export const TRIAGE_OFFER_TEXT = 'Background triage needs a mail agent.';
+/**
+ * What Home and the Mail page say while nobody sorts mail as it lands: what is
+ * missing, and what already works, so a team that reads mail on request does
+ * not read the card as a bug.
+ */
+export const TRIAGE_OFFER_TEXT =
+  'Mail arrives, but nobody sorts it as it lands: no labels, no “needs a reply”, no drafts waiting. buddi and your other agents still read mail when you ask.';
 
 export const MAIL_TRIAGE_TOOLS: readonly string[] = [
   // Reading.
