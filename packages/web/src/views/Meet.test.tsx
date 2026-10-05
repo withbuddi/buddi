@@ -12,7 +12,7 @@ import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiError, api, chatApi, type BrowserStatus, type OllamaProbe, type OnboardingView, type OwnerView, type ProviderAccountsView, type TakeOnView } from '../api';
 import { App } from '../App';
-import { Meet, FIRST_MESSAGE_TIMEOUT_MS, PATIENCE_MS, TAKE_ON_POLL_MS } from './Meet';
+import { Meet, FIRST_MESSAGE_TIMEOUT_MS, PATIENCE_MS, TAKE_ON_POLL_MS, calendarRowState } from './Meet';
 import { BANNED_WORDS, DEFAULT_ASSISTANT_NAME, SCRIPT } from './meet/script';
 import { resetInstallPrompt } from './parts/KeepClose';
 import { SHEETS } from './parts/FirstRunSheets';
@@ -1356,6 +1356,20 @@ describe('chapter 4: reach me', () => {
     expect(await screen.findByText(SCRIPT.reach.bank.later)).toBeInTheDocument();
   });
 
+  it('shows the Google account the calendar plugin says is signed in, on the calendar row', async () => {
+    atReach(['days']);
+    vi.mocked(api.pages).mockResolvedValue({
+      pages: [{ plugin: 'calendar', id: 'settings', title: 'Calendar', place: 'settings', body: [{ kind: 'notice', text: 'The Calendar settings page.' }] }] as never,
+    } as never);
+    vi.mocked(api.pageQuery).mockImplementation(async (plugin: string, query: string) =>
+      ({ data: plugin === 'calendar' && query === 'settings' ? { calendars: [{ id: 'c1', name: 'Home' }], accounts: [{ id: 'g1', kind: 'google', label: 'Google', username: 'amen@gmail.com', needsSignIn: false }] } : { waiting: false } }) as never,
+    );
+    render(meet());
+    expect(await screen.findByText(SCRIPT.reach.calendar.google('amen@gmail.com'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: SCRIPT.reach.calendar.add })).not.toBeInTheDocument();
+    expect(api.pageQuery).toHaveBeenCalledWith('calendar', 'sign_in');
+  });
+
   it('leaves the calendar and bank rows out when chapter 3 did not take them on', async () => {
     atReach(['mail']);
     render(meet());
@@ -1930,5 +1944,16 @@ describe('every word of it', () => {
       unmount();
     }
     for (const text of seen) for (const word of BANNED_WORDS) expect(text.includes(word), `the screen says "${word}"`).toBe(false);
+  });
+});
+
+describe('the calendar row reads the calendar plugin', () => {
+  it('says whose Google account, a sign-in under way, one to sign in again, or a private link', () => {
+    const google = (needsSignIn: boolean) => ({ kind: 'google', username: 'amen@gmail.com', needsSignIn });
+    expect(calendarRowState({ accounts: [google(false)], calendars: [{}] }, {})).toMatchObject({ kind: 'google', label: 'Google · amen@gmail.com' });
+    expect(calendarRowState({ accounts: [] }, { waiting: true })).toMatchObject({ kind: 'waiting', label: SCRIPT.reach.calendar.googleWaiting });
+    expect(calendarRowState({ accounts: [google(true)], calendars: [{}] }, {})).toMatchObject({ kind: 'expired', tone: 'warning' });
+    expect(calendarRowState({ accounts: [], calendars: [{}] }, {})).toMatchObject({ kind: 'linked', label: SCRIPT.reach.calendar.linked });
+    expect(calendarRowState({ accounts: [], calendars: [] }, {})).toBeNull();
   });
 });

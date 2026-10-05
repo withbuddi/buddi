@@ -10,12 +10,13 @@ import { BankSheet, CalendarSheet, MailboxSheet, SHEETS, SIGN_IN_PREPARE_MS, nam
 
 vi.mock('../../api', async (load) => {
   const real = await load<typeof import('../../api')>();
-  return { ...real, api: { ...real.api, pageQuery: vi.fn(), pageAct: vi.fn() } };
+  return { ...real, api: { ...real.api, pageQuery: vi.fn(), pageAct: vi.fn(), acceptPluginAgent: vi.fn() } };
 });
 
 beforeEach(() => {
   vi.mocked(api.pageQuery).mockReset();
   vi.mocked(api.pageAct).mockReset();
+  vi.mocked(api.acceptPluginAgent).mockReset();
 });
 
 const sheet = (name: string): Promise<HTMLElement> => screen.findByRole('dialog', { name });
@@ -62,6 +63,7 @@ describe('the mailbox sheet', () => {
 
   it('keeps an Other mailbox\'s hosts under Server details, sent only when filled in', async () => {
     vi.mocked(api.pageAct).mockResolvedValue({ result: { added: true, address: 'me@example.org', triage: 'needs-agent' } });
+    vi.mocked(api.acceptPluginAgent).mockResolvedValue({ agent: { id: 'mail-triage', handle: 'mail', name: 'Mail Triage' } });
     render(<MailboxSheet onClose={vi.fn()} onAdded={vi.fn()} />);
     const s = await sheet(SHEETS.mailbox.sheet);
     fireEvent.click(within(s).getByRole('button', { name: /Other/ }));
@@ -70,8 +72,41 @@ describe('the mailbox sheet', () => {
     fireEvent.change(within(s).getByLabelText(SHEETS.mailbox.otherPassword), { target: { value: 'pw' } });
     fireEvent.change(within(s).getByLabelText(SHEETS.mailbox.imapHost), { target: { value: 'mail.example.org' } });
     fireEvent.click(within(s).getByRole('button', { name: SHEETS.mailbox.submit }));
-    expect(await within(s).findByText(SHEETS.mailbox.noTriage)).toBeInTheDocument();
+    expect(await within(s).findByText(SHEETS.mailbox.reading)).toBeInTheDocument();
     expect(api.pageAct).toHaveBeenCalledWith('email', { tool: 'email.add_account', args: { address: 'me@example.org', password: 'pw', imapHost: 'mail.example.org' } });
+  });
+
+  it('brings Mail Triage in with the first mailbox, on the same press, and says so', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ result: { added: true, address: 'amen@gmail.com', triage: 'needs-agent' } });
+    vi.mocked(api.acceptPluginAgent).mockResolvedValue({ approvalId: 'a1', agent: { id: 'mail-triage', handle: 'mail', name: 'Mail Triage' } });
+    const joined = vi.fn();
+    window.addEventListener('buddi:agents-changed', joined);
+    render(<MailboxSheet onClose={vi.fn()} onAdded={vi.fn()} />);
+    const s = await sheet(SHEETS.mailbox.sheet);
+    fireEvent.click(within(s).getByRole('button', { name: /Gmail/ }));
+    // Said before the press: one Add it covers the mailbox and its teammate.
+    expect(within(s).getByText(SHEETS.mailbox.brings)).toBeInTheDocument();
+    fireEvent.change(within(s).getByLabelText(SHEETS.mailbox.address), { target: { value: 'amen@gmail.com' } });
+    fireEvent.change(within(s).getByLabelText(SHEETS.mailbox.password), { target: { value: 'abcd efgh' } });
+    fireEvent.click(within(s).getByRole('button', { name: SHEETS.mailbox.submit }));
+    expect(await within(s).findByText(SHEETS.mailbox.reading)).toBeInTheDocument();
+    expect(api.acceptPluginAgent).toHaveBeenCalledWith('email', 'mail-triage');
+    expect(joined).toHaveBeenCalled();
+    window.removeEventListener('buddi:agents-changed', joined);
+  });
+
+  it('keeps the mailbox and says where Mail Triage waits when it could not be created', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ result: { added: true, address: 'amen@gmail.com', triage: 'needs-agent' } });
+    vi.mocked(api.acceptPluginAgent).mockRejectedValue(new ApiError(409, 'Creating @mail did not finish (failed).'));
+    const onAdded = vi.fn();
+    render(<MailboxSheet onClose={vi.fn()} onAdded={onAdded} />);
+    const s = await sheet(SHEETS.mailbox.sheet);
+    fireEvent.click(within(s).getByRole('button', { name: /Gmail/ }));
+    fireEvent.change(within(s).getByLabelText(SHEETS.mailbox.address), { target: { value: 'amen@gmail.com' } });
+    fireEvent.change(within(s).getByLabelText(SHEETS.mailbox.password), { target: { value: 'abcd efgh' } });
+    fireEvent.click(within(s).getByRole('button', { name: SHEETS.mailbox.submit }));
+    expect(await within(s).findByText(SHEETS.mailbox.noTriage('Creating @mail did not finish (failed).'))).toBeInTheDocument();
+    expect(onAdded).toHaveBeenCalledWith('amen@gmail.com');
   });
 
   it('goes back to the choice', async () => {

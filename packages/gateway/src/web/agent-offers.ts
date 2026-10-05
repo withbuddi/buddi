@@ -53,6 +53,12 @@ export interface AgentOffersDeps extends PagesDeps {
   pool: { query(sql: string, params?: unknown[]): Promise<{ rows: any[] }> };
   /** The ids the roster holds right now. */
   agentIds: () => readonly string[];
+  /**
+   * Is first run not under way? While it runs, Home’s offers stay
+   * quiet: chapter 4's mailbox sheet brings Mail Triage in itself. Absent
+   * counts as over.
+   */
+  firstRunDone?: () => Promise<boolean>;
 }
 
 function keyOf(plugin: string, agent: string): string {
@@ -99,6 +105,7 @@ async function wanted(deps: AgentOffersDeps, plugin: string, query: string | und
  * read broke is a card the owner cannot reason about.
  */
 export async function readAgentOffers(deps: AgentOffersDeps): Promise<{ offers: AgentOfferView[] }> {
+  if (deps.firstRunDone && !(await deps.firstRunDone().catch(() => true))) return { offers: [] };
   const present = new Set(deps.agentIds());
   const dismissed = await dismissedSet(deps.pool);
   const offers: AgentOfferView[] = [];
@@ -169,6 +176,9 @@ export interface RaiseAgentOffersDeps extends AgentOffersDeps {
 export async function raiseAgentOffers(deps: RaiseAgentOffersDeps, plugin: string): Promise<string[]> {
   const proposals = pluginAgentProposals(deps.registry).filter((p) => p.plugin === plugin && p.agent.offer);
   if (proposals.length === 0) return [];
+  // First run's mailbox sheet accepts Mail Triage on the same press: no card
+  // (nor a Telegram ask) to decide behind the owner's back meanwhile.
+  if (deps.firstRunDone && !(await deps.firstRunDone().catch(() => true))) return [];
   const raisedIds: string[] = [];
   for (const { agent } of proposals) {
     const key = keyOf(plugin, agent.id);

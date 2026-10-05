@@ -69,6 +69,15 @@ describe('agent offers on Home', () => {
     expect((await readAgentOffers(deps({ value: true }, ['gardener']))).offers).toEqual([]);
   });
 
+  it('stays quiet while first run is still on: its mailbox sheet brings Mail Triage in itself', async () => {
+    const wanted = { value: true };
+    let over = false;
+    const during = { ...deps(wanted), firstRunDone: async () => over };
+    expect((await readAgentOffers(during)).offers).toEqual([]);
+    over = true;
+    expect((await readAgentOffers(during)).offers.map((o) => o.agent)).toEqual(['gardener']);
+  });
+
   it('stops offering once dismissed, and refuses to dismiss what nobody offers', async () => {
     const d = deps({ value: true });
     expect(await dismissAgentOffer(d, 'garden', 'gardener')).toEqual({ status: 200, body: { dismissed: true } });
@@ -105,5 +114,11 @@ describe('agent offers on Home', () => {
     await dismissAgentOffer(said, 'garden', 'gardener');
     said.registry.invoke = (async () => { throw new Error('never invoked'); }) as never;
     expect(await raiseAgentOffers(said, 'garden')).toEqual([]);
+
+    // During first run: nothing raised, the mailbox sheet accepts it itself.
+    const early = { ...deps({ value: true }), firstRunDone: async () => false };
+    early.registry.invoke = (async () => { throw new Error('never invoked'); }) as never;
+    expect(await raiseAgentOffers(early, 'garden')).toEqual([]);
+    expect(early.stored.get('agent-offers')).toBeUndefined();
   });
 });

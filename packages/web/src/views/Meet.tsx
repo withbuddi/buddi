@@ -59,7 +59,7 @@ import { Blob, Button, ButtonLink, Code, Field, FloatCard, GradientField, Icon, 
 import { useMediaQuery } from '../useMediaQuery';
 import { GEMINI_FALLBACK_MODEL, geminiBrains, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
 import { firstMlxhModel, isMlxhAccount, isMlxhImageModel, mlxhNotAnswering } from '../mlxh';
-import { BankSheet, CalendarSheet, MailboxSheet } from './parts/FirstRunSheets';
+import { BankSheet, CalendarSheet, MailboxSheet, SIGN_IN_POLL_MS } from './parts/FirstRunSheets';
 import { InstallProgress } from './parts/InstallProgress';
 import { SignInCode } from './parts/SignInCode';
 import { inBuddiApp, installHint, useInstallPrompt } from './parts/KeepClose';
@@ -2951,16 +2951,34 @@ function usePluginHere(plugin: string, progress?: TakeOnView | null): boolean | 
 function CalendarRow({ progress }: { progress: TakeOnView | null }): JSX.Element {
   const ready = usePluginHere('calendar', progress);
   const [open, setOpen] = useState(false);
+  const [state, setState] = useState<CalendarRowState | null>(null);
   const [linked, setLinked] = useState(false);
+  // The plugin's own reads: its accounts (`settings`) and a sign-in under way
+  // (`sign_in`), asked again when the sheet closes and every two seconds while
+  // Google is still answering.
+  const [round, setRound] = useState(0);
   useEffect(() => {
-    if (!ready) return;
-    void Promise.resolve()
-      .then(() => api.pageQuery<{ calendars?: unknown[] }>('calendar', 'settings'))
-      .then((answer) => {
-        if ((answer?.data?.calendars?.length ?? 0) > 0) setLinked(true);
+    if (!ready) return undefined;
+    let cancelled = false;
+    void Promise.all([
+      api.pageQuery<CalendarAccountsView>('calendar', 'settings').then((answer) => answer?.data ?? {}),
+      api.pageQuery<{ waiting?: boolean }>('calendar', 'sign_in').then((answer) => answer?.data ?? {}).catch(() => ({})),
+    ])
+      .then(([settings, signIn]) => {
+        if (!cancelled) setState(calendarRowState(settings, signIn));
       })
       .catch(() => {});
-  }, [ready]);
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, round, open]);
+  useEffect(() => {
+    if (state?.kind !== 'waiting') return undefined;
+    const timer = window.setTimeout(() => setRound((n) => n + 1), SIGN_IN_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [state, round]);
+  const shown: CalendarRowState | null = state ?? (linked ? { kind: 'linked', tone: 'good', label: SCRIPT.reach.calendar.linked } : null);
+  const done = shown !== null && shown.kind !== 'expired';
   return (
     <div className="wiz-row">
       <span className="wiz-glyph" data-tone="calendar" aria-hidden="true">
@@ -2971,19 +2989,56 @@ function CalendarRow({ progress }: { progress: TakeOnView | null }): JSX.Element
         <span className="wiz-opt-line">{ready === false ? SCRIPT.reach.calendar.waiting : SCRIPT.reach.calendar.line}</span>
       </span>
       <span className="wiz-row-side">
-        {linked ? (
-          <Pill tone="good" dot>
-            {SCRIPT.reach.calendar.linked}
+        {shown !== null ? (
+          <Pill tone={shown.tone} dot mono={shown.kind === 'google' || shown.kind === 'expired'}>
+            {shown.label}
           </Pill>
-        ) : (
+        ) : null}
+        {done ? null : (
           <Button size="lg" disabled={!ready} onClick={() => setOpen(true)}>
             {SCRIPT.reach.calendar.add}
           </Button>
         )}
       </span>
-      {open ? <CalendarSheet onClose={() => setOpen(false)} onLinked={() => setLinked(true)} /> : null}
+      {open ? (
+        <CalendarSheet
+          onClose={() => setOpen(false)}
+          onLinked={() => {
+            setLinked(true);
+            setRound((n) => n + 1);
+          }}
+        />
+      ) : null}
     </div>
   );
+}
+
+/** What chapter 4's calendar row reads from the calendar plugin's `settings`. */
+interface CalendarAccountsView {
+  calendars?: unknown[];
+  accounts?: Array<{ kind?: string; username?: string; needsSignIn?: boolean }>;
+}
+
+export type CalendarRowState =
+  | { kind: 'waiting' | 'linked'; tone: 'accent' | 'good'; label: string }
+  | { kind: 'google'; tone: 'good'; label: string }
+  | { kind: 'expired'; tone: 'warning'; label: string };
+
+/**
+ * The calendar row's pill, from the plugin's own answers: a Google account
+ * signed in says whose, one Google stopped accepting says to sign in again, a
+ * sign-in under way says it is waiting, a private link says linked. Nothing
+ * linked yet: null, and the row offers Link a calendar.
+ */
+export function calendarRowState(settings: CalendarAccountsView, signIn: { waiting?: boolean }): CalendarRowState | null {
+  const google = (settings.accounts ?? []).filter((a) => a.kind === 'google');
+  const expired = google.filter((a) => a.needsSignIn === true);
+  const live = google.filter((a) => a.needsSignIn !== true);
+  if (signIn.waiting === true) return { kind: 'waiting', tone: 'accent', label: SCRIPT.reach.calendar.googleWaiting };
+  if (live.length > 0) return { kind: 'google', tone: 'good', label: SCRIPT.reach.calendar.google(live.map((a) => a.username ?? '').filter(Boolean).join(', ') || 'signed in') };
+  if (expired.length > 0) return { kind: 'expired', tone: 'warning', label: SCRIPT.reach.calendar.googleExpired(expired.map((a) => a.username ?? '').filter(Boolean).join(', ')) };
+  if ((settings.calendars?.length ?? 0) > 0) return { kind: 'linked', tone: 'good', label: SCRIPT.reach.calendar.linked };
+  return null;
 }
 
 /** The bank, from chapter 3's My money: what Finance needs, said once. */

@@ -358,6 +358,12 @@ export const SCRIPT = {
       waiting: 'Calendar is still being fetched. The button wakes up when it is in.',
       add: 'Link a calendar',
       linked: 'Calendar linked',
+      /** A Google account, signed in: whose. */
+      google: (who: string): string => `Google · ${who}`,
+      /** A Google sign-in started and not finished yet. */
+      googleWaiting: 'Waiting for Google…',
+      /** Google stopped accepting buddi's sign-in. */
+      googleExpired: (who: string): string => `Sign in again · ${who}`,
     },
     /** Shown when My money was taken on in chapter 3. */
     bank: {

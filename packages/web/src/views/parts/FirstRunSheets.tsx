@@ -10,7 +10,7 @@
  * counters, access per calendar) stays on its own settings page.
  */
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { api, ApiError } from '../../api';
+import { api, AGENTS_CHANGED, ApiError } from '../../api';
 import { Button, ButtonLink, Details, Field, Icon, Sheet, Spacer, Toolbar } from '../../ui';
 
 /* ------------------------------------------------------------------ *
@@ -47,8 +47,10 @@ export const SHEETS = {
     smtpHost: 'SMTP host',
     submit: 'Add it',
     reading: 'Mail Triage is reading it.',
-    /** Saved before Mail Triage exists: its offer is on Home. */
-    noTriage: 'Saved. Mail Triage starts reading once you accept it on Home.',
+    /** Said before the press: the one Add it covers both the mailbox and its teammate. */
+    brings: 'Adding it also brings in Mail Triage, who reads what arrives and sorts it for you.',
+    /** Saved, and Mail Triage could not be created with it: why, and where it waits. */
+    noTriage: (why: string): string => `Saved. Mail Triage didn’t start (${why.replace(/[.\s]+$/, '')}); it waits for you on Home.`,
     later: 'More in Mail settings later.',
   },
   calendar: {
@@ -149,6 +151,9 @@ const MAIL_HOSTS: Record<Exclude<MailProvider, 'other'>, { imapHost: string; ima
 
 const PROVIDERS: MailProvider[] = ['gmail', 'icloud', 'fastmail', 'other'];
 
+/** The email plugin's own teammate, proposed by it: what a first mailbox brings in. */
+const TRIAGE = { plugin: 'email', agent: 'mail-triage' } as const;
+
 /**
  * "Which mailbox?", then only what that provider needs.
  *
@@ -220,10 +225,22 @@ function MailboxForm({
         : MAIL_HOSTS[provider];
     void Promise.resolve()
       .then(() => api.pageAct('email', { tool: 'email.add_account', args: { address: address.trim(), password, ...hosts } }))
-      .then((answer) => {
+      .then(async (answer) => {
         const result = (answer.result ?? {}) as { address?: string; triage?: string };
         setPassword('');
-        setState({ kind: 'good', line: result.triage === 'needs-agent' ? SHEETS.mailbox.noTriage : SHEETS.mailbox.reading });
+        let line: string = SHEETS.mailbox.reading;
+        if (result.triage === 'needs-agent') {
+          // The same press brings Mail Triage in: the email plugin's own
+          // proposal, accepted as the owner (the card it raised is decided here).
+          line = await Promise.resolve()
+            .then(() => api.acceptPluginAgent(TRIAGE.plugin, TRIAGE.agent))
+            .then(() => {
+              window.dispatchEvent(new Event(AGENTS_CHANGED));
+              return SHEETS.mailbox.reading as string;
+            })
+            .catch((err: unknown) => SHEETS.mailbox.noTriage(reason(err)));
+        }
+        setState({ kind: 'good', line });
         onAdded(result.address ?? address.trim().toLowerCase());
       })
       .catch((err: unknown) => setState({ kind: 'bad', line: reason(err) }));
@@ -282,6 +299,7 @@ function MailboxForm({
         {state.kind === 'busy' ? <Line state="busy">{SHEETS.checking}</Line> : null}
         {state.kind === 'good' ? <Line state="good">{state.line}</Line> : null}
         {state.kind === 'bad' ? <Line state="bad">{state.line}</Line> : null}
+        {state.kind === 'idle' ? <p className="frs-later">{SHEETS.mailbox.brings}</p> : null}
         <p className="frs-later">{SHEETS.mailbox.later}</p>
       </div>
       <div className="ui-sheet-foot">

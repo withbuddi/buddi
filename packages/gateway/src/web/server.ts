@@ -128,7 +128,7 @@ import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactByt
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
 import { createVault } from '@buddi/core';
-import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
+import { beginOnboarding, completeOnboarding, getOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
 import {
@@ -1592,6 +1592,9 @@ export function createWebApp(deps: WebServerDeps): Server {
       ...pagesDeps(),
       pool: deps.pool,
       agentIds: () => deps.catalog.list().map((a) => a.id),
+      // Only a first run under way holds the offers back: an older install
+      // that never ran it keeps them.
+      firstRunDone: async () => (await getOnboarding(deps.pool)).state !== 'in-progress',
     });
     /** The Keys and secrets page (docs/owner-secrets.md §6): core's own queries and ownerOnly tools. */
     const secretsDeps = (): SecretsDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, ...(browser.logins ? { logins: browser.logins } : {}) });
@@ -1662,6 +1665,10 @@ export function createWebApp(deps: WebServerDeps): Server {
         ...(live.register && live.unregister && live.manifests ? { registry: deps.registry as never } : {}),
         mailboxSet,
         agentIds: () => deps.catalog.list().map((a) => a.id),
+        calendarLinked: async () => {
+          const answer = await runPageQuery(pagesDeps(), 'calendar', 'settings', new URLSearchParams()).catch(() => null);
+          return answer?.status === 200 && (answer.body as { data?: { hasCalendars?: unknown } } | null)?.data?.hasCalendars === true;
+        },
       };
     };
     /** The weather at home in one line, for the hello, when the weather plugin answers. */
