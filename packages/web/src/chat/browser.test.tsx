@@ -45,7 +45,11 @@ describe('conversation browser canvas', () => {
     expect(screen.queryByRole('tab', { name: /Shed · Status/ })).not.toBeInTheDocument();
     fireEvent.click(chip);
     expect(await screen.findByRole('tab', { name: /Shed · Status/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Raw JSON' }));
+    // Raw JSON sits under the card's ⋯ menu.
+    const more = screen.getByRole('button', { name: /^More for Shed · Status/ });
+    fireEvent.pointerDown(more, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    fireEvent.keyDown(more, { key: 'Enter' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Raw JSON' }));
     expect(screen.getByText(/"target": "garden"/)).toHaveTextContent('All ready');
   });
   it('restores an approval in the dock after reload and returns the composer after a decision', async () => {

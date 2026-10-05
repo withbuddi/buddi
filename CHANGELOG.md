@@ -10,6 +10,8 @@ What changes in buddi from one release to the next, newest first.
 
 - Chat: the list of your team hides from the chevron at the right of its "Your team" line (or ⌘\ — Ctrl+\ off a Mac). Hidden, it leaves a thin tab on the chat's left edge that brings it back, with a dot when someone is waiting for you. The empty row under Agent Father is gone.
 
+- Canvas: a tool's result without a view of its own is a tidy card now — its name in words you'd use, with the agent's face; facts in a clear grid; yes/no and states as small badges; short lists as chips; nested details folded; dates and times your way. A profile leads with the name, a list shows each item with a fact or two, and settings read as rows. Raw JSON is under the card's ⋯ menu. What an agent reads to know you (your profile, the first-run state, memory lookups, your team) no longer opens a Canvas tab by itself; open its step in the conversation to see it.
+
 ## 0.1.0-pre.42 — 2026-10-04
 
 - buddi.app: the Dock icon and the menu-bar glyph are the Blob now, not a "b". The menu-bar Blob is dimmed while buddi starts or updates and carries a dot when it needs attention.

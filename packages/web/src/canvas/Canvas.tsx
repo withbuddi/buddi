@@ -26,7 +26,8 @@ import * as Tabs from '@radix-ui/react-tabs';
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 import type { ApprovalRow } from '../api';
 import { RenderView } from './registry';
-import type { Renderable, RendererName, ViewDescriptor } from './types';
+import type { Renderable, RendererName, StructuredProps, ViewDescriptor } from './types';
+import { ToolResult } from './views/ToolResult';
 import { Profile, type ProfileProps } from './views/Profile';
 import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
 import { DelegateView, type DelegateViewProps } from './views/DelegateView';
@@ -69,6 +70,7 @@ export function Canvas({
   onDecided,
   onChangeAgent,
   face,
+  cardFace,
   descriptors,
   grantedTools,
   agentName,
@@ -88,6 +90,8 @@ export function Canvas({
   onChangeAgent?: ProfileProps['onChange'];
   /** The face of the agent whose canvas this is, drawn over the empty line. */
   face?: ReactNode;
+  /** The same face, small, for the head of a generic tool-result card. */
+  cardFace?: ReactNode;
   /** The installed view descriptors, used to say what could appear here. */
   descriptors?: ViewDescriptor[];
   /**
@@ -175,7 +179,7 @@ export function Canvas({
           >
             {/* The Page tab draws on the canvas's ground, as the kit does: no panel around it. */}
             {item.source === 'browser' ? browserPanel : <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
-              {item.source !== 'files' && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
+              {item.source !== 'files' && !genericCard(item) && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
                 <h2 className="ui-panel-title">{item.title}</h2>
                 <span className="ui-panel-tool mono">{item.source === 'sources' ? sourcesSummary(item.props as SourcesPanelProps) : item.tool}</span>
               </header> : null}
@@ -187,7 +191,15 @@ export function Canvas({
                 not be able to ask for it and fill it with whatever it likes.
                 Its source is set here, in the page, and nowhere else.
               */}
-              {item.source === 'profile' ? (
+              {genericCard(item) ? (
+                <ToolResult
+                  value={(item.props as StructuredProps).value}
+                  title={item.title}
+                  tool={item.tool}
+                  face={cardFace}
+                  timezone={timezone}
+                />
+              ) : item.source === 'profile' ? (
                 <Profile
                   {...(item.props as ProfileProps)}
                   {...(onChangeAgent ? { onChange: onChangeAgent } : {})}
@@ -216,6 +228,16 @@ export function Canvas({
       </Tabs.Root>
     </div>
   );
+}
+
+/**
+ * A result with no view of its own, that did not fail: drawn as the generic
+ * tool-result card, whose head carries the title, the face and the ⋯ menu.
+ */
+function genericCard(item: Renderable): boolean {
+  return item.renderer === 'structured'
+    && (item.source === 'fallback' || item.source === 'descriptor')
+    && !(item.props as StructuredProps | null)?.failed;
 }
 
 /**

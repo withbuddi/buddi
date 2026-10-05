@@ -230,8 +230,20 @@ describe('the canvas knows no domain', () => {
      */
     const SOURCES_SURFACE = path.join('src', 'chat', 'sources.ts');
     const SOURCES_LITERALS = new Set(["'web.read'", "'web.search'"]);
+    /*
+     * And one file the platform's own tools': which results are context for
+     * the agent (no tab of their own) and what each is called on the owner's
+     * screen. Core families only — never a plugin's tool.
+     */
+    const OWN_SURFACE = path.join('src', 'chat', 'own-tools.ts');
+    const OWN_FAMILIES = /^'(owner|memory|platform|system|reminder|schedule|goal)\./;
     for (const file of NEW_SURFACE.filter((candidate) => !/\.test\.tsx?$/.test(candidate))) {
       const text = readFileSync(file, 'utf8');
+      if (path.relative(PACKAGE, file) === OWN_SURFACE) {
+        const literals = text.match(/'[a-z][a-z0-9]*\.[a-z][a-z0-9_]*'/g) ?? [];
+        expect(literals.filter((literal) => !OWN_FAMILIES.test(literal))).toEqual([]);
+        continue;
+      }
       if (path.relative(PACKAGE, file) === BROWSER_SURFACE) {
         const literals = text.match(/'[a-z][a-z0-9]*\.[a-z][a-z0-9_]*'/g) ?? [];
         expect(literals.filter((literal) => !BROWSER_LITERALS.has(literal))).toEqual([]);

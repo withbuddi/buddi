@@ -34,6 +34,7 @@ import { ErrorBanner, Notice } from '../ui';
 import { BROWSER_TOOLS, conversationBrowser, endedBrowser, pausedBrowser, stepFor } from './browser';
 import { BrowserAsk, browserCardOf } from './BrowserAsk';
 import { WEB_SOURCE_TOOLS } from './sources';
+import { OWN_TOOL_TITLES, QUIET_TOOLS } from './own-tools';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
 import { agentRoute, chatRoute, settingsRoute } from '../routes';
@@ -581,13 +582,16 @@ export function ChatPage({
       ...(browserTab ? { folded: BROWSER_TOOLS } : {}),
       // A turn's web reads and searches share one Sources tab.
       gathered: WEB_SOURCE_TOOLS,
+      // What an agent reads to know its owner opens no tab of its own.
+      quiet: QUIET_TOOLS,
+      titles: OWN_TOOL_TITLES,
     });
     const items = fromTranscript.filter(item => item.source === 'approval' || !dismissed.includes(item.id));
     // A web call clicked in the conversation opens its turn's Sources tab on that call.
     const holder = activeTab ? sourcesHolding(items, activeTab) : null;
     if (holder) holder.props = { ...(holder.props as SourcesPanelProps), focus: activeTab };
     if (activeTab && !holder && !dismissed.includes(activeTab) && !items.some(item => item.id === activeTab)) {
-      const inspection = inspectToolCall(conversation?.messages ?? [], activeTab, { redactInputOf: BROWSER_TOOLS });
+      const inspection = inspectToolCall(conversation?.messages ?? [], activeTab, { redactInputOf: BROWSER_TOOLS, resultOf: QUIET_TOOLS, titles: OWN_TOOL_TITLES });
       // A browser call is never inspected as raw arguments: what was typed on
       // the owner's screen belongs on the panel as a step, not in a JSON tree
       // on the canvas.
@@ -1105,7 +1109,7 @@ export function ChatPage({
       grantedTools={group ? members.flatMap((member) => member.tools ?? []) : agent?.tools ?? []}
       {...(agent ? { agentName: agent.name } : {})}
       loading={threadLoading}
-      {...(!group && agent ? { face: <AgentAvatar agents={everyone} id={agent.id} size="xl" /> } : {})}
+      {...(!group && agent ? { face: <AgentAvatar agents={everyone} id={agent.id} size="xl" />, cardFace: <AgentAvatar agents={everyone} id={agent.id} size="sm" /> } : {})}
     />
   );
 

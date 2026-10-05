@@ -136,6 +136,18 @@ export interface RenderableInput {
    * call joins it the moment it is made, and its result lands in place.
    */
   gathered?: ReadonlySet<string>;
+  /**
+   * Tools whose results are context for the agent — the owner's profile, a
+   * memory lookup — by name, from the page (`chat/quiet-tools.ts`). A
+   * successful one opens no tab; the owner opens it from its step row.
+   */
+  quiet?: ReadonlySet<string>;
+  /**
+   * Owner-facing names for the platform's own tools (`owner.get_profile` →
+   * "Your profile"), from the page (`chat/own-tools.ts`). Any other tool's
+   * title is its name turned back into words.
+   */
+  titles?: ReadonlyMap<string, string>;
 }
 
 /** One gathered call: what was asked, and how it came back (null while out). */
@@ -213,7 +225,8 @@ export function awaitingPreviews({
  * The canvas contents for a conversation, oldest first, capped at the last
  * few. `canvas.clear` empties what came before it and nothing after.
  */
-export function renderablesFrom({ messages, descriptors, awaiting, folded, served, gathered }: RenderableInput): Renderable[] {
+export function renderablesFrom({ messages, descriptors, awaiting, folded, served, gathered, quiet, titles }: RenderableInput): Renderable[] {
+  const toolTitle = (tool: string): string => titleFor(tool, titles);
   const byTool = new Map(descriptors.map((descriptor) => [descriptor.tool, descriptor]));
   const uses = new Map<string, { name: string; input: unknown; at: string | null }>();
   let collected: Renderable[] = [];
@@ -335,6 +348,11 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // step list is where the action and its reason are read.
       if (folded?.has(tool)) continue;
 
+      // Context the agent read for itself (the owner's profile, a memory
+      // lookup) is not drawn back at the owner. Its step row still opens it;
+      // a failure still keeps its tab.
+      if (quiet?.has(tool) && block.ok !== false) continue;
+
       // A web read or search lands in its turn's Sources tab, failure or not.
       if (gathered?.has(tool)) {
         gather({
@@ -365,7 +383,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         collected.push({
           id: block.toolUseId,
           tool,
-          title: labelFor(tool),
+          title: toolTitle(tool),
           renderer: 'structured',
           props: { value: block.error ?? output ?? null, failed: true },
           at,
@@ -408,7 +426,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         collected.push({
           id: block.toolUseId,
           tool,
-          title: descriptor.title ?? labelFor(tool),
+          title: descriptor.title ?? toolTitle(tool),
           renderer,
           props,
           at,
@@ -423,7 +441,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       collected.push({
         id: block.toolUseId,
         tool,
-        title: labelFor(tool),
+        title: toolTitle(tool),
         renderer: 'structured',
         props,
         at,
@@ -604,15 +622,24 @@ export function approvalIdOf(block: Extract<ChatBlock, { type: 'tool_result' }>)
 export function inspectToolCall(
   messages: ChatMessage[],
   id: string,
-  options: { redactInputOf?: ReadonlySet<string> } = {},
+  options: { redactInputOf?: ReadonlySet<string>; resultOf?: ReadonlySet<string>; titles?: ReadonlyMap<string, string> } = {},
 ): Renderable | null {
+  const toolTitle = (tool: string): string => titleFor(tool, options.titles);
   const blocks = messages.flatMap(message => message.blocks);
   const call = blocks.find(block => block.type === 'tool_use' && block.id === id);
   if (call?.type !== 'tool_use') return null;
   const result = blocks.find(block => block.type === 'tool_result' && block.toolUseId === id);
+  // A quiet tool the owner opened shows what came back, drawn like any result:
+  // its arguments ("which profile?") are not what they asked to see.
+  if (options.resultOf?.has(call.name) && result?.type === 'tool_result' && result.ok && !result.approval) {
+    return {
+      id, tool: call.name, title: toolTitle(call.name), renderer: 'structured',
+      props: { value: forOwner(result.output) ?? null }, at: null, source: 'fallback', substantial: false,
+    };
+  }
   const input = options.redactInputOf?.has(call.name) ? redacted(call.input) : call.input;
   return {
-    id, tool: call.name, title: labelFor(call.name), renderer: 'structured',
+    id, tool: call.name, title: toolTitle(call.name), renderer: 'structured',
     props: { value: { input, ...(result?.type === 'tool_result'
       ? { status: result.approval?.state ?? (result.ok ? 'completed' : 'failed'), output: result.output, ...(result.error ? { error: result.error } : {}) }
       : { status: 'Awaiting result' }) } },
@@ -652,6 +679,11 @@ export function labelFor(tool: string): string {
   const parts = tool.split('.');
   if (parts.length === 1) return humanise(tool);
   return parts.map((part) => humanise(part)).join(' · ');
+}
+
+/** The page's owner-facing name for a tool, or its name turned back into words. */
+export function titleFor(tool: string, titles?: ReadonlyMap<string, string>): string {
+  return titles?.get(tool) ?? labelFor(tool);
 }
 
 /** The Sources tab that gathered this call, when one did. */

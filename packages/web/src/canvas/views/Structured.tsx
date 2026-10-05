@@ -29,7 +29,11 @@ const DEPTH_LIMIT = 2;
 /** Longer than this and a cell shows its head, with the whole of it on hover. */
 const CELL_CHARS = 64;
 
-export function Structured({ props }: { props: StructuredProps }): JSX.Element {
+export function Structured({ props, bare = false }: {
+  props: StructuredProps;
+  /** Inside the tool-result card, whose ⋯ menu already holds Raw JSON. */
+  bare?: boolean;
+}): JSX.Element {
   const [raw, setRaw] = useState(false);
   const execution = commandResult(props.value);
   const files = artifactFiles(execution?.result ?? props.value);
@@ -45,11 +49,11 @@ export function Structured({ props }: { props: StructuredProps }): JSX.Element {
         ? <CommandResult value={execution}>{files.length > 0 && <section><h4>Generated files</h4><ArtifactDownloads files={files} /></section>}</CommandResult> : files.length
         ? <details className="wb-aside"><summary>Tool details</summary><Shape shape={shape} /></details>
         : <Shape shape={shape} />}
-      <div className="wb-row-end wb-section">
+      {bare ? null : <div className="wb-row-end wb-section">
         <button className="ui-btn" data-variant="ghost" data-size="sm" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
           {raw ? 'Readable' : 'Raw JSON'}
         </button>
-      </div>
+      </div>}
     </div>
   );
 }
