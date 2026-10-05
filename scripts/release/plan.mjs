@@ -4,7 +4,7 @@
  *
  * `pnpm release pre.N` commits "Release <version>" with `release/REQUEST.json`
  * ({ version, from }) and pushes main; no tag. On every push to main the
- * release workflow (and ci.yml, to skip its own gate) asks this file:
+ * release workflow asks this file:
  *
  *   - The marker is the commit that last changed release/REQUEST.json. It
  *     counts only when its subject is exactly "Release <version>" for the

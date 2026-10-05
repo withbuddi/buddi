@@ -48,9 +48,9 @@ the ref the workflow ran for, and installers and buddi.app accept only
 `release.yml@refs/tags/v<version>` (`packages/install/src/provenance.ts`).
 A tag pushed with the workflow's own token starts no workflow; a dispatch does.
 
-`ci.yml` gates every other push to main. On a push that `release.yml` will
-tag, `ci.yml` skips its gate so the same commit is not tested twice; its
-changelog check still runs.
+`ci.yml` gates every push to main, its changelog check included. A push that
+`release.yml` will tag is gated by both: twice on that one commit, so that
+main's own CI never skips a push.
 
 ## The rule (plan.mjs)
 
@@ -74,7 +74,7 @@ overwrites it, and a tagged version makes it inert. CI never writes to main.
 
 Pushes to main queue in `release.yml` (one at a time; a newer push replaces
 one still waiting), so two runs never race for the tag; the `tag` job also
-refuses if the tag appeared while the gate ran.
+refuses if the tag appeared on another commit while the gate ran.
 
 ## A red gate
 
@@ -83,12 +83,17 @@ push whose gate is green tags the release at that push's commit, fix
 included. A flaky failure needs no commit: re-run the failed jobs of that run,
 and `tag` follows a green gate.
 
+The same holds when the gate passed and only the publish dispatch at the end
+of `tag` failed: re-run the failed jobs. `tag` finds the tag already naming
+this commit, leaves it, and starts the publish run again; it fails only when
+the tag names another commit.
+
 Fixes pushed on top of the release commit should not add Unreleased lines for
 this release: `CHANGELOG.md` already has its section. Edit that section if the
 fix changes what it says.
 
 A release whose gate never goes green stays requested: each push to main runs
-the release gate instead of the ordinary one, until the release is tagged or
+the release gate as well as the ordinary one, until the release is tagged or
 falls more than 50 commits behind HEAD. Then it is stale (a warning on each
 push, never a tag). To release it after all, push a fresh commit with the
 subject `Release 0.1.0-pre.N` that rewrites `release/REQUEST.json` with the

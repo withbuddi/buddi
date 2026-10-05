@@ -113,13 +113,23 @@ jobs:
         with: { ref: '${{ needs.plan.outputs.sha }}' }
       - name: Tag the gated commit
         run: |
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
-            echo "::error::$TAG appeared on origin while the gate ran; not moving it. Check which commit it names."
+          # The commit the tag names on origin, peeled when it is annotated;
+          # empty when there is no such tag yet.
+          named=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}" \
+            | awk '{ sha[$2] = $1 } END { t = ENVIRON["TAG"]; p = sha["refs/tags/" t "^{}"]; print (p != "" ? p : sha["refs/tags/" t]) }')
+          if [ -n "$named" ] && [ "$named" != "$SHA" ]; then
+            echo "::error::$TAG appeared on origin naming ${named:0:8}, not ${SHA:0:8}; not moving it."
             exit 1
           fi
-          git tag "$TAG" "$SHA"
-          git push origin "refs/tags/$TAG"
-          echo "::notice title=Tagged $TAG::${SHA:0:8} passed the gate and is $TAG."
+          if [ "$named" = "$SHA" ]; then
+            # A re-run after the dispatch below failed: the tag is already
+            # this commit's, so go on to the dispatch.
+            echo "::notice title=$TAG already tagged::$TAG already names ${SHA:0:8}; starting the publish run again."
+          else
+            git tag "$TAG" "$SHA"
+            git push origin "refs/tags/$TAG"
+            echo "::notice title=Tagged $TAG::${SHA:0:8} passed the gate and is $TAG."
+          fi
       - name: Start the publish run on the tag
         env:
           GH_TOKEN: ${{ github.token }}
