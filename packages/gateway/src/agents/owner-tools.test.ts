@@ -350,6 +350,40 @@ describe('owner.set_profile', () => {
     expect(h.db.places).toEqual([]);
   });
 
+  it('goes gated with a card when it clears a field or removes a place', async () => {
+    const h = harness();
+    const tool = h.tool('owner.set_profile') as unknown as {
+      tierFor(input: unknown, ctx: unknown): Promise<{ tier: string; reason?: string }>;
+      describe(input: unknown, ctx: unknown): Promise<{ envelope: unknown; preview: string }>;
+    };
+    expect(await tool.tierFor({ clear: ['pronouns'] }, h.ctx)).toMatchObject({ tier: 'gated' });
+    expect(await tool.tierFor({ removePlaces: ['Home'] }, h.ctx)).toMatchObject({ tier: 'gated' });
+    const card = await tool.describe({ fullName: 'Ada Lovelace', clear: ['pronouns'], removePlaces: ['Work'] }, h.ctx);
+    expect(card.preview).toBe('Change your profile:\nFull name: Ada Lovelace\nPronouns: cleared\nRemove the place Work');
+    expect(card.envelope).toMatchObject({ kind: 'profile_update', change: { profile: { pronouns: null }, removePlaces: ['Work'] } });
+  });
+
+  it('stays auto for a plain set, and for a call it will refuse anyway', async () => {
+    const h = harness();
+    const tool = h.tool('owner.set_profile') as unknown as {
+      tierFor(input: unknown, ctx: unknown): Promise<{ tier: string; reason?: string }>;
+      describe(input: unknown, ctx: unknown): Promise<{ envelope: unknown; preview: string }>;
+    };
+    expect(await tool.tierFor({ preferredName: 'Amen', places: [{ label: 'Home', address: 'Lyon' }] }, h.ctx)).toEqual({ tier: 'auto' });
+    expect(await tool.tierFor({ pronouns: 'she/her', clear: ['pronouns'] }, h.ctx)).toEqual({ tier: 'auto' });
+  });
+
+  it('looks up one place per call, and refuses a batch before asking the finder', async () => {
+    const h = harness();
+    const before = geocoded.length;
+    const result = await h.tool('owner.set_profile').execute(
+      { places: [{ label: 'Home', address: 'Lyon' }, { label: 'Work', address: 'Portland' }] },
+      h.ctx,
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'one-place' });
+    expect(geocoded.length).toBe(before);
+  });
+
   it('refuses a place with no address before looking anything up', async () => {
     const h = harness();
     const before = geocoded.length;

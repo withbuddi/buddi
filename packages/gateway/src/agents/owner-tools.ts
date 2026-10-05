@@ -7,10 +7,20 @@
  * something else entirely belong to the agent and its `first-run` skill. These
  * tools are the whole seam between the two.
  *
- * Everything here is tier `auto` and deliberately so: nothing it does is
- * irreversible, nothing leaves the machine, and an approval prompt in the
- * middle of "what should I call you?" would be the opposite of the experience
- * this exists to create. The one edit that touches a file — `rename_me` —
+ * Everything here is tier `auto` and deliberately so: an approval prompt in
+ * the middle of "what should I call you?" would be the opposite of the
+ * experience this exists to create. Two things are not quite that simple, and
+ * are said here so nobody reads the tier as a promise it is not:
+ *
+ *  - `set_profile` with a place sends that address to the geocoder Settings →
+ *    Profile already uses (the owner's own words, leaving the machine), one
+ *    lookup per call and no more.
+ *  - `set_profile` that *deletes* — `clear` a field, `removePlaces` — goes
+ *    gated for that call (`tierFor`), with the same card `mcp.profile_update`
+ *    shows: forgetting what the owner told buddi is his to confirm. Plain
+ *    sets stay auto.
+ *
+ * The one edit that touches a file — `rename_me` —
  * refuses far more than it accepts: an example the repository ships is never
  * rewritten, a handle another agent answers to is never taken, and the body of
  * the persona is never touched (core's `updateAgentFrontmatter` re-parses the
@@ -45,6 +55,7 @@ import {
   updateAgentFrontmatter,
   type HttpArea,
   type PluginManifest,
+  ToolRefusal,
   type ToolDefinition,
 } from '@buddi/core';
 import path from 'node:path';
@@ -59,7 +70,9 @@ import {
   applyProfileEdit,
   checkPlaceEdits,
   checkProfilePatch,
+  describeProfileEdit,
   profileGaps,
+  type ProfileEdit,
 } from '../owner-profile-edit.js';
 import type { AgentCatalog } from '../telegram/types.js';
 
@@ -76,6 +89,62 @@ export const OWNER_PLUGIN = 'owner';
 const INTERVIEW_RULES =
   'Ask one thing at a time and wait for the answer — never send a list of questions. ' +
   'Never invent or record a preference the owner did not actually state.';
+
+type SetProfileInput = z.infer<typeof setProfileInput>;
+
+/** Whether a `set_profile` call forgets something: a cleared field or a removed place. */
+function deletes(input: SetProfileInput): boolean {
+  return (input.clear?.length ?? 0) > 0 || (input.removePlaces?.length ?? 0) > 0;
+}
+
+/**
+ * A `set_profile` call checked into the edit Settings → Profile would save,
+ * or the refusal the model is handed. Pure: `tierFor`, `describe` and
+ * `execute` each run it and reach the same answer.
+ */
+function prepareProfileEdit(
+  input: SetProfileInput,
+): { ok: true; edit: ProfileEdit } | { ok: false; reason: string; message: string } {
+  if (input.timezone !== undefined && !isKnownTimezone(input.timezone)) {
+    return {
+      ok: false,
+      reason: 'unknown-timezone',
+      message:
+        `"${input.timezone}" is not a timezone I know. Ask the owner which city they are in ` +
+        'and try again; nothing was recorded.',
+    };
+  }
+  const { places, removePlaces, clear, ...fields } = input;
+  // One address goes to the geocoder per call, never a batch of them.
+  if ((places?.length ?? 0) > 1) {
+    return {
+      ok: false,
+      reason: 'one-place',
+      message: 'One place per call: the place finder is asked once each time. Send them one by one; nothing was recorded.',
+    };
+  }
+  const body: Record<string, unknown> = { ...fields };
+  for (const field of clear ?? []) {
+    if (body[field] !== undefined) {
+      return { ok: false, reason: 'conflict', message: `${field} is both given and cleared; nothing was recorded.` };
+    }
+    body[field] = null;
+  }
+  // Settings → Profile's own checks and sentences.
+  const checked = checkProfilePatch(body);
+  if (!checked.ok) {
+    const reason = checked.error.startsWith('The birthday') ? 'unknown-day' : 'invalid';
+    return { ok: false, reason, message: `${checked.error} Ask the owner again; nothing was recorded.` };
+  }
+  const placeEdits = checkPlaceEdits(places ?? [], removePlaces ?? []);
+  if (!placeEdits.ok) {
+    return { ok: false, reason: 'invalid-place', message: `${placeEdits.error} Nothing was recorded.` };
+  }
+  if (Object.keys(checked.patch).length === 0 && placeEdits.places.length === 0 && placeEdits.remove.length === 0) {
+    return { ok: false, reason: 'nothing-to-do', message: 'Say which field changed; nothing was recorded.' };
+  }
+  return { ok: true, edit: { patch: checked.patch, places: placeEdits.places, remove: placeEdits.remove } };
+}
 
 /** The surface a completion is attributed to when the caller did not say. */
 const UNKNOWN_SURFACE = 'agent';
@@ -405,37 +474,31 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
       INTERVIEW_RULES,
     tier: 'auto',
     input: setProfileInput,
+    /*
+     * A delete is the owner's to confirm: `clear` or `removePlaces` makes this
+     * call gated. A call that will be refused anyway stays auto, so the model
+     * hears the refusal at once instead of the owner seeing a card for nothing.
+     */
+    async tierFor(input) {
+      const prepared = prepareProfileEdit(input);
+      if (prepared.ok && deletes(input)) {
+        return { tier: 'gated', reason: 'It forgets something you told buddi.' };
+      }
+      return { tier: 'auto' };
+    },
+    describe(input) {
+      const prepared = prepareProfileEdit(input);
+      if (!prepared.ok) throw new ToolRefusal(prepared.message);
+      const edit = prepared.edit;
+      return {
+        envelope: { kind: 'profile_update', change: { profile: edit.patch, places: edit.places, removePlaces: edit.remove } },
+        preview: ['Change your profile:', ...describeProfileEdit(edit)].join('\n'),
+      };
+    },
     async execute(input, ctx: CoreToolContext) {
-      if (input.timezone !== undefined && !isKnownTimezone(input.timezone)) {
-        return {
-          ok: false,
-          reason: 'unknown-timezone',
-          message:
-            `"${input.timezone}" is not a timezone I know. Ask the owner which city they are in ` +
-            'and try again; nothing was recorded.',
-        };
-      }
-      const { places, removePlaces, clear, ...fields } = input;
-      const body: Record<string, unknown> = { ...fields };
-      for (const field of clear ?? []) {
-        if (body[field] !== undefined) {
-          return { ok: false, reason: 'conflict', message: `${field} is both given and cleared; nothing was recorded.` };
-        }
-        body[field] = null;
-      }
-      // Settings → Profile's own checks and sentences.
-      const checked = checkProfilePatch(body);
-      if (!checked.ok) {
-        const reason = checked.error.startsWith('The birthday') ? 'unknown-day' : 'invalid';
-        return { ok: false, reason, message: `${checked.error} Ask the owner again; nothing was recorded.` };
-      }
-      const placeEdits = checkPlaceEdits(places ?? [], removePlaces ?? []);
-      if (!placeEdits.ok) {
-        return { ok: false, reason: 'invalid-place', message: `${placeEdits.error} Nothing was recorded.` };
-      }
-      if (Object.keys(checked.patch).length === 0 && placeEdits.places.length === 0 && placeEdits.remove.length === 0) {
-        return { ok: false, reason: 'nothing-to-do', message: 'Say which field changed; nothing was recorded.' };
-      }
+      const prepared = prepareProfileEdit(input);
+      if (!prepared.ok) return prepared;
+      const edit = prepared.edit;
       const binding = bound();
       // The zone applies at once and schedules kept in the old one move with
       // it; the birthday greeting follows a new day at once.
@@ -445,7 +508,7 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
           log: binding?.log ?? (() => undefined),
           ...(binding?.placesHttp ? { http: binding.placesHttp } : {}),
         },
-        { patch: checked.patch, places: placeEdits.places, remove: placeEdits.remove },
+        edit,
       );
       // The steps the shipped skill records. Free-form strings in core, so an
       // owner's own first-run skill is free to record something else entirely.

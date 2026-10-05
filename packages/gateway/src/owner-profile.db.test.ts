@@ -94,6 +94,23 @@ suite('the owner tools on a real profile', () => {
     expect(result).toMatchObject({ ok: true, pronouns: null, dateFormat: null });
   });
 
+  it('asks the owner before a clear, through the registry, and writes nothing until he says yes', async () => {
+    const gated = new ToolRegistry();
+    const owned = createOwnerManifest(gated);
+    gated.register(owned);
+    bindOwnerTools(gated, { catalog: { get: () => undefined } as unknown as AgentCatalog, placesHttp: geocoder });
+    await tool('owner.set_profile').execute({ pronouns: 'they/them' }, ctx);
+
+    const asked = await gated.invoke('owner.set_profile', { clear: ['pronouns'] }, ctx);
+    expect(asked).toMatchObject({ ok: false, reason: 'approval-required' });
+    expect((asked as { preview: string }).preview).toContain('Pronouns: cleared');
+    expect((await getOwnerProfile(pool)).pronouns).toBe('they/them');
+
+    // A plain set is still the owner's words recorded at once.
+    expect(await gated.invoke('owner.set_profile', { about: 'Short answers, please.' }, ctx)).toMatchObject({ ok: true });
+    expect((await getOwnerProfile(pool)).about).toBe('Short answers, please.');
+  });
+
   it('reads the gaps and the "knowing you" record from memory', async () => {
     let gaps = await tool('owner.profile_gaps').execute({}, ctx);
     expect(gaps.gaps.map((g: any) => g.field)).toEqual(['places.home', 'dateFormat']);
