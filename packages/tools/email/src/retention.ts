@@ -133,6 +133,7 @@ export async function purgeBodies(
     const { rowCount } = await db.query(
       `update email.messages
           set body_text = null,
+              body_html = null,
               body_purged_at = $1
         where id in (
           select id from email.messages

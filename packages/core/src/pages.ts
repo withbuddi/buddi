@@ -385,6 +385,16 @@ export interface ListItem {
    * Since 1.28.
    */
   choice?: RowChoice;
+  /**
+   * The title drawn heavier while this holds of the row: a conversation with
+   * mail the owner has not read yet. Since 1.30.
+   */
+  strong?: Visibility;
+  /**
+   * One faint line under the rest of the row, cut to one line: what a
+   * message opens with. Since 1.30.
+   */
+  preview?: ValueRef;
 }
 
 /**
@@ -774,6 +784,47 @@ export interface CalendarSheet {
   asks?: Array<{ label: string; text: string }>;
 }
 
+/** One address on a message: the words the sender wrote, and the address. Since 1.30. */
+export interface PageMessageAddress {
+  name?: string | null;
+  address: string;
+}
+
+/** One file on a message, as a `message` component draws it (since 1.30). */
+export interface PageMessageAttachment {
+  name: string;
+  /** Bytes. */
+  size: number;
+  mime: string;
+  /** The file in the owner's library once it is there; null while it is only listed. */
+  artifactId: string | null;
+  /** The part's Content-ID, without angle brackets: what a `cid:` image in the HTML names. */
+  contentId?: string | null;
+  /** Anything else the `fetch` button's arguments read (the message, the part's index). */
+  [key: string]: unknown;
+}
+
+/**
+ * The data a `message` component draws (since host API 1.30). `html` is the
+ * body as the plugin stored it — the dashboard sanitises it again before a
+ * single node is drawn, and never fetches a remote image until the owner asks
+ * — `text` the plain body, drawn when there is no HTML. `at` is ISO 8601.
+ * `note` is one sentence drawn in place of a body that is not there (purged
+ * under retention); `snippet` is the folded line.
+ */
+export interface PageMessage {
+  id?: string;
+  from: PageMessageAddress;
+  to?: PageMessageAddress[];
+  cc?: PageMessageAddress[];
+  at?: string | null;
+  html?: string | null;
+  text?: string | null;
+  snippet?: string | null;
+  note?: string | null;
+  attachments?: PageMessageAttachment[];
+}
+
 /** What a section may put on the right of its heading: going, or doing. */
 export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' } | { kind: 'menu' }>;
 
@@ -783,6 +834,14 @@ export type Component =
       /** Right of the heading: a link away, or one button. Never a list of them. */
       actions?: SectionAction[];
       body: Component[];
+      /**
+       * Read this query and draw the body against its answer (since 1.30): the
+       * parts of one conversation, inside a detail the route owns, read the
+       * conversation rather than the page's own data.
+       */
+      query?: QueryRef;
+      /** The heading read from the data, in place of `title`: a conversation's subject. Since 1.30. */
+      heading?: ValueRef;
     })
   /**
    * A sentence. `text` may be a path, for something the data has to say.
@@ -1083,6 +1142,25 @@ export type Component =
   /** An artifact id in the data; draws the download link. */
   | (ComponentCommon & { kind: 'artifact'; path: string; label: string })
   /**
+   * One email, read (since host API 1.30): who wrote it and when, To and Cc on
+   * expand, and its body — sanitised HTML with remote images held back until
+   * the owner shows them for that sender, or the plain text with its links —
+   * with quoted earlier messages folded and the attachments as file rows. The
+   * data is a `PageMessage`, at `path` or the data itself; with `query`, the
+   * whole message is read from it when it is drawn open, and the row is only
+   * the header. `folded` draws it as one line (who, when, how it opens) while
+   * it holds of the row; opening it reads the query. `fetch` is the button on
+   * an attachment that has no file yet, its arguments read against that
+   * attachment.
+   */
+  | (ComponentCommon & {
+      kind: 'message';
+      path?: string;
+      query?: QueryRef;
+      folded?: Visibility;
+      fetch?: ToolRef;
+    })
+  /**
    * An agent this plugin proposes (`manifest.agents`), offered where it is
    * needed: one line and one button. Accepting is the gated
    * `platform.accept_plugin_agent` the Plugins page's Accept runs, with the
@@ -1275,6 +1353,8 @@ const listItemSchema = z
     status: z.object({ text: valueRefSchema, tone: z.union([toneSchema, valueRefSchema]).optional() }).strict().optional(),
     swatch: viewPathSchema.optional(),
     choice: rowChoiceSchema.optional(),
+    strong: visibilitySchema.optional(),
+    preview: valueRefSchema.optional(),
   })
   .strict();
 
@@ -1426,6 +1506,8 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
           )
           .optional(),
         body: z.array(componentSchema).max(24),
+        query: queryRefSchema.optional(),
+        heading: valueRefSchema.optional(),
       })
       .strict(),
     z
@@ -1812,6 +1894,16 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
       .strict(),
     z.object({ ...common, kind: z.literal('approval'), path: viewPathSchema }).strict(),
     z.object({ ...common, kind: z.literal('artifact'), path: viewPathSchema, label }).strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('message'),
+        path: viewPathSchema.optional(),
+        query: queryRefSchema.optional(),
+        folded: visibilitySchema.optional(),
+        fetch: toolRefSchema.optional(),
+      })
+      .strict(),
     z
       .object({
         ...common,

@@ -43,6 +43,9 @@ import type {
   OptionsFrom as CoreOptionsFrom,
   PageDescriptor as CorePageDescriptor,
   PageIcon as CorePageIcon,
+  PageMessage as CorePageMessage,
+  PageMessageAddress as CorePageMessageAddress,
+  PageMessageAttachment as CorePageMessageAttachment,
   PagePlay as CorePagePlay,
   PageTab as CorePageTab,
   ParamRef as CoreParamRef,
@@ -86,6 +89,9 @@ import type {
   RowChoiceOption,
   OptionsFrom,
   PageIcon,
+  PageMessage,
+  PageMessageAddress,
+  PageMessageAttachment,
   PagePlay,
   PageTab,
   ParamRef,
@@ -192,6 +198,9 @@ interface Conformance {
   field: Exact<CoreField, Field>;
   fieldAction: Exact<CoreFieldAction, FieldAction>;
   pagePlay: Exact<CorePagePlay, PagePlay>;
+  pageMessage: Exact<CorePageMessage, PageMessage>;
+  pageMessageAddress: Exact<CorePageMessageAddress, PageMessageAddress>;
+  pageMessageAttachment: Exact<CorePageMessageAttachment, PageMessageAttachment>;
   componentCommon: Exact<CoreComponentCommon, ComponentCommon>;
   sectionAction: Same<CoreSectionAction, SectionAction>;
   /** The web's `ListComponent` is core's list arm, named so it can be reused. */
@@ -245,6 +254,9 @@ export const CONTRACTS_AGREE: Conformance = {
   field: true,
   fieldAction: true,
   pagePlay: true,
+  pageMessage: true,
+  pageMessageAddress: true,
+  pageMessageAttachment: true,
   componentCommon: true,
   sectionAction: true,
   listComponent: true,
@@ -277,6 +289,7 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   button: true,
   approval: true,
   artifact: true,
+  message: true,
   'agent-offer': true,
   editor: true,
   stories: true,
@@ -295,6 +308,9 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
 /** Core's named types that are mirrored and compared above, by core's name. */
 export const CHECKED_TYPES = [
   'PageIcon',
+  'PageMessage',
+  'PageMessageAddress',
+  'PageMessageAttachment',
   'Visibility',
   'ParamRef',
   'ArgRef',

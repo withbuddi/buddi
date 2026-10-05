@@ -50,6 +50,7 @@ import type { AttachmentInfo } from '../ports.js';
 import { draftStatusLine, isoOf, policyLine, relative } from './format.js';
 import { describeUndo, movedSince, plural, recentActions, undoRefusal, verbOf, type ActionRecord } from '../mailbox/actions.js';
 import { learnedRules } from '../policies/auto.js';
+import { ACTION_COLUMNS, SEEN, toAction } from '../mailbox/actions.js';
 
 /** How many conversations the list shows before the owner narrows it. */
 export const THREAD_LIST_LIMIT = 30;
@@ -98,6 +99,10 @@ export function attachmentRows(
   line: string;
   artifactId: string | null;
   held: string;
+  name: string;
+  size: number;
+  mime: string;
+  contentId: string | null;
 }> {
   if (!Array.isArray(raw)) return [];
   return raw.map((entry, index) => {
@@ -113,6 +118,11 @@ export function attachmentRows(
       line: `${filename} — ${detail}`,
       artifactId: a.artifactId ?? null,
       held: a.artifactId ? 'in your files' : 'not fetched',
+      // The `message` component's own words for the same file (host API 1.30).
+      name: filename,
+      size: Number.isFinite(size) ? size : 0,
+      mime: a.mime ?? 'application/octet-stream',
+      contentId: typeof a.contentId === 'string' && a.contentId !== '' ? a.contentId : null,
     };
   });
 }
@@ -146,21 +156,28 @@ export const MAX_BODY_BYTES = 512 * 1024;
 export const TRUNCATED_NOTE =
   '… this message is too long to show in full; the rest is in your mailbox.';
 
-export function truncateBody(text: string): string {
-  if (Buffer.byteLength(text, 'utf8') <= MAX_BODY_BYTES) return text;
+/**
+ * How much of the plain text rides along when there is an HTML body too: the
+ * text is then only the fallback, and the answer must stay under the
+ * engine's megabyte with both in it.
+ */
+export const TEXT_WITH_HTML_BYTES = 64 * 1024;
+
+export function truncateBody(text: string, max: number = MAX_BODY_BYTES): string {
+  if (Buffer.byteLength(text, 'utf8') <= max) return text;
   /*
    * Cut on a character boundary: slicing bytes can land in the middle of a
    * multi-byte character, and the owner would read a replacement glyph at the
    * end of every long message. Decoding the slice leaves that partial
    * character as U+FFFD, which is exactly what is trimmed off here.
    */
-  const bytes = Buffer.from(text, 'utf8').subarray(0, MAX_BODY_BYTES);
+  const bytes = Buffer.from(text, 'utf8').subarray(0, max);
   const whole = new TextDecoder('utf-8').decode(bytes).replace(/\uFFFD+$/, '');
   return `${whole}\n\n${TRUNCATED_NOTE}`;
 }
 
 /** A draft as the editor and the draft list read it. Never a patch: all of it. */
-function draftRow(draft: DraftRecord, now: Date): Record<string, unknown> {
+function draftRow(draft: DraftRecord, now: Date, fromAddress?: string): Record<string, unknown> {
   const live =
     (LIVE_DRAFT_STATUSES as readonly string[]).includes(draft.status) && draft.sentActionId === null;
   // Dispatched, never confirmed: the one state where nothing may be done to it
@@ -191,6 +208,17 @@ function draftRow(draft: DraftRecord, now: Date): Record<string, unknown> {
     notLiveLine: `This draft is ${draft.status} and cannot be edited or sent. It is kept so you can read what was proposed.`,
     unresolvedLine: unresolvedLine(draft.sendError),
     sendError: draft.sendError,
+    /*
+     * The reply as the reading pane shows it before anyone edits it: drawn
+     * the way a message is (host API 1.30), from the mailbox it will leave.
+     */
+    preview: {
+      from: { name: 'Your reply', address: fromAddress ?? draft.to[0] ?? 'you' },
+      to: draft.to.map((address) => ({ address })),
+      cc: draft.cc.map((address) => ({ address })),
+      at: draft.updatedAt,
+      text: draft.bodyText,
+    },
   };
 }
 
@@ -245,6 +273,7 @@ export function threadsQuery(): PageQuery {
         [threads.map((t) => t.id), [...LIVE_DRAFT_STATUSES]],
       );
       const withDraft = new Set(rows.map((r: { thread_id: unknown }) => String(r.thread_id)));
+      const reading = await listReading(ctx.buddi!.db, threads.map((t) => t.id));
 
       /*
        * Who the conversation is *with*: the first participant who is not one
@@ -255,13 +284,27 @@ export function threadsQuery(): PageQuery {
         accounts.flatMap((account) => [account.address, ...account.aliases]).map((address) => address.toLowerCase()),
       );
       return {
-        threads: threads.map((thread) => ({
-          id: thread.id,
-          subject: thread.subject === '' ? '(no subject)' : thread.subject,
-          sender:
+        threads: threads.map((thread) => {
+          const sender =
             thread.participants.find((address) => !own.has(address.toLowerCase())) ??
             thread.participants[0] ??
-            '(nobody)',
+            '(nobody)';
+          const read = reading.get(thread.id);
+          return {
+          id: thread.id,
+          subject: thread.subject === '' ? '(no subject)' : thread.subject,
+          sender,
+          /*
+           * The person, not the address: the display name on their latest
+           * message when they gave one (host API 1.30's reading pane), the
+           * address otherwise.
+           */
+          senderName: read?.senderName && read.senderAddress?.toLowerCase() === sender.toLowerCase() ? read.senderName : sender,
+          // What the conversation last said, on one line; the owner's own words say so.
+          preview: read ? (read.lastOut ? `You: ${read.snippet}` : read.snippet) : '',
+          unread: read?.unread ?? false,
+          // Mail Triage's word for the latest message, as a chip: "Bill", "Receipt".
+          tag: read?.category && read.category !== 'other' ? tagLabel(read.category) : '',
           participants: thread.participants.join(', '),
           state: thread.state,
           /*
@@ -278,11 +321,149 @@ export function threadsQuery(): PageQuery {
           draftPill: withDraft.has(thread.id) ? 'draft' : '',
           when: relative(thread.lastAt, now),
           messageCount: thread.messageCount,
-        })),
+          };
+        }),
         ...hits,
       };
     },
   };
+}
+
+/** Triage's categories as a chip says them. Anything else reads as itself, capitalised. */
+const TAG_WORDS: Record<string, string> = {
+  'reply-needed': 'Reply needed',
+  'payment-failed': 'Payment failed',
+  'bank-notice': 'Bank',
+  'service-notice': 'Service',
+  promo: 'Promotion',
+};
+
+export function tagLabel(category: string): string {
+  const known = TAG_WORDS[category];
+  if (known) return known;
+  const words = category.replace(/-/g, ' ').trim();
+  return words === '' ? '' : words[0]!.toUpperCase() + words.slice(1);
+}
+
+interface Reading {
+  snippet: string;
+  lastOut: boolean;
+  senderName: string | null;
+  senderAddress: string | null;
+  unread: boolean;
+  category: string | null;
+}
+
+/**
+ * What the list draws beside each conversation, in one read: how its last
+ * message opens, the name on the latest message they sent, whether anything
+ * they sent is still unread on the server (no `\Seen`, as the flag sync last
+ * saw it), and Mail Triage's latest category.
+ */
+async function listReading(db: Pick<DbArea, 'query'>, ids: string[]): Promise<Map<string, Reading>> {
+  const out = new Map<string, Reading>();
+  if (ids.length === 0) return out;
+  const { rows } = await db.query(
+    `select t.id,
+            lm.snippet, lm.direction as last_direction,
+            li.from_name, li.from_addr,
+            exists (select 1 from email.messages u
+                     where u.thread_id = t.id and u.direction = 'in'
+                       and not (coalesce(u.flags, '[]'::jsonb) ? $2)) as unread,
+            (select tr.category from email.triage tr
+              where tr.message_id = li.id
+              order by tr.decided_at desc, tr.processing_version desc limit 1) as category
+       from email.threads t
+       left join email.messages lm on lm.id = t.last_message_id
+       left join lateral (
+         select m.id, m.from_name, m.from_addr from email.messages m
+          where m.thread_id = t.id and m.direction = 'in'
+          order by coalesce(m.internal_date, m.fetched_at) desc, m.id desc limit 1
+       ) li on true
+      where t.id = any($1::uuid[])`,
+    [ids, SEEN],
+  );
+  for (const row of rows as Array<Record<string, any>>) {
+    out.set(String(row.id), {
+      snippet: String(row.snippet ?? ''),
+      lastOut: row.last_direction === 'out',
+      senderName: typeof row.from_name === 'string' && row.from_name.trim() !== '' ? row.from_name.trim() : null,
+      senderAddress: typeof row.from_addr === 'string' ? row.from_addr : null,
+      unread: row.unread === true,
+      category: typeof row.category === 'string' ? row.category : null,
+    });
+  }
+  return out;
+}
+
+/** One address as the `message` component reads it. */
+function addressRow(address: string, name?: string | null): { address: string; name?: string } {
+  return name ? { address, name } : { address };
+}
+
+/**
+ * The parts of a conversation's reading pane that are buddi's rather than the
+ * mail's: Mail Triage's verdict on the latest message they sent, and what
+ * buddi changed in the mailbox about this conversation, newest first, with
+ * Undo where it still applies (the same rows and words as Recent changes).
+ */
+async function threadLayer(
+  db: Pick<DbArea, 'query'>,
+  threadId: string,
+  accountAddress: string,
+  now: Date,
+): Promise<{ triage: Record<string, unknown> | null; changes: Array<Record<string, unknown>> }> {
+  const verdict = await db.query(
+    `select tr.category, tr.urgency, tr.summary, tr.action_needed, tr.decided_at
+       from email.triage tr
+       join lateral (
+         select m.id from email.messages m
+          where m.thread_id = $1::uuid and m.direction = 'in'
+          order by coalesce(m.internal_date, m.fetched_at) desc, m.id desc limit 1
+       ) li on li.id = tr.message_id
+      order by tr.decided_at desc, tr.processing_version desc limit 1`,
+    [threadId],
+  );
+  const v = verdict.rows[0] as Record<string, any> | undefined;
+  const triage = v
+    ? {
+        category: String(v.category),
+        tag: tagLabel(String(v.category)),
+        urgency: String(v.urgency),
+        // "Bill · normal — The October invoice from Studio North, €1,240. To do: pay by 14 Oct."
+        line: [
+          `${tagLabel(String(v.category))} · ${v.urgency === 'urgent' ? 'urgent' : v.urgency === 'low' ? 'low' : 'this week'}`,
+          '—',
+          String(v.summary ?? '').trim(),
+          v.action_needed ? `To do: ${String(v.action_needed).trim()}` : '',
+        ]
+          .filter((part) => part !== '')
+          .join(' '),
+        when: relative(isoOf(v.decided_at), now),
+      }
+    : null;
+
+  const { rows } = await db.query(
+    `select ${ACTION_COLUMNS_SQL} from email.mailbox_actions a
+      where a.message_ids && (select coalesce(array_agg(m.id), '{}') from email.messages m where m.thread_id = $1::uuid)
+      order by a.created_at desc, a.seq desc limit $2`,
+    [threadId, THREAD_CHANGES],
+  );
+  const changes: Array<Record<string, unknown>> = [];
+  for (const c of rows.map(toAction)) {
+    const undoable = undoRefusal(c) === null;
+    const moved = undoable ? await movedSince(db, c) : 0;
+    const who = c.origin === 'policy' ? `by ${c.actor}` : c.origin === 'owner' ? 'by you' : c.actor === TRIAGE_AGENT_ID ? 'by Mail Triage' : `by @${c.actor}`;
+    changes.push({
+      id: c.id,
+      // The words Recent changes uses: "Mark as read · by Mail Triage · yesterday".
+      line: [verbOf(c.kind, c.destination), who, relative(c.createdAt, now), c.note ?? ''].filter((p) => p !== '').join(' · '),
+      state: changeState(c),
+      undoable,
+      undoLine: describeUndo(c, accountAddress, moved),
+    });
+  }
+  return { triage, changes };
 }
 
 /**
@@ -357,6 +538,34 @@ async function searchHits(
   };
 }
 
+/** How many of buddi's changes a reading pane lists for one conversation. */
+export const THREAD_CHANGES = 3;
+
+const ACTION_COLUMNS_SQL = ACTION_COLUMNS.split(',').map((c) => `a.${c.trim()}`).join(', ');
+
+/** The display name, the server's own arrival time and the read mark of each message, by id. */
+async function messageExtras(
+  db: Pick<DbArea, 'query'>,
+  ids: string[],
+): Promise<Map<string, { fromName: string | null; at: string | null; unread: boolean }>> {
+  const out = new Map<string, { fromName: string | null; at: string | null; unread: boolean }>();
+  if (ids.length === 0) return out;
+  const { rows } = await db.query(
+    `select id, from_name, coalesce(internal_date, fetched_at) as at, direction,
+            coalesce(flags, '[]'::jsonb) ? $2 as seen
+       from email.messages where id = any($1::uuid[])`,
+    [ids, SEEN],
+  );
+  for (const row of rows as Array<Record<string, any>>) {
+    out.set(String(row.id), {
+      fromName: typeof row.from_name === 'string' && row.from_name.trim() !== '' ? row.from_name.trim() : null,
+      at: isoOf(row.at),
+      unread: row.direction === 'in' && row.seen !== true,
+    });
+  }
+  return out;
+}
+
 /**
  * One conversation: its messages' snippets, then the drafts under them.
  *
@@ -385,8 +594,23 @@ export function threadQuery(): PageQuery {
         (d) => !(LIVE_DRAFT_STATUSES as readonly string[]).includes(d.status),
       );
       const latest = messages[messages.length - 1] ?? null;
+      const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
+      const account = accounts.find((a) => a.id === thread.accountId);
+      const layer = await threadLayer(ctx.buddi!.db, thread.id, account?.address ?? 'your mailbox', now);
+      const extra = await messageExtras(ctx.buddi!.db, messages.map((m) => m.id));
+      const view = viewOf(reason);
       return {
         id: thread.id,
+        /*
+         * buddi's layer above the thread (host API 1.30's reading pane): the
+         * verdict, what was changed and Undo, and "Needs a reply" with Done.
+         */
+        hasTriage: layer.triage !== null,
+        triage: layer.triage,
+        triageLine: layer.triage ? String(layer.triage.line) : '',
+        changes: layer.changes,
+        hasChanges: layer.changes.length > 0,
+        needsReply: view === 'needs-you',
         subject: thread.subject === '' ? '(no subject)' : thread.subject,
         state: thread.state,
         attention: viewOf(reason),
@@ -395,9 +619,17 @@ export function threadQuery(): PageQuery {
         participants: thread.participants.join(', '),
         lastAt: thread.lastAt,
         messageCount: thread.messageCount,
-        messages: messages.map((message) => ({
+        messages: messages.map((message, index) => {
+          const more = extra.get(message.id);
+          return {
           id: message.id,
-          from: message.from,
+          // The header the reading pane draws before the body arrives (`message`).
+          from: addressRow(message.from, more?.fromName),
+          to: message.to.map((address) => addressRow(address)),
+          at: more?.at ?? message.date,
+          // Every message but the newest is one line until it is opened, unless the owner has not read it.
+          folded: index < messages.length - 1 && !(more?.unread ?? false),
+          fromAddress: message.from,
           snippet: message.snippet,
           who: message.direction === 'out' ? 'you wrote' : 'they wrote',
           when: relative(message.date, now),
@@ -414,13 +646,14 @@ export function threadQuery(): PageQuery {
           ]
             .filter((part) => part !== '')
             .join(' · ') + (message.snippet ? ` — ${message.snippet}` : ''),
-        })),
+          };
+        }),
         latestMessageId: latest?.id ?? null,
         hasMessages: messages.length > 0,
         hasDraft: live.length > 0,
         // Every live draft: the page draws an editor per row, so each row is
         // the whole envelope rather than a line about one.
-        drafts: live.map((draft) => draftRow(draft, now)),
+        drafts: live.map((draft) => draftRow(draft, now, account?.address)),
         hasOlder: older.length > 0,
         older: older.map((draft) => ({
           id: draft.id,
@@ -464,8 +697,9 @@ export function messageQuery(): PageQuery {
     async produce(params, ctx: ToolContext) {
       const { id } = params as { id: string };
       const { rows } = await ctx.buddi!.db.query(
-        `select m.id, m.from_addr, m.to_addrs, m.cc, m.subject, m.date, m.direction,
-                m.body_text, m.body_purged_at, m.attachments
+        `select m.id, m.from_addr, m.from_name, m.to_addrs, m.cc, m.subject, m.date, m.direction,
+                m.body_text, m.body_html, m.body_purged_at, m.attachments, m.snippet,
+                coalesce(m.internal_date, m.fetched_at) as at
            from email.messages m
            join email.accounts a on a.id = m.account_id
           where m.id = $1::uuid`,
@@ -475,14 +709,30 @@ export function messageQuery(): PageQuery {
       if (!row) throw new QueryRefusal('No message here has that id.');
       const messageId = String(row.id);
       const purged = row.body_purged_at !== null;
-      const body = purged
-        ? 'The body of this message has been purged under your retention setting. Its headers are kept.'
-        : truncateBody(String(row.body_text ?? ''));
+      const purgedNote = 'The body of this message has been purged under your retention setting. Its headers are kept.';
+      const html = !purged && typeof row.body_html === 'string' && row.body_html !== '' ? (row.body_html as string) : null;
+      const text = purged ? '' : truncateBody(String(row.body_text ?? ''), html ? TEXT_WITH_HTML_BYTES : MAX_BODY_BYTES);
+      const body = purged ? purgedNote : text;
+      const toList: string[] = Array.isArray(row.to_addrs) ? row.to_addrs : [];
+      const ccList: string[] = Array.isArray(row.cc) ? row.cc : [];
       return {
         id: messageId,
-        from: row.from_addr,
-        to: (Array.isArray(row.to_addrs) ? row.to_addrs : []).join(', '),
-        cc: (Array.isArray(row.cc) ? row.cc : []).join(', '),
+        /*
+         * The `message` component's shape (host API 1.30): who, to whom,
+         * when (the server's arrival time, as the thread orders by), the
+         * stored HTML — sanitised at ingest, and again by the dashboard — and
+         * the text it falls back to. Never anything fetched now.
+         */
+        from: addressRow(String(row.from_addr), typeof row.from_name === 'string' ? row.from_name : null),
+        to: toList.map((address) => addressRow(address)),
+        cc: ccList.map((address) => addressRow(address)),
+        at: isoOf(row.at) ?? isoOf(row.date),
+        html,
+        text: purged ? null : text,
+        snippet: row.snippet ?? '',
+        note: purged ? purgedNote : null,
+        toText: toList.join(', '),
+        ccText: ccList.join(', '),
         subject: row.subject ?? '',
         date: isoOf(row.date),
         who: row.direction === 'out' ? 'you wrote' : 'they wrote',

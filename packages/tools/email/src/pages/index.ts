@@ -17,6 +17,7 @@ import {
   createRevokePoliciesTool,
 } from './policies-tools.js';
 import { createDiscardDraftTool, createSaveDraftTool } from './drafts-tools.js';
+import { createThreadDoneTool } from './thread-tools.js';
 import { emailPageDescriptors } from './descriptors.js';
 import { createUndoChangeTool, createUndoLearnedTool } from '../tools/mailbox.js';
 import { emailPageQueries } from './queries.js';
@@ -27,6 +28,7 @@ export * from './drafts-tools.js';
 export * from './format.js';
 export * from './policies-tools.js';
 export * from './queries.js';
+export * from './thread-tools.js';
 
 /** Everything the two pages write through, and nothing a model may see. */
 export function emailPageTools(opts: AccountToolOptions): ToolDefinition<never, unknown>[] {
@@ -38,6 +40,7 @@ export function emailPageTools(opts: AccountToolOptions): ToolDefinition<never, 
     createRevokePoliciesTool(),
     createSaveDraftTool(),
     createDiscardDraftTool(),
+    createThreadDoneTool(),
     createUndoChangeTool(opts),
     createUndoLearnedTool(opts),
   ] as unknown as ToolDefinition<never, unknown>[];

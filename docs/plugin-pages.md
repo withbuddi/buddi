@@ -159,6 +159,8 @@ type Component =
   | { kind: 'menu'; label: string; tone?: 'accent'; items: MenuItem[] }
   | { kind: 'approval'; path: string }          // an approval id in the data; draws ApprovalCard
   | { kind: 'artifact'; path: string; label: string }  // an artifact id; draws the download link
+  /** 1.30: one email, read: header, sanitised HTML or text, quotes folded, files as rows. The data is a `PageMessage`. */
+  | { kind: 'message'; path?: string; query?: QueryRef; folded?: Visibility; fetch?: ToolRef }
   | { kind: 'agent-offer'; agent: string; text: string; label: string }  // one of this plugin's proposed agents: a line and an accept button (the gated platform.accept_plugin_agent, card in place).
   | { kind: 'editor'; query: QueryRef; fields: Field[]; save: ToolRef; actions?: ToolRef[]; footnote?: string; readOnlyWhen?: Visibility; version: string }
   /** 1.27: a feed of stories (the News page): cards, group heads with See all, a ⋯ of ways out with Undo, a sheet per story. Rows are `StoryRow`s. */
@@ -169,6 +171,10 @@ type Component =
 // RowAction menu, hint, group; GroupBy label and aside; a first notice's text read from the page's data is the page's intro.
 // 1.28 additions elsewhere: ListItem swatch and choice; GroupBy asideTone and actions; a form drawer's id (button optional);
 // a repeat's poll.finish; a calendar's count and sheet (CalendarSheet); `where` on every component; `menu` in a section's or a page's head; ArgRef { choice: true }.
+// 1.30 additions elsewhere: section query and heading; ListItem strong and preview; ↑ ↓ and Enter in a list beside a reading pane.
+interface PageMessage { id?: string; from: { name?: string | null; address: string }; to?: PageMessageAddress[]; cc?: PageMessageAddress[]; at?: string | null;
+  html?: string | null; text?: string | null; snippet?: string | null; note?: string | null;
+  attachments?: Array<{ name: string; size: number; mime: string; artifactId: string | null; contentId?: string | null; [key: string]: unknown }> }
 interface RowChoice extends Omit<ToolRef, 'args' | 'confirm'> { value: string; options: RowChoiceOption[]; args: Record<string, ValueRef | { row: string } | { choice: true }> }
 interface RowChoiceOption { value: string; label: string; when?: Visibility; disabledWhen?: Visibility; hint?: string }
 interface MenuItem { label: string; hint?: string; when?: Visibility; action?: ToolRef; open?: string }
@@ -428,8 +434,45 @@ can answer and two steps where it cannot:
   body: [/* the waiting line, Continue to Google ↗, Cancel; a form with `where: 'remote'` */] }
 ```
 
-Not in the set, on purpose: free layout, custom styling, embedded HTML,
-client-side logic beyond `when`. A plugin that needs those serves its own app.
+**A message, read** (host API `^1.30`) is the Mail page's reading pane. A
+`message` component draws one `PageMessage`: the sender's initial in a face,
+"Name <address>", the time in the owner's format and zone, and "to …" that
+opens To and Cc; then the body. `html` is sanitised again in the browser
+before a node is drawn — parsed by `DOMParser` into an inert document and
+walked into React elements from an allow-list (no scripts, styles, forms,
+frames, media or event attributes; links http(s) and mailto only, opening in a
+new tab with `noopener noreferrer`; a safe subset of inline style with every
+`url(…)` refused). A remote picture is not an `<img>` at all until the owner
+presses Show images, which is remembered per sender in this browser (and
+undone with Hide pictures from this sender); a tracking pixel (1×1 or hidden)
+is never drawn; a `cid:` picture is drawn from the attachment whose
+`contentId` it names once that file is in the library. With no HTML, `text` is
+drawn with its http(s) links. Quoted earlier messages — Gmail's
+`gmail_quote`, `blockquote type=cite`, Outlook's reply header, `>` lines with
+their "On … wrote:" line, an "Original Message" separator — fold behind
+"··· earlier message", and a quote inside a quote folds again. Attachments are
+file rows; one with an `artifactId` opens its library entry, one without has
+`fetch`, its arguments read against that attachment. Caps: HTML over 600,000
+characters is not parsed (the text is drawn), 5,000 elements, 32 levels deep
+(deeper keeps its text), text over 200,000 characters is cut with a line.
+With `query`, the row is only the header and the whole message is read when
+it is drawn open; `folded` draws it as one line (face, name, snippet, time)
+while it holds of the row. A `section` may read a `query` and draw its body
+against the answer, with `heading` read from it in place of `title`; a list
+item's `strong` draws the title heavier while it holds (unread) and `preview`
+is one faint line under the row; ↑ and ↓ move through a list beside a reading
+pane and Enter opens the focused row.
+
+```ts
+{ kind: 'section', title: 'Conversation', query: { query: 'thread', params: { id: { param: 'thread' } } }, heading: { path: 'subject' },
+  body: [{ kind: 'repeat', query: { query: 'thread', params: { id: { param: 'thread' } } }, rows: 'messages', key: 'id',
+           body: [{ kind: 'message', query: { query: 'message', params: { id: { path: 'id' } } }, folded: { path: 'folded', equals: true },
+                    fetch: { tool: 'email.fetch_attachment', label: 'Fetch', args: { message: { path: 'messageId' }, index: { path: 'index' } } } }] }] }
+```
+
+Not in the set, on purpose: free layout, custom styling, embedded HTML beyond
+a `message`'s sanitised body, client-side logic beyond `when`. A plugin that
+needs those serves its own app.
 
 ## 5. The dashboard side
 

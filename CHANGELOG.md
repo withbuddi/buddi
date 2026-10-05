@@ -5,6 +5,9 @@ What changes in buddi from one release to the next, newest first.
 ## Unreleased
 
 - Plugins now learn which of your model accounts can listen and speak: an OpenAI key and Gemini can, a ChatGPT subscription and Claude can't, and Ollama or another compatible server is "try it and see". Settings → Speech uses this to offer only accounts that work, with the reason beside the ones that don't. (Host API 1.30.)
+### Added
+
+- Mail: opening a conversation now reads it. Each message shows who wrote it (their initial, name and address), when, and who else got it under "to …"; the body looks the way it was sent, with earlier quoted messages folded behind "··· earlier message" and attachments you can open in Files (or fetch first). Pictures from the web stay hidden until you press Show images, which buddi remembers for that sender; tracking pixels never load. Above the thread, Mail Triage says what it made of the latest message and what it changed, with Undo; "Needs a reply" has a Done button; and the reply written for you shows as a message with Send and Edit. Older messages fold to one line until you open them, and the old summary (subject, state, people, count) is under Details at the bottom. The list shows the sender's name, a line of the latest message, unread conversations in bold and Mail Triage's label as a chip; ↑ and ↓ move through it and Enter opens one. New mail keeps its formatting from now on; mail that arrived before shows its text.
 
 ## 0.1.0-pre.43 — 2026-10-05
 

@@ -40,6 +40,8 @@ export interface AttachmentInfo {
    * attachments are already in the library.
    */
   artifactId?: string | null;
+  /** The part's Content-ID without brackets: what a `cid:` picture in the HTML names. */
+  contentId?: string | null;
 }
 
 /** One message, as the IMAP port hands it over. Headers + text body only. */
@@ -83,6 +85,14 @@ export interface FetchedMessage {
    */
   internalDate: Date | null;
   bodyText: string;
+  /**
+   * The HTML part as downloaded (capped, unsanitised) when the message has
+   * one; sanitised at ingest into `messages.body_html` (`html.ts`). Absent or
+   * null for a text-only message.
+   */
+  bodyHtml?: string | null;
+  /** The display name on the From header, when the sender gave one. */
+  fromName?: string | null;
   hasAttachments: boolean;
   attachments: AttachmentInfo[];
   /** IMAP flags, observed. A read never sets one — see `ImapClient`. */

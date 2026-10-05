@@ -76,6 +76,7 @@ describe('the mail pages, as contributions', () => {
       'email.revoke_policies',
       'email.save_draft',
       'email.discard_draft',
+      'email.thread_done',
     ];
     for (const name of owner) {
       expect(registry.pluginOf(name), `${name} is contributed`).toBe('email');
@@ -179,5 +180,67 @@ describe('the mail pages, as contributions', () => {
     expect(() => registry.register({ ...manifest, pages: broken })).toThrow(
       /invalid page descriptor mail — body\.0/,
     );
+  });
+});
+
+describe('the reading pane (host API 1.30)', () => {
+  const manifest = createEmailManifest();
+  const mail = (manifest.pages ?? []).find((page) => page.id === 'mail')!;
+
+  /** Every node of a tree that satisfies `test`, in document order. */
+  function find(node: unknown, test: (o: any) => boolean, out: any[] = []): any[] {
+    if (Array.isArray(node)) node.forEach((child) => find(child, test, out));
+    else if (node && typeof node === 'object') {
+      if (test(node)) out.push(node);
+      Object.values(node).forEach((child) => find(child, test, out));
+    }
+    return out;
+  }
+
+  const listDetail = find(mail, (o) => o.kind === 'list-detail')[0];
+
+  it('opens a conversation as its subject, buddi first, then the thread, then the details', () => {
+    expect(listDetail.detail).toHaveLength(1);
+    const pane = listDetail.detail[0];
+    expect(pane).toMatchObject({ kind: 'section', query: { query: 'thread' }, heading: { path: 'subject' } });
+    const order = pane.body.map((c: any) => c.title ?? c.label ?? c.rows ?? c.kind);
+    expect(order).toEqual(['Mail Triage', 'changes', 'Needs a reply', 'drafts', 'messages', 'Older drafts', 'Details']);
+    // The old record is a fold at the foot, not the head of the pane.
+    const details = pane.body.at(-1);
+    expect(details.kind).toBe('expand');
+    expect(details.body[0].fields.map((f: any) => f.label)).toEqual(['Subject', 'State', 'With', 'Messages', 'Last message']);
+  });
+
+  it('draws each message with the message block: folded until opened, its body read on open, Fetch per file', () => {
+    const messages = find(listDetail, (o) => o.kind === 'repeat' && o.rows === 'messages')[0];
+    expect(messages.body).toEqual([
+      expect.objectContaining({
+        kind: 'message',
+        query: { query: 'message', params: { id: { path: 'id' } } },
+        folded: { path: 'folded', equals: true },
+        fetch: expect.objectContaining({ tool: 'email.fetch_attachment', args: { message: { path: 'messageId' }, index: { path: 'index' } } }),
+      }),
+    ]);
+  });
+
+  it('puts Undo on what Mail Triage changed, Done on "Needs a reply", and Send and Edit on the reply', () => {
+    const tools = find(listDetail.detail, (o) => typeof o.tool === 'string').map((o) => o.tool);
+    expect(tools).toEqual(
+      expect.arrayContaining(['email.undo_change', 'email.thread_done', 'email.send', 'email.save_draft', 'email.discard_draft']),
+    );
+    const done = find(listDetail.detail, (o) => o.tool === 'email.thread_done')[0];
+    expect(done.args).toEqual({ thread: { path: 'id' } });
+    const drafts = find(listDetail.detail, (o) => o.kind === 'repeat' && o.rows === 'drafts')[0];
+    expect(drafts.body.map((c: any) => c.label ?? c.kind)).toEqual(['notice', 'notice', 'message', 'button', 'Edit']);
+  });
+
+  it('lists a conversation by the person, the subject and a line of it, heavier while unread, with triage chips', () => {
+    expect(listDetail.list.item).toMatchObject({
+      title: { path: 'senderName' },
+      sub: { path: 'subject' },
+      preview: { path: 'preview' },
+      strong: { path: 'unread', equals: true },
+    });
+    expect(listDetail.list.item.pills.map((p: any) => p.value.path)).toEqual(['pill', 'draftPill', 'tag']);
   });
 });

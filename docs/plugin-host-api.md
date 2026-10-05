@@ -786,6 +786,15 @@ Settings → Speech reads it to offer only accounts that can listen or speak.
 An older buddi leaves it out, so a plugin computes the same from `kind` and
 `baseUrl` when it is absent.
 
+1.30 also brings the page grammar's reading pane ([plugin-pages.md](plugin-pages.md)
+§4, "A message, read"): the `message` component, whose data is a
+`PageMessage` (`PageMessageAddress`, `PageMessageAttachment` in
+`@buddi/core/plugin`) — sanitised HTML with remote pictures held back per
+sender, text with links, quotes folded, attachments as file rows; a
+`section`'s `query` and `heading`; a list item's `strong` and `preview`. Each
+is refused by an older buddi's descriptor check, so a plugin that uses one
+asks for `^1.30`.
+
 ## 8. End to end
 
 1. `plugin-imports.test.ts` passes, and fails naming the file when a plugin

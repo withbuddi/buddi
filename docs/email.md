@@ -1020,6 +1020,67 @@ owner's window; the artifact a fetch produced is the owner's own file, in their
 own library, and is never deleted by the mail sweep. The message row keeps its
 listing, artifact id included.
 
+## 10a. Reading mail
+
+The Mail page opens a conversation as a reading pane, not a record. On the
+left, the list: who it is with (the name on their latest message, else the
+address), the subject, one line of how it last read ("You: …" when the owner
+wrote last), heavier while anything they sent is unread on the server, the
+"Waiting on you" and Draft pills and Mail Triage's word for it ("Bill",
+"Receipt") as a chip. ↑ and ↓ move through it and Enter opens one; search
+stays above it, its filters folded under Filters.
+
+On the right, the subject as the heading, and **buddi's layer above the
+thread**:
+
+- **Mail Triage**: its verdict on the latest message they sent — category,
+  how soon ("this week"), its one-sentence summary and what is to do — and
+  under it what buddi changed in the mailbox about this conversation, the
+  same rows and words as Recent changes, with Undo (`email.undo_change`)
+  while it still applies.
+- **Needs a reply**, when the one rule (§2) says the conversation waits on
+  the owner, with why, and **Done** (`email.thread_done`, owner only): the
+  conversation is closed, leaves "Waiting on you", the widget and the
+  watcher, and the next message from them opens it again.
+- **The reply** written for it, drawn as a message from the mailbox it will
+  leave, with **Send** — `email.send`, the approval card in place, exactly as
+  an agent's — and **Edit**, which opens the editor (Save, Discard).
+
+Then **the thread as messages**, newest last, each with the sender's initial,
+"Name <address>", the time in the owner's format, and To and Cc on expand.
+Every message but the newest is one line until it is opened, unless the owner
+has not read it; a message's body is read only when it is drawn open. The
+body is the HTML part when the message had one and the text otherwise, quoted
+earlier messages folded behind "··· earlier message", attachments as file
+rows that open in Files (or Fetch first, §10). The old record — Subject,
+State, With, Messages, Last message — is a small **Details** fold at the
+foot.
+
+**What is stored.** The sync already downloaded the text part; when a message
+also has an HTML part (`findHtmlPart`: the first `text/html` leaf that is not
+an attachment) it downloads that too, capped like the text at 512 KB, as a
+peek. At ingest (`prepareForIngest` → `html.ts`) it is parsed with `parse5`
+and re-written from an allow-list — scripts, styles, forms, frames, objects,
+media, SVG and event attributes dropped; links kept only when http(s) or
+mailto, pictures only when http(s), `cid:` or a small inline picture; a safe
+subset of inline style; only the classes that mark a quoted reply — and
+stored in `messages.body_html` only when the result is at most 256 KB (over
+it, the text is what is read). The From header's display name is kept in
+`messages.from_name`, and each attachment's Content-ID in its listing, so a
+`cid:` picture can be drawn from the file once it is fetched. Both columns
+(migration 028) are empty for mail synced before them; nothing is fetched to
+fill them. Retention purges `body_html` with `body_text`; the pane then says
+the body was purged and keeps the headers.
+
+**What is never fetched.** Nothing is fetched to draw a message. A remote
+picture in the HTML is kept as an address; the dashboard sanitises the body
+again before drawing it and does not create an `<img>` for it until the owner
+presses Show images, a choice it remembers for that sender in this browser
+(Hide pictures from this sender undoes it). A tracking pixel — 1×1, or hidden
+— is never drawn at all. The `message` query answers the stored HTML and at
+most 64 KB of the text beside it, so the answer stays under the page engine's
+megabyte.
+
 ## 11. Changing the mailbox: mark, archive, move, trash, undo
 
 Migration `017_mailbox_actions.sql`. Reading is still a peek; these are the

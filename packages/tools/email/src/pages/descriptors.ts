@@ -59,88 +59,44 @@ const message = (): QueryRef => ({ query: 'message', params: { id: { path: 'id' 
  * ------------------------------------------------------------------ */
 
 /**
- * One message: a line saying who wrote it and when, and its body behind a
- * fold.
+ * The thread, as messages, newest last (host API 1.30's `message`): who wrote
+ * it, when, To and Cc on expand, and the body — the stored HTML, sanitised
+ * again by the dashboard with remote pictures held back, or the text — with
+ * earlier quoted messages folded and the attachments as file rows.
  *
- * The body is *not* shipped with the thread — twenty bodies for a list of
- * one-line rows is a page weight nobody reads — so opening a message is what
- * fetches it (`expand`), exactly as the old route did.
+ * The thread answers with headers only, and each message reads its own body
+ * (`message`) when it is drawn open: every one but the newest is a single line
+ * until the owner opens it (or has not read it yet), so a long conversation is
+ * not twenty bodies in one answer.
  */
 const messages: Component = {
   kind: 'repeat',
-  title: 'Messages',
   query: thread(),
   rows: 'messages',
   key: 'id',
   /*
    * The sentence for an empty conversation belongs *here*, on the thing that
    * would have drawn the rows — not on a sibling `notice` asking `when` about
-   * the thread. A component is handed the data of the nearest query above it,
-   * and inside a `list-detail`'s detail that is the page's own, which is
-   * nothing: such a `when` can only ever be false, and the sentence would
-   * never appear. `empty` asks nothing and cannot rot.
+   * the thread. `empty` asks nothing and cannot rot.
    */
   empty: 'No messages have been synced for this conversation yet.',
   body: [
     {
-      kind: 'expand',
-      // The fold carries the row's own words: who wrote it, when, and what it
-      // opens with — the line the old list drew, on the thing that opens it.
-      label: { path: 'summary' },
+      kind: 'message',
       query: message(),
-      body: [
-        {
-          kind: 'detail',
-          query: message(),
-          fields: [
-            { label: 'From', value: { path: 'from' } },
-            { label: 'To', value: { path: 'to' } },
-            { label: 'Sent', value: { path: 'date' }, unit: 'date' },
-            { label: 'Body', value: { path: 'bodyText' } },
-          ],
-          body: [],
-        },
-        /*
-         * The bytes were never downloaded at ingest — what is stored is a
-         * listing — so an attachment is one block: what it is, a Fetch while
-         * there is nothing to download, and the link to the file once there
-         * is. `when` is asked of the row, so the button gives way rather than
-         * sitting beside the link it produced.
-         */
-        {
-          kind: 'repeat',
-          title: 'Attachments',
-          query: message(),
-          rows: 'attachments',
-          // The index, never the filename: a filename comes off the wire, and
-          // two `invoice.pdf` on one message are two rows, not one.
-          key: 'index',
-          empty: 'Nothing was attached to this message.',
-          body: [
-            { kind: 'notice', text: { path: 'line' } },
-            {
-              kind: 'button',
-              when: { path: 'artifactId', equals: null },
-              action: {
-                // Plain words: a `button` is not handed its row for `{field}`
-                // substitution the way a row action is, and the line above it
-                // already names the file.
-                tool: 'email.fetch_attachment',
-                label: 'Fetch',
-                busy: 'Fetching…',
-                done: { path: 'note' },
-                args: { message: { path: 'messageId' }, index: { path: 'index' } },
-              },
-            },
-            {
-              kind: 'artifact',
-              when: { path: 'artifactId', equals: null, not: true },
-              path: 'artifactId',
-              label: 'Download the file',
-            },
-          ],
-        },
-      ],
+      folded: { path: 'folded', equals: true },
+      /*
+       * The bytes were never downloaded at ingest — what is stored is a
+       * listing — so a file with nothing in the library yet has a Fetch, read
+       * against that attachment; once fetched, the row opens it in Files.
+       */
+      fetch: {
+        tool: 'email.fetch_attachment',
+        label: 'Fetch',
+        busy: 'Fetching…',
+        done: { path: 'note' },
+        args: { message: { path: 'messageId' }, index: { path: 'index' } },
+      },
     },
   ],
 };
@@ -161,25 +117,21 @@ const draftFields: Field[] = [
 ];
 
 /**
- * One live draft, editable — and one that was dispatched and never confirmed,
- * which is not the same thing at all.
- *
- * A draft a send is holding may already be on the wire, so it is drawn as a
- * critical notice with every action taken away: a second Send is how the same
- * letter goes out twice.
+ * The reply written for this conversation: read as a message, then Send —
+ * through the approval card, exactly as an agent's would — and Edit, which
+ * opens the editor. One that was dispatched and never confirmed is not the
+ * same thing at all: it is drawn as a critical notice with every action taken
+ * away, because a second Send is how the same letter goes out twice.
  */
 const drafts: Component = {
   kind: 'repeat',
-  title: 'Drafts',
+  // Asked of the conversation the pane reads: no draft, no block at all.
+  when: { path: 'hasDraft', equals: true },
   query: thread(),
   rows: 'drafts',
   key: 'id',
-  empty:
-    'No draft is waiting here. Ask an agent to draft a reply and it will appear under the conversation.',
   body: [
     {
-      // The sentence carries the server's own words when there were any, which
-      // is why it is a path rather than a string.
       kind: 'notice',
       tone: 'critical',
       title: 'This was dispatched and never confirmed',
@@ -189,133 +141,148 @@ const drafts: Component = {
     {
       /*
        * `notLive`, not `live === false`: a draft a dispatch is holding is also
-       * not live, and telling the owner "it is kept so you can read what was
-       * proposed" directly under "whether it went out is genuinely unknown"
-       * is two answers to one question.
+       * not live, and "it is kept so you can read what was proposed" under
+       * "whether it went out is genuinely unknown" is two answers to one
+       * question.
        */
       kind: 'notice',
       text: { path: 'notLiveLine' },
       when: { path: 'notLive', equals: true },
     },
+    { kind: 'message', path: 'preview', when: { path: 'live', equals: true } },
     {
-      kind: 'editor',
-      query: { query: 'draft', params: { id: { path: 'id' } } },
-      // A stamp, not a clock: the save carries the `updated_at` this editor
-      // loaded, and a save that lost a race is refused rather than allowed to
-      // overwrite what is stored.
-      version: 'updatedAt',
-      readOnlyWhen: { path: 'live', equals: false },
-      fields: draftFields,
-      save: {
-        tool: 'email.save_draft',
-        label: 'Save',
-        busy: 'Saving…',
-        done: { path: 'note' },
-        args: {
-          draftId: { path: 'id' },
-          to: { field: 'to' },
-          cc: { field: 'cc' },
-          bcc: { field: 'bcc' },
-          subject: { field: 'subject' },
-          bodyText: { field: 'bodyText' },
-          version: { field: 'version' },
-        },
+      // Gated, and the page draws the approval card in place — identity
+      // select and all. Nothing on this page reaches SMTP.
+      kind: 'button',
+      when: { path: 'live', equals: true },
+      action: {
+        tool: 'email.send',
+        label: 'Send',
+        tone: 'accent',
+        busy: 'Proposing…',
+        pending:
+          'Nothing has been sent. This is the envelope, exactly as it will go out — approve it to send it, and pick the address it leaves from here.',
+        args: { draftId: { path: 'id' } },
       },
-      actions: [
+    },
+    {
+      kind: 'expand',
+      label: 'Edit',
+      when: { path: 'live', equals: true },
+      query: { query: 'draft', params: { id: { path: 'id' } } },
+      body: [
         {
-          tool: 'email.discard_draft',
-          label: 'Discard',
-          tone: 'danger',
-          placement: 'leading',
-          busy: 'Discarding…',
-          done: { path: 'note' },
-          confirm: 'Discard this draft? It is kept, so you can still read what was proposed.',
-          args: { draftId: { path: 'id' } },
-        },
-        {
-          // Gated, and the page draws the approval card in place — identity
-          // select and all. Nothing on this page reaches SMTP.
-          tool: 'email.send',
-          label: 'Send',
-          tone: 'accent',
-          busy: 'Proposing…',
-          pending:
-            'Nothing has been sent. This is the envelope, exactly as it will go out — approve it to send it, and pick the address it leaves from here.',
-          args: { draftId: { path: 'id' } },
+          kind: 'editor',
+          query: { query: 'draft', params: { id: { path: 'id' } } },
+          // A stamp, not a clock: the save carries the `updated_at` this editor
+          // loaded, and a save that lost a race is refused rather than allowed
+          // to overwrite what is stored.
+          version: 'updatedAt',
+          readOnlyWhen: { path: 'live', equals: false },
+          fields: draftFields,
+          save: {
+            tool: 'email.save_draft',
+            label: 'Save',
+            busy: 'Saving…',
+            done: { path: 'note' },
+            args: {
+              draftId: { path: 'id' },
+              to: { field: 'to' },
+              cc: { field: 'cc' },
+              bcc: { field: 'bcc' },
+              subject: { field: 'subject' },
+              bodyText: { field: 'bodyText' },
+              version: { field: 'version' },
+            },
+          },
+          actions: [
+            {
+              tool: 'email.discard_draft',
+              label: 'Discard',
+              tone: 'danger',
+              placement: 'leading',
+              busy: 'Discarding…',
+              done: { path: 'note' },
+              confirm: 'Discard this draft? It is kept, so you can still read what was proposed.',
+              args: { draftId: { path: 'id' } },
+            },
+          ],
+          footnote:
+            'Save, then Send above: Send puts the whole envelope in front of you to approve, bound to what is stored, and that card is where you choose which of your addresses it leaves from.',
         },
       ],
-      footnote:
-        'Send does not send: it puts the whole envelope in front of you to approve, and that card is where you choose which of your addresses it leaves from. Save first if you have edited anything — the card is bound to what is stored.',
     },
   ],
 };
 
 /**
- * The conversations and the one that is open. The list reads the page
- * parameter `show` the bar above it writes (`needs-you.ts` says what each
- * view holds); the detail follows the route, so changing the view keeps the
- * open conversation open.
+ * One conversation, read: buddi's layer first — Mail Triage's verdict and
+ * what it changed (Undo), the reply written for it, "Needs a reply" with Done
+ * — then the thread itself, and the old record fields folded at the foot.
  */
-const conversations: Component = {
-  kind: 'list-detail',
-  param: THREAD,
-  list: {
-    kind: 'list',
-    query: { query: 'threads', params: { show: { param: 'show' } } },
-    rows: 'threads',
-    key: 'id',
-    item: {
-      // Who it is with, then what it is about: the way a mailbox reads.
-      title: { path: 'sender' },
-      sub: { path: 'subject' },
-      meta: [{ path: 'when' }],
-      // Both facts: where the conversation stands, and whether a reply is
-      // waiting on the owner. One in place of the other hid the state of
-      // every conversation an agent had drafted for.
-      pills: [
-        // Where it stands, by the one rule (needs-you.ts): "Waiting on you"
-        // only when someone is, in the warning ink because it is now rare
-        // and true. A notification or a message nobody expects an answer to
-        // has no pill (`pill` is empty); the detail says which it is.
-        {
-          value: { path: 'pill' },
-          labels: { ...ATTENTION_LABELS },
-          tones: { 'needs-you': 'warning', 'waiting-on-them': 'neutral', muted: 'neutral', closed: 'neutral' },
-        },
-        // The reply waiting on the owner is the one to catch an eye.
-        { value: { path: 'draftPill' }, labels: { draft: 'Draft' }, tone: 'accent' },
-      ],
-      to: { page: 'mail', item: { path: 'id' } },
+const reading: Component = {
+  kind: 'section',
+  title: 'Conversation',
+  query: thread(),
+  heading: { path: 'subject' },
+  body: [
+    {
+      kind: 'notice',
+      title: 'Mail Triage',
+      text: { path: 'triageLine' },
+      when: { path: 'hasTriage', equals: true },
     },
-    empty: 'No conversations here.',
-  },
-  detail: [
     /*
-     * The parts of a conversation are siblings rather than one nested
-     * tree: a descriptor may be twelve levels deep, and a message's
-     * attachments are already six of them below this line.
+     * What buddi changed in the mailbox about this conversation — the same
+     * rows Recent changes lists — with Undo while it still applies.
      */
     {
-      kind: 'detail',
-      title: 'Conversation',
+      kind: 'repeat',
+      when: { path: 'hasChanges', equals: true },
       query: thread(),
-      fields: [
-        { label: 'Subject', value: { path: 'subject' } },
-        { label: 'State', value: { path: 'stateLabel' } },
-        { label: 'With', value: { path: 'participants' } },
-        { label: 'Messages', value: { path: 'messageCount' }, unit: 'number' },
-        { label: 'Last message', value: { path: 'lastAt' }, unit: 'date' },
+      rows: 'changes',
+      key: 'id',
+      body: [
+        {
+          kind: 'notice',
+          look: 'quiet',
+          text: { path: 'line' },
+          when: { path: 'undoable', equals: false },
+        },
+        {
+          kind: 'notice',
+          text: { path: 'line' },
+          when: { path: 'undoable', equals: true },
+          action: {
+            tool: 'email.undo_change',
+            label: 'Undo',
+            busy: 'Putting it back…',
+            confirm: '{undoLine}',
+            done: { path: 'note' },
+            args: { id: { path: 'id' } },
+          },
+        },
       ],
-      body: [],
     },
-    messages,
+    {
+      kind: 'notice',
+      tone: 'warning',
+      title: 'Needs a reply',
+      text: { path: 'stateLabel' },
+      when: { path: 'needsReply', equals: true },
+      action: {
+        tool: 'email.thread_done',
+        label: 'Done',
+        busy: 'Marking it done…',
+        done: { path: 'note' },
+        args: { thread: { path: 'id' } },
+      },
+    },
     drafts,
+    messages,
     /*
-     * The ended drafts. The fold is always here rather than shown only
-     * when there are some: `when` would be asked against the page's own
-     * data — which, inside a detail the route owns, is nothing — and a
-     * question that can only be answered "no" is how a whole section
-     * quietly stops existing. The list inside says when there is nothing.
+     * The ended drafts. Always here rather than shown only when there are
+     * some: the list inside says when there is nothing.
      */
     {
       kind: 'expand',
@@ -339,7 +306,72 @@ const conversations: Component = {
         },
       ],
     },
+    // The record the pane used to be, now a small fold at the foot.
+    {
+      kind: 'expand',
+      label: 'Details',
+      query: thread(),
+      body: [
+        {
+          kind: 'detail',
+          query: thread(),
+          fields: [
+            { label: 'Subject', value: { path: 'subject' } },
+            { label: 'State', value: { path: 'stateLabel' } },
+            { label: 'With', value: { path: 'participants' } },
+            { label: 'Messages', value: { path: 'messageCount' }, unit: 'number' },
+            { label: 'Last message', value: { path: 'lastAt' }, unit: 'date' },
+          ],
+          body: [],
+        },
+      ],
+    },
   ],
+};
+
+/**
+ * The conversations and the one that is open. The list reads the page
+ * parameter `show` the bar above it writes (`needs-you.ts` says what each
+ * view holds); the detail follows the route, so changing the view keeps the
+ * open conversation open. ↑ and ↓ move through the list, Enter opens one.
+ */
+const conversations: Component = {
+  kind: 'list-detail',
+  param: THREAD,
+  list: {
+    kind: 'list',
+    query: { query: 'threads', params: { show: { param: 'show' } } },
+    rows: 'threads',
+    key: 'id',
+    item: {
+      // Who it is with — the name they gave, else the address — then what it
+      // is about, then how it last read: the way a mailbox reads.
+      title: { path: 'senderName' },
+      sub: { path: 'subject' },
+      preview: { path: 'preview' },
+      meta: [{ path: 'when' }],
+      // Mail the owner has not read yet is drawn heavier.
+      strong: { path: 'unread', equals: true },
+      pills: [
+        // Where it stands, by the one rule (needs-you.ts): "Waiting on you"
+        // only when someone is, in the warning ink because it is now rare
+        // and true. A notification or a message nobody expects an answer to
+        // has no pill (`pill` is empty); the reading pane says which it is.
+        {
+          value: { path: 'pill' },
+          labels: { ...ATTENTION_LABELS },
+          tones: { 'needs-you': 'warning', 'waiting-on-them': 'neutral', muted: 'neutral', closed: 'neutral' },
+        },
+        // The reply waiting on the owner is the one to catch an eye.
+        { value: { path: 'draftPill' }, labels: { draft: 'Draft' }, tone: 'accent' },
+        // Mail Triage's word for it: "Bill", "Receipt".
+        { value: { path: 'tag' }, tone: 'neutral' },
+      ],
+      to: { page: 'mail', item: { path: 'id' } },
+    },
+    empty: 'No conversations here.',
+  },
+  detail: [reading],
   empty: 'Choose a conversation to read it here.',
 };
 

@@ -39,6 +39,7 @@ import { mailboxAuth } from '../credentials.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
+import { purgeBodies } from '../retention.js';
 import { emailPageDescriptors } from './descriptors.js';
 import { MAX_BODY_BYTES, TRUNCATED_NOTE } from './queries.js';
 import type { ImapClientFactory } from '../ports.js';
@@ -183,6 +184,9 @@ suite('the mail pages, over postgres', () => {
         to: [OWNER],
         subject: 'Invoice 42',
         bodyText: 'Could you resend invoice 42?',
+        // The HTML part the sync keeps, sanitised at the door (html.ts).
+        bodyHtml: '<p onclick="steal()">Could you <b>resend</b> invoice 42?</p><script>steal()</script><img src="https://track.test/p.gif" width="1" height="1">',
+        fromName: 'Dorothée',
         date: new Date('2026-09-20T08:00:00Z'),
       }),
     );
@@ -203,6 +207,26 @@ suite('the mail pages, over postgres', () => {
       JSON.stringify([{ filename: 'invoice.pdf', mime: 'application/pdf', sizeBytes: 12_345, part: '2' }]),
       messageId,
     ]);
+    // Mail Triage's verdict on it, and what it changed in the mailbox about it:
+    // the reading pane's layer above the thread.
+    await pool.query(
+      `insert into email.triage (message_id, processing_version, category, urgency, summary, action_needed, decided_at)
+       values ($1, 1, 'reply-needed', 'normal', 'Dorothée needs invoice 42 again.', 'Resend invoice 42', $2)`,
+      [messageId, new Date('2026-09-20T08:05:00Z')],
+    );
+    const account = (await pool.query(`select account_id from email.messages where id = $1::uuid`, [messageId])).rows[0]!.account_id;
+    await pool.query(
+      `insert into email.mailbox_actions (account_id, kind, origin, actor, message_ids, items, changed, state, created_at)
+       values ($1, 'mark-read', 'agent', 'mail-triage', array[$2::uuid], $3::jsonb, 1, 'done', $4)`,
+      [
+        account,
+        messageId,
+        JSON.stringify([
+          { id: messageId, subject: 'Invoice 42', from: 'tdorothee@client.test', messageId: '<invoice-1@client.test>', fromFolder: 'INBOX', fromUidValidity: 1, fromUid: 1, prevFlags: [], wantSeen: true, status: 'done' },
+        ]),
+        new Date('2026-09-20T08:06:00Z'),
+      ],
+    );
     // An agent's draft, which is what the owner's editor opens onto.
     const draft = await act('email.draft_reply', { inReplyTo: messageId, bodyText: 'It is attached.' }, 'mail-triage');
     return { threadId, messageId, draftId: String(draft.draft?.id ?? draft.id) };
@@ -224,6 +248,14 @@ suite('the mail pages, over postgres', () => {
     // The state and the draft are two pills now, not one in place of the other.
     expect(listed.threads[0]).toMatchObject({ subject: 'Invoice 42', draftPill: 'draft' });
     expect(listed.threads[0].state).toBeTruthy();
+    // The reading pane's list (host API 1.30): the person, a line of it, unread weight, triage's chip.
+    expect(listed.threads[0]).toMatchObject({
+      sender: 'tdorothee@client.test',
+      senderName: 'Dorothée',
+      preview: 'Could you resend invoice 42?',
+      unread: true,
+      tag: 'Reply needed',
+    });
     // Nothing narrows it, so the search half is empty rather than everything.
     expect(listed.items).toEqual([]);
 
@@ -238,7 +270,22 @@ suite('the mail pages, over postgres', () => {
   it('answers one conversation with its messages, its live draft and its ended ones', async () => {
     const thread = await ask('thread', { id: ids.threadId });
     expect(thread).toMatchObject({ subject: 'Invoice 42', hasMessages: true, hasDraft: true, hasOlder: false });
-    expect(thread.messages[0]).toMatchObject({ from: expect.stringContaining('tdorothee@client.test') });
+    expect(thread.messages[0]).toMatchObject({
+      from: { address: 'tdorothee@client.test', name: 'Dorothée' },
+      to: [{ address: OWNER }],
+      at: '2026-09-20T08:00:00.000Z',
+      // The newest is drawn open; so is any the owner has not read.
+      folded: false,
+    });
+    // buddi's layer: the verdict, what Mail Triage changed (Undo), "Needs a reply".
+    expect(thread.triageLine).toBe('Reply needed · this week — Dorothée needs invoice 42 again. To do: Resend invoice 42');
+    expect(thread.hasTriage).toBe(true);
+    expect(thread.changes).toEqual([
+      expect.objectContaining({ line: expect.stringMatching(/^Mark as read · by Mail Triage · /), undoable: expect.any(Boolean), undoLine: expect.any(String) }),
+    ]);
+    expect(typeof thread.needsReply).toBe('boolean');
+    // The reply as the pane reads it before anyone edits it, from the mailbox it leaves.
+    expect(thread.drafts[0].preview).toMatchObject({ from: { name: 'Your reply', address: OWNER }, text: 'It is attached.' });
     // Snippets, never bodies: the page fetches one when the owner opens it.
     expect(thread.messages[0].bodyText).toBeUndefined();
     expect(thread.drafts).toHaveLength(1);
@@ -255,6 +302,18 @@ suite('the mail pages, over postgres', () => {
     const message = await ask('message', { id: ids.messageId });
     expect(message).toMatchObject({ purged: false });
     expect(message.bodyText).toContain('resend invoice 42');
+    // The `message` block's shape (host API 1.30): who, to whom, when, and
+    // the stored HTML — sanitised at ingest, nothing that runs, the pixel's
+    // address kept but never fetched by buddi — with the text beside it.
+    expect(message).toMatchObject({
+      from: { address: 'tdorothee@client.test', name: 'Dorothée' },
+      to: [{ address: OWNER }],
+      cc: [],
+      at: '2026-09-20T08:00:00.000Z',
+      text: 'Could you resend invoice 42?',
+      note: null,
+    });
+    expect(message.html).toBe('<p>Could you <b>resend</b> invoice 42?</p><img src="https://track.test/p.gif" width="1" height="1">');
     // The listing, and where the file went — which is nowhere until somebody
     // fetches it. Keyed by its index, because a filename comes off the wire.
     expect(message.attachments).toEqual([
@@ -266,6 +325,10 @@ suite('the mail pages, over postgres', () => {
         line: 'invoice.pdf — application/pdf · 12.1 KB',
         artifactId: null,
         held: 'not fetched',
+        name: 'invoice.pdf',
+        size: 12_345,
+        mime: 'application/pdf',
+        contentId: null,
       },
     ]);
 
@@ -355,9 +418,9 @@ suite('the mail pages, over postgres', () => {
       'mail_status.fresh',
       'threads.items',
       'threads.threads',
-      'thread.messages',
-      'message.attachments',
+      'thread.changes',
       'thread.drafts',
+      'thread.messages',
       'thread.older',
       'mailbox_changes.changes',
       'learned_rules.rules',
@@ -418,7 +481,10 @@ suite('the mail pages, over postgres', () => {
       }
       const kind = component.kind;
       if (kind === 'section') {
-        for (const [i, child] of (component.body ?? []).entries()) await walk(child, root, `${where}.${i}`);
+        // A section that reads a query (host API 1.30) hands down its answer.
+        const data = component.query ? await answer(component.query, root) : root;
+        if (component.query) roots.push(`${where} → ${component.query.query}`);
+        for (const [i, child] of (component.body ?? []).entries()) await walk(child, data, `${where}.${i}`);
         return;
       }
       if (kind === 'button') return;
@@ -477,19 +543,27 @@ suite('the mail pages, over postgres', () => {
       'mail.body.3.when(anyConnecting)',
       'mail.body.4.when(showList)',
       'mail.body.5.when(showList)',
-      // An attachment's Fetch and its link, each asked of its own row: the
-      // button gives way to the link the moment there is a file.
-      'mail.body.5.0.conversations.0.detail.1.0.1.1.when(artifactId)',
-      'mail.body.5.0.conversations.0.detail.1.0.1.2.when(artifactId)',
-      // The two draft notices, each asked of the draft the editor is about.
-      'mail.body.5.0.conversations.0.detail.2.0.when(unresolved)',
-      'mail.body.5.0.conversations.0.detail.2.1.when(notLive)',
+      // The reading pane's layer, asked of the conversation the section reads.
+      'mail.body.5.0.conversations.0.detail.0.0.when(hasTriage)',
+      // What Mail Triage changed: Undo only on a row that can still be undone.
+      'mail.body.5.0.conversations.0.detail.0.1.when(hasChanges)',
+      'mail.body.5.0.conversations.0.detail.0.1.0.when(undoable)',
+      'mail.body.5.0.conversations.0.detail.0.1.1.when(undoable)',
+      'mail.body.5.0.conversations.0.detail.0.2.when(needsReply)',
+      // The draft: the block only when there is one, then the two notices, the reply, Send and Edit.
+      'mail.body.5.0.conversations.0.detail.0.3.when(hasDraft)',
+      'mail.body.5.0.conversations.0.detail.0.3.0.when(unresolved)',
+      'mail.body.5.0.conversations.0.detail.0.3.1.when(notLive)',
+      'mail.body.5.0.conversations.0.detail.0.3.2.when(live)',
+      'mail.body.5.0.conversations.0.detail.0.3.3.when(live)',
+      'mail.body.5.0.conversations.0.detail.0.3.4.when(live)',
       // The note "Read the last 7 days" lands on, and the offer of @mail,
       // asked of the settings page's own accounts read.
       'settings.body.2.0.when(anyFresh)',
       'settings.body.2.1.when(triage)',
     ]);
-    expect(roots).toContain('mail.body.5.0.conversations.0.detail.3 → thread');
+    expect(roots).toContain('mail.body.5.0.conversations.0.detail.0 → thread');
+    expect(roots).toContain('mail.body.5.0.conversations.0.detail.0.5 → thread');
   });
 
   /**
@@ -507,7 +581,7 @@ suite('the mail pages, over postgres', () => {
     const section: any = mail.body.find((c: any) => c.kind === 'section');
     const bar: any = section.body.find((c: any) => c.kind === 'tabs');
     const split: any = bar.tabs[0].body.find((c: any) => c.kind === 'list-detail');
-    const fold: any = split.detail.find((c: any) => c.kind === 'expand' && c.label === 'Older drafts');
+    const fold: any = split.detail[0].body.find((c: any) => c.kind === 'expand' && c.label === 'Older drafts');
     expect(fold, 'the Mail detail has an Older drafts fold').toBeDefined();
     expect(fold.when, 'the fold may not ask a question of data it is not handed').toBeUndefined();
 
@@ -1043,5 +1117,54 @@ suite('the mail pages, over postgres', () => {
       bodyText: 'The words that lost the race.',
       version: loaded.updatedAt,
     })).toMatch(/changed while you had it open/);
+  });
+  /* -------------------------------------------------------------- *
+   * Reading mail (host API 1.30)
+   * -------------------------------------------------------------- */
+
+  it('folds every message but the newest once read, and weighs the list by what is unread', async () => {
+    imap.add(
+      'INBOX',
+      fakeMessage({
+        messageId: '<invoice-2@client.test>',
+        inReplyTo: '<invoice-1@client.test>',
+        references: ['<invoice-1@client.test>'],
+        from: 'Dorothée <tdorothee@client.test>',
+        to: [OWNER],
+        subject: 'Re: Invoice 42',
+        bodyText: 'Any news?\n\n> Could you resend invoice 42?',
+        flags: ['\\Seen'],
+        date: new Date('2026-09-21T08:00:00Z'),
+      }),
+    );
+    const source = createInboxPollSource({ connect: (async () => imap.client()) as ImapClientFactory, env, backfill: 1_000 });
+    await source.poll(hosted({ db: pool, now: ctx.now, timezone: 'UTC', log: () => {}, enqueueRun: async () => {} }));
+    // Both read now: the first one is folded, the newest drawn open.
+    await pool.query(`update email.messages set flags = '["\\\\Seen"]'::jsonb`);
+    const thread = await ask('thread', { id: ids.threadId });
+    expect(thread.messages.map((m: any) => m.folded)).toEqual([true, false]);
+    const listed = await ask('threads');
+    expect(listed.threads[0]).toMatchObject({ unread: false, preview: expect.stringContaining('Any news?') });
+    // A message without HTML has none, and the text is what is drawn.
+    const plain = await ask('message', { id: thread.messages[1].id });
+    expect(plain).toMatchObject({ html: null, text: expect.stringContaining('Any news?') });
+  });
+
+  it('marks a conversation done from the pane: it stops waiting, and new mail brings it back', async () => {
+    const out = await act('email.thread_done', { thread: ids.threadId });
+    expect(out.note).toMatch(/^Done\./);
+    const thread = await ask('thread', { id: ids.threadId });
+    expect(thread).toMatchObject({ state: 'closed', needsReply: false });
+    // Owner-only: no agent may say the owner is done.
+    expect(await refusal('email.thread_done', { thread: ids.threadId }, 'mail-triage')).toMatch(/unknown|not/i);
+  });
+
+  it('purges the HTML with the text under retention, and says so instead of a body', async () => {
+    await pool.query(`update email.messages set date = $2, fetched_at = $2 where id = $1::uuid`, [ids.messageId, new Date('2025-01-01T00:00:00Z')]);
+    await purgeBodies(pool, clock, { retentionDays: 30 });
+    const { rows } = await pool.query(`select body_text, body_html from email.messages where id = $1::uuid`, [ids.messageId]);
+    expect(rows[0]).toEqual({ body_text: null, body_html: null });
+    const message = await ask('message', { id: ids.messageId });
+    expect(message).toMatchObject({ html: null, text: null, purged: true, note: expect.stringContaining('purged') });
   });
 });

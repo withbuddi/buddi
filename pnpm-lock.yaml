@@ -368,6 +368,9 @@ importers:
       nodemailer:
         specifier: ^7.0.9
         version: 7.0.13
+      parse5:
+        specifier: ^7.3.0
+        version: 7.3.0
       pg:
         specifier: ^8.13.1
         version: 8.23.0
@@ -3765,6 +3768,14 @@ snapshots:
     optionalDependencies:
       vite: 5.4.21(@types/node@22.20.2)
 
+  '@vitest/mocker@2.1.9(vite@5.4.21(@types/node@26.6.4))':
+    dependencies:
+      '@vitest/spy': 2.1.9
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 5.4.21(@types/node@26.6.4)
+
   '@vitest/pretty-format@2.1.9':
     dependencies:
       tinyrainbow: 1.2.0
@@ -5049,7 +5060,7 @@ snapshots:
   vitest@2.1.9(@types/node@26.6.4)(jsdom@25.0.1):
     dependencies:
       '@vitest/expect': 2.1.9
-      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@22.20.2))
+      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@26.6.4))
       '@vitest/pretty-format': 2.1.9
       '@vitest/runner': 2.1.9
       '@vitest/snapshot': 2.1.9

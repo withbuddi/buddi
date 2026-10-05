@@ -141,6 +141,40 @@ export interface ListItem {
   swatch?: string;
   /** 1.28: a segmented choice on the row's right. */
   choice?: RowChoice;
+  /** 1.30: the title drawn heavier while this holds of the row (unread mail). */
+  strong?: Visibility;
+  /** 1.30: one faint line under the row, cut to one line. */
+  preview?: ValueRef;
+}
+
+/** 1.30: one address on a message. */
+export interface PageMessageAddress {
+  name?: string | null;
+  address: string;
+}
+
+/** 1.30: one file on a message; extra keys are what `fetch` reads. */
+export interface PageMessageAttachment {
+  name: string;
+  size: number;
+  mime: string;
+  artifactId: string | null;
+  contentId?: string | null;
+  [key: string]: unknown;
+}
+
+/** 1.30: the data a `message` component draws. */
+export interface PageMessage {
+  id?: string;
+  from: PageMessageAddress;
+  to?: PageMessageAddress[];
+  cc?: PageMessageAddress[];
+  at?: string | null;
+  html?: string | null;
+  text?: string | null;
+  snippet?: string | null;
+  note?: string | null;
+  attachments?: PageMessageAttachment[];
 }
 
 /** A row's segmented choice (1.28): `{ choice: true }` is the picked option's value. */
@@ -426,7 +460,15 @@ export type ListComponent = ComponentCommon & {
 export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' } | { kind: 'menu' }>;
 
 export type Component =
-  | (ComponentCommon & { kind: 'section'; actions?: SectionAction[]; body: Component[] })
+  | (ComponentCommon & {
+      kind: 'section';
+      actions?: SectionAction[];
+      body: Component[];
+      /** 1.30: the body is drawn against this query's answer. */
+      query?: QueryRef;
+      /** 1.30: the heading read from the data, in place of `title`. */
+      heading?: ValueRef;
+    })
   | (ComponentCommon & {
       kind: 'notice';
       text: string | ValueRef;
@@ -525,6 +567,8 @@ export type Component =
   /** One of the plugin's proposed agents: a line, and the gated accept. */
   | (ComponentCommon & { kind: 'agent-offer'; agent: string; text: string; label: string })
   | (ComponentCommon & { kind: 'artifact'; path: string; label: string })
+  /** 1.30: one email, read — sanitised HTML or text, quotes folded, attachments as file rows. */
+  | (ComponentCommon & { kind: 'message'; path?: string; query?: QueryRef; folded?: Visibility; fetch?: ToolRef })
   | (ComponentCommon & {
       kind: 'editor';
       query: QueryRef;

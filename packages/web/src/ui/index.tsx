@@ -1168,6 +1168,7 @@ export function PickRow({
   sub,
   snippet,
   side,
+  strong,
 }: {
   href: string;
   onClick?: () => void;
@@ -1181,11 +1182,14 @@ export function PickRow({
   snippet?: ReactNode;
   /** Pills, after the second line. */
   side?: ReactNode;
+  /** Unread: the title heavier (true), or lighter than the default (false). Left out, the default. */
+  strong?: boolean | undefined;
 }): JSX.Element {
   return (
     <a
       className="ui-pick"
       href={href}
+      data-strong={strong === undefined ? undefined : String(strong)}
       aria-current={current ? 'true' : undefined}
       onClick={onClick ? (e) => { e.preventDefault(); onClick(); } : undefined}
     >

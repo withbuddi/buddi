@@ -19,14 +19,17 @@
  *    search's fields are page parameters, and a reload lands where the owner
  *    was — on a phone as much as on a desk.
  */
-import { createContext, useContext, useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useMemo, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { api, type ApprovalRow } from '../api';
-import { downloadUrl } from '../chat/attachments';
+import { downloadUrl, previewUrl } from '../chat/attachments';
+import { FileTile } from '../chat/FileTile';
+import { fmtMoment } from '../format';
+import { MessageBody } from './mail/MessageBody';
 import { fmtDay, fmtValue } from '../canvas/format';
 import { asNumber, readPath, readRef, resolveTiles, tileIcon } from '../canvas/resolve';
 import { Tiles } from '../canvas/views/Tiles';
 import { tileGlyph } from '../canvas/tileIcons';
-import { chatRoute, pluginPageRoute, pluginSettingsRoute, proposalsRoute } from '../routes';
+import { chatRoute, fileRoute, pluginPageRoute, pluginSettingsRoute, proposalsRoute } from '../routes';
 import {
   Button,
   ButtonLink,
@@ -83,6 +86,9 @@ import type {
   ImageList,
   ImageRef,
   ListItem,
+  PageMessage,
+  PageMessageAddress,
+  PageMessageAttachment,
   ParamRef,
   PluginPageDescriptor,
   QueryRef,
@@ -1184,6 +1190,8 @@ function Piece({
       return <ApprovalPiece component={component} data={data} />;
     case 'artifact':
       return <ArtifactPiece component={component} data={data} />;
+    case 'message':
+      return <MessagePiece component={component} data={data} />;
     case 'editor':
       return <EditorPiece component={component} data={data} />;
     case 'agent-offer':
@@ -1208,8 +1216,13 @@ type Of<K extends Component['kind']> = Extract<Component, { kind: K }>;
  * right of its heading, after the section's own actions, and nothing inside
  * is asked for until it is pressed.
  */
-function SectionPiece({ component, data }: { component: Of<'section'>; data: unknown }): JSX.Element {
+function SectionPiece({ component, data: given }: { component: Of<'section'>; data: unknown }): JSX.Element {
   const scope = useScope();
+  // 1.30: a section that reads a query draws its body against the answer.
+  const read = usePageQuery(component.query, given);
+  const data = component.query ? read.data : given;
+  const heading = component.heading ? readRef(data, component.heading) : undefined;
+  const title = heading === undefined || heading === null || heading === '' ? component.title : String(heading);
   const unmasked = useContext(Unmasked);
   const [revealed, toggle] = useReveal();
   const gated = !unmasked && readsSensitive(component.body, scope.sensitive);
@@ -1234,7 +1247,7 @@ function SectionPiece({ component, data }: { component: Of<'section'>; data: unk
   return (
     <HeadNote.Provider value={setHeadNote}>
     <PieceSection
-      title={component.title}
+      title={title}
       note={component.note}
       /*
        * The right of the heading: where this section's own way out goes —
@@ -1254,7 +1267,10 @@ function SectionPiece({ component, data }: { component: Of<'section'>; data: unk
     >
       <Stack gap="lg" divided={boxed}>
         {headNote}
-        {masked ? (
+        {component.query ? <ErrorBanner message={read.error} /> : null}
+        {component.query && read.data === undefined && !read.error ? (
+          <Empty>Loading…</Empty>
+        ) : masked ? (
           <MaskedNote />
         ) : (
           <Unmasked.Provider value={unmasked || gated}>
@@ -1384,6 +1400,8 @@ function NoticePiece({ component, data }: { component: Of<'notice'>; data: unkno
               args={resolveArgs(action.args, { data, scope })}
               disabled={act.busy}
               running={act.running === action.tool}
+              /* Inside a `repeat` the data is the row: "{undoLine}" in a confirm reads it. */
+              row={data}
               onRun={(ref, args) => void act.run(ref, args)}
             />
           ) : undefined
@@ -1554,7 +1572,7 @@ function itemRow(
   row: unknown,
   /** When the list chooses in the page rather than in the URL, there is no link. */
   local?: (key: string) => void,
-): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: string; href: string | null; outside: boolean; text: string; lead: ReactNode } {
+): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: string; href: string | null; outside: boolean; text: string; lead: ReactNode; preview: string; strong: boolean | undefined } {
   const meta = (item.meta ?? []).map((ref) => String(readRef(row, ref) ?? '')).filter((text) => text !== '');
   const text = String(readRef(row, item.title) ?? '');
   const routed = item.to && !local ? routeOf(scope, item.to, row) : null;
@@ -1611,11 +1629,15 @@ function itemRow(
       <span className="pl-swatch" data-none="true" aria-hidden="true" />
     )
   ) : null;
+  // 1.30: a faint line under the row, and a heavier title while `strong` holds.
+  const preview = item.preview ? String(readRef(row, item.preview) ?? '') : '';
   return {
     text,
     href,
     outside,
     lead,
+    preview,
+    strong: item.strong ? holds(row, item.strong) : undefined,
     pills: <>{drawnPills}</>,
     meta: meta.join(' · '),
     // The pictures sit above the title, as a card's head: logos, then who they are.
@@ -1711,6 +1733,29 @@ function keyedRows(
   return out;
 }
 
+/**
+ * ↑ and ↓ move between the rows of a list beside a reading pane (1.30);
+ * Enter opens the focused one, as a link does. Home and End go to the ends.
+ */
+export function moveAmongPicks(event: KeyboardEvent<HTMLElement>): void {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  const rows = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('a.ui-pick'));
+  if (rows.length === 0) return;
+  const at = rows.findIndex((row) => row === document.activeElement);
+  const current = at >= 0 ? at : rows.findIndex((row) => row.getAttribute('aria-current') === 'true');
+  const next =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? rows.length - 1
+        : event.key === 'ArrowDown'
+          ? Math.min(rows.length - 1, current + 1)
+          : Math.max(0, current < 0 ? 0 : current - 1);
+  event.preventDefault();
+  rows[next]?.focus();
+}
+
 function ListPiece({
   component,
   data,
@@ -1797,6 +1842,8 @@ function ListPiece({
             meta={drawn.meta}
             sub={drawn.sub}
             side={drawn.pills}
+            snippet={drawn.preview || undefined}
+            strong={drawn.strong}
           />
         );
       }
@@ -1839,7 +1886,16 @@ function ListPiece({
               drawn.title
             )
           }
-          sub={drawn.sub}
+          sub={
+            drawn.preview ? (
+              <>
+                {drawn.sub ? <span className="pl-row-line">{drawn.sub}</span> : null}
+                <span className="pl-row-preview">{drawn.preview}</span>
+              </>
+            ) : (
+              drawn.sub
+            )
+          }
           side={
             <>
               {drawn.side}
@@ -2744,7 +2800,10 @@ function ListDetailPiece({ component, data }: { component: Of<'list-detail'>; da
     <Split
       list={
         <InSplit.Provider value>
-          <Piece component={component.list} data={data} chosen={chosen ?? null} {...(local ? { choose: setHere } : {})} />
+          {/* 1.30: ↑ and ↓ move between the rows, Enter opens one. */}
+          <div className="pl-picks" onKeyDown={moveAmongPicks}>
+            <Piece component={component.list} data={data} chosen={chosen ?? null} {...(local ? { choose: setHere } : {})} />
+          </div>
         </InSplit.Provider>
       }
       detail={chosen ? inner ? <Scope.Provider value={inner}>{detail}</Scope.Provider> : detail : undefined}
@@ -3734,6 +3793,197 @@ function ArtifactPiece({ component, data }: { component: Of<'artifact'>; data: u
     <Toolbar>
       <a href={downloadUrl(id)}>{component.label}</a>
     </Toolbar>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * One email (1.30)
+ * ------------------------------------------------------------------ */
+
+function addressOf(raw: unknown): PageMessageAddress | null {
+  if (typeof raw === 'string') return raw.trim() === '' ? null : { address: raw.trim() };
+  if (raw && typeof raw === 'object' && typeof (raw as PageMessageAddress).address === 'string') {
+    const a = raw as PageMessageAddress;
+    return { address: a.address, name: typeof a.name === 'string' && a.name.trim() !== '' ? a.name.trim() : null };
+  }
+  return null;
+}
+
+function addressesOf(raw: unknown): PageMessageAddress[] {
+  return Array.isArray(raw) ? raw.map(addressOf).filter((a): a is PageMessageAddress => a !== null) : [];
+}
+
+/** "Ana Duarte <ana@studio.test>", or the address alone. */
+export function addressWords(a: PageMessageAddress): string {
+  return a.name ? `${a.name} <${a.address}>` : a.address;
+}
+
+/** The message as the data has it, every field checked: a row is untrusted. */
+export function asMessage(raw: unknown): PageMessage | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const from = addressOf(r.from);
+  if (!from) return null;
+  const text = (key: string): string | null => (typeof r[key] === 'string' ? (r[key] as string) : null);
+  const attachments = Array.isArray(r.attachments)
+    ? (r.attachments as unknown[]).filter(
+        (a): a is PageMessageAttachment => !!a && typeof a === 'object' && typeof (a as PageMessageAttachment).name === 'string',
+      )
+    : [];
+  return {
+    ...(typeof r.id === 'string' ? { id: r.id } : {}),
+    from,
+    to: addressesOf(r.to),
+    cc: addressesOf(r.cc),
+    at: text('at'),
+    html: text('html'),
+    text: text('text'),
+    snippet: text('snippet'),
+    note: text('note'),
+    attachments,
+  };
+}
+
+/** The first letter a face shows: of the name, else of the address. */
+function initialOf(a: PageMessageAddress): string {
+  const source = (a.name ?? a.address).replace(/^["'\s]+/, '');
+  return (source.match(/[\p{L}\p{N}]/u)?.[0] ?? '?').toUpperCase();
+}
+
+/** One of the six faces, the same one for the same address every time. */
+function faceOf(address: string): number {
+  let hash = 0;
+  for (const ch of address.toLowerCase()) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return (hash % 6) + 1;
+}
+
+function MessagePiece({ component, data }: { component: Of<'message'>; data: unknown }): JSX.Element | null {
+  const scope = useScope();
+  const row = component.path ? readPath(data, component.path) : data;
+  const startsFolded = component.folded !== undefined && holds(row, component.folded);
+  const [open, setOpen] = useState(!startsFolded);
+  const [details, setDetails] = useState(false);
+  const read = usePageQuery(open ? component.query : undefined, row);
+  const head = asMessage(row);
+  const full = component.query ? asMessage(read.data) : head;
+  const message = full ?? head;
+  if (!message) return null;
+  const sender = message.from;
+  const when = message.at ? fmtMoment(new Date(message.at), scope.timezone) : '';
+  const recipients = [...(message.to ?? []), ...(message.cc ?? [])];
+  const face = (
+    <span className="ui-avatar pl-mail-face" data-face={faceOf(sender.address)} aria-hidden="true">
+      {initialOf(sender)}
+    </span>
+  );
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="pl-mail-folded"
+        onClick={() => setOpen(true)}
+        aria-label={`Open the message from ${sender.name ?? sender.address}`}
+      >
+        {face}
+        <span className="pl-mail-folded-who">{sender.name ?? sender.address}</span>
+        <span className="pl-mail-folded-snippet">{message.snippet ?? ''}</span>
+        <span className="pl-mail-when">{when}</span>
+      </button>
+    );
+  }
+  return (
+    <article className="pl-mail" aria-label={`Message from ${sender.name ?? sender.address}`}>
+      <header className="pl-mail-head">
+        {face}
+        <span className="pl-mail-who">
+          <span className="pl-mail-from">
+            {sender.name ? <span className="pl-mail-name">{sender.name}</span> : null}
+            <span className="pl-mail-address">{sender.name ? `<${sender.address}>` : sender.address}</span>
+          </span>
+          {recipients.length > 0 ? (
+            <button type="button" className="pl-mail-to-toggle" aria-expanded={details} onClick={() => setDetails((v) => !v)}>
+              to {recipients.map((a) => a.name ?? a.address).join(', ')}
+            </button>
+          ) : null}
+        </span>
+        <span className="pl-mail-when">
+          {startsFolded ? (
+            <button type="button" className="pl-mail-fold" onClick={() => setOpen(false)} title="Fold this message">
+              {when}
+            </button>
+          ) : (
+            when
+          )}
+        </span>
+      </header>
+      {details ? (
+        <dl className="pl-mail-recipients">
+          {(message.to ?? []).length > 0 ? (
+            <>
+              <dt>To</dt>
+              <dd>{(message.to ?? []).map(addressWords).join(', ')}</dd>
+            </>
+          ) : null}
+          {(message.cc ?? []).length > 0 ? (
+            <>
+              <dt>Cc</dt>
+              <dd>{(message.cc ?? []).map(addressWords).join(', ')}</dd>
+            </>
+          ) : null}
+        </dl>
+      ) : null}
+      <ErrorBanner message={read.error} />
+      {component.query && !full && !read.error ? (
+        <Empty>Loading…</Empty>
+      ) : (
+        <>
+          {message.note ? <p className="pl-mail-note">{message.note}</p> : null}
+          <MessageBody
+            html={message.html}
+            text={message.text}
+            sender={sender.address}
+            attachments={message.attachments}
+            cidSrc={previewUrl}
+          />
+          {(message.attachments ?? []).length > 0 ? (
+            <MessageFiles attachments={message.attachments ?? []} fetch={component.fetch} />
+          ) : null}
+        </>
+      )}
+    </article>
+  );
+}
+
+/** A message's files as file rows: open on the library entry, or Fetch while there is no file yet. */
+function MessageFiles({ attachments, fetch }: { attachments: PageMessageAttachment[]; fetch: ToolRef | undefined }): JSX.Element {
+  const scope = useScope();
+  const act = useAct();
+  return (
+    <div className="pl-mail-files">
+      <div className="wb-msg-files" role="list" aria-label="Attachments">
+        {attachments.map((file, index) => (
+          <span role="listitem" key={`${index}-${file.name}`} className="pl-mail-file">
+            <FileTile
+              name={file.name}
+              mime={file.mime}
+              sizeBytes={typeof file.size === 'number' ? file.size : null}
+              {...(file.artifactId ? { onOpen: () => scope.navigate(fileRoute(file.artifactId)) } : {})}
+            />
+            {!file.artifactId && fetch ? (
+              <ActionButton
+                action={fetch}
+                args={resolveArgs(fetch.args, { data: file, row: file, scope })}
+                disabled={act.busy}
+                running={act.running === fetch.tool}
+                row={file}
+                onRun={(ref, args) => void act.run(ref, args)}
+              />
+            ) : null}
+          </span>
+        ))}
+      </div>
+      <ActOutcome act={act} />
+    </div>
   );
 }
 

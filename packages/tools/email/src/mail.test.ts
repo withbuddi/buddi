@@ -21,7 +21,7 @@ import {
   trustedAuthResults,
 } from './mail.js';
 import { fakeMessage } from './imap/fake.js';
-import { allHeaders, collectAttachments, findTextPart, firstHeader, parseHeaders } from './imap/imapflow-client.js';
+import { allHeaders, collectAttachments, findHtmlPart, findTextPart, firstHeader, firstName, parseHeaders } from './imap/imapflow-client.js';
 import { renderPreview, sha256, type SendEnvelope } from './tools/send.js';
 
 describe('addresses', () => {
@@ -279,6 +279,24 @@ describe('imap body structure', () => {
     });
     expect(findTextPart({ type: 'application/pdf' })).toBeNull();
     expect(findTextPart(undefined)).toBeNull();
+  });
+
+  it('finds the HTML part beside the text, never an attached .html, and the sender name', () => {
+    const structure = {
+      type: 'multipart/mixed',
+      childNodes: [
+        { type: 'multipart/alternative', childNodes: [{ type: 'text/plain', part: '1.1' }, { type: 'text/html', part: '1.2' }] },
+        { type: 'text/html', part: '2', disposition: 'attachment' },
+        { type: 'image/png', part: '3', disposition: 'inline', id: '<logo@studio>', parameters: { name: 'logo.png' } },
+      ],
+    };
+    expect(findHtmlPart(structure)).toBe('1.2');
+    expect(findHtmlPart({ type: 'multipart/mixed', childNodes: [{ type: 'text/html', part: '1', disposition: 'attachment' }] })).toBeNull();
+    expect(findHtmlPart({ type: 'text/plain' })).toBeNull();
+    // A cid: picture's part is listed with the Content-ID it is named by.
+    expect(collectAttachments(structure).find((a) => a.filename === 'logo.png')?.contentId).toBe('logo@studio');
+    expect(firstName([{ name: ' Ana Duarte ', address: 'ana@studio.test' }])).toBe('Ana Duarte');
+    expect(firstName([{ address: 'ana@studio.test' }])).toBeNull();
   });
 
   it('lists attachments without downloading them, and records the part each one is', () => {

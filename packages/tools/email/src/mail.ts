@@ -4,6 +4,7 @@
  * being reimplemented in two adapters.
  */
 import type { AttachmentInfo, FetchedMessage } from './ports.js';
+import { sanitizeEmailHtml } from './html.js';
 
 /** How much of the body the list view carries. */
 export const SNIPPET_CHARS = 220;
@@ -786,5 +787,8 @@ export function prepareForIngest(message: FetchedMessage, now: Date = new Date()
     // The header date, clamped — display only, never ordering.
     date: clampFutureDate(message.date, now),
     snippet: snippetOf(message.bodyText),
+    // Sanitised at the door: what is stored can hold nothing that runs (html.ts).
+    bodyHtml: sanitizeEmailHtml(message.bodyHtml ?? null),
+    fromName: message.fromName ?? null,
   };
 }

@@ -186,6 +186,9 @@
 
   /* ---- code ---- */
   --code-bg: #f1f5fb;
+  /* An HTML email is drawn on paper: senders colour for white. */
+  --mail-paper: #ffffff;
+  --mail-ink: #1d2433;
   /* A terminal is dark in either theme: it is what the owner's own terminal
      looks like, and output reads as output rather than as page. */
   --terminal-bg: #111a2b;
@@ -303,6 +306,8 @@
     --focus-ring: #9ac4ff;
 
     --code-bg: #0f1828;
+    --mail-paper: #f3f1ec;
+    --mail-ink: #1d2433;
     --terminal-bg: #070b12;
     --terminal-ink: #e8edf4;
     --terminal-muted: #8792a4;
@@ -369,6 +374,8 @@
   --focus-ring: #9ac4ff;
 
   --code-bg: #0f1828;
+  --mail-paper: #f3f1ec;
+  --mail-ink: #1d2433;
   --terminal-bg: #070b12;
   --terminal-ink: #e8edf4;
   --terminal-muted: #8792a4;

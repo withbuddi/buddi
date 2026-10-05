@@ -105,6 +105,35 @@ export function findTextPart(node: Record<string, any> | undefined): {
   return search(node, '');
 }
 
+/**
+ * The HTML part a message carries beside (or instead of) its text, by its
+ * IMAP part path. The first `text/html` leaf that is not an attachment.
+ */
+export function findHtmlPart(node: Record<string, any> | undefined): string | null {
+  if (!node) return null;
+  const search = (n: Record<string, any>, path: string): string | null => {
+    const type = String(n.type ?? '').toLowerCase();
+    const children: Record<string, any>[] = Array.isArray(n.childNodes) ? n.childNodes : [];
+    if (children.length === 0) {
+      const attached = String(n.disposition ?? '').toLowerCase() === 'attachment';
+      return type === 'text/html' && !attached ? (n.part ? String(n.part) : path === '' ? '1' : path) : null;
+    }
+    for (const [i, child] of children.entries()) {
+      const found = search(child, path === '' ? String(i + 1) : `${path}.${i + 1}`);
+      if (found) return found;
+    }
+    return null;
+  };
+  return search(node, '');
+}
+
+/** The display name on an envelope address list's first entry, or null. */
+export function firstName(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const name = (value[0] as { name?: unknown } | undefined)?.name;
+  return typeof name === 'string' && name.trim() !== '' ? name.trim().slice(0, 200) : null;
+}
+
 /** Attachment metadata from a body structure. Bytes are never downloaded. */
 export function collectAttachments(node: Record<string, any> | undefined): AttachmentInfo[] {
   if (!node) return [];
@@ -132,6 +161,8 @@ export function collectAttachments(node: Record<string, any> | undefined): Attac
         // attachment anyway. Anything that is not a part id is not stored as
         // one — the fetch re-reads the structure rather than trusting it.
         part: isPartId(part) ? part : null,
+        // What a `cid:` picture in the HTML names this part by, without its brackets.
+        ...(typeof n.id === 'string' && n.id.trim() !== '' ? { contentId: n.id.trim().replace(/^<|>$/g, '').slice(0, 200) } : {}),
       });
     }
     for (const child of children) walk(child);
@@ -329,11 +360,28 @@ class ImapFlowClient implements ImapWriter {
       const headers = parseHeaders(msg.headers);
       const text = findTextPart(msg.bodyStructure as Record<string, any>);
       let bodyText = '';
+      let bodyHtml: string | null = null;
       if (text) {
         // BODY.PEEK — reading never marks the message seen.
         const downloaded = await this.client.download(String(uid), text.part, { uid: true });
         const raw = await readAll(downloaded?.content ?? null, MAX_BODY_BYTES);
         bodyText = text.type === 'text/html' ? stripHtml(raw) : raw;
+        if (text.type === 'text/html') bodyHtml = raw;
+      }
+      /*
+       * The HTML part too, when there is one beside the text: what the Mail
+       * page draws. Sanitised and capped at ingest (`html.ts`); a peek, like
+       * every body read here.
+       */
+      const htmlPart = text?.type === 'text/html' ? null : findHtmlPart(msg.bodyStructure as Record<string, any>);
+      if (htmlPart) {
+        try {
+          const downloaded = await this.client.download(String(uid), htmlPart, { uid: true });
+          bodyHtml = await readAll(downloaded?.content ?? null, MAX_BODY_BYTES);
+        } catch {
+          // The text is already in hand; a part the server will not give is no reason to lose the message.
+          bodyHtml = null;
+        }
       }
       const attachments = collectAttachments(msg.bodyStructure as Record<string, any>);
       out.push({
@@ -352,6 +400,7 @@ class ImapFlowClient implements ImapWriter {
           addressList(envelope.from)[0] ?? '',
         ),
         from: addressList(envelope.from)[0] ?? '(unknown)',
+        fromName: firstName(envelope.from),
         to: addressList(envelope.to),
         cc: addressList(envelope.cc),
         subject: String(envelope.subject ?? ''),
@@ -360,6 +409,7 @@ class ImapFlowClient implements ImapWriter {
         // controlled `date` is never used for thread ordering (threads.ts).
         internalDate: msg.internalDate ? new Date(msg.internalDate as string | Date) : null,
         bodyText,
+        bodyHtml,
         hasAttachments: attachments.length > 0,
         attachments,
         flags: [...(msg.flags instanceof Set ? msg.flags : new Set<string>())].map(String),
