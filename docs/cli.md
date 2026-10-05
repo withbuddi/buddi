@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-10-04
+updated: 2026-10-05
 ---
 
 # The buddi command line
@@ -1471,7 +1471,7 @@ buddi telegram unpair 12
 Set up signing in through Cloudflare Access on your own domain: tunnel, DNS, Access application and policy, from one API token.
 
 ```sh
-buddi access cloudflare setup --host <hostname> [--zone <zone>] [--email <email>] [--adopt]
+buddi access cloudflare setup --host <hostname> [--zone <zone>] [--email <email>] [--adopt] [--use-system-daemon]
 ```
 
 **Flags**
@@ -1480,6 +1480,7 @@ buddi access cloudflare setup --host <hostname> [--zone <zone>] [--email <email>
 - `--zone <zone>`: The Cloudflare zone, when the hostname alone does not say which.
 - `--email <email>`: The one email Cloudflare lets in. Asked for when not given or already set.
 - `--adopt`: Use it anyway: take over a tunnel, DNS record, policy or application of buddi's name that this buddi did not make.
+- `--use-system-daemon`: Use Cloudflare's system service (from `sudo cloudflared service install`) as the connector; buddi starts none of its own.
 
 **Example**
 
@@ -1487,7 +1488,7 @@ buddi access cloudflare setup --host <hostname> [--zone <zone>] [--email <email>
 buddi access cloudflare setup --host buddi.example.com
 ```
 
-**Then**: Run the `sudo cloudflared service install …` line it prints; it waits for the tunnel, then tests. The token comes from CLOUDFLARE_API_TOKEN or a hidden prompt.
+**Then**: With buddi's service running, it starts the connector itself and waits for the tunnel, then tests; without one it prints the `sudo cloudflared service install …` line to run. The token comes from CLOUDFLARE_API_TOKEN or a hidden prompt.
 
 **Exit codes**
 

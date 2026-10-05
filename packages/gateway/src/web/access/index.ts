@@ -6,3 +6,4 @@ export * from './cloudflare.js';
 export * from './cloudflare-api.js';
 export * from './cloudflare-setup.js';
 export * from './cloudflare-token.js';
+export * from './cloudflare-connector.js';

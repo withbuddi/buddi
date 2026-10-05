@@ -33,7 +33,7 @@ export function registerCloudflareTokenDestination(): void {
   registerSecretDestination('access', {
     kind: ACCESS_CLOUDFLARE_KIND,
     maxRule: 'pre-approved',
-    checkTarget: (target) => target === TARGET,
+    checkTarget: (target) => target === TARGET || target === 'connector',
     describe: () => 'Cloudflare setup (Settings → Sign in from elsewhere)',
     deliver() {
       throw new Error('access.cloudflare delivers through the gateway itself, never through a destination');

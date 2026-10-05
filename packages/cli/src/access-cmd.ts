@@ -1,5 +1,5 @@
 /**
- * `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt]` and
+ * `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt] [--use-system-daemon]` and
  * `buddi access cloudflare remove [--host <h>]` and `buddi access cloudflare
  * forget-token`: Settings → Sign in from elsewhere → Cloudflare Access →
  * "Set it up for me", from the terminal. Remove keeps the token; forget-token
@@ -10,7 +10,10 @@
  * its ingress listener within a quarter of a minute. The API token comes from
  * `CLOUDFLARE_API_TOKEN`, the owner secret kept by an earlier run, or a
  * prompt with echo off; it is kept as that owner secret for Remove and never
- * printed. The service install line is printed, never run.
+ * printed. With buddi's service running, its supervisor runs the connector
+ * (no command to copy); a system service from an earlier setup is named with
+ * the one line that removes it, or used instead (`--use-system-daemon`).
+ * Without a running service the install line is printed, never run.
  */
 import { createPool, createVault, readWebSetting, writeWebSetting, VAULT_PLACEHOLDER } from '@buddi/core';
 import {
@@ -20,8 +23,11 @@ import {
   WEB_PORT_VAR,
   createCloudflareApi,
   createJwks,
+  connectorTokenStore,
   ownerSecretTokenStore,
   removeCloudflareSetup,
+  supervisorAnswers,
+  supervisorConnector,
   removedInWords,
   SETUP_PROPAGATION,
   runCloudflareSetup,
@@ -61,6 +67,7 @@ async function ask(question: string): Promise<string> {
 function printer(): (p: SetupProgress) => void {
   const said = new Set<string>();
   let installShown = false;
+  let connectorSaid = '';
   return (p) => {
     for (const step of p.steps) {
       const key = `${step.id}:${step.state}`;
@@ -68,6 +75,26 @@ function printer(): (p: SetupProgress) => void {
       if (step.state === 'done') { said.add(key); console.log(`  ✓ ${step.text}`); }
       if (step.state === 'failed') { said.add(key); console.log(`  ✗ ${step.text}\n    ${step.why ?? ''}`); }
       if (step.state === 'now' && step.id === 'healthy') { said.add(key); console.log(dim('  … waiting for the tunnel to connect (Ctrl-C stops waiting; what buddi made stays)')); }
+    }
+    // The connector, each time what it says changes: starting, missing, a system service in the way.
+    const c = p.connector;
+    const connectorLine = c ? `${c.mode}:${c.state}:${c.detail ?? ''}:${c.systemDaemon ? 1 : 0}` : '';
+    if (c && connectorLine !== connectorSaid && p.steps.find((s) => s.id === 'connector')?.state !== 'done') {
+      connectorSaid = connectorLine;
+      if (c.mode === 'buddi' && c.state === 'system-daemon' && c.systemDaemon) {
+        console.log('');
+        console.log(bold(`  ${c.systemDaemon.why}`));
+        console.log('');
+        console.log(`    ${c.systemDaemon.command}`);
+        console.log('');
+        console.log(dim('  Or use it instead: run this setup again with --use-system-daemon.'));
+        console.log('');
+      } else if (c.state === 'missing-binary') {
+        console.log(`  … cloudflared isn’t on this computer. ${c.detail ?? ''}`);
+        if (c.brew) console.log(dim(`    Or install it yourself: ${c.brew}`));
+      } else if (c.state === 'starting' || c.state === 'stopped') {
+        console.log(dim(`  … starting the connector${c.detail ? ` (${c.detail})` : ''}`));
+      }
     }
     if (p.install && !installShown) {
       installShown = true;
@@ -83,8 +110,9 @@ function printer(): (p: SetupProgress) => void {
 }
 
 export async function runAccess(
-  command: { action: 'cloudflare-setup' | 'cloudflare-remove' | 'cloudflare-forget-token'; host?: string; zone?: string; email?: string; adopt?: boolean },
+  command: { action: 'cloudflare-setup' | 'cloudflare-remove' | 'cloudflare-forget-token'; host?: string; zone?: string; email?: string; adopt?: boolean; useSystemDaemon?: boolean },
   env: NodeJS.ProcessEnv = process.env,
+  socket?: string,
 ): Promise<number> {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) {
@@ -126,12 +154,16 @@ export async function runAccess(
       return row && typeof row.host === 'string' ? row : null;
     };
     const saveRecord = (record: SetupRecord | null) => writeWebSetting(pool, CLOUDFLARE_SETUP_KEY, record);
+    // buddi's service runs the connector when its supervisor answers; else the line to run by hand.
+    const connector = socket && await supervisorAnswers(socket)
+      ? supervisorConnector(socket, connectorTokenStore(pool, createVault({ env })))
+      : undefined;
 
     if (command.action === 'cloudflare-remove') {
-      const done = await removeCloudflareSetup({ api, platform: process.platform, readSetting, saveSetting, readRecord, saveRecord, host: command.host });
+      const done = await removeCloudflareSetup({ api, platform: process.platform, readSetting, saveSetting, readRecord, saveRecord, host: command.host, connector });
       if (done.removed.length) console.log(`Removed ${removedInWords(done.removed)}.`);
       if (done.error) { console.error(done.error); return 1; }
-      console.log(`To remove the connector from this computer too: ${done.uninstall}`);
+      if (done.uninstall) console.log(`To remove Cloudflare’s system service from this computer too: ${done.uninstall}`);
       if (await tokens.has().catch(() => false)) {
         console.log('Your Cloudflare API token is still kept here, and still valid in Cloudflare. To forget it: buddi access cloudflare forget-token');
         console.log(dim(REVOKE_LINE));
@@ -151,7 +183,7 @@ export async function runAccess(
     process.once('SIGINT', onSigint);
     const jwks = createJwks();
     const done = await runCloudflareSetup(
-      { host: command.host ?? '', email, zone: command.zone, adopt: command.adopt === true },
+      { host: command.host ?? '', email, zone: command.zone, adopt: command.adopt === true, useSystemDaemon: command.useSystemDaemon === true },
       {
         api,
         ingressPort: ingressPortOf(env),
@@ -161,6 +193,7 @@ export async function runAccess(
         readRecord,
         saveRecord,
         test: (team) => jwks.refresh(team),
+        connector,
         signal: abort.signal,
       },
       printer(),

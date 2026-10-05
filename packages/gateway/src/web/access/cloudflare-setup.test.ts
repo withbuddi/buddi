@@ -14,10 +14,12 @@ import {
   installFor,
   removeCloudflareSetup,
   runCloudflareSetup,
+  SYSTEM_DAEMON_WHY,
   type SetupDeps,
   type SetupProgress,
   type SetupRecord,
 } from './cloudflare-setup.js';
+import type { ConnectorControl, ConnectorView } from './cloudflare-connector.js';
 
 const fakes: FakeCloudflare[] = [];
 afterEach(async () => { await Promise.all(fakes.splice(0).map((f) => f.close())); });
@@ -295,5 +297,87 @@ describe('one operation at a time', () => {
     const free = claimSetupOperation('setup');
     expect(free).not.toBeNull();
     free?.release();
+  });
+});
+
+/** A fake supervisor connector: answers sync with the states it is given, one per call, the last one repeating. */
+function fakeConnector(states: Array<Partial<ConnectorView>>) {
+  const calls: string[] = [];
+  let saved: string | null = null;
+  let i = 0;
+  const base: ConnectorView = { state: 'starting', mode: 'buddi', systemDaemon: null, binary: { path: '/opt/homebrew/bin/cloudflared', source: 'path' }, pid: null, log: '/data/logs/cloudflared.log' };
+  const control: ConnectorControl = {
+    saveToken: async (token) => { calls.push('saveToken'); saved = token; },
+    forgetToken: async () => { calls.push('forgetToken'); saved = null; },
+    sync: async () => { calls.push('sync'); const s = states[Math.min(i++, states.length - 1)]; return { ...base, ...s }; },
+    remove: async () => { calls.push('remove'); return { ...base, state: 'stopped', binary: null, removedBinary: true }; },
+  };
+  return { control, calls, get saved() { return saved; } };
+}
+
+describe('the connector buddi runs', () => {
+  it('keeps the connector token, asks the supervisor to start it, and shows no command', async () => {
+    const w = await world();
+    w.cf.healthyAfter = 3;
+    const c = fakeConnector([{ state: 'starting' }, { state: 'running', pid: 42 }]);
+    const done = await runCloudflareSetup({ host: HOST, email: EMAIL }, { ...w.deps(), connector: c.control }, (p) => w.seen.push(p));
+    expect(done.state).toBe('done');
+    const tunnel = w.cf.state.tunnels[0]!;
+    expect(c.saved).toBe(`eyJ-connector-token-for-${tunnel.id}`);
+    expect(c.calls[0]).toBe('saveToken');
+    expect(w.record?.connector).toBe('buddi');
+    // "Starting the connector…" then "Connected", never a line to copy.
+    expect(w.seen.some((p) => p.steps.find((s) => s.id === 'connector')?.text === 'Starting the connector…' && p.steps.find((s) => s.id === 'connector')?.state === 'now')).toBe(true);
+    expect(w.seen.every((p) => p.install === null)).toBe(true);
+    expect(done.steps.find((s) => s.id === 'connector')).toMatchObject({ state: 'done', text: 'Connector running' });
+    expect(done.steps.find((s) => s.id === 'healthy')).toMatchObject({ state: 'done', text: 'Connected' });
+    // The connector token never reaches the progress.
+    expect(JSON.stringify(w.seen)).not.toContain('eyJ-connector-token');
+  });
+
+  it('names a system service in the way, with the line that removes it and why', async () => {
+    const w = await world();
+    w.cf.healthyAfter = 1_000;
+    const c = fakeConnector([{ state: 'system-daemon', systemDaemon: '/Library/LaunchDaemons/com.cloudflare.cloudflared.plist' }]);
+    const failed = await runCloudflareSetup({ host: HOST, email: EMAIL }, { ...w.deps(), connector: c.control, waitMs: 0 }, (p) => w.seen.push(p));
+    const waiting = w.seen.find((p) => p.state === 'waiting');
+    expect(waiting?.connector?.systemDaemon).toEqual({ file: '/Library/LaunchDaemons/com.cloudflare.cloudflared.plist', command: 'sudo cloudflared service uninstall', why: SYSTEM_DAEMON_WHY });
+    expect(waiting?.steps.find((s) => s.id === 'connector')?.text).toBe('Cloudflare’s system service is in the way');
+    expect(waiting?.install).toBeNull();
+    expect(failed.state).toBe('failed');
+    expect(failed.steps.find((s) => s.id === 'connector')?.state).toBe('failed');
+    expect(failed.error).toContain('sudo cloudflared service uninstall');
+  });
+
+  it('uses the system service when told to: buddi starts none, and the reinstall line is there should it run another tunnel', async () => {
+    const w = await world();
+    w.cf.healthyAfter = 2;
+    const c = fakeConnector([{ state: 'system-daemon', mode: 'system', systemDaemon: '/Library/LaunchDaemons/com.cloudflare.cloudflared.plist' }]);
+    const done = await runCloudflareSetup({ host: HOST, email: EMAIL, useSystemDaemon: true }, { ...w.deps(), connector: c.control }, (p) => w.seen.push(p));
+    expect(done.state).toBe('done');
+    expect(w.record?.connector).toBe('system');
+    expect(w.seen.find((p) => p.state === 'waiting')?.install?.command).toContain('sudo cloudflared service install');
+    expect(done.steps.find((s) => s.id === 'connector')?.text).toBe('Cloudflare’s system service connected');
+  });
+
+  it('says how to get cloudflared when it is missing', async () => {
+    const w = await world();
+    w.cf.healthyAfter = 1_000;
+    const c = fakeConnector([{ state: 'missing-binary', binary: null, detail: 'cloudflared could not be downloaded from GitHub.', brew: 'brew install cloudflared' }]);
+    const failed = await runCloudflareSetup({ host: HOST, email: EMAIL }, { ...w.deps(), connector: c.control, waitMs: 0 });
+    expect(failed.connector).toMatchObject({ state: 'missing-binary', brew: 'brew install cloudflared' });
+    expect(failed.error).toContain('Run brew install cloudflared');
+  });
+
+  it('on Remove forgets the connector token, stops it and deletes the cloudflared it downloaded; no sudo line without a system service', async () => {
+    const w = await world();
+    const c = fakeConnector([{ state: 'running' }]);
+    await runCloudflareSetup({ host: HOST, email: EMAIL }, { ...w.deps(), connector: c.control });
+    const removed = await removeCloudflareSetup({ ...w.deps(), connector: c.control });
+    expect(removed.error).toBeNull();
+    expect(c.calls.slice(-2)).toEqual(['forgetToken', 'remove']);
+    expect(removed.removed).toContain('the cloudflared buddi downloaded');
+    expect(removed.uninstall).toBeNull();
+    expect(c.saved).toBeNull();
   });
 });

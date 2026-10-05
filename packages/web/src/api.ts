@@ -1917,14 +1917,26 @@ export interface CloudflareSetupProgress {
   host: string;
   email: string;
   steps: Array<{ id: CloudflareSetupStepId; state: 'next' | 'now' | 'done' | 'failed'; text: string; why?: string }>;
-  /** The one line buddi never runs itself; it holds the tunnel's connector token. */
+  /** The one line buddi never runs itself; it holds the tunnel's connector token. Only without a supervisor, or for the system service. */
   install: { command: string; note: string } | null;
+  /** The connector buddi's supervisor runs (or Cloudflare's system service it uses). Absent from an older gateway. */
+  connector?: CloudflareConnector | null;
   error: string | null;
   url: string | null;
   removed: string[];
   uninstall: string | null;
   /** It stopped at something of buddi's name that buddi didn't make: "Use it anyway" runs again with adopt. */
   adoptable?: boolean;
+}
+export interface CloudflareConnector {
+  state: 'running' | 'starting' | 'stopped' | 'missing-binary' | 'system-daemon';
+  mode: 'buddi' | 'system';
+  detail?: string;
+  /** The Homebrew line, when cloudflared is missing on a Mac with brew. */
+  brew?: string;
+  /** Cloudflare's system service is installed: the line that removes it, and why. */
+  systemDaemon?: { file: string; command: string; why: string };
+  log?: string;
 }
 /** A domain (Cloudflare zone) the setup token can see. */
 export interface CloudflareZone { id: string; name: string }
@@ -3002,7 +3014,7 @@ export const api = {
   testCloudflareAccess: (change: { teamDomain: string }) => post<CloudflareAccessTest>('/access/cloudflare-access/test', change),
   cloudflareSetup: () => get<CloudflareSetupView>('/access/cloudflare-access/setup'),
   cloudflareZones: (input: { token?: string } = {}) => post<{ zones: CloudflareZone[] }>('/access/cloudflare-access/zones', input),
-  startCloudflareSetup: (input: { token?: string; host: string; email: string; zone?: string; adopt?: boolean }) => post<CloudflareSetupView>('/access/cloudflare-access/setup', input),
+  startCloudflareSetup: (input: { token?: string; host: string; email: string; zone?: string; adopt?: boolean; useSystemDaemon?: boolean }) => post<CloudflareSetupView>('/access/cloudflare-access/setup', input),
   stopCloudflareSetup: () => post<CloudflareSetupView>('/access/cloudflare-access/setup/stop'),
   removeCloudflareSetup: (input: { token?: string } = {}) => post<CloudflareSetupView>('/access/cloudflare-access/setup/remove', input),
   /** Forget the kept Cloudflare API token (the owner secret); it stays valid in Cloudflare. */

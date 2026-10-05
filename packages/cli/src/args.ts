@@ -103,8 +103,8 @@ export type Command =
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
-  /** `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt]`, `… remove [--host <h>]` and `… forget-token`. */
-  | { kind: 'access'; action: 'cloudflare-setup' | 'cloudflare-remove' | 'cloudflare-forget-token'; host?: string; zone?: string; email?: string; adopt?: true }
+  /** `buddi access cloudflare setup --host <h> [--zone <z>] [--email <e>] [--adopt] [--use-system-daemon]`, `… remove [--host <h>]` and `… forget-token`. */
+  | { kind: 'access'; action: 'cloudflare-setup' | 'cloudflare-remove' | 'cloudflare-forget-token'; host?: string; zone?: string; email?: string; adopt?: true; useSystemDaemon?: true }
   /** The local dashboard over the event log. */
   | { kind: 'dashboard'; action: DashboardAction }
   /** The agents' own browser: `status` says which one is here, `install` downloads Chromium. */
@@ -528,7 +528,7 @@ export function parseArgs(argv: string[]): Command {
 
   if (head === 'access') {
     if (rest[0] !== 'cloudflare' || (rest[1] !== 'setup' && rest[1] !== 'remove' && rest[1] !== 'forget-token')) {
-      throw new UsageError('buddi access needs: cloudflare setup --host <hostname> [--zone <zone>] [--email <email>] [--adopt], cloudflare remove, or cloudflare forget-token');
+      throw new UsageError('buddi access needs: cloudflare setup --host <hostname> [--zone <zone>] [--email <email>] [--adopt] [--use-system-daemon], cloudflare remove, or cloudflare forget-token');
     }
     if (rest[1] === 'forget-token') {
       if (rest.length > 2) throw new UsageError(`unexpected argument: ${rest[2]}`);
@@ -537,10 +537,11 @@ export function parseArgs(argv: string[]): Command {
     const action = rest[1] === 'setup' ? 'cloudflare-setup' as const : 'cloudflare-remove' as const;
     const allowed = action === 'cloudflare-setup' ? ['--host', '--zone', '--email'] : ['--host'];
     const values: Record<string, string> = {};
-    let adopt = false;
+    let adopt = false, useSystemDaemon = false;
     for (let i = 2; i < rest.length; i++) {
       const arg = rest[i]!;
       if (arg === '--adopt' && action === 'cloudflare-setup') { adopt = true; continue; }
+      if (arg === '--use-system-daemon' && action === 'cloudflare-setup') { useSystemDaemon = true; continue; }
       const [flag, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
       if (!allowed.includes(flag!)) throw new UsageError(`unexpected argument: ${arg}`);
       const value = inline ?? rest[++i];
@@ -548,7 +549,7 @@ export function parseArgs(argv: string[]): Command {
       values[flag!.slice(2)] = value;
     }
     if (action === 'cloudflare-setup' && !values.host) throw new UsageError('buddi access cloudflare setup needs --host <hostname>, like --host buddi.example.com');
-    return { kind: 'access', action, ...values, ...(adopt ? { adopt: true as const } : {}) };
+    return { kind: 'access', action, ...values, ...(adopt ? { adopt: true as const } : {}), ...(useSystemDaemon ? { useSystemDaemon: true as const } : {}) };
   }
 
   throw new UsageError(`buddi ${head} is not a command.`);

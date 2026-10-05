@@ -290,4 +290,34 @@ describe('Set it up for me', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Use it anyway' }));
     await waitFor(() => expect(api.startCloudflareSetup).toHaveBeenCalledWith({ host: 'buddi.example.com', email: 'owner@example.com', adopt: true }));
   });
+
+  it('shows the connector starting with no command, and a system service in the way with its line and Use the system daemon instead', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    const why = 'Cloudflare’s system service from an earlier setup is installed on this computer. Two connectors for one tunnel fight over its connections.';
+    const waiting = progress('waiting', 6, {
+      connector: { state: 'system-daemon', mode: 'buddi', systemDaemon: { file: '/Library/LaunchDaemons/com.cloudflare.cloudflared.plist', command: 'sudo cloudflared service uninstall', why } },
+    });
+    waiting.steps[6]!.text = 'Cloudflare’s system service is in the way';
+    vi.mocked(api.cloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: waiting });
+    vi.mocked(api.stopCloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: { ...waiting, state: 'stopped' } });
+    vi.mocked(api.startCloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: progress('running', 2) });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    expect(await screen.findByText(why)).toBeTruthy();
+    expect(screen.getByText('sudo cloudflared service uninstall')).toBeTruthy();
+    expect(screen.queryByText(/service install/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use the system daemon instead' }));
+    await waitFor(() => expect(api.startCloudflareSetup).toHaveBeenCalledWith({ host: 'buddi.example.com', email: 'owner@example.com', useSystemDaemon: true }));
+    expect(api.stopCloudflareSetup).toHaveBeenCalled();
+  });
+
+  it('offers the Homebrew line when cloudflared is missing', async () => {
+    vi.mocked(api.access).mockResolvedValue(ROWS);
+    const waiting = progress('waiting', 6, { connector: { state: 'missing-binary', mode: 'buddi', detail: 'cloudflared could not be downloaded from GitHub.', brew: 'brew install cloudflared' } });
+    vi.mocked(api.cloudflareSetup).mockResolvedValue({ ...SETUP, tokenStored: true, progress: waiting });
+    render(<AccessSettings />);
+    fireEvent.click(await screen.findByText('Cloudflare Access'));
+    expect(await screen.findByText('brew install cloudflared')).toBeTruthy();
+    expect(screen.getByText(/could not be downloaded from GitHub/)).toBeTruthy();
+  });
 });

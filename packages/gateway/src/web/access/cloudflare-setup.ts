@@ -6,9 +6,13 @@
  * `buddi-<host>`, its ingress (`<host>` → the ingress listener), a proxied
  * CNAME, a reusable Allow policy for the owner's email and a self-hosted
  * Access application for the hostname. It reads the application's AUD tag and
- * the team domain, fills in `access.cloudflare`, shows the one command buddi
- * never runs itself (`sudo cloudflared service install <token>`), waits for
- * the tunnel to report healthy and runs Test my setup.
+ * the team domain, fills in `access.cloudflare`, keeps the tunnel's connector
+ * token as an owner secret and asks the supervisor to run cloudflared itself
+ * (install's cloudflared.ts; no command to copy), waits for the tunnel to
+ * report healthy and runs Test my setup. A system service from an earlier
+ * setup (`sudo cloudflared service install`) is named, with the one line that
+ * removes it, or used instead when the owner says so. Without a supervisor (a
+ * checkout's `buddi serve`) the step falls back to the line to run by hand.
  *
  * Idempotent: the ids of what buddi made are kept in the setup record, so a
  * second run after a failure picks up where the first stopped. An object of
@@ -28,6 +32,7 @@
 import type { CloudflareApi, CfAccessApp, CfDnsRecord } from './cloudflare-api.js';
 import { CloudflareApiError, CONNECTOR_TOKEN } from './cloudflare-api.js';
 import { plausibleEmail, validateCloudflareInput, type CloudflareAccessSetting } from './cloudflare.js';
+import type { ConnectorControl, ConnectorState, ConnectorView } from './cloudflare-connector.js';
 
 /** Where the record of what buddi made lives (a web setting). Ids only, never a token. */
 export const CLOUDFLARE_SETUP_KEY = 'access.cloudflare.setup';
@@ -66,12 +71,41 @@ export interface SetupInstall {
   note: string;
 }
 
+/** The connector the supervisor runs, as the step shows it. */
+export interface SetupConnector {
+  state: ConnectorState;
+  mode: 'buddi' | 'system';
+  detail?: string | undefined;
+  /** The Homebrew line, when cloudflared is missing on a Mac with brew. */
+  brew?: string | undefined;
+  /** Cloudflare's system service is installed: the line that removes it, and why. */
+  systemDaemon?: { file: string; command: string; why: string } | undefined;
+  /** Where cloudflared's lines go. */
+  log?: string | undefined;
+}
+
+/** Why a system service and buddi's own connector can't both run. */
+export const SYSTEM_DAEMON_WHY = 'Cloudflare’s system service from an earlier setup is installed on this computer. Two connectors for one tunnel fight over its connections, so buddi doesn’t start its own while it is there. Remove it with this line, or use it instead.';
+
+export function connectorOf(view: ConnectorView, platform: NodeJS.Platform): SetupConnector {
+  return {
+    state: view.state,
+    mode: view.mode,
+    ...(view.detail ? { detail: view.detail } : {}),
+    ...(view.brew ? { brew: view.brew } : {}),
+    ...(view.systemDaemon ? { systemDaemon: { file: view.systemDaemon, command: uninstallFor(platform), why: SYSTEM_DAEMON_WHY } } : {}),
+    log: view.log,
+  };
+}
+
 export interface SetupProgress {
   state: 'idle' | 'running' | 'waiting' | 'done' | 'failed' | 'stopped' | 'removing' | 'removed';
   host: string;
   email: string;
   steps: SetupStep[];
   install: SetupInstall | null;
+  /** The connector buddi runs (or the system service it uses), when a supervisor runs buddi. */
+  connector: SetupConnector | null;
   /** The sentence for a failure, a stop or a partial removal. */
   error: string | null;
   /** The address, once it is set up. */
@@ -96,6 +130,8 @@ export interface SetupRecord {
   policyId?: string | undefined;
   appId?: string | undefined;
   aud?: string | undefined;
+  /** Who runs the connector: buddi's supervisor (the default) or Cloudflare's system service. */
+  connector?: 'buddi' | 'system' | undefined;
   at: string;
 }
 
@@ -105,6 +141,8 @@ export interface SetupInput {
   zone?: string | undefined;
   /** "Use it anyway": take over an object of buddi's name that buddi didn't make. */
   adopt?: boolean | undefined;
+  /** "Use the system daemon instead": buddi starts no connector of its own. */
+  useSystemDaemon?: boolean | undefined;
 }
 
 export interface SetupDeps {
@@ -128,6 +166,11 @@ export interface SetupDeps {
    * its first await). Without one, the run claims its own and lets it go.
    */
   lease?: SetupLease | undefined;
+  /**
+   * The supervisor's connector. Absent (a checkout's `buddi serve`, a CLI
+   * with no supervisor answering), the step shows the line to run by hand.
+   */
+  connector?: ConnectorControl | undefined;
 }
 
 export type SetupOperation = 'setup' | 'remove';
@@ -199,7 +242,7 @@ const LABELS: Record<SetupStepId, string> = {
   dns: 'Adding the DNS record',
   access: 'Creating the Access application',
   save: 'Filling in buddi’s settings',
-  connector: 'Install the connector',
+  connector: 'Starting the connector…',
   healthy: 'Waiting for the tunnel to connect',
   test: 'Testing the setup',
 };
@@ -209,7 +252,7 @@ export function freshProgress(host = '', email = ''): SetupProgress {
   return {
     state: 'idle', host, email,
     steps: ORDER.map((id) => ({ id, state: 'next', text: LABELS[id] })),
-    install: null, error: null, url: null, removed: [], uninstall: null, adoptable: false,
+    install: null, connector: null, error: null, url: null, removed: [], uninstall: null, adoptable: false,
   };
 }
 
@@ -402,13 +445,47 @@ async function setupRun(input: SetupInput, deps: SetupDeps, onProgress: (p: Setu
     await deps.saveSetting(checked.value);
     finish('save', 'buddi’s settings filled in');
 
-    // 7. The one command buddi does not run.
+    // 7. The connector: the supervisor runs it, or (no supervisor) the owner does.
     at('connector');
-    p.install = installFor(await api.tunnelToken(accountId, tunnel.id), deps.platform);
+    const connectorToken = await api.tunnelToken(accountId, tunnel.id);
+    if (!CONNECTOR_TOKEN.test(connectorToken)) throw new CloudflareApiError('Cloudflare answered without the tunnel’s connector token.', 200, []);
+    const control = deps.connector;
+    const systemMode = input.useSystemDaemon === true;
+    let view: ConnectorView | null = null;
+    const look = async (): Promise<void> => {
+      if (!control) return;
+      try {
+        view = await control.sync();
+      } catch {
+        view = null;
+      }
+      p.connector = view ? connectorOf(view, deps.platform) : null;
+      const s = step('connector');
+      if (s.state === 'done') return;
+      const v = view as ConnectorView | null;
+      s.text = !v ? 'Starting the connector… (buddi’s supervisor isn’t answering)'
+        : v.mode === 'system' ? 'Using Cloudflare’s system service'
+        : v.state === 'running' ? 'Connector running'
+        : v.state === 'missing-binary' ? 'cloudflared isn’t on this computer'
+        : v.state === 'system-daemon' ? 'Cloudflare’s system service is in the way'
+        : 'Starting the connector…';
+      if (v?.state === 'running' && v.mode === 'buddi') finish('connector', 'Connector running');
+    };
+    if (control) {
+      record.connector = systemMode ? 'system' : 'buddi';
+      await deps.saveRecord(record);
+      await control.saveToken(connectorToken);
+      // The system service runs whatever token it was installed with: the line, should it be another tunnel's.
+      if (systemMode) p.install = { ...installFor(connectorToken, deps.platform), note: 'Only if the system service runs another tunnel: uninstall it (sudo cloudflared service uninstall), then install it again with this line.' };
+      await look();
+    } else {
+      step('connector').text = 'Install the connector';
+      p.install = installFor(connectorToken, deps.platform);
+    }
     p.state = 'waiting';
     emit();
 
-    // 8. Wait for cloudflared to connect.
+    // 8. Wait for the tunnel to connect.
     const deadline = now().getTime() + (deps.waitMs ?? HEALTH_WAIT_MS);
     let healthy = false;
     let first = true;
@@ -422,19 +499,29 @@ async function setupRun(input: SetupInput, deps: SetupDeps, onProgress: (p: Setu
       }
       if (now().getTime() >= deadline) break;
       await sleep(deps.pollMs ?? HEALTH_POLL_MS, deps.signal);
+      if (!deps.signal?.aborted && control) { await look(); emit(); }
     }
     if (!healthy) {
       if (deps.signal?.aborted) {
         p.state = 'stopped';
-        p.error = 'Stopped waiting. Everything buddi made stays; run the command, then Set it up again to finish.';
+        p.error = control
+          ? 'Stopped waiting. Everything buddi made stays; Set it up again to finish.'
+          : 'Stopped waiting. Everything buddi made stays; run the command, then Set it up again to finish.';
         emit();
         return p;
       }
-      current = 'healthy';
-      throw new SetupError('The tunnel hasn’t connected yet. Run the command above on this computer, then try again.');
+      const v = view as ConnectorView | null;
+      current = !control || v?.state === 'running' || v?.mode === 'system' ? 'healthy' : 'connector';
+      if (!control) throw new SetupError('The tunnel hasn’t connected yet. Run the command above on this computer, then try again.');
+      if (!v) throw new SetupError('buddi’s supervisor didn’t answer, so the connector isn’t running. Restart buddi, then Set it up again.');
+      if (v.mode === 'system') throw new SetupError('The tunnel hasn’t connected through Cloudflare’s system service. Check that it runs this tunnel’s token, then Set it up again.');
+      if (v.state === 'system-daemon') throw new SetupError('Cloudflare’s system service is still installed. Remove it (sudo cloudflared service uninstall) or use it instead, then Set it up again.');
+      if (v.state === 'missing-binary') throw new SetupError(`cloudflared isn’t on this computer and buddi couldn’t download it. ${v.brew ? `Run ${v.brew}` : 'Install it from Cloudflare’s downloads page'}, then Set it up again.`);
+      throw new SetupError('The tunnel hasn’t connected yet. cloudflared’s own lines are in logs/cloudflared.log in buddi’s data folder.');
     }
-    finish('connector', 'Connector installed');
-    finish('healthy', 'Tunnel connected');
+    const v = view as ConnectorView | null;
+    finish('connector', !control ? 'Connector installed' : v?.mode === 'system' ? 'Cloudflare’s system service connected' : 'Connector running');
+    finish('healthy', 'Connected');
 
     // 9. Test my setup.
     at('test');
@@ -464,7 +551,7 @@ async function setupRun(input: SetupInput, deps: SetupDeps, onProgress: (p: Setu
  * the one setup filled in, and forgets the record. Never throws.
  */
 export async function removeCloudflareSetup(
-  deps: Pick<SetupDeps, 'api' | 'platform' | 'readSetting' | 'saveSetting' | 'readRecord' | 'saveRecord' | 'lease'> & { host?: string | undefined },
+  deps: Pick<SetupDeps, 'api' | 'platform' | 'readSetting' | 'saveSetting' | 'readRecord' | 'saveRecord' | 'lease' | 'connector'> & { host?: string | undefined },
   onProgress: (p: SetupProgress) => void = () => {},
 ): Promise<SetupProgress> {
   const lease = deps.lease ?? claimSetupOperation('remove');
@@ -483,7 +570,7 @@ export async function removeCloudflareSetup(
 }
 
 async function removeRun(
-  deps: Pick<SetupDeps, 'api' | 'platform' | 'readSetting' | 'saveSetting' | 'readRecord' | 'saveRecord'> & { host?: string | undefined },
+  deps: Pick<SetupDeps, 'api' | 'platform' | 'readSetting' | 'saveSetting' | 'readRecord' | 'saveRecord' | 'connector'> & { host?: string | undefined },
   onProgress: (p: SetupProgress) => void,
 ): Promise<SetupProgress> {
   const record = await deps.readRecord();
@@ -519,6 +606,18 @@ async function removeRun(
     await deps.saveRecord(record).catch(() => undefined);
   };
 
+  // The connector first: its token forgotten (so nothing starts it again), the child stopped, a downloaded cloudflared deleted.
+  let systemDaemon = !deps.connector;
+  if (deps.connector) {
+    try {
+      await deps.connector.forgetToken();
+      const view = await deps.connector.remove();
+      if (view.removedBinary) { p.removed.push('the cloudflared buddi downloaded'); emit(); }
+      systemDaemon = view.systemDaemon !== null;
+    } catch {
+      failures.push('buddi’s connector could not be stopped; restart buddi to stop it.');
+    }
+  }
   const account = record.accountId;
   const zone = record.zone.id;
   await attempt('the Access application', 'appId', (id) => api.deleteApp(account, id));
@@ -537,7 +636,8 @@ async function removeRun(
   }
   if (failures.length === 0) await deps.saveRecord(null).catch(() => undefined);
   p.state = 'removed';
-  p.uninstall = uninstallFor(deps.platform);
+  // Cloudflare's system service is the owner's to remove: buddi never runs sudo.
+  p.uninstall = systemDaemon ? uninstallFor(deps.platform) : null;
   p.error = failures.length ? `Some of it is still there. ${failures.join(' ')} Try Remove again.` : null;
   emit();
   return p;

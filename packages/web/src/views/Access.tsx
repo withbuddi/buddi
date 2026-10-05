@@ -11,7 +11,7 @@
  * let this browser in cannot be widened from the far end of it.
  */
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { ApiError, api, type AccessState, type CloudflareAccessChange, type CloudflareAccessView, type CloudflareSetupProgress, type CloudflareSetupView, type CloudflareZone, type TailscaleView } from '../api';
+import { ApiError, api, type AccessState, type CloudflareAccessChange, type CloudflareAccessView, type CloudflareConnector, type CloudflareSetupProgress, type CloudflareSetupView, type CloudflareZone, type TailscaleView } from '../api';
 import { Button, ButtonLink, ErrorBanner, Field, Icon, List, ListRow, Notice, Pill, Section, Stack, Toolbar, useAsync } from '../ui';
 
 /** After the Done line (the gateway's SETUP_PROPAGATION): a new Access application takes a minute or two to reach Cloudflare's sign-in page. */
@@ -426,6 +426,11 @@ export function CloudflareRow({ enabled, locked, onSaved }: { enabled: boolean; 
       onStop={() => act(() => api.stopCloudflareSetup())}
       onRetry={() => setMode('form')}
       onAdopt={() => { const p = setup?.progress; if (p) act(() => api.startCloudflareSetup({ host: p.host, email: p.email, adopt: true }), 'run'); }}
+      onUseSystem={() => {
+        const p = setup?.progress;
+        // The wait is one run: stop it, then run again with the system service as the connector.
+        if (p) act(() => api.stopCloudflareSetup().then(() => api.startCloudflareSetup({ host: p.host, email: p.email, useSystemDaemon: true })), 'run');
+      }}
       onRemove={remove}
       onAgain={() => setMode('form')}
       tokenStored={setup?.tokenStored ?? false}
@@ -584,13 +589,14 @@ function SetupForm({ setup, busy, failed, onCancel, onStart }: {
 /** Where a token forgotten here is revoked: buddi forgetting it leaves it valid in Cloudflare. */
 export const CLOUDFLARE_REVOKE_LINE = 'To revoke it in Cloudflare: My Profile → API Tokens.';
 
-function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, onAgain, tokenStored = false, forgot = false, onForget }: {
+function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onUseSystem, onRemove, onAgain, tokenStored = false, forgot = false, onForget }: {
   progress: CloudflareSetupProgress | null;
   busy: boolean;
   failed: string | null;
   onStop: () => void;
   onRetry: () => void;
   onAdopt: () => void;
+  onUseSystem?: () => void;
   onRemove: () => void;
   onAgain: () => void;
   tokenStored?: boolean;
@@ -611,7 +617,7 @@ function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, 
         {progress.error ? <Notice tone="critical" role="alert">{progress.error}</Notice> : null}
         {progress.uninstall ? (
           <>
-            <p className="ui-card-meta">The connector is still installed on this computer. To remove it too:</p>
+            <p className="ui-card-meta">Cloudflare’s system service is still installed on this computer. To remove it too:</p>
             <Command text={progress.uninstall} />
           </>
         ) : null}
@@ -649,9 +655,16 @@ function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, 
             <div className="access-run-text">
               <span>{step.state === 'now' && step.id !== 'connector' ? `${step.text}…` : step.text}</span>
               {step.state === 'failed' && step.why ? <span className="access-run-why">{step.why}</span> : null}
+              {step.id === 'connector' && step.state !== 'done' && progress.connector ? (
+                <ConnectorMore connector={progress.connector} live={live} busy={busy} onUseSystem={onUseSystem} />
+              ) : null}
               {step.id === 'connector' && step.state !== 'done' && progress.install ? (
                 <div className="access-run-more">
-                  <span className="ui-card-meta">Run this once in a terminal on this computer. buddi never runs sudo itself.</span>
+                  <span className="ui-card-meta">
+                    {progress.connector?.mode === 'system'
+                      ? 'If the system service runs another tunnel, install it again with this tunnel’s token. buddi never runs sudo itself.'
+                      : 'Run this once in a terminal on this computer. buddi never runs sudo itself.'}
+                  </span>
                   <Command text={progress.install.command} />
                   <span className="ui-card-meta">{progress.install.note}</span>
                 </div>
@@ -669,6 +682,35 @@ function SetupRun({ progress, busy, failed, onStop, onRetry, onAdopt, onRemove, 
       </Toolbar>
     </Stack>
   );
+}
+
+/** Under "Starting the connector…": what the supervisor says, and the one way out when something is in the way. */
+function ConnectorMore({ connector, live, busy, onUseSystem }: { connector: CloudflareConnector; live: boolean; busy: boolean; onUseSystem?: (() => void) | undefined }): JSX.Element | null {
+  if (connector.mode === 'buddi' && connector.state === 'system-daemon' && connector.systemDaemon) {
+    return (
+      <div className="access-run-more">
+        <span className="ui-card-meta">{connector.systemDaemon.why}</span>
+        <Command text={connector.systemDaemon.command} />
+        {live && onUseSystem ? (
+          <Toolbar align="end">
+            <Button disabled={busy} onClick={onUseSystem}>Use the system daemon instead</Button>
+          </Toolbar>
+        ) : null}
+      </div>
+    );
+  }
+  if (connector.state === 'missing-binary') {
+    return (
+      <div className="access-run-more">
+        <span className="ui-card-meta">{connector.detail ?? 'cloudflared isn’t on this computer.'} {connector.brew ? 'Or install it with Homebrew; buddi finds it on its own:' : ''}</span>
+        {connector.brew ? <Command text={connector.brew} /> : null}
+      </div>
+    );
+  }
+  if (connector.detail && connector.state !== 'running') {
+    return <div className="access-run-more"><span className="ui-card-meta">{connector.detail}</span></div>;
+  }
+  return null;
 }
 
 function inWords(items: string[]): string {

@@ -406,8 +406,9 @@ command:
    Cloudflare*, and Save.
 
 **Set it up for me.** The panel (and `buddi access cloudflare setup --host
-buddi.example.com [--zone example.com] [--email you@example.com] [--adopt]`) does steps
-2–5 through Cloudflare's API instead. Create a token under My Profile → API
+buddi.example.com [--zone example.com] [--email you@example.com] [--adopt]
+[--use-system-daemon]`) does steps 1–5 itself: the Cloudflare objects through
+Cloudflare's API, and the connector as part of buddi's service. Create a token under My Profile → API
 Tokens → Create Token → Custom token with:
 
 - Account · Cloudflare Tunnel · Edit
@@ -425,16 +426,49 @@ ingress (`<host>` → `http://127.0.0.1:<ingress port>`, everything else 404), a
 proxied CNAME commented "Made by buddi…", a reusable Allow policy `buddi —
 <host>` for your email (24-hour sessions) and a self-hosted Access application
 `buddi (<host>)`. It reads the AUD tag and the team domain, fills in and turns
-on the setting above, and shows the one command it never runs itself:
+on the setting above, keeps the tunnel's connector token as the owner secret
+`CLOUDFLARE_TUNNEL_TOKEN`, and the step reads "Starting the connector…" then
+"Connected" — there is no command to copy.
+
+*The connector.* The supervisor runs `cloudflared tunnel --no-autoupdate run`
+itself, as your user, like Postgres: started whenever Cloudflare Access is on
+and the setup record holds a tunnel, restarted with backoff (2 s doubling to
+30 s) when it exits, stopped with buddi and when the setting is turned off.
+It reads the connector token from the owner secret store at each start and
+hands it over in `TUNNEL_TOKEN` — never on the command line, never in a log;
+the child gets no other part of buddi's environment. cloudflared's own lines
+go to `<data>/logs/cloudflared.log`. The control socket says how it stands
+(`GET /connector`, and `connector` in `/status`): `running` once cloudflared
+logs "Registered tunnel connection", `starting`, `stopped`, `missing-binary`
+or `system-daemon`. buddi uses the `cloudflared` on PATH (or in
+`/opt/homebrew/bin` and `/usr/local/bin`, which a launchd PATH leaves out); with
+none, it downloads the latest release for this platform from
+github.com/cloudflare/cloudflared into `<data>/bin/cloudflared` (mode 0700) and
+runs it only after its SHA-256 matches the checksum Cloudflare publishes with
+the release (and GitHub's digest for the asset, when given); a mismatch is
+deleted, never run, and the step says so, with `brew install cloudflared` on a
+Mac that has Homebrew — buddi finds it on its own once it is installed.
+
+*Cloudflare's system service.* An earlier setup's `sudo cloudflared service
+install` leaves a system service (`/Library/LaunchDaemons/com.cloudflare.cloudflared.plist`
+on a Mac, `/etc/systemd/system/cloudflared.service` on Linux) that `buddi
+uninstall` does not remove: it is Cloudflare's, not buddi's. Two connectors
+for one tunnel fight over its connections, so while one is installed buddi
+starts none of its own; the step names it, says why, and gives the one line
+that removes it (buddi never runs sudo):
 
 ```sh
-sudo cloudflared service install <tunnel token>
+sudo cloudflared service uninstall
 ```
 
-(on a Mac after `brew install cloudflared`; if sudo cannot find it, use
-`/opt/homebrew/bin/cloudflared`, or `/usr/local/bin/cloudflared` on an Intel
-Mac; on Linux after the `.deb` or the package repository). buddi then waits up
-to 30 minutes for the tunnel to report healthy and runs Test my setup. A step
+buddi starts its own within seconds of it going. Or *Use the system daemon
+instead* (`--use-system-daemon`): buddi then never starts a connector, and shows
+`sudo cloudflared service install <tunnel token>` for the case where that
+service runs another tunnel's token. Without a supervisor (a checkout's `buddi
+serve`) the step falls back to that same line to run by hand.
+
+buddi then waits up to 30 minutes for the tunnel to report healthy and runs
+Test my setup. A step
 that fails says why — a missing token permission is named — and nothing made
 so far is lost: running it again picks up where it stopped. It refuses to
 touch a DNS record or an Access application for that hostname it did not make.
@@ -447,7 +481,10 @@ asking Cloudflare anything: remove the first, or set up the same hostname again.
 *Remove what buddi made* (or `buddi access cloudflare remove`) deletes the
 application, the policy, the DNS record and the tunnel, only those whose ids
 buddi recorded making (never anything found by name), turns the setting off when setup filled it in,
-and shows `sudo cloudflared service uninstall` for the connector. The API
+forgets the connector token, stops the connector and deletes `<data>/bin/cloudflared`
+when buddi downloaded it (a cloudflared you installed stays). It shows
+`sudo cloudflared service uninstall` only when Cloudflare's system service is
+installed. The API
 token stays kept (a later setup reuses it): the panel then says so with
 *Forget the token* (or `buddi access cloudflare forget-token`), which drops the
 owner secret. Forgotten here, it is still valid in Cloudflare until revoked

@@ -203,6 +203,7 @@ import {
   type SetupRecord,
 } from './access/cloudflare-setup.js';
 import { ownerSecretTokenStore, type CloudflareTokenStore } from './access/cloudflare-token.js';
+import { connectorTokenStore, supervisorConnector, type ConnectorControl } from './access/cloudflare-connector.js';
 import { createAccessRegistry } from './access/registry.js';
 import { createIngress, type Ingress } from './access/ingress.js';
 import type { AccessContext, AccessProviderId, AccessRefusal } from './access/provider.js';
@@ -466,6 +467,8 @@ export interface WebServerDeps {
     tokens?: CloudflareTokenStore | undefined;
     platform?: NodeJS.Platform | undefined;
     setup?: Pick<SetupDeps, 'pollMs' | 'waitMs' | 'sleep'> | undefined;
+    /** The supervisor's connector (a test's fake); by default the control socket when one is set, else none. */
+    connector?: ConnectorControl | null | undefined;
   } | undefined;
 }
 
@@ -977,6 +980,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       hand.revoke((lease) => forgotten.has(lease), 'Cloudflare access changed. Sign in again.');
     }
     await ingress.sync();
+    // Cloudflare Access on or off: the supervisor starts or stops its connector to match.
+    void connectorControl()?.sync().catch(() => undefined);
   };
 
   /*
@@ -992,6 +997,13 @@ export function createWebApp(deps: WebServerDeps): Server {
     const row = await readWebSetting<SetupRecord>(deps.pool, CLOUDFLARE_SETUP_KEY);
     return row && typeof row === 'object' && typeof row.host === 'string' ? row : null;
   };
+  /** The supervisor's connector, when a supervisor runs this gateway (install's cloudflared.ts). */
+  const connectorControl = (): ConnectorControl | undefined => {
+    if (deps.cloudflare?.connector !== undefined) return deps.cloudflare.connector ?? undefined;
+    const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET?.trim();
+    if (!socket) return undefined;
+    return supervisorConnector(socket, connectorTokenStore(deps.pool as never, createVault({ env: deps.env ?? process.env })));
+  };
   const setupDepsFor = (token: string, lease: SetupLease, signal?: AbortSignal): SetupDeps => ({
     api: createCloudflareApi({ token, transport: deps.cloudflare?.api?.transport, baseUrl: deps.cloudflare?.api?.baseUrl }),
     ingressPort: ingress.port() ?? (askedIngressPort() || null) ?? accessCtx.dashboardPort() + 2,
@@ -1002,6 +1014,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     saveRecord: (record) => writeWebSetting(deps.pool, CLOUDFLARE_SETUP_KEY, record),
     test: (team) => jwks.refresh(team),
     ...(deps.cloudflare?.setup ?? {}),
+    connector: connectorControl(),
     signal,
     lease,
   });
@@ -3027,7 +3040,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           // The token stays kept: the panel offers to forget it (…/setup/forget-token), and Set it up again reuses it.
           return sendJson(res, 200, await setupView());
         }
-        const input = { host: str(body.host), email: str(body.email), zone: str(body.zone) || undefined, adopt: body.adopt === true };
+        const input = { host: str(body.host), email: str(body.email), zone: str(body.zone) || undefined, adopt: body.adopt === true, useSystemDaemon: body.useSystemDaemon === true };
         const invalid = checkSetupInput(input);
         if (invalid) return sendJson(res, 400, { error: invalid });
         if (pasted) {

@@ -355,7 +355,7 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
-      return runAccess(command, process.env);
+      return runAccess(command, process.env, supervisorSocketPath(DATA_DIR));
     }
     case 'telegram': {
       await loadEnvironment();

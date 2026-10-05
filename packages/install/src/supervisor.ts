@@ -30,6 +30,9 @@ import type { ManagedDatabase } from './postgres.js';
 import { createUpgradeService, finishUpgrade, handOver, installedVersion, isVersion, recoverySentence, statusOnSocket, TICK_INTERVAL_MS } from './upgrade.js';
 import type { UpgradeControl, UpgradeInProgress } from './upgrade.js';
 import { APP_RESTART_EXIT, appLayout } from './app-layout.js';
+import { createConnector } from './cloudflared.js';
+import type { Connector, ConnectorStatus } from './cloudflared.js';
+import type { Pool } from 'pg';
 
 /** The launcher, as the supervisor spawns it for the gateway child. */
 const LAUNCHER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'launcher.js');
@@ -170,6 +173,8 @@ export interface SupervisorStatus {
   upgrading?: boolean;
   /** A recorded port another program took, moved within the last day: the app says it once. */
   portNotice?: string;
+  /** Cloudflare's connector, when this supervisor runs one (cloudflared.ts). */
+  connector?: ConnectorStatus['state'];
 }
 
 export interface ControlSocketOptions {
@@ -185,6 +190,8 @@ export interface ControlSocketOptions {
   uninstall?: ProductUninstall | undefined;
   /** buddi.app's command line tool (cli-shim.ts); absent outside the app. */
   cli?: { status: () => { available: boolean; installed: string[]; reason?: string }; install: () => Promise<ShimOutcome> } | undefined;
+  /** Cloudflare's connector (cloudflared.ts): its status, and the two verbs the gateway asks for. */
+  connector?: Pick<Connector, 'status' | 'sync' | 'remove'> | undefined;
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -237,7 +244,7 @@ function optionalString(value: unknown): string | undefined {
  * `<data>/incoming/`, and that is checked to be under that directory, resolved,
  * before it is passed on.
  */
-export function controlSocket({ status, action, backup, upgrade, data, uninstall, cli }: ControlSocketOptions): Server {
+export function controlSocket({ status, action, backup, upgrade, data, uninstall, cli, connector }: ControlSocketOptions): Server {
   return createServer((req, res) => {
     void handle(req, res).catch(() => send(res, 500, { error: 'The supervisor could not complete that action.' }));
   });
@@ -374,6 +381,22 @@ export function controlSocket({ status, action, backup, upgrade, data, uninstall
         return outcome.ok ? send(res, 200, { file: outcome.file, lines: outcome.lines }) : send(res, outcome.status, { error: outcome.error });
       }
     }
+    /*
+     * Cloudflare's connector. `sync` reads the setting and makes the child
+     * match it; `remove` stops it and deletes the cloudflared buddi
+     * downloaded. No token travels here: the supervisor reads it itself.
+     */
+    if (route === '/connector') {
+      if (!connector) return send(res, 404, { error: 'no such endpoint' });
+      if (method === 'GET') return send(res, 200, connector.status());
+      if (method === 'POST') {
+        const body = await readBody(req);
+        if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+        if (body.action === 'sync') return send(res, 200, await connector.sync());
+        if (body.action === 'remove') return send(res, 200, await connector.remove());
+        return send(res, 400, { error: '"action" must be sync or remove.' });
+      }
+    }
     if (route === '/uninstall' && method === 'GET') {
       if (!uninstall) return send(res, 404, { error: 'no such endpoint' });
       return send(res, 200, uninstall.plan());
@@ -493,6 +516,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   let backup: BackupControl | undefined, scheduleTick: NodeJS.Timeout | undefined;
   let upgrade: UpgradeControl | undefined, upgradeTick: NodeJS.Timeout | undefined, handingOver = false;
   let uninstall: ProductUninstall | undefined, leavingForUninstall = false;
+  let connector: Connector | undefined, connectorPool: Pool | undefined;
   /** Has a pending upgrade been written into the history yet? */
   let resolved = false, pending: UpgradeInProgress | undefined;
   let desired = true, closing = false, chain: Promise<void> = Promise.resolve();
@@ -698,16 +722,28 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       status: () => ({ available: false, installed: [] as string[], reason: 'This buddi came from npm, and its buddi command is already on your PATH.' }),
       install: async (): Promise<ShimOutcome> => ({ ok: false, status: 409, error: 'This buddi came from npm, and its buddi command is already on your PATH.' }),
     };
+    /*
+     * Cloudflare's connector, run here like Postgres: started when Cloudflare
+     * Access is on and the setup made a tunnel, stopped with buddi. The
+     * token is read from the owner secret store at each spawn (cloudflared.ts).
+     */
+    const connectorDb = (): Pool => (connectorPool ??= core.createPool(ready.env.DATABASE_URL as string));
+    connector = createConnector({
+      data: ready.data, env: startEnv,
+      plan: () => gateway.cloudflareConnectorPlan(connectorDb()),
+      token: () => gateway.connectorTokenStore(connectorDb(), core.createVault({ env: ready.env })).use(),
+      log: line => console.error(line),
+    });
     server = controlSocket({
       status: () => ({ phase: ready.state.phase, supervisorPid: process.pid, installRoot: ready.root, nodePath: process.execPath, database: database!.pid ? (database!.alive ? 'running' : 'failed') : 'external', databasePid: database!.pid,
         gateway: child && child.exitCode === null && child.signalCode === null ? 'running' : 'stopped', gatewayPid: child?.pid ?? null,
-        current, upgrading: upgrade!.busy(), ...portNotice(ready.state.portMoved) }),
+        current, upgrading: upgrade!.busy(), ...portNotice(ready.state.portMoved), connector: connector!.status().state }),
       action: name => { console.error(`supervisor: ${name} asked for on the control socket.`); chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
-      backup, upgrade, data: ready.data, uninstall, cli,
+      backup, upgrade, data: ready.data, uninstall, cli, connector,
     });
     await listenOnSocket(server, supervisorSocket(ready.data));
     if (briefly) console.error('supervisor: started briefly, for an uninstall\'s last backup; the gateway stays stopped.');
-    else if (migrationFailure === undefined) start();
+    else if (migrationFailure === undefined) { start(); void connector.sync(); }
     else console.error('supervisor: the gateway was not started; this installation is in upgrade-failed.');
     // The daily version check: once at start, now that the installation is up,
     // and then on the hour, which is only ever a question about the clock —
@@ -743,6 +779,8 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     clearInterval(upgradeTick);
     await chain.catch(() => {});
     await stopGateway();
+    await connector?.close().catch(() => {});
+    await connectorPool?.end().catch(() => {});
     if (server?.listening) {
       /*
        * `close` stops the supervisor listening; it does not touch the
