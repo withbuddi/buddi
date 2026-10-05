@@ -6,11 +6,12 @@ buddi is a personal agent platform you run yourself: AI teammates that use
 tools, work on schedules, remember what matters, and ask before doing
 anything consequential. Everything runs on your machine, with your keys.
 
-**Just want to use it?** See [withbuddi.com](https://withbuddi.com), or
+**Just want to use it?** On a Mac, [download buddi.app](https://withbuddi.com/download/mac)
+(or `brew install withbuddi/tap/buddi`). On Linux, or a Mac from the terminal:
 `npm install -g @withbuddi/buddi && buddi`. This page is for working on buddi
 itself.
 
-[withbuddi.com](https://withbuddi.com) · [npm](https://www.npmjs.com/package/@withbuddi/buddi) · [docs](docs/README.md) · [plugins](https://withbuddi.com/plugins/) · [Chrome extension](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)
+[withbuddi.com](https://withbuddi.com) · [Download for Mac](https://withbuddi.com/download/mac) · [Homebrew](https://github.com/withbuddi/homebrew-tap) · [npm](https://www.npmjs.com/package/@withbuddi/buddi) · [docs](docs/README.md) · [plugins](https://withbuddi.com/plugins/) · [Chrome extension](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)
 
 <img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/home.png" alt="The buddi dashboard's Home: Good evening, Sam, then three widgets — the weather in Lisbon, what is coming up and a world clock — and the team." width="100%">
 
