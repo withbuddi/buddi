@@ -135,6 +135,8 @@ export interface GoldenCase {
    * the way the real one does for the situation the case pins.
    */
   manifests?: () => PluginManifest[];
+  /** SQL run after the shared fixture, for a case that needs the owner in a given state. */
+  seed?: readonly string[];
   /** Every failure, as a plain sentence. An empty array is a pass. */
   check(turns: TurnRecord[]): string[];
 }
@@ -256,6 +258,19 @@ export function minutesOf(input: { start?: string; end?: string; duration?: numb
   }
   return null;
 }
+
+/** The owner of the profile case: a name and a zone, no full name, the first run behind them. */
+export const PROFILE_CASE_NAME = 'Samuel Okafor';
+export const PROFILE_CASE_SEED = [
+  `insert into core.owner (id, preferred_name, timezone) values ('owner', 'Sam', 'UTC')
+   on conflict (id) do update set preferred_name = 'Sam', timezone = 'UTC', full_name = null`,
+  `insert into core.onboarding (owner_id, state, started_at, completed_at, surface)
+   values ('owner', 'done', now(), now(), 'web')
+   on conflict (owner_id) do update set state = 'done', completed_at = now()`,
+  `delete from core.owner_places`,
+];
+const ASKS_FULL_NAME = /full name|your (?:last|sur)name|name (?:should|to) (?:i )?(?:sign|put)|sign (?:it|off) (?:with|as)/i;
+const questions = (text: string): number => (text.match(/\?/g) ?? []).length;
 
 const ASKS_WHICH_CALENDAR = /which calendar|what calendar|which of your calendars/i;
 const STATES_TWO_HOURS = /\b(?:2|two)[ -]?(?:hours?|h)\b|2-hour|two-hour/i;
@@ -525,6 +540,34 @@ export const GOLDEN_CASES: GoldenCase[] = [
       return fails;
     },
   },
+  {
+    id: 'one-writable-field-asked-once',
+    guards:
+      'A letter needs the full name the profile lacks: the front desk asks once, one question, records the answer with ' +
+      'owner.set_profile, signs with it, and never asks again for the next letter.',
+    agent: 'concierge',
+    seed: PROFILE_CASE_SEED,
+    turns: [
+      { question: "Write a short letter to my landlord saying I'll be away for all of November." },
+      { question: PROFILE_CASE_NAME },
+      { question: 'Thanks. Now a two-line note to my bank saying the same.' },
+    ],
+    check([ask, answer, again]) {
+      const fails: string[] = [];
+      const setsName = (turn: TurnRecord | undefined) =>
+        called(turn, 'owner.set_profile').filter((c) => typeof c.input?.fullName === 'string');
+      if (!ASKS_FULL_NAME.test(ask?.text ?? '')) fails.push('did not ask for the full name the letter needs');
+      if (questions(ask?.text ?? '') > 1) fails.push('asked more than one question at once');
+      if (setsName(ask).length > 0) fails.push('recorded a full name the owner had not said');
+      const recorded = setsName(answer);
+      if (recorded.length === 0) fails.push('never recorded the full name once the owner said it');
+      else if (String(recorded[0]!.input.fullName).trim() !== PROFILE_CASE_NAME) fails.push(`recorded "${recorded[0]!.input.fullName}", not what the owner said`);
+      if (!(answer?.text ?? '').includes(PROFILE_CASE_NAME)) fails.push('did not sign the letter with the full name');
+      if (ASKS_FULL_NAME.test(again?.text ?? '')) fails.push('asked for the full name a second time');
+      if (!(again?.text ?? '').includes(PROFILE_CASE_NAME)) fails.push('did not use the recorded full name in the next note');
+      return fails;
+    },
+  },
 ];
 
 
@@ -691,6 +734,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const standIns: string[] = [];
     for (const testCase of cases) {
       await reseed(pool);
+      for (const statement of testCase.seed ?? []) await pool.query(statement);
       const started = Date.now();
       const result: CaseResult = {
         id: testCase.id,

@@ -19,9 +19,13 @@ scheduled runs and delegates. No agent-file edits or approval grants are needed.
   is unreadable), then New York. The same zone drives the turn clock,
   `{{today}}` in agent prompts, tools, widgets ("here" on the World clock),
   reminders, digests and the dashboard's footer and lock clocks.
-- A change in Settings → Profile (or through `owner.set_profile`) applies at
-  once, with no restart: the server keeps the profile's zone in memory, updates
-  it on every save and re-reads it every minute.
+- A change in Settings → Profile (or through `owner.set_profile`, or MCP's
+  `buddi.profile_update` once approved) applies at once, with no restart: the
+  server keeps the profile's zone in memory, updates it on every save and
+  re-reads it every minute. The three check a change with the same rules
+  (`owner-profile-edit.ts`), and every field — name, full name, pronouns,
+  language, birthday, about, formats, places — reaches every agent's context
+  at its next turn, since the block below is built fresh for each turn.
 - Every schedule records whether its zone was named on purpose
   (`core.schedule_specs.timezone_explicit`). One made without a zone — the
   recap, the learning digest, a plugin's mission that names none, an agent's

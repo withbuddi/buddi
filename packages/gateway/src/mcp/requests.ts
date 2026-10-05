@@ -29,10 +29,12 @@ import {
   type CoreToolContext,
   type ToolDefinition,
   type ToolRegistry,
+  type HttpArea,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { describeOwnerAgentEdit, updateAgentFromOwner } from '../agents/platform.js';
+import { applyProfileEdit, checkPlaceEdits, checkProfilePatch, describeProfileEdit, PROFILE_FIELDS, type ProfileEdit } from '../owner-profile-edit.js';
 
 /**
  * The plugin name of the MCP *server*'s owner-only writes. Its tools keep
@@ -51,6 +53,7 @@ export const MCP_REQUEST_KINDS = [
   'page_act',
   'proposal_decide',
   'memory_edit',
+  'profile_update',
 ] as const;
 export type McpRequestKind = (typeof MCP_REQUEST_KINDS)[number];
 
@@ -79,6 +82,8 @@ export interface McpBinding {
     updateNote: (input: { id: string; content?: string; scope?: string; kind?: string }) => Promise<unknown>;
     forgetNote: (id: string) => Promise<boolean>;
   };
+  /** Settings → Profile's save: the zone's fallback, the log, the geocoder's road (a test's stub). */
+  profile?: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; http?: HttpArea };
 }
 
 const bindings = new WeakMap<ToolRegistry, McpBinding>();
@@ -155,6 +160,43 @@ const memoryEditInput = z.discriminatedUnion('op', [
   z.object({ client, op: z.literal('edit_note'), id: z.string().uuid(), content: z.string().trim().min(1).max(2000).optional(), scope: z.string().trim().min(1).optional(), kind: z.enum(['fact', 'observation', 'todo']).optional() }).strict(),
   z.object({ client, op: z.literal('forget_note'), id: z.string().uuid() }).strict(),
 ]);
+
+/** Settings → Profile's fields; the values are checked by `checkProfilePatch`, as the page's are. */
+const profileUpdateInput = z
+  .object({
+    client,
+    preferredName: z.string().optional(),
+    fullName: z.string().optional(),
+    pronouns: z.string().optional(),
+    timezone: z.string().optional(),
+    language: z.string().optional(),
+    about: z.string().optional(),
+    birthday: z.object({ day: z.number().int(), month: z.number().int(), year: z.number().int().optional() }).strict().optional(),
+    timeFormat: z.enum(['12h', '24h']).optional(),
+    dateFormat: z.enum(['short', 'long', 'iso']).optional(),
+    places: z.array(z.object({ label: z.string(), address: z.string() }).strict()).max(10).optional(),
+    removePlaces: z.array(z.string()).max(10).optional(),
+    clear: z.array(z.enum(PROFILE_FIELDS)).optional(),
+  })
+  .strict();
+type ProfileUpdateInput = z.infer<typeof profileUpdateInput>;
+
+/** The checked change, or the page's refusal as a throw. */
+function profileEditOf(input: ProfileUpdateInput): ProfileEdit {
+  const { client: _who, places, removePlaces, clear, ...fields } = input;
+  const body: Record<string, unknown> = { ...fields };
+  for (const field of clear ?? []) {
+    if (body[field] !== undefined) throw new Error(`${field} is both given and cleared.`);
+    body[field] = null;
+  }
+  const checked = checkProfilePatch(body);
+  if (!checked.ok) throw new Error(checked.error);
+  const placeEdits = checkPlaceEdits(places ?? [], removePlaces ?? []);
+  if (!placeEdits.ok) throw new Error(placeEdits.error);
+  const edit = { patch: checked.patch, places: placeEdits.places, remove: placeEdits.remove };
+  if (Object.keys(edit.patch).length === 0 && edit.places.length === 0 && edit.remove.length === 0) throw new Error('Say what changes.');
+  return edit;
+}
 
 type AgentUpdateInput = z.infer<typeof agentUpdateInput>;
 type AgentEngineInput = z.infer<typeof agentEngineInput>;
@@ -425,13 +467,50 @@ export function createMcpManifest(registry: ToolRegistry): PluginManifest {
     },
   };
 
+  const profileUpdate: ToolDefinition<ProfileUpdateInput, unknown> = {
+    name: 'mcp.profile_update',
+    description: "Settings → Profile's save, requested through MCP.",
+    tier: 'gated',
+    ownerOnly: true,
+    input: profileUpdateInput,
+    describe(input) {
+      const edit = profileEditOf(input);
+      return {
+        envelope: {
+          requestedThrough: throughMcp(input.client),
+          kind: 'profile_update',
+          change: { profile: edit.patch, places: edit.places, removePlaces: edit.remove },
+        },
+        preview: preview(input, ['Change your profile:', ...describeProfileEdit(edit)]),
+      };
+    },
+    async execute(input) {
+      const binding = bound(registry);
+      const outcome = await applyProfileEdit(
+        {
+          pool: binding.pool,
+          log: binding.profile?.log ?? (() => undefined),
+          ...(binding.profile?.env ? { env: binding.profile.env } : {}),
+          ...(binding.profile?.http ? { http: binding.profile.http } : {}),
+        },
+        profileEditOf(input),
+      );
+      const { displayName: _display, ...profile } = outcome.profile;
+      return {
+        ...profile,
+        places: outcome.places.map((p) => ({ label: p.label, address: p.address, matched: p.name, timezone: p.timezone })),
+        ...(outcome.placeChanges ? { placeChanges: outcome.placeChanges } : {}),
+      };
+    },
+  };
+
   return {
     name: MCP_PLUGIN,
     version: '0.1.0',
     // No tables: the only record of an MCP write is the action ledger.
     schema: 'core',
     migrationsDir: '',
-    tools: [agentUpdate, agentEngine, defaultAgent, pageAct, proposalDecide, memoryEdit],
+    tools: [agentUpdate, agentEngine, defaultAgent, pageAct, proposalDecide, memoryEdit, profileUpdate],
   };
 }
 

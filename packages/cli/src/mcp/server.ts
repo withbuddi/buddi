@@ -20,7 +20,7 @@ export const MCP_SERVER_VERSION = '0.1.0';
 const INSTRUCTIONS = [
   "This is the owner's buddi, a personal agent platform running on this Mac.",
   'Reads (buddi.overview, buddi.agents_list, buddi.tools_list, …) answer at once.',
-  'Every write (buddi.agent_update, buddi.agent_engine, buddi.default_agent, buddi.page_act, buddi.proposal_decide, buddi.memory_edit) becomes an approval card the owner decides on the dashboard or Telegram; the call waits up to ten minutes and then returns { pending: <action id> }.',
+  'Every write (buddi.agent_update, buddi.agent_engine, buddi.default_agent, buddi.page_act, buddi.proposal_decide, buddi.memory_edit, buddi.profile_update) becomes an approval card the owner decides on the dashboard or Telegram; the call waits up to ten minutes and then returns { pending: <action id> }.',
   'To create an agent, buddi.ask the maker agent (Agent Father); its own approvals apply.',
 ].join(' ');
 

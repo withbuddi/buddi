@@ -105,6 +105,13 @@ Writes, each an approval:
   `POST /api/pages/<plugin>/act`, i.e. the plugin's owner tool.
 - `buddi.proposal_decide { id, decision: keep|discard, edited?, reason? }`.
 - `buddi.memory_edit { … }` — the Memory page's correct/forget.
+- `buddi.profile_update { preferredName?, fullName?, pronouns?, timezone?,
+  language?, about?, birthday?: { day, month, year? }, timeFormat?: 12h|24h,
+  dateFormat?: short|long|iso, places?: [{ label, address }], removePlaces?,
+  clear? }` — Settings → Profile's save, same checks and refusals (no card is
+  raised for a change the page would refuse). Places are looked up when the
+  owner approves, through the page's own geocoder, and saved with the town and
+  its zone; the result says which town each matched.
 
 Conversation:
 

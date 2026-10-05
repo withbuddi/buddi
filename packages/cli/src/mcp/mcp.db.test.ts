@@ -344,6 +344,34 @@ suite('buddi mcp', () => {
     expect(history.recent.find((a) => a.id === card.id)?.preview).toContain(`through MCP (${CLIENT})`);
   });
 
+  it('buddi.profile_update is one card, and changes the profile once approved', async () => {
+    const call_ = tool('buddi.profile_update', { fullName: 'Ada Lovelace', timeFormat: '24h', dateFormat: 'long' });
+    const card = await pendingCard('mcp.profile_update');
+    expect(card.preview).toContain(`Requested through MCP (${CLIENT})`);
+    expect(card.preview).toContain('Full name: Ada Lovelace');
+    expect(card.preview).toContain('Time format: 24h');
+    expect(card.envelope.change.profile).toMatchObject({ fullName: 'Ada Lovelace', timeFormat: '24h', dateFormat: 'long' });
+    // Nothing is written before the owner says so.
+    expect((await owner.get<{ fullName: string | null }>('/api/owner')).fullName).toBeNull();
+
+    expect((await decide(card.id, 'approve')).status).toBe(200);
+    const { json, isError } = await call_;
+    expect(isError).toBe(false);
+    expect(json).toMatchObject({ state: 'succeeded', result: { fullName: 'Ada Lovelace', timeFormat: '24h', dateFormat: 'long' } });
+    expect(await owner.get('/api/owner')).toMatchObject({ fullName: 'Ada Lovelace', timeFormat: '24h' });
+  });
+
+  it('buddi.profile_update refuses what Settings → Profile refuses, with no card', async () => {
+    const { text, isError } = await tool('buddi.profile_update', { timezone: 'Mars/Olympus' });
+    expect(isError).toBe(true);
+    expect(text).toContain('"Mars/Olympus" is not a timezone this host knows.');
+    const bad = await tool('buddi.profile_update', { birthday: { day: 31, month: 2 } });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('The birthday needs a real day and month');
+    const { pending } = await owner.get<{ pending: Array<{ tool: string }> }>('/api/approvals');
+    expect(pending.filter((a) => a.tool === 'mcp.profile_update')).toEqual([]);
+  });
+
   it('a rejected write changes nothing and says so', async () => {
     const call_ = tool('buddi.default_agent', { agent: 'advisor' });
     const card = await pendingCard('mcp.default_agent');

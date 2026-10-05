@@ -38,10 +38,17 @@ export interface PlacesReply {
 }
 
 let shared: HttpArea | undefined;
-function geocoder(deps: PlacesDeps): HttpArea {
-  if (deps.http) return deps.http;
-  shared ??= createHttpArea({ plugin: 'places', network: [GEOCODER_HOST], log: deps.log, transport: createHttpTransport });
+/**
+ * The geocoder's road, one per process: the page's Find button, the agents'
+ * `owner.set_profile` and MCP's `buddi.profile_update` all go this way.
+ */
+export function placesGeocoder(log: (line: string) => void, http?: HttpArea): HttpArea {
+  if (http) return http;
+  shared ??= createHttpArea({ plugin: 'places', network: [GEOCODER_HOST], log, transport: createHttpTransport });
   return shared;
+}
+function geocoder(deps: PlacesDeps): HttpArea {
+  return placesGeocoder(deps.log, deps.http);
 }
 
 /** The list, as the page draws it. A database not yet migrated answers none. */

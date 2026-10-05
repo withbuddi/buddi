@@ -5,7 +5,7 @@
  * decides only when it happens (the surfaces) and stores what came out of it
  * (core); the questions, their order, and what to do when the owner answers
  * something else entirely belong to the agent and its `first-run` skill. These
- * four tools are the whole seam between the two.
+ * tools are the whole seam between the two.
  *
  * Everything here is tier `auto` and deliberately so: nothing it does is
  * irreversible, nothing leaves the machine, and an approval prompt in the
@@ -31,26 +31,39 @@ import {
   getOnboarding,
   getOwnerProfile,
   isKnownTimezone,
+  listOwnerPlaces,
+  OWNER_DATE_FORMATS,
+  OWNER_TIME_FORMATS,
+  PLACE_ADDRESS_MAX,
+  PLACE_LABEL_MAX,
   AGENT_ACTION_MAX,
   AGENT_TEXT_MAX,
   AGENT_TITLE_MAX,
   checkAgentLink,
   notifyFromAgent,
   markStepDone,
-  saveOwnerProfile,
-  validDayMonth,
-  type DayMonth,
   updateAgentFrontmatter,
+  type HttpArea,
   type PluginManifest,
   type ToolDefinition,
 } from '@buddi/core';
 import path from 'node:path';
+import type { Pool } from 'pg';
 import { z } from 'zod';
 import { EXAMPLES_AGENTS_DIR } from './catalog.js';
-import { datesChanged } from '../missions/dates.js';
+import {
+  ASKED_PREFERENCE,
+  DONT_ASK_PREFERENCE,
+  PROFILE_FIELDS,
+  PROFILE_GAP_REASONS,
+  applyProfileEdit,
+  checkPlaceEdits,
+  checkProfilePatch,
+  profileGaps,
+} from '../owner-profile-edit.js';
 import type { AgentCatalog } from '../telegram/types.js';
 
-/** Plugin family name. One manifest, four tools, no tables of its own. */
+/** Plugin family name. One manifest, six tools, no tables of its own. */
 export const OWNER_PLUGIN = 'owner';
 
 /**
@@ -72,6 +85,9 @@ export interface OwnerToolsBinding {
   catalog: AgentCatalog;
   /** Which surface this process is; recorded when onboarding completes. */
   surface?: string;
+  /** The geocoder's road for places; a test hands in a stub. Default: Settings → Profile's. */
+  placesHttp?: HttpArea;
+  log?: (line: string) => void;
 }
 
 const bindings = new WeakMap<ToolRegistry, OwnerToolsBinding>();
@@ -157,7 +173,7 @@ const setProfileInput = z
     language: z
       .string()
       .min(1)
-      .max(40)
+      .max(80)
       .optional()
       .describe('The language they want to be answered in, if they said one. Never guessed from their spelling.'),
     about: z
@@ -186,6 +202,44 @@ const setProfileInput = z
       })
       .optional()
       .describe('Their birthday, when they said it: day and month, the year only if they gave it. Their team greets them on the day.'),
+    timeFormat: z
+      .enum(OWNER_TIME_FORMATS)
+      .optional()
+      .describe('How they read times: "12h" (2:05 PM) or "24h" (14:05). Only when they said.'),
+    dateFormat: z
+      .enum(OWNER_DATE_FORMATS)
+      .optional()
+      .describe('How they read dates: "short" (Thu, Oct 1), "long" (Thursday, 1 October) or "iso" (2026-10-01). Only when they said.'),
+    places: z
+      .array(
+        z
+          .object({
+            label: z.string().min(1).max(PLACE_LABEL_MAX).describe('What they call it: "Home", "Work", "Mum\'s".'),
+            address: z
+              .string()
+              .min(2)
+              .max(PLACE_ADDRESS_MAX)
+              .describe('Where it is, as they said it: a street address or just the town ("Lyon", "12 rue Neuve, Lyon").'),
+          })
+          .strict(),
+      )
+      .max(5)
+      .optional()
+      .describe(
+        'Places they told you about. Each address is looked up the way Settings → Profile does it and saved with ' +
+          'the town and its timezone; a place already called that is changed, not added twice. The answer says which ' +
+          'town it matched: tell them, so they can correct it.',
+      ),
+    removePlaces: z
+      .array(z.string().min(1).max(PLACE_LABEL_MAX))
+      .max(5)
+      .optional()
+      .describe('Labels of places they asked you to forget ("Work").'),
+    clear: z
+      .array(z.enum(PROFILE_FIELDS))
+      .max(PROFILE_FIELDS.length)
+      .optional()
+      .describe('Fields they asked you to forget. A cleared timeFormat or dateFormat goes back to Auto.'),
   })
   .strict();
 
@@ -270,7 +324,36 @@ export function interactiveTurn(ctx: CoreToolContext): boolean {
 }
 
 /**
- * The five tools. No state of its own: the profile and the state machine are
+ * The "knowing you" record, from the two memory preferences the front desk
+ * keeps it in: which fields it already asked about (and when it last did),
+ * and which the owner said not to ask about. Shared or the caller's own; a
+ * database without memory answers nothing recorded.
+ */
+async function knowingYouRecord(ctx: CoreToolContext): Promise<{ asked: string | null; askedAt: Date | null; dontAsk: string | null }> {
+  try {
+    const { rows } = await ctx.db.query(
+      `select key, value, created_at from memory.preferences
+        where key = any($1::text[]) and superseded_at is null
+          and (agent_scope is null or agent_scope = $2)
+        order by created_at desc`,
+      [[ASKED_PREFERENCE, DONT_ASK_PREFERENCE], ctx.agentId ?? ''],
+    );
+    const of = (key: string) => (rows as Array<{ key: string; value: unknown; created_at: unknown }>).filter((r) => r.key === key);
+    const asked = of(ASKED_PREFERENCE);
+    const dontAsk = of(DONT_ASK_PREFERENCE);
+    const at = asked[0]?.created_at;
+    return {
+      asked: asked.length > 0 ? asked.map((r) => String(r.value)).join(', ') : null,
+      askedAt: at ? new Date(at as string) : null,
+      dontAsk: dontAsk.length > 0 ? dontAsk.map((r) => String(r.value)).join(', ') : null,
+    };
+  } catch {
+    return { asked: null, askedAt: null, dontAsk: null };
+  }
+}
+
+/**
+ * The six tools. No state of its own: the profile and the state machine are
  * core's rows, and the agent file is the one the catalog loaded.
  */
 export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
@@ -279,22 +362,31 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
   const getProfile: ToolDefinition<Record<string, never>, unknown> = {
     name: 'owner.get_profile',
     description:
-      'What you already know about the owner: the name they asked to be called, their timezone, ' +
-      'the language they want, and which parts of the first-run conversation are already done. ' +
+      'What you already know about the owner: the name they asked to be called, their full name, ' +
+      'pronouns, timezone, language, birthday, time and date formats, their places, and which parts ' +
+      'of the first-run conversation are already done. ' +
       'Call this before you ask anything — a question about something already recorded is the ' +
       'one mistake a first conversation cannot afford. ' +
       INTERVIEW_RULES,
     tier: 'auto',
     input: z.object({}).strict(),
     async execute(_input, ctx: CoreToolContext) {
-      const [profile, onboarding] = await Promise.all([
+      const [profile, onboarding, places] = await Promise.all([
         getOwnerProfile(ctx.db),
         getOnboarding(ctx.db),
+        listOwnerPlaces(ctx.db).catch(() => []),
       ]);
       return {
         preferredName: profile.preferredName,
         timezone: profile.timezone,
         language: profile.language,
+        fullName: profile.fullName,
+        pronouns: profile.pronouns,
+        birthday: profile.birthday,
+        timeFormat: profile.timeFormat,
+        dateFormat: profile.dateFormat,
+        about: profile.about,
+        places: places.map((p) => ({ label: p.label, address: p.address, matched: p.name, timezone: p.timezone })),
         onboarding: onboarding.state,
         stepsDone: onboarding.stepsDone,
         detectedTimezone: ctx.timezone,
@@ -305,10 +397,11 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
   const setProfile: ToolDefinition<z.infer<typeof setProfileInput>, unknown> = {
     name: 'owner.set_profile',
     description:
-      'Record what the owner just told you about themselves: what to call them, their timezone, ' +
-      'the language they want to be answered in. Write a field only when they actually said it, ' +
-      'in this same conversation — this is their profile, not your inference. Pass only the ' +
-      'fields that changed. ' +
+      'Record what the owner just told you about themselves: what to call them, their full name, pronouns, ' +
+      'timezone, language, birthday, how they read times and dates, a line about them, and their places ' +
+      '(Home, Work, others). Write a field only when they actually said it, in this same conversation — this ' +
+      'is their profile, not your inference: never fill one from an email signature, a display name or a ' +
+      'guess. Pass only the fields that changed. Every agent reads it from its next turn. ' +
       INTERVIEW_RULES,
     tier: 'auto',
     input: setProfileInput,
@@ -322,24 +415,79 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
             'and try again; nothing was recorded.',
         };
       }
-      const { birthday: givenBirthday, ...rest } = input;
-      let birthday: DayMonth | undefined;
-      if (givenBirthday !== undefined) {
-        const valid = validDayMonth(givenBirthday);
-        if (!valid) {
-          return { ok: false, reason: 'unknown-day', message: 'That day does not exist. Ask the owner again; nothing was recorded.' };
+      const { places, removePlaces, clear, ...fields } = input;
+      const body: Record<string, unknown> = { ...fields };
+      for (const field of clear ?? []) {
+        if (body[field] !== undefined) {
+          return { ok: false, reason: 'conflict', message: `${field} is both given and cleared; nothing was recorded.` };
         }
-        birthday = valid;
+        body[field] = null;
       }
-      // The zone applies at once; schedules kept in the old one move with it.
-      const { profile } = await saveOwnerProfile(ctx.db, { ...rest, ...(birthday ? { birthday } : {}) });
-      // The birthday greeting's schedule follows the new day at once.
-      if (birthday) await datesChanged();
+      // Settings → Profile's own checks and sentences.
+      const checked = checkProfilePatch(body);
+      if (!checked.ok) {
+        const reason = checked.error.startsWith('The birthday') ? 'unknown-day' : 'invalid';
+        return { ok: false, reason, message: `${checked.error} Ask the owner again; nothing was recorded.` };
+      }
+      const placeEdits = checkPlaceEdits(places ?? [], removePlaces ?? []);
+      if (!placeEdits.ok) {
+        return { ok: false, reason: 'invalid-place', message: `${placeEdits.error} Nothing was recorded.` };
+      }
+      if (Object.keys(checked.patch).length === 0 && placeEdits.places.length === 0 && placeEdits.remove.length === 0) {
+        return { ok: false, reason: 'nothing-to-do', message: 'Say which field changed; nothing was recorded.' };
+      }
+      const binding = bound();
+      // The zone applies at once and schedules kept in the old one move with
+      // it; the birthday greeting follows a new day at once.
+      const outcome = await applyProfileEdit(
+        {
+          pool: ctx.db as unknown as Pool,
+          log: binding?.log ?? (() => undefined),
+          ...(binding?.placesHttp ? { http: binding.placesHttp } : {}),
+        },
+        { patch: checked.patch, places: placeEdits.places, remove: placeEdits.remove },
+      );
       // The steps the shipped skill records. Free-form strings in core, so an
       // owner's own first-run skill is free to record something else entirely.
       if (input.preferredName !== undefined) await markStepDone(ctx.db, 'name');
       if (input.timezone !== undefined) await markStepDone(ctx.db, 'timezone');
-      return { ok: true, ...profile };
+      const changes = outcome.placeChanges;
+      return {
+        ok: true,
+        ...outcome.profile,
+        ...(changes
+          ? {
+              places: outcome.places.map((p) => ({ label: p.label, address: p.address, matched: p.name, timezone: p.timezone })),
+              placesSaved: changes.saved,
+              ...(changes.notSaved.length > 0 ? { placesNotSaved: changes.notSaved } : {}),
+              ...(changes.removed.length > 0 ? { placesRemoved: changes.removed } : {}),
+              ...(changes.notFound.length > 0 ? { placesNotFound: changes.notFound } : {}),
+            }
+          : {}),
+        message: 'Recorded. Every agent uses it from its next turn.',
+      };
+    },
+  };
+
+  const profileGapsTool: ToolDefinition<Record<string, never>, unknown> = {
+    name: 'owner.profile_gaps',
+    description:
+      "Which useful parts of the owner's profile are still empty, each with one line on why it matters " +
+      '(fullName: letters, forms and bookings; places.work: "how long to work?"). Each gap says whether it was ' +
+      `already asked in a "knowing you" question (the ${ASKED_PREFERENCE} preference) or declined (${DONT_ASK_PREFERENCE}); ` +
+      'nudge names the one field a weekly "knowing you" question may ask now, or null. A read: it asks nothing. ' +
+      'Ask for a gap only when the task in hand needs it, or as that one weekly question, never mid-task. ' +
+      INTERVIEW_RULES,
+    tier: 'auto',
+    input: z.object({}).strict(),
+    async execute(_input, ctx: CoreToolContext) {
+      const [profile, places, record] = await Promise.all([
+        getOwnerProfile(ctx.db),
+        listOwnerPlaces(ctx.db).catch(() => []),
+        knowingYouRecord(ctx),
+      ]);
+      const gaps = profileGaps(profile, places, record, ctx.now());
+      return { ...gaps, filled: PROFILE_GAP_REASONS.length - gaps.gaps.length, of: PROFILE_GAP_REASONS.length };
     },
   };
 
@@ -495,6 +643,6 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
     // The rows are core's (migrations 013 and 043): this manifest only exposes them.
     schema: 'core',
     migrationsDir: '',
-    tools: [getProfile, setProfile, renameMe, finish, notify],
+    tools: [getProfile, setProfile, profileGapsTool, renameMe, finish, notify],
   };
 }

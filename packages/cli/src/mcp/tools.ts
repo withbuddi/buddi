@@ -614,6 +614,61 @@ export const TOOLS: McpTool[] = [
       return request(rt, 'memory_edit', input);
     },
   },
+  {
+    name: 'buddi.profile_update',
+    description:
+      "Settings → Profile's save: the owner's name to use, full name, pronouns, timezone (IANA), language, about, birthday { day, month, year? }, " +
+      "timeFormat (12h|24h), dateFormat (short|long|iso), places [{ label, address }] (looked up like the page's Find, saved with the town and its zone), " +
+      'removePlaces [label], clear [field] (a cleared format is Auto). Only what the owner said. An approval; the call waits for the owner.',
+    write: true,
+    inputSchema: object({
+      preferredName: str('What to call the owner.'),
+      fullName: str('Their full name, for letters, forms and bookings.'),
+      pronouns: str('As they write them, e.g. she/her.'),
+      timezone: str('An IANA zone, e.g. Europe/Paris.'),
+      language: str('The language they want answers in.'),
+      about: str('A few lines about them, in their words.'),
+      birthday: {
+        type: 'object',
+        properties: { day: { type: 'integer' }, month: { type: 'integer' }, year: { type: 'integer' } },
+        required: ['day', 'month'],
+        additionalProperties: false,
+        description: 'Day and month; the year optional.',
+      },
+      timeFormat: { type: 'string', enum: ['12h', '24h'] },
+      dateFormat: { type: 'string', enum: ['short', 'long', 'iso'], description: 'short: Thu, Oct 1; long: Thursday, 1 October; iso: 2026-10-01.' },
+      places: {
+        type: 'array',
+        items: object({ label: str('Home, Work, or their own word.'), address: str('An address or a town.') }, ['label', 'address']),
+        description: 'Places to save or change, by label.',
+      },
+      removePlaces: strings('Labels of places to remove.'),
+      clear: strings('Fields to clear: preferredName, fullName, pronouns, timezone, language, about, birthday, timeFormat, dateFormat.'),
+    }),
+    async run(args, rt) {
+      const input: Record<string, unknown> = {};
+      for (const key of ['preferredName', 'fullName', 'pronouns', 'timezone', 'language', 'about', 'timeFormat', 'dateFormat'] as const) {
+        const value = opt(args, key);
+        if (value !== undefined) input[key] = value;
+      }
+      if (args.birthday !== undefined) {
+        if (typeof args.birthday !== 'object' || args.birthday === null || Array.isArray(args.birthday)) throw new ToolRefusal('`birthday` is { day, month, year? }.');
+        input.birthday = args.birthday;
+      }
+      if (args.places !== undefined) {
+        if (!Array.isArray(args.places)) throw new ToolRefusal('`places` must be a list of { label, address }.');
+        input.places = args.places;
+      }
+      for (const key of ['removePlaces', 'clear'] as const) {
+        const value = args[key];
+        if (value === undefined) continue;
+        if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) throw new ToolRefusal(`\`${key}\` must be a list of strings.`);
+        input[key] = value;
+      }
+      if (Object.keys(input).length === 0) throw new ToolRefusal('Say what changes.');
+      return request(rt, 'profile_update', input);
+    },
+  },
 
   /* ---------------- conversation ---------------- */
   {

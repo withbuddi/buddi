@@ -99,6 +99,30 @@ places — Home, Work and the rest, with the address, the town and its zone — 
 "how long to work?" or "the weather at home" needs no explaining. All of it is
 context, never an instruction or a grant.
 
+Agents with the `owner.*` tools (the front desk) can also fill it in for you,
+but only with what you told them: `owner.set_profile` writes every field the
+Profile page has — the name to use, full name, pronouns, timezone, language,
+birthday, your few lines, 12-hour or 24-hour time, the date style, and places
+(Home, Work or your own word, with an address that is looked up the way the
+page's Find does it and saved with the town and its zone). It checks a change
+the way the page does and refuses what the page refuses, and every agent reads
+the change from its next turn. Nothing is ever taken from a mail signature, a
+display name or a guess. `owner.profile_gaps` (the front desk and Agent Father
+hold it) says which useful fields are still empty and why each matters
+("fullName: letters, forms and bookings"; "places.work: 'how long to work?' and
+the weather at work"); pronouns and the language are never asked for. The front
+desk asks for a missing field only when the task in hand needs it (a letter
+needs your full name, a commute question needs Work), once and in one question,
+then records it. Beyond that it may ask one "knowing you" question a week at
+most, at the end of a finished exchange, never twice for the same field; say
+"don't ask" and it remembers that as a preference (`knowing_you_dont_ask`) and
+stops. The golden set's `one-writable-field-asked-once` case holds this.
+
+When you ask a built-in agent (the front desk, Agent Father) to become yours,
+it says so in plain words: it can't change itself in place, Agent Father can
+make a copy that's yours with the same name and handle, and from then on it's
+whatever you want.
+
 ## Placeholders in the persona
 
 The persona may use one placeholder, `{{today}}`. buddi replaces it with the
