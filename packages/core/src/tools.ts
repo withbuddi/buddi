@@ -225,6 +225,20 @@ export interface CoreToolContext extends ToolContext {
    */
   unattendedSession?: readonly string[];
   /**
+   * Set only by the mission executor, beside `unattendedSession`, for a
+   * mission the owner let use their signed-in Chrome (`browser: owner`):
+   * the browser may then route this unattended run to the owner's Chrome.
+   * Absent, an unattended run stays in buddi's own browser.
+   */
+  unattendedChrome?: boolean;
+  /**
+   * Set only by the mission executor for an unattended run: the browser
+   * calls it when the run needed the owner's Chrome and the mission may not
+   * use it, so the owner is asked once ("Let … use your Chrome?") instead of
+   * the run reporting a chore. `site` is the host it needed, when known.
+   */
+  chromeRefused?: (need: { site?: string }) => void;
+  /**
    * Set only by the delegation tool, one level down: the `session` tools a
    * delegate may call because the conversation that delegated is an owner
    * conversation with a browser session of its own (docs/browser.md,

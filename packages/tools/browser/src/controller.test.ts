@@ -8,7 +8,7 @@ import type { RouteProvider } from '@buddi/core/plugin';
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
 const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
-import { APPS_NOT_INSTALLED, APPS_UNAVAILABLE, HostController, UNATTENDED_APPS, UNATTENDED_CHROME } from './controller.js';
+import { APPS_NOT_INSTALLED, APPS_UNAVAILABLE, HostController, UNATTENDED_APPS, UNATTENDED_CHROME, UNATTENDED_CHROME_ASKED } from './controller.js';
 import { NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import { migrateSettings } from './settings.js';
 import { commandSchema, type BrowserDriver, type Observation } from './types.js';
@@ -191,6 +191,32 @@ describe('the route, chosen per task', () => {
     expect(result.needsOwner?.kind).toBe('sign-in');
     expect(result.needsOwner?.options.map((o) => o.label)).not.toContain('Use my Chrome');
     expect(asked).toHaveLength(1);
+  });
+  it("a mission the owner let use his Chrome (`browser: owner`) goes there as his own run would, never to apps", async () => {
+    const { controller, log } = await routes({ settings: { yourChrome: true, yourApps: 'on', signInSites: ['pnc.com'] } });
+    const granted = { ...ctx('m'), ownerRequest: undefined, unattendedChrome: true } as CoreToolContext;
+    await expect(controller.execute(navigate('https://www.pnc.com/'), granted)).resolves.toMatchObject({ route: 'chrome' });
+    await expect(controller.execute(navigate('https://news.test/', { prefer: 'yours' }), granted)).resolves.toMatchObject({ route: 'chrome' });
+    await expect(controller.execute(open, granted)).rejects.toThrow(UNATTENDED_APPS);
+    // A pin to apps does not reach a mission either: the own browser.
+    await controller.pin('m', 'apps');
+    await expect(controller.execute(navigate('https://shop.test/'), granted)).resolves.toMatchObject({ route: 'own' });
+    expect(log).toEqual(['chrome https://www.pnc.com/', 'chrome https://news.test/', 'own https://shop.test/']);
+  });
+  it("a mission that needed the owner's Chrome tells the executor once and is told the owner was asked", async () => {
+    const { controller, log } = await routes({ settings: { yourChrome: true, signInSites: ['pnc.com'] } });
+    const needs: Array<{ site?: string }> = [];
+    const mission = { ...ctx('m'), ownerRequest: undefined, chromeRefused: (need: { site?: string }) => { needs.push(need); } } as CoreToolContext;
+    // On the owner's own "needs my sign-in" list: nothing opens.
+    await expect(controller.execute(navigate('https://www.pnc.com/accounts'), mission)).rejects.toThrow(UNATTENDED_CHROME_ASKED);
+    // Asked for his Chrome by name.
+    await expect(controller.execute(navigate('https://bank.test/', { prefer: 'yours' }), mission)).rejects.toThrow(UNATTENDED_CHROME_ASKED);
+    expect(needs).toEqual([{ site: 'pnc.com' }, { site: 'bank.test' }]);
+    expect(log).toEqual([]);
+    // Chrome turned off for agents: a grant would not help, so nobody is asked and the old refusal stands.
+    await controller.configure({ yourChrome: false });
+    await expect(controller.execute(navigate('https://bank.test/', { prefer: 'yours' }), mission)).rejects.toThrow(UNATTENDED_CHROME);
+    expect(needs).toHaveLength(2);
   });
 });
 

@@ -235,7 +235,7 @@ function DockCard({
         {/* The kit's row: Reject quiet, the standing permissions plain, and
             the one-time yes in green, all at the small size. */}
         <Button variant="ghost" size="sm" disabled={disabled} onClick={() => decide('reject')}>
-          {busy === 'reject' ? 'Rejecting…' : 'Reject'}
+          {busy === 'reject' ? 'Rejecting…' : action?.answers?.reject ?? 'Reject'}
         </Button>
         {reusable ? (
           <>
@@ -244,7 +244,7 @@ function DockCard({
           </>
         ) : null}
         <Button variant="good" size="sm" disabled={disabled} onClick={() => decide('approve')}>
-          {busy === 'approve' ? 'Approving…' : reusable ? 'Allow once' : 'Approve'}
+          {busy === 'approve' ? 'Approving…' : action?.answers?.approve ?? (reusable ? 'Allow once' : 'Approve')}
         </Button>
       </div>
     </section>

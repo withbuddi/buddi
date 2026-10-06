@@ -472,6 +472,8 @@ export interface MissionView {
   quietRuns?: number;
   /** Set while "Still useful?" waits for Keep or Stop. */
   stillUsefulAskedAt?: string;
+  /** Where it browses while the owner is away: `own` (buddi's browser), `owner` (his Chrome too); absent: no pages. */
+  browser?: 'own' | 'owner';
 }
 
 export async function readMissions(pool: Pool, now: Date): Promise<MissionView[]> {
@@ -493,6 +495,7 @@ export async function readMissions(pool: Pool, now: Date): Promise<MissionView[]
       ...(mission.endedAt ? { endedAt: mission.endedAt.toISOString() } : {}),
       ...(mission.quietRuns ? { quietRuns: mission.quietRuns } : {}),
       ...(mission.stillUsefulAskedAt && mission.enabled ? { stillUsefulAskedAt: mission.stillUsefulAskedAt.toISOString() } : {}),
+      ...(mission.browser ? { browser: mission.browser } : {}),
       alwaysDeliver: mission.alwaysDeliver,
       createdAt: mission.createdAt.toISOString(),
       schedule: spec

@@ -43,6 +43,7 @@ import {
   asksEachTime,
   OWNER_AGENT_ID,
 } from '@buddi/core';
+import { approvalAnswers, type ApprovalAnswers } from '../web/approval-ask.js';
 import {
   MAX_CALLBACK_DATA_BYTES,
   type InlineKeyboardMarkup,
@@ -143,6 +144,7 @@ export function approvalKeyboard(
   actionId: string,
   host = false,
   choice?: OwnerChoice | undefined,
+  answers?: ApprovalAnswers | undefined,
 ): InlineKeyboardMarkup {
   /*
    * An approval that offers the owner something offers it as buttons: one
@@ -176,6 +178,15 @@ export function approvalKeyboard(
         [{ text: '✖ Reject', callback_data: approvalCallbackData(actionId, 'reject') }],
         ...scopes,
       ],
+    };
+  }
+  // A question core asks in its own words ("Let the PNC pull use your Chrome?"): its two answers, the way out first.
+  if (answers) {
+    return {
+      inline_keyboard: [[
+        { text: answers.reject, callback_data: approvalCallbackData(actionId, 'reject') },
+        { text: `✅ ${answers.approve}`, callback_data: approvalCallbackData(actionId, 'approve') },
+      ]],
     };
   }
   return {
@@ -225,9 +236,10 @@ export function approvalRequestText(action: ActionRecord, timezone: string): str
 
 /** What replaces the request once it is decided. */
 export function decidedText(action: ActionRecord, state: ApprovalState, detail?: string): string {
+  const answers = approvalAnswers(action.tool);
   const head =
     state === 'rejected'
-      ? `Rejected — ${action.tool}`
+      ? answers ? `${answers.reject} — left as it was` : `Rejected — ${action.tool}`
       : state === 'succeeded'
         ? `Approved and done — ${action.tool}`
         : state === 'failed'
@@ -310,6 +322,7 @@ export class TelegramApprovals {
           // A bundle script's run asks every time: no standing-permission row.
           action.tool === 'host.exec' && !asksEachTime(action.envelope),
           keyboardChoice(action),
+          approvalAnswers(action.tool),
         ),
       },
     );

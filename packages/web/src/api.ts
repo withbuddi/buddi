@@ -573,6 +573,8 @@ export interface MissionRow {
   endedAt?: string;
   /** Runs in a row that told the owner nothing. */
   quietRuns?: number;
+  /** Where it browses while you are away: `own` (buddi's browser), `owner` (your Chrome too); absent: no pages. */
+  browser?: 'own' | 'owner';
   /** Set while "Still useful?" waits for Keep or Stop. */
   stillUsefulAskedAt?: string;
 }
@@ -628,6 +630,8 @@ export interface ApprovalRow {
   permissionScopes?: ('conversation' | 'always')[];
   /** The card's heading in the owner's words, from the preview or the tool's description; never the dotted id. */
   ask?: string;
+  /** A question core asks in its own words ("Let the PNC pull use your Chrome?"): its two answers instead of Approve and Reject. */
+  answers?: { approve: string; reject: string };
   /** Controls to draw above the buttons. Empty for almost every action. */
   choices?: OwnerChoiceRow[];
   /** What the owner picked, once decided. */
@@ -3231,6 +3235,9 @@ export const api = {
     sendArchive<{ job: BackupJob }>('/onboarding/restore', file, { passphrase }),
   setMissionEnabled: (id: string, enabled: boolean) =>
     post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/enabled`, { enabled }),
+  /** For a mission that browses: your Chrome (`true`) or buddi's own browser. */
+  setMissionChrome: (id: string, chrome: boolean) =>
+    post<{ id: string; browser: 'own' | 'owner' }>(`/missions/${encodeURIComponent(id)}/browser`, { chrome }),
   keepMission: (id: string) => post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/keep`, {}),
   /** Keep or Stop on "Still useful?": the first answer from any surface decides. */
   answerStillUseful: (id: string, answer: 'keep' | 'stop') =>

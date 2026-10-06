@@ -164,8 +164,9 @@ export function ApprovalCard({
       }
       actions={
         <>
-          <Button variant="danger" disabled={busy} onClick={() => onDecide(action.id, 'reject')}>
-            Reject
+          {/* A question with its own answers (Allow / Not now): the way out is quiet, not a red Reject. */}
+          <Button variant={action.answers ? 'ghost' : 'danger'} disabled={busy} onClick={() => onDecide(action.id, 'reject')}>
+            {action.answers?.reject ?? 'Reject'}
           </Button>
           {scoped ? (
             <>
@@ -178,7 +179,7 @@ export function ApprovalCard({
             </>
           ) : null}
           <Button variant="accent" disabled={busy} onClick={() => approve()}>
-            {scoped ? 'Allow once' : 'Approve'}
+            {action.answers?.approve ?? (scoped ? 'Allow once' : 'Approve')}
           </Button>
         </>
       }

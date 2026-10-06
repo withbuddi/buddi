@@ -663,6 +663,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   /* ---------------- missions, jobs, reminders, watchers ---------------- */
   { method: 'GET', path: '/api/missions', area: 'work', summary: 'Every mission, its schedule, next run and recent occurrences.', answer: '{ missions: MissionView[] }' },
   { method: 'POST', path: '/api/missions/:id/enabled', area: 'work', summary: 'Switch a mission on or off.', body: '{ enabled: boolean }', errors: '404' },
+  { method: 'POST', path: '/api/missions/:id/browser', area: 'work', token: 'grants', summary: 'For a mission that browses: let it use your signed-in Chrome while you are away (`chrome: true`), or keep it in buddi’s own browser.', body: '{ chrome: boolean }', answer: "{ id, browser: 'own' | 'owner' }", errors: '400; 404; 409 (it opens no page)' },
   { method: 'POST', path: '/api/missions/:id/keep', area: 'work', summary: 'Keep an agent’s quiet watch after “Still useful?”: its count of silent runs starts again.', answer: '{ id, enabled }', errors: '404' },
   { method: 'POST', path: '/api/missions/:id/still-useful', area: 'work', summary: 'Answer “Still useful?” with Keep or Stop. The first answer from any surface decides; a later one changes nothing and says what was decided.', body: "{ answer: 'keep' | 'stop' }", answer: '{ id, enabled, outcome }', errors: '400; 404' },
   {
@@ -1363,6 +1364,7 @@ export const API_SINCE: Readonly<Record<string, string>> = {
   'POST /api/onboarding/ollama/pull': '0.1.0-pre.37',
   'GET /api/plugin-assets/:plugin/:key': '0.1.0-pre.36',
   'POST /api/missions/:id/still-useful': '0.1.0-pre.35',
+  'POST /api/missions/:id/browser': '0.1.0-pre.48',
   'GET /api/artifacts/:id/export/:format': '0.1.0-pre.35',
   'GET /api/skills': '0.1.0-pre.32',
   'POST /api/skills': '0.1.0-pre.32',

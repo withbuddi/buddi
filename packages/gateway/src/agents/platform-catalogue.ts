@@ -47,6 +47,7 @@ import {
   type MisfirePolicy,
   type SuggestedAgent,
   type ToolDefinition,
+  type MissionBrowser,
   type ToolRegistry,
   type ToolSpec,
 } from '@buddi/core';
@@ -66,6 +67,7 @@ import { composeProvenance, fileEdited, packageOwnedText, readProvenance, PROVEN
 import { composeAgentFile, composeSkillFile, createAgentDirAtomic, trashStamp, writeFilesAtomic } from './platform-files.js';
 import { diffGrant, grantChangeBlock } from './platform-grant.js';
 import { agentMissionId, describeCadence } from '../missions/reminders.js';
+import { siteLabel } from '../missions/chrome-scope.js';
 import { normaliseAvatar } from './avatar-image.js';
 import { ownerText, type ToolWords } from './owner-text.js';
 import { readAvatar, writeAvatar } from './avatars.js';
@@ -441,8 +443,10 @@ export interface PackageMissionPlan {
   /** Host API 1.27: an export read before each run, and the longest report. */
   context?: { plugin: string; export: string; args?: Record<string, unknown> };
   reportMax?: number;
-  /** `own`: browses unattended in buddi's own browser (docs/browser.md, "Missions"). */
-  browser?: 'own';
+  /** `own`: browses unattended in buddi's own browser; `owner`: the owner's Chrome too (docs/browser.md, "Missions"). */
+  browser?: MissionBrowser;
+  /** With `owner`: the site it needs the owner's Chrome for. */
+  browserFor?: string;
 }
 
 export interface InstallAgentEnvelope {
@@ -522,7 +526,20 @@ export interface MissionSettingsChange {
   context: { plugin: string; export: string; args?: Record<string, unknown> } | null;
   reportMax: number | null;
   /** Present only when it changes (absent in an envelope from before pre.38): absent keeps the mission's own. */
-  browser?: 'own' | null;
+  browser?: MissionBrowser | null;
+  /** With `owner`: the site it needs the owner's Chrome for. */
+  browserFor?: string;
+}
+
+/**
+ * The browsing a mission keeps when its package changes: the owner's own
+ * grant of his Chrome (`owner`, from an approval or the Missions switch)
+ * survives an update whose package still says `own`; anything else follows
+ * the package.
+ */
+export function keptBrowser(row: MissionBrowser | null | undefined, planned: MissionBrowser | null | undefined): MissionBrowser | null {
+  if (row === 'owner' && planned === 'own') return 'owner';
+  return planned ?? null;
 }
 
 /** JSON with sorted keys, so a jsonb column's own key order never reads as a change. */
@@ -538,12 +555,18 @@ function stableJson(value: unknown): string {
 export function missionSettingsWords(change: MissionSettingsChange): string {
   const reads = change.context ? `reads ${change.context.plugin}.${change.context.export} before each run` : 'reads nothing before it runs';
   const length = change.reportMax ? `reports up to ${change.reportMax.toLocaleString('en-US')} characters` : 'reports at the usual length';
-  const browses = change.browser === undefined ? '' : change.browser === 'own' ? `; ${BROWSES_WORDS}` : '; opens no page';
+  const browses = change.browser === undefined ? '' : change.browser === 'owner' ? `; ${chromeWords(change.browserFor)}` : change.browser === 'own' ? `; ${BROWSES_WORDS}` : '; opens no page';
   return `${reads}; ${length}${browses}`;
 }
 
 /** What the card says about a mission that opted in to browsing. */
 export const BROWSES_WORDS = "may look at pages in buddi's own browser while you are away (never your Chrome or apps); a sign-in or a check waits for you";
+
+/** What the card says about a mission that needs the owner's Chrome: never granted without this line. */
+export function chromeWords(site?: string): string {
+  const label = siteLabel(site);
+  return `using your Chrome${label ? ` for ${label}` : ''} while you are away (approving this lets it); a check waits for you`;
+}
 
 export const installAgentInput = z
   .object({
@@ -830,6 +853,7 @@ function missionPlans(
       ...(m.context === undefined ? {} : { context: m.context }),
       ...(m.reportMax === undefined ? {} : { reportMax: m.reportMax }),
       ...(m.browser === undefined ? {} : { browser: m.browser }),
+      ...(m.browser === 'owner' && m.browserFor ? { browserFor: m.browserFor } : {}),
     };
   });
 }
@@ -1187,10 +1211,11 @@ async function buildUpdate(
       // An existing mission is the owner's; only what the package says it reads and how long it reports may follow it.
       const context = plan.context ?? null;
       const reportMax = plan.reportMax ?? null;
-      const browser = plan.browser ?? null;
+      // The owner's own grant of his Chrome is his: a package that still says `own` keeps it.
+      const browser = keptBrowser(row.browser, plan.browser);
       if (stableJson(row.context ?? null) !== stableJson(context) || (row.reportMax ?? null) !== reportMax || (row.browser ?? null) !== browser) {
         // `browser` only when it changes: the card names what changes, and an absent one keeps the row's.
-        missionSettings.push({ id: plan.id, name: row.name, context, reportMax, ...((row.browser ?? null) !== browser ? { browser } : {}) });
+        missionSettings.push({ id: plan.id, name: row.name, context, reportMax, ...((row.browser ?? null) !== browser ? { browser, ...(browser === 'owner' && plan.browserFor ? { browserFor: plan.browserFor } : {}) } : {}) });
       }
     }
   }
@@ -1249,7 +1274,7 @@ function missionLines(missions: readonly PackageMissionPlan[], specs: readonly T
     (mission) =>
       `  ${ownerText(mission.name, specs)}, ${describeCadence(mission.cron, mission.timezone)} — ` +
       (mission.enabled ? 'ON from the start' : 'off until you turn it on') +
-      (mission.browser === 'own' ? `; ${BROWSES_WORDS}` : ''),
+      (mission.browser === 'owner' ? `; ${chromeWords(mission.browserFor)}` : mission.browser === 'own' ? `; ${BROWSES_WORDS}` : ''),
   );
 }
 
@@ -1674,7 +1699,8 @@ export function createCatalogueTools(
         for (const mission of envelope.missions) {
           if (envelope.mode === 'update' && (await getMission(ctx.db as never, mission.id).catch(() => null))) {
             // The owner's prompt and hour stay; what the package says it reads and how long it reports follow it.
-            await setMissionExtras(ctx.db as never, mission.id, { context: mission.context ?? null, reportMax: mission.reportMax ?? null, browser: mission.browser ?? null });
+            const row = await getMission(ctx.db as never, mission.id).catch(() => null);
+            await setMissionExtras(ctx.db as never, mission.id, { context: mission.context ?? null, reportMax: mission.reportMax ?? null, browser: keptBrowser(row?.browser, mission.browser) });
             continue;
           }
           await upsertMission(ctx.db as never, {

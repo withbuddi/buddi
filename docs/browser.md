@@ -26,7 +26,8 @@ permissions, not a choice.
 or orders; a site on your **sites that need my sign-in** list, a site buddi
 met a login wall on before (remembered in `browser/sign-in-sites.json`), or
 the agent's `prefer: "yours"` goes to your Chrome; everything else to the own
-browser. A run with no owner behind it (a mission) is kept in the own browser
+browser. A run with no owner behind it (a mission) is kept in the own browser,
+unless you let that mission use your Chrome
 (see [Missions](#missions-browsing-while-you-are-away)).
 
 **Fallback, without a stop.** Your Chrome asked for but not connected, or
@@ -101,9 +102,11 @@ login is used before any card: the agent is pointed at `secret.list` and
 
 ## Missions: browsing while you are away
 
-A mission may look at pages unattended **only in buddi's own browser**, never
-your Chrome and never your apps, and only when its package says so:
-`"browser": "own"` on the mission in the catalogue package. Every other
+A mission may look at pages unattended **in buddi's own browser**, never your
+apps, and only when its package or its proposal says so: `"browser": "own"`
+on the mission in the catalogue package, or `browser: 'own'` in
+`schedule.propose`. **Your Chrome** is a second grant, per mission, that only
+you give (`browser: owner`, see [Your Chrome for a mission](#your-chrome-for-a-mission)). Every other
 mission opens no page (`browser.act` answers "this mission has not opted in
 to browsing"), and the agent must hold `browser.act` in its own grant; the
 opt-in adds no tool. The install and update cards say it in a line: *may look
@@ -117,8 +120,9 @@ executor lists it in the run's `unattendedSession` (only for an opted-in
 mission). The agent's grant, an agent, a conversation and depth 0 are still
 asked on every call.
 
-**What it may not do.** Asked for your Chrome (`prefer: "yours"`) it is
-refused with the reason; an app job is refused before any card (nobody is
+**What it may not do.** Without your grant, asked for your Chrome
+(`prefer: "yours"`) or sent to a site on your *sites that need my sign-in*
+list, it opens nothing and stops, and you are asked once (below); an app job is refused before any card (nobody is
 there to answer one); a sign-in wall never moves to your Chrome; pins, the
 agent's, the conversation's and the global one, are passed over. The owner's
 own Stop holds for missions too: the run is told browsing is stopped and ends,
@@ -153,6 +157,37 @@ stuck; its question parks the run the same way, with the question's choices
 as the Telegram buttons, the same wait and the same *needed you* line. A
 second question in the same turn is dropped (logged); `/recap` in an open
 chat is not offered the tool.
+
+### Your Chrome for a mission
+
+An unattended run never gets your signed-in Chrome unless you said so, for
+that mission (`core.missions.browser = 'owner'`, migration 079). You say so in
+one of three places, each a decision you see:
+
+- **When it is proposed.** `schedule.propose` takes `browser: 'owner'` (and
+  `browserFor: 'pnc.com'`); left out, a plan that names a site on your
+  sign-in list (yours or one buddi learned), from an agent that holds
+  `browser.act`, needs your Chrome too. An agent package declares
+  `"browser": "owner"` (and `"browserFor"`) on the mission. Either way the card
+  carries one line right under the ask, *Runs every day at 07:00, using your
+  Chrome for PNC*, and approving the card grants exactly that. Never silently.
+- **When a run needed it.** The run stops without opening anything, reports
+  nothing (whatever it said after is held back), and you get one approval,
+  *Let the PNC pull use your Chrome?*: nothing was read or changed, and what
+  it last brought you is still from the day it says. **Allow** (core's
+  `schedule.use_chrome`, run only by your yes) sets the mission to your Chrome
+  and runs it once now; **Not now** leaves it as it was. It is an approval
+  like any other: on Home's Needs you, in the agent's chat and on Telegram,
+  with those two buttons. While one is open, another refused run does not ask
+  again. Chrome turned off for agents in Settings means nobody is asked (a
+  grant would not help); the run gets the old refusal.
+- **On Missions.** A mission that browses shows *Uses your Chrome* or *Own
+  browser* with a switch, both ways (`POST /api/missions/:id/browser`).
+
+With the grant the route chooser treats the run as it would yours: a pin, a
+sign-in site or `prefer: "yours"` goes to your Chrome, and a sign-in wall in
+the own browser moves there. Apps stay out of reach, a delegate still never
+browses, and an agent package update that still says `own` keeps your grant.
 
 Which lineup missions opt in (buddi-market): Travel planner's **Trip check**
 (check-in windows and booking pages that do not read as plain pages).
@@ -919,7 +954,8 @@ download capability is exposed.
 
 Pages are opened for authenticated interactive dashboard/Telegram requests.
 The route chooser keeps an unattended run (a mission) in buddi's own browser,
-never the owner's Chrome; core's session tier still decides whether such a run
+never the owner's Chrome unless the owner granted that mission his Chrome
+(`unattendedChrome`, set only by the mission executor); core's session tier still decides whether such a run
 may call `browser.act` at all, and today it does not, nor does a delegate.
 A standalone CLI process does not launch a second controller: use the dashboard
 or Telegram served by `buddi serve`.

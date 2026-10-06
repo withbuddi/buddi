@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { api, type MissionRow } from '../api';
 import { fmtRelative, fmtTime, truncate } from '../format';
-import { Button, Card, Code, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Section, Stack, StatePill, Table, Toolbar, useAsync, EmptyState } from '../ui';
+import { Button, Card, Code, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Section, Spacer, Stack, StatePill, Switch, Table, Toolbar, useAsync, EmptyState } from '../ui';
 
 const POLICIES = ['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline'] as const;
 
@@ -94,6 +94,25 @@ function Mission({
         >
           {`It has run ${mission.quietRuns ?? 'many'} times in a row without anything to tell you.`}
         </Notice>
+      ) : null}
+      {/* A mission that browses: where, in words, and the owner's switch for his Chrome. */}
+      {mission.browser ? (
+        <Toolbar>
+          <span>
+            <strong>{mission.browser === 'owner' ? 'Uses your Chrome' : 'Own browser'}</strong>
+            <span className="muted">
+              {mission.browser === 'owner'
+                ? ' · it may open pages in your signed-in Chrome while you are away'
+                : ' · it opens pages only in buddi’s browser, never your Chrome'}
+            </span>
+          </span>
+          <Spacer />
+          <Switch
+            checked={mission.browser === 'owner'}
+            label={`Let ${mission.name} use your Chrome`}
+            onChange={(on) => onRun(api.setMissionChrome(mission.id, on))}
+          />
+        </Toolbar>
       ) : null}
       {mission.stopWhen || mission.endsAt ? (
         <p className="ui-card-meta">

@@ -29,6 +29,11 @@ function isAppEnvelope(value: unknown): value is AppEnvelope {
 /** What the agent is told when an app job has no route: the one fix, never a mode. */
 /** What a mission is told when it asks for the owner's Chrome (docs/browser.md, "Missions"). */
 export const UNATTENDED_CHROME = "A mission looks only in buddi's own browser, never the owner's Chrome: nobody is there to watch it. Use the own browser, or report what needs the owner's sign-in.";
+/**
+ * What a mission is told when it needed the owner's Chrome, may not use it, and the
+ * owner was just asked (one "Let … use your Chrome?" card): stop, and say nothing.
+ */
+export const UNATTENDED_CHROME_ASKED = "This needs the owner's signed-in Chrome, which this mission may not use yet. The owner has been asked, with a card, whether it may; nothing more is needed from you. Stop here: no report, no question, no other route.";
 /** What a mission is told when it asks for an app. */
 export const UNATTENDED_APPS = "A mission looks only in buddi's own browser; the owner's apps need the owner. Report what you could not do instead.";
 export const APPS_UNAVAILABLE = 'Your apps are not available to agents right now. The owner can turn them on, or repair them, in Settings → Browser & apps.';
@@ -559,6 +564,19 @@ export class HostController implements BrowserController {
     };
   }
 
+  /**
+   * Tell the mission executor this unattended run needed the owner's Chrome
+   * (`chromeRefused`, set only for a mission run). True when someone was
+   * told, so the run can say the owner was asked; false when nobody listens
+   * or the owner turned his Chrome off for agents (a grant would not help).
+   */
+  #chromeRefused(ctx: ToolContext, site: string | undefined): boolean {
+    const tell = (ctx as { chromeRefused?: (need: { site?: string }) => void }).chromeRefused;
+    if (!tell || !this.#usable().allowed.chrome) return false;
+    try { tell(site ? { site } : {}); return true; }
+    catch { return false; }
+  }
+
   /** Hand a card to the surface once, as a question with choices. */
   #ask(ctx: ToolContext, card: OwnerCard): void {
     if (this.#asked.has(card)) return;
@@ -623,17 +641,29 @@ export class HostController implements BrowserController {
       const opened = this.#opened.get(ctx.conversationId) ?? new Set<string>();
       opened.add(app.bundleId); this.#opened.set(ctx.conversationId, opened);
     }
-    // A mission browses in buddi's own browser only: asked for the owner's Chrome, it is told so plainly (no pin changes that).
-    if (unattended && command.prefer === 'yours') {
+    // A mission browses in buddi's own browser unless the owner let it use his Chrome (`browser: owner`):
+    // asked for the owner's Chrome without that, it is told so plainly (no pin changes that), and the owner is asked once.
+    const chromeGranted = unattended && (ctx as { unattendedChrome?: boolean }).unattendedChrome === true;
+    if (unattended && !chromeGranted && command.prefer === 'yours') {
       this.telemetry.stop('route-unavailable', { route: 'chrome', agent: ctx.agentId, ...missionMark(ctx) });
-      throw new ToolRefusal(UNATTENDED_CHROME);
+      throw new ToolRefusal(this.#chromeRefused(ctx, siteOf(command.url)) ? UNATTENDED_CHROME_ASKED : UNATTENDED_CHROME);
     }
     let route = this.#current.get(key);
     let choice: RouteChoice = { route, reason: 'continuing' };
     const site = siteOf(command.url);
+    // A site on the owner's own "Sites that need my sign-in" list (always his Chrome), for a mission that may
+    // not use his Chrome: ask once, open nothing. A site only learned from a wall still gets its Sign in card.
+    if (unattended && !chromeGranted && command.action === 'navigate' && siteListed(site, this.#settings.signInSites)) {
+      const pins = this.#pinFor(ctx);
+      const pin = [pins.conversation, pins.agent, pins.global].find((value) => value !== undefined && value !== 'auto');
+      if ((pin === undefined || pin === 'chrome') && this.#chromeRefused(ctx, site)) {
+        this.telemetry.stop('route-unavailable', { route: 'chrome', agent: ctx.agentId, ...missionMark(ctx), ...(site ? { host: site } : {}) });
+        throw new ToolRefusal(UNATTENDED_CHROME_ASKED);
+      }
+    }
     if (!route || command.action === 'navigate' || command.action === 'open') {
       const { allowed, available } = this.#usable();
-      choice = chooseRoute({ command: run, prefer: command.prefer, pins: this.#pinFor(ctx), allowed, available, signInSite: this.#signInSite(site), unattended });
+      choice = chooseRoute({ command: run, prefer: command.prefer, pins: this.#pinFor(ctx), allowed, available, signInSite: this.#signInSite(site), unattended, unattendedChrome: chromeGranted });
       // A task already in the owner's Chrome stays there for its next page (a checkout on
       // another domain keeps his sign-in), unless something asked for another route.
       if (route === 'chrome' && command.action === 'navigate' && choice.route === 'own' && choice.reason === 'default' && allowed.chrome && available.chrome) {
@@ -720,7 +750,8 @@ export class HostController implements BrowserController {
     }
     this.#learn(site);
     const { allowed, available } = this.#usable();
-    const chromeUsable = allowed.chrome && available.chrome && !unattended;
+    const chromeGranted = unattended && (ctx as { unattendedChrome?: boolean }).unattendedChrome === true;
+    const chromeUsable = allowed.chrome && available.chrome && (!unattended || chromeGranted);
     // A pin to another route (the conversation's, the agent's, the default) holds here too:
     // the move to the owner's Chrome is then his choice on the card, never automatic.
     const pins = this.#pinFor(ctx);

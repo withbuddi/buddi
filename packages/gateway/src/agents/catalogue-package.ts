@@ -103,9 +103,13 @@ const missionSchema = z
     /**
      * 0.1.0-pre.38: `own` opts the mission in to browsing unattended, in
      * buddi's own browser only (docs/browser.md, "Missions"). Absent: it
-     * opens no page.
+     * opens no page. `owner` (0.1.0-pre.48): it needs the owner's signed-in
+     * Chrome too; the install card says so in one line and approving it
+     * grants it, never the package alone.
      */
-    browser: z.literal('own').optional(),
+    browser: z.enum(['own', 'owner']).optional(),
+    /** With `browser: owner`: the site it needs the owner's Chrome for, a host like `pnc.com`. */
+    browserFor: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/).max(253).optional(),
     /** Host API 1.27: an export of a required plugin, read before each run. */
     context: z
       .object({

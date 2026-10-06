@@ -90,6 +90,27 @@ describe('the approval on the card', () => {
   });
 });
 
+describe('a question core asks in its own words', () => {
+  it('"Let the PNC pull use your Chrome?" is answered Not now (quiet) or Allow, with the reassurance in view', () => {
+    const onDecide = vi.fn();
+    const action: ApprovalRow = {
+      ...ACTION,
+      tool: 'schedule.use_chrome',
+      ask: 'Let the PNC pull use your Chrome?',
+      answers: { approve: 'Allow', reject: 'Not now' },
+      preview: 'Let the PNC pull use your Chrome?\n\nIts scheduled run needed your signed-in Chrome for PNC and stopped there: nothing was read or changed.',
+    };
+    render(<ApprovalCard action={action} timezone="UTC" busy={false} onDecide={onDecide} agentName="CFO" />);
+    const article = screen.getByRole('article', { name: 'Let the PNC pull use your Chrome?' });
+    expect(buttonsOf(article)).toEqual([['Show envelope', 'ghost'], ['Not now', 'ghost'], ['Allow', 'accent']]);
+    expect(article).toHaveTextContent('nothing was read or changed');
+    fireEvent.click(within(article).getByRole('button', { name: 'Allow' }));
+    expect(onDecide).toHaveBeenCalledWith(ACTION.id, 'approve', undefined);
+    fireEvent.click(within(article).getByRole('button', { name: 'Not now' }));
+    expect(onDecide).toHaveBeenCalledWith(ACTION.id, 'reject');
+  });
+});
+
 describe('an approval buddi itself asked for', () => {
   it('reads "Asked by buddi", lowercase, with the Blob, whatever name the caller passed', () => {
     const action = { ...ACTION, agentId: 'owner' };

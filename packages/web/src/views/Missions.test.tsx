@@ -64,3 +64,25 @@ describe('missions that stop themselves', () => {
     expect(screen.queryByText('Still useful?')).not.toBeInTheDocument();
   });
 });
+
+describe('where a mission browses', () => {
+  afterEach(() => cleanup());
+
+  it('says "Uses your Chrome" or "Own browser" with a switch, and a mission that opens no page has neither', async () => {
+    vi.mocked(api.missions).mockResolvedValue({ missions: [
+      { ...mission('agent:cfo:pnc-pull', 'UTC', false), name: 'PNC pull', browser: 'own' },
+      { ...mission('agent:cfo:bills', 'UTC', false), name: 'Bills', browser: 'owner' },
+      { ...mission('recap', 'UTC', false), name: 'Recap' },
+    ] });
+    const set = vi.spyOn(api, 'setMissionChrome').mockResolvedValue({ id: 'agent:cfo:pnc-pull', browser: 'owner' });
+    render(<Missions timezone="UTC" />);
+    expect(await screen.findByText('Own browser')).toBeInTheDocument();
+    expect(screen.getByText('Uses your Chrome')).toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Let Recap use your Chrome' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Let Bills use your Chrome' })).toBeChecked();
+    const pnc = screen.getByRole('switch', { name: 'Let PNC pull use your Chrome' });
+    expect(pnc).not.toBeChecked();
+    fireEvent.click(pnc);
+    await waitFor(() => expect(set).toHaveBeenCalledWith('agent:cfo:pnc-pull', true));
+  });
+});
