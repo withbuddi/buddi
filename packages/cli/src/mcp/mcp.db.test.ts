@@ -103,7 +103,16 @@ const demoManifest: PluginManifest = {
   schema: 'demo',
   migrationsDir: '',
   // `settings` stands in for a balance: marked sensitive, as finance marks its reads.
-  queries: (demoPagesManifest.queries ?? []).map((q) => (q.name === 'settings' ? { ...q, sensitive: true } : q)),
+  queries: [
+    ...(demoPagesManifest.queries ?? []).map((q) => (q.name === 'settings' ? { ...q, sensitive: true } : q)),
+    // 1.31: a query that marks values, not itself.
+    {
+      name: 'figures',
+      params: z.object({}).strict(),
+      sensitive: ['total', 'rows[].amount'],
+      produce: async () => ({ total: 12345.67, currency: 'EUR', rows: [{ name: 'Rent', amount: 900 }, { name: 'Gym', amount: null }] }),
+    },
+  ],
   home: [
     { id: 'demo.money', title: 'Money', produce: async () => ({ id: 'demo.money', title: 'Money', stats: [{ label: 'Cash', value: BALANCE }], rows: [], sensitive: true }) },
     { id: 'demo.car', title: 'Car', produce: async () => ({ id: 'demo.car', title: 'Car', stats: [{ label: 'Mileage', value: '42,000' }], rows: [] }) },
@@ -454,6 +463,19 @@ suite('buddi mcp', () => {
     const listed = (await tool('buddi.pages_list')).json.pages.flatMap((p: any) => p.queries);
     expect(listed.find((q: any) => q.name === 'settings')).toMatchObject({ sensitive: true });
     expect(listed.find((q: any) => q.name === 'counts').sensitive).toBeUndefined();
+  });
+
+  it('page_query masks the values a query marks sensitive, keeping the rest, unless asked', async () => {
+    const plain = await tool('buddi.page_query', { plugin: 'demo', query: 'figures' });
+    expect(plain.isError).toBe(false);
+    expect(plain.json).toEqual({
+      data: { total: '(hidden)', currency: 'EUR', rows: [{ name: 'Rent', amount: '(hidden)' }, { name: 'Gym', amount: null }] },
+      sensitivePaths: ['total', 'rows[].amount'],
+      omitted: 'ask with includeSensitive',
+    });
+    expect(plain.text).not.toContain('12345');
+    const asked = await tool('buddi.page_query', { plugin: 'demo', query: 'figures', includeSensitive: true });
+    expect(asked.json).toEqual({ data: { total: 12345.67, currency: 'EUR', rows: [{ name: 'Rent', amount: 900 }, { name: 'Gym', amount: null }] } });
   });
 
   it('no read returns a seeded secret', async () => {

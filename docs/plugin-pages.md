@@ -60,8 +60,11 @@ export interface PageQuery {
   produce(params: unknown, ctx: ToolContext): Promise<unknown>;  // read-only
   /** Optional result shape; when given, the result is validated before it leaves. */
   result?: z.ZodTypeAny;
-  /** Masked on the page until the owner asks (as a sensitive Home block); left out over MCP unless asked. */
-  sensitive?: boolean;
+  /**
+   * true: every section that reads it is masked until the owner asks (as a sensitive Home block); left out over MCP unless asked.
+   * A list of paths into the answer (host API 1.31): only those values are masked; see "Sensitive values" below.
+   */
+  sensitive?: boolean | string[];
 }
 
 export interface PageDescriptor {
@@ -104,6 +107,44 @@ download. This is what the chat canvas's Files tab reads a workspace with
 (`files` on the manifest names the queries; the developer plugin's workspace
 browser is the one that uses it), and it is the only non-JSON answer the route
 has.
+
+**Sensitive values** (host API `^1.31`). A balance should hide the figure,
+not the page. Instead of `sensitive: true`, a query lists the paths in its
+answer that are sensitive: dotted field names, `[]` for every item of a list
+(`accounts[].balance`), a leading `[]` when the answer is itself a list; at
+most 32. The page then draws everything — titles, names, rows, the bank beside
+the balance — and each of those values as `••••` (a fixed width; "hidden" to a
+screen reader) until the owner presses **Show amounts** in the page head. That
+one button reveals the whole page and the next one visited, and masks them
+again when the window is left or after five minutes. A form field whose
+`from` is a masked value cannot be saved until shown; a button that sends a
+masked value (`{ row: 'balance' }`) sends the real one. Over MCP,
+`buddi.page_query` answers with those values reading `"(hidden)"` unless
+called with `includeSensitive: true`.
+
+The mark is on the query rather than on each `{ path }` because one line then
+covers every place the value is drawn — a stat, a list's `meta` or `sub`, a
+`detail` row, a table cell, a hero, a chart, a form — and the gateway can
+redact an answer by the same paths without reading any layout. Nothing in the
+descriptor changes:
+
+```ts
+// The query marks the values, once; the descriptor stays as it was.
+queries: [{
+  name: 'overview',
+  params: z.object({}),
+  sensitive: ['netWorth', 'accounts[].balance'],
+  produce: async (_p, ctx) => ({ netWorth: 48210.5, accounts: [{ id: 'a1', name: 'Checking', bank: 'N26', balance: '1,204.10' }] }),
+}],
+
+// A stats item: drawn "Net worth ••••" until Show amounts.
+{ label: 'Net worth', value: { path: 'netWorth' }, unit: 'currency' }
+
+// A list item's meta: "Checking   N26 · ••••".
+{ title: { path: 'name' }, meta: [{ path: 'bank' }, { path: 'balance' }] }
+```
+
+`sensitive: true` still works as before, masking whole sections.
 
 Tools an owner may call from a page but no agent should see carry
 `ownerOnly: true` (new `ToolDefinition` field, off by default): the registry

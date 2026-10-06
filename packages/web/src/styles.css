@@ -5694,3 +5694,6 @@ button.br-address:hover:not(:disabled) { border-color: var(--line-strong); }
 
 .pl-mail-files .wb-msg-files { justify-content: flex-start; }
 .pl-mail-file { display: inline-flex; align-items: center; gap: var(--space-2); }
+
+/* A value a plugin page marks sensitive, until Show amounts (host API 1.31): always as wide, never its length. */
+.pp-masked { display: inline-block; letter-spacing: 0.1em; color: var(--text-muted); white-space: nowrap; }

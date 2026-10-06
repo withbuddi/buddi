@@ -175,13 +175,20 @@ export function listPageDescriptors(deps: PagesDeps): PagesReply {
    * cannot say it itself — the flag is the query's, not the screen's.
    */
   const sensitive = new Map<string, string[]>();
+  // 1.31: a query may mark values rather than itself — the page masks just those.
+  const paths = new Map<string, Record<string, string[]>>();
   for (const q of queries) {
     if (q.sensitive === true) sensitive.set(q.plugin, [...(sensitive.get(q.plugin) ?? []), q.name]);
+    if (Array.isArray(q.sensitive)) paths.set(q.plugin, { ...paths.get(q.plugin), [q.name]: [...q.sensitive] });
   }
   return {
     status: 200,
     body: {
-      pages: deps.registry.pages().map((p) => (sensitive.has(p.plugin) ? { ...p, sensitive: sensitive.get(p.plugin) } : p)),
+      pages: deps.registry.pages().map((p) => ({
+        ...p,
+        ...(sensitive.has(p.plugin) ? { sensitive: sensitive.get(p.plugin) } : {}),
+        ...(paths.has(p.plugin) ? { sensitivePaths: paths.get(p.plugin) } : {}),
+      })),
       files: deps.registry.files(),
       // What each query takes, by name and type: the schema itself stays here.
       queries: queries.map((q) => ({
@@ -189,6 +196,7 @@ export function listPageDescriptors(deps: PagesDeps): PagesReply {
         name: q.name,
         params: describeParams(q.params),
         ...(q.sensitive === true ? { sensitive: true } : {}),
+        ...(Array.isArray(q.sensitive) ? { sensitivePaths: [...q.sensitive] } : {}),
       })),
     },
   };

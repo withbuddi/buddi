@@ -19,6 +19,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ApprovalRow, type ConnectionSignal, type NeedsYouCounts, type NotificationRow, type ConversationSummary, type DigestRow, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtDate, fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
+import { useReveal } from '../reveal';
 import { agentRoute, catalogueRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, BACKUP_ROUTE, NEEDS_ROUTE, NOTIFICATIONS_RECENT_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import { RECOVERY_BANNER } from './Recovery';
 import type { AgentAttention } from '../shell/roster';
@@ -855,21 +856,14 @@ function capitalise(text: string): string {
  * shows the shape of the block and none of its figures.
  */
 function HomeBlockView({ block, onHide }: { block: HomeBlock; onHide: () => void }): JSX.Element {
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, toggleRevealed] = useReveal();
   const masked = block.sensitive === true && !revealed;
-  useEffect(() => {
-    if (!block.sensitive || !revealed) return undefined;
-    const hide = (): void => { if (document.visibilityState === 'hidden') setRevealed(false); };
-    document.addEventListener('visibilitychange', hide);
-    window.addEventListener('blur', hide);
-    return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('blur', hide); };
-  }, [block.sensitive, revealed]);
 
   const aside = (
     <span className="ui-row">
       {block.rows.length > 0 && block.rowsTitle && !masked ? <span className="muted">{block.rowsTitle.toLowerCase()} below</span> : null}
       {block.sensitive ? (
-        <Button size="sm" variant="ghost" aria-pressed={!masked} onClick={() => setRevealed((v) => !v)}>
+        <Button size="sm" variant="ghost" aria-pressed={!masked} onClick={toggleRevealed}>
           {masked ? 'Show' : 'Hide'}
         </Button>
       ) : null}

@@ -207,10 +207,10 @@ interface Conformance {
   listComponent: Exact<Extract<CoreComponent, { kind: 'list' }>, ListComponent>;
   /**
    * The served descriptor is core's, plus the plugin the route carries and
-   * the names of that plugin's sensitive queries (a query's flag, not the
-   * descriptor's: the route adds it).
+   * the names of that plugin's sensitive queries and the values each marks
+   * (a query's flag, not the descriptor's: the route adds them).
    */
-  descriptor: Exact<CorePageDescriptor & { plugin: string; sensitive?: string[] }, PluginPageDescriptor>;
+  descriptor: Exact<CorePageDescriptor & { plugin: string; sensitive?: string[]; sensitivePaths?: Record<string, string[]> }, PluginPageDescriptor>;
   workspaceFiles: Exact<CoreWorkspaceFiles, WorkspaceFiles>;
 }
 

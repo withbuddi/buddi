@@ -474,7 +474,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.30`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.31`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -794,6 +794,35 @@ sender, text with links, quotes folded, attachments as file rows; a
 `section`'s `query` and `heading`; a list item's `strong` and `preview`. Each
 is refused by an older buddi's descriptor check, so a plugin that uses one
 asks for `^1.30`.
+
+1.31 adds no method: a page query's `sensitive` may be a list of paths into
+its answer instead of `true` ([plugin-pages.md](plugin-pages.md) §3,
+"Sensitive values"). The page then masks only those values (`••••`, one
+**Show amounts** per page, masked again when the window is left or after five
+minutes) and keeps every piece of structure visible; `buddi.page_query` over
+MCP answers with them reading `"(hidden)"` unless `includeSensitive`. The mark
+sits on the query, not on each `{ path }`, so one line covers every place a
+value is drawn and the gateway redacts by the same paths without reading a
+layout:
+
+```ts
+// The query marks the values, once; the descriptor stays as it was.
+queries: [{
+  name: 'overview',
+  params: z.object({}),
+  sensitive: ['netWorth', 'accounts[].balance'],
+  produce: async (_p, ctx) => ({ netWorth: 48210.5, accounts: [{ id: 'a1', name: 'Checking', bank: 'N26', balance: '1,204.10' }] }),
+}],
+
+// A stats item: drawn "Net worth ••••" until Show amounts.
+{ label: 'Net worth', value: { path: 'netWorth' }, unit: 'currency' }
+
+// A list item's meta: "Checking   N26 · ••••".
+{ title: { path: 'name' }, meta: [{ path: 'bank' }, { path: 'balance' }] }
+```
+
+An older buddi refuses a query whose `sensitive` is not a boolean, so a
+plugin that marks values asks for `^1.31`.
 
 ## 8. End to end
 

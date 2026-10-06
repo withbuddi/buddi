@@ -77,6 +77,8 @@ import { CHAT_ROUTE } from '../routes';
 import { CalendarView, useCalendarState } from './CalendarPiece';
 import { SeriesPanel } from './SeriesPanel';
 import { AssetImage, assetSrc } from './AssetImage';
+import { useAmountsShown, useReveal } from '../reveal';
+import { MASK, MaskText, holdsMask, maskValues, rawOf } from './sensitive';
 import type {
   ArgRef,
   ColumnMap,
@@ -126,6 +128,10 @@ interface PageScope {
   refresh: () => void;
   /** This plugin's sensitive queries: what reads one is masked until asked. */
   sensitive: ReadonlySet<string>;
+  /** 1.31: the values each query marks sensitive, by query name: masked until Show amounts. */
+  sensitivePaths: Readonly<Record<string, string[]>>;
+  /** The session's Show amounts is on. */
+  amountsShown: boolean;
 }
 
 const Scope = createContext<PageScope | null>(null);
@@ -161,26 +167,20 @@ function readsSensitive(node: unknown, sensitive: ReadonlySet<string>): boolean 
   return false;
 }
 
-/**
- * Shown for this tab only. Leaving the window masks it again, so a screen
- * left unattended shows the shape of the page and none of its figures —
- * the rule Home's sensitive blocks follow.
- */
-function useReveal(): [boolean, () => void] {
-  const [revealed, setRevealed] = useState(false);
-  useEffect(() => {
-    if (!revealed) return undefined;
-    const hide = (): void => {
-      if (document.visibilityState === 'hidden') setRevealed(false);
-    };
-    document.addEventListener('visibilitychange', hide);
-    window.addEventListener('blur', hide);
-    return () => {
-      document.removeEventListener('visibilitychange', hide);
-      window.removeEventListener('blur', hide);
-    };
-  }, [revealed]);
-  return [revealed, () => setRevealed((v) => !v)];
+/** True when this subtree reads a query that marks values sensitive (1.31). */
+function readsSensitiveValues(node: unknown, paths: Readonly<Record<string, string[]>>): boolean {
+  for (const name of queriesOf(node)) if ((paths[name]?.length ?? 0) > 0) return true;
+  return false;
+}
+
+/** The page's one Show amounts (1.31): on for the session until the window is left, or five minutes. */
+function AmountsToggle(): JSX.Element {
+  const [shown, toggle] = useAmountsShown();
+  return (
+    <Button size="sm" variant="ghost" aria-pressed={shown} onClick={toggle}>
+      {shown ? 'Hide amounts' : 'Show amounts'}
+    </Button>
+  );
 }
 
 function RevealButton({ revealed, onToggle }: { revealed: boolean; onToggle: () => void }): JSX.Element {
@@ -365,7 +365,7 @@ function resolveParams(
     let value: unknown;
     if ('param' in ref) value = scope.params[ref.param];
     else if ('route' in ref) value = ref.route === 'plugin' ? scope.plugin : ref.route === 'page' ? scope.page : scope.item;
-    else value = readRef(data, ref);
+    else value = readRef(rawOf(data), ref);
     // An absent parameter is left out rather than sent as an empty string: the
     // plugin's schema decides whether it was optional.
     if (value === undefined || value === null || value === '') continue;
@@ -393,7 +393,8 @@ function resolveArgs(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, ref] of Object.entries(args ?? {})) {
-    if ('row' in ref) out[key] = readPath(source.row, ref.row);
+    // A write sends the real value, never the mask a sensitive one is drawn as (1.31).
+    if ('row' in ref) out[key] = readPath(rawOf(source.row), ref.row);
     else if ('choice' in ref) out[key] = source.choice;
     else if ('field' in ref) {
       // A field the owner cannot see or cannot change is a field they said
@@ -411,7 +412,7 @@ function resolveArgs(
       out[key] = value;
     } else if ('selected' in ref) out[key] = source.selected ?? [];
     else if ('param' in ref) out[key] = source.scope.params[ref.param];
-    else out[key] = readRef(source.data, ref);
+    else out[key] = readRef(rawOf(source.data), ref);
   }
   return out;
 }
@@ -448,8 +449,12 @@ function usePageQuery(
     pollMs,
   );
   const current = state.data !== undefined && state.data.asked === asked;
+  // 1.31: the values this query marks sensitive stay masked until Show amounts.
+  const paths = ref && !scope.amountsShown ? scope.sensitivePaths[ref.query] : undefined;
+  const raw = current ? state.data!.data : undefined;
+  const shown = useMemo(() => maskValues(raw, paths), [raw, paths]);
   return {
-    data: current ? state.data!.data : undefined,
+    data: shown,
     error: current || !state.loading ? state.error : null,
     loading: state.loading,
   };
@@ -1570,7 +1575,7 @@ function StatsPiece({ component, data }: { component: Of<'stats'>; data: unknown
             <Stat
               key={index}
               label={item.label}
-              value={fmtValue(readRef(query.data, item.value), item.unit ?? 'text', null)}
+              value={<MaskText text={fmtValue(readRef(query.data, item.value), item.unit ?? 'text', null)} />}
               tone={statTone(item.tone)}
             />
           ))}
@@ -1592,7 +1597,7 @@ function itemRow(
   row: unknown,
   /** When the list chooses in the page rather than in the URL, there is no link. */
   local?: (key: string) => void,
-): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: string; href: string | null; outside: boolean; text: string; lead: ReactNode; preview: string; strong: boolean | undefined } {
+): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: ReactNode; href: string | null; outside: boolean; text: string; lead: ReactNode; preview: string; strong: boolean | undefined } {
   const meta = (item.meta ?? []).map((ref) => String(readRef(row, ref) ?? '')).filter((text) => text !== '');
   const text = String(readRef(row, item.title) ?? '');
   const routed = item.to && !local ? routeOf(scope, item.to, row) : null;
@@ -1659,7 +1664,7 @@ function itemRow(
     preview,
     strong: item.strong ? holds(row, item.strong) : undefined,
     pills: <>{drawnPills}</>,
-    meta: meta.join(' · '),
+    meta: meta.length > 0 ? <MaskText text={meta.join(' · ')} /> : '',
     // The pictures sit above the title, as a card's head: logos, then who they are.
     title: images ? (
       <>
@@ -1677,14 +1682,14 @@ function itemRow(
     ),
     sub: status ? (
       <>
-        {subText ? <span className="pl-row-line">{subText}</span> : null}
+        {subText ? <span className="pl-row-line"><MaskText text={subText} /></span> : null}
         {status}
       </>
-    ) : item.sub ? subText : null,
+    ) : item.sub ? (subText ? <MaskText text={subText} /> : subText) : null,
     side: (
       <>
         {drawnPills}
-        {meta.length > 0 ? <span className="muted"> {meta.join(' · ')}</span> : null}
+        {meta.length > 0 ? <span className="muted"> <MaskText text={meta.join(' · ')} /></span> : null}
       </>
     ),
   };
@@ -2359,9 +2364,9 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
                       {column.pill ? (
                         <PillCell column={column} row={row} />
                       ) : column.fit === 'truncate' ? (
-                        <span className="ui-table-cut">{text}</span>
+                        <span className="ui-table-cut"><MaskText text={text} /></span>
                       ) : (
-                        text
+                        <MaskText text={text} />
                       )}
                     </td>
                   );
@@ -2471,7 +2476,7 @@ function DetailPiece({ component, data }: { component: Of<'detail'>; data: unkno
             items={component.fields.map((field) => ({
               key: field.label,
               label: field.label,
-              value: fmtValue(readRef(query.data, field.value), field.unit ?? 'text', null),
+              value: <MaskText text={fmtValue(readRef(query.data, field.value), field.unit ?? 'text', null)} />,
             }))}
           />
         ) : null}
@@ -2580,6 +2585,11 @@ function FormBody({
    * fills the one they are on.
    */
   const inactive = inactiveFields(component.fields, values, initialData);
+  /*
+   * 1.31: a field that starts from a sensitive value holds the mask until Show
+   * amounts — saving it would write the mask over the real figure.
+   */
+  const hidden = component.fields.some((field) => field.from !== undefined && holdsMask(readPath(initialData, field.from)));
   const missing = component.fields.some(
     (field) =>
       field.required &&
@@ -2598,6 +2608,7 @@ function FormBody({
         onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
       />
       {component.drawer ? null : <ActOutcome act={act} />}
+      {hidden ? <p className="muted">Show amounts to change this.</p> : null}
       <Toolbar align="end" className={top ? 'ui-panel-foot' : undefined}>
         <ActionButton
           action={component.submit}
@@ -2608,7 +2619,7 @@ function FormBody({
             omit: inactive,
             scope,
           })}
-          disabled={act.busy || missing}
+          disabled={act.busy || missing || hidden}
           running={act.running === component.submit.tool}
           onRun={(ref, args) => void act.run(ref, args, onDone)}
         />
@@ -3155,7 +3166,7 @@ function HeroPiece({ component, data }: { component: Of<'hero'>; data: unknown }
   const title = text(component.title);
   const facts = component.facts.map((fact) => ({ label: fact.label, value: text(fact.path) })).filter((fact) => fact.value !== '');
   return (
-    <section className="pg-hero" aria-label={[value, title, ...facts.map((fact) => `${fact.label} ${fact.value}`)].filter(Boolean).join(', ')}>
+    <section className="pg-hero" aria-label={[value, title, ...facts.map((fact) => `${fact.label} ${fact.value}`)].filter(Boolean).join(', ').split(MASK).join('hidden')}>
       <div className="pg-hero-main" aria-hidden="true">
         <span className="pg-hero-icon">
           <Icon name={tileGlyph(tileIcon(readRef(query.data, component.icon)))} size={44} />
@@ -4101,6 +4112,8 @@ function EditorBody({
  * The page
  * ------------------------------------------------------------------ */
 
+const NO_PATHS: Readonly<Record<string, string[]>> = {};
+
 export function PluginPage({
   page,
   item,
@@ -4137,6 +4150,7 @@ export function PluginPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeKey]);
   const [version, setVersion] = useState(0);
+  const [amountsShown] = useAmountsShown();
   const scope: PageScope = {
     plugin: page.plugin,
     page: page.id,
@@ -4159,6 +4173,8 @@ export function PluginPage({
     version,
     refresh: () => setVersion((n) => n + 1),
     sensitive: new Set(page.sensitive ?? []),
+    sensitivePaths: page.sensitivePaths ?? NO_PATHS,
+    amountsShown,
   };
   /*
    * A notice that opens a page of its own is the page's intro: one muted
@@ -4199,11 +4215,15 @@ function PageWithData({ page, embedded, lede: given }: { page: PluginPageDescrip
   const rootData = root.data ?? null;
   const read = given === undefined || typeof given === 'string' ? given : readRef(rootData, given);
   const lede = read === undefined || read === null || read === '' ? undefined : String(read);
-  const actions = !embedded && page.actions && page.actions.length > 0 ? (
+  // 1.31: one Show amounts for the page, leftmost, when anything on it reads a sensitive value.
+  const amounts = readsSensitiveValues([page.data, page.actions, page.body], scope.sensitivePaths);
+  const own = !embedded && page.actions && page.actions.length > 0;
+  const actions = own || amounts ? (
     <>
-      {page.actions.map((action, index) => (
-        <HeadAction key={index} component={action} data={rootData} />
-      ))}
+      {amounts ? <AmountsToggle /> : null}
+      {own
+        ? page.actions!.map((action, index) => <HeadAction key={index} component={action} data={rootData} />)
+        : null}
     </>
   ) : undefined;
   return (

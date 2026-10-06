@@ -588,6 +588,12 @@ export interface PluginPageDescriptor {
    * masked until the owner asks, as Home masks a sensitive block.
    */
   sensitive?: string[];
+  /**
+   * 1.31: the values each of this plugin's queries marks sensitive, by query
+   * name — paths into its answer, `[]` for every item. Drawn as a mask until
+   * the owner presses Show amounts; the structure around them stays.
+   */
+  sensitivePaths?: Record<string, string[]>;
   id: string;
   title: string;
   place: 'rail' | 'settings';

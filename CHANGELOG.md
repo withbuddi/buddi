@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Plugin pages can hide just the figures: a page query may name the values that are sensitive (a balance, a total) instead of hiding everything that reads it. The page then shows its whole layout with those values as •••• and one "Show amounts" button in its head, which reveals the page (and the next one) until you leave the window or five minutes pass. Over MCP, `buddi.page_query` returns those values as "(hidden)" unless asked with `includeSensitive`. (Host API 1.31.)
+
 ### Fixed
 
 - The chat sends files on their own: drop three statements, press Enter, and they go with no words needed. An empty box with nothing attached still sends nothing.

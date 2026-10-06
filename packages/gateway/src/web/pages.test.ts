@@ -86,4 +86,27 @@ describe('sensitive queries, as the page list names them', () => {
     expect(body.pages[0]!.sensitive).toEqual(['balances']);
     expect(body.queries.map((q) => [q.name, q.sensitive])).toEqual([['balances', true], ['labels', undefined]]);
   });
+
+  it('names the values a query marks sensitive (1.31), per query, on its pages and in the query list', () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'money',
+      tools: [],
+      queries: [
+        { name: 'overview', params: z.object({}), sensitive: ['netWorth', 'accounts[].balance'], produce: async () => ({}) },
+        { name: 'labels', params: z.object({}), produce: async () => ({}) },
+      ],
+      pages: [{ id: 'home', title: 'Money', place: 'rail', body: [{ kind: 'notice', text: 'Hi.' }] }],
+    } as never);
+    const body = listPageDescriptors({ registry, ctx: {} as never, now: () => new Date() }).body as {
+      pages: Array<{ id: string; sensitive?: string[]; sensitivePaths?: Record<string, string[]> }>;
+      queries: Array<{ name: string; sensitive?: boolean; sensitivePaths?: string[] }>;
+    };
+    expect(body.pages[0]!.sensitive).toBeUndefined();
+    expect(body.pages[0]!.sensitivePaths).toEqual({ overview: ['netWorth', 'accounts[].balance'] });
+    expect(body.queries.map((q) => [q.name, q.sensitive, q.sensitivePaths])).toEqual([
+      ['overview', undefined, ['netWorth', 'accounts[].balance']],
+      ['labels', undefined, undefined],
+    ]);
+  });
 });
