@@ -31,40 +31,54 @@ const URL_KEYS = ['url', 'href', 'link'];
 /** Ids that say where a call ran, not what it was about. */
 const CONTEXT_IDS = new Set(['conversationId', 'agentId', 'runId', 'toolUseId', 'ownerId', 'requestId']);
 
-function cut(text: string): string | null {
+/**
+ * A subject twice over: `key`, the whole thing a tab is grouped by (the full
+ * path, the full id), and `label`, what its title shows (the file's name, cut
+ * to length). Two files called statement.csv in two folders are two tabs.
+ */
+export interface Subject {
+  key: string;
+  label: string;
+}
+
+function cut(text: string): string {
+  return text.length > SUBJECT_MAX ? `${text.slice(0, SUBJECT_MAX - 1)}…` : text;
+}
+
+function plain(text: string): Subject | null {
   const trimmed = text.trim();
-  if (trimmed === '') return null;
-  return trimmed.length > SUBJECT_MAX ? `${trimmed.slice(0, SUBJECT_MAX - 1)}…` : trimmed;
+  return trimmed === '' ? null : { key: trimmed, label: cut(trimmed) };
 }
 
-function basename(value: string): string | null {
-  const bare = value.split(/[?#]/)[0] ?? '';
-  return cut(bare.split(/[\\/]/).filter(Boolean).at(-1) ?? '');
+function basename(value: string): Subject | null {
+  const bare = (value.split(/[?#]/)[0] ?? '').trim();
+  const name = (bare.split(/[\\/]/).filter(Boolean).at(-1) ?? '').trim();
+  return name === '' ? null : { key: bare, label: cut(name) };
 }
 
-function host(value: string): string | null {
+function host(value: string): Subject | null {
   try {
     const parsed = new URL(value);
     if (!parsed.host) return null;
-    return cut(parsed.host.replace(/^www\./, ''));
+    return plain(parsed.host.replace(/^www\./, ''));
   } catch {
     return null;
   }
 }
 
-function named(value: unknown): string | null {
-  if (typeof value === 'string') return cut(value);
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+function named(value: unknown): Subject | null {
+  if (typeof value === 'string') return plain(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return plain(String(value));
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
     for (const key of ['name', 'filename', 'title']) {
-      if (typeof record[key] === 'string') return cut(record[key] as string);
+      if (typeof record[key] === 'string') return plain(record[key] as string);
     }
   }
   return null;
 }
 
-function fromRecord(value: unknown): string | null {
+function fromRecord(value: unknown): Subject | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   for (const key of FILE_KEYS) {
@@ -74,7 +88,7 @@ function fromRecord(value: unknown): string | null {
       if (found) return found;
     } else if (key === 'file') {
       const found = named(field);
-      if (found) return basename(found);
+      if (found) return basename(found.key);
     }
   }
   for (const key of ACCOUNT_KEYS) {
@@ -95,24 +109,32 @@ function fromRecord(value: unknown): string | null {
   return null;
 }
 
-/** An id argument (`importId`, `staging_id`) as a last resort, shortened. */
-function fromId(input: unknown): string | null {
+/** An id argument (`importId`, `staging_id`) as a last resort, shown shortened. */
+function fromId(input: unknown): Subject | null {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return null;
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
     if (CONTEXT_IDS.has(key) || !/(?:[a-z]Id|_id)$/.test(key)) continue;
-    if (typeof value === 'string' && value.trim() !== '') return value.length > 8 ? value.slice(0, 8) : value;
-    if (typeof value === 'number') return String(value);
+    if (typeof value === 'string' && value.trim() !== '') {
+      const id = value.trim();
+      return { key: id, label: id.length > 8 ? id.slice(0, 8) : id };
+    }
+    if (typeof value === 'number') return { key: String(value), label: String(value) };
   }
   return null;
 }
 
 /**
- * What a call was about: a file name, an account, a page, a site — read from
- * its arguments first, then its result, then any id it was given. Null when
+ * What a call was about: a file, an account, a page, a site — read from its
+ * arguments first, then its result, then any id it was given. Null when
  * nothing says, and the tab is then the call's own.
  */
-export function subjectOf(input: unknown, output: unknown): string | null {
+export function subjectIdentityOf(input: unknown, output: unknown): Subject | null {
   return fromRecord(input) ?? fromRecord(output) ?? fromId(input);
+}
+
+/** The subject as a tab's title shows it. */
+export function subjectOf(input: unknown, output: unknown): string | null {
+  return subjectIdentityOf(input, output)?.label ?? null;
 }
 
 /** When a result says it stops being good (`expiresAt`), if it does. */

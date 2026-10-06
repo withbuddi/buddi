@@ -7,6 +7,8 @@
  * survives an approval pause and a restart, and a call is reserved on that
  * row before it is dispatched.
  */
+import { forgetConversationSettings } from './web-settings.js';
+
 /** A stored content block, as the runtime defines it; opaque here. */
 type ContentBlock = Record<string, unknown> & { type: string };
 
@@ -297,7 +299,8 @@ export async function purgeDeletedGroups(pool: Queryable, now: Date = new Date()
   );
   const ids = rows.map((r) => String(r.id));
   for (const id of ids) {
-    await pool.query(`delete from core.conversations where group_id = $1::uuid`, [id]);
+    const { rows: gone } = await pool.query(`delete from core.conversations where group_id = $1::uuid returning id`, [id]);
+    await forgetConversationSettings(pool, gone.map((r) => String(r.id)));
     await pool.query(`delete from core.groups where id = $1::uuid and deleted_at is not null`, [id]);
   }
   return ids;
@@ -312,6 +315,7 @@ export async function purgeDeletedGroups(pool: Queryable, now: Date = new Date()
 export async function clearGroupHistory(pool: Queryable, id: string): Promise<number> {
   if (!UUID.test(id)) return 0;
   const { rows } = await pool.query(`delete from core.conversations where group_id = $1::uuid returning id`, [id]);
+  await forgetConversationSettings(pool, rows.map((r) => String(r.id)));
   await pool.query(`update core.groups set last_summary = null where id = $1::uuid`, [id]);
   return rows.length;
 }

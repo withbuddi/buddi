@@ -6,11 +6,14 @@
  * device. Kept in `core.web_settings` under `canvas-tabs:<conversationId>`:
  * one small value per conversation, owned here, replaced whole on each write.
  */
-import { readWebSetting, writeWebSetting, type Queryable } from '@buddi/core';
+import { CANVAS_TABS_PREFIX, readWebSetting, type Queryable } from '@buddi/core';
 
-/** The `core.web_settings` key for one conversation. */
+/**
+ * The `core.web_settings` key for one conversation. Deleting a conversation
+ * deletes it too (core's `forgetConversationSettings`).
+ */
 export function canvasTabsKey(conversationId: string): string {
-  return `canvas-tabs:${conversationId}`;
+  return `${CANVAS_TABS_PREFIX}${conversationId}`;
 }
 
 /** How many ids either half keeps; a long conversation drops its oldest. */
@@ -50,14 +53,29 @@ export function parseCanvasTabs(body: unknown): { ok: true; value: CanvasTabsSta
   };
 }
 
-/** The stored state, or an empty one: nothing stored is nothing closed. */
-export async function readCanvasTabs(db: Queryable, conversationId: string): Promise<CanvasTabsState> {
+/**
+ * The stored state, or an empty one: nothing stored is nothing closed. Null
+ * when there is no such conversation.
+ */
+export async function readCanvasTabs(db: Queryable, conversationId: string): Promise<CanvasTabsState | null> {
+  const { rows } = await db.query('select 1 from core.conversations where id = $1::uuid', [conversationId]);
+  if (rows.length === 0) return null;
   const stored = await readWebSetting<unknown>(db, canvasTabsKey(conversationId));
   const parsed = parseCanvasTabs(stored ?? {});
   return parsed.ok ? parsed.value : { closed: [], touched: {} };
 }
 
-/** Replace the conversation's state with an already-parsed one. */
-export async function writeCanvasTabs(db: Queryable, conversationId: string, state: CanvasTabsState): Promise<void> {
-  await writeWebSetting(db, canvasTabsKey(conversationId), state);
+/**
+ * Replace the conversation's state with an already-parsed one. False, and
+ * nothing written, when there is no such conversation.
+ */
+export async function writeCanvasTabs(db: Queryable, conversationId: string, state: CanvasTabsState): Promise<boolean> {
+  const { rows } = await db.query(
+    `insert into core.web_settings (key, value, updated_at)
+     select $1, $2::jsonb, now() where exists (select 1 from core.conversations where id = $3::uuid)
+     on conflict (key) do update set value = excluded.value, updated_at = now()
+     returning key`,
+    [canvasTabsKey(conversationId), JSON.stringify(state), conversationId],
+  );
+  return rows.length > 0;
 }

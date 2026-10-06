@@ -23,7 +23,7 @@ import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../
 import { Canvas } from '../canvas/Canvas';
 import { Splitter, WIDTH_VAR } from '../canvas/Splitter';
 import { readWidth } from '../canvas/split-math';
-import { awaitingPreviews, inspectToolCall, previewKey, renderablesFrom, sourcesHolding, type SourcesPanelProps } from '../canvas/renderables';
+import { awaitingPreviews, inspectToolCall, opensTurn, previewKey, renderablesFrom, sourcesHolding, type SourcesPanelProps } from '../canvas/renderables';
 import { useServedPreviews } from '../canvas/served';
 import { FILES_TAB_ID, filesRenderable, useAgentWorkspace, workspaceChanges } from '../canvas/files';
 import { profileRenderable, profileTabId } from './properties';
@@ -709,8 +709,7 @@ export function ChatPage({
     const messages = conversation?.messages ?? [];
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index]!;
-      if (message.role === 'user' && (!message.speaker || message.speaker === 'owner')
-        && message.blocks.some(block => block.type === 'text' && block.text.trim() !== '')) return message.at ?? null;
+      if ((!message.speaker || message.speaker === 'owner') && opensTurn(message)) return message.at ?? null;
     }
     return null;
   }, [conversation]);

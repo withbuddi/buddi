@@ -58,6 +58,16 @@ describe('gathering by turn', () => {
     expect(tabs.map((tab) => [tab.id, tab.count])).toEqual([['sources:s1', 3], ['sources:r3', 1]]);
   });
 
+  it('starts a new tab when the owner sends files alone', () => {
+    const files: ChatMessage = {
+      id: 'o2', role: 'user', at: AT,
+      blocks: [{ type: 'attachment', artifactId: 'f1', filename: 'statement.csv', mime: 'text/csv', kind: 'document', sizeBytes: 10 }],
+    };
+    const messages = [...turn(), files, call('r3', 'lens.fetch', { url: 'https://ikea.com/trotten' }), result('r3', 'lens.fetch', page('https://ikea.com/trotten', 'Trotten', 'A crank desk.'))];
+    const tabs = renderablesFrom({ messages, descriptors: [], gathered: GATHERED });
+    expect(tabs.map((tab) => [tab.id, tab.count])).toEqual([['sources:s1', 3], ['sources:r3', 1]]);
+  });
+
   it('keeps working while the turn streams: a call joins at once, its result lands in place', () => {
     const all = turn();
     // Only the search is back; the first read has been called, not answered.

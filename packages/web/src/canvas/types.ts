@@ -433,6 +433,8 @@ export interface Renderable {
    * this, and a later call on the same subject updates it.
    */
   subject?: string;
+  /** The subject unabridged (the full path, the full id): what tabs are grouped by. */
+  subjectKey?: string;
   /**
    * Every call this tab holds, oldest first; the newest is what the top-level
    * fields show. Present on a tab with a subject; more than one means the

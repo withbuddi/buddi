@@ -8,6 +8,21 @@
  */
 import type { Queryable } from './owner.js';
 
+/**
+ * The prefix of the canvas's per-conversation tab state (`canvas-tabs:<id>`,
+ * owned by the gateway's web/canvas-tabs.ts). Named here so that deleting a
+ * conversation, which happens in core, can take its key with it.
+ */
+export const CANVAS_TABS_PREFIX = 'canvas-tabs:';
+
+/** Drop the settings that belonged to these conversations, now gone. */
+export async function forgetConversationSettings(db: Queryable, conversationIds: readonly string[]): Promise<void> {
+  if (conversationIds.length === 0) return;
+  await db.query('delete from core.web_settings where key = any($1::text[])', [
+    conversationIds.map((id) => `${CANVAS_TABS_PREFIX}${id}`),
+  ]);
+}
+
 /** The value stored under `key`, or null when nothing is stored. */
 export async function readWebSetting<T = unknown>(db: Queryable, key: string): Promise<T | null> {
   const { rows } = await db.query('select value from core.web_settings where key = $1', [key]);

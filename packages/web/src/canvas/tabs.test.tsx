@@ -229,6 +229,22 @@ describe('a tab is known by its tool and its subject', () => {
     expect(other.map((tab) => tab.title)).toContain('Shed · Commit · savings.csv');
   });
 
+  it('groups by the whole subject and shortens only the title', () => {
+    const long = 'quarterly-statement-for-the-joint-account-2026-';
+    const messages = [
+      ...call('a', 'shed.stage', { file: '/a/statement.csv' }, ROWS, 0),
+      ...call('b', 'shed.stage', { file: '/b/statement.csv' }, ROWS, 1),
+      ...call('c', 'shed.stage', { file: `${long}01.csv` }, ROWS, 2),
+      ...call('d', 'shed.stage', { file: `${long}02.csv` }, ROWS, 3),
+    ];
+    const tabs = renderablesFrom({ messages, descriptors: [] });
+    expect(tabs).toHaveLength(4);
+    expect(tabs.slice(0, 2).map((tab) => tab.title)).toEqual(['Shed · Stage · statement.csv', 'Shed · Stage · statement.csv']);
+    expect(tabs.every((tab) => (tab.versions ?? []).length === 1)).toBe(true);
+    expect(tabs[2]!.title).toBe(tabs[3]!.title);
+    expect(tabs[2]!.title.endsWith('…')).toBe(true);
+  });
+
   it('steps back to the earlier result inside the tab', () => {
     const messages = [
       ...call('a', 'shed.stage', { file: 'savings.csv' }, { rows: [{ name: 'First', count: 1 }, { name: 'Hoe', count: 1 }] }, 0),

@@ -2651,7 +2651,10 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       // The canvas's tabs for one conversation: what was closed, and their order (web/canvas-tabs.ts).
       const canvasTabsRead = /^\/api\/chat\/conversations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/canvas-tabs$/i.exec(path);
-      if (canvasTabsRead) return sendJson(res, 200, await readCanvasTabs(deps.pool, canvasTabsRead[1]!.toLowerCase()));
+      if (canvasTabsRead) {
+        const state = await readCanvasTabs(deps.pool, canvasTabsRead[1]!.toLowerCase());
+        return state ? sendJson(res, 200, state) : sendJson(res, 404, { error: 'no such conversation' });
+      }
       // A new agent's chat: the once-only strip, both directions of delegation (agents/agent-intro.ts).
       const agentIntro = /^\/api\/agents\/([^/]+)\/intro$/.exec(path);
       if (agentIntro) {
@@ -2951,7 +2954,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         const parsed = parseCanvasTabs(body);
         if (!parsed.ok) return sendJson(res, 400, { error: parsed.error });
-        await writeCanvasTabs(deps.pool, canvasTabsWrite[1]!.toLowerCase(), parsed.value);
+        if (!(await writeCanvasTabs(deps.pool, canvasTabsWrite[1]!.toLowerCase(), parsed.value))) {
+          return sendJson(res, 404, { error: 'no such conversation' });
+        }
         return sendJson(res, 200, parsed.value);
       }
       const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/access/tailscale', '/api/access/cloudflare-access', '/api/notifications/settings', '/api/notifications/focus'];

@@ -43,7 +43,7 @@ import type { PreviewProps, Renderable, RendererName, TabVersion, ViewDescriptor
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { delegatedFiles, type AttachmentBlock } from '../chat/attachments';
 import { commandResult } from './command-result';
-import { expiryOf, subjectOf } from './tab-order';
+import { expiryOf, subjectIdentityOf, type Subject } from './tab-order';
 
 /**
  * One agent asking another. Its call is drawn as the colleague's own run —
@@ -183,9 +183,13 @@ export function subjectTabId(firstCallId: string): string {
   return `tab:${firstCallId}`;
 }
 
-/** Did the owner speak in this message? That is where a new turn begins. */
-function opensTurn(message: ChatMessage): boolean {
-  return message.role === 'user' && (message.blocks ?? []).some((block) => block.type === 'text' && block.text.trim() !== '');
+/**
+ * Did the owner speak in this message — words, or files sent alone? That is
+ * where a new turn begins. Tool results ride in user messages too, and do not.
+ */
+export function opensTurn(message: ChatMessage): boolean {
+  return message.role === 'user' && (message.blocks ?? []).some((block) =>
+    (block.type === 'text' && block.text.trim() !== '') || block.type === 'attachment');
 }
 
 /** The key a preview is known by: `<plugin>/<name>`. */
@@ -270,16 +274,17 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
    * across refreshes), shows the newest call, holds the earlier ones as
    * versions, and moves to the end — it is the newest thing now.
    */
-  const place = (item: Renderable, subject: string | null, expiresAt: string | null): void => {
+  const place = (item: Renderable, subject: Subject | null, expiresAt: string | null): void => {
     if (expiresAt) item.expiresAt = expiresAt;
     if (!subject) { collected.push(item); return; }
-    item.subject = subject;
-    item.title = `${item.title} · ${subject}`;
+    item.subject = subject.label;
+    item.subjectKey = subject.key;
+    item.title = `${item.title} · ${subject.label}`;
     const version: TabVersion = {
       id: item.id, at: item.at, title: item.title, renderer: item.renderer, props: item.props, substantial: item.substantial,
       ...(item.tone ? { tone: item.tone } : {}),
     };
-    const existing = collected.find((other) => other.subject === subject && other.tool === item.tool
+    const existing = collected.find((other) => other.subjectKey === subject.key && other.tool === item.tool
       && (other.source === 'descriptor' || other.source === 'fallback'));
     if (!existing) { collected.push({ ...item, id: subjectTabId(item.id), versions: [version] }); return; }
     collected = collected.filter((other) => other !== existing);
@@ -414,7 +419,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       }
 
       const output = forOwner(block.output);
-      const subject = subjectOf(use?.input ?? null, output);
+      const subject = subjectIdentityOf(use?.input ?? null, output);
       if (block.ok === false) {
         place({
           id: block.toolUseId,
