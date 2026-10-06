@@ -78,7 +78,9 @@ export function ownWords(text: string): string[] {
     .replace(/\]\([^)]*\)/g, ' ')
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/\S+@\S+\.\S+/g, ' ')
-    .replace(/"[^"\n]{1,400}"|“[^”\n]{1,400}”|«[^»\n]{1,400}»|„[^“”\n]{1,400}[“”]/g, ' ');
+    // A complete quotation goes whatever its length or line breaks: a long
+    // French passage quoted in an English answer is not the answer's French.
+    .replace(/"[^"]+"|“[^”]+”|«[^»]+»|„[^“”]+[“”]/g, ' ');
   return prose.toLowerCase().match(/\p{L}+/gu) ?? [];
 }
 
@@ -110,15 +112,58 @@ export function detectLanguage(text: string, opts: { minHits?: number } = {}): L
   return scoreLanguage(text, opts).language;
 }
 
-/**
- * Does the owner's message say which language to answer in ("in French",
- * "auf Deutsch") or ask for a translation? Then the answer's language is the
- * owner's call, not the guard's. "The French news" names no answer language.
- */
-const NAMES_A_LANGUAGE = /(?<!\p{L})(?:translat\p{L}*|tradu\p{L}*|übersetz\p{L}*|uebersetz\p{L}*|(?:in|into|en|auf|em|al|para)\s+(?:english|anglais|inglés|ingles|englisch|inglese|french|français|francais|francés|frances|französisch|francese|spanish|español|espanol|espagnol|spanisch|spagnolo|espanhol|german|deutsch|allemand|alemán|aleman|tedesco|alemão|alemao|italian|italiano|italien|italienisch|portuguese|português|portugues|portugais|portugiesisch|portoghese))(?!\p{L})/iu;
+const LANG =
+  'english|anglais|inglés|ingles|englisch|inglese|french|français|francais|francés|frances|französisch|francese|' +
+  'spanish|español|espanol|espagnol|spanisch|spagnolo|espanhol|german|deutsch|allemand|alemán|aleman|tedesco|alemão|alemao|' +
+  'italian|italiano|italien|italienisch|portuguese|português|portugues|portugais|portugiesisch|portoghese';
+/** Feminine and inflected adjectives that follow their noun ("une version française"). */
+const LANG_ADJ = `${LANG}|anglaise|française|francaise|espagnole|allemande|italienne|portugaise|inglesa|francesa|española|espanola|alemana|italiana|portuguesa|englische|französische|spanische|deutsche|italienische|portugiesische|englischen|französischen|spanischen|deutschen`;
+/** Words that can follow "in French" in an instruction without making it a noun phrase. */
+const AFTER =
+  'please|pls|now|instead|too|also|only|again|anymore|from|for|to|of|and|then|thanks|thank|' +
+  's|svp|merci|maintenant|désormais|dorénavant|aussi|seulement|pour|de|du|à|stp|' +
+  'bitte|jetzt|ab|danke|nur|auch|por|favor|ahora|gracias|solo|también|per|favore|ora|adesso|grazie|agora|obrigado|obrigada';
+/** Verbs of answering, writing or saying, in the six languages. */
+const VERB =
+  'answer|reply|respond|write|rewrite|say|speak|talk|tell|explain|summari[sz]e|give|send|draft|' +
+  'réponds|répondez|répondre|écris|écrivez|parle|parlez|dis|dites|explique|expliquez|résume|résumez|' +
+  'antworte|antworten|schreib|schreibe|sprich|erkläre|erklär|' +
+  'responde|responda|escribe|escriba|habla|hable|dime|explica|resume|' +
+  'rispondi|scrivi|parla|parli|dimmi|spiega|riassumi|' +
+  'escreva|escreve|fala|fale|diga|explique|resuma';
+/** Object pronouns that may sit between the verb and "in French" ("tell me in Spanish"). */
+const PRONOUN = 'me|us|him|her|them|it|this|that|back|moi|nous|lui|leur|le|la|les|ça|mir|uns|ihm|ihr|es|das|nos|lo|mi|ci|gli|lhe';
+const NOUN =
+  'summary|version|translation|reply|answer|response|text|copy|draft|edition|' +
+  'résumé|resume|traduction|réponse|texte|' +
+  'zusammenfassung|fassung|übersetzung|antwort|' +
+  'resumen|versión|traducción|respuesta|riassunto|versione|traduzione|risposta|resumo|versão|tradução|resposta';
 
+const INSTRUCTIONS: readonly RegExp[] = [
+  // "translate to German", "traduis", "übersetzen", "the Spanish translation".
+  /(?<!\p{L})(?:translat\p{L}*|tradu\p{L}*|übersetz\p{L}*|uebersetz\p{L}*)/iu,
+  // "answer in French", "write the mail in Spanish to Ana", "en français
+  // s'il te plaît": the language at the end of a clause, or followed by
+  // "please", "from now on", "to"; never by a noun ("in French politics").
+  new RegExp(`(?<!\\p{L})(?:in|into|en|auf|em|al|para)\\s+(?:${LANG})(?:\\s*(?:[.,!?;:)\\]]|$)|\\s+(?:${AFTER})(?!\\p{L}))`, 'imu'),
+  // "tell me in Spanish what is on", "réponds-moi en anglais": a verb of
+  // answering, at most two pronouns, then the language.
+  new RegExp(`(?<!\\p{L})(?:${VERB})(?:[\\s-]+(?:${PRONOUN})){0,2}\\s+(?:in|into|en|auf|em|al|para)\\s+(?:${LANG})(?!\\p{L})`, 'iu'),
+  // "a Spanish summary", "the French version".
+  new RegExp(`(?<!\\p{L})(?:${LANG})\\s+(?:${NOUN})(?!\\p{L})`, 'iu'),
+  // "une version française", "una respuesta española".
+  new RegExp(`(?<!\\p{L})(?:${NOUN})\\s+(?:${LANG_ADJ})(?!\\p{L})`, 'iu'),
+];
+
+/**
+ * Does the owner's message tell buddi which language to answer in ("answer in
+ * French", "give me a Spanish summary", "en français s'il te plaît") or ask
+ * for a translation? Then the answer's language is the owner's call, not the
+ * guard's. A language named as a subject ("what happened in French politics
+ * today?", "the French news") is no instruction.
+ */
 export function namesALanguage(message: string): boolean {
-  return NAMES_A_LANGUAGE.test(message);
+  return INSTRUCTIONS.some((re) => re.test(message));
 }
 
 /** The six-language code the profile's "Answer me in" names, if it names one of them. */
@@ -134,14 +179,29 @@ export interface OffLanguage {
   target: string;
 }
 
+/** Below this many own words, a message too short to tell leans on the profile language. */
+export const SHORT_MESSAGE_WORDS = 8;
+
+/**
+ * The language the owner's message is in, read from its opening: the
+ * instruction comes first ("Résume cet article :" over a pasted English
+ * article). Text before the first blank line when the message has more than
+ * one paragraph, else its first forty own words.
+ */
+export function messageLanguage(message: string): LanguageCode | null {
+  const head = message.split(/\n\s*\n/)[0] ?? '';
+  return detectLanguage(ownWords(head).slice(0, 40).join(' '), { minHits: 2 });
+}
+
 /**
  * Is this reply in the wrong language? Only when its language is confidently
- * one of the six and matches neither the owner's message (when that can be
- * told) nor the profile language. Never for a short reply, a code-dominant
- * one, a message that names a language or asks for a translation, or when
- * nothing anchors the answer (no telling the message, no profile language
- * buddi can read). A message, or an earlier one, that names a language or
- * asks for a translation hands the choice to the owner.
+ * one of the six and differs from the anchor: the owner's message when it
+ * can be told, else the profile language, and the profile only for a short
+ * message (a long one that cannot be told is likely in a seventh language).
+ * Never for a short reply, a code-dominant one, a message that tells buddi
+ * which language to answer in or asks for a translation, or when nothing
+ * anchors the answer. A message, or an earlier one, that names an answer
+ * language hands the choice to the owner.
  */
 export function offLanguage(
   reply: string,
@@ -154,9 +214,9 @@ export function offLanguage(
   const scored = scoreLanguage(reply);
   if (scored.words < MIN_REPLY_WORDS || !scored.language) return null;
   if ((message && namesALanguage(message)) || namesALanguage(earlier)) return null;
-  const asked = message ? detectLanguage(message, { minHits: 2 }) : null;
-  const preferred = profileLanguageCode(profile);
-  if (!asked && !preferred) return null;
-  if (scored.language === asked || scored.language === preferred) return null;
-  return { reply: scored.language, target: LANGUAGE_NAMES[(asked ?? preferred)!] };
+  const asked = message ? messageLanguage(message) : null;
+  const short = !message || ownWords(message).length < SHORT_MESSAGE_WORDS;
+  const anchor = asked ?? (short ? profileLanguageCode(profile) : null);
+  if (!anchor || scored.language === anchor) return null;
+  return { reply: scored.language, target: LANGUAGE_NAMES[anchor] };
 }

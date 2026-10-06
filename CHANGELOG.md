@@ -7,11 +7,13 @@ What changes in buddi from one release to the next, newest first.
 ### Fixed
 
 - Agents answer in the language you wrote in. One answered an English question in Spanish, another in French after reading French news. Every agent is now told to answer in your message's language (your profile language when the message is too short to tell, else English), whatever language its documents, tools and colleagues used; and an answer that still comes out in another language is rewritten once before you see it. With no language on your profile, the front desk may ask for it once.
+- The reply-language check is sharper: "give me a Spanish summary" counts as asking for Spanish while "French politics" does not; a long or multi-line quotation no longer counts as the answer's language; a pasted article does not outvote the instruction above it; missions and reminders are read by their own words, not buddi's English around them; the profile language only stands in for a short message; and the language and sources checks retry at most once per turn between them, so a rewrite can no longer bring back an answer already held back.
+- The Chrome Web Store upload never prints the store credentials: the release talks to the store API itself and logs only the store's own explanation, and a refused upload now shows its warning instead of reporting success.
 
 ### Changed
 
 - Releases send the Chrome extension to the Chrome Web Store themselves (submitted for review) once the store's API keys are in the repository; a refused upload is a notice and the zip stays on the GitHub release.
-- Hidden amounts look deliberate: on the Money page's cards (and anywhere a plugin page or Home masks a figure) the mask is four even dots on the value's own line, centred on the figure's height, with the label under it as when the amount shows; a screen reader hears "hidden". "Show amounts" is now a proper button with an eye, first among the page's actions, reading "Hide amounts" while they show; Home's and a section's Show/Hide match it.
+- Hidden amounts look deliberate: on the Money page's cards (and anywhere a plugin page or Home masks a figure) the mask is four even dots on the value's own line, centred on the figure's height, with the label under it as when the amount shows; a screen reader hears "hidden". "Show amounts" is now a proper button with an eye, first among the page's actions, reading "Hide amounts" while they show (its label alone says the state, no pressed state on top); Home's and a section's Show/Hide match it.
 
 ## 0.1.0-pre.46 — 2026-10-06
 

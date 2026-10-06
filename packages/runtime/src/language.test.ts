@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codeShare, detectLanguage, languageRetryText, namesALanguage, offLanguage, profileLanguageCode } from './language.js';
+import { codeShare, detectLanguage, languageRetryText, messageLanguage, namesALanguage, offLanguage, profileLanguageCode } from './language.js';
 
 const EN = 'I checked your calendar and there is nothing on Thursday, so the dinner with Marc fits well at eight. Do you want me to add it?';
 const FR = "J'ai regardé ton agenda et il n'y a rien jeudi, donc le dîner avec Marc tombe bien à vingt heures. Tu veux que je l'ajoute ?";
@@ -40,6 +40,15 @@ describe('detectLanguage', () => {
     expect(detectLanguage('> Le gouvernement a annoncé que la réforme sera votée la semaine prochaine.\n\nThe vote is next week, and it should pass with the votes of the centre.')).toBe('en');
     expect(detectLanguage('```\nconst la = de que el los las\n```')).toBeNull();
   });
+
+  it('drops a complete quotation whatever its length or line breaks', () => {
+    const long = `"${'Le gouvernement a annoncé que la réforme des retraites sera votée la semaine prochaine, et que les syndicats ne sont pas d’accord avec le texte. '.repeat(5)}"`;
+    expect(long.length).toBeGreaterThan(400);
+    expect(detectLanguage(`Here is what the paper says: ${long} In short, the vote is next week and it should pass.`)).toBe('en');
+    const multiline = '“Le gouvernement a annoncé que la réforme sera votée la semaine prochaine.\n\nLes syndicats ne sont pas d’accord avec le texte et ils appellent à la grève.” In short, the vote is next week and the unions are not happy about it.';
+    expect(detectLanguage(multiline)).toBe('en');
+    expect(detectLanguage('« Le gouvernement a annoncé que la réforme sera votée,\net les syndicats appellent à la grève dans toute la France. » That is all there is for now, and I will keep an eye on it.')).toBe('en');
+  });
 });
 
 describe('codeShare', () => {
@@ -55,9 +64,21 @@ describe('namesALanguage', () => {
     expect(namesALanguage('Réponds en anglais')).toBe(true);
     expect(namesALanguage('Kannst du das übersetzen?')).toBe(true);
     expect(namesALanguage('Translate this mail')).toBe(true);
+    expect(namesALanguage('translate to German')).toBe(true);
+  });
+  it('sees an output-language instruction in its usual shapes', () => {
+    expect(namesALanguage('Can you give me a Spanish summary of my schedule?')).toBe(true);
+    expect(namesALanguage('answer in French')).toBe(true);
+    expect(namesALanguage("en français s'il te plaît")).toBe(true);
+    expect(namesALanguage('Write the mail to Ana in Spanish, please.')).toBe(true);
+    expect(namesALanguage('Fais-moi une version anglaise du message')).toBe(true);
+    expect(namesALanguage('Answer in German\nand keep it short')).toBe(true);
   });
   it('does not mistake a language named as a subject', () => {
     expect(namesALanguage("What's in the French news today?")).toBe(false);
+    expect(namesALanguage('What happened in French politics today?')).toBe(false);
+    expect(namesALanguage('Explain what happened in French politics today')).toBe(false);
+    expect(namesALanguage('My German class is at six')).toBe(false);
   });
 });
 
@@ -91,8 +112,25 @@ describe('offLanguage', () => {
     expect(offLanguage(ES, 'Marc, Thursday?', 'French')).toEqual({ reply: 'es', target: 'French' });
     expect(offLanguage(FR, 'Marc, Thursday?', 'French')).toBeNull();
   });
-  it('accepts the profile language even when the message is in another', () => {
-    expect(offLanguage(FR, 'Is there room for a dinner with Marc on Thursday evening?', 'French')).toBeNull();
+  it('anchors on the message over the profile when the message can be told', () => {
+    expect(offLanguage(FR, 'Is there room for a dinner with Marc on Thursday evening?', 'French')).toEqual({ reply: 'fr', target: 'English' });
+  });
+  it('leans on the profile only for a short message', () => {
+    // Dutch: none of the six, long enough to be a language of its own.
+    const dutch = 'Is er donderdagavond nog ruimte voor een etentje met Marc bij het restaurant aan de gracht?';
+    expect(offLanguage(EN, dutch, 'French')).toBeNull();
+    expect(offLanguage(EN, 'Marc, Thursday?', 'French')).toEqual({ reply: 'en', target: 'French' });
+  });
+  it('reads the message from its opening, not a pasted article', () => {
+    const article = 'The government announced on Monday that the pension reform will be put to a vote next week. The unions said they were not happy with the text and that they would call for a strike if it passed without changes. ';
+    const ask = `Résume cet article pour moi, s'il te plaît, en quelques lignes :\n\n${article.repeat(3)}`;
+    expect(messageLanguage(ask)).toBe('fr');
+    expect(offLanguage(FR, ask, null)).toBeNull();
+    expect(offLanguage(EN, ask, null)).toEqual({ reply: 'en', target: 'French' });
+  });
+  it('answers a Spanish request in Spanish without a rewrite', () => {
+    expect(offLanguage(ES, 'Can you give me a Spanish summary of my schedule?', null)).toBeNull();
+    expect(offLanguage(FR, 'What happened in French politics today?', null)).toEqual({ reply: 'fr', target: 'English' });
   });
   it('leaves the choice to the owner who asked for a language, now or earlier', () => {
     expect(offLanguage(ES, 'Tell me in Spanish what is on for Thursday evening', null)).toBeNull();

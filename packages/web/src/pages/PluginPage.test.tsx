@@ -1080,7 +1080,7 @@ describe('a sensitive query', () => {
     const section = screen.getByRole('heading', { name: 'Balances' }).closest('section') as HTMLElement;
     fireEvent.click(within(section).getByRole('button', { name: 'Show' }));
     expect(await screen.findByText('Every')).toBeInTheDocument();
-    expect(within(section).getByRole('button', { name: 'Hide' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(section).getByRole('button', { name: 'Hide' })).not.toHaveAttribute('aria-pressed');
     // The loose one has its own Show, and stays masked.
     expect(screen.queryByText('Keep')).not.toBeInTheDocument();
   });

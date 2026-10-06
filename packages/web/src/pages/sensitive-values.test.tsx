@@ -136,7 +136,7 @@ describe('sensitive values', () => {
     expect(await screen.findByText(/48,?210/)).toBeInTheDocument();
     expect(screen.getAllByText(/1,204\.10/).length).toBeGreaterThan(0);
     expect(screen.queryAllByRole('img', { name: 'hidden' })).toHaveLength(0);
-    expect(screen.getByRole('button', { name: 'Hide amounts' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Hide amounts' })).not.toHaveAttribute('aria-pressed');
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 
@@ -170,7 +170,7 @@ describe('sensitive values', () => {
     draw();
     expect((await screen.findAllByText('Checking')).length).toBe(2);
     expect(screen.queryByText(/48,?210/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Show amounts' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Show amounts' })).not.toHaveAttribute('aria-pressed');
   });
 
   it('keeps what the owner typed across a reveal, a re-mask and a background refresh', async () => {
@@ -266,7 +266,7 @@ describe('sensitive values', () => {
       vi.advanceTimersByTime(AMOUNTS_SHOWN_MS + 1);
     });
     await waitFor(() => expect(screen.queryByText(/48,?210/)).not.toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Show amounts' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Show amounts' })).not.toHaveAttribute('aria-pressed');
   });
 
   it('draws no Show amounts on a page that reads no sensitive value', async () => {
@@ -306,14 +306,14 @@ describe('the Money page head and stat cards', () => {
     const toggle = await screen.findByRole('button', { name: 'Show amounts' });
     expect(toggle).toHaveClass('ui-btn', 'pp-reveal');
     expect(toggle).not.toHaveAttribute('data-variant');
-    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle).not.toHaveAttribute('aria-pressed');
     expect(toggle.querySelector('svg[data-icon="eye"]')).toHaveAttribute('aria-hidden', 'true');
     const head = toggle.closest('.ui-page-actions') as HTMLElement;
     expect(head.firstElementChild).toBe(toggle);
     expect(within(head).getByRole('button', { name: 'Add' })).toBeInTheDocument();
     fireEvent.click(toggle);
     expect(toggle).toHaveAccessibleName('Hide amounts');
-    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(toggle).not.toHaveAttribute('aria-pressed');
   });
 
   it('reveals from the keyboard: Tab reaches it, Enter shows, Space hides', async () => {

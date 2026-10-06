@@ -2810,6 +2810,42 @@ describe('the grounding guard', () => {
   });
 });
 
+describe('the grounding and reply-language guards together', () => {
+  const INVENTED = 'The court ruled today, CBS News reported. According to the Associated Press, the vote was 6-3, and NPR (Oct 5) has the dissent.';
+  const SPANISH = 'Según lo que recuerdo, el tribunal decidió el caso esta semana, pero no he podido comprobarlo con ninguna fuente y no estoy seguro.';
+  const say = (text: string): CompletionResponse => ({ content: [{ type: 'text', text }], stopReason: 'end_turn', usage, model: 'claude-sonnet-5' });
+  async function run(script: CompletionResponse[], userMessage: string) {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider(script);
+    const onText = vi.fn();
+    const result = await runAgent({ agent, provider, registry: registryWithDouble(), ctx, pool: db, conversationId, userMessage, onText });
+    return { db, provider, result, onText };
+  }
+
+  it('retries once per turn: after grounding, an off-language answer is delivered as it is, never the unsupported one', async () => {
+    const { db, provider, result, onText } = await run([say(INVENTED), say(SPANISH), say('   ')], 'tell me more about the court ruling in the news today');
+    expect(provider.calls).toHaveLength(2);
+    expect(result.text).toBe(SPANISH);
+    expect(result.unchecked).toBe(true);
+    expect(onText).not.toHaveBeenCalledWith(INVENTED);
+    expect(JSON.stringify(db.messages)).not.toContain('CBS News reported');
+    expect(db.eventKinds()).not.toContain('run.language');
+    expect(db.events.filter((e) => e.kind === 'run.grounding').map((e) => (e.payload as { stage: string }).stage)).toEqual(['retried', 'unchecked']);
+  });
+
+  it('after a language retry, a rewrite that cites unread sources is delivered flagged, not retried again', async () => {
+    const asked = 'Is there any news about the court ruling this week, and what did people say about it?';
+    const spanishFirst = 'No tengo herramientas para comprobarlo, pero creo que la votación fue ajustada y que hubo mucha discusión sobre el caso esta semana.';
+    const { db, provider, result } = await run([say(spanishFirst), say(INVENTED)], asked);
+    expect(provider.calls).toHaveLength(2);
+    expect(result.text).toBe(INVENTED);
+    expect(result.unchecked).toBe(true);
+    expect(db.events.filter((e) => e.kind === 'run.grounding').map((e) => (e.payload as { stage: string }).stage)).toEqual(['unchecked']);
+    expect(db.events.filter((e) => e.kind === 'run.language')).toHaveLength(1);
+  });
+});
+
 describe('the reply-language guard', () => {
   const SPANISH = 'He revisado tu calendario y no hay nada el jueves, así que la cena con Marc encaja bien a las ocho. ¿Quieres que la añada?';
   const ENGLISH = 'I checked your calendar and there is nothing on Thursday, so the dinner with Marc fits well at eight. Do you want me to add it?';
@@ -2884,6 +2920,17 @@ describe('the reply-language guard', () => {
     const { db, provider } = await run([say(SPANISH), say(FRENCH)], { userMessage: 'Marc, Thursday?', ctx: { ...ctx, systemContext } });
     expect(provider.calls[1]?.messages.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: 'Answer in French.' }] });
     expect(fired(db)[0]?.payload).toMatchObject({ target: 'French' });
+  });
+
+  it("anchors on the owner's own words, not the English buddi composed around them", async () => {
+    // A mission: the owner's French prompt, then buddi's English instructions in the same message.
+    const composed = `Fais le point sur mes rendez-vous de la semaine avec Marc. You run while the owner is away. If you are stuck, ask once: the owner gets it on Telegram and your run continues with the answer. Otherwise decide, or report what you could not do.`;
+    const own = await run([say(FRENCH)], { userMessage: composed, ownerText: 'Fais le point sur mes rendez-vous de la semaine avec Marc.' });
+    expect(own.provider.calls).toHaveLength(1);
+    expect(own.db.eventKinds()).not.toContain('run.language');
+    // Without the owner's words, buddi's own English would have anchored it.
+    const whole = await run([say(FRENCH), say(ENGLISH)], { userMessage: composed });
+    expect(whole.provider.calls).toHaveLength(2);
   });
 
   it('stays silent in a delegate and on a decided approval coming back', async () => {

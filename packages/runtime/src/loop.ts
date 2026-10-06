@@ -60,6 +60,13 @@ export interface RunAgentOptions {
   /** The owner's turn. Omitted only when `resume` carries the turn instead. */
   userMessage?: string;
   /**
+   * The owner's own words in `userMessage`, when buddi composed more around
+   * them (a mission's prompt under its context material and buddi's English
+   * instructions). The reply-language guard reads these, not buddi's text.
+   * Defaults to `userMessage`.
+   */
+  ownerText?: string;
+  /**
    * An extra system line appended to the agent's prompt for this run only.
    *
    * Genuinely one-off instructions, and nothing else: "this is the first run,
@@ -1115,16 +1122,20 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
    */
   let read = false;
   let regrounded = false;
-  /** The answer the guard held back, delivered (flagged) if the retry says nothing. */
+  /**
+   * The latest answer a guard held back (grounding or language), delivered if
+   * the retry says nothing. One slot for both, so a fallback never brings
+   * back an answer an earlier guard had already replaced.
+   */
   let heldBack: { content: ContentBlock[]; text: string } | undefined;
   let unchecked = false;
   /**
    * The reply-language guard (docs/system-context.md, Reply language).
    * `relanguaged`: an answer in the wrong language was held back once and the
    * model asked to answer in the owner's; whatever comes next is delivered.
+   * One retry per turn across both guards: neither fires after the other.
    */
   let relanguaged = false;
-  let langHeldBack: { content: ContentBlock[]; text: string } | undefined;
   /**
    * What the owner added, leased for the step that has not happened yet.
    *
@@ -1259,21 +1270,25 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
     const finalAnswer = toolUses.length === 0 && res.stopReason !== 'pause_turn' && res.stopReason !== 'max_tokens';
     if (finalAnswer && !read && resume === undefined && !waitingForOwner && (turnText !== '' || regrounded)) {
       if (regrounded) {
-        unchecked = true;
         // A retry that said nothing: the held-back answer goes out, flagged,
         // rather than an empty reply.
         if (turnText === '' && heldBack) {
           delivered = heldBack.content;
           turnText = heldBack.text;
         }
-        await appendEvent(pool, 'run.grounding', { stage: 'unchecked', agentId: agent.id, ...(opts.runId ? { runId: opts.runId } : {}) }, conversationId);
+        if (!unchecked) {
+          unchecked = true;
+          await appendEvent(pool, 'run.grounding', { stage: 'unchecked', agentId: agent.id, ...(opts.runId ? { runId: opts.runId } : {}) }, conversationId);
+        }
       } else {
         // What the agent legitimately carries counts as held too: its own
         // prompt, its memory notes, the platform context it was given.
         const known = [knownText(messages.slice(0, -1)), agent.systemPrompt, memory, platformContext?.prompt ?? ''].join('\n');
         if (citesUnread(turnText, known)) {
           regrounded = true;
-          const budgetLeft = turns - exemptTurns < agent.maxTurns && turns < agent.maxTurns + MAX_EXEMPT_TURNS;
+          // One retry per turn: a language rewrite that cites unread sources
+          // is delivered flagged, not sent back a second time.
+          const budgetLeft = !relanguaged && turns - exemptTurns < agent.maxTurns && turns < agent.maxTurns + MAX_EXEMPT_TURNS;
           await appendEvent(pool, 'run.grounding', {
             stage: budgetLeft ? 'retried' : 'unchecked',
             agentId: agent.id,
@@ -1302,15 +1317,15 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
      * caller's, and a decided approval coming back carries no owner message.
      * `offLanguage` is precision-first; see language.ts.
      */
-    if (finalAnswer && resume === undefined && (ctx.delegationDepth ?? 0) === 0) {
+    if (finalAnswer && resume === undefined && (ctx.delegationDepth ?? 0) === 0 && !regrounded) {
       if (relanguaged) {
         // A rewrite that said nothing: the held-back answer goes out.
-        if (turnText === '' && langHeldBack) {
-          delivered = langHeldBack.content;
-          turnText = langHeldBack.text;
+        if (turnText === '' && heldBack) {
+          delivered = heldBack.content;
+          turnText = heldBack.text;
         }
       } else if (turnText !== '') {
-        const off = offLanguage(turnText, userMessage, platformContext?.language, ownerWords(messages.slice(0, -1)));
+        const off = offLanguage(turnText, opts.ownerText ?? userMessage, platformContext?.language, ownerWords(messages.slice(0, -1)));
         if (off) {
           relanguaged = true;
           const budgetLeft = turns - exemptTurns < agent.maxTurns && turns < agent.maxTurns + MAX_EXEMPT_TURNS;
@@ -1322,7 +1337,7 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
             ...(opts.runId ? { runId: opts.runId } : {}),
           }, conversationId);
           if (budgetLeft) {
-            langHeldBack = { content: delivered, text: turnText };
+            heldBack = { content: delivered, text: turnText };
             try { opts.onRetract?.(); } catch { /* a surface's drawing never decides a run */ }
             messages.push({ role: 'user', content: [{ type: 'text', text: languageRetryText(off.target) }] });
             continue;

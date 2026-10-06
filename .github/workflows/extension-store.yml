@@ -22,6 +22,12 @@ jobs:
     env:
       EXTENSION_ID: pbfpjefkiijjgefblpnlnlpmeaddfbah
     steps:
+      # Only the upload script: it talks to the store API itself and logs
+      # nothing but the store's allowlisted explanation.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/release/cws-upload.mjs
+          sparse-checkout-cone-mode: false
       - name: Fetch the release zip
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,9 +45,12 @@ jobs:
           CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
           PUBLISH: ${{ inputs.publish }}
+        shell: bash
         run: |
           set -euo pipefail
+          for s in "$CLIENT_ID" "$CLIENT_SECRET" "$REFRESH_TOKEN"; do if [ -n "$s" ]; then echo "::add-mask::$s"; fi; done
           [ -n "$CLIENT_ID" ] && [ -n "$CLIENT_SECRET" ] && [ -n "$REFRESH_TOKEN" ] || { echo "::error::CWS_CLIENT_ID / CWS_CLIENT_SECRET / CWS_REFRESH_TOKEN are not all set."; exit 1; }
-          args=(upload --source "$zip" --extension-id "$EXTENSION_ID")
-          [ "$PUBLISH" = "true" ] && args+=(--auto-publish)
-          npx --yes chrome-webstore-upload-cli@3 "${args[@]}"
+          args=(--source "$zip" --extension-id "$EXTENSION_ID")
+          [ "$PUBLISH" = "true" ] && args+=(--publish)
+          # A refusal stays an error here: this workflow exists to retry it.
+          node scripts/release/cws-upload.mjs "${args[@]}"

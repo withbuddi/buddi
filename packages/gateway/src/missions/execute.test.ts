@@ -275,6 +275,20 @@ describe('createMissionExecutor', () => {
     ]);
   });
 
+  it("answers a French mission in French: buddi's English lines around the prompt do not anchor the reply language", async () => {
+    const systems: string[] = [];
+    const french = "J'ai regardé tes comptes et il n'y a rien de nouveau cette semaine, donc le budget tient bien jusqu'à la fin du mois.";
+    const { db, deps: d } = deps();
+    const result = await createMissionExecutor({ ...d, provider: fakeProvider(french, systems) })(occurrence, {
+      ...mission,
+      prompt: 'Fais le point sur mes comptes de la semaine, avec les dépenses à venir.',
+    });
+    expect(String((db.messages[0]?.content as { text: string }[])[0]?.text)).toContain(MISSION_ASK_LINE);
+    expect(systems).toHaveLength(1);
+    expect(result.text).toBe(french);
+    expect(db.events.map((e) => e.kind)).not.toContain('run.language');
+  });
+
   it('tells the agent the run is scheduled and unattended', async () => {
     const systems: string[] = [];
     const { deps: d } = deps();

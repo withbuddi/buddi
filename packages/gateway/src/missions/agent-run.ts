@@ -76,6 +76,12 @@ const MISSION_TOOLS = ['mission.report', 'mission.silent'];
 export interface AgentRunPayload {
   agentId: string;
   prompt: string;
+  /**
+   * The owner's (or the reminder's) own words inside `prompt`, when the source
+   * composed buddi's English instructions around them. The reply-language
+   * guard reads these instead of the whole prompt.
+   */
+  ownerText?: string;
   /** Free-form routing hint from the source. Recorded, never authoritative. */
   conversationHint?: string;
   /** Written when the run suspends: the action it waits on and where to resume. */
@@ -101,6 +107,7 @@ export function agentRunPayload(payload: unknown): AgentRunPayload | null {
   return {
     agentId: p.agentId,
     prompt: p.prompt,
+    ...(typeof p.ownerText === 'string' ? { ownerText: p.ownerText } : {}),
     ...(typeof p.conversationHint === 'string' ? { conversationHint: p.conversationHint } : {}),
     ...(awaiting && typeof awaiting.actionId === 'string' && typeof awaiting.conversationId === 'string'
       ? { awaiting: { actionId: awaiting.actionId, conversationId: awaiting.conversationId } }
@@ -209,7 +216,7 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
       conversationId,
       ...(resuming
         ? { resume: payload.approval as ApprovalResume }
-        : { userMessage: payload.prompt }),
+        : { userMessage: payload.prompt, ...(payload.ownerText !== undefined ? { ownerText: payload.ownerText } : {}) }),
       surface: SCHEDULED_SURFACE,
       systemSuffix: payload.conversationHint?.startsWith(OFFER_HINT_PREFIX)
         ? `${SCHEDULED_RUN_SUFFIX} ${OFFER_RUN_SUFFIX}`

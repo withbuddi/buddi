@@ -113,24 +113,34 @@ it, so the front desk asks it once like any other gap.
 
 The runtime checks it (`packages/runtime/src/language.ts`), with no model: a
 stopword count for English, French, Spanish, German, Portuguese and Italian.
-Code, links, blockquotes and quoted passages are not counted; a word several
+Code, links, blockquotes and complete quoted passages (any length, line
+breaks included) are not counted; a word several
 languages share counts for each by a fraction; a language is named only with
 three hits at least (two for the owner's message), twice the runner-up's
-score, and a tenth of the words. When the final answer of a turn is
-confidently in a language that matches neither the owner's message (when
-that can be told) nor the profile language, it is held back the way the
+score, and a tenth of the words. The owner's message is read from its
+opening (the text before its first blank line, at most forty words), so an
+instruction over a pasted article counts, not the article; and only the
+owner's own words: a mission passes its prompt (`ownerText`), a reminder its
+text, not the English instructions buddi wraps around them. When the final
+answer of a turn is confidently in a language other than the anchor (the
+message's language when it can be told; else, for a message under eight
+words, the profile language), it is held back the way the
 grounding guard holds an answer back (not stored, not sent, streamed words
 withdrawn through `onRetract`) and the model gets one turn, not kept in the
 transcript: "Answer in <language>." (the message's language, else the
 profile's). Whatever it answers then is delivered, without a flag; an empty
-rewrite delivers the held-back answer. Each firing writes a `run.language`
+rewrite delivers the held-back answer. One retry per turn across this guard
+and the grounding guard: after a grounding retry the language is not
+checked, and a language rewrite that cites unread sources is delivered
+flagged `unchecked` rather than sent back again. Each firing writes a `run.language`
 event (`stage: retried`, or `kept` when the run had no budget left for a
 rewrite; `reply` and `target`).
 
 It never fires on a reply under 12 words or one that is mostly code, when the
 owner's message cannot be told and no profile language buddi can read is set,
-when the owner's message (or one of their last few) asks for a language ("in
-French", "auf Deutsch") or a translation, in a delegate's run (its answer is
+when the owner's message (or one of their last few) tells buddi the answer
+language ("answer in French", "a Spanish summary", "en français s'il te
+plaît"; not "French politics") or asks for a translation, in a delegate's run (its answer is
 quoted into its caller's), or on a decided approval coming back.
 
 ## Edition origin

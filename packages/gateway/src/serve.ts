@@ -897,7 +897,7 @@ export async function main(): Promise<void> {
       enqueueRun: async (input) => {
         const job = await enqueue(pool, {
           kind: AGENT_RUN_JOB_KIND,
-          payload: { agentId: input.agentId, prompt: input.prompt },
+          payload: { agentId: input.agentId, prompt: input.prompt, ...(input.ownerText ? { ownerText: input.ownerText } : {}) },
           dedupKey: input.dedupKey,
         });
         console.log(`reminder run queued: @${input.agentId} job ${job.id} (${input.dedupKey})`);

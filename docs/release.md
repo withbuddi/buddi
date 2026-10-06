@@ -45,7 +45,11 @@ Two runs of `.github/workflows/release.yml`:
    (buddi.app, DMG, Sparkle feed).
 
    The store step sends the release's `buddi-extension-<version>.zip` with
-   `chrome-webstore-upload-cli` and submits it for review. It needs three
+   `scripts/release/cws-upload.mjs` (the store API called directly, logging
+   only the store's own explanation, never the CLI's output) and submits it
+   for review. It runs only for a release npm tags `latest`: once a stable
+   version exists, pre-releases go out under `next` and do not reach the store
+   (send one by hand with the extension-store workflow). It needs three
    repository secrets minted once for the publisher account
    (`chrome-webstore-upload-keys`): `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`,
    `CWS_REFRESH_TOKEN`. Without them, or when the store refuses (a version

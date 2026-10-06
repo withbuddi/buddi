@@ -102,7 +102,7 @@ export function RevealToggle({
   size?: 'sm';
 }): JSX.Element {
   return (
-    <Button className="pp-reveal" size={size} aria-pressed={shown} onClick={onToggle}>
+    <Button className="pp-reveal" size={size} onClick={onToggle}>
       <Icon name="eye" size={size === 'sm' ? 14 : 16} />
       <span>{shown ? hide : show}</span>
     </Button>

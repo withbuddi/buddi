@@ -295,7 +295,7 @@ export interface ReminderTickDeps {
   now: () => Date;
   timezone: string;
   /** Puts one agent run on the queue. Idempotent on the dedup key. */
-  enqueueRun: (input: { agentId: string; prompt: string; dedupKey: string }) => Promise<void>;
+  enqueueRun: (input: { agentId: string; prompt: string; ownerText?: string; dedupKey: string }) => Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -338,6 +338,8 @@ export function createReminderTick(
         await deps.enqueueRun({
           agentId: reminder.agentId,
           prompt: reminderRunPrompt(reminder, deps.timezone),
+          // The reminder's own words, not the English around them, anchor the reply language.
+          ownerText: reminder.text,
           dedupKey: reminderDedupKey(reminder.id),
         });
         const marked = await markFired(deps.pool, reminder.id, now);

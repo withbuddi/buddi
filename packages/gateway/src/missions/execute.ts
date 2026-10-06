@@ -635,8 +635,10 @@ export function createMissionExecutor(
       ...(control?.resume
         ? { resume: control.resume.approval }
         : control?.answer
-          ? { userMessage: answeredMessage(control.answer.parked.question, control.answer.text ?? '', browses) }
-          : { userMessage }),
+          ? { userMessage: answeredMessage(control.answer.parked.question, control.answer.text ?? '', browses), ownerText: control.answer.text ?? '' }
+          : // The reply-language guard reads the owner's prompt, not the
+            // material and buddi's English lines composed around it.
+            { userMessage, ownerText: mission.prompt }),
       surface: scheduledSurface(reportMaxOf(mission.reportMax)),
       systemSuffix: SCHEDULED_RUN_SUFFIX,
       memoryPreamble: memoryPreambleFor(deps.pool),
