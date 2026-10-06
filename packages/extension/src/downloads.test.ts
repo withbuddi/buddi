@@ -39,9 +39,9 @@ describe('agent downloads in the owner’s Chrome', () => {
   it('hands buddi a download the agent’s click started, with where Chrome saved it', async () => {
     const { sent, watcher, chrome, settle } = setup();
     chrome.items.push(statement);
-    watcher.begin('s1', ['https://bank.example/accounts']);
+    const action = watcher.begin('s1', ['https://bank.example/accounts']);
     chrome.create({ ...statement, state: 'in_progress' });
-    watcher.end('s1');
+    watcher.end(action);
     chrome.finish(7);
     await settle();
     expect(sent).toEqual([{ type: 'download', session: 's1', path: '/Users/owner/Downloads/transactions.csv', filename: 'transactions.csv',
@@ -54,10 +54,10 @@ describe('agent downloads in the owner’s Chrome', () => {
     const other = { ...statement, id: 10, byExtensionId: 'other' };
     chrome.items.push(statement, { ...statement, id: 8 }, news, other);
     chrome.create({ ...statement, id: 8 }); // nothing armed yet
-    watcher.begin('s1', ['https://bank.example/accounts']);
+    const action = watcher.begin('s1', ['https://bank.example/accounts']);
     chrome.create(news);
     chrome.create(other);
-    watcher.end('s1');
+    watcher.end(action);
     tick(DOWNLOAD_GRACE_MS + 1);
     chrome.create(statement); // after the grace: the owner's
     for (const id of [7, 8, 9, 10]) chrome.finish(id);
@@ -69,8 +69,7 @@ describe('agent downloads in the owner’s Chrome', () => {
     const { sent, watcher, chrome, settle, tick } = setup();
     const blob = { ...statement, id: 11, referrer: '', url: 'blob:https://bank.example/1f2e', filename: '/Users/owner/Downloads/statement.pdf', mime: 'application/pdf' };
     chrome.items.push(blob);
-    watcher.begin('s1', ['https://bank.example/accounts']);
-    watcher.end('s1');
+    watcher.end(watcher.begin('s1', ['https://bank.example/accounts']));
     tick(DOWNLOAD_GRACE_MS - 1);
     chrome.create(blob);
     chrome.finish(11);
@@ -87,6 +86,25 @@ describe('agent downloads in the owner’s Chrome', () => {
     chrome.finish(7, 'interrupted');
     watcher.forget('s1');
     chrome.finish(12);
+    await settle();
+    expect(sent).toEqual([]);
+  });
+
+  it('tracks the sites of the current command only: a bank the agent left is the owner’s again', async () => {
+    const { sent, watcher, chrome, settle, tick } = setup();
+    chrome.items.push(statement, { ...statement, id: 13 });
+    // The agent was on the bank, then moved on to a shop; that first command's seconds run out.
+    watcher.end(watcher.begin('s1', ['https://bank.example/accounts']), ['https://bank.example/accounts']);
+    tick(DOWNLOAD_GRACE_MS + 1);
+    const shopping = watcher.begin('s1', ['https://shop.example/cart']);
+    // The owner downloads from the bank while the agent shops: not the agent's.
+    chrome.create(statement);
+    chrome.finish(7);
+    // Each command's grace runs out on its own: a long one does not keep an old site claimed.
+    watcher.end(shopping, ['https://shop.example/cart']);
+    tick(DOWNLOAD_GRACE_MS - 1);
+    chrome.create({ ...statement, id: 13 });
+    chrome.finish(13);
     await settle();
     expect(sent).toEqual([]);
   });

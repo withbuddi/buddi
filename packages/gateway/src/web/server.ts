@@ -127,7 +127,7 @@ import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
-import { createVault } from '@buddi/core';
+import { createVault, saveArtifactReporting } from '@buddi/core';
 import { beginOnboarding, completeOnboarding, getOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
@@ -2059,9 +2059,9 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, q.has('conversationId') && q.has('agentId')
             ? browser.status({ agentId: q.get('agentId')!, conversationId: q.get('conversationId')! }) : browser.status());
         case '/api/browser/downloads': {
-          // The agents' downloads area: how much it holds, by agent, and its caps (Settings → Browser).
-          if (!browser.downloadUsage) return sendJson(res, 200, { bytes: 0, files: 0, agents: [], fileCap: 0, agentCap: 0, retentionDays: 0 });
-          return sendJson(res, 200, await browser.downloadUsage());
+          // The agents' downloads area: how much it holds, by agent, its caps, and the files waiting (Settings → Browser).
+          if (!browser.downloadUsage) return sendJson(res, 200, { bytes: 0, files: 0, agents: [], fileCap: 0, agentCap: 0, retentionDays: 0, waiting: [] });
+          return sendJson(res, 200, await downloadsView(browser));
         }
         case '/api/browser/telemetry': {
           // Stops by cause, cards and routes over the last week: how flakiness is seen to fall.
@@ -3192,7 +3192,27 @@ export function createWebApp(deps: WebServerDeps): Server {
     /* Clear the agents' downloads area. Files keeps the copies registered there. */
     if (path === '/api/browser/downloads/clear') {
       if (!browser.clearDownloads) return sendJson(res, 409, { error: 'This host keeps no downloads.' });
-      return sendJson(res, 200, await browser.clearDownloads());
+      await browser.clearDownloads();
+      return sendJson(res, 200, await downloadsView(browser));
+    }
+    /*
+     * File it: register one waiting download in Files, as the agent's, and
+     * drop it from the area once Files holds it (docs/browser.md, "Downloads").
+     */
+    if (path === '/api/browser/downloads/file') {
+      const body = await readJsonBody(req) as { id?: unknown };
+      if (!browser.readWaitingDownload || !browser.removeWaitingDownload) return sendJson(res, 409, { error: 'This host keeps no downloads.' });
+      if (typeof body?.id !== 'string' || body.id.length > 400) return sendJson(res, 400, { error: 'Name the file to file: { id }.' });
+      let waiting: Awaited<ReturnType<NonNullable<BrowserController['readWaitingDownload']>>>;
+      try { waiting = await browser.readWaitingDownload(body.id); }
+      catch (error) { return sendJson(res, 404, { error: error instanceof Error ? error.message : String(error) }); }
+      const { row } = await saveArtifactReporting(deps.pool, {
+        bytes: waiting.bytes, mime: waiting.mime, filename: waiting.name, caption: 'Downloaded in the browser',
+        source: { surface: 'browser', chatId: null, messageId: null }, createdBy: waiting.agent,
+      }, deps.env ?? process.env);
+      await deps.pool.query(`insert into core.plugin_files (plugin, artifact_id) values ('browser', $1) on conflict do nothing`, [row.id]);
+      await browser.removeWaitingDownload(body.id).catch(() => undefined);
+      return sendJson(res, 200, { ...(await downloadsView(browser)), filed: { artifactId: row.id, name: row.filename ?? waiting.name } });
     }
     if (path === '/api/browser/settings') {
       const body = await readJsonBody(req);
@@ -4629,6 +4649,13 @@ export function createWebApp(deps: WebServerDeps): Server {
  * Start the dashboard. The token is resolved (and created on first run) before
  * the socket is bound, so a process that cannot keep a secret never listens.
  */
+/** The downloads area for Settings → Browser: usage, plus the files waiting there (at most 200). */
+async function downloadsView(browser: BrowserController): Promise<Record<string, unknown>> {
+  const usage = await browser.downloadUsage!();
+  const waiting = browser.waitingDownloads ? (await browser.waitingDownloads()).slice(0, 200) : [];
+  return { ...usage, waiting };
+}
+
 export async function startWebServer(
   deps: Omit<WebServerDeps, 'token'> & { token?: string },
 ): Promise<WebServer> {

@@ -20,6 +20,7 @@ export function browserHost(
   return hostBrowser(pluginDir('browser', env), env, {
     ...options,
     lookup: (policy) => guardedLookup(undefined, policy),
+    dataDir: dataDir(env),
   });
 }
 

@@ -360,12 +360,24 @@ statement PDF, an export. buddi keeps it so the agent can pass it on.
   The agent passes `artifactId` to the owning plugin's import tool (finance
   imports statements) and does not paste the file into its reply.
 - **Settings → Browser & apps → Downloads** says how many files are waiting
-  (normally none), the rules, and **Clear** (`GET /api/browser/downloads`,
-  `POST /api/browser/downloads/clear`). Clearing leaves Files alone.
+  (normally none) and the rules, and lists each waiting file with its agent
+  and day and a **File it** button that registers it in Files again, as the
+  agent's ("Downloaded in the browser"; the address it came from is not kept
+  for a leftover). **Clear** asks first, with the count and a line that these
+  copies are not in Files, so clearing deletes them for good
+  (`GET /api/browser/downloads` with its `waiting` list,
+  `POST /api/browser/downloads/file`, `POST /api/browser/downloads/clear`).
+  Clearing leaves Files alone.
 
-**buddi's own browser** accepts downloads into its profile's temporary folder
+**buddi's own browser** accepts downloads into Playwright's temporary folder
 and copies each finished one into the area; a download from a tab no
-conversation holds is cancelled, as before.
+conversation holds is cancelled, as before. While a transfer runs its partial
+file is measured four times a second: past 50 MB it is cancelled there and
+then, and one still running after five minutes is cancelled too, so a huge or
+endless response never fills the disk before the size check. Cancelling the
+run cancels a transfer the action is waiting on. Chromium's own copy is
+deleted as soon as the file was taken or refused, and any left uncollected
+when the page closes.
 
 **Your Chrome.** The extension needs Chrome's optional `downloads` permission,
 which it never asks for at install: the popup shows **Allow downloads**, and
@@ -374,14 +386,23 @@ Chrome only asks from a click there. Once granted, while an agent's
 tabs, and for 15 seconds after, a download that starts from the same site as
 one of those tabs is the agent's. When it completes the extension sends buddi
 a `download` frame with the path Chrome saved it at, its address, type and
-size; buddi reads that file only if it is under the owner's home folder, is a
-plain file (not a link), was written in the last 15 minutes and is exactly the
-size Chrome reported, and only within five minutes of that session's last
-action. The file also stays in the owner's own Downloads folder, where Chrome
-put it. Downloads the owner starts are not touched: none while no agent acts,
-none from another site, none another extension started. Chrome's download
-record names no tab, so a download the owner starts from the very site the
-agent is on, in those same seconds, would be taken for the agent's.
+size; buddi reads that file only if its complete path, every link resolved,
+is inside the folder Chrome saves to (`~/Downloads`, or the browser setting
+`downloadsFolder` when the owner's Chrome saves elsewhere: an absolute path
+or one starting with `~/`, set with `POST /api/browser/settings`), under no
+dot-folder and not in buddi's data dir; it must be a plain file (not a link),
+written in the last 15 minutes and exactly the size Chrome reported, and only
+within five minutes of that session's last action. buddi opens it once and
+checks and reads it through that one descriptor, so a file swapped in after
+the check is not what gets read. The file also stays in the owner's own
+Downloads folder, where Chrome put it. Downloads the owner starts are not
+touched: none while no agent acts, none from another site, none another
+extension started. Each agent command keeps its own sites (the tabs' sites
+when it starts and when it ends) and its own 15 seconds: once they are over,
+a site an earlier command visited is not claimed any more, so a bank the
+agent has left is the owner's again. Chrome's download record names no tab,
+so a download the owner starts from the very site the agent is on, in those
+same seconds, would be taken for the agent's.
 
 What this cannot do without a native component: the extension reads nothing
 itself, buddi reads the finished file from disk, which works because the

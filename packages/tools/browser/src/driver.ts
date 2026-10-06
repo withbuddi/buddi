@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import type { Page, Locator, ElementHandle, CDPSession, Download } from 'playwright';
-import type { PendingDownload } from './downloads.js';
+import { watchTransfer, type PendingDownload } from './downloads.js';
 import { PlaywrightHost, type DriverOptions, type TabOwner } from './host.js';
 import { checkSecretOrigin, fieldOrigin } from './secrets.js';
 import { LOGIN_BINDING, LOGIN_WORLD, loginWatchSource, readLoginPayload } from './logins.js';
@@ -27,6 +28,24 @@ function describeElement(el: Element) {
 }
 type ElementDescription = ReturnType<typeof describeElement>;
 
+/**
+ * Where Chromium writes a Playwright download: `<artifacts>/<guid>`, with
+ * `.crdownload` on it while the transfer runs. Playwright keeps the path on
+ * the download's artifact and does not publish it, so this reads it
+ * defensively: without it only the timeout and the store's own cap hold.
+ */
+export function downloadLocalPath(download: Download): string | undefined {
+  const local = (download as unknown as { _artifact?: { _initializer?: { absolutePath?: unknown } } })._artifact?._initializer?.absolutePath;
+  return typeof local === 'string' && local !== '' ? local : undefined;
+}
+
+/** Bytes Chromium holds for a download so far, partial or finished. */
+async function bytesSoFar(local: string | undefined): Promise<number | undefined> {
+  if (!local) return undefined;
+  const sizes = await Promise.all([`${local}.crdownload`, local].map((file) => stat(file).then((info) => info.size, () => 0)));
+  return Math.max(...sizes);
+}
+
 /** One character the page would have typed, as opposed to a named key. */
 function printableKey(key: string): boolean {
   return [...key].length === 1 && key.codePointAt(0)! >= 0x20 && key.codePointAt(0)! !== 0x7f;
@@ -46,13 +65,23 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
   #starting?: Promise<void>;
   constructor(readonly options: DriverOptions, host?: PlaywrightHost) { this.host = host ?? new PlaywrightHost(options); }
   #downloads: PendingDownload[] = [];
-  /** A file one of this conversation's tabs started: read once it finishes, when the service asks. */
+  /**
+   * A file one of this conversation's tabs started: read once it finishes,
+   * when the service asks. Watched while it runs, and stopped past the
+   * per-file cap or the timeout; Chromium's copy is deleted once the service
+   * took it or refused it.
+   */
   download(download: Download): void {
     if (this.#downloads.length >= 20) { void download.cancel().catch(() => {}); return; }
+    const local = downloadLocalPath(download);
+    const outcome = watchTransfer({ done: download.failure(), size: () => bytesSoFar(local), cancel: () => download.cancel() });
     this.#downloads.push({
       filename: download.suggestedFilename(), url: download.url(),
       read: { stream: () => download.createReadStream() },
-      failure: () => download.failure(),
+      failure: () => outcome,
+      cancel: () => download.cancel(),
+      // A cancelled transfer has no copy left to delete; Playwright says so with an error.
+      cleanup: () => download.delete().catch(() => undefined),
     });
   }
   takeDownloads(): PendingDownload[] { return this.#downloads.splice(0); }
@@ -428,6 +457,8 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
   }
   async close(): Promise<void> {
     ++this.#generation; this.#invalidate(); this.#picture = undefined; this.#page = undefined;
+    // Downloads nobody collected: stopped, and Chromium's copies removed.
+    for (const pending of this.#downloads.splice(0)) { void pending.cancel?.().catch(() => {}); void pending.cleanup?.().catch(() => {}); }
     await this.hand.stop();
     await this.host.release(this); this.#tabs.clear();
   }

@@ -14,9 +14,9 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type AgentEngine, type BrowserRoute, type BrowserRouteStatus, type BrowserStatus, type ControlSettings, type ExtensionState } from '../api';
-import { fmtClock, fmtTime } from '../format';
+import { fmtClock, fmtDay, fmtTime } from '../format';
 import { chatRoute, parsePairingCode, pluginSettingsRoute, withoutPairingCode } from '../routes';
-import { ActionMenu, Avatar, Icon, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, Panel, Pill, Segment, Sheet, Spacer, Switch, Toolbar, useAsync } from '../ui';
+import { ActionMenu, Avatar, Icon, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Modal, Notice, Panel, Pill, Segment, Sheet, Spacer, Switch, Toolbar, useAsync } from '../ui';
 import { useThisMachine } from '../useThisMachine';
 import { formatBytes } from '../chat/attachments';
 
@@ -202,9 +202,20 @@ export function downloadsLine(usage: { bytes: number; files: number; fileCap: nu
   return `${held} · kept ${usage.retentionDays} days, at most ${formatBytes(usage.fileCap)} a file`;
 }
 
+/** "2 files are not in Files…": what Clear's confirmation says before anything goes. */
+export function clearWarning(files: number): string {
+  return `${files === 1 ? 'This file is' : `These ${files} files are`} not in Files: ${files === 1 ? 'it is the only copy' : 'they are the only copies'}. Clearing deletes ${files === 1 ? 'it' : 'them'} for good. File ${files === 1 ? 'it' : 'the ones you want'} first.`;
+}
+
 function DownloadsPanel({ busy, run }: { busy: boolean; run: (action: () => Promise<unknown>) => Promise<void> }): JSX.Element {
   const usage = useAsync(() => api.browserDownloads(), [], 30_000);
+  const agents = useAsync(() => api.agents(), []);
+  const [confirming, setConfirming] = useState(false);
   const data = usage.data;
+  const waiting = data?.waiting ?? [];
+  const names = new Map((agents.data?.agents ?? []).map((agent) => [agent.id, agent.name]));
+  const fileIt = (id: string) => void run(async () => { await api.fileBrowserDownload(id); usage.reload(); });
+  const clear = () => void run(async () => { setConfirming(false); await api.clearBrowserDownloads(); usage.reload(); });
   return (
     <Panel title="Downloads" flush>
       <div className="ui-list">
@@ -215,10 +226,32 @@ function DownloadsPanel({ busy, run }: { busy: boolean; run: (action: () => Prom
             <span className="ui-list-sub">In your Chrome, agents’ downloads need the extension’s Downloads permission: open the buddi extension and press Allow downloads. Downloads you start yourself are never read.</span>
           </span>
           <span className="ui-list-side">
-            <Button size="sm" disabled={busy || !data || data.files === 0} onClick={() => void run(async () => { await api.clearBrowserDownloads(); usage.reload(); })}>Clear</Button>
+            <Button size="sm" disabled={busy || !data || data.files === 0} onClick={() => setConfirming(true)}>Clear</Button>
           </span>
         </div>
+        {waiting.map((file) => (
+          <div className="ui-list-row" key={file.id} data-testid="download-waiting">
+            <span className="ui-list-main">
+              <span className="ui-list-title">{file.name}</span>
+              <span className="ui-list-sub">{`${names.get(file.agent) ?? file.agent} · ${fmtDay(file.day)} · ${formatBytes(file.size)} · not in Files yet`}</span>
+            </span>
+            <span className="ui-list-side">
+              <Button size="sm" variant="accent" disabled={busy} onClick={() => fileIt(file.id)}>File it</Button>
+            </span>
+          </div>
+        ))}
       </div>
+      {confirming && data ? (
+        <Modal title={`Clear ${data.files} ${data.files === 1 ? 'download' : 'downloads'}?`} onClose={() => setConfirming(false)}
+          foot={(
+            <>
+              <Button variant="ghost" onClick={() => setConfirming(false)}>{data.files === 1 ? 'Keep it' : 'Keep them'}</Button>
+              <Button variant="danger" disabled={busy} onClick={clear}>{`Clear ${data.files}`}</Button>
+            </>
+          )}>
+          <p>{clearWarning(data.files)}</p>
+        </Modal>
+      ) : null}
     </Panel>
   );
 }

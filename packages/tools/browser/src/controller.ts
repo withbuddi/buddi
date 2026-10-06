@@ -16,7 +16,7 @@ import { agoText, cardAnswer, ownerClock, chooseRoute, detectSignedOut, detectWa
 import { BrowserTelemetry, missionMark, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
 import { canonicalOrigin, fieldBoundTo } from './secrets.js';
 import { LoginKeeper } from './logins.js';
-import { DownloadStore, type DownloadStoreOptions, type DownloadUsage } from './downloads.js';
+import { DownloadStore, type DownloadStoreOptions, type DownloadUsage, type WaitingDownload } from './downloads.js';
 import { LOGIN_GONE, LOGIN_NOT_KEPT, type LoginAck, type LoginCheck, type SeenLoginReport } from './types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -112,12 +112,15 @@ export class HostController implements BrowserController {
     downloadsDir?: string;
     /** Caps and retention for it (tests shrink them). */
     downloadLimits?: DownloadStoreOptions;
+    /** buddi's data dir, never read as a Chrome download; the parent of this plugin's area by default. */
+    dataDir?: string;
   } = {}) {
     this.#extension = options.extensionBridge;
     this.logins = new LoginKeeper(path.join(dir, 'logins.json'), options.service?.now ? { now: options.service.now } : {});
     this.telemetry = new BrowserTelemetry(path.join(dir, 'telemetry.jsonl'), options.service?.now);
     this.downloads = new DownloadStore(options.downloadsDir ?? path.join(path.dirname(dir), 'downloads'),
-      { ...(options.service?.now ? { now: options.service.now } : {}), ...options.downloadLimits });
+      { ...(options.service?.now ? { now: options.service.now } : {}), chromeFolder: () => this.#settings.downloadsFolder,
+        dataDir: options.dataDir ?? path.dirname(dir), ...options.downloadLimits });
     const self = this;
     const hostOptions: DriverOptions = {
       profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts,
@@ -334,6 +337,12 @@ export class HostController implements BrowserController {
   downloadUsage(): Promise<DownloadUsage> { return this.downloads.usage(); }
   /** Empty the downloads area (Files keeps its copies). */
   clearDownloads(): Promise<DownloadUsage> { return this.downloads.clear(); }
+  /** The files waiting in the downloads area because they could not be filed. */
+  waitingDownloads(): Promise<WaitingDownload[]> { return this.downloads.waiting(); }
+  /** One waiting file's bytes, to file it again (the gateway registers it in Files). */
+  readWaitingDownload(id: string): ReturnType<DownloadStore['readWaiting']> { return this.downloads.readWaiting(id); }
+  /** Drop a waiting file once Files holds it. */
+  removeWaitingDownload(id: string): Promise<void> { return this.downloads.removeWaiting(id); }
   #now(): number { return this.options.service?.now?.() ?? Date.now(); }
   /** The global Stop, if it still holds; an expired one is cleared here. */
   #activeStop(): StopRecord | undefined {

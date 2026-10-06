@@ -4,9 +4,9 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserRouteStatus, type BrowserStatus } from '../api';
 import { pluginSettingsRoute } from '../routes';
-import { appsProvided, appWord, Browser, chromeState, downloadsLine, installTarget, lookingLine, olderExtension, pairWithCode, SANDBOX_COMMAND, SELF_PAIRED_WINDOW_MS, STORE_URL } from './Browser';
+import { appsProvided, appWord, Browser, chromeState, clearWarning, downloadsLine, installTarget, lookingLine, olderExtension, pairWithCode, SANDBOX_COMMAND, SELF_PAIRED_WINDOW_MS, STORE_URL } from './Browser';
 
-vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), browserCheck: vi.fn(), browserInstall: vi.fn(), browserDownloads: vi.fn(), clearBrowserDownloads: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn(), agents: vi.fn(), setAgentEngine: vi.fn() }, ApiError: class extends Error {} }));
+vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), browserCheck: vi.fn(), browserInstall: vi.fn(), browserDownloads: vi.fn(), clearBrowserDownloads: vi.fn(), fileBrowserDownload: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn(), agents: vi.fn(), setAgentEngine: vi.fn() }, ApiError: class extends Error {} }));
 
 const settings = { version: 2 as const, yourChrome: true, yourApps: 'on' as const, signInSites: [] as string[], defaultRoute: 'auto' as const, stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false };
 const routes = (over: Partial<Record<'own' | 'chrome' | 'apps', Partial<BrowserRouteStatus> | null>> = {}): BrowserRouteStatus[] => [
@@ -430,14 +430,40 @@ describe('Downloads: what agents downloaded, and Clear', () => {
     expect(downloadsLine(held)).toBe('2 files waiting · 35 KB · kept 30 days, at most 50.0 MB a file');
     expect(downloadsLine({ ...held, files: 0, bytes: 0 })).toBe('Nothing waiting · kept 30 days, at most 50.0 MB a file');
   });
-  it('clears the area and explains the Chrome permission', async () => {
-    vi.mocked(api.browserDownloads).mockResolvedValue(held);
-    vi.mocked(api.clearBrowserDownloads).mockResolvedValue({ ...held, files: 0, bytes: 0, agents: [] });
+  const waiting = [
+    { id: 'cfo/2026-10-05/april.csv', agent: 'cfo', day: '2026-10-05', name: 'april.csv', size: 18_000, mime: 'text/csv' },
+    { id: 'cfo/2026-10-04/march.csv', agent: 'cfo', day: '2026-10-04', name: 'march.csv', size: 18_000, mime: 'text/csv' },
+  ];
+  it('lists what waits with its agent and day, and files one into Files', async () => {
+    vi.mocked(api.agents).mockResolvedValue({ agents: [{ id: 'cfo', name: 'CFO' }], engines: [], providers: [] } as never);
+    vi.mocked(api.browserDownloads).mockResolvedValue({ ...held, waiting });
+    vi.mocked(api.fileBrowserDownload).mockResolvedValue({ ...held, files: 1, waiting: waiting.slice(1), filed: { artifactId: 'a1', name: 'april.csv' } });
+    render(<Browser />);
+    const rows = await screen.findAllByTestId('download-waiting');
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]!).getByText('april.csv')).toBeInTheDocument();
+    expect(await within(rows[0]!).findByText('CFO · 5 October · 18 KB · not in Files yet')).toBeInTheDocument();
+    fireEvent.click(within(rows[0]!).getByRole('button', { name: 'File it' }));
+    await waitFor(() => expect(api.fileBrowserDownload).toHaveBeenCalledWith('cfo/2026-10-05/april.csv'));
+  });
+  it('asks before Clear, with the count and that these copies are not in Files, and explains the Chrome permission', async () => {
+    vi.mocked(api.browserDownloads).mockResolvedValue({ ...held, waiting });
+    vi.mocked(api.clearBrowserDownloads).mockResolvedValue({ ...held, files: 0, bytes: 0, agents: [], waiting: [] });
     render(<Browser />);
     const line = await screen.findByTestId('downloads-row');
     expect(await within(line).findByText(/2 files waiting · 35 KB/)).toBeInTheDocument();
     expect(within(line).getByText(/Allow downloads/)).toBeInTheDocument();
     fireEvent.click(within(line).getByRole('button', { name: 'Clear' }));
+    // Nothing goes on the first press: a confirmation says how many and that Files has no copy.
+    expect(api.clearBrowserDownloads).not.toHaveBeenCalled();
+    expect(await screen.findByText('Clear 2 downloads?')).toBeInTheDocument();
+    expect(screen.getByText(clearWarning(2))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep them' }));
+    expect(api.clearBrowserDownloads).not.toHaveBeenCalled();
+    fireEvent.click(within(line).getByRole('button', { name: 'Clear' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear 2' }));
     await waitFor(() => expect(api.clearBrowserDownloads).toHaveBeenCalled());
+    expect(clearWarning(2)).toBe('These 2 files are not in Files: they are the only copies. Clearing deletes them for good. File the ones you want first.');
+    expect(clearWarning(1)).toBe('This file is not in Files: it is the only copy. Clearing deletes it for good. File it first.');
   });
 });

@@ -349,9 +349,9 @@ export class BrowserCommands implements Executor {
     cancel.check();
     // An agent's action that can start a download: its downloads are watched for while it runs. The owner's own hand is not.
     if (this.downloads?.attached && !command.owner && DOWNLOAD_COMMANDS.has(command.name)) {
-      this.downloads.begin(command.session, await this.#tabUrls(command.session));
+      const action = this.downloads.begin(command.session, await this.#tabUrls(command.session));
       try { return await this.#dispatch(command, cancel); }
-      finally { this.downloads.end(command.session, await this.#tabUrls(command.session).catch(() => [])); }
+      finally { this.downloads.end(action, await this.#tabUrls(command.session).catch(() => [])); }
     }
     return this.#dispatch(command, cancel);
   }

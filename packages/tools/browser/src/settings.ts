@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -52,6 +53,14 @@ export const settingsSchema = z.object({
    * you", in minutes (docs/browser.md, "Missions").
    */
   missionWaitMinutes: z.number().int().min(5).max(24 * 60).default(60),
+  /**
+   * The folder the owner's Chrome saves downloads to, when it is not
+   * `~/Downloads`: an agent's download in the owner's Chrome is read only from
+   * inside it (docs/browser.md, "Downloads"). Absolute, or starting with `~/`.
+   */
+  downloadsFolder: z.preprocess((value) => (value === null || value === '' ? undefined : value), z.string().trim().min(1).max(1024)
+    .refine((folder) => path.isAbsolute(folder) || folder === '~' || folder.startsWith('~/'), 'a folder is an absolute path, like ~/Downloads')
+    .optional()),
 }).strict();
 export type ControlSettings = z.infer<typeof settingsSchema>;
 

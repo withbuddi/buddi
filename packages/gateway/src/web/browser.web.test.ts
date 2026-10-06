@@ -1,6 +1,10 @@
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { Readable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, createPluginHost, hostBindingOf, type AgentCatalog, type CoreToolContext } from '@buddi/core';
-import { BrowserService, BrowserManager, commandSchema, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
+import { BrowserService, BrowserManager, DownloadStore, commandSchema, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
 import { mintTicket } from './token.js';
 import { csrfCookieName, portOf, sessionCookieName } from './http.js';
@@ -289,6 +293,63 @@ describe('browser dashboard endpoints', () => {
     expect(started.status).toBe(202);
     expect(await started.json()).toMatchObject({ browser: { install: { state: 'running' } } });
     expect(installBrowser).toHaveBeenCalledOnce();
+  });
+  it('lists the downloads waiting, files one into Files as its agent’s, and clears the rest', async () => {
+    const scratch = await mkdtemp(path.join(tmpdir(), 'buddi-web-downloads-'));
+    try {
+      const store = new DownloadStore(path.join(scratch, 'downloads'), { now: () => Date.parse('2026-10-05T09:00:00Z') });
+      for (const name of ['march.csv', 'april.csv']) {
+        await store.save('cfo', { filename: name, url: 'https://bank.example/x', read: { stream: async () => Readable.from([Buffer.from(`rows of ${name}`)]) } });
+      }
+      const driver: BrowserDriver = { start: vi.fn(), perform: vi.fn(), observe: vi.fn(), screenshot: vi.fn(), close: vi.fn() };
+      const browser: BrowserController = new BrowserService(driver); services.push(browser); await browser.enable();
+      Object.assign(browser, {
+        downloadUsage: () => store.usage(), clearDownloads: () => store.clear(), waitingDownloads: () => store.waiting(),
+        readWaitingDownload: (id: string) => store.readWaiting(id), removeWaitingDownload: (id: string) => store.removeWaiting(id),
+      });
+      const queries: Array<{ text: string; params: unknown[] }> = [];
+      const pool = { query: async (text: string, params: unknown[] = []) => {
+        queries.push({ text, params });
+        if (/insert into core\.artifacts/.test(text)) {
+          return { rows: [{ id: '11111111-2222-4333-8444-555555555555', kind: 'document', mime: params[1], filename: params[2], size_bytes: params[3], sha256: params[4], storage_path: params[5], caption: params[9], created_at: new Date(), inserted: true }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      } };
+      const app = await startWebServer({ pool: pool as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
+        ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(), env: { BUDDI_DATA_DIR: path.join(scratch, 'data') },
+        config: { enabled: true, host: '127.0.0.1', port: 0 }, openAccess: true, token: TOKEN, browser });
+      instances.push(app);
+      const origin = `http://127.0.0.1:${app.port}`;
+      const headers = await session(origin);
+      const listed = await (await fetch(`${origin}/api/browser/downloads`, { headers })).json() as { files: number; waiting: Array<{ id: string; agent: string; day: string; name: string }> };
+      expect(listed.files).toBe(2);
+      expect(listed.waiting.map((w) => [w.id, w.agent, w.day, w.name])).toEqual([
+        ['cfo/2026-10-05/april.csv', 'cfo', '2026-10-05', 'april.csv'], ['cfo/2026-10-05/march.csv', 'cfo', '2026-10-05', 'march.csv']]);
+      // Behind CSRF like every write.
+      expect((await fetch(`${origin}/api/browser/downloads/file`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: JSON.stringify({ id: listed.waiting[0]!.id }) })).status).toBe(403);
+      const filed = await fetch(`${origin}/api/browser/downloads/file`, { method: 'POST', headers, body: JSON.stringify({ id: 'cfo/2026-10-05/april.csv' }) });
+      expect(filed.status).toBe(200);
+      const after = await filed.json() as { files: number; filed: { artifactId: string; name: string }; waiting: Array<{ id: string }> };
+      expect(after.filed).toEqual({ artifactId: '11111111-2222-4333-8444-555555555555', name: 'april.csv' });
+      expect(after.files).toBe(1);
+      expect(after.waiting.map((w) => w.id)).toEqual(['cfo/2026-10-05/march.csv']);
+      const insert = queries.find((q) => /insert into core\.artifacts/.test(q.text))!;
+      // Filed as the agent's, from the browser, with its name and type.
+      expect(insert.params.slice(1, 3)).toEqual(['text/csv', 'april.csv']);
+      expect(insert.params[6]).toBe('browser');
+      expect(insert.params[10]).toBe('cfo');
+      expect(queries.some((q) => /insert into core\.plugin_files/.test(q.text) && q.params[0] === '11111111-2222-4333-8444-555555555555')).toBe(true);
+      // Not a file of the area: 404 with a sentence, nothing read from outside it.
+      const outside = await fetch(`${origin}/api/browser/downloads/file`, { method: 'POST', headers, body: JSON.stringify({ id: '../../etc/passwd' }) });
+      expect(outside.status).toBe(404);
+      expect(await outside.json()).toEqual({ error: 'That file is not in the downloads area.' });
+      expect((await fetch(`${origin}/api/browser/downloads/file`, { method: 'POST', headers, body: '{}' })).status).toBe(400);
+      const cleared = await (await fetch(`${origin}/api/browser/downloads/clear`, { method: 'POST', headers, body: '{}' })).json() as { files: number; waiting: unknown[] };
+      expect(cleared).toMatchObject({ files: 0, waiting: [] });
+      expect(await readdir(path.join(scratch, 'downloads'))).toEqual([]);
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   });
   it('checks that the browser launches, for the owner only, and relays the reason when it does not', async () => {
     const { origin, browser } = await setup(); const headers = await session(origin);
