@@ -50,7 +50,8 @@ export function describeSecretUse(args: SecretUseApproval): EffectDescription {
       rule: args.rule,
     },
     preview:
-      `${args.plugin} asks to use your secret "${args.secret}" for ${destination}. ` +
+      // The ask on a line of its own: it is the card's heading on Telegram and in notifications.
+      `${args.plugin} asks to use your secret "${args.secret}" for ${destination}.\n` +
       (args.rule === 'every-time'
         ? 'This use only: every use of it there asks you.'
         : 'Approve once, and later uses of it there go ahead without asking.'),

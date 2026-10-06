@@ -4,6 +4,9 @@
  * engine meanwhile answers it too, approving starts the download, and once the
  * engine is here a later plugin gets no card. The download is served by a fake
  * server on 127.0.0.1; the database is created by this suite and dropped.
+ *
+ * Isolated: an explicit throwaway `DATABASE_URL` and the memory vault, never
+ * the keychain and never the dev database's port (`isolatedTestDatabaseUrl`).
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,16 +15,19 @@ import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createPool, migrateCore } from '../db.js';
 import { urlForDatabase } from '../backup/restore.js';
-import { testDatabaseUrl } from '../testing/database-url.js';
+import { isolatedTestDatabaseUrl } from '../testing/database-url.js';
+import { decideApproval } from '../actions/approvals.js';
+import { executeApproved } from '../actions/execute.js';
+import { ToolRegistry } from '../registry.js';
 import { configurePluginHost, createPluginHost, hostBindingOf, resetPluginHost } from '../host/build.js';
 import type { CoreToolContext, PluginManifest } from '../tools.js';
 import { configureRuntimes, resetRuntimesConfig } from './config.js';
 import { createRuntimesManifest, RUNTIMES_TOOL, type RuntimesDownload } from './consent.js';
 import { startFakeServer, sha256, tgz, type FakeServer } from './__fixtures__/server.js';
 import { modelState, resetModels, startModelDownload } from './models.js';
-import { onnxState, resetOnnxRuntime, startOnnxDownload } from './onnx.js';
+import { onnxState, removeOnnxRuntime, resetOnnxRuntime, startOnnxDownload } from './onnx.js';
 
-const databaseUrl = await testDatabaseUrl();
+const databaseUrl = isolatedTestDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const DB = `buddi_runtimes_${process.pid}`;
 
@@ -39,16 +45,20 @@ suite('one card for a local model', () => {
   let data: string;
   let server: FakeServer;
   const now = new Date('2026-10-06T10:00:00Z');
+  const told: string[] = [];
 
   const manifest = (name: string): PluginManifest =>
     ({ name, version: '1.0.0', schema: name, migrationsDir: '', tools: [], uses: ['onnx'] }) as unknown as PluginManifest;
   const hostFor = (name: string) => createPluginHost(hostBindingOf(manifest(name)), { db: pool, now: () => now, timezone: 'UTC', agentId: 'assistant' });
   const cards = async (): Promise<Array<{ id: string; preview: string; canonical_args: RuntimesDownload }>> =>
     (await pool.query(`select id, preview, canonical_args from core.actions where tool = $1 order by created_at`, [RUNTIMES_TOOL])).rows;
+  // The real path: the owner's decision, then the executor through the registry (an ownerOnly tool, run as the owner).
   const approve = async (id: string): Promise<void> => {
-    const card = (await cards()).find((c) => c.id === id)!;
-    const tool = createRuntimesManifest().tools[0]!;
-    await tool.execute(card.canonical_args, { db: pool, now: () => now, timezone: 'UTC' } as CoreToolContext);
+    const registry = new ToolRegistry();
+    registry.register(createRuntimesManifest());
+    await decideApproval(pool, { actionId: id, decision: 'approved', by: 'owner', via: 'web', now });
+    const executed = await executeApproved(pool, { actionId: id, registry, ctx: { db: pool, now: () => now, timezone: 'UTC' } as CoreToolContext, worker: 'test', now });
+    expect(executed.state).toBe('succeeded');
   };
 
   beforeAll(async () => {
@@ -61,7 +71,7 @@ suite('one card for a local model', () => {
     server.files.set('/onnxruntime-node/-/onnxruntime-node-9.9.9.tgz', TARBALL);
     server.files.set('/acme/minilm/model.onnx', MODEL);
     data = await mkdtemp(path.join(tmpdir(), 'buddi-runtimes-db-'));
-    configurePluginHost({ env: { BUDDI_DATA_DIR: data } });
+    configurePluginHost({ env: { BUDDI_DATA_DIR: data }, askApproval: async (action) => { told.push(action.tool); } });
     configureRuntimes({
       get: server.get,
       platform: 'linux',
@@ -109,7 +119,7 @@ suite('one card for a local model', () => {
     expect(news.pending).toBe(first.pending);
     const raised = await cards();
     expect(raised).toHaveLength(1);
-    expect(raised[0]!.preview).toMatch(/^Download the Whisper base model \(135 MB\) and the engine that runs it \([^)]+\)\? speech asks: to transcribe your voice notes\./);
+    expect(raised[0]!.preview).toMatch(/^Download the Whisper base model \(135 MB\) and the engine that runs it \([^)]+\)\?\nspeech asks: to transcribe your voice notes\./);
     // Nothing was fetched before the owner's yes.
     expect(server.hits.size).toBe(0);
     expect(onnxState().state).toBe('absent');
@@ -124,6 +134,23 @@ suite('one card for a local model', () => {
     expect(later).toMatchObject({ state: 'ready' });
     expect(later.pending).toBeUndefined();
     expect(await cards()).toHaveLength(1);
+  });
+
+  it('raises one card when two plugins ask in the same tick', async () => {
+    await removeOnnxRuntime();
+    expect(onnxState().state).toBe('absent');
+    const asked = await Promise.all([
+      hostFor('speech').onnx!.ensure({ reason: 'to transcribe' }),
+      hostFor('news').onnx!.ensure({ reason: 'to group stories' }),
+      hostFor('digest').onnx!.ensure({ reason: 'to rank' }),
+    ]);
+    expect(new Set(asked.map((a) => a.pending)).size).toBe(1);
+    expect(await cards()).toHaveLength(1);
+    // Telegram and push are told about the one card, once.
+    expect(told.slice(-1)).toEqual([RUNTIMES_TOOL]);
+    const before = told.length;
+    await hostFor('speech').onnx!.ensure({ reason: 'again' });
+    expect(told).toHaveLength(before);
   });
 
   it('asks once for a shared model, downloads it once, and then answers its folder', async () => {

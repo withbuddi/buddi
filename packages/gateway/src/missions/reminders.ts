@@ -628,6 +628,17 @@ async function proposedBrowser(
   if (input.browser === 'none') return {};
   if (input.browser === 'own') return { browser: 'own' };
   if (input.browser === 'owner') return { browser: 'owner', ...(named ? { browserSite: named } : {}) };
+  /*
+   * Described again for an approved action (`executeApproved`): what was
+   * worked out when the owner was asked is what he approved. The context that
+   * re-describes carries no session tools, so inferring again would drop the
+   * Chrome he said yes to and refuse the approval as an effect that changed.
+   */
+  const approved = ctx.approvedEffect?.envelope as Partial<ScheduleEnvelope> | undefined;
+  if (approved !== undefined) {
+    if (approved.browser !== 'owner') return {};
+    return { browser: 'owner', ...(typeof approved.browserSite === 'string' ? { browserSite: approved.browserSite } : {}) };
+  }
   if (!ctx.sessionTools?.includes('browser.act') || !options.signInSites) return {};
   const sites = await options.signInSites().catch(() => [] as readonly string[]);
   const site = signInSiteIn(`${input.name}\n${input.prompt}`, sites);

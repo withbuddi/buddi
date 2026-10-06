@@ -28,6 +28,7 @@ import {
   openQuestion,
   runMigrations,
   runWorker,
+  setMissionEnabled,
   ToolRegistry,
   upsertMission,
   type CoreToolContext,
@@ -295,6 +296,69 @@ suite('missions that browse (postgres)', () => {
     expect(log).toEqual(['chrome https://www.pnc.com/']);
     expect(delivered).toEqual(['Balances pulled.']);
     expect(asked).toHaveLength(1);
+  });
+
+  it('a refused Chrome stops the run: nothing after it is dispatched, and the card says so truthfully', async () => {
+    const m = await mission('own', 'PNC pull');
+    const occurrence = await insertOccurrence(pool, m.id, 0, new Date(), 'claimed');
+    const seen: CompletionRequest[] = [];
+    const delivered: string[] = [];
+    const asked: ActionRecord[] = [];
+    const result = await executor([
+      { tool: 'browser.act', input: { action: 'navigate', url: 'https://www.pnc.com/', prefer: 'yours' } },
+      // Straight after the refusal: a page in its own browser, and stopping itself.
+      { tool: 'browser.act', input: { action: 'navigate', url: 'https://news.example.com/' } },
+      { tool: 'schedule.cancel_mine', input: { missionId: m.id } },
+      { tool: 'mission.report', input: { urgency: 'normal', text: 'Could not reach PNC.' } },
+      { text: 'done' },
+    ], seen, delivered, asked)(occurrence, m);
+    expect(result).toMatchObject({ delivered: false, reason: 'needs-chrome' });
+    // Nothing was read: no page opened in either browser.
+    expect(log).toEqual([]);
+    // Nothing was changed: the mission is still on, nothing was delivered.
+    expect((await getMission(pool, m.id))?.enabled).toBe(true);
+    expect(delivered).toEqual([]);
+    // The last request holds every result: the refusal, then three calls answered unrun.
+    const results = toolResults(seen.slice(-1));
+    expect(results.filter((r) => r.includes('not-executed')).length).toBe(3);
+    // The Chrome ask is the only approval, and what it says is true.
+    expect(asked.map((a) => a.tool)).toEqual([USE_CHROME_TOOL]);
+    expect(await listPendingActions(pool, { now: new Date() })).toHaveLength(1);
+    expect(asked[0]!.preview).toContain('stopped there: nothing was read or changed.');
+  });
+
+  it("an agent may not ask for the owner's Chrome for a mission that never browsed; its own ask says it asks", async () => {
+    const ask = (missionId: string) => registry.invoke(USE_CHROME_TOOL, { missionId, site: 'pnc.com' }, { ...ctx, agentId: AGENT });
+    const plain = await mission(null, 'Digest');
+    const refused = await ask(plain.id);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.reason).not.toBe('approval-required');
+    expect(await listPendingActions(pool, { now: new Date() })).toHaveLength(0);
+    expect((await getMission(pool, plain.id))?.browser).toBeNull();
+
+    const browsing = await mission('own', 'PNC pull');
+    const asked = await ask(browsing.id);
+    if (asked.ok || asked.reason !== 'approval-required') throw new Error('expected an approval');
+    const action = (await getAction(pool, asked.actionId))!;
+    expect(action.preview).toContain(`${AGENT} asks to use your signed-in Chrome for PNC`);
+    expect(action.preview).not.toContain('stopped there');
+    // Approved through the real executor: the wording the owner saw is the one re-described.
+    await decideApproval(pool, { actionId: asked.actionId, decision: 'approved', by: 'owner', via: 'web', now: new Date() });
+    expect((await executeApproved(pool, { actionId: asked.actionId, registry, ctx, worker: 'test', now: new Date() })).state).toBe('succeeded');
+    expect((await getMission(pool, browsing.id))?.browser).toBe('owner');
+  });
+
+  it('Allow on a mission that is off grants the Chrome only, runs nothing, and the card says so', async () => {
+    const m = await mission('own', 'PNC pull');
+    await setMissionEnabled(pool, m.id, false);
+    const asked = await registry.invoke(USE_CHROME_TOOL, { missionId: m.id }, { ...ctx, agentId: AGENT });
+    if (asked.ok || asked.reason !== 'approval-required') throw new Error('expected an approval');
+    expect((await getAction(pool, asked.actionId))!.preview).toContain('It is off, so Allow only lets it use your Chrome');
+    await decideApproval(pool, { actionId: asked.actionId, decision: 'approved', by: 'owner', via: 'web', now: new Date() });
+    expect((await executeApproved(pool, { actionId: asked.actionId, registry, ctx, worker: 'test', now: new Date() })).state).toBe('succeeded');
+    expect((await getMission(pool, m.id))?.browser).toBe('owner');
+    const { rows } = await pool.query(`select count(*)::int as n from core.occurrences where mission_id = $1 and state = 'pending'`, [m.id]);
+    expect(rows[0].n).toBe(0);
   });
 
   it('Not now leaves the mission as it was', async () => {

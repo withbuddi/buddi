@@ -9,7 +9,7 @@
  * never throw for a channel's sake unless asked to (`strict`, the CLI's
  * `--inline` run, which reports an unreached owner as a skipped delivery).
  */
-import { approvalAnswers, approvalAsk } from './web/approval-ask.js';
+import { approvalAsk, asksInOwnWords } from './web/approval-ask.js';
 import {
   notifyOwner,
   type ActionRecord,
@@ -108,8 +108,8 @@ export async function notifyApproval(pool: Queryable, opts: NotifyDeps, action: 
   return notifyOwner(pool, opts, {
     kind: 'approval',
     urgency: 'now',
-    // A question core asks in its own words ("Let the PNC pull use your Chrome?") is its own title.
-    title: approvalAnswers(action.tool) ? approvalAsk(action.tool, action.preview) : `${action.agentId} needs your approval to run ${action.tool}`,
+    // A question core asks in its own words ("Let the PNC pull use your Chrome?", "Download the … model?") is its own title.
+    title: asksInOwnWords(action.tool) ? approvalAsk(action.tool, action.preview) : `${action.agentId} needs your approval to run ${action.tool}`,
     ...(action.preview ? { text: action.preview } : {}),
     ...(action.conversationId ? { link: { route: `#/chat/${encodeURIComponent(action.agentId)}/${encodeURIComponent(action.conversationId)}` } } : {}),
     agentId: action.agentId,

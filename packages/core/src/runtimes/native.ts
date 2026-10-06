@@ -7,10 +7,9 @@
  * binding is handed a tensor class at `initOrtOnce` and builds its outputs
  * with it; the one here is the minimum it reads and writes (`type`, `data`,
  * `dims`, `location`), the same fields `onnxruntime-common`'s `Tensor` has.
+ * The binding is opened inside the engine's worker thread (`onnx.ts`), never
+ * on the main thread: its `run` is synchronous.
  */
-import { isMainThread } from 'node:worker_threads';
-import path from 'node:path';
-import type { OnnxPin } from './pins.js';
 
 /** The element types the binding understands, by their names. */
 export type OnnxTensorType =
@@ -79,20 +78,4 @@ export interface NativeSession {
 export interface OnnxNative {
   InferenceSession: new () => NativeSession;
   initOrtOnce(logLevel: number, tensor: unknown, isMainThread: boolean): void;
-}
-
-/**
- * Open the binding in `dir` and initialise it once. The folder has been
- * checked against the pin by the caller; this only loads it.
- */
-export function dlopenNative(dir: string, _pin: OnnxPin): OnnxNative {
-  const module = { exports: {} as unknown };
-  process.dlopen(module, path.join(dir, 'onnxruntime_binding.node'));
-  const native = module.exports as OnnxNative;
-  if (typeof native?.InferenceSession !== 'function' || typeof native.initOrtOnce !== 'function') {
-    throw new Error('the binding does not export InferenceSession and initOrtOnce');
-  }
-  // Warning level (2): errors and warnings reach the log, nothing chattier.
-  native.initOrtOnce(2, OrtTensor, isMainThread);
-  return native;
 }

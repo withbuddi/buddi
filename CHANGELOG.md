@@ -6,9 +6,21 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
-- Plugins that run models on this computer share one engine that buddi downloads only when it is first needed, for this platform only, instead of each plugin carrying its own 200 MB copy for every platform. The first plugin to need it shows one card ("Download the Whisper base model (135 MB) and the engine that runs it (114 MB)?"); later plugins use it without asking. The download is checked against a checksum pinned in buddi before anything is kept or loaded. Settings → System → Local models shows the engine (state, version, size) and the models plugins keep there, each with Remove. Linux x64 and arm64 and both Macs; not available on Windows yet. (Host API 1.32: `uses: ['onnx']`, `ctx.buddi.onnx`, `ctx.buddi.models`.)
+- Plugins that run models on this computer share one engine that buddi downloads only when it is first needed, for this platform only, instead of each plugin carrying its own 200 MB copy for every platform. The first plugin to need it shows one card ("Download the Whisper base model (135 MB) and the engine that runs it (114 MB)?"); later plugins use it without asking. The download is checked against a checksum pinned in buddi before anything is kept or loaded. Settings → System → Local models shows the engine (state, version, size) and the models plugins keep there, each with Remove. Linux x64 and arm64 and Apple silicon Macs; not available on Windows or Intel Macs yet (the Intel build is held back until it has been checked on one). Models run in a worker thread of their own, so a long transcription never freezes the dashboard, Telegram or other plugins. (Host API 1.32: `uses: ['onnx']`, `ctx.buddi.onnx`, `ctx.buddi.models`.)
 - When an agent proposes a schedule (or an agent package adds a mission) that will use your Chrome, the card says so in one line right under the ask, like "Runs every day at 07:00, using your Chrome for PNC", and approving it grants exactly that. Agents can say so themselves (`browser: 'owner'` in `schedule.propose`); otherwise buddi works it out when the plan names a site on your "needs my sign-in" list. Nothing gets your Chrome silently.
 - Missions: a mission that looks at pages shows "Uses your Chrome" or "Own browser", with a switch to change it either way.
+
+### Fixed
+
+- Local-model downloads follow the same address rules as every other fetch: no private or local addresses (also after a redirect or through DNS), no credentials in the address, only the web's own ports, at most five redirects.
+- A failed local-model download no longer logs, keeps or shows the full address it failed on; the reason names the host only, with any stored secret scrubbed.
+- Two models downloading at the same time no longer delete each other's half-finished files; a download a restart cut short resumes on the next ask without a second card, and its leftovers are cleaned up at start.
+- Two plugins asking for the engine at the same moment get one card between them, and that card now reaches Telegram and push, headed with its question (an owner secret's card too).
+- Closing a local-model session while it is still loading no longer leaves the model loaded.
+- Settings → Local models asks before removing a ready engine ("Plugins that use it will ask you again").
+- A mission run that needed your Chrome now stops there for real: nothing after it runs, so "nothing was read or changed" is always true and no other approval can jump ahead of the Chrome card.
+- Approving a schedule where buddi worked out that it needs your Chrome no longer fails as "the effect changed".
+- An agent can no longer ask for your Chrome for a mission that never browsed; when an agent (not a stopped run) asks, the card says the agent asks. Allow on a mission that is off or ended only grants it, runs nothing, and the card says so.
 
 ### Changed
 

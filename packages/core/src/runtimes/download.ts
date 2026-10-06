@@ -21,6 +21,9 @@ import type { IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import path from 'node:path';
 import { createGunzip } from 'node:zlib';
+import { guardedLookup, type LookupAll } from '../host/http.js';
+import { DEFAULT_POLICY, checkUrl, type AddressPolicy } from '../plugin/url.js';
+import { scrubText } from '../secrets/scrub.js';
 
 /** An answer whose body is read as it arrives, never buffered whole. */
 export interface DownloadResponse {
@@ -31,29 +34,50 @@ export interface DownloadResponse {
 /** How a download asks for a URL: tests hand in one over a local server. */
 export type DownloadGet = (url: string, opts?: { signal?: AbortSignal }) => Promise<DownloadResponse>;
 
+/** How `nodeGet` dials: tests point it at a local server and a resolver of their own. */
+export interface NodeGetOptions {
+  request?: typeof httpsRequest;
+  /** Where a checked URL is actually sent. Tests only: the checks run on the URL before it. */
+  rewrite?: (url: string) => string;
+  /** The address rules; `DEFAULT_POLICY` in shipped code. */
+  policy?: AddressPolicy;
+  /** How a name is resolved before the guard judges it. */
+  resolve?: LookupAll;
+}
+
+/** The most redirects one download follows. */
+export const DOWNLOAD_MAX_REDIRECTS = 5;
+
 /**
  * GET over `node:https`, one connection per request and no pool (the reason
  * the shared transport exists; it buffers whole answers, and an engine is a
- * hundred megabytes). Redirects are followed, five at most, and only to
- * https: the bytes are checked against their pin at the end either way.
- * `request` and `rewrite` are for tests, which point it at a local server.
+ * hundred megabytes). The same guards as the shared transport: every URL —
+ * the first and every redirect — goes through `checkUrl` (no credentials, the
+ * web's own ports, no private or local host), https only, and the socket
+ * resolves through `guardedLookup`, so a name that answers a private address
+ * is refused before anything is sent. Five redirects at most.
  */
-export function nodeGet(
-  request: typeof httpsRequest = httpsRequest,
-  rewrite: (url: string) => string = (url) => url,
-  requireHttps = true,
-): DownloadGet {
+export function nodeGet(options: NodeGetOptions = {}): DownloadGet {
+  const request = options.request ?? httpsRequest;
+  const rewrite = options.rewrite ?? ((url: string) => url);
+  const policy = options.policy ?? DEFAULT_POLICY;
+  const lookup = guardedLookup(options.resolve, policy);
   const once = (url: string, signal: AbortSignal | undefined): Promise<IncomingMessage> =>
     new Promise((resolve, reject) => {
-      const req = request(rewrite(url), { method: 'GET', agent: false, headers: { 'user-agent': 'buddi', accept: '*/*' }, ...(signal ? { signal } : {}) }, resolve);
+      const req = request(
+        rewrite(url),
+        { method: 'GET', agent: false, lookup, headers: { 'user-agent': 'buddi', accept: '*/*' }, ...(signal ? { signal } : {}) },
+        resolve,
+      );
       req.setTimeout(60_000, () => req.destroy(new Error('the server went quiet for a minute')));
       req.on('error', reject);
       req.end();
     });
   return async (url, opts = {}) => {
     let current = url;
-    for (let hop = 0; hop <= 5; hop += 1) {
-      if (requireHttps && !current.startsWith('https://')) throw new Error(`refusing ${current.split('?')[0]}: downloads are https only`);
+    for (let hop = 0; hop <= DOWNLOAD_MAX_REDIRECTS; hop += 1) {
+      const checked = checkUrl(current, policy);
+      if (checked.url.protocol !== 'https:') throw new Error(`refusing ${checked.url.host}: downloads are https only`);
       const res = await once(current, opts.signal);
       const status = res.statusCode ?? 0;
       const location = res.headers.location;
@@ -84,13 +108,27 @@ export class DownloadError extends Error {
   }
 }
 
-/** A fresh temporary name in `dir`: `.tmp-<random><suffix>`. */
-export function tempName(dir: string, suffix = ''): string {
-  return path.join(dir, `.tmp-${randomBytes(6).toString('hex')}${suffix}`);
+/**
+ * A fresh temporary name in `dir`: `.tmp-<random><suffix>`, or
+ * `.tmp-<owner>+<random><suffix>` when an owner (a model id) is named, so a
+ * sweep for one owner never touches another's download in the same folder.
+ * `+` is not a character an id may hold, so `.tmp-a+` never matches `a-b`'s.
+ */
+export function tempName(dir: string, suffix = '', owner?: string): string {
+  return path.join(dir, `.tmp-${owner === undefined ? '' : `${owner}+`}${randomBytes(6).toString('hex')}${suffix}`);
 }
 
-/** Delete every `.tmp-*` entry in `dir`: what a download that died left. Never throws. */
-export async function sweepTemp(dir: string): Promise<number> {
+/** The prefix of an owner's temporaries (`tempName`'s third argument). */
+export function tempPrefix(owner?: string): string {
+  return owner === undefined ? '.tmp-' : `.tmp-${owner}+`;
+}
+
+/**
+ * Delete every `.tmp-*` entry in `dir` (or only an owner's, `.tmp-<owner>+*`):
+ * what a download that died left. `keep` spares the entries a running download
+ * owns. Never throws.
+ */
+export async function sweepTemp(dir: string, owner?: string, keep: (name: string) => boolean = () => false): Promise<number> {
   let names: string[];
   try {
     names = await readdir(dir);
@@ -98,8 +136,9 @@ export async function sweepTemp(dir: string): Promise<number> {
     return 0;
   }
   let swept = 0;
+  const prefix = tempPrefix(owner);
   for (const name of names) {
-    if (!name.startsWith('.tmp-')) continue;
+    if (!name.startsWith(prefix) || keep(name)) continue;
     await rm(path.join(dir, name), { recursive: true, force: true }).catch(() => {});
     swept += 1;
   }
@@ -123,7 +162,7 @@ export async function downloadVerified(
     try {
       response = await get(file.url, opts.signal ? { signal: opts.signal } : {});
     } catch (err) {
-      throw new DownloadError(`Could not reach ${hostOf(file.url)}: ${err instanceof Error ? err.message : String(err)}`);
+      throw new DownloadError(`Could not reach ${hostOf(file.url)}: ${safeReason(err instanceof Error ? err.message : String(err))}${errorCode(err)}`);
     }
     if (response.status < 200 || response.status >= 300) {
       throw new DownloadError(`${hostOf(file.url)} answered ${response.status} for ${path.posix.basename(new URL(file.url).pathname)}.`);
@@ -143,7 +182,7 @@ export async function downloadVerified(
       }
     } catch (err) {
       if (err instanceof DownloadError) throw err;
-      throw new DownloadError(`The download from ${hostOf(file.url)} broke off after ${received} bytes: ${err instanceof Error ? err.message : String(err)}`);
+      throw new DownloadError(`The download from ${hostOf(file.url)} broke off after ${received} bytes: ${safeReason(err instanceof Error ? err.message : String(err))}${errorCode(err)}`);
     }
     if (received !== file.bytes) {
       throw new DownloadError(`The download from ${hostOf(file.url)} ended after ${received} of ${file.bytes} bytes.`);
@@ -296,10 +335,32 @@ export async function sha256OfFile(file: string): Promise<string> {
 
 function hostOf(url: string): string {
   try {
-    return new URL(url).host;
+    return new URL(url).host || 'the server';
   } catch {
     return 'the server';
   }
+}
+
+/** ` (ECONNRESET)`: a system error's short code, when it has one. */
+function errorCode(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[A-Z0-9_]{2,32}$/.test(code) && !(err instanceof Error && err.message.includes(code)) ? ` (${code})` : '';
+}
+
+/** The longest failure reason kept, logged or shown. */
+export const REASON_MAX = 300;
+
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>()`]+/gi;
+
+/**
+ * A failure reason safe to log, keep on disk and show in Settings: every
+ * stored secret scrubbed, every URL cut to its host (no credentials, path or
+ * query, where a signed link keeps its key), one line, at most 300 characters.
+ */
+export function safeReason(text: string): string {
+  const scrubbed = scrubText(String(text)).replace(URL_IN_TEXT, (found) => hostOf(found));
+  const line = scrubbed.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return line.length > REASON_MAX ? `${line.slice(0, REASON_MAX - 1)}…` : line;
 }
 
 /** Bytes as the owner reads them: `114 MB`, `850 KB`, `1.2 GB`. */

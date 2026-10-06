@@ -195,6 +195,8 @@ suite('owner API tokens', () => {
       ['GET', '/api/api-tokens'],
       ['POST', '/api/secrets/act', { tool: 'secrets.set', args: {} }],
       ['GET', '/api/backups/passphrase'],
+      // Letting a mission use the owner's signed-in Chrome is a grant.
+      ['POST', '/api/missions/m1/browser', { chrome: true }],
     ];
     for (const [method, path, body] of refused) {
       const res = await call(path, { method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });

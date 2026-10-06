@@ -43,7 +43,7 @@ import {
   asksEachTime,
   OWNER_AGENT_ID,
 } from '@buddi/core';
-import { approvalAnswers, type ApprovalAnswers } from '../web/approval-ask.js';
+import { approvalAnswers, approvalAsk, asksInOwnWords, type ApprovalAnswers } from '../web/approval-ask.js';
 import {
   MAX_CALLBACK_DATA_BYTES,
   type InlineKeyboardMarkup,
@@ -222,7 +222,8 @@ export function approvalRequestText(action: ActionRecord, timezone: string): str
   const choice = keyboardChoice(action);
   const overflow = choice ? choiceOverflowLine(choice) : undefined;
   return [
-    `Approval needed — ${action.tool}`,
+    // Core's own asks head with the question itself, not the tool's name.
+    asksInOwnWords(action.tool) ? `Approval needed — ${approvalAsk(action.tool, action.preview)}` : `Approval needed — ${action.tool}`,
     '',
     action.preview,
     ...(overflow ? ['', overflow] : []),

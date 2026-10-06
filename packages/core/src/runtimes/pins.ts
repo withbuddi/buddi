@@ -12,10 +12,9 @@
  * moved into place or loaded. The rest of the tarball is never written.
  *
  * One version, 1.30.0 (the newest stable), everywhere Microsoft still builds
- * it. Intel Macs are the exception: 1.24 dropped macOS x64 from both npm and
- * the GitHub releases, so darwin-x64 is pinned to 1.23.2, the last build that
- * has it. The binding's interface is the same in both (`initOrtOnce`,
- * `InferenceSession.loadModel/run/dispose`). Windows is not offered yet.
+ * it. 1.24 dropped macOS x64 from both npm and the GitHub releases, and
+ * darwin-x64 (1.23.2, the last build that has it) is left out until it has
+ * been checked on an Intel Mac (see below). Windows is not offered yet.
  *
  * To move a pin: download the tarball, `shasum -a 256` it and the two files
  * under `package/bin/napi-v6/<platform>/<arch>/`, and change all four numbers
@@ -49,29 +48,25 @@ const TARBALL_1_30_0 = {
   bytes: 113_507_888,
 };
 
-const TARBALL_1_23_2 = {
-  url: 'https://registry.npmjs.org/onnxruntime-node/-/onnxruntime-node-1.23.2.tgz',
-  sha256: 'fe70e8de46560c57c2dfb7170770da32dbb21684504a5c904346c44a56e154f2',
-  bytes: 97_134_627,
-};
-
 const BIN = 'package/bin/napi-v6';
 
-export const ONNX_PINS: Readonly<Record<OnnxPlatform, OnnxPin>> = {
+/*
+ * darwin-x64 is left out for now, so an Intel Mac reads "not available on
+ * this platform". Its pin was 1.23.2 (the last release with an Intel Mac
+ * binding), keeping `libonnxruntime.1.23.2.dylib` where every other platform
+ * keeps the `.1` soname; whether that binding's install name points at that
+ * exact file has not been checked. Load it once by hand on an Intel Mac
+ * (`otool -L onnxruntime_binding.node`, then a run) before adding it back:
+ * tarball onnxruntime-node-1.23.2.tgz, sha256
+ * fe70e8de46560c57c2dfb7170770da32dbb21684504a5c904346c44a56e154f2, 97134627 bytes.
+ */
+export const ONNX_PINS: Readonly<Partial<Record<OnnxPlatform, OnnxPin>>> = {
   'darwin-arm64': {
     version: '1.30.0',
     tarball: TARBALL_1_30_0,
     files: [
       { entry: `${BIN}/darwin/arm64/onnxruntime_binding.node`, name: 'onnxruntime_binding.node', sha256: 'a3f993357759b06ae2411f70af60f5e041d04521ea7f0d12cb7546e411a527dd', bytes: 266_840 },
       { entry: `${BIN}/darwin/arm64/libonnxruntime.1.dylib`, name: 'libonnxruntime.1.dylib', sha256: '685d2be5dba1309c89d3a5324b7fd06a5c42f1a61bfea32d14c4cc28d072121d', bytes: 44_589_928 },
-    ],
-  },
-  'darwin-x64': {
-    version: '1.23.2',
-    tarball: TARBALL_1_23_2,
-    files: [
-      { entry: `${BIN}/darwin/x64/onnxruntime_binding.node`, name: 'onnxruntime_binding.node', sha256: 'b9f2fad0f4c81fc79a1e990e47efbffe6275db72e6d8cabdb620e70e2bdff720', bytes: 226_408 },
-      { entry: `${BIN}/darwin/x64/libonnxruntime.1.23.2.dylib`, name: 'libonnxruntime.1.23.2.dylib', sha256: '0576e3f8dd16833c291fddd037444672ae20cdc6797db00928cc7527541c5a4a', bytes: 40_009_968 },
     ],
   },
   'linux-x64': {
@@ -95,8 +90,8 @@ export const ONNX_PINS: Readonly<Record<OnnxPlatform, OnnxPin>> = {
 /** The pin for a platform, or undefined where buddi offers no engine (Windows, anything else). */
 export function onnxPinFor(platform: string, arch: string): { key: OnnxPlatform; pin: OnnxPin } | undefined {
   const key = `${platform}-${arch}`;
-  if (!(key in ONNX_PINS)) return undefined;
-  return { key: key as OnnxPlatform, pin: ONNX_PINS[key as OnnxPlatform] };
+  const pin = Object.prototype.hasOwnProperty.call(ONNX_PINS, key) ? ONNX_PINS[key as OnnxPlatform] : undefined;
+  return pin === undefined ? undefined : { key: key as OnnxPlatform, pin };
 }
 
 /** What a pin keeps on disk. */

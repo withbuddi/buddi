@@ -355,6 +355,11 @@ suite('reminders and proposed schedules (postgres)', () => {
     if (derived.ok || derived.reason !== 'approval-required') throw new Error('expected an approval');
     expect((await getAction(pool, derived.actionId))?.envelope).toMatchObject({ browser: 'owner', browserSite: 'pnc.com' });
     expect((await getAction(pool, derived.actionId))?.preview).toContain('using your Chrome for PNC');
+    // Approved through the real executor, whose re-description has no session tools: the Chrome he said yes to stands.
+    await decideApproval(pool, { actionId: derived.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
+    const ran = await executeApproved(pool, { actionId: derived.actionId, registry, ctx, worker: 'test', now: NOW });
+    expect(ran).toMatchObject({ ok: true });
+    expect((await getMission(pool, agentMissionId('cfo', 'morning-balances')))?.browser).toBe('owner');
     // An agent that may not browse, or a plan naming no such site: no pages, no line.
     const noBrowser = await registry.invoke('schedule.propose', { name: 'Balances', cron: '0 8 * * *', prompt: 'Pull the PNC balances.' }, { ...ctx, agentId: 'cfo' });
     const elsewhere = await registry.invoke('schedule.propose', { name: 'Weather', cron: '0 9 * * *', prompt: 'Check the weather.' }, browsing);

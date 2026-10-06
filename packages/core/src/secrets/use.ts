@@ -24,6 +24,7 @@
  */
 import type { Pool } from 'pg';
 import { createAction } from '../actions/store.js';
+import type { ActionRecord } from '../actions/types.js';
 import type { BuddiHost, SecretUseResult } from '../host/types.js';
 import { ownerSecretVaultName, type Vault } from '../vault/types.js';
 import { isAccountKind, secretDestination, stricterRule } from './destinations.js';
@@ -49,7 +50,8 @@ export interface UseSecretDeps {
    * use; the registered destination's own `deliver` never runs. Not on the
    * host's `secrets` area, so no plugin can ask for this.
    */
-  deliverInto?: (value: string, target: unknown, useId: string) => void | Promise<void>;
+  deliverInto?: (value: string, target: unknown, useId: string) => void | Promise<void>;  /** Tells the owner's channels (Telegram, push) a card is waiting; never fails the ask. */
+  askApproval?: ((action: ActionRecord) => Promise<void>) | undefined;
 }
 
 export interface UseSecretRequest {
@@ -232,6 +234,7 @@ export async function useOwnerSecret(deps: UseSecretDeps, req: UseSecretRequest)
       now: deps.now(),
     });
     await record({ secretId: secret!.id, outcome: 'pending', actionId: action.id });
+    if (deps.askApproval !== undefined) await deps.askApproval(action).catch(() => {});
     return { pending: action.id };
   }
 }

@@ -6,7 +6,11 @@
  * after every file matched its pin and before the folder is renamed into
  * place, under the same rules as the engine: temporary names, checks while the
  * bytes arrive, an atomic rename, stale temporaries swept, a failure kept in
- * `<id>.failed.json` and never retried by itself.
+ * `<id>.failed.json` and never retried by itself. Each download stages in
+ * its own `.tmp-<id>+*` folder and sweeps only its own, so two models
+ * downloading at once never delete each other's files. The owner's yes is
+ * kept in `<id>.approved.json` until the download ends, so one cut short by a
+ * restart resumes on the next `ensure` without a second card.
  *
  * Minimal on purpose: plugins keep their own download code until they move,
  * and this is the place they move to.
@@ -15,7 +19,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { checkUrl } from '../plugin/url.js';
-import { downloadVerified, sweepTemp, tempName, type PinnedDownload } from './download.js';
+import { downloadVerified, safeReason, sweepTemp, tempName, tempPrefix, type PinnedDownload } from './download.js';
 import { modelsRoot, runtimesGet, runtimesLog } from './config.js';
 
 /** One file of a model: where it comes from, its sha256 and its length. */
@@ -109,6 +113,30 @@ function failureFile(id: string): string {
   return path.join(modelsRoot(), `${id}.failed.json`);
 }
 
+function approvedFile(id: string): string {
+  return path.join(modelsRoot(), `${id}.approved.json`);
+}
+
+/** Keep the owner's yes for a model until its download ends (`runtimes.download`). */
+export async function markModelApproved(id: string, files: ReadonlyArray<PinnedDownload & { name: string }>): Promise<void> {
+  await mkdir(modelsRoot(), { recursive: true });
+  await writeFile(approvedFile(id), JSON.stringify({ id, files, at: new Date().toISOString() }));
+}
+
+/**
+ * The files the owner approved for a model whose download has not finished
+ * (a restart cut it short), when they are exactly the files asked for now.
+ */
+export function approvedModelFiles(id: string, files: ReadonlyArray<{ name: string; sha256: string; url: string; bytes: number }>): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(approvedFile(id), 'utf8')) as { files?: Array<{ name: string; sha256: string; url: string; bytes: number }> };
+    const kept = Array.isArray(parsed.files) ? parsed.files : [];
+    return kept.length === files.length && files.every((file) => kept.some((k) => k.name === file.name && k.sha256 === file.sha256 && k.url === file.url && k.bytes === file.bytes));
+  } catch {
+    return false;
+  }
+}
+
 function verifiedFiles(id: string): Array<{ name: string; sha256: string; bytes: number }> | undefined {
   try {
     const parsed = JSON.parse(readFileSync(path.join(folder(id), VERIFIED), 'utf8')) as { files?: unknown };
@@ -129,7 +157,7 @@ export function modelState(id: string, files?: ReadonlyArray<{ name: string; sha
   if (running !== undefined) return { id, state: 'downloading', sizeBytes: 0, receivedBytes: running.received };
   try {
     const parsed = JSON.parse(readFileSync(failureFile(id), 'utf8')) as { reason?: string };
-    return { id, state: 'failed', sizeBytes: 0, reason: parsed.reason ?? 'The download failed.' };
+    return { id, state: 'failed', sizeBytes: 0, reason: typeof parsed.reason === 'string' ? safeReason(parsed.reason) : 'The download failed.' };
   } catch {
     // No failure recorded.
   }
@@ -154,12 +182,15 @@ export function startModelDownload(req: ModelRequest): Promise<void> {
     entry.received = received;
   })
     .catch(async (err) => {
-      const reason = err instanceof Error ? err.message : String(err);
+      // Scrubbed and cut to hosts before it is logged, kept or shown in Settings.
+      const reason = safeReason(err instanceof Error ? err.message : String(err));
       runtimesLog(`model ${id}: ${reason}`);
       await mkdir(modelsRoot(), { recursive: true }).catch(() => {});
       await writeFile(failureFile(id), JSON.stringify({ reason, at: new Date().toISOString() })).catch(() => {});
     })
-    .finally(() => {
+    .finally(async () => {
+      // Finished or failed, the yes is spent: a failure is never retried by itself.
+      await rm(approvedFile(id), { force: true }).catch(() => {});
       live.delete(id);
     });
   live.set(id, entry);
@@ -174,8 +205,9 @@ async function downloadModel(
 ): Promise<void> {
   const root = modelsRoot();
   await mkdir(root, { recursive: true });
-  await sweepTemp(root);
-  const stage = tempName(root);
+  // Only this model's leftovers: another model may be downloading beside it.
+  await sweepTemp(root, id);
+  const stage = tempName(root, '', id);
   try {
     await mkdir(stage);
     let before = 0;
@@ -207,7 +239,7 @@ export function listModels(): ModelState[] {
   }
   const ids = new Set<string>();
   for (const name of names) {
-    if (name.startsWith('.')) continue;
+    if (name.startsWith('.') || name.endsWith('.approved.json')) continue;
     const id = name.endsWith('.failed.json') ? name.slice(0, -'.failed.json'.length) : name;
     if (ID.test(id)) ids.add(id);
   }
@@ -222,7 +254,16 @@ export async function removeModel(id: string): Promise<{ removed: boolean; refus
   const existed = existsSync(folder(id)) || existsSync(failureFile(id));
   await rm(folder(id), { recursive: true, force: true });
   await rm(failureFile(id), { force: true });
+  await rm(approvedFile(id), { force: true });
   return { removed: existed };
+}
+
+/**
+ * Sweep what downloads that died left in `models/` (once at boot): every
+ * temporary except those of a model downloading in this process.
+ */
+export async function sweepModelTemps(): Promise<number> {
+  return sweepTemp(modelsRoot(), undefined, (name) => [...live.keys()].some((id) => name.startsWith(tempPrefix(id))));
 }
 
 /** Forget what this process was doing. Tests only. */

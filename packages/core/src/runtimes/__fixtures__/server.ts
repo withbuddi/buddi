@@ -22,6 +22,10 @@ export interface FakeServer {
   hits: Map<string, number>;
   /** Paths answered with a 302 to another https address. */
   redirects: Map<string, string>;
+  /** Paths whose answer waits this many milliseconds first. */
+  delays: Map<string, number>;
+  /** The port it listens on, 127.0.0.1. */
+  port: number;
   close(): Promise<void>;
 }
 
@@ -30,9 +34,12 @@ export async function startFakeServer(): Promise<FakeServer> {
   const modes = new Map<string, Mode>();
   const hits = new Map<string, number>();
   const redirects = new Map<string, string>();
-  const server: Server = createServer((req, res) => {
+  const delays = new Map<string, number>();
+  const server: Server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     hits.set(url.pathname, (hits.get(url.pathname) ?? 0) + 1);
+    const wait = delays.get(url.pathname);
+    if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
     const to = redirects.get(url.pathname);
     if (to !== undefined) {
       res.writeHead(302, { location: to }).end();
@@ -61,17 +68,18 @@ export async function startFakeServer(): Promise<FakeServer> {
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
-  const get = nodeGet(
-    httpRequest as never,
-    (url) => `http://127.0.0.1:${port}${new URL(url).pathname}`,
-    true,
-  );
+  const get = nodeGet({
+    request: httpRequest as never,
+    rewrite: (url) => `http://127.0.0.1:${port}${new URL(url).pathname}`,
+  });
   return {
     get,
     files,
     modes,
     hits,
     redirects,
+    delays,
+    port,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

@@ -21,7 +21,7 @@ import { PluginTeammatePanel } from './parts/CatalogueSuggest';
 import { usePluginPages } from '../pages/usePages';
 import { useAppearance, type Ground, type PageWidth } from '../appearance';
 import type { ThemeChoice } from '../theme';
-import { Breadcrumb, Button, ButtonLink, Empty, ErrorBanner, Field, KV, Notice, PageHeader, Pill, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
+import { Breadcrumb, Button, ButtonLink, Empty, ErrorBanner, Field, KV, Modal, Notice, PageHeader, Pill, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
@@ -389,6 +389,8 @@ export function LocalModels(): JSX.Element | null {
   const view = useAsync(() => api.runtimes(), [], 10_000);
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A ready engine is asked about first: every plugin on it stops until the owner says yes to a fresh download.
+  const [confirming, setConfirming] = useState(false);
   const data = view.data;
   if (!data) return null;
   const { onnx, models } = data;
@@ -418,7 +420,7 @@ export function LocalModels(): JSX.Element | null {
       panel
       actions={
         onnx.available && (onnx.state === 'ready' || onnx.state === 'failed') ? (
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => { remove(() => api.removeEngine()); }}>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (onnx.state === 'ready') setConfirming(true); else remove(() => api.removeEngine()); }}>
             Remove
           </Button>
         ) : undefined
@@ -426,6 +428,17 @@ export function LocalModels(): JSX.Element | null {
     >
       <Stack gap="sm">
         <ErrorBanner message={failed} />
+        {confirming ? (
+          <Modal title="Remove the engine?" onClose={() => setConfirming(false)}
+            foot={(
+              <>
+                <Button variant="ghost" onClick={() => setConfirming(false)}>Keep it</Button>
+                <Button variant="danger" disabled={busy} onClick={() => { setConfirming(false); remove(() => api.removeEngine()); }}>Remove</Button>
+              </>
+            )}>
+            <p>Plugins that use it will ask you again, and it downloads again ({megabytes(onnx.downloadBytes)}) once you say yes.</p>
+          </Modal>
+        ) : null}
         <KV
           items={[
             { label: 'Engine', value: engineValue },

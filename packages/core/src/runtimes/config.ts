@@ -20,8 +20,17 @@ export interface RuntimesConfig {
   arch?: string;
   /** The pin for a platform. `onnxPinFor` unless a test points it at a fixture. */
   pinFor?: (platform: string, arch: string) => { key: string; pin: OnnxPin } | undefined;
-  /** How the binding in a verified folder is opened. `process.dlopen` unless a test fakes it. */
+  /**
+   * Tests only: a fake binding run in this thread. Absent, the binding is
+   * opened with `process.dlopen` inside the engine's worker thread.
+   */
   loadNative?: (dir: string, pin: OnnxPin) => OnnxNative;
+  /**
+   * Tests only: the engine's worker uses a fake binding written into it
+   * (`run` spins for its first input's milliseconds) instead of opening the
+   * real one, so a test can time the worker without native code.
+   */
+  fakeWorkerBinding?: boolean;
   /** Where a background failure is logged. */
   log?: (line: string) => void;
   /** The most threads one session may ask for. Half the cores, at least 1, at most 8. */
@@ -48,10 +57,10 @@ export function runtimesEnv(): EnvLike {
   return config.env ?? process.env;
 }
 
-const defaultGet = nodeGet();
+let defaultGet: DownloadGet | undefined;
 
 export function runtimesGet(): DownloadGet {
-  return config.get ?? defaultGet;
+  return config.get ?? (defaultGet ??= nodeGet());
 }
 
 export function runtimesLog(line: string): void {

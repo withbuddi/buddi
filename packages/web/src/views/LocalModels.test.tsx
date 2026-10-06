@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type RuntimesView } from '../api';
 import { LocalModels } from './Settings';
 
@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 
 describe('local models', () => {
-  it('shows the engine ready with its version and sizes, and removes it', async () => {
+  it('shows the engine ready with its version and sizes, and removes it once the owner confirms', async () => {
     vi.mocked(api.runtimes).mockResolvedValue({ onnx: engine(), models: [{ id: 'minilm', state: 'ready', sizeBytes: 90_000_000 }] });
     vi.mocked(api.removeEngine).mockResolvedValue({ onnx: engine({ state: 'absent' }), models: [] });
     render(<LocalModels />);
@@ -32,7 +32,25 @@ describe('local models', () => {
     expect(screen.getByText('minilm')).toBeInTheDocument();
     const [removeEngine] = screen.getAllByRole('button', { name: 'Remove' });
     fireEvent.click(removeEngine!);
-    await waitFor(() => expect(api.removeEngine).toHaveBeenCalled());
+    // Asked first: nothing removed yet.
+    expect(await screen.findByText(/Plugins that use it will ask you again/)).toBeInTheDocument();
+    expect(api.removeEngine).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep it' }));
+    await waitFor(() => expect(screen.queryByText(/Plugins that use it will ask you again/)).toBeNull());
+    expect(api.removeEngine).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]!);
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(api.removeEngine).toHaveBeenCalledTimes(1));
+  });
+
+  it('removes a failed engine at once: there is nothing to lose', async () => {
+    vi.mocked(api.runtimes).mockResolvedValue({ onnx: engine({ state: 'failed', reason: 'The engine could not be loaded: wrong architecture' }), models: [] });
+    vi.mocked(api.removeEngine).mockResolvedValue({ onnx: engine({ state: 'absent' }), models: [] });
+    render(<LocalModels />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(api.removeEngine).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
   it('says so where the engine is not offered, with nothing to remove', async () => {

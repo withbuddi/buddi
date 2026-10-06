@@ -6,11 +6,27 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { Pool } from 'pg';
+import type { ActionRecord } from '../actions/types.js';
 import type { ModelsArea, OnnxArea } from '../host/types.js';
 import { downloadArgs, raiseDownloadCard } from './consent.js';
-import { checkModelRequest, modelState, ModelRefusal } from './models.js';
-import { createOnnxSession, onnxState, OnnxUnavailable } from './onnx.js';
+import { approvedModelFiles, checkModelRequest, modelState, ModelRefusal, startModelDownload, sweepModelTemps } from './models.js';
+import { createOnnxSession, onnxApproved, onnxState, OnnxUnavailable, startOnnxDownload, sweepOnnxTemps } from './onnx.js';
 import { modelsRoot } from './config.js';
+
+const swept = new Set<string>();
+
+/**
+ * Sweep what downloads that died left (half-written `.tmp-*` tarballs and
+ * folders) under the engine's version folder and `models/`, once per data
+ * directory per process: at boot, from `configurePluginHost`. Never throws.
+ */
+export async function sweepRuntimesOnce(): Promise<void> {
+  const root = modelsRoot();
+  if (swept.has(root)) return;
+  swept.add(root);
+  await sweepOnnxTemps().catch(() => 0);
+  await sweepModelTemps().catch(() => 0);
+}
 
 export interface RuntimeAreaFacts {
   plugin: string;
@@ -20,6 +36,7 @@ export interface RuntimeAreaFacts {
   agentId?: string | undefined;
   conversationId?: string | undefined;
   now: () => Date;
+  askApproval?: ((action: ActionRecord) => Promise<void>) | undefined;
 }
 
 /** Inside `root`, after links are followed. */
@@ -39,7 +56,7 @@ function within(file: string, root: string): boolean {
 export function onnxAreaOf(facts: RuntimeAreaFacts): OnnxArea {
   const card = (args: Parameters<typeof raiseDownloadCard>[1]) =>
     raiseDownloadCard(
-      { pool: facts.pool(), plugin: facts.plugin, agentId: facts.agentId, conversationId: facts.conversationId, now: facts.now },
+      { pool: facts.pool(), plugin: facts.plugin, agentId: facts.agentId, conversationId: facts.conversationId, now: facts.now, askApproval: facts.askApproval },
       args,
     );
   return {
@@ -47,8 +64,13 @@ export function onnxAreaOf(facts: RuntimeAreaFacts): OnnxArea {
       return onnxState();
     },
     async ensure(req) {
-      const state = onnxState();
-      if (state.state === 'failed' || state.state === 'downloading') return state;
+      let state = onnxState();
+      // Approved before a restart cut the download short: it resumes, no second card.
+      if (state.state === 'absent' && onnxApproved()) {
+        void startOnnxDownload();
+        state = onnxState();
+      }
+      if (state.state === 'failed') return state;
       const model = req?.model;
       // A shared model already kept, or downloading, needs no card of its own.
       const shared = model !== undefined && (model.id !== undefined || model.files !== undefined);
@@ -57,8 +79,13 @@ export function onnxAreaOf(facts: RuntimeAreaFacts): OnnxArea {
         const checked = checkModelRequest({ id: model.id ?? '', files: model.files ?? [] });
         const current = modelState(checked.id, checked.files);
         if (current.state === 'failed') throw new ModelRefusal(current.reason ?? `Model ${checked.id} failed.`);
-        modelMissing = current.state === 'absent';
+        if (current.state === 'absent' && approvedModelFiles(checked.id, checked.files)) {
+          void startModelDownload({ id: checked.id, files: checked.files }).catch(() => {});
+        } else {
+          modelMissing = current.state === 'absent';
+        }
       }
+      if (state.state === 'downloading' && !modelMissing) return state;
       const engineMissing = state.state === 'absent';
       // A model the plugin fetches itself rides on the engine's card; once the
       // engine is here, it asks nothing more.
@@ -101,11 +128,16 @@ export function modelsAreaOf(facts: RuntimeAreaFacts): ModelsArea {
     },
     async ensure(req) {
       const checked = checkModelRequest(req);
-      const current = modelState(checked.id, checked.files);
+      let current = modelState(checked.id, checked.files);
+      // Approved before a restart cut the download short: it resumes, no second card.
+      if (current.state === 'absent' && approvedModelFiles(checked.id, checked.files)) {
+        void startModelDownload({ id: checked.id, files: checked.files }).catch(() => {});
+        current = modelState(checked.id, checked.files);
+      }
       if (current.state !== 'absent') return { ...current, sizeBytes: current.sizeBytes || checked.bytes };
       const args = downloadArgs(facts.plugin, req.reason, false, { id: checked.id, files: checked.files, ...(req.name ? { name: req.name } : {}) });
       const pending = await raiseDownloadCard(
-        { pool: facts.pool(), plugin: facts.plugin, agentId: facts.agentId, conversationId: facts.conversationId, now: facts.now },
+        { pool: facts.pool(), plugin: facts.plugin, agentId: facts.agentId, conversationId: facts.conversationId, now: facts.now, askApproval: facts.askApproval },
         args!,
       );
       return { ...current, sizeBytes: checked.bytes, pending };

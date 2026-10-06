@@ -28,6 +28,7 @@ import {
   pairSurfaceIdentity,
   ToolRegistry,
   upsertMission,
+  getMission,
   setSchedule,
   createReminder,
   offerActions,
@@ -892,6 +893,23 @@ suite('the dashboard API', () => {
     expect((await client.json<any>('/api/overview')).jobs.failed).toBe(0);
     const back = await client.post('/api/jobs/retry', { ids: [q1] });
     expect(((await back.json()) as any).jobs[0].acknowledgedAt).toBeNull();
+  });
+
+  it("switches a browsing mission's Chrome both ways, and refuses one that opens no page", async () => {
+    const client = await signedIn();
+    await upsertMission(pool, { id: 'web-browses', name: 'PNC pull', agentId: 'demo-agent', prompt: 'p', browser: 'own' });
+    await upsertMission(pool, { id: 'web-no-page', name: 'Digest', agentId: 'demo-agent', prompt: 'p' });
+    const on = await client.post('/api/missions/web-browses/browser', { chrome: true });
+    expect(on.status).toBe(200);
+    expect(await on.json()).toEqual({ id: 'web-browses', browser: 'owner' });
+    const off = await client.post('/api/missions/web-browses/browser', { chrome: false });
+    expect(await off.json()).toEqual({ id: 'web-browses', browser: 'own' });
+    const none = await client.post('/api/missions/web-no-page/browser', { chrome: true });
+    expect(none.status).toBe(409);
+    expect((await none.json()) as { error: string }).toMatchObject({ error: expect.stringMatching(/opens no page/) });
+    expect((await getMission(pool, 'web-no-page'))?.browser).toBeNull();
+    expect((await client.post('/api/missions/web-browses/browser', { chrome: 'yes' })).status).toBe(400);
+    expect((await client.post('/api/missions/nope/browser', { chrome: true })).status).toBe(404);
   });
 
   it('enables, disables and re-schedules a mission', async () => {

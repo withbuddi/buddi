@@ -104,11 +104,27 @@ async function lastDelivered(pool: Pool, missionId: string): Promise<Date | null
   }
 }
 
+/**
+ * How the mission executor marks the ask it raises for a run that was
+ * refused the owner's Chrome. A symbol: no agent's tool call can carry it, so
+ * an ask an agent raises never reads as "its run stopped there".
+ */
+export const RUN_CHROME_ASK: unique symbol = Symbol('buddi.run-chrome-ask');
+
+/** A mission that is switched off, paused or ended: Allow then grants and runs nothing. */
+export function missionIsOff(mission: Pick<Mission, 'enabled' | 'pausedReason' | 'endedAt'>): boolean {
+  return !mission.enabled || mission.pausedReason !== null || (mission.endedAt ?? null) !== null;
+}
+
 export interface UseChromeEnvelope {
   tool: typeof USE_CHROME_TOOL;
   missionId: string;
   missionName: string;
   agentId: string;
+  /** Who asked: the executor for a run that stopped (`run`), or the mission's agent on its own (`agent`). */
+  raisedBy: 'run' | 'agent';
+  /** Off, paused or ended: Allow only grants, it does not run it now. */
+  off?: true;
   /** The host the run needed, when the browser knew it. */
   site?: string;
   /** When it last delivered something (ISO), for the reassurance line. */
@@ -119,12 +135,13 @@ export interface UseChromeEnvelope {
 export function renderUseChromePreview(envelope: UseChromeEnvelope, timezone: string): string {
   const label = siteLabel(envelope.site);
   const since = envelope.lastDelivered ? ` What it last brought you is still from ${ownerDate(new Date(envelope.lastDelivered), timezone)}.` : '';
-  return [
-    useChromeAsk(envelope.missionName),
-    '',
-    `Its scheduled run needed your signed-in Chrome${label ? ` for ${label}` : ''} and stopped there: nothing was read or changed.${since}`,
-    `Allow lets it use your Chrome while you are away and runs it once now; Not now leaves it as it is. Missions has the switch either way.`,
-  ].join('\n');
+  const why = envelope.raisedBy === 'run'
+    ? `Its scheduled run needed your signed-in Chrome${label ? ` for ${label}` : ''} and stopped there: nothing was read or changed.${since}`
+    : `${envelope.agentId} asks to use your signed-in Chrome${label ? ` for ${label}` : ''} in this mission while you are away.`;
+  const allow = envelope.off
+    ? 'It is off, so Allow only lets it use your Chrome when it runs again; it does not run now. Not now leaves it as it is. Missions has the switch either way.'
+    : 'Allow lets it use your Chrome while you are away and runs it once now; Not now leaves it as it is. Missions has the switch either way.';
+  return [useChromeAsk(envelope.missionName), '', why, allow].join('\n');
 }
 
 const useChromeInput = z.object({
@@ -169,12 +186,21 @@ export function createUseChromeTool(): ToolDefinition<z.infer<typeof useChromeIn
       if (!mission) throw new Error(`no mission ${input.missionId}`);
       if (!mayAsk(ctx, mission)) throw new Error(`${input.missionId} is not one of your missions`);
       if (mission.browser === 'owner') throw new Error(`${mission.name} may already use the owner's Chrome`);
+      // Whether it browses at all was approved with its package or its proposal, never here (as the web route's 409).
+      if (!mission.browser) throw new Error(`${mission.name} does not browse; whether it may is decided where it was proposed, not here`);
       const last = await lastDelivered(ctx.db as Pool, mission.id);
+      // Described again for the approved action: who asked is what the owner was shown.
+      const approved = ctx.approvedEffect?.envelope as Partial<UseChromeEnvelope> | undefined;
+      const raisedBy: UseChromeEnvelope['raisedBy'] = approved !== undefined
+        ? (approved.raisedBy === 'run' ? 'run' : 'agent')
+        : (ctx as unknown as Record<symbol, unknown>)[RUN_CHROME_ASK] === true ? 'run' : 'agent';
       const envelope: UseChromeEnvelope = {
         tool: USE_CHROME_TOOL,
         missionId: mission.id,
         missionName: mission.name,
         agentId: mission.agentId,
+        raisedBy,
+        ...(missionIsOff(mission) ? { off: true as const } : {}),
         ...(input.site?.trim() ? { site: input.site.trim().toLowerCase() } : {}),
         ...(last ? { lastDelivered: last.toISOString() } : {}),
         answers: USE_CHROME_ANSWERS,
@@ -186,7 +212,10 @@ export function createUseChromeTool(): ToolDefinition<z.infer<typeof useChromeIn
       const mission = await getMission(pool, input.missionId);
       if (!mission) throw new Error(`no mission ${input.missionId}`);
       if (!mayAsk(ctx, mission)) throw new Error(`${input.missionId} is not one of your missions`);
+      if (!mission.browser) throw new Error(`${mission.name} does not browse; whether it may is decided where it was proposed, not here`);
       const updated = await setMissionBrowser(pool, mission.id, 'owner');
+      // Off, paused or ended: Allow grants and nothing runs (as the scheduler would not run it either).
+      if (missionIsOff(updated ?? mission)) return { missionId: mission.id, browser: 'owner' satisfies MissionBrowser, rerun: null, off: true };
       const occurrenceId = await runOnceNow(pool, updated ?? mission, ctx.now());
       return { missionId: mission.id, browser: 'owner' satisfies MissionBrowser, ...(occurrenceId ? { rerun: occurrenceId } : {}) };
     },

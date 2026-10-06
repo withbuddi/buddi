@@ -46,7 +46,8 @@ import { PluginCallRefusal, parsePluginRequires } from '../plugin/requires.js';
 import { listOwnerPlaces } from '../places.js';
 import { deletePluginAsset, listPluginAssets, putPluginAsset, type AssetImageCodec } from '../plugin-assets.js';
 import { localDateString, ownerTimezone } from '../time.js';
-import { modelsAreaOf, onnxAreaOf } from '../runtimes/area.js';
+import { modelsAreaOf, onnxAreaOf, sweepRuntimesOnce } from '../runtimes/area.js';
+import type { ActionRecord } from '../actions/types.js';
 import { configureRuntimes } from '../runtimes/config.js';
 import {
   createHttpArea,
@@ -222,7 +223,13 @@ export interface PluginHostServices {
    */
   signIns?: PluginSignInService;
   /** The providers a sign-in may name. `OAUTH_PROVIDERS` unless a test points them at a fixture. */
-  oauthProviders?: Readonly<Record<string, OAuthProvider>>;
+  oauthProviders?: Readonly<Record<string, OAuthProvider>>;  /**
+   * Tells the owner's channels (Telegram, push) that core raised an approval
+   * card outside a run — a local-model download (`runtimes.download`) or an
+   * owner secret's use (`secrets.use`) — once the action is written. Without
+   * it the card shows only on the dashboard.
+   */
+  askApproval?: (action: ActionRecord) => Promise<void>;
 }
 
 let services: PluginHostServices = {};
@@ -231,7 +238,11 @@ let services: PluginHostServices = {};
 export function configurePluginHost(more: PluginHostServices): void {
   services = { ...services, ...more };
   // The engine and the shared models live in the same data directory (1.32).
-  if (more.env !== undefined) configureRuntimes({ env: more.env });
+  if (more.env !== undefined) {
+    configureRuntimes({ env: more.env });
+    // What a download cut short by a restart left on disk, swept once at boot.
+    void sweepRuntimesOnce();
+  }
   // Core's own destination (owner-secrets §3): `http.header`, under core's
   // `http` area. Re-registering from the same name replaces, so every process
   // that configures the host carries it; a plugin cannot name it — `use`
@@ -493,6 +504,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
                     vault: services.vault,
                     plugin: 'http',
                     buddi: host,
+                    askApproval: services.askApproval,
                     agentId: facts.agentId,
                     conversationId: facts.conversationId,
                     now: () => facts.now(),
@@ -521,6 +533,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
                     vault: services.vault,
                     plugin: 'http',
                     buddi: host,
+                    askApproval: services.askApproval,
                     agentId: facts.agentId,
                     conversationId: facts.conversationId,
                     now: () => facts.now(),
@@ -546,6 +559,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
                     vault: services.vault,
                     plugin: 'http',
                     buddi: host,
+                    askApproval: services.askApproval,
                     agentId: facts.agentId,
                     conversationId: facts.conversationId,
                     now: () => facts.now(),
@@ -575,6 +589,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
                     vault: services.vault,
                     plugin: 'http',
                     buddi: host,
+                    askApproval: services.askApproval,
                     agentId: facts.agentId,
                     conversationId: facts.conversationId,
                     now: () => facts.now(),
@@ -647,6 +662,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       agentId: facts.agentId,
       conversationId: facts.conversationId,
       now: () => facts.now(),
+      askApproval: services.askApproval,
     };
     host.onnx = onnxAreaOf(runtimeFacts);
     host.models = modelsAreaOf(runtimeFacts);
@@ -906,6 +922,7 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
           vault: services.vault,
           plugin,
           buddi: host,
+          askApproval: services.askApproval,
           agentId: facts.agentId,
           conversationId: facts.conversationId,
           now: () => facts.now(),

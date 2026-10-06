@@ -11,6 +11,7 @@
  * plain line naming the plugin.
  */
 
+import { RUNTIMES_TOOL, SECRETS_TOOL } from '@buddi/core';
 import { USE_CHROME_ANSWERS, USE_CHROME_TOOL } from '../missions/chrome-scope.js';
 
 /** A card's two answers when they are not Approve and Reject. */
@@ -28,6 +29,19 @@ const ANSWERS: Readonly<Record<string, ApprovalAnswers>> = {
 
 export function approvalAnswers(tool: string): ApprovalAnswers | undefined {
   return ANSWERS[tool];
+}
+
+/**
+ * Core's asks whose preview opens with the question in the owner's words
+ * ("Download the Whisper base model (135 MB)…?", "Let speech use …?"): the
+ * notification and Telegram head with that line, never "needs your approval
+ * to run runtimes.download". Core's tool names only.
+ */
+const OWN_WORDS: ReadonlySet<string> = new Set([USE_CHROME_TOOL, RUNTIMES_TOOL, SECRETS_TOOL]);
+
+/** Whether this card's heading is its own ask (`approvalAsk`) rather than the tool's name. */
+export function asksInOwnWords(tool: string): boolean {
+  return OWN_WORDS.has(tool);
 }
 
 /** The longest ask drawn as is; a longer line is cut at a word. */

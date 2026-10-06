@@ -234,16 +234,19 @@ against its own pin; the rest is never written. Pins live in
 | Platform | Version | Download | On disk |
 | --- | --- | --- | --- |
 | macOS arm64 | 1.30.0 | 114 MB | 45 MB |
-| macOS x64 | 1.23.2 | 97 MB | 40 MB |
+| macOS x64 | — | not available on this platform (for now) | |
 | Linux x64 | 1.30.0 | 114 MB | 46 MB |
 | Linux arm64 | 1.30.0 | 114 MB | 26 MB |
 | Windows | — | not available on this platform | |
 
 1.30.0 is the newest stable. Microsoft stopped building macOS x64 at 1.24
-(npm and GitHub alike), so Intel Macs get 1.23.2, the last build that has
-it; the binding's interface is the same. buddi talks to the binding directly
+(npm and GitHub alike); 1.23.2, the last build that has it, is left out until
+its library's install name has been checked on an Intel Mac, so an Intel Mac
+reads "not available on this platform". buddi talks to the binding directly
 (`runtimes/native.ts`), with a tensor class of its own, so neither
-`onnxruntime-node` nor `onnxruntime-common` is in the install.
+`onnxruntime-node` nor `onnxruntime-common` is in the install. The binding is
+opened in a worker thread the engine owns, and every session loads and runs
+there: its `run` is synchronous, and a batch must never hold the event loop.
 
 *On disk.* `<data>/runtimes/onnx/<version>/<platform>-<arch>/`: the binding,
 the library, and `.verified.json`. Everything is written under a `.tmp-*`

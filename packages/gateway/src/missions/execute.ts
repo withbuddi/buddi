@@ -58,7 +58,7 @@ import {
 } from './report.js';
 import { findingsOf, renderFindings, type FindingPayload } from './sentinel-wake.js';
 import { missionOwnerAgent } from './reminders.js';
-import { pendingUseChrome, USE_CHROME_TOOL } from './chrome-scope.js';
+import { pendingUseChrome, RUN_CHROME_ASK, USE_CHROME_TOOL } from './chrome-scope.js';
 import { askInto } from '../surfaces/browser-cards.js';
 import { ASK_TOOL, createAskManifest, type AskSink } from '../surfaces/pending-question.js';
 import { askHeldBack, noteHeldAsk, timedOutRecently } from './ask-cap.js';
@@ -346,7 +346,8 @@ async function askForChrome(
     const result = await deps.registry.invoke(
       USE_CHROME_TOOL,
       { missionId: mission.id, ...(need.site ? { site: need.site } : {}) },
-      { ...deps.ctx, agentId: mission.agentId || agentId, conversationId, now: deps.now } as CoreToolContext,
+      // Marked as the executor's own ask, so the card can say the run stopped there.
+      { ...deps.ctx, agentId: mission.agentId || agentId, conversationId, now: deps.now, [RUN_CHROME_ASK]: true } as CoreToolContext,
     );
     if (result.ok || result.reason !== 'approval-required') {
       log(`mission ${mission.id}: could not ask for the owner's Chrome: ${result.ok ? 'it ran without an approval' : result.message}`);
@@ -366,8 +367,35 @@ async function askForChrome(
  * bound to *this* run's decision. Built per run on purpose — a decision is run
  * state, and the process-wide registry must never carry it.
  */
-function registryForRun(base: ToolRegistry, sink: DecisionSink, reportMax?: number | null, ask?: AskSink): ToolRegistry {
-  const registry = new ToolRegistry();
+/**
+ * One run's registry, which can be halted: once the run needed the owner's
+ * Chrome and may not use it, nothing more is dispatched — no read, no
+ * effect, and no approval of its own to outrank the Chrome ask — so "nothing
+ * was read or changed" stays true. Every later call is answered unrun.
+ */
+export class RunRegistry extends ToolRegistry {
+  #halted: string | undefined;
+
+  /** Refuse every later call, saying why. The first reason stands. */
+  halt(reason: string): void {
+    this.#halted ??= reason;
+  }
+
+  get halted(): string | undefined {
+    return this.#halted;
+  }
+
+  override async invoke(...args: Parameters<ToolRegistry['invoke']>): ReturnType<ToolRegistry['invoke']> {
+    if (this.#halted !== undefined) return { ok: false, reason: 'tool-error', message: `not-executed: ${this.#halted}` };
+    return super.invoke(...args);
+  }
+}
+
+/** Why a run that needed the owner's Chrome dispatches nothing more. Agent-facing. */
+export const CHROME_HALT = "the run stopped: it needs the owner's Chrome, and the owner has been asked. Do not call more tools; end your reply in one short line.";
+
+function registryForRun(base: ToolRegistry, sink: DecisionSink, reportMax?: number | null, ask?: AskSink): RunRegistry {
+  const registry = new RunRegistry();
   for (const manifest of base.manifests()) registry.register(manifest);
   registry.register(createMissionManifest(sink, { reportMax }));
   // Unattended: the run may ask the owner once, and parks on the question.
@@ -637,7 +665,8 @@ export function createMissionExecutor(
       ...(control?.jobId ? { jobId: control.jobId } : {}),
       ...(control?.signal ? { signal: control.signal } : {}),
       ...(browses ? { unattendedSession: UNATTENDED_BROWSER_TOOLS, ask: askVia(asked), unattendedChrome: mission.browser === 'owner' } : {}),
-      ...(askChrome ? { chromeRefused: (need: { site?: string }) => { chromeNeed ??= need; } } : {}),
+      // The refusal halts the run's registry: nothing after it is dispatched, gated calls included.
+      ...(askChrome ? { chromeRefused: (need: { site?: string }) => { chromeNeed ??= need; registry.halt(CHROME_HALT); } } : {}),
     };
 
     /*
@@ -690,6 +719,16 @@ export function createMissionExecutor(
       ...(deps.onToolCall ? { onToolCall: deps.onToolCall } : {}),
     });
 
+    // It needed the owner's Chrome and may not use it: one approval (Allow runs it once now with his
+    // Chrome; Not now leaves it), and nothing else. Whatever the run said after is held back: the
+    // card is the whole message, never "ask me in a chat to change this mission". It comes first:
+    // nothing was dispatched after the refusal, so no other approval can outrank it.
+    if (chromeNeed) {
+      await askForChrome(deps, mission, agentId, conversationId, chromeNeed, log);
+      await appendEvent(deps.pool, 'mission.silent', { missionId: mission.id, occurrenceId: occurrence.id, conversationId, reason: 'needs-chrome', ...(chromeNeed.site ? { site: chromeNeed.site } : {}) }, conversationId);
+      return { conversationId, text: result.text.trim(), delivered: false, decision: 'no-decision', reason: 'needs-chrome' };
+    }
+
     // The run proposed a gated effect and stopped. Nothing is decided, nothing
     // is delivered and nothing is silent: the caller parks the job and the
     // owner's answer brings the run back exactly here.
@@ -719,15 +758,6 @@ export function createMissionExecutor(
         decision: 'no-decision',
         awaiting: { actionId: result.pendingActionId, conversationId },
       };
-    }
-
-    // It needed the owner's Chrome and may not use it: one approval (Allow runs it once now with his
-    // Chrome; Not now leaves it), and nothing else. Whatever the run said after is held back: the
-    // card is the whole message, never "ask me in a chat to change this mission".
-    if (chromeNeed) {
-      await askForChrome(deps, mission, agentId, conversationId, chromeNeed, log);
-      await appendEvent(deps.pool, 'mission.silent', { missionId: mission.id, occurrenceId: occurrence.id, conversationId, reason: 'needs-chrome', ...(chromeNeed.site ? { site: chromeNeed.site } : {}) }, conversationId);
-      return { conversationId, text: result.text.trim(), delivered: false, decision: 'no-decision', reason: 'needs-chrome' };
     }
 
     // The run asked the owner, or a browser moment needed them (Look? / Keep going? / Sign in / Human check): park on the card.

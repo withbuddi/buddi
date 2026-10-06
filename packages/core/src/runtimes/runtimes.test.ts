@@ -6,6 +6,7 @@
  * binding is a fake.
  */
 import { existsSync, readdirSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,10 +16,12 @@ import { configurePluginHost, createPluginHost, hostBindingOf, readOnlyHostOf, r
 import type { PluginManifest } from '../tools.js';
 import { configureRuntimes, resetRuntimesConfig } from './config.js';
 import { describeRuntimesDownload, downloadArgs } from './consent.js';
+import { nodeGet, safeReason } from './download.js';
+import { sweepRuntimesOnce } from './area.js';
 import { startFakeServer, sha256, tgz, type FakeServer } from './__fixtures__/server.js';
-import { listModels, modelState, removeModel, resetModels, startModelDownload } from './models.js';
+import { listModels, markModelApproved, modelState, removeModel, resetModels, startModelDownload } from './models.js';
 import type { NativeSession, OnnxNative, OrtTensor } from './native.js';
-import { createOnnxSession, onnxSessionCounts, onnxState, removeOnnxRuntime, resetOnnxRuntime, startOnnxDownload } from './onnx.js';
+import { createOnnxSession, markOnnxApproved, onnxSessionCounts, onnxState, removeOnnxRuntime, resetOnnxRuntime, startOnnxDownload } from './onnx.js';
 import type { OnnxPin } from './pins.js';
 import { ONNX_PINS, onnxPinFor } from './pins.js';
 
@@ -84,6 +87,7 @@ beforeEach(async () => {
   server.modes.clear();
   server.hits.clear();
   server.redirects.clear();
+  server.delays.clear();
   server.files.set(TARBALL_PATH, TARBALL);
   loadCalls = 0;
   record = { loads: [], disposed: 0 };
@@ -110,12 +114,14 @@ afterEach(async () => {
 });
 
 describe('the pins', () => {
-  it('cover Linux x64 and both Macs, and leave Windows out', () => {
+  it('cover Linux and Apple silicon, and leave Windows and Intel Macs out for now', () => {
     expect(onnxPinFor('linux', 'x64')?.pin.version).toBe('1.30.0');
     expect(onnxPinFor('darwin', 'arm64')?.pin.version).toBe('1.30.0');
-    expect(onnxPinFor('darwin', 'x64')?.pin.version).toBe('1.23.2');
+    expect(onnxPinFor('darwin', 'x64')).toBeUndefined();
     expect(onnxPinFor('win32', 'x64')).toBeUndefined();
+    expect(onnxPinFor('constructor', '')).toBeUndefined();
     for (const entry of Object.values(ONNX_PINS)) {
+      if (entry === undefined) continue;
       expect(entry.tarball.url).toMatch(/^https:\/\/registry\.npmjs\.org\/onnxruntime-node\/-\//);
       for (const file of [entry.tarball, ...entry.files]) expect(file.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(entry.files.map((f) => f.name)).toContain('onnxruntime_binding.node');
@@ -310,7 +316,7 @@ describe('the card', () => {
   it('asks once for the model and the engine that runs it', () => {
     const args = downloadArgs('speech', 'to transcribe your voice notes here', true, { name: 'Whisper base model', bytes: 135_000_000 })!;
     const card = describeRuntimesDownload(args);
-    expect(card.preview).toMatch(/^Download the Whisper base model \(135 MB\) and the engine that runs it \([^)]+\)\? speech asks: to transcribe your voice notes here\. The engine is ONNX Runtime 9\.9\.9/);
+    expect(card.preview).toMatch(/^Download the Whisper base model \(135 MB\) and the engine that runs it \([^)]+\)\?\nspeech asks: to transcribe your voice notes here\. The engine is ONNX Runtime 9\.9\.9/);
     expect(args.key).toBe('onnx@9.9.9/linux-x64|named:Whisper base model');
   });
 
@@ -371,4 +377,175 @@ describe('who may reach it', () => {
     expect(state.state).toBe('ready');
     expect(state.pending).toBeUndefined();
   });
+});
+
+describe('the downloader\'s guards', () => {
+  const A = Buffer.from('weights '.repeat(2000));
+  const one = () => [{ url: 'https://huggingface.co/acme/m/resolve/main/model.onnx', sha256: sha256(A), bytes: A.length }];
+
+  beforeEach(() => {
+    server.files.set('/acme/m/resolve/main/model.onnx', A);
+  });
+
+  it('refuses a redirect to a private or local address, and never asks it', async () => {
+    for (const [i, target] of ['https://127.0.0.1/steal', 'https://10.1.2.3/steal', 'https://169.254.169.254/latest/meta-data', 'https://localhost/steal'].entries()) {
+      server.redirects.set('/acme/m/resolve/main/model.onnx', target);
+      await startModelDownload({ id: `m${i}`, files: one() });
+      expect(modelState(`m${i}`)).toMatchObject({ state: 'failed', reason: expect.stringMatching(/refusing/) });
+      expect(existsSync(path.join(data, 'models', `m${i}`))).toBe(false);
+    }
+    expect(server.hits.get('/steal')).toBeUndefined();
+    expect(server.hits.get('/latest/meta-data')).toBeUndefined();
+  });
+
+  it('refuses credentials, another port and plain http, first or after a redirect', async () => {
+    const get = server.get;
+    await expect(get('https://user:pass@huggingface.co/acme/m/resolve/main/model.onnx')).rejects.toThrow(/username or password/);
+    await expect(get('https://huggingface.co:8443/acme/m/resolve/main/model.onnx')).rejects.toThrow(/port 8443/);
+    await expect(get('http://huggingface.co/acme/m/resolve/main/model.onnx')).rejects.toThrow(/https only/);
+    server.redirects.set('/acme/m/resolve/main/model.onnx', 'https://user:sekret@cdn.example.com/blob?sig=abc123');
+    await startModelDownload({ id: 'creds', files: one() });
+    const state = modelState('creds');
+    expect(state).toMatchObject({ state: 'failed', reason: expect.stringMatching(/username or password/) });
+    expect(state.reason).not.toMatch(/sekret|sig=abc123/);
+    expect(server.hits.get('/blob')).toBeUndefined();
+  });
+
+  it('stops after five redirects', async () => {
+    server.redirects.set('/loop', 'https://huggingface.co/loop');
+    await expect(server.get('https://huggingface.co/loop')).rejects.toThrow(/too many redirects/);
+    expect(server.hits.get('/loop')).toBe(6);
+  });
+
+  it('resolves every name through the guard, so a public name that answers a private address is refused', async () => {
+    const get = nodeGet({
+      request: httpRequest as never,
+      // The socket dials a name, which only the guard resolves; it answers loopback.
+      rewrite: (url) => `http://rebind.example:${server.port}${new URL(url).pathname}`,
+      resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+    });
+    await expect(get('https://rebind.example/acme/m/resolve/main/model.onnx')).rejects.toThrow(/loopback|refus/);
+    expect(server.hits.get('/acme/m/resolve/main/model.onnx')).toBeUndefined();
+  });
+
+  it('keeps a failure reason free of credentials, paths and queries', () => {
+    const reason = safeReason('could not fetch https://user:sekret@cdn.example.com/private/abc?X-Amz-Signature=deadbeef\nthen gave up');
+    expect(reason).toBe('could not fetch cdn.example.com then gave up');
+    expect(safeReason('x'.repeat(1000))).toHaveLength(300);
+  });
+});
+
+describe('two models at once', () => {
+  const A = Buffer.from('model a '.repeat(3000));
+  const B = Buffer.from('model b '.repeat(3000));
+
+  it('downloads both: neither sweeps the other\'s staging folder', async () => {
+    server.files.set('/a/model.onnx', A);
+    server.files.set('/b/model.onnx', B);
+    // A is still staging when B starts and sweeps.
+    server.delays.set('/a/model.onnx', 150);
+    const a = startModelDownload({ id: 'model-a', files: [{ url: 'https://huggingface.co/a/model.onnx', sha256: sha256(A), bytes: A.length }] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(readdirSync(path.join(data, 'models')).some((name) => name.startsWith('.tmp-model-a+'))).toBe(true);
+    const b = startModelDownload({ id: 'model-b', files: [{ url: 'https://huggingface.co/b/model.onnx', sha256: sha256(B), bytes: B.length }] });
+    await Promise.all([a, b]);
+    expect(modelState('model-a').state).toBe('ready');
+    expect(modelState('model-b').state).toBe('ready');
+    expect(readdirSync(path.join(data, 'models')).sort()).toEqual(['model-a', 'model-b']);
+  });
+});
+
+describe('a download cut short by a restart', () => {
+  const fakePool = {} as Pool;
+  const facts = { db: fakePool, now: () => new Date('2026-10-06T10:00:00Z'), timezone: 'UTC' };
+  const manifest = (): PluginManifest =>
+    ({ name: 'speech', version: '1.0.0', schema: 'speech', migrationsDir: '', tools: [], uses: ['onnx'] }) as unknown as PluginManifest;
+
+  it('resumes on the next ensure with no second card, for the engine and a model', async () => {
+    const M = Buffer.from('resumed '.repeat(500));
+    server.files.set('/r/model.onnx', M);
+    const files = [{ url: 'https://huggingface.co/r/model.onnx', sha256: sha256(M), bytes: M.length, name: 'model.onnx' }];
+    await markOnnxApproved();
+    await markModelApproved('resumed', files);
+    // The pool is never touched: a card would need it.
+    const host = createPluginHost(hostBindingOf(manifest()), facts);
+    const engine = await host.onnx!.ensure({ reason: 'to listen' });
+    expect(engine).toMatchObject({ state: 'downloading' });
+    expect(engine.pending).toBeUndefined();
+    const model = await host.models!.ensure({ id: 'resumed', files, reason: 'to listen' });
+    expect(model).toMatchObject({ state: 'downloading' });
+    expect(model.pending).toBeUndefined();
+    await startOnnxDownload();
+    await startModelDownload({ id: 'resumed', files });
+    expect(onnxState().state).toBe('ready');
+    expect(modelState('resumed').state).toBe('ready');
+    // Spent: neither marker is left, so a later Remove asks again.
+    expect(readdirSync(versionDir()).filter((name) => name.endsWith('.approved.json'))).toEqual([]);
+    expect(readdirSync(path.join(data, 'models'))).toEqual(['resumed']);
+  });
+
+  it('sweeps half-written temporaries once at boot', async () => {
+    await mkdir(versionDir(), { recursive: true });
+    await mkdir(path.join(data, 'models', '.tmp-old+abc'), { recursive: true });
+    await writeFile(path.join(versionDir(), '.tmp-abc.tgz'), 'half');
+    await sweepRuntimesOnce();
+    expect(readdirSync(versionDir())).toEqual([]);
+    expect(readdirSync(path.join(data, 'models'))).toEqual([]);
+  });
+});
+
+describe('closing a session while it loads', () => {
+  it('never loads the model once it was closed during the engine\'s check', async () => {
+    await startOnnxDownload();
+    const session = createOnnxSession(path.join(data, 'model.onnx'));
+    const running = session.run({ x: { type: 'float32', data: new Float32Array([1]), dims: [1] } });
+    // The run is hashing the engine's files; close it now.
+    await session.close();
+    await expect(running).rejects.toThrow(/closed/);
+    expect(record.loads).toHaveLength(0);
+    expect(session.loaded).toBe(false);
+    expect(onnxSessionCounts()).toEqual({ open: 0, loaded: 0 });
+  });
+
+  it('refuses a run still queued when it closes, and unloads once', async () => {
+    await startOnnxDownload();
+    const session = createOnnxSession(path.join(data, 'model.onnx'));
+    await session.run({ x: { type: 'float32', data: new Float32Array([1]), dims: [1] } });
+    const queued = session.run({ x: { type: 'float32', data: new Float32Array([2]), dims: [1] } });
+    await session.close();
+    await expect(queued).rejects.toThrow(/closed/);
+    expect(record.disposed).toBe(1);
+    expect(record.loads).toHaveLength(1);
+    expect(session.loaded).toBe(false);
+  });
+});
+
+describe('the engine\'s worker', () => {
+  it('runs a long inference off the main thread: a timer keeps its pace meanwhile', async () => {
+    await startOnnxDownload();
+    configureRuntimes({ loadNative: undefined, fakeWorkerBinding: true });
+    const session = createOnnxSession(path.join(data, 'model.onnx'));
+    // Load first, so only the run is timed.
+    expect(await session.names()).toEqual({ inputs: ['x'], outputs: ['y'] });
+    let last = Date.now();
+    let worst = 0;
+    let ticks = 0;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      worst = Math.max(worst, now - last);
+      last = now;
+      ticks += 1;
+    }, 10);
+    try {
+      const out = await session.run({ x: { type: 'float32', data: new Float32Array([400]), dims: [1] } });
+      expect(Array.from(out.y!.data as Float32Array)).toEqual([401]);
+    } finally {
+      clearInterval(timer);
+    }
+    // 400 ms of a busy run: the main thread kept ticking every ~10 ms.
+    expect(ticks).toBeGreaterThan(15);
+    expect(worst).toBeLessThan(200);
+    await session.close();
+    expect(await removeOnnxRuntime()).toEqual({ removed: true });
+  }, 30_000);
 });

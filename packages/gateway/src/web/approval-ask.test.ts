@@ -28,3 +28,19 @@ describe('approvalAsk', () => {
     expect(ask.endsWith('…')).toBe(true);
   });
 });
+
+describe('core asks in their own words', () => {
+  it("heads a download or a secret's card with its question, Telegram included", async () => {
+    const { asksInOwnWords } = await import('./approval-ask.js');
+    const { approvalRequestText } = await import('../telegram/approvals.js');
+    expect(asksInOwnWords('runtimes.download')).toBe(true);
+    expect(asksInOwnWords('secrets.use')).toBe(true);
+    expect(asksInOwnWords('schedule.use_chrome')).toBe(true);
+    expect(asksInOwnWords('mail.send')).toBe(false);
+    const text = approvalRequestText({
+      id: 'a1', tool: 'runtimes.download', agentId: 'speech', preview: 'Download the Whisper base model (135 MB)?\nspeech asks: to listen.',
+      expiresAt: new Date('2026-10-07T10:00:00Z'), canonicalArgs: {}, choices: [],
+    } as never, 'UTC');
+    expect(text.split('\n')[0]).toBe('Approval needed — Download the Whisper base model (135 MB)?');
+  });
+});
