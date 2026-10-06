@@ -1836,6 +1836,33 @@ export interface ServiceStatus {
   gatewayPid: number | null;
 }
 
+/** Settings → System, Local models (host API 1.32): the ONNX engine and the shared models. */
+export interface RuntimeState {
+  state: 'absent' | 'downloading' | 'ready' | 'failed';
+  version: string;
+  sizeBytes: number;
+  downloadBytes: number;
+  platform: string;
+  available: boolean;
+  reason?: string;
+  receivedBytes?: number;
+  sessions: { open: number; loaded: number };
+}
+
+export interface SharedModelState {
+  id: string;
+  state: 'absent' | 'downloading' | 'ready' | 'failed';
+  sizeBytes: number;
+  path?: string;
+  reason?: string;
+  receivedBytes?: number;
+}
+
+export interface RuntimesView {
+  onnx: RuntimeState;
+  models: SharedModelState[];
+}
+
 export interface ServiceView {
   supervised: boolean;
   status?: ServiceStatus;
@@ -3048,6 +3075,9 @@ export const api = {
     ),
   setPaused: (paused: boolean) => post<{ paused: boolean }>('/pause', { paused }).then(statusChanged),
   service: () => get<ServiceView>('/service'),
+  runtimes: () => get<RuntimesView>('/runtimes'),
+  removeEngine: () => del<RuntimesView>('/runtimes/onnx'),
+  removeModel: (id: string) => del<RuntimesView>(`/runtimes/models/${encodeURIComponent(id)}`),
   /**
    * Start, stop or restart the gateway through the supervisor. A `stop` or a
    * `restart` is *accepted* rather than completed: it ends the gateway serving

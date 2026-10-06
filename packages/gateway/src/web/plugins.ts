@@ -38,6 +38,7 @@ import {
   type InstalledPlugin,
   type PluginAuthor,
   type PluginManifest,
+  RUNTIMES_PLUGIN,
 } from '@buddi/core';
 import { agentSearchPath, AGENTS_DIR, builtInManifests, installedManifests } from '../agents/catalog.js';
 import { CANVAS_PLUGIN } from '../agents/canvas.js';
@@ -359,6 +360,8 @@ const INTERNAL_FAMILIES: ReadonlySet<string> = new Set([
   AGENT_PLUGIN,
   REMINDER_PLUGIN,
   SCHEDULE_PLUGIN,
+  // The local-model download card's tool: buddi's engine, not a plugin.
+  RUNTIMES_PLUGIN,
 ]);
 
 /**

@@ -962,6 +962,9 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'POST', path: '/api/service/start', area: 'system', summary: 'Start through the supervisor.', errors: '404 no supervisor; 502; 503' },
   { method: 'POST', path: '/api/service/stop', area: 'system', summary: 'Stop buddi. Accepted, then done once the answer is sent; nothing answers after.', answer: "202 { supervised: true, pending: 'stop' }", errors: '404 no supervisor' },
   { method: 'POST', path: '/api/service/restart', area: 'system', summary: 'Restart buddi; it is back in seconds.', answer: "202 { supervised: true, pending: 'restart' }", errors: '404 no supervisor' },
+  { method: 'GET', path: '/api/runtimes', area: 'system', summary: 'The local-model engine (ONNX Runtime) and the shared models: state, version, sizes.', answer: '{ onnx: { state, version, sizeBytes, downloadBytes, platform, available, reason?, sessions }, models: ModelState[] }' },
+  { method: 'DELETE', path: '/api/runtimes/onnx', area: 'system', summary: 'Remove the engine, and any recorded failure; the next plugin to need it asks again.', answer: 'the same as GET /api/runtimes', errors: '409 downloading' },
+  { method: 'DELETE', path: '/api/runtimes/models/:id', area: 'system', summary: 'Remove one shared model.', answer: 'the same as GET /api/runtimes', errors: '409 downloading' },
   { method: 'GET', path: '/api/version', area: 'system', summary: 'What is running, and what upgrading did before.' },
   { method: 'POST', path: '/api/version/check', area: 'system', summary: 'Check for a newer version now.', errors: '409; 503' },
   { method: 'PUT', path: '/api/version/check', area: 'system', summary: 'Turn the daily check on or off.', body: '{ enabled: boolean }', errors: '400' },
@@ -1312,6 +1315,9 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'GET /api/runtimes': '0.1.0-pre.48',
+  'DELETE /api/runtimes/onnx': '0.1.0-pre.48',
+  'DELETE /api/runtimes/models/:id': '0.1.0-pre.48',
   'GET /api/system/cli': '0.1.0-pre.41',
   'POST /api/system/cli': '0.1.0-pre.41',
   'GET /api/system/uninstall': '0.1.0-pre.41',

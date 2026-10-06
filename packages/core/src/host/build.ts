@@ -46,6 +46,8 @@ import { PluginCallRefusal, parsePluginRequires } from '../plugin/requires.js';
 import { listOwnerPlaces } from '../places.js';
 import { deletePluginAsset, listPluginAssets, putPluginAsset, type AssetImageCodec } from '../plugin-assets.js';
 import { localDateString, ownerTimezone } from '../time.js';
+import { modelsAreaOf, onnxAreaOf } from '../runtimes/area.js';
+import { configureRuntimes } from '../runtimes/config.js';
 import {
   createHttpArea,
   isOwnBasicBinding,
@@ -228,6 +230,8 @@ let services: PluginHostServices = {};
 /** Hand the host its process-wide services. Merges: each caller sets what it owns. */
 export function configurePluginHost(more: PluginHostServices): void {
   services = { ...services, ...more };
+  // The engine and the shared models live in the same data directory (1.32).
+  if (more.env !== undefined) configureRuntimes({ env: more.env });
   // Core's own destination (owner-secrets §3): `http.header`, under core's
   // `http` area. Re-registering from the same name replaces, so every process
   // that configures the host carries it; a plugin cannot name it — `use`
@@ -632,6 +636,20 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       delete: (key) => deletePluginAsset(plugin, key, env()),
       list: () => listPluginAssets(plugin, env()),
     };
+  }
+  if (declared.has('onnx')) {
+    // The one engine and the shared models (1.32): core's folders, not the
+    // plugin's `dir`; a download starts only from the owner's approved card.
+    const runtimeFacts = {
+      plugin,
+      dir: () => host.dir.path,
+      pool,
+      agentId: facts.agentId,
+      conversationId: facts.conversationId,
+      now: () => facts.now(),
+    };
+    host.onnx = onnxAreaOf(runtimeFacts);
+    host.models = modelsAreaOf(runtimeFacts);
   }
   if (declared.has('owner:notify')) {
     // The kind is always `plugin` and the plugin's name is on the row: a
@@ -1327,6 +1345,9 @@ export function readOnlyHostOf(host: BuddiHost, what: string): BuddiHost {
   if (host.channels) view.channels = only('channels', host.channels, []);
   // An export reads its own assets; it never writes them for its caller.
   if (host.assets) view.assets = only('assets', host.assets, ['list']);
+  // An export may say where the engine and a model stand; it never asks for a download or runs one.
+  if (host.onnx) view.onnx = only('onnx', host.onnx, ['state']);
+  if (host.models) view.models = only('models', host.models, ['state']);
   // Another export, under the same rules: it is read-only in its turn.
   if (host.plugins) view.plugins = host.plugins;
   return view;

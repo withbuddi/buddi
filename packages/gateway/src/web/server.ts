@@ -73,6 +73,7 @@ import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
 import { ProviderAccountError, type ProviderAccounts } from '../provider-accounts.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR } from '../agents/catalog.js';
 import { setDelegatesFromWeb } from './write.js';
+import { removeEngineRoute, removeModelRoute, runtimesView } from './runtimes.js';
 import { mlxhBaseUrl, probeMlxh } from '../mlxh.js';
 import { PullRefusal, createOllamaPulls, ollamaMachine, type OllamaMachine, type OllamaPulls } from '../ollama-local.js';
 import {
@@ -2333,6 +2334,9 @@ export function createWebApp(deps: WebServerDeps): Server {
          * Read-only, and it says `active: false` on an installation that was
          * never restored rather than 404 — the shell asks unconditionally.
          */
+        // The local-model engine and shared models (host API 1.32): Settings → System.
+        case '/api/runtimes':
+          return reply(res, runtimesView());
         case '/api/recovery':
           return sendJson(res, 200, await readRecoveryView({ pool: deps.pool, env: deps.env ?? process.env }, deps.ctx.ownerId));
         /*
@@ -2873,6 +2877,10 @@ export function createWebApp(deps: WebServerDeps): Server {
         const forgotten = await extension.unpair();
         return sendJson(res, forgotten.status, forgotten.body);
       }
+      // Remove the local-model engine or a shared model; the next plugin to need it asks again.
+      if (path === '/api/runtimes/onnx') return reply(res, await removeEngineRoute());
+      const modelGone = /^\/api\/runtimes\/models\/([^/]+)$/.exec(path);
+      if (modelGone) return reply(res, await removeModelRoute(decodeURIComponent(modelGone[1] as string)));
       // Delete a skill: the agents that asked for it stop, the file goes to the trash.
       const stagedGone = /^\/api\/skills\/bundles\/([^/]+)$/.exec(path);
       if (stagedGone) return reply(res, discardStaged(incomingDirFor(skillsDeps().skillsDir), decodeURIComponent(stagedGone[1] as string)));

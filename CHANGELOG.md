@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Plugins that run models on this computer share one engine that buddi downloads only when it is first needed, for this platform only, instead of each plugin carrying its own 200 MB copy for every platform. The first plugin to need it shows one card ("Download the Whisper base model (135 MB) and the engine that runs it (114 MB)?"); later plugins use it without asking. The download is checked against a checksum pinned in buddi before anything is kept or loaded. Settings → System → Local models shows the engine (state, version, size) and the models plugins keep there, each with Remove. Linux x64 and arm64 and both Macs; not available on Windows yet. (Host API 1.32: `uses: ['onnx']`, `ctx.buddi.onnx`, `ctx.buddi.models`.)
+
 ## 0.1.0-pre.47 — 2026-10-06
 
 ### Fixed

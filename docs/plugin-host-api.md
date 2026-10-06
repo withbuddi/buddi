@@ -1,7 +1,7 @@
 ---
 title: The plugin host API
 status: reference
-updated: 2026-10-03
+updated: 2026-10-06
 ---
 
 # The plugin host API
@@ -99,6 +99,7 @@ interface BuddiHost {
   secrets?: SecretsArea; channels?: ChannelsArea;
   plugins?: PluginsArea;               // 1.18, with `requires`; 1.27, or `optional`
   assets?: AssetsArea;                 // 1.27
+  onnx?: OnnxArea; models?: ModelsArea; // 1.32, both with `onnx`
 }
 ```
 
@@ -195,6 +196,105 @@ decoding is the gateway's (pngjs, jpeg-js, omggif, an ICO reader), handed to
 core as `configurePluginHost({ images })` the way the HTTP transport is; a
 process without it refuses `put` in a sentence. An export's read-only host
 keeps only `list`. The card says "keeps small images it fetched, like logos".
+
+**onnx.** (1.32) The one engine plugins run local models on, and the models
+they share. A plugin that runs an ONNX model (speech's Whisper through
+`@huggingface/transformers`, news's embeddings) used to carry
+`onnxruntime-node` itself: about 208 MB per plugin, because that npm package
+bundles every platform. With `uses: ['onnx']` it carries none; buddi fetches
+the engine when it is first needed, for this platform only, like a model.
+
+```ts
+interface OnnxArea {
+  state(): Promise<OnnxRuntimeState>;   // { state: 'absent'|'downloading'|'ready'|'failed', version, sizeBytes, downloadBytes, platform, available, reason?, receivedBytes?, pending? }
+  ensure(req: { reason: string; model?: { name?, bytes?, id?, files? } }): Promise<OnnxRuntimeState>;
+  createSession(modelPath: string, opts?: { threads?: number; idleUnloadMs?: number }): Promise<OnnxSession>;
+}
+interface OnnxSession {
+  run(feeds: Record<string, OnnxTensor>): Promise<Record<string, OnnxTensor>>; // { type, data, dims }
+  names(): Promise<{ inputs: string[]; outputs: string[] }>;
+  readonly loaded: boolean;
+  close(): Promise<void>;
+}
+interface ModelsArea {
+  state(id: string): Promise<ModelState>; // { id, state, sizeBytes, path?, reason?, receivedBytes?, pending? }
+  ensure(req: { id: string; files: { url, sha256, bytes, name? }[]; reason: string; name?: string }): Promise<ModelState>;
+}
+```
+
+*Where it comes from.* The `onnxruntime-node` tarball on the npm registry,
+because it is the only place Microsoft publishes the small N-API binding
+(`onnxruntime_binding.node`) next to the library it links; the GitHub
+release archives (`onnxruntime-<os>-<arch>-<ver>.tgz`) carry the C library
+and no binding. The tarball holds every platform, so buddi downloads it once,
+checks its sha256, and extracts only this platform's two files, each checked
+against its own pin; the rest is never written. Pins live in
+`packages/core/src/runtimes/pins.ts`:
+
+| Platform | Version | Download | On disk |
+| --- | --- | --- | --- |
+| macOS arm64 | 1.30.0 | 114 MB | 45 MB |
+| macOS x64 | 1.23.2 | 97 MB | 40 MB |
+| Linux x64 | 1.30.0 | 114 MB | 46 MB |
+| Linux arm64 | 1.30.0 | 114 MB | 26 MB |
+| Windows | — | not available on this platform | |
+
+1.30.0 is the newest stable. Microsoft stopped building macOS x64 at 1.24
+(npm and GitHub alike), so Intel Macs get 1.23.2, the last build that has
+it; the binding's interface is the same. buddi talks to the binding directly
+(`runtimes/native.ts`), with a tensor class of its own, so neither
+`onnxruntime-node` nor `onnxruntime-common` is in the install.
+
+*On disk.* `<data>/runtimes/onnx/<version>/<platform>-<arch>/`: the binding,
+the library, and `.verified.json`. Everything is written under a `.tmp-*`
+name in the folder it ends up in; the sha256 and length are checked while the
+bytes arrive; the folder is renamed into place only once every file matched;
+a download that dies deletes what it wrote, and one a dead process left is
+swept by the next. Before the binding is opened, each file is hashed again.
+Nothing downloaded runs before its hash matched.
+
+*The states.* `absent` (no folder), `downloading` (in this process, with
+`receivedBytes`), `ready`, `failed` with the reason. A failed download or a
+failed load is kept in `<platform>-<arch>.failed.json` and never retried by
+itself, across restarts too; Remove in Settings → System clears it. Windows
+answers `failed` with `available: false` and "The engine is not available on
+this platform (win32-x64)."
+
+*Consent.* `ensure` answers at once. When the engine (or the model it names)
+is missing it raises one card and answers `pending` with its id; nothing is
+fetched before the owner approves. The card covers the engine and the
+plugin's first model together: `ensure({ reason: 'to transcribe your voice
+notes', model: { name: 'Whisper base model', bytes: 135_000_000 } })` asks
+"Download the Whisper base model (135 MB) and the engine that runs it
+(114 MB)?". While a card is pending, asking again — from the same plugin, or
+another that needs only the engine — answers the same card. Once the engine
+is ready, a later plugin's `ensure` raises nothing for a model it fetches
+itself. Approving runs core's ownerOnly `runtimes.download`, which starts the
+download(s); the plugin polls `state()`.
+
+*Sessions.* `createSession(modelPath)` opens a model in the plugin's `dir` or
+in the shared models, never elsewhere (links followed). Every session shares
+the process's one loaded binding. A session loads its model on its first
+`run`, with `threads` intra-op threads (default 2, clamped to half the cores,
+at most 8) and one inter-op thread, runs one call at a time, and unloads after
+`idleUnloadMs` without a run (default five minutes, `0` keeps it); the next
+`run` loads it again. `run` takes and answers plain `{ type, data, dims }`
+tensors; the binding's run is synchronous, so a long inference holds the
+event loop as it did in each plugin. No tokenizer helper: a plugin keeps its
+own.
+
+*Shared models.* `models.ensure({ id, files, reason, name? })`: one folder,
+`<data>/models/<id>/`, per id across plugins, downloaded once under the same
+rules and the same single card. Files are https, pass `checkUrl`, carry
+their sha256 and length, and may redirect (a CDN) — the bytes are checked
+either way. An id already kept with other files is refused rather than
+replaced. `state(id).path` is the folder once it is ready. `onnx.ensure`
+also takes `model: { id, files }` to put a shared model on the engine's card.
+Plugins keep their own download code until they move here.
+
+An export's read-only host keeps `onnx.state` and `models.state` only. The
+card says "runs local models on buddi's engine, downloaded only when you
+agree".
 
 **plugins** (with `requires`, not a `uses` area). `ctx.buddi.plugins.call(name,
 exportName, args)` (1.18) calls a named read-only export of a plugin this one
@@ -406,7 +506,7 @@ password), the one stated exception to "never held". The product is
 
 The manifest carries `uses: ('http' | 'accounts' | 'files' | 'files:library'
 | 'memory' | 'proposals' | 'schedule' | 'secrets' | 'owner:notify' | 'owner:channel'
-| 'owner:places' | 'assets')[]`. Because the staged
+| 'owner:places' | 'assets' | 'onnx')[]`. Because the staged
 install screen may not import anything, the same list goes in
 `package.json` as `buddi.uses`; at load the two must match or the plugin
 does not register, as `network` is compared with `buddi.md`.
@@ -418,7 +518,8 @@ model account you pick", "reads every file in your Files library",
 "starts agent runs by itself", "fills secrets you bind to it", "can send
 you messages when you are away", "adds a way for buddi to reach you", "reads
 your places (Home, Work…) and their addresses", "keeps small images it
-fetched, like logos". An area
+fetched, like logos", "runs local models on buddi's engine, downloaded only
+when you agree". An area
 not declared is absent from `ctx.buddi`, so a call to it is a type error
 and, at runtime, `undefined`. Adding an area in an upgrade is shown as a
 change on the upgrade card.
@@ -474,7 +575,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.31`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.32`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -823,6 +924,14 @@ queries: [{
 
 An older buddi refuses a query whose `sensitive` is not a boolean, so a
 plugin that marks values asks for `^1.31`.
+
+1.32 adds the `onnx` area (§4.2): `uses: ['onnx']` gives `ctx.buddi.onnx`
+(`state`, `ensure`, `createSession`) and `ctx.buddi.models` (`state`,
+`ensure`), one engine downloaded on first need for this platform only, after
+one owner card that covers the engine and the plugin's first model. An older
+buddi refuses `onnx` in `uses` at staging, so a plugin that declares it asks
+for `^1.32`. A plugin that must still run on an older buddi keeps its own
+`onnxruntime-node` as an optional fallback and checks `ctx.buddi.onnx`.
 
 ## 8. End to end
 

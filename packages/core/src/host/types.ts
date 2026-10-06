@@ -25,6 +25,9 @@ import type { Proposal } from '../learning/types.js';
 import type { ResolvedProvider } from '../provider.js';
 import type { CodexImage, CodexImageOptions, CodexProfile, ProviderAccountListing } from '../provider-accounts.js';
 import type { ToolContext, ToolDefinition } from '../tools.js';
+import type { OnnxRuntimeState, OnnxSession, OnnxSessionOptions } from '../runtimes/onnx.js';
+import type { ModelRequest, ModelState } from '../runtimes/models.js';
+import type { EnsureModel } from '../runtimes/consent.js';
 
 /** The host, bound to one plugin. See the file comment. */
 export interface BuddiHost {
@@ -72,6 +75,10 @@ export interface BuddiHost {
   plugins?: PluginsArea;
   /** Declared as `assets`. Since 1.27. */
   assets?: AssetsArea;
+  /** Declared as `onnx`: buddi's one local-model engine. Since 1.32. */
+  onnx?: OnnxArea;
+  /** Declared as `onnx`: models kept once for every plugin. Since 1.32. */
+  models?: ModelsArea;
 }
 
 /* ------------------------------------------------------------------ *
@@ -161,6 +168,38 @@ export interface AssetsArea {
   delete(key: string): Promise<boolean>;
   /** Every asset this plugin keeps. */
   list(): Promise<PluginAsset[]>;
+}
+
+/**
+ * buddi's ONNX engine (1.32): downloaded on first need, for this platform
+ * only, after the owner's yes, and shared by every plugin that declares
+ * `onnx`. See `runtimes/onnx.ts`.
+ */
+export interface OnnxArea {
+  /** Where the engine stands: absent, downloading, ready or failed, its version and size. */
+  state(): Promise<OnnxRuntimeState>;
+  /**
+   * Ask for the engine, and the model it will run in the same card. Answers
+   * at once with the state; when something is missing, `pending` is the card
+   * raised (or the one already raised for the same thing), and nothing is
+   * fetched before the owner approves it. Once the engine is here, a model the
+   * plugin fetches itself asks nothing more.
+   */
+  ensure(req: { reason: string; model?: EnsureModel }): Promise<OnnxRuntimeState>;
+  /**
+   * A session over a model in this plugin's directory or in the shared models,
+   * on the one engine. Loaded on its first `run`, unloaded after it sat idle.
+   * Throws `OnnxUnavailable` when the engine is not ready.
+   */
+  createSession(modelPath: string, opts?: OnnxSessionOptions): Promise<OnnxSession>;
+}
+
+/** Shared models (1.32): one folder per id, one download across plugins. */
+export interface ModelsArea {
+  /** A model's state, with its folder once it is ready. */
+  state(id: string): Promise<ModelState>;
+  /** Ask for a model: one card, then one download, checked file by file. Answers at once. */
+  ensure(req: ModelRequest & { reason: string; name?: string }): Promise<ModelState>;
 }
 
 /**

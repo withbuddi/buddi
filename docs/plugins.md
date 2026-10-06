@@ -431,6 +431,7 @@ the timers and the hosts:
 | `owner:channel` | adds a way for buddi to reach you |
 | `owner:places` | reads your places (Home, Work…) and their addresses |
 | `assets` | keeps small images it fetched, like logos |
+| `onnx` | runs local models on buddi's engine, downloaded only when you agree |
 
 `files` sees what you saved and what was handed into your conversation;
 `files:library` is the whole library, and the card says so in those words —
@@ -491,7 +492,7 @@ prints the line telling you to restart buddi yourself.
 
 ### 1.7 Versioning
 
-`ctx.buddi.version` is `major.minor`, `1.18` today. Say what you were built
+`ctx.buddi.version` is `major.minor`, `1.32` today. Say what you were built
 against as `buddi.hostApi` in `package.json` — the scaffold writes `"^1.0"`. A
 plugin asking for more than this buddi has is refused at staging, before
 anything is imported, with both numbers: `^1.2` on a `1.0` host is "built for
@@ -3282,7 +3283,7 @@ version each arrived in — is §9b.
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `author` | `PluginAuthor` | no | Who made you: `{ name, url? }`, the name at most 80 characters, the URL `https:`. The install card and the Plugins page show "by <name>", linked to the URL. Checked at `register()`. Without it the card reads `author` from your `package.json` (a string or `{ name, url }`); with both, the names must match or approval is refused. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
-| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`, `owner:channel`, `owner:places`, `assets` (1.27). Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
+| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`, `owner:channel`, `owner:places`, `assets` (1.27), `onnx` (1.32). Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
 | `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/owner-secrets.md §3. |
 | `setup` | `PluginSetup` | no | Whether you can do anything yet: `{ produce(ctx) }` answering `{ ready, note?, page? }`, read-only, five seconds. Not ready, the Plugins row says "needs setup" and opens `page`. Host API 1.18. See §2.9. |
 | `requires` | `Record<string, string>` | no | Plugins you need, by name, with a semver range. Repeated as `buddi.requires` in `package.json`; the two must match. Until each is installed, enabled, in range and set up, nothing of yours loads; declaring any gives `ctx.buddi.plugins`. Host API 1.18. See §2.10. |
@@ -3625,6 +3626,8 @@ that say otherwise.
 | `channels` | `ChannelsArea` | no | 1.3 | Declared as `owner:channel`. A way to reach the owner that you carry, listed in Settings → Notifications. Also on the `register` hook's host. |
 | `plugins` | `PluginsArea` | no | 1.18 | Present when your manifest declares `requires`, or `optional` (1.27): the named read-only exports of those plugins (§2.10). |
 | `assets` | `AssetsArea` | no | 1.27 | Declared as `assets`. Small images you fetched, kept and served by buddi. |
+| `onnx` | `OnnxArea` | no | 1.32 | Declared as `onnx`. buddi's one local-model engine, downloaded on first need for this platform only, after the owner's card. |
+| `models` | `ModelsArea` | no | 1.32 | Declared as `onnx`. Models kept once in `<data>/models/<id>/` for every plugin. |
 
 #### `OwnerArea`
 
@@ -3785,3 +3788,26 @@ checks a request against, exactly like a manifest host.
 | `put` | `(key, bytes, mime) => Promise<PluginAsset>` | yes | 1.27 | Keep an image under `key` (lower case, digits, `.`, `_`, `-`, at most 96), replacing what was there. PNG, JPEG, GIF (its first frame) or ICO, at most 256 KB; SVG is refused (it can carry script), and WebP too for now. Core decodes it and keeps PNGs it drew itself, 64 and 128 px square, the picture fitted and centred; served session-gated at `/api/plugin-assets/<plugin>/<key>` (`?size=64`). 20 MB per plugin. Answers `{ key, bytes, updatedAt }`; a refusal is thrown with the sentence why. |
 | `delete` | `(key) => Promise<boolean>` | yes | 1.27 | Delete one. False when there was none. |
 | `list` | `() => Promise<PluginAsset[]>` | yes | 1.27 | Every asset you keep. An export's read-only host keeps only this. |
+
+#### `OnnxArea`
+
+Declared as `onnx` (plugin-host-api.md §4.2). Types `OnnxRuntimeState`,
+`OnnxSession`, `OnnxSessionOptions`, `OnnxTensor` and `EnsureModel` are
+exported from `@buddi/core/plugin`. Don't ship `onnxruntime-node` with a
+plugin that declares this: the engine is buddi's.
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `state` | `() => Promise<OnnxRuntimeState>` | yes | 1.32 | `{ state: 'absent' \| 'downloading' \| 'ready' \| 'failed', version, sizeBytes, downloadBytes, platform, available, reason?, receivedBytes? }`. `failed` keeps its reason and never retries by itself; Windows is `failed` with `available: false`. An export's read-only host keeps only this. |
+| `ensure` | `({ reason, model? }) => Promise<OnnxRuntimeState>` | yes | 1.32 | Ask for the engine, and the model it will run, in one owner card ("Download the Whisper base model (135 MB) and the engine that runs it (114 MB)?"). Answers at once; `pending` is the card's id while it waits, and asking again answers the same card. `model` is `{ name, bytes }` for a model you fetch yourself, or `{ id, files, name? }` for a shared one (`models.ensure`'s). Once the engine is ready, a model you fetch yourself asks nothing more. |
+| `createSession` | `(modelPath, { threads?, idleUnloadMs? }?) => Promise<OnnxSession>` | yes | 1.32 | A session over a model in your `dir` or the shared models, on the one engine. `run(feeds)` takes and answers `{ type, data, dims }` tensors; `names()`, `loaded`, `close()`. Loaded on first `run`; `threads` default 2, clamped to half the cores (at most 8); unloaded after `idleUnloadMs` idle (default five minutes, 0 keeps it). Throws `OnnxUnavailable` when the engine is not ready. |
+
+#### `ModelsArea`
+
+Declared as `onnx`. One folder per model id across plugins; the types are
+`ModelRequest`, `ModelFile` and `ModelState`.
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `state` | `(id) => Promise<ModelState>` | yes | 1.32 | `{ id, state, sizeBytes, path?, reason?, receivedBytes? }`; `path` is the model's folder once it is ready. An export's read-only host keeps only this. |
+| `ensure` | `({ id, files, reason, name? }) => Promise<ModelState>` | yes | 1.32 | Ask for a model: one card, then one download into `<data>/models/<id>/`, every file https, checked against its `sha256` and `bytes` before the folder is renamed into place. `id` is lower case, digits, `.`, `_`, `-`; a file's `name` (default: the URL's last segment) may be up to four folders deep. An id already kept with other files is refused. Answers at once, with `pending` while the card waits. |

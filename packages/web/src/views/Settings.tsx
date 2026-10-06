@@ -340,6 +340,7 @@ function System({ timezone }: { timezone: string }): JSX.Element {
         ) : null}
       </Section>
       <Service />
+      <LocalModels />
       <AppInstallSection />
       <CommandLineTool />
       <AccessSettings />
@@ -365,6 +366,92 @@ function System({ timezone }: { timezone: string }): JSX.Element {
       {/* The last row, on purpose: nothing here is something to do often. */}
       <RemoveBuddi />
     </Stack>
+  );
+}
+
+/** Megabytes as the cards say them: `114 MB`. */
+function megabytes(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}
+
+const RUNTIME_TONE = { ready: 'good', downloading: 'muted', absent: 'muted', failed: 'critical' } as const;
+const RUNTIME_WORD = { ready: 'ready', downloading: 'downloading', absent: 'not downloaded', failed: 'failed' } as const;
+
+/**
+ * The engine plugins run local models on (host API 1.32), and the models
+ * kept once for every plugin. Nothing is downloaded from here: a plugin asks,
+ * and the owner says yes on its card. Remove frees the disk; the next plugin
+ * to need it asks again.
+ */
+export function LocalModels(): JSX.Element | null {
+  const view = useAsync(() => api.runtimes(), [], 10_000);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const data = view.data;
+  if (!data) return null;
+  const { onnx, models } = data;
+  const remove = (act: () => Promise<unknown>): void => {
+    setBusy(true);
+    setFailed(null);
+    void act()
+      .then(() => view.reload())
+      .catch((error: Error) => { setFailed(error.message); })
+      .finally(() => { setBusy(false); });
+  };
+  const engineValue = !onnx.available ? (
+    <span className="ui-card-meta">Not available on this platform ({onnx.platform}).</span>
+  ) : (
+    <span>
+      <Pill tone={RUNTIME_TONE[onnx.state]}>{RUNTIME_WORD[onnx.state]}</Pill>{' '}
+      <span className="ui-card-meta">
+        ONNX Runtime {onnx.version} · {onnx.state === 'downloading' && onnx.receivedBytes !== undefined
+          ? `${megabytes(onnx.receivedBytes)} of ${megabytes(onnx.downloadBytes)}`
+          : `${megabytes(onnx.sizeBytes)} on disk (${megabytes(onnx.downloadBytes)} download)`}
+      </span>
+    </span>
+  );
+  return (
+    <Section
+      title="Local models"
+      panel
+      actions={
+        onnx.available && (onnx.state === 'ready' || onnx.state === 'failed') ? (
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => { remove(() => api.removeEngine()); }}>
+            Remove
+          </Button>
+        ) : undefined
+      }
+    >
+      <Stack gap="sm">
+        <ErrorBanner message={failed} />
+        <KV
+          items={[
+            { label: 'Engine', value: engineValue },
+            ...models.map((model) => ({
+              key: model.id,
+              label: <span className="mono">{model.id}</span>,
+              value: (
+                <span>
+                  <Pill tone={RUNTIME_TONE[model.state]}>{RUNTIME_WORD[model.state]}</Pill>{' '}
+                  <span className="ui-card-meta">{model.state === 'failed' ? model.reason : megabytes(model.sizeBytes)}</span>{' '}
+                  {model.state === 'ready' || model.state === 'failed' ? (
+                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => { remove(() => api.removeModel(model.id)); }}>
+                      Remove
+                    </Button>
+                  ) : null}
+                </span>
+              ),
+            })),
+          ]}
+        />
+        {onnx.state === 'failed' && onnx.available ? <Notice tone="warning">{onnx.reason}</Notice> : null}
+        <p className="ui-card-meta">
+          Plugins that run models on this computer share one engine. It is downloaded for this platform only, after you approve a plugin's card, and checked against its pinned checksum.
+        </p>
+      </Stack>
+    </Section>
   );
 }
 

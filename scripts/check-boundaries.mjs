@@ -173,6 +173,11 @@ const HTTP_EXEMPT = [
   // `fetch` can do. There is no pool: every call makes its own request with no
   // agent and no keep-alive, and the connection dies with the response.
   /^packages\/gateway\/src\/web\/preview\.ts$/,
+  // The local-model downloads (the ONNX engine, shared models). An engine is a
+  // hundred megabytes and the transport buffers whole answers, so this streams
+  // to disk instead, hashing as it goes. No pool either: every request is
+  // `agent: false`, one connection, gone with the response.
+  /^packages\/core\/src\/runtimes\/download\.ts$/,
   // Tests may stand up servers, inject pooling agents, and prove the bug. The
   // rule is about what the *service* does at runtime.
   /\.test\.(ts|tsx|mts|js|mjs)$/,

@@ -185,6 +185,8 @@ export type {
   AccountsArea,
   ApprovalsArea,
   AssetsArea,
+  ModelsArea,
+  OnnxArea,
   ConversationDecision,
   BuddiHost,
   ChannelsArea,
@@ -222,6 +224,10 @@ export type {
   NetworkArea,
 } from '../host/types.js';
 export type { OwnerPlace } from '../places.js';
+export type { OnnxRuntimeState, OnnxRuntimeStateName, OnnxSession, OnnxSessionOptions } from '../runtimes/onnx.js';
+export type { OnnxTensor, OnnxTensorType } from '../runtimes/native.js';
+export type { ModelFile, ModelRequest, ModelState } from '../runtimes/models.js';
+export type { EnsureModel } from '../runtimes/consent.js';
 
 // Widget declarations are checked the way the host checks them; plugin tests use this.
 export { parseWidgets } from '../widgets.js';

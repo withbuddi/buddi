@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createSecretsManifest,
+  createRuntimesManifest,
   DELEGATE_EVERYONE,
   loadAgentCatalog,
   migrationNotice,
@@ -129,6 +130,9 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   // The approval behind an owner secret's use: an ownerOnly tool no model
   // sees, run only from an approved action (docs/owner-secrets.md §2).
   registry.register(createSecretsManifest());
+  // The approval behind a local-model download (host API 1.32): ownerOnly,
+  // run only from the card a plugin's `onnx.ensure` or `models.ensure` raised.
+  registry.register(createRuntimesManifest());
   // Nothing domain-specific is compiled in any more. Finance was the last one,
   // and it is now installed like any other plugin (`buddi plugins install
   // <path>/buddi-plugins/finance` in a checkout), which is why an agent that

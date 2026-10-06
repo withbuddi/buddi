@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-05
+updated: 2026-10-06
 ---
 
 # The HTTP API
@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-332 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+335 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -4329,6 +4329,9 @@ curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/telegram/
 | POST | `/api/service/start` | Start through the supervisor. | yes |
 | POST | `/api/service/stop` | Stop buddi. Accepted, then done once the answer is sent; nothing answers after. | yes |
 | POST | `/api/service/restart` | Restart buddi; it is back in seconds. | yes |
+| GET | `/api/runtimes` | The local-model engine (ONNX Runtime) and the shared models: state, version, sizes. | yes |
+| DELETE | `/api/runtimes/onnx` | Remove the engine, and any recorded failure; the next plugin to need it asks again. | yes |
+| DELETE | `/api/runtimes/models/:id` | Remove one shared model. | yes |
 | GET | `/api/version` | What is running, and what upgrading did before. | yes |
 | POST | `/api/version/check` | Check for a newer version now. | yes |
 | PUT | `/api/version/check` | Turn the daily check on or off. | yes |
@@ -4405,6 +4408,44 @@ Restart buddi; it is back in seconds.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/service/restart"
+```
+
+#### `GET /api/runtimes`
+
+The local-model engine (ONNX Runtime) and the shared models: state, version, sizes.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ onnx: { state, version, sizeBytes, downloadBytes, platform, available, reason?, sessions }, models: ModelState[] }`
+- **Since:** 0.1.0-pre.48
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/runtimes"
+```
+
+#### `DELETE /api/runtimes/onnx`
+
+Remove the engine, and any recorded failure; the next plugin to need it asks again.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `the same as GET /api/runtimes`
+- **Errors:** 409 downloading
+- **Since:** 0.1.0-pre.48
+
+```sh
+curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/runtimes/onnx"
+```
+
+#### `DELETE /api/runtimes/models/:id`
+
+Remove one shared model.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `the same as GET /api/runtimes`
+- **Errors:** 409 downloading
+- **Since:** 0.1.0-pre.48
+
+```sh
+curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/runtimes/models/<id>"
 ```
 
 #### `GET /api/version`
