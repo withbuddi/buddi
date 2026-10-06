@@ -485,6 +485,18 @@ calls the act route and then does what `then` says. Design rules hold: tokens
 only, primary action right-aligned, hairlines between stacked sections,
 phone width works.
 
+**A page reads again when its plugin writes.** When any run (chat, Telegram,
+a mission) finishes one of a plugin's tools and it worked — a `tool.result`
+with `ok`, or an `effect.succeeded` for a gated tool the owner approved — the
+attention stream (`/api/chat/attention/stream`) carries `pages.changed
+{ plugin }`. A tool belongs to the plugin that registered it, or to the plugin
+whose family prefixes its name (`finance.record_balance`), so a tool registered
+for one run counts too; core tools and other plugins' tools say nothing. An
+open `PluginPage` of that plugin asks every query again, half a second after
+the last frame of a burst, keeping its last answer up meanwhile; a page that is
+not mounted asks nothing. No plugin change is needed. Home's widgets do not go
+through page queries and keep their own refresh.
+
 ## 6. What core keeps
 
 The rail's core places, the settings' core sections, the Watchers page (a

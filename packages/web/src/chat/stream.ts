@@ -28,6 +28,7 @@ const KNOWN: ChatEventName[] = [
   'live.snapshot',
   'attention',
   'plugins-changed',
+  'pages.changed',
   'closing',
   'ping',
 ];

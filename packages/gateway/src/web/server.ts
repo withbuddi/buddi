@@ -160,7 +160,7 @@ import {
   readChatTranscript,
   type WebChatDeps,
 } from './chat.js';
-import { readAgentAttention, streamAttention } from './attention.js';
+import { readAgentAttention, streamAttention, toolPlugin } from './attention.js';
 import { PreviewApp, PreviewTickets, parsePreviewApiPath } from './preview.js';
 import { allowedOrigins, isLoopback, webAssetsDir, webUrl, type WebConfig } from './config.js';
 import {
@@ -2766,6 +2766,8 @@ export function createWebApp(deps: WebServerDeps): Server {
             pool: deps.pool,
             since: resumeCursor(req, q.get('since')),
             now: deps.now,
+            // An open plugin page asks its queries again when its plugin's tools write.
+            pluginOf: (tool) => toolPlugin(tool, deps.registry),
           });
         } finally {
           let_go();

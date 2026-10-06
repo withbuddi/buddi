@@ -1486,6 +1486,28 @@ suite('the dashboard chat API', () => {
       expect(frames.filter((f) => f.event === 'attention').length).toBeGreaterThan(0);
     });
 
+    it('says pages.changed for the plugin whose tool ran, and for nobody else', async () => {
+      const client = await signedIn();
+      provider.script = [call('t1', 'demo.read', { what: 'the ledger' }), say('Read.')];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'read the ledger' })
+      ).json()) as any;
+      await settled(conversationId);
+      // A tool nobody's plugin owns, a failed one of demo's, and a core one:
+      // none of them is a reason for any page to read again.
+      for (const payload of [{ name: 'elsewhere.write', ok: true }, { name: 'demo.send', ok: false, reason: 'refused' }, { name: 'memory_save', ok: true }]) {
+        await pool.query(`insert into core.events (kind, conversation_id, payload) values ('tool.result', $1::uuid, $2::jsonb)`, [conversationId, JSON.stringify(payload)]);
+      }
+      await pool.query(`insert into core.events (kind, payload) values ('plugins.changed', '{"plugins":[]}'::jsonb)`);
+
+      const frames = await client.stream('/api/chat/attention/stream?since=0', (e) =>
+        e.some((x) => x.event === 'plugins-changed'),
+      );
+      const pages = frames.filter((f) => f.event === 'pages.changed');
+      expect(pages.length).toBe(1);
+      expect(pages[0]!.data).toMatchObject({ plugin: 'demo' });
+    });
+
     it('refuses both attention routes without a session when the gate is closed', async () => {
       // Open on loopback, these routes answer instead of refusing — the gate
       // that stops an anonymous stranger is the closed one, driven here through

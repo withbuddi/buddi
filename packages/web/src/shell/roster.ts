@@ -30,7 +30,7 @@ import { get } from '../api';
 import { openChatStream } from '../chat/stream';
 import { announceReconnect } from './freshness';
 import { noticeClosing } from './restart';
-import { announcePagesChanged } from '../pages/usePages';
+import { announcePagesChanged, announcePluginDataChanged } from '../pages/usePages';
 import type { ChatAgent } from '../chat/types';
 
 /** One agent's claim on the owner, exactly as the attention endpoint sends it. */
@@ -172,6 +172,10 @@ export function useAttention(): Map<string, AgentAttention> {
         // A plugin was loaded live or toggled (first run's installs, another tab):
         // the rail and Settings read `/api/pages` again.
         else if (event.name === 'plugins-changed') announcePagesChanged();
+        // A plugin's tool wrote: its open page reads again. Not a badge.
+        else if (event.name === 'pages.changed') {
+          if (typeof event.data.plugin === 'string') announcePluginDataChanged(event.data.plugin);
+        }
         else refresh();
       },
       onReconnect: announceReconnect,

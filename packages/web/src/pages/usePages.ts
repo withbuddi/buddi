@@ -6,7 +6,7 @@
  * read, held in the shell, rather than three — and an installation with no
  * such plugin gets an empty list and behaves exactly as it did before.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { PluginPageDescriptor } from './types';
 
@@ -37,6 +37,45 @@ export const PAGES_CHANGED_EVENT = 'buddi:plugin-pages-changed';
 /** Say the plugin pages changed: the shell reads them again. */
 export function announcePagesChanged(): void {
   window.dispatchEvent(new Event(PAGES_CHANGED_EVENT));
+}
+
+/**
+ * Fired when one plugin's own data may have changed: a run used one of its
+ * tools and it worked (the attention stream's `pages.changed { plugin }`).
+ * `detail` is the plugin's id.
+ */
+export const PLUGIN_DATA_CHANGED_EVENT = 'buddi:plugin-data-changed';
+
+/** How long a burst of a plugin's tool calls is gathered into one re-read. */
+export const PLUGIN_DATA_DEBOUNCE_MS = 500;
+
+/** Say a plugin's data may have changed: its open pages read again. */
+export function announcePluginDataChanged(plugin: string): void {
+  window.dispatchEvent(new CustomEvent<string>(PLUGIN_DATA_CHANGED_EVENT, { detail: plugin }));
+}
+
+/**
+ * Call `onChange` when `plugin`'s data may have changed, at most once per
+ * burst: a run recording five balances is one re-read, half a second after
+ * the last. Only while the caller is mounted — a page nobody is looking at
+ * asks nothing.
+ */
+export function usePluginDataChanged(plugin: string, onChange: () => void, delayMs = PLUGIN_DATA_DEBOUNCE_MS): void {
+  const latest = useRef(onChange);
+  latest.current = onChange;
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const heard = (event: Event): void => {
+      if ((event as CustomEvent<string>).detail !== plugin) return;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(() => { timer = undefined; latest.current(); }, delayMs);
+    };
+    window.addEventListener(PLUGIN_DATA_CHANGED_EVENT, heard);
+    return () => {
+      window.removeEventListener(PLUGIN_DATA_CHANGED_EVENT, heard);
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [plugin, delayMs]);
 }
 
 export function usePluginPages(skip = false): PluginPages {

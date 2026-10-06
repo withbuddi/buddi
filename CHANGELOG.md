@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 
 - The chat sends files on their own: drop three statements, press Enter, and they go with no words needed. An empty box with nothing attached still sends nothing.
 - The chat takes files while the agent is working. They used to be refused ("Send files once the agent has answered."); now they queue with the words, the agent picks them up at its next step, or they open the next turn when the answer is already being written. A file can also be sent on its own mid-run. The box says where it goes in a full sentence under itself, and the bubble reads "Queued with 1 file".
+- Plugin pages update when the plugin's own tools write: after the CFO records balances in chat, an open Money page shows them within a second instead of still saying "Start with one account". It works for every plugin, whether the agent ran in chat, on Telegram or in a mission.
 
 ## 0.1.0-pre.45 — 2026-10-05
 

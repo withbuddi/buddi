@@ -182,6 +182,8 @@ describe('the canvas knows no domain', () => {
     "'message.appended'",
     "'live.settle'",
     "'live.snapshot'",
+    // The attention stream's frame: a plugin's tools wrote, its page reads again.
+    "'pages.changed'",
     "'buddi.theme'",
     "'buddi.chatWidth'",
   ]);

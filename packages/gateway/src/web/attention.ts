@@ -62,6 +62,53 @@ export async function announcePluginsChanged(pool: Queryable, plugins: readonly 
   }
 }
 
+/**
+ * A plugin's own data may have changed: one of its tools ran and worked.
+ * Not a log kind of its own — it is read off the rows every run already
+ * writes, so a Telegram turn or a mission moves an open page as much as a
+ * chat in the next tab. The frame is `pages.changed { plugin }`, and an open
+ * plugin page whose plugin it names asks its queries again.
+ */
+export const PAGES_CHANGED_FRAME = 'pages.changed';
+
+/**
+ * The rows that say a tool finished and worked: `tool.result` with `ok` (an
+ * auto tool ran in a run), and `effect.succeeded` (a gated one ran once the
+ * owner approved it).
+ */
+export const TOOL_DONE_KINDS: readonly string[] = ['tool.result', 'effect.succeeded'];
+
+/**
+ * Which plugin a tool belongs to: the one that registered it, else the plugin
+ * whose family prefixes its name (`finance.record_balance` → `finance`) — a
+ * tool registered for one run only is in no registry, but its name still
+ * says whose it is. Undefined for core tools and for names nobody owns.
+ */
+export function toolPlugin(
+  name: string,
+  registry: { pluginOf(name: string): string | undefined; manifests(): ReadonlyArray<{ name: string }> },
+): string | undefined {
+  const registered = registry.pluginOf(name);
+  if (registered) return registered;
+  const dot = name.indexOf('.');
+  if (dot <= 0) return undefined;
+  const family = name.slice(0, dot);
+  return registry.manifests().some((m) => m.name === family) ? family : undefined;
+}
+
+/** What a finished-tool row becomes on the attention stream, or null. */
+export function pagesChangedFrame(
+  row: LogRow,
+  pluginOf: (tool: string) => string | undefined,
+): { event: string; data: Record<string, unknown> } | null {
+  const tool = row.kind === 'tool.result'
+    ? (row.payload.ok === true ? row.payload.name : undefined)
+    : row.kind === 'effect.succeeded' ? row.payload.tool : undefined;
+  if (typeof tool !== 'string' || tool === '') return null;
+  const plugin = pluginOf(tool);
+  return plugin ? { event: PAGES_CHANGED_FRAME, data: { plugin, at: row.createdAt.toISOString() } } : null;
+}
+
 /** Pending approvals read in one pass. Far more than any owner should have. */
 const APPROVAL_SCAN_LIMIT = 200;
 
@@ -222,34 +269,49 @@ export async function holdsQuestion(
 export async function streamAttention(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { pool: Pool; since?: string | undefined; now?: () => Date; pollMs?: number; pingMs?: number },
+  opts: {
+    pool: Pool;
+    since?: string | undefined;
+    now?: () => Date;
+    pollMs?: number;
+    pingMs?: number;
+    /**
+     * Whose tool this is (`toolPlugin`). Given, the stream also carries
+     * `pages.changed { plugin }` whenever a plugin's tool finished and worked.
+     */
+    pluginOf?: (tool: string) => string | undefined;
+  },
 ): Promise<void> {
+  const { pluginOf, ...rest } = opts;
+  const kinds = pluginOf ? [...ATTENTION_KINDS, ...TOOL_DONE_KINDS] : ATTENTION_KINDS;
   await streamLog(req, res, {
-    ...opts,
-    head: () => head(opts.pool),
-    tail: (cursor, limit) => tail(opts.pool, cursor, limit),
+    ...rest,
+    head: () => head(opts.pool, kinds),
+    tail: (cursor, limit) => tail(opts.pool, cursor, limit, kinds),
     project: (row: LogRow) =>
-      row.kind === PLUGINS_CHANGED
-        ? { event: 'plugins-changed', data: { at: row.createdAt.toISOString(), plugins: row.payload.plugins ?? [] } }
-        : { event: 'attention', data: { at: row.createdAt.toISOString() } },
+      TOOL_DONE_KINDS.includes(row.kind)
+        ? (pluginOf ? pagesChangedFrame(row, pluginOf) : null)
+        : row.kind === PLUGINS_CHANGED
+          ? { event: 'plugins-changed', data: { at: row.createdAt.toISOString(), plugins: row.payload.plugins ?? [] } }
+          : { event: 'attention', data: { at: row.createdAt.toISOString() } },
   });
 }
 
-async function head(pool: Pool): Promise<string> {
+async function head(pool: Pool, kinds: readonly string[]): Promise<string> {
   const { rows } = await pool.query(
     `select coalesce(max(id), 0)::text as id from core.events where kind = any($1::text[])`,
-    [ATTENTION_KINDS],
+    [kinds],
   );
   return String(rows[0]?.id ?? '0');
 }
 
-async function tail(pool: Pool, cursor: string, limit: number): Promise<LogRow[]> {
+async function tail(pool: Pool, cursor: string, limit: number, kinds: readonly string[]): Promise<LogRow[]> {
   const { rows } = await pool.query(
     `select id, kind, payload, created_at from core.events
       where id > $1::bigint and kind = any($2::text[])
       order by id asc
       limit $3`,
-    [cursor, ATTENTION_KINDS, limit],
+    [cursor, kinds, limit],
   );
   return rows.map((r) => ({
     id: String(r.id),

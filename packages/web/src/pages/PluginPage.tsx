@@ -77,6 +77,7 @@ import { CHAT_ROUTE } from '../routes';
 import { CalendarView, useCalendarState } from './CalendarPiece';
 import { SeriesPanel } from './SeriesPanel';
 import { AssetImage, assetSrc } from './AssetImage';
+import { usePluginDataChanged } from './usePages';
 import type {
   ArgRef,
   ColumnMap,
@@ -4137,6 +4138,9 @@ export function PluginPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeKey]);
   const [version, setVersion] = useState(0);
+  // The plugin's own tools wrote (an agent recorded balances in chat): every
+  // query on the page asks again, keeping its last answer up meanwhile.
+  usePluginDataChanged(page.plugin, () => setVersion((n) => n + 1));
   const scope: PageScope = {
     plugin: page.plugin,
     page: page.id,

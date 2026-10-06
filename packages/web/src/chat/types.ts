@@ -318,6 +318,9 @@ export type ChatEventName =
   // Also on the attention stream: a plugin was loaded live or toggled, so the
   // shell reads `/api/pages` again (the rail's plugin places, Settings tabs).
   | 'plugins-changed'
+  // Also on the attention stream: one of a plugin's tools ran and worked
+  // (`{ plugin }`), so an open page of that plugin asks its queries again.
+  | 'pages.changed'
   // Every stream's last frame from a gateway about to close (a restart, a
   // stop): the shell draws "Restarting buddi" and reloads when it is back.
   | 'closing'
