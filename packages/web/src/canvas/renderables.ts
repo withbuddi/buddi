@@ -39,10 +39,11 @@ import { isKnownRenderer } from './registry';
 import { humanise } from './resolve';
 import { NOTIFY_TOOL } from '../chat/notify';
 import type { NotifyViewProps } from './views/NotifyView';
-import type { PreviewProps, Renderable, RendererName, ViewDescriptor } from './types';
+import type { PreviewProps, Renderable, RendererName, TabVersion, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { delegatedFiles, type AttachmentBlock } from '../chat/attachments';
 import { commandResult } from './command-result';
+import { expiryOf, subjectOf } from './tab-order';
 
 /**
  * One agent asking another. Its call is drawn as the colleague's own run —
@@ -173,6 +174,15 @@ export function sourcesTabId(firstCallId: string): string {
   return `sources:${firstCallId}`;
 }
 
+/**
+ * The id a subject's tab is known by: its first call's, prefixed. Not the
+ * call's own id, so that opening the tab (the newest result) and opening its
+ * first call from the conversation (that version) stay two different things.
+ */
+export function subjectTabId(firstCallId: string): string {
+  return `tab:${firstCallId}`;
+}
+
 /** Did the owner speak in this message? That is where a new turn begins. */
 function opensTurn(message: ChatMessage): boolean {
   return message.role === 'user' && (message.blocks ?? []).some((block) => block.type === 'text' && block.text.trim() !== '');
@@ -252,6 +262,31 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
     // Something read is worth turning to; a row of failures keeps its tab quietly.
     sources.substantial = entries.some((item) => item.ok === true);
     sources.tone = entries.every((item) => item.ok === false) ? 'critical' : undefined;
+  };
+
+  /*
+   * A result with a subject joins the tab its tool already has for that
+   * subject: the tab keeps its id (from the first call, so it is the same tab
+   * across refreshes), shows the newest call, holds the earlier ones as
+   * versions, and moves to the end — it is the newest thing now.
+   */
+  const place = (item: Renderable, subject: string | null, expiresAt: string | null): void => {
+    if (expiresAt) item.expiresAt = expiresAt;
+    if (!subject) { collected.push(item); return; }
+    item.subject = subject;
+    item.title = `${item.title} · ${subject}`;
+    const version: TabVersion = {
+      id: item.id, at: item.at, title: item.title, renderer: item.renderer, props: item.props, substantial: item.substantial,
+      ...(item.tone ? { tone: item.tone } : {}),
+    };
+    const existing = collected.find((other) => other.subject === subject && other.tool === item.tool
+      && (other.source === 'descriptor' || other.source === 'fallback'));
+    if (!existing) { collected.push({ ...item, id: subjectTabId(item.id), versions: [version] }); return; }
+    collected = collected.filter((other) => other !== existing);
+    const merged: Renderable = { ...item, id: existing.id, versions: [...(existing.versions ?? []), version] };
+    if (!item.tone) delete merged.tone;
+    if (!expiresAt) delete merged.expiresAt;
+    collected.push(merged);
   };
 
   for (const message of messages) {
@@ -379,8 +414,9 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       }
 
       const output = forOwner(block.output);
+      const subject = subjectOf(use?.input ?? null, output);
       if (block.ok === false) {
-        collected.push({
+        place({
           id: block.toolUseId,
           tool,
           title: toolTitle(tool),
@@ -392,7 +428,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
           // A failure is news, but it is news the chat already delivered, and
           // it has nothing to draw. It waits in a tab with a red dot.
           substantial: false,
-        });
+        }, subject, null);
         continue;
       }
 
@@ -423,7 +459,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         // A declared view is the plugin author's judgement that this result is
         // worth looking at. It keeps its tab even when it came back empty —
         // "no rows this month" is an answer, drawn the way its author meant.
-        collected.push({
+        const item: Renderable = {
           id: block.toolUseId,
           tool,
           title: descriptor.title ?? toolTitle(tool),
@@ -432,13 +468,16 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
           at,
           source: 'descriptor',
           substantial: hasSubstance(renderer, props),
-        });
+        };
+        // A preview is one tab per process already, keyed above.
+        if (renderer === 'preview') collected.push(item);
+        else place(item, subject, expiryOf(output));
         continue;
       }
 
       const props = { value: commandResult(output) ? { input: use?.input, output: output } : output };
       if (!earnsTab('structured', props)) continue;
-      collected.push({
+      place({
         id: block.toolUseId,
         tool,
         title: toolTitle(tool),
@@ -447,7 +486,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         at,
         source: 'fallback',
         substantial: hasSubstance('structured', props),
-      });
+      }, subject, expiryOf(output));
     }
   }
 

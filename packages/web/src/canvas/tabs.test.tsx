@@ -10,7 +10,8 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Canvas, splitTabs } from './Canvas';
-import { inspectToolCall, renderablesFrom } from './renderables';
+import { inspectToolCall, renderablesFrom, subjectTabId } from './renderables';
+import { selfClosed, subjectOf, tabStamp, timelineOf, versionHolding } from './tab-order';
 import type { Renderable, ViewDescriptor } from './types';
 import type { ChatMessage } from '../chat/types';
 
@@ -171,6 +172,7 @@ function open(trigger: HTMLElement): void {
   fireEvent.keyDown(trigger, { key: 'Enter' });
 }
 
+/** Made a minute apart, in order: r0 at 09:00, r1 at 09:01, … */
 function fake(index: number, over: Partial<Renderable> = {}): Renderable {
   return {
     id: `r${index}`,
@@ -178,56 +180,163 @@ function fake(index: number, over: Partial<Renderable> = {}): Renderable {
     title: `Thing ${index}`,
     renderer: 'structured',
     props: { value: { a: 1, b: 2, c: 3 } },
-    at: '2026-09-14T09:00:00Z',
+    at: new Date(Date.UTC(2026, 8, 14, 9, index)).toISOString(),
     source: 'fallback',
     substantial: true,
     ...over,
   };
 }
 
-describe('the strip holds what fits and names the rest', () => {
+/** A call and its result, with arguments, at a given minute. */
+function call(id: string, name: string, input: unknown, output: unknown, minute: number, ok = true): ChatMessage[] {
+  const at = new Date(Date.UTC(2026, 8, 14, 9, minute)).toISOString();
+  return [
+    { id: `m-${id}-a`, role: 'assistant', at, blocks: [{ type: 'tool_use', id, name, input }] },
+    { id: `m-${id}-b`, role: 'user', at, blocks: [{ type: 'tool_result', toolUseId: id, name, ok, output, ...(ok ? {} : { error: output }) }] },
+  ];
+}
+
+const ROWS = { rows: [{ name: 'Rake', count: 2 }, { name: 'Hoe', count: 1 }] };
+
+describe('a tab is known by its tool and its subject', () => {
+  it('reads the subject from a file name, an account, a page, a site, or an id', () => {
+    expect(subjectOf({ file: '/imports/savings.csv' }, null)).toBe('savings.csv');
+    expect(subjectOf({ account: { name: 'Joint' } }, null)).toBe('Joint');
+    expect(subjectOf({ pageId: 'p-12' }, null)).toBe('p-12');
+    expect(subjectOf({ url: 'https://www.example.com/a?b' }, null)).toBe('example.com');
+    expect(subjectOf({}, { filename: 'notes.md' })).toBe('notes.md');
+    expect(subjectOf({ stagingId: 'abcdef123456', conversationId: 'c' }, null)).toBe('abcdef12');
+    expect(subjectOf({ query: 'apples' }, { total: 3 })).toBeNull();
+  });
+
+  it('updates the tab a repeat call on the same subject already has, keeping the earlier result inside it', () => {
+    const messages = [
+      ...call('a', 'shed.stage', { file: 'savings.csv' }, ROWS, 0),
+      ...call('b', 'shed.stage', { file: 'current.csv' }, ROWS, 1),
+      ...call('c', 'shed.stage', { file: 'savings.csv' }, { rows: [{ name: 'Rake', count: 3 }, { name: 'Hoe', count: 1 }] }, 2),
+    ];
+    const tabs = renderablesFrom({ messages, descriptors: [] });
+    expect(tabs.map((tab) => tab.title)).toEqual(['Shed · Stage · current.csv', 'Shed · Stage · savings.csv']);
+    const savings = tabs[1]!;
+    // Known by the first call, showing the newest, holding both.
+    expect(savings.id).toBe(subjectTabId('a'));
+    expect(savings.versions?.map((version) => version.id)).toEqual(['a', 'c']);
+    expect(tabStamp(savings)).toBe('c');
+    expect((savings.props as { value: typeof ROWS }).value.rows[0]!.count).toBe(3);
+    expect(versionHolding(tabs, 'a')?.id).toBe(savings.id);
+    // A different tool on the same subject is a different tab.
+    const other = renderablesFrom({ messages: [...messages, ...call('d', 'shed.commit', { file: 'savings.csv' }, ROWS, 3)], descriptors: [] });
+    expect(other.map((tab) => tab.title)).toContain('Shed · Commit · savings.csv');
+  });
+
+  it('steps back to the earlier result inside the tab', () => {
+    const messages = [
+      ...call('a', 'shed.stage', { file: 'savings.csv' }, { rows: [{ name: 'First', count: 1 }, { name: 'Hoe', count: 1 }] }, 0),
+      ...call('c', 'shed.stage', { file: 'savings.csv' }, { rows: [{ name: 'Second', count: 1 }, { name: 'Hoe', count: 1 }] }, 2),
+    ];
+    const tabs = renderablesFrom({ messages, descriptors: [] });
+    render(<Canvas renderables={tabs} activeId={tabs[0]!.id} onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getByText(/Latest · 2 of 2/)).toBeDefined();
+    expect(screen.getByText('Second')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Earlier result' }));
+    expect(screen.getByText(/Earlier · 1 of 2/)).toBeDefined();
+    expect(screen.getByText('First')).toBeDefined();
+  });
+
+  it('opens on the version whose chat row was clicked', () => {
+    const messages = [
+      ...call('a', 'shed.stage', { file: 'savings.csv' }, { rows: [{ name: 'First', count: 1 }, { name: 'Hoe', count: 1 }] }, 0),
+      ...call('c', 'shed.stage', { file: 'savings.csv' }, { rows: [{ name: 'Second', count: 1 }, { name: 'Hoe', count: 1 }] }, 2),
+    ];
+    const [tab] = renderablesFrom({ messages, descriptors: [] });
+    render(<Canvas renderables={[{ ...tab!, focus: 'a' }]} activeId={tab!.id} onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getByText('First')).toBeDefined();
+  });
+
+  it('tells apart two tabs with no subject by their clock', () => {
+    render(<Canvas renderables={[fake(0, { title: 'Artifacts · Write' }), fake(1, { title: 'Artifacts · Write' })]} activeId="r1" onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Artifacts · Write · 09:01', 'Artifacts · Write · 09:00']);
+  });
+});
+
+describe('tabs that close themselves', () => {
+  const now = Date.UTC(2026, 8, 14, 10, 0);
+
+  it('closes a staged result past its expiry', () => {
+    const fresh = renderablesFrom({ messages: call('s', 'shed.stage', { file: 'a.csv' }, { ...ROWS, expiresAt: '2026-09-14T11:00:00Z' }, 0), descriptors: [] });
+    const stale = renderablesFrom({ messages: call('s', 'shed.stage', { file: 'a.csv' }, { ...ROWS, expiresAt: '2026-09-14T09:30:00Z' }, 0), descriptors: [] });
+    expect(selfClosed(fresh[0]!, now)).toBeNull();
+    expect(selfClosed(stale[0]!, now)).toBe('gone');
+  });
+
+  it('parks a failure that produced no view, but not a subject whose earlier result is still good', () => {
+    const failed = renderablesFrom({ messages: call('f', 'shed.work', {}, 'Busy', 0, false), descriptors: [] });
+    expect(selfClosed(failed[0]!, now)).toBe('parked');
+    const retried = renderablesFrom({
+      messages: [...call('a', 'shed.stage', { file: 'a.csv' }, ROWS, 0), ...call('b', 'shed.stage', { file: 'a.csv' }, 'Busy', 1, false)],
+      descriptors: [],
+    });
+    expect(retried).toHaveLength(1);
+    expect(retried[0]!.tone).toBe('critical');
+    expect(selfClosed(retried[0]!, now)).toBeNull();
+  });
+
+  it('keeps a parked failure off the strip, in the timeline with its dot', () => {
+    const items = [fake(0), fake(1), fake(2, { tone: 'critical', substantial: false, parked: true })];
+    const { shown, hidden } = splitTabs(items, 'r1');
+    expect(shown.map((item) => item.id)).toEqual(['r1', 'r0']);
+    expect(hidden.map((item) => item.id)).toEqual(['r2']);
+    render(<Canvas renderables={items} activeId="r1" onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getByRole('button', { name: /1 more view/ }).getAttribute('data-tone')).toBe('critical');
+  });
+});
+
+describe('the strip holds three, most recent first', () => {
   const many = Array.from({ length: 12 }, (_, index) => fake(index));
 
-  it('shows the most recent few and puts the rest behind one control', () => {
+  it('shows the three most recent, newest first, and puts the rest behind one control', () => {
+    render(<Canvas renderables={many} activeId="r11" onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Thing 11', 'Thing 10', 'Thing 9']);
+    expect(screen.getByRole('button', { name: /9 more views/ })).toBeDefined();
+  });
+
+  it('moves the oldest into the list when a fourth opens', () => {
+    expect(splitTabs(many.slice(0, 3), 'r2').shown.map((item) => item.id)).toEqual(['r2', 'r1', 'r0']);
+    const { shown, hidden } = splitTabs(many.slice(0, 4), 'r3');
+    expect(shown.map((item) => item.id)).toEqual(['r3', 'r2', 'r1']);
+    expect(hidden.map((item) => item.id)).toEqual(['r0']);
+  });
+
+  it('puts a tab the owner looked at first, whatever its age', () => {
+    const touched = { r0: Date.UTC(2026, 8, 14, 12, 0) };
+    expect(splitTabs(many.slice(0, 5), 'r0', 3, touched).shown.map((item) => item.id)).toEqual(['r0', 'r4', 'r3']);
+  });
+
+  it('never shows more than three, even with room for five', () => {
     render(<Canvas renderables={many} activeId="r11" onActivate={() => {}} timezone="UTC" maxTabs={5} />);
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Thing 7',
-      'Thing 8',
-      'Thing 9',
-      'Thing 10',
-      'Thing 11',
-    ]);
-    expect(screen.getByRole('button', { name: /7 more views/ })).toBeDefined();
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
   });
 
   it('keeps the tab being read on the strip however old it is', () => {
-    render(<Canvas renderables={many} activeId="r0" onActivate={() => {}} timezone="UTC" maxTabs={5} />);
-    const titles = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(titles).toContain('Thing 0');
-    expect(titles).toHaveLength(5);
+    render(<Canvas renderables={many} activeId="r0" onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Thing 11', 'Thing 10', 'Thing 0']);
   });
 
   it('keeps a decision on the strip even when the conversation moved on', () => {
     const withGate = [fake(0, { source: 'approval', title: 'Approval', tone: 'warning' }), ...many.slice(1)];
-    render(<Canvas renderables={withGate} activeId="r11" onActivate={() => {}} timezone="UTC" maxTabs={4} />);
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Approval',
-      'Thing 9',
-      'Thing 10',
-      'Thing 11',
-    ]);
+    render(<Canvas renderables={withGate} activeId="r11" onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Thing 11', 'Thing 10', 'Approval']);
   });
 
   it('says a failure is back there before the menu is opened', () => {
     const withFailure = [fake(0, { tone: 'critical', substantial: false }), ...many.slice(1)];
-    render(<Canvas renderables={withFailure} activeId="r11" onActivate={() => {}} timezone="UTC" maxTabs={5} />);
-    const more = screen.getByRole('button', { name: /7 more views/ });
-    expect(more.getAttribute('data-tone')).toBe('critical');
+    render(<Canvas renderables={withFailure} activeId="r11" onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getByRole('button', { name: /9 more views/ }).getAttribute('data-tone')).toBe('critical');
   });
 
   it('shows every tab when they all fit', () => {
-    render(<Canvas renderables={many.slice(0, 4)} activeId="r3" onActivate={() => {}} timezone="UTC" maxTabs={5} />);
-    expect(screen.getAllByRole('tab')).toHaveLength(4);
+    render(<Canvas renderables={many.slice(0, 3)} activeId="r2" onActivate={() => {}} timezone="UTC" />);
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
     expect(screen.queryByRole('button', { name: /more views/ })).toBeNull();
   });
 });
@@ -235,72 +344,98 @@ describe('the strip holds what fits and names the rest', () => {
 describe('the split itself', () => {
   it('dismisses result tabs by button or Delete, but does not hide approvals or live controls', () => {
     const onClose = vi.fn();
-    render(<Canvas renderables={[
+    const items = [
       fake(0),
       fake(1, { source: 'approval' }),
       // Live: the session is stopped with its own controls, not by closing a tab.
       fake(2, { source: 'browser', renderer: 'browser', pinned: true }),
-      // Over: ordinary history, and history can be put away.
-      fake(3, { source: 'browser', renderer: 'browser' }),
-    ]}
-      activeId="r0" onActivate={vi.fn()} onClose={onClose} timezone="UTC" maxTabs={5} />);
+    ];
+    const { unmount } = render(<Canvas renderables={items} activeId="r0" onActivate={vi.fn()} onClose={onClose} timezone="UTC" />);
     fireEvent.click(screen.getByRole('button', { name: 'Close Thing 0 tab' }));
     expect(onClose).toHaveBeenCalledWith('r0');
     expect(screen.queryByRole('button', { name: 'Close Thing 1 tab' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Close Thing 2 tab' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Close Thing 3 tab' }));
-    expect(onClose).toHaveBeenCalledWith('r3');
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Thing 0' }), { key: 'Delete' });
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Thing 2' }), { key: 'Delete' });
-    expect(onClose).toHaveBeenCalledTimes(3);
+    expect(onClose).toHaveBeenCalledTimes(2);
+    unmount();
+    // Over: ordinary history, and history can be put away.
+    render(<Canvas renderables={[fake(3, { source: 'browser', renderer: 'browser' })]} activeId="r3" onActivate={vi.fn()} onClose={onClose} timezone="UTC" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Thing 3 tab' }));
+    expect(onClose).toHaveBeenCalledWith('r3');
   });
+
   it('shows a pinned pair even when the room is one', () => {
     const items = [fake(0, { source: 'approval' }), fake(1), fake(2)];
     const { shown, hidden } = splitTabs(items, 'r2', 1);
-    expect(shown.map((item) => item.id)).toEqual(['r0', 'r2']);
+    expect(shown.map((item) => item.id)).toEqual(['r2', 'r0']);
     expect(hidden.map((item) => item.id)).toEqual(['r1']);
   });
 
   /*
-   * A screen an agent is driving right now holds the strip: the page marks it
-   * pinned while the session lives and clears the mark when it ends, and a
-   * long run cannot push it behind the menu in between.
+   * A screen an agent is driving right now holds the strip, first: the page
+   * marks it pinned while the session lives and clears the mark when it ends.
    */
   it('holds a pinned panel on the strip, and lets go once it is history', () => {
     const live = [fake(0, { source: 'browser', pinned: true }), fake(1), fake(2), fake(3)];
     expect(splitTabs(live, 'r3', 2).shown.map((item) => item.id)).toEqual(['r0', 'r3']);
     const ended = live.map((item) => (item.id === 'r0' ? { ...item, pinned: false } : item));
-    expect(splitTabs(ended, 'r3', 2).shown.map((item) => item.id)).toEqual(['r2', 'r3']);
+    expect(splitTabs(ended, 'r3', 2).shown.map((item) => item.id)).toEqual(['r3', 'r2']);
+  });
+});
+
+describe('the timeline', () => {
+  const items = [fake(0), fake(10), fake(40), fake(55), fake(58)];
+  const now = Date.UTC(2026, 8, 14, 9, 59);
+
+  it('groups Now / Earlier this turn / Earlier, newest first', () => {
+    const groups = timelineOf(items, { now, turnStartedAt: '2026-09-14T09:30:00Z' });
+    expect(groups.map((group) => [group.label, group.items.map((item) => item.id)])).toEqual([
+      ['Now', ['r58']],
+      ['Earlier this turn', ['r55', 'r40']],
+      ['Earlier', ['r10', 'r0']],
+    ]);
   });
 
-  it('keeps the strip in the order the conversation made things', () => {
-    const items = [fake(0), fake(1), fake(2), fake(3)];
-    expect(splitTabs(items, 'r0', 3).shown.map((item) => item.id)).toEqual(['r0', 'r2', 'r3']);
+  it('leaves out an empty group, and has no turn before the owner spoke', () => {
+    expect(timelineOf(items.slice(0, 2), { now, turnStartedAt: '2026-09-14T09:30:00Z' }).map((group) => group.label)).toEqual(['Earlier']);
+    expect(timelineOf(items, { now, turnStartedAt: null }).map((group) => group.label)).toEqual(['Now', 'Earlier']);
   });
 });
 
 /**
  * Opening a Radix menu leaves jsdom's document in a state every later query
- * pays for, so this goes last: it is the same assertion wherever it sits, and
- * here it costs the rest of the file nothing.
+ * pays for, so these go last: they are the same assertions wherever they sit,
+ * and here they cost the rest of the file nothing.
  */
-describe('the overflow menu', () => {
-  const many = Array.from({ length: 12 }, (_, index) => fake(index));
+describe('the tab menu', () => {
+  const many = Array.from({ length: 6 }, (_, index) => fake(index));
 
-  it('names what is hidden, and goes there when it is chosen', () => {
+  it('names what is hidden as a timeline, and goes there when it is chosen', () => {
     const onActivate = vi.fn();
-    render(<Canvas renderables={many} activeId="r11" onActivate={onActivate} timezone="UTC" maxTabs={5} />);
+    render(<Canvas renderables={many} activeId="r5" onActivate={onActivate} timezone="UTC"
+      turnStartedAt="2026-09-14T09:02:00Z" now={() => Date.UTC(2026, 8, 14, 9, 6)} />);
 
-    open(screen.getByRole('button', { name: /7 more views/ }));
+    open(screen.getByRole('button', { name: /3 more views/ }));
     const menu = screen.getByRole('menu');
+    expect(within(menu).getAllByRole('group').map((group) => group.textContent?.split('Thing')[0])).toEqual(['Earlier this turn', 'Earlier']);
     // Newest first: the menu is reached for to go back.
-    expect(within(menu).getAllByRole('menuitem')[0]?.textContent).toContain('Thing 6');
-    expect(within(menu).getAllByRole('menuitem')).toHaveLength(7);
-
-    fireEvent.click(within(menu).getByRole('menuitem', { name: /Thing 2/ }));
-    expect(onActivate).toHaveBeenCalledWith('r2');
-    // Radix hides the rest of the document while a menu is open; put that back
-    // before the next test renders into it.
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Thing 209:02', 'Thing 109:01', 'Thing 009:00']);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /Thing 1/ }));
+    expect(onActivate).toHaveBeenCalledWith('r1');
     fireEvent.keyDown(menu, { key: 'Escape' });
+  });
+
+  it('closes all, or all but the tab in front', () => {
+    const onCloseMany = vi.fn();
+    const items = [fake(0), fake(1, { source: 'approval' }), fake(2), fake(3)];
+    render(<Canvas renderables={items} activeId="r3" onActivate={vi.fn()} onCloseMany={onCloseMany} timezone="UTC" />);
+    open(screen.getByRole('button', { name: /1 more view/ }));
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Close others' }));
+    expect(onCloseMany).toHaveBeenLastCalledWith(['r0', 'r2']);
+    open(screen.getByRole('button', { name: /1 more view/ }));
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Close all' }));
+    // A decision waiting is never closed in bulk.
+    expect(onCloseMany).toHaveBeenLastCalledWith(['r0', 'r2', 'r3']);
   });
 });

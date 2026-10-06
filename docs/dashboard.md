@@ -1,7 +1,7 @@
 ---
 title: "The dashboard"
 status: reference
-updated: 2026-10-01
+updated: 2026-10-05
 ---
 
 # The dashboard
@@ -324,6 +324,26 @@ agent's workspace files, and a **Page** tab while an agent looks at a page
 (see [the browser](browser.md#on-the-dashboard)): who looks where in one quiet
 line, the live picture, Stop and Take over. A decision waiting to be made
 stays on the tab strip. On a small screen, the **Canvas** button opens it.
+
+A tab is known by its tool and what the call was about: the file, the account,
+the page, the site (from the call's arguments, then its result), so its title
+says the subject — **Staged import · savings.csv** — rather than only the tool.
+A second call on the same subject updates that tab instead of opening another;
+the earlier results stay inside it, one step back with the **‹ ›** row above the
+panel (**Earlier · 1 of 3**). Two tabs with no subject are told apart by their
+time. Clicking an earlier call in the conversation opens its tab on that result.
+
+The strip holds three tabs, most recently looked at first; a fourth moves the
+oldest into the **N more** menu. That menu is a timeline grouped **Now** (the
+last two minutes), **Earlier this turn** (since you last wrote) and **Earlier**,
+newest first and scrollable, and a failure keeps its red dot there. It also
+holds **Close others** and **Close all**; a decision waiting is never closed.
+Tabs close themselves when they stop being worth a place: a staged result past
+its expiry (`expiresAt`) leaves, and a failed call that produced nothing to show
+moves into the timeline. The chat rows still open either on click. Which tabs
+you closed and their order are kept per conversation by buddi
+(`/api/chat/conversations/:id/canvas-tabs`), so the strip comes back the same
+after a reload and on another device.
 
 Every web page an agent reads and every web search it runs in one turn share a
 single **Sources** tab, with the number of calls beside its name, instead of a

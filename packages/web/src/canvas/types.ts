@@ -427,4 +427,33 @@ export interface Renderable {
    * (Sources) holds. Absent on every other tab.
    */
   count?: number;
+  /**
+   * What the call was about — a file, an account, a page, a site — when its
+   * arguments or result say (`tab-order.ts`). A tab is known by its tool and
+   * this, and a later call on the same subject updates it.
+   */
+  subject?: string;
+  /**
+   * Every call this tab holds, oldest first; the newest is what the top-level
+   * fields show. Present on a tab with a subject; more than one means the
+   * earlier results are a step back inside it.
+   */
+  versions?: TabVersion[];
+  /** When the newest result says it stops being good. Past it, the tab closes itself. */
+  expiresAt?: string;
+  /** A call the owner clicked in the conversation: the version to open on. */
+  focus?: string | null;
+  /** Closed itself (a failure with no view): off the strip, still in the timeline. */
+  parked?: boolean;
+}
+
+/** One call a subject tab holds. */
+export interface TabVersion {
+  id: string;
+  at: string | null;
+  title: string;
+  renderer: PanelName;
+  props: unknown;
+  tone?: Tone;
+  substantial: boolean;
 }

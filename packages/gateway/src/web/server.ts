@@ -311,6 +311,7 @@ import { type HttpArea } from '@buddi/core';
 import { checkProfilePatch } from '../owner-profile-edit.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentIntro, readAgentIntro } from '../agents/agent-intro.js';
+import { parseCanvasTabs, readCanvasTabs, writeCanvasTabs } from './canvas-tabs.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
@@ -2643,6 +2644,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         res.end(method === 'HEAD' ? undefined : file.text);
         return;
       }
+      // The canvas's tabs for one conversation: what was closed, and their order (web/canvas-tabs.ts).
+      const canvasTabsRead = /^\/api\/chat\/conversations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/canvas-tabs$/i.exec(path);
+      if (canvasTabsRead) return sendJson(res, 200, await readCanvasTabs(deps.pool, canvasTabsRead[1]!.toLowerCase()));
       // A new agent's chat: the once-only strip, both directions of delegation (agents/agent-intro.ts).
       const agentIntro = /^\/api\/agents\/([^/]+)\/intro$/.exec(path);
       if (agentIntro) {
@@ -2932,6 +2936,19 @@ export function createWebApp(deps: WebServerDeps): Server {
      * everything else.
      */
     if (method === 'PUT') {
+      const canvasTabsWrite = /^\/api\/chat\/conversations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/canvas-tabs$/i.exec(path);
+      if (canvasTabsWrite) {
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: 'request body must be JSON' });
+        }
+        const parsed = parseCanvasTabs(body);
+        if (!parsed.ok) return sendJson(res, 400, { error: parsed.error });
+        await writeCanvasTabs(deps.pool, canvasTabsWrite[1]!.toLowerCase(), parsed.value);
+        return sendJson(res, 200, parsed.value);
+      }
       const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/access/tailscale', '/api/access/cloudflare-access', '/api/notifications/settings', '/api/notifications/focus'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);
       let put: Record<string, unknown>;
