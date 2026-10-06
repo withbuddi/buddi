@@ -41,6 +41,15 @@ describe.skipIf(!enabled)('real host browser fixture (opt in with BUDDI_BROWSER_
       else if (req.url === '/cookie') res.end(`<title>Saved login</title><p>${req.headers.cookie?.includes('fixture_login=remembered') ? 'Login remembered' : 'No login'}</p>`);
       else if (req.url === '/statement') res.end('<title>Statement</title><main><a href="/export.csv">Download CSV</a></main>');
       else if (req.url === '/export.csv') { res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="transactions.csv"' }); res.end('Date,Amount\n2026-09-01,-3.20\n'); }
+      else if (req.url === '/endless') res.end('<title>Endless</title><main><a href="/endless.bin">Download everything</a></main>');
+      else if (req.url === '/endless.bin') {
+        // A response that never ends: the driver must stop it at the cap, not wait for it.
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="endless.bin"' });
+        const chunk = Buffer.alloc(1024 * 1024, 7);
+        const pump = () => { if (!res.destroyed && res.write(chunk)) setImmediate(pump); else if (!res.destroyed) res.once('drain', pump); };
+        req.socket.on('close', () => res.destroy());
+        pump();
+      }
       else if (req.url === '/redirect-private') { res.writeHead(302, { Location: 'http://127.0.0.1:4317/' }); res.end(); }
       else res.end('<title>Appointment fixture</title><h1>Book an appointment</h1><form method="POST" action="/book"><label for="name">Your name</label><input id="name" name="name"><label for="time">Time</label><select id="time" name="time"><option>10:00</option><option>11:00</option></select><button>Book appointment</button></form><a href="/redirect-private">Private redirect</a>');
     });
@@ -70,7 +79,20 @@ describe.skipIf(!enabled)('real host browser fixture (opt in with BUDDI_BROWSER_
     expect(saved).toMatchObject({ filename: 'transactions.csv', mime: 'text/csv', url: `${url}/export.csv` });
     expect(await readFile(saved.path, 'utf8')).toBe('Date,Amount\n2026-09-01,-3.20\n');
     expect((await stat(saved.path)).mode & 0o777).toBe(0o600);
+    // Chromium's own copy is gone once the download was taken.
+    await pending[0]!.cleanup!();
   }, 30_000);
+
+  it('stops a download that passes the per-file cap while it runs, and removes Chromium’s copy', async () => {
+    await driver.perform(commandSchema.parse({ action: 'navigate', url: `${url}/endless` }));
+    const page = await driver.observe();
+    const ref = page.targets!.find((target) => target.name === 'Download everything')!.ref;
+    await driver.perform(commandSchema.parse({ action: 'click', observation: page.id, target: { ref } }));
+    const pending: PendingDownload[] = [];
+    await vi.waitFor(() => { pending.push(...driver.takeDownloads()); expect(pending).toHaveLength(1); }, { timeout: 10_000 });
+    await expect(new DownloadStore(path.join(dir, 'downloads')).save('cfo', pending[0]!)).rejects.toThrow(/larger than 50 MB/);
+    await pending[0]!.cleanup!();
+  }, 60_000);
 
   it('visibly navigates, fills, selects and submits exactly once; keeps login across restart', async () => {
     await driver.perform(commandSchema.parse({ action: 'navigate', url }));

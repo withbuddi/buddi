@@ -47,7 +47,7 @@ export type { SecretFillInput, SecretTypeInput };
 export function hostBrowser(
   area: Pick<DirArea, 'path' | 'legacyPath'>,
   env: NodeJS.ProcessEnv = process.env,
-  options: { extensionBridge?: () => ExtensionBridge; lookup?: GuardedLookup } = {},
+  options: { extensionBridge?: () => ExtensionBridge; lookup?: GuardedLookup; dataDir?: string } = {},
 ): HostController {
   const dir = area.legacyPath ?? area.path;
   let service = services.get(dir);
@@ -59,6 +59,7 @@ export function hostBrowser(
       allowedHosts: env.BUDDI_BROWSER_HOSTS?.split(',').map((host) => host.trim().toLowerCase()).filter(Boolean),
       ...(options.extensionBridge ? { extensionBridge: options.extensionBridge } : {}),
       ...(options.lookup ? { lookup: options.lookup } : {}),
+      ...(options.dataDir ? { dataDir: options.dataDir } : {}),
     });
     services.set(dir, service);
   }
@@ -144,7 +145,7 @@ export { LoginKeeper, LOGIN_HOLD_MS, LOGIN_RULE, loginName, shortUsername, watch
 export type { LoginDecision, LoginOutcome, LoginPrompt, LoginStore, LoginStoreInput, LoginStoreKey, LoginStoreNames, LoginAsk, SavedLogin, SeenLogin } from './logins.js';
 export { PlaywrightHost } from './host.js';
 export { DownloadStore, DownloadRefused, downloadMime, downloadName, downloadSource, DOWNLOAD_FILE_CAP, DOWNLOAD_AGENT_CAP, DOWNLOAD_RETENTION_DAYS, OWNER_FILE_FRESH_MS } from './downloads.js';
-export type { PendingDownload, StoredDownload, DownloadUsage, DownloadStoreOptions } from './downloads.js';
+export type { PendingDownload, StoredDownload, DownloadUsage, DownloadStoreOptions, WaitingDownload } from './downloads.js';
 export type { DownloadReport } from './service.js';
 export type { GuardedLookup } from './proxy.js';
 export { PlaywrightDriver } from './driver.js';

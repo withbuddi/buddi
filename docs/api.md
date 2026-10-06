@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-331 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+332 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -3909,11 +3909,12 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | GET | `/api/browser/screenshot` | The browser’s current screen, as JPEG. | yes |
 | POST | `/api/browser/install` | Download the browser agents use (about 150 MB); follow on GET /api/browser. | no |
 | POST | `/api/browser/check` | Launch the browser once to see it starts. | yes |
-| POST | `/api/browser/settings` | Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window. A partial object. | no |
+| POST | `/api/browser/settings` | Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window, the folder your Chrome saves downloads to (downloadsFolder). A partial object. | no |
 | POST | `/api/browser/pin` | Pin one conversation to a route, or clear it. | yes |
 | POST | `/api/browser/card` | Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) without a chat message. | yes |
-| GET | `/api/browser/downloads` | The agents' downloads area: bytes and files by agent, the per-file and per-agent caps and the retention in days. | yes |
-| POST | `/api/browser/downloads/clear` | Empty the agents' downloads area. The copies in Files stay. | yes |
+| GET | `/api/browser/downloads` | The agents' downloads area: bytes and files by agent, the per-file and per-agent caps, the retention in days, and the files waiting there because they could not be filed (newest day first, at most 200). | yes |
+| POST | `/api/browser/downloads/clear` | Empty the agents' downloads area. What waits there is not in Files, so it is gone for good. | yes |
+| POST | `/api/browser/downloads/file` | File it: register one waiting download in Files as its agent's, then drop it from the area. | yes |
 | GET | `/api/browser/telemetry` | Browser stops by cause, cards and routes over the last days. | yes |
 | POST | `/api/browser/stop` | Stop one page, or with no session stop agents' browsing (expires after the set time unless forever). | yes |
 | POST | `/api/browser/takeover` | Take over the screen from the agent. | yes |
@@ -4021,7 +4022,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/che
 
 #### `POST /api/browser/settings`
 
-Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window. A partial object.
+Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window, the folder your Chrome saves downloads to (downloadsFolder). A partial object.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes what an agent may do without asking.
 - **Answer:** JSON
@@ -4062,10 +4063,10 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/browser/downloads`
 
-The agents' downloads area: bytes and files by agent, the per-file and per-agent caps and the retention in days.
+The agents' downloads area: bytes and files by agent, the per-file and per-agent caps, the retention in days, and the files waiting there because they could not be filed (newest day first, at most 200).
 
 - **Auth:** Session or API token.
-- **Answer:** `{ bytes, files, agents: [{ agent, bytes, files }], fileCap, agentCap, retentionDays }`
+- **Answer:** `{ bytes, files, agents: [{ agent, bytes, files }], fileCap, agentCap, retentionDays, waiting: [{ id, agent, day, name, size, mime }] }`
 - **Since:** 0.1.0-pre.46
 
 ```sh
@@ -4074,15 +4075,29 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/downloads"
 
 #### `POST /api/browser/downloads/clear`
 
-Empty the agents' downloads area. The copies in Files stay.
+Empty the agents' downloads area. What waits there is not in Files, so it is gone for good.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Answer:** `the usage, now empty`
+- **Answer:** `the downloads area, now empty`
 - **Errors:** 409
 - **Since:** 0.1.0-pre.46
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/downloads/clear"
+```
+
+#### `POST /api/browser/downloads/file`
+
+File it: register one waiting download in Files as its agent's, then drop it from the area.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ id }`
+- **Answer:** `{ ...the downloads area, filed: { artifactId, name } }`
+- **Errors:** 400 · 404 when the file is no longer there · 409
+- **Since:** 0.1.0-pre.46
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/browser/downloads/file"
 ```
 
 #### `GET /api/browser/telemetry`

@@ -13,8 +13,8 @@
  * agent keeps more than its cap here. A download that would break one is
  * refused with a sentence the agent can repeat, and nothing partial is left.
  */
-import { createReadStream } from 'node:fs';
-import { chmod, lstat, mkdir, open, readdir, rm, stat, unlink, type FileHandle } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, lstat, mkdir, open, readdir, realpath, rm, stat, unlink, type FileHandle } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
@@ -24,6 +24,10 @@ export const DOWNLOAD_AGENT_CAP = 500 * 1024 * 1024;
 export const DOWNLOAD_RETENTION_DAYS = 30;
 /** A finished file in the owner's own Downloads folder counts only this soon after it was written. */
 export const OWNER_FILE_FRESH_MS = 15 * 60 * 1000;
+/** How long buddi's browser may take over one download before it is stopped. */
+export const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+/** How often a transfer's partial file is measured against the cap. */
+export const DOWNLOAD_POLL_MS = 250;
 
 /** Refused on purpose: a cap, an empty file, a file that is not the one reported. The message is the agent's. */
 export class DownloadRefused extends Error {}
@@ -42,11 +46,30 @@ export interface PendingDownload {
   /** What the browser reported, when it did. */
   size?: number;
   read: { stream(): Promise<Readable | null> } | { path: string };
-  /** Why the browser gave up on it, when it did. */
+  /**
+   * Waits for the transfer to end: null when it finished, the browser's reason
+   * when it gave up. Rejects with `DownloadRefused` when it was stopped on
+   * purpose (over the cap, too slow).
+   */
   failure?(): Promise<string | null>;
+  /** Stop a transfer still running (the run was cancelled). */
+  cancel?(): Promise<void>;
+  /** Remove the browser's own copy once the file was taken or refused. Called in both cases. */
+  cleanup?(): Promise<void>;
 }
 
 export interface StoredDownload { path: string; filename: string; size: number; mime: string; url: string; agent: string }
+
+/** One file waiting in the area because it could not be filed: what Settings → Browser lists. */
+export interface WaitingDownload {
+  /** `<agent>/<day>/<name>`, the handle for File it. */
+  id: string;
+  agent: string;
+  day: string;
+  name: string;
+  size: number;
+  mime: string;
+}
 
 export interface DownloadUsage {
   bytes: number;
@@ -62,8 +85,12 @@ export interface DownloadStoreOptions {
   agentCap?: number;
   retentionDays?: number;
   now?: () => number;
-  /** Where the owner's own files live; a Chrome download is read only from under it. */
+  /** The owner's home; `~` in the Chrome folder means it, and the folder defaults to `~/Downloads`. */
   homeDir?: string;
+  /** The folder the owner's Chrome saves downloads to (setting `downloadsFolder`); a Chrome download is read only from inside it. */
+  chromeFolder?: () => string | undefined;
+  /** buddi's data dir: nothing under it is ever read as a Chrome download. */
+  dataDir?: string;
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -112,18 +139,80 @@ export function downloadSource(url: string): string {
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
+/** `child` is `parent` or inside it (both already resolved). */
+function inside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/** The resolved path when it exists, else the lexical one. */
+async function resolvedOr(file: string): Promise<string> {
+  try { return await realpath(file); } catch { return path.resolve(file); }
+}
+
+/**
+ * Watch one transfer in buddi's own browser: stop it the moment its partial
+ * file passes the cap, or when it runs past the timeout, so a huge or endless
+ * response never fills the disk before the size check. The outcome is what
+ * `PendingDownload.failure` hands the store.
+ */
+export function watchTransfer(options: {
+  /** Settles when the browser is done with it: null, or why it failed. */
+  done: Promise<string | null>;
+  /** Bytes received so far, when they can be measured. */
+  size(): Promise<number | undefined>;
+  cancel(): Promise<void>;
+  cap?: number;
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<string | null> {
+  const cap = options.cap ?? DOWNLOAD_FILE_CAP;
+  const timeoutMs = options.timeoutMs ?? DOWNLOAD_TIMEOUT_MS;
+  const outcome = new Promise<string | null>((resolve, reject) => {
+    let settled = false;
+    const finish = (settle: () => void) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); clearInterval(poll); settle();
+    };
+    const stop = (message: string) => finish(() => { void options.cancel().catch(() => undefined); reject(new DownloadRefused(message)); });
+    const timer = setTimeout(() => stop(`It was still downloading after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes, so it was stopped.`), timeoutMs);
+    const poll = setInterval(() => {
+      void options.size().then((bytes) => {
+        if (bytes !== undefined && bytes > cap) stop(`That download is larger than ${kb(cap)}, the most agents may download per file.`);
+      }, () => undefined);
+    }, options.pollMs ?? DOWNLOAD_POLL_MS);
+    timer.unref?.(); poll.unref?.();
+    options.done.then((reason) => finish(() => resolve(reason)), (error: unknown) => finish(() => resolve(error instanceof Error ? error.message : String(error))));
+  });
+  // Nobody may ask before it settles (the action ended first): never an unhandled rejection.
+  outcome.catch(() => undefined);
+  return outcome;
+}
+
 export class DownloadStore {
   readonly fileCap: number;
   readonly agentCap: number;
   readonly retentionDays: number;
   readonly #now: () => number;
   readonly #home: string;
+  readonly #chromeFolder: () => string | undefined;
+  readonly #dataDir: string | undefined;
   constructor(readonly root: string, options: DownloadStoreOptions = {}) {
     this.fileCap = options.fileCap ?? DOWNLOAD_FILE_CAP;
     this.agentCap = options.agentCap ?? DOWNLOAD_AGENT_CAP;
     this.retentionDays = options.retentionDays ?? DOWNLOAD_RETENTION_DAYS;
     this.#now = options.now ?? Date.now;
     this.#home = options.homeDir ?? os.homedir();
+    this.#chromeFolder = options.chromeFolder ?? (() => undefined);
+    this.#dataDir = options.dataDir;
+  }
+
+  /** The folder the owner's Chrome saves to: the setting, `~` expanded, else `~/Downloads`. */
+  chromeFolder(): string {
+    const set = this.#chromeFolder()?.trim();
+    if (!set) return path.join(this.#home, 'Downloads');
+    if (set === '~' || set.startsWith('~/')) return path.join(this.#home, set.slice(1));
+    return path.resolve(set);
   }
 
   async #tally(dir: string): Promise<{ bytes: number; files: number }> {
@@ -138,26 +227,74 @@ export class DownloadStore {
     return { bytes, files };
   }
 
-  /** The finished file a Chrome download left, read only when it plainly is that file. */
+  /**
+   * The finished file a Chrome download left, read only when it plainly is
+   * that file: its complete path resolved (no symlinked folder can lead out),
+   * inside the folder Chrome saves to, under no dot-directory and not in
+   * buddi's data dir, a plain file written in the last minutes with the size
+   * Chrome said. It is opened once, then checked and read through that one
+   * descriptor, so nothing swapped in after the check is what gets read.
+   */
   async #ownerFile(file: string, reported: number | undefined): Promise<Readable> {
-    const refuse = () => new DownloadRefused('That download could not be read from your Downloads folder.');
+    const folderWord = this.#chromeFolder()?.trim() ? 'your Chrome’s download folder' : 'your Downloads folder';
+    const refuse = () => new DownloadRefused(`That download could not be read from ${folderWord}.`);
     if (!path.isAbsolute(file)) throw refuse();
-    const resolved = path.resolve(file);
-    const home = path.resolve(this.#home) + path.sep;
-    if (!resolved.startsWith(home) || resolved.startsWith(path.resolve(this.root) + path.sep)) throw refuse();
-    let info: Awaited<ReturnType<typeof lstat>>;
-    try { info = await lstat(resolved); } catch { throw refuse(); }
-    if (!info.isFile() || info.isSymbolicLink()) throw refuse();
-    if (Math.abs(this.#now() - info.mtimeMs) > OWNER_FILE_FRESH_MS) throw refuse();
-    if (reported !== undefined && reported >= 0 && info.size !== reported) throw refuse();
-    if (info.size > this.fileCap) throw new DownloadRefused(`That download is ${kb(info.size)}; agents may download at most ${kb(this.fileCap)} per file.`);
-    return createReadStream(resolved);
+    let real: string;
+    let folder: string;
+    try { real = await realpath(file); folder = await realpath(this.chromeFolder()); } catch { throw refuse(); }
+    if (real === folder || !inside(real, folder)) throw refuse();
+    for (const kept of [this.root, this.#dataDir]) if (kept && inside(real, await resolvedOr(kept))) throw refuse();
+    if (path.dirname(real).split(path.sep).some((part) => part.startsWith('.'))) throw refuse();
+    let link = true;
+    try { link = (await lstat(file)).isSymbolicLink(); } catch { /* refused below */ }
+    if (link) throw refuse();
+
+    let handle: FileHandle;
+    try { handle = await open(real, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); } catch { throw refuse(); }
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) throw refuse();
+      // The descriptor is still the file at that resolved path: nothing was swapped between the check and the open.
+      const again = await realpath(real).catch(() => '');
+      const there = again === real ? await stat(real).catch(() => undefined) : undefined;
+      if (!there || there.ino !== info.ino || there.dev !== info.dev) throw refuse();
+      if (Math.abs(this.#now() - info.mtimeMs) > OWNER_FILE_FRESH_MS) throw refuse();
+      if (reported !== undefined && reported >= 0 && info.size !== reported) throw refuse();
+      if (info.size > this.fileCap) throw new DownloadRefused(`That download is ${kb(info.size)}; agents may download at most ${kb(this.fileCap)} per file.`);
+      return handle.createReadStream({ start: 0, autoClose: true });
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Wait for the transfer to end, stopping it when the run is cancelled. */
+  async #settle(pending: PendingDownload, signal: AbortSignal | undefined): Promise<void> {
+    if (!pending.failure && !signal) return;
+    let onAbort = () => {};
+    const stopped = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new DownloadRefused('The run was stopped, so the download was stopped too.'));
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    stopped.catch(() => undefined);
+    try {
+      const failure = await Promise.race([pending.failure?.() ?? Promise.resolve(null), stopped]).catch((error: unknown) => {
+        if (error instanceof DownloadRefused) throw error;
+        return null;
+      });
+      if (failure) throw new DownloadRefused(`The download did not finish: ${failure}.`);
+    } catch (error) {
+      if (signal?.aborted) await pending.cancel?.().catch(() => undefined);
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
   }
 
   /** Copy one download into the agent's area for today. Refuses, and leaves nothing behind, when a cap is hit. */
-  async save(agent: string, pending: PendingDownload): Promise<StoredDownload> {
-    const failure = await pending.failure?.().catch(() => null);
-    if (failure) throw new DownloadRefused(`The download did not finish: ${failure}.`);
+  async save(agent: string, pending: PendingDownload, options: { signal?: AbortSignal } = {}): Promise<StoredDownload> {
+    await this.#settle(pending, options.signal);
     if (pending.size !== undefined && pending.size > this.fileCap) {
       throw new DownloadRefused(`That download is ${kb(pending.size)}; agents may download at most ${kb(this.fileCap)} per file.`);
     }
@@ -214,6 +351,62 @@ export class DownloadStore {
     await chmod(target, 0o600);
     const filename = path.basename(target);
     return { path: target, filename, size, mime: downloadMime(filename, pending.mime), url: pending.url, agent };
+  }
+
+  /** The files waiting, newest day first. */
+  async waiting(): Promise<WaitingDownload[]> {
+    const found: WaitingDownload[] = [];
+    let agents: import('node:fs').Dirent[] = [];
+    try { agents = await readdir(this.root, { withFileTypes: true }); } catch { return found; }
+    for (const agent of agents) {
+      if (!agent.isDirectory()) continue;
+      let days: import('node:fs').Dirent[] = [];
+      try { days = await readdir(path.join(this.root, agent.name), { withFileTypes: true }); } catch { continue; }
+      for (const day of days) {
+        if (!day.isDirectory() || !DAY.test(day.name)) continue;
+        let names: import('node:fs').Dirent[] = [];
+        try { names = await readdir(path.join(this.root, agent.name, day.name), { withFileTypes: true }); } catch { continue; }
+        for (const entry of names) {
+          if (!entry.isFile()) continue;
+          let size = 0;
+          try { size = (await stat(path.join(this.root, agent.name, day.name, entry.name))).size; } catch { continue; }
+          found.push({ id: `${agent.name}/${day.name}/${entry.name}`, agent: agent.name, day: day.name, name: entry.name, size, mime: downloadMime(entry.name) });
+        }
+      }
+    }
+    return found.sort((a, b) => b.day.localeCompare(a.day) || a.agent.localeCompare(b.agent) || a.name.localeCompare(b.name));
+  }
+
+  /** The file behind a waiting id, or a refusal when the id is not one of the area's files. */
+  async #waitingFile(id: string): Promise<{ path: string; agent: string; day: string; name: string }> {
+    const parts = typeof id === 'string' ? id.split('/') : [];
+    const [agent, day, name] = parts;
+    if (parts.length !== 3 || !agent || !day || !name || agentFolder(agent) !== agent || !DAY.test(day) || name !== downloadName(name)) {
+      throw new DownloadRefused('That file is not in the downloads area.');
+    }
+    const file = path.join(this.root, agent, day, name);
+    let info: Awaited<ReturnType<typeof lstat>> | undefined;
+    try { info = await lstat(file); } catch { /* below */ }
+    if (!info?.isFile()) throw new DownloadRefused('That file is no longer in the downloads area.');
+    return { path: file, agent, day, name };
+  }
+
+  /** Read one waiting file, to file it again. */
+  async readWaiting(id: string): Promise<{ bytes: Buffer; agent: string; name: string; mime: string }> {
+    const found = await this.#waitingFile(id);
+    const handle = await open(found.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try { return { bytes: await handle.readFile(), agent: found.agent, name: found.name, mime: downloadMime(found.name) }; }
+    finally { await handle.close(); }
+  }
+
+  /** Remove one waiting file (it was filed), and its day and agent folders once empty. */
+  async removeWaiting(id: string): Promise<void> {
+    const found = await this.#waitingFile(id);
+    await unlink(found.path);
+    const dayDir = path.dirname(found.path);
+    try { if ((await readdir(dayDir)).length === 0) await rm(dayDir, { recursive: true, force: true }); } catch { /* fine */ }
+    const agentDir = path.dirname(dayDir);
+    try { if ((await readdir(agentDir)).length === 0) await rm(agentDir, { recursive: true, force: true }); } catch { /* fine */ }
   }
 
   /** What the area holds, by agent. */

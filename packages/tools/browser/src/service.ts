@@ -10,7 +10,7 @@ import type { RouteKind, ControlSettings } from './settings.js';
 import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
 import { readFile, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { DownloadRefused, downloadSource, type DownloadStore, type DownloadUsage } from './downloads.js';
+import { DownloadRefused, downloadSource, type DownloadStore, type DownloadUsage, type WaitingDownload } from './downloads.js';
 
 /** One download an action produced, as `browser.act` reports it: an artifact id to hand a plugin's import tool, or why not. */
 export type DownloadReport =
@@ -193,6 +193,12 @@ export interface BrowserController {
   downloadUsage?(): Promise<DownloadUsage>;
   /** Empty the agents' downloads area; Files keeps its copies. */
   clearDownloads?(): Promise<DownloadUsage>;
+  /** The files waiting there because they could not be filed (Settings → Browser lists them). */
+  waitingDownloads?(): Promise<WaitingDownload[]>;
+  /** One waiting file's bytes, for File it. */
+  readWaitingDownload?(id: string): Promise<{ bytes: Buffer; agent: string; name: string; mime: string }>;
+  /** Drop a waiting file once Files holds it. */
+  removeWaitingDownload?(id: string): Promise<void>;
 }
 
 export interface BrowserServiceOptions {
@@ -495,6 +501,7 @@ export class BrowserService {
           message: `${observed} No page was open, so I opened ${siteOf(this.#lastUrl) ?? 'the last page'} again. Nothing else was done; ${asked === 'observe' ? 'here it is' : 'act on this page now'}.` };
       }
       const files = await this.#collectDownloads(ctx);
+      controller.signal.throwIfAborted();
       const said = [observed, this.#message, files.line].filter(Boolean).join(' ');
       return { completed: true, notice: UNTRUSTED, observation: this.#observation, ...(files.downloads ? { downloads: files.downloads } : {}), message: said };
     } catch (error) {
@@ -545,7 +552,8 @@ export class BrowserService {
     for (const item of pending) {
       try {
         if (!store || !files) throw new DownloadRefused('Downloads are not set up on this buddi.');
-        const stored = await store.save(ctx.agentId!, item);
+        if (!ctx.agentId) throw new DownloadRefused('No agent is named for this page, so there is nowhere to file it.');
+        const stored = await store.save(ctx.agentId, item, ctx.signal ? { signal: ctx.signal } : {});
         const runId = ctx.provenance?.().runId ?? ctx.jobId ?? null;
         const site = siteOf(item.url);
         const saved = await files.save({
@@ -560,6 +568,11 @@ export class BrowserService {
       } catch (error) {
         const reason = error instanceof DownloadRefused ? error.message : `It could not be saved (${error instanceof Error ? error.message : String(error)}).`;
         reports.push({ name: item.filename, refused: reason });
+        // A transfer still running when it was refused stops here (a no-op once it finished).
+        await item.cancel?.().catch(() => undefined);
+      } finally {
+        // Taken or refused, the browser's own copy goes (buddi's browser keeps one per download until it closes).
+        await item.cleanup?.().catch(() => undefined);
       }
     }
     const lines = reports.map((report) => 'artifactId' in report

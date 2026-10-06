@@ -11,7 +11,10 @@
  *
  * A download is the agent's when it starts while an agent command runs in one
  * of that session's tabs, or within a few seconds after, and comes from the
- * same site as one of those tabs. A download the owner starts is not touched:
+ * same site as one of those tabs were on for that command. Each command
+ * keeps its own sites and its own few seconds: a site an earlier command
+ * visited is not claimed once that command's seconds are over, so a bank the
+ * agent left is the owner's again. A download the owner starts is not touched:
  * not while no agent acts, not from another site, not one another extension
  * started. Chrome's download item names no tab, so a download the owner starts
  * from the very site the agent is working on in those same seconds would be
@@ -60,10 +63,12 @@ function basename(file: string): string {
   return file.split(/[\\/]/).pop() || 'download';
 }
 
-interface Armed { origins: Set<string>; running: number; until: number; at: number }
+/** One agent command: the sites its session's tabs were on, and until when it still counts. */
+interface Action { session: string; origins: Set<string>; running: boolean; until: number; at: number }
 
 export class AgentDownloads {
-  #armed = new Map<string, Armed>();
+  #actions = new Map<number, Action>();
+  #next = 1;
   #claimed = new Map<number, string>();
   #api?: DownloadsApi;
   #send: (frame: DownloadFrame) => void;
@@ -83,28 +88,35 @@ export class AgentDownloads {
   }
   get attached(): boolean { return this.#api !== undefined; }
 
-  /** An agent command starts in this session, whose tabs are on these addresses. */
-  begin(session: string, urls: readonly string[]): void {
-    const armed = this.#armed.get(session) ?? { origins: new Set<string>(), running: 0, until: 0, at: 0 };
-    for (const url of urls) { const origin = originOf(url); if (origin) armed.origins.add(origin); }
-    armed.running += 1;
-    armed.at = this.#now();
-    this.#armed.set(session, armed);
+  /** An agent command starts in this session, whose tabs are on these addresses. Returns the command's handle for `end`. */
+  begin(session: string, urls: readonly string[]): number {
+    this.#expire();
+    const id = this.#next++;
+    const origins = new Set<string>();
+    for (const url of urls) { const origin = originOf(url); if (origin) origins.add(origin); }
+    this.#actions.set(id, { session, origins, running: true, until: 0, at: this.#now() });
+    return id;
   }
 
-  /** It ended; the tabs may have moved on to these. Downloads still count for a few seconds. */
-  end(session: string, urls: readonly string[] = []): void {
-    const armed = this.#armed.get(session);
-    if (!armed) return;
-    for (const url of urls) { const origin = originOf(url); if (origin) armed.origins.add(origin); }
-    armed.running = Math.max(0, armed.running - 1);
-    armed.until = this.#now() + DOWNLOAD_GRACE_MS;
+  /** That command ended; its tabs may have moved on to these. Its downloads still count for a few seconds, its own. */
+  end(id: number, urls: readonly string[] = []): void {
+    const action = this.#actions.get(id);
+    if (!action) return;
+    for (const url of urls) { const origin = originOf(url); if (origin) action.origins.add(origin); }
+    action.running = false;
+    action.until = this.#now() + DOWNLOAD_GRACE_MS;
+  }
+
+  /** Commands whose few seconds are over count for nothing any more. */
+  #expire(): void {
+    const now = this.#now();
+    for (const [id, action] of this.#actions) if (!action.running && now > action.until) this.#actions.delete(id);
   }
 
   /** The session ended or the socket went: nothing more is its. */
   forget(session?: string): void {
-    if (session === undefined) { this.#armed.clear(); this.#claimed.clear(); return; }
-    this.#armed.delete(session);
+    if (session === undefined) { this.#actions.clear(); this.#claimed.clear(); return; }
+    for (const [id, action] of this.#actions) if (action.session === session) this.#actions.delete(id);
     for (const [id, owner] of this.#claimed) if (owner === session) this.#claimed.delete(id);
   }
 
@@ -113,12 +125,11 @@ export class AgentDownloads {
     if (item.byExtensionId) return undefined;
     const origin = originOf(item.referrer) ?? originOf(item.finalUrl ?? item.url);
     if (!origin) return undefined;
-    const now = this.#now();
-    let best: { session: string; at: number } | undefined;
-    for (const [session, armed] of this.#armed) {
-      if (armed.running === 0 && now > armed.until) continue;
-      if (!armed.origins.has(origin)) continue;
-      if (!best || armed.at > best.at) best = { session, at: armed.at };
+    this.#expire();
+    let best: Action | undefined;
+    for (const action of this.#actions.values()) {
+      if (!action.origins.has(origin)) continue;
+      if (!best || action.at > best.at) best = action;
     }
     return best?.session;
   }

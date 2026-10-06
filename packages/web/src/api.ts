@@ -2651,8 +2651,10 @@ export const api = {
   browserCheck: () => post<BrowserLaunchCheck>('/browser/check', {}),
   /** The agents' downloads area: what it holds and its caps. */
   browserDownloads: () => get<BrowserDownloads>('/browser/downloads'),
-  /** Empty the agents' downloads area; the copies in Files stay. */
+  /** Empty the agents' downloads area. What waits there is not in Files, so it goes for good. */
   clearBrowserDownloads: () => post<BrowserDownloads>('/browser/downloads/clear', {}),
+  /** File it: register one waiting download in Files, as its agent's. */
+  fileBrowserDownload: (id: string) => post<BrowserDownloads & { filed: { artifactId: string; name: string } }>('/browser/downloads/file', { id }),
   /**
    * The way into a preview: a URL on the preview origin carrying a
    * single-use ticket. It is asked for per panel and never stored — the
@@ -3276,6 +3278,8 @@ export interface ControlSettings {
   stopExpiryMinutes: number;
   /** How long a mission waits on a browser card for the owner before it ends as "needed you", in minutes. */
   missionWaitMinutes?: number;
+  /** The folder the owner's Chrome saves downloads to, when it is not ~/Downloads. */
+  downloadsFolder?: string;
   maxOwnPages: number;
   showWindow: boolean;
 }
@@ -3396,6 +3400,8 @@ export interface BrowserDownloads {
   fileCap: number;
   agentCap: number;
   retentionDays: number;
+  /** The files waiting because they could not be filed, newest day first. Older gateways leave it out. */
+  waiting?: Array<{ id: string; agent: string; day: string; name: string; size: number; mime: string }>;
 }
 
 export type BrowserLaunchCheck =
