@@ -477,6 +477,11 @@ interface ActState {
   run: (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void) => Promise<boolean>;
   /** Forget what the last write said: a sheet cancelled after a refusal. */
   reset: () => void;
+  /**
+   * How many writes have actually happened (ran, or approved and executed).
+   * A form starts afresh when it grows; a background refresh does not touch it.
+   */
+  happened: number;
 }
 
 /**
@@ -497,6 +502,7 @@ function useAct(): ActState {
   const [approvalId, setApprovalId] = useState<string | null>(null);
   /** What a gated action asked to happen *after* — held until it has. */
   const [pending, setPending] = useState<{ then: ToolRef['then']; ref: ToolRef; onDone?: () => void } | null>(null);
+  const [happened, setHappened] = useState(0);
 
   /** The sentence for a write that worked, from the descriptor or the result. */
   const saidDone = (ref: ToolRef, result: unknown): string | null => {
@@ -508,6 +514,7 @@ function useAct(): ActState {
 
   /** Do what `then` says. Only ever called when something actually happened. */
   const apply = (then: ToolRef['then'], result: unknown, onDone?: () => void): void => {
+    setHappened((n) => n + 1);
     const what = then ?? 'refresh';
     if (typeof what === 'object') {
       // A route the data could not answer — `{ chat }` over a null id — is no
@@ -596,7 +603,7 @@ function useAct(): ActState {
     setDone(null);
   };
 
-  return { running, busy: running !== null, error, done, approvalId, waiting: pending?.ref.pending ?? null, settle, run, reset };
+  return { running, busy: running !== null, error, done, approvalId, waiting: pending?.ref.pending ?? null, settle, run, reset, happened };
 }
 
 /**
@@ -627,6 +634,12 @@ function ActionButton({
   onRun: (ref: ToolRef, args: Record<string, unknown>) => void;
 }): JSX.Element {
   const [asking, setAsking] = useState(false);
+  /*
+   * 1.31: whatever surface built these arguments — a form, a row's sheet, an
+   * editor — a value still drawn as the mask is never written back over the
+   * real one.
+   */
+  const off = disabled === true || sendsMask(args);
   const words = (text: string): string => fill(text, { ...(count === undefined ? {} : { count }), row });
   const label = words(action.label);
   if (asking && action.confirm) {
@@ -638,7 +651,7 @@ function ActionButton({
         </Button>
         <Button
           variant={action.tone === 'danger' ? 'danger' : 'accent'}
-          disabled={disabled}
+          disabled={off}
           onClick={() => {
             setAsking(false);
             onRun(action, args);
@@ -652,7 +665,7 @@ function ActionButton({
   return (
     <Button
       variant={action.tone === 'danger' ? 'danger' : action.tone === 'accent' ? 'accent' : undefined}
-      disabled={disabled}
+      disabled={off}
       onClick={() => (action.confirm ? setAsking(true) : onRun(action, args))}
     >
       {running && action.busy ? action.busy : label}
@@ -743,6 +756,47 @@ function initialValues(fields: Field[], data: unknown): Values {
           : '';
   }
   return values;
+}
+
+/** True when a value, or anything nested in it, is the mask. */
+function sendsMask(value: unknown): boolean {
+  if (value === MASK) return true;
+  if (Array.isArray(value)) return value.some(sendsMask);
+  if (value !== null && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(sendsMask);
+  return false;
+}
+
+/**
+ * A form's values, kept in step with what they started from without losing
+ * what the owner typed.
+ *
+ * `source` changes under an open form for three reasons: Show amounts turned
+ * on or off (the same answer, masked or not), a background refresh (the
+ * plugin's tools wrote), or the answer to a save. None of them may empty the
+ * form. A field the owner has not touched follows the source — so it shows
+ * the figure once revealed, and the mask again once hidden, never keeping a
+ * revealed figure in state — and a field they changed keeps their value.
+ */
+function useSyncedValues(
+  fields: Field[],
+  source: unknown,
+): [Values, (name: string, value: unknown) => void] {
+  const base = initialValues(fields, source);
+  const baseKey = JSON.stringify(base);
+  const [state, setState] = useState<{ values: Values; base: Values; key: string }>(() => ({ values: base, base, key: baseKey }));
+  let current = state;
+  if (state.key !== baseKey) {
+    const values: Values = { ...state.values };
+    for (const field of fields) {
+      const touched = JSON.stringify(state.values[field.name]) !== JSON.stringify(state.base[field.name]);
+      if (!touched) values[field.name] = base[field.name];
+    }
+    current = { values, base, key: baseKey };
+    setState(current);
+  }
+  const change = (name: string, value: unknown): void =>
+    setState((s) => ({ ...s, values: { ...s.values, [name]: value } }));
+  return [current.values, change];
 }
 
 /**
@@ -1940,7 +1994,7 @@ function ListPiece({
     <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
       {rowForm.open ? null : <ActOutcome act={act} />}
-      {rowForm.open ? <RowFormSheet open={rowForm.open} data={query.data} act={act} onClose={rowForm.close} onDone={rowForm.finish} /> : null}
+      {rowForm.open ? <RowFormSheet open={rowForm.open} data={query.data} rows={rows} act={act} onClose={rowForm.close} onDone={rowForm.finish} /> : null}
       {groups.every((group) => group.rows.length === 0) ? (
         query.loading ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />
       ) : (
@@ -2274,6 +2328,19 @@ function RowMenu({
 }
 
 /**
+ * The open sheet's row among the rows drawn now: the same row (a masked copy
+ * remembers the one it came from), or the row with the same content after a
+ * refresh. The row it opened on when neither is there any more.
+ */
+function rowNow(opened: unknown, rows: unknown[]): unknown {
+  const raw = rawOf(opened);
+  const same = rows.find((candidate) => rawOf(candidate) === raw);
+  if (same !== undefined) return same;
+  const text = JSON.stringify(raw);
+  return rows.find((candidate) => JSON.stringify(rawOf(candidate)) === text) ?? opened;
+}
+
+/**
  * The small sheet a row action opens: its fields, Cancel, and the submit on
  * the right. A refusal stays here with its sentence and the owner's input;
  * success closes it and the page says what happened.
@@ -2281,20 +2348,29 @@ function RowMenu({
 function RowFormSheet({
   open,
   data,
+  rows,
   act,
   onClose,
   onDone,
 }: {
   open: OpenRowForm;
   data: unknown;
+  /** The rows as drawn now: masked or not, as Show amounts stands. */
+  rows: unknown[];
   act: ActState;
   onClose: () => void;
   onDone: () => void;
 }): JSX.Element {
   const scope = useScope();
-  const { action, row } = open;
+  const { action } = open;
+  /*
+   * The row as it is drawn now, not as it was when the sheet opened: Show
+   * amounts going off while the sheet is open masks its fields too (1.31).
+   */
+  const row = rowNow(open.row, rows);
   const form = action.form!;
-  const [values, setValues] = useState<Values>(() => initialValues(form.fields, row));
+  const [values, setValue] = useSyncedValues(form.fields, row);
+  const hidden = form.fields.some((field) => field.from !== undefined && holdsMask(readPath(row, field.from)));
   const missing = form.fields.some((field) => field.required && (values[field.name] === '' || values[field.name] === undefined));
   // The submit is the action without its row-button words or a second question.
   const { confirm: _confirm, ...rest } = action;
@@ -2311,7 +2387,7 @@ function RowFormSheet({
           <ActionButton
             action={submit}
             args={resolveArgs(action.args, { data, row, fields: values, shape: form.fields, scope })}
-            disabled={act.busy || missing}
+            disabled={act.busy || missing || hidden}
             running={act.running === action.tool}
             row={row}
             onRun={(ref, args) => void act.run(ref, args, onDone)}
@@ -2324,8 +2400,9 @@ function RowFormSheet({
           fields={form.fields}
           values={values}
           data={row}
-          onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
+          onChange={setValue}
         />
+        {hidden ? <p className="muted">Show amounts to change this.</p> : null}
         <ErrorBanner message={act.error} />
       </Stack>
     </Sheet>
@@ -2341,7 +2418,7 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
     <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
       {rowForm.open ? null : <ActOutcome act={act} />}
-      {rowForm.open ? <RowFormSheet open={rowForm.open} data={query.data} act={act} onClose={rowForm.close} onDone={rowForm.finish} /> : null}
+      {rowForm.open ? <RowFormSheet open={rowForm.open} data={query.data} rows={rows} act={act} onClose={rowForm.close} onDone={rowForm.finish} /> : null}
       {rows.length === 0 ? (
         query.loading ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />
       ) : (
@@ -2501,12 +2578,15 @@ function FormPiece({ component, data }: { component: Of<'form'>; data: unknown }
     setPressed(next);
     if (!next && byId) scope.setParams({ open: null });
   };
-  // Remounting on the initial data is what makes "Save" show what was saved:
-  // the key changes when the query answers again.
-  const key = JSON.stringify([initial.data ?? null, scope.version]);
+  /*
+   * The body starts afresh only when a write of its own happened: that is
+   * what makes "Save" show what was saved (an add form empties, an edit form
+   * fills from the new answer). A reveal, a re-mask or a background refresh
+   * changes `initial.data` under it and keeps what the owner typed.
+   */
   const body = (
     <FormBody
-      key={key}
+      key={act.happened}
       component={component}
       data={data}
       initialData={initial.data}
@@ -2579,7 +2659,7 @@ function FormBody({
 }): JSX.Element {
   const top = useContext(PanelTop);
   const scope = useScope();
-  const [values, setValues] = useState<Values>(() => initialValues(component.fields, initialData));
+  const [values, setValue] = useSyncedValues(component.fields, initialData);
   /*
    * A field the form is not asking for cannot hold it back: two required
    * fields under opposite `when`s are two branches, and the owner only ever
@@ -2606,7 +2686,7 @@ function FormBody({
         columns={component.columns}
         values={values}
         data={initialData}
-        onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
+        onChange={setValue}
       />
       {component.drawer ? null : <ActOutcome act={act} />}
       {hidden ? <p className="muted">Show amounts to change this.</p> : null}
@@ -4039,7 +4119,11 @@ function EditorPiece({ component, data }: { component: Of<'editor'>; data: unkno
   return (
     <>
       <ActOutcome act={act} />
-      <EditorBody key={JSON.stringify(query.data)} component={component} data={data} loaded={query.data} act={act} />
+      {/*
+        Keyed on the answer itself, never its masked copy: Show amounts going
+        on or off is the same draft, and keeps what is being typed (1.31).
+      */}
+      <EditorBody key={JSON.stringify(rawOf(query.data))} component={component} data={data} loaded={query.data} act={act} />
     </>
   );
 }
@@ -4056,7 +4140,8 @@ function EditorBody({
   act: ActState;
 }): JSX.Element {
   const scope = useScope();
-  const [values, setValues] = useState<Values>(() => initialValues(component.fields, loaded));
+  const [values, setValue] = useSyncedValues(component.fields, loaded);
+  const hidden = component.fields.some((field) => field.from !== undefined && holdsMask(readPath(loaded, field.from)));
   /*
    * The version travels with the save as the implicit field `version`: it is
    * the stamp the tool refuses a stale write against, and it is read from the
@@ -4088,8 +4173,9 @@ function EditorBody({
           values={values}
           data={loaded}
           disabled={readOnly}
-          onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
+          onChange={setValue}
         />
+        {hidden && !readOnly ? <p className="muted">Show amounts to change this.</p> : null}
         {/*
           Discard on the left, then a spacer, then Save, then whatever else the
           descriptor listed — the primary of the editor sits under the owner's

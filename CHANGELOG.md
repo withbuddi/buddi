@@ -6,11 +6,11 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
-- Plugin pages can hide just the figures: a page query may name the values that are sensitive (a balance, a total) instead of hiding everything that reads it. The page then shows its whole layout with those values as •••• and one "Show amounts" button in its head, which reveals the page (and the next one) until you leave the window or five minutes pass. Over MCP, `buddi.page_query` returns those values as "(hidden)" unless asked with `includeSensitive`. (Host API 1.31.)
+- Plugin pages can hide just the figures: a page query may name the values that are sensitive (a balance, a total) instead of hiding everything that reads it. The page then shows its whole layout with those values as •••• and one "Show amounts" button in its head, which reveals the page (and the next one) until you switch to another app or tab, or five minutes pass. Showing or hiding amounts never empties a form you are typing in, and a field still showing •••• cannot be saved, in a form, a row's sheet or an editor alike. Over MCP, `buddi.page_query` returns those values as "(hidden)" unless asked with `includeSensitive`. (Host API 1.31.)
 
 ### Changed
 
-- Canvas tabs in long conversations: a tab is now known by the tool and what it was about (a file, an account, a page, a site), titled "Staged import · savings.csv" instead of by the tool alone. A repeat call on the same subject updates that tab and keeps the earlier results one step back inside it. The strip holds three tabs, most recently looked at first; the rest are a scrollable timeline (Now / Earlier this turn / Earlier) with Close others and Close all. A staged result past its expiry closes itself and a failure with nothing to show moves into the timeline; their chat rows still open them. Closed tabs and the order are kept per conversation by buddi, not in the browser.
+- Canvas tabs in long conversations: a tab is now known by the tool and what it was about (a file, an account, a page, a site), titled "Staged import · savings.csv" instead of by the tool alone. Two files with the same name in different folders get a tab each. A repeat call on the same subject updates that tab and keeps the earlier results one step back inside it. The strip holds three tabs, most recently looked at first; the rest are a scrollable timeline (Now / Earlier this turn / Earlier) with Close others and Close all. A staged result past its expiry closes itself and a failure with nothing to show moves into the timeline; their chat rows still open them. Closed tabs and the order are kept per conversation by buddi, not in the browser.
 
 ### Fixed
 
@@ -19,7 +19,7 @@ What changes in buddi from one release to the next, newest first.
 
 - The chat sends files on their own: drop three statements, press Enter, and they go with no words needed. An empty box with nothing attached still sends nothing.
 - The chat takes files while the agent is working. They used to be refused ("Send files once the agent has answered."); now they queue with the words, the agent picks them up at its next step, or they open the next turn when the answer is already being written. A file can also be sent on its own mid-run. The box says where it goes in a full sentence under itself, and the bubble reads "Queued with 1 file".
-- Plugin pages update when the plugin's own tools write: after the CFO records balances in chat, an open Money page shows them within a second instead of still saying "Start with one account". It works for every plugin, whether the agent ran in chat, on Telegram or in a mission.
+- Plugin pages update when the plugin's own tools write: after the CFO records balances in chat, an open Money page shows them within a second instead of still saying "Start with one account"; a form you are filling in keeps what you typed. It works for every plugin, whether the agent ran in chat, on Telegram or in a mission.
 
 ## 0.1.0-pre.45 — 2026-10-05
 

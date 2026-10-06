@@ -10,6 +10,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { api } from '../api';
 import { PluginPage } from './PluginPage';
 import { AMOUNTS_SHOWN_MS, setAmountsShown } from '../reveal';
+import { announcePluginDataChanged } from './usePages';
 import type { PluginPageDescriptor } from './types';
 
 vi.mock('../api', async (load) => ({
@@ -147,6 +148,108 @@ describe('sensitive values', () => {
     await waitFor(() => expect(screen.queryByText(/48,?210/)).not.toBeInTheDocument());
     expect(screen.getAllByRole('img', { name: 'hidden' }).length).toBe(5);
     visibility.mockRestore();
+  });
+
+  it('masks again on switching to another app, though the browser is still on screen', async () => {
+    draw();
+    fireEvent.click(await screen.findByRole('button', { name: 'Show amounts' }));
+    expect(await screen.findByText(/48,?210/)).toBeInTheDocument();
+    // visibilityState stays 'visible': only the window lost focus.
+    fireEvent(window, new Event('blur'));
+    await waitFor(() => expect(screen.queryByText(/48,?210/)).not.toBeInTheDocument());
+  });
+
+  it('keeps listening for the leave while no plugin page is open', async () => {
+    const first = draw();
+    fireEvent.click(await screen.findByRole('button', { name: 'Show amounts' }));
+    expect(await screen.findByText(/48,?210/)).toBeInTheDocument();
+    first.unmount();
+    // On Home, say: nothing that reads the switch is mounted.
+    fireEvent(window, new Event('blur'));
+    draw();
+    expect((await screen.findAllByText('Checking')).length).toBe(2);
+    expect(screen.queryByText(/48,?210/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show amounts' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('keeps what the owner typed across a reveal, a re-mask and a background refresh', async () => {
+    const page: PluginPageDescriptor = {
+      ...money,
+      body: [{
+        kind: 'form',
+        title: 'Budget',
+        initial: { query: 'overview' },
+        fields: [
+          { name: 'limit', label: 'Limit', type: 'number', from: 'budget.limit' },
+          { name: 'note', label: 'Note', type: 'text' },
+        ],
+        submit: { tool: 'finance.budget', label: 'Save', args: { limit: { field: 'limit' }, note: { field: 'note' } } },
+      }],
+    };
+    render(<PluginPage page={page} navigate={vi.fn()} timezone="UTC" siblings={[page]} />);
+    const note = await screen.findByLabelText('Note');
+    await waitFor(() => expect(api.pageQuery).toHaveBeenCalled());
+    fireEvent.change(note, { target: { value: 'groceries up' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show amounts' }));
+    await waitFor(() => expect(screen.getByLabelText('Limit')).toHaveValue(900));
+    expect(screen.getByLabelText('Note')).toHaveValue('groceries up');
+
+    // Hidden again: the figure leaves the field, the typing stays, Save waits.
+    fireEvent(window, new Event('blur'));
+    await waitFor(() => expect(screen.getByText('Show amounts to change this.')).toBeInTheDocument());
+    expect(screen.getByLabelText('Note')).toHaveValue('groceries up');
+    expect(document.body.textContent).not.toContain('900');
+    expect((screen.getByLabelText('Limit') as HTMLInputElement).value).not.toBe('900');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    // The plugin's tools wrote: the page asks again, and the form keeps its edits.
+    const calls = vi.mocked(api.pageQuery).mock.calls.length;
+    announcePluginDataChanged('finance');
+    await waitFor(() => expect(vi.mocked(api.pageQuery).mock.calls.length).toBeGreaterThan(calls), { timeout: 2000 });
+    expect(screen.getByLabelText('Note')).toHaveValue('groceries up');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show amounts' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.pageAct).toHaveBeenCalled());
+    expect(vi.mocked(api.pageAct).mock.calls[0]![1]).toEqual({ tool: 'finance.budget', args: { limit: 900, note: 'groceries up' } });
+  });
+
+  it('a row action\'s sheet never sends the mask, and masks again what it showed', async () => {
+    const page: PluginPageDescriptor = {
+      ...money,
+      body: [{
+        kind: 'table',
+        title: 'Table',
+        query: { query: 'overview' },
+        rows: 'accounts',
+        columns: [{ key: 'name', label: 'Name' }],
+        actions: [{
+          tool: 'finance.correct',
+          label: 'Correct',
+          args: { id: { row: 'id' }, balance: { field: 'balance' } },
+          form: { title: 'Correct', submit: 'Save', fields: [{ name: 'balance', label: 'Balance', type: 'text', from: 'balance' }] },
+        }],
+      }],
+    };
+    render(<PluginPage page={page} navigate={vi.fn()} timezone="UTC" siblings={[page]} />);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Correct' }))[0]!);
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByLabelText('Balance')).toHaveValue('••••');
+    expect(within(sheet).getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(within(sheet).getByText('Show amounts to change this.')).toBeInTheDocument();
+
+    // The page behind the sheet is out of reach; the switch is the session's.
+    act(() => setAmountsShown(true));
+    await waitFor(() => expect(within(sheet).getByLabelText('Balance')).toHaveValue('1,204.10'));
+    expect(within(sheet).getByRole('button', { name: 'Save' })).toBeEnabled();
+
+    // Left the window with the sheet open: the figure it held is masked again.
+    fireEvent(window, new Event('blur'));
+    await waitFor(() => expect(within(sheet).getByLabelText('Balance')).toHaveValue('••••'));
+    expect(within(sheet).getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(api.pageAct).not.toHaveBeenCalled();
   });
 
   it('remembers the reveal for the session, and masks again after five minutes', async () => {
