@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.46 — 2026-10-06
+
 ### Added
 
 - Plugin pages can hide just the figures: a page query may name the values that are sensitive (a balance, a total) instead of hiding everything that reads it. The page then shows its whole layout with those values as •••• and one "Show amounts" button in its head, which reveals the page (and the next one) until you switch to another app or tab, or five minutes pass. Showing or hiding amounts never empties a form you are typing in, and a field still showing •••• cannot be saved, in a form, a row's sheet or an editor alike. Over MCP, `buddi.page_query` returns those values as "(hidden)" unless asked with `includeSensitive`. (Host API 1.31.)
