@@ -7,9 +7,9 @@
  * and the thread says where it went, in three words above the bubble, until
  * the transcript carries the same turn itself.
  *
- * Files are the one thing that still waits: a run's attachments are hydrated
- * when the request is built, so there is no honest way to add one to a call
- * already in flight. The box says so in the same sentence the server does.
+ * Files queue with the words: the run takes them at its next step, or they
+ * open the next turn. The box says where they go in a full sentence under
+ * itself, and the thread marks the bubble "Queued with 1 file".
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
@@ -49,7 +49,7 @@ describe('the composer while the agent is working', () => {
     expect(onSend).toHaveBeenCalledWith('in euros, please', []);
   });
 
-  it('holds a file back in a plain sentence instead of sending it into the run', async () => {
+  it('sends a file into the run and says where it goes, in full, under the box', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       JSON.stringify({ artifactId: 'art-1', filename: 'receipt.png', mime: 'image/png', kind: 'image', sizeBytes: 12 }),
       { status: 200 },
@@ -69,8 +69,27 @@ describe('the composer while the agent is working', () => {
     handle!.addFiles([new File(['x'], 'receipt.png', { type: 'image/png' })]);
 
     fireEvent.change(screen.getByLabelText(/Message Ada/), { target: { value: 'and this one' } });
-    await waitFor(() => expect(screen.getByText('Send files once the agent has answered.')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByTestId('files-wait')).toHaveTextContent('Ada picks up the file between steps, or right after this answer.'));
+    // Under the box, not squeezed into the hint line beside Stop.
+    expect(screen.getByTestId('files-wait').closest('.wb-composer-box')).toBeNull();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onSend).toHaveBeenCalledWith('and this one', [expect.objectContaining({ artifactId: 'art-1' })]);
+    vi.unstubAllGlobals();
+  });
+
+  it('sends files alone mid-run', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ artifactId: 'art-2', filename: 'scan.pdf', mime: 'application/pdf', kind: 'document', sizeBytes: 40 }),
+      { status: 200 },
+    )));
+    const onSend = vi.fn();
+    let handle: { addFiles: (files: File[]) => void } | null = null;
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running onSend={onSend} onStop={() => {}} agentName="Ada" />);
+    handle!.addFiles([new File(['x'], 'scan.pdf', { type: 'application/pdf' })]);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onSend).toHaveBeenCalledWith('', [expect.objectContaining({ artifactId: 'art-2' })]);
     vi.unstubAllGlobals();
   });
 });
@@ -93,6 +112,25 @@ describe('a turn added while the agent was working', () => {
     );
     expect(screen.getByTestId('added-while-working')).toHaveTextContent('added while working');
     expect(screen.getByText('in euros, please').closest('.wb-msg')).toHaveAttribute('data-role', 'user');
+  });
+
+  it('says "Queued with 1 file" when a file rode along, words or not', () => {
+    render(
+      <MessageList
+        messages={[{
+          id: 'p1', role: 'user', at: '', speaker: OWNER_INTERJECTION_SPEAKER,
+          blocks: [{ type: 'attachment', artifactId: 'art-1', filename: 'receipt.png', mime: 'image/png', kind: 'image', sizeBytes: 12 }],
+        }]}
+        agentName="Keeper"
+        onOpen={() => {}}
+        live={[]}
+        now={Date.now()}
+        emptyHint="Nothing yet."
+        working={false}
+      />,
+    );
+    expect(screen.getByTestId('added-while-working')).toHaveTextContent('Queued with 1 file');
+    expect(screen.getByText('receipt.png').closest('.wb-msg')).toHaveAttribute('data-role', 'user');
   });
 
   it('shows at once when sent and is not drawn twice once the transcript has it', async () => {

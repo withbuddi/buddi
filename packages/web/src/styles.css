@@ -5397,6 +5397,8 @@ button.lk-chip:disabled { cursor: default; }
 .cv .wb-composer-model { white-space: nowrap; }
 .cv-hint { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity var(--dur-fast) ease; }
 .cv-hint[data-shown='true'] { opacity: 1; }
+/* A file sent mid-run: where it goes, in full, under the box (the hint line beside Stop is too short). */
+.cv-wait { margin: var(--space-1) var(--space-3) 0; font-size: var(--text-xs); color: var(--text-muted); }
 .cv:not([data-phone='true']) .cv-pop { right: auto; width: min(100%, calc(var(--space-12) * 10)); }
 .cv-pop-row[data-mention] { min-height: var(--control-h-lg); }
 .cv-pop-row[data-mention] .cv-pop-title { flex: 0 1 auto; font-size: var(--text-md); }

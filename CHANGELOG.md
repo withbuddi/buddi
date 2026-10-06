@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Fixed
 
 - The chat sends files on their own: drop three statements, press Enter, and they go with no words needed. An empty box with nothing attached still sends nothing.
+- The chat takes files while the agent is working. They used to be refused ("Send files once the agent has answered."); now they queue with the words, the agent picks them up at its next step, or they open the next turn when the answer is already being written. A file can also be sent on its own mid-run. The box says where it goes in a full sentence under itself, and the bubble reads "Queued with 1 file".
 
 ## 0.1.0-pre.45 — 2026-10-05
 

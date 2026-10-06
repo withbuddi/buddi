@@ -75,11 +75,13 @@ import { snapTab } from './snap';
 import type { ChatAgent, UploadedAttachment } from './types';
 
 /**
- * The one thing that waits for the answer. A run's attachments are hydrated
- * when the request is built, so there is no honest way to add one to a call
- * already in flight; the server says the same sentence.
+ * Where a file sent mid-run goes, in one sentence under the box. It queues
+ * with the words: the run takes it at its next step, or it opens the next
+ * turn when the answer is already being written.
  */
-export const FILES_DURING_RUN = 'Send files once the agent has answered.';
+export function filesDuringRun(agentName: string, count: number): string {
+  return `${agentName} picks up ${count === 1 ? 'the file' : 'the files'} between steps, or right after this answer.`;
+}
 
 /**
  * The id of the one composer field on a page. The shell's `/` looks for it
@@ -421,10 +423,9 @@ export const Composer = forwardRef<ComposerHandle, {
 
   const uploading = attachments.some((attachment) => attachment.state === 'uploading');
   /*
-   * A file cannot join a run that has already been sent: its bytes are
-   * hydrated and capped when the request is built. So the one thing the box
-   * will not do mid-run is send a file, and it says so on the line where it
-   * says everything else.
+   * A file sent mid-run queues with the words, like any other line: the run
+   * takes it at its next step, or it opens the next turn. The box says so in
+   * a full sentence under itself — the hint line beside Stop is too short.
    */
   const holdingFiles = attachments.length > 0;
   const filesWait = running && holdingFiles;
@@ -438,7 +439,7 @@ export const Composer = forwardRef<ComposerHandle, {
    */
   // Files alone are a message too: three statements need no words to go with them.
   const holdingReady = attachments.some((attachment) => attachment.state === 'ready' && attachment.uploaded);
-  const canSend = !disabled && !uploading && !filesWait && (text.trim() !== '' || holdingReady);
+  const canSend = !disabled && !uploading && (text.trim() !== '' || holdingReady);
 
   /** Upload files as they arrive; answers each one's tray key. */
   const take = (files: FileList | File[] | null): string[] => {
@@ -550,7 +551,7 @@ export const Composer = forwardRef<ComposerHandle, {
 
   const send = (spoken?: string): void => {
     const outgoing = (spoken ?? text).trim();
-    if (spoken === undefined ? !canSend : disabled || uploading || filesWait || outgoing === '') return;
+    if (spoken === undefined ? !canSend : disabled || uploading || outgoing === '') return;
     // `/quiet 1d`, typed whole: the page runs it, nothing is sent to the agent.
     const command = spoken === undefined && onCommand ? parseCommand(outgoing) : null;
     if (command && isChatCommand(command.name) && attachments.length === 0) {
@@ -585,7 +586,7 @@ export const Composer = forwardRef<ComposerHandle, {
     if (row.source === 'chat' && isChatCommand(row.name)) { runChatCommand(row.name, ''); return; }
     // A plugin's command is the owner's words to the agent: sent as typed.
     const words = `/${row.name}`;
-    if (disabled || uploading || filesWait) { apply({ value: `${words} `, caret: words.length + 1 }); return; }
+    if (disabled || uploading) { apply({ value: `${words} `, caret: words.length + 1 }); return; }
     send(words);
   };
 
@@ -761,7 +762,7 @@ export const Composer = forwardRef<ComposerHandle, {
       : p.group === 'In this room' ? 'is asked in this room' : `${agentName} asks them`;
   const problem = failed > 0
     ? (failed === 1 && failures[0]?.error ? failures[0].error : `${failed} files failed to upload and will not be sent`)
-    : snapNote ?? (filesWait ? FILES_DURING_RUN : null);
+    : snapNote;
   const hint = problem
     ?? (running || showPopup ? null
       : item ? 'Enter continues the list · Enter on an empty item ends it · Tab indents'
@@ -1009,9 +1010,7 @@ export const Composer = forwardRef<ComposerHandle, {
               className="wb-send"
               aria-label="Send"
               title={
-                filesWait
-                  ? FILES_DURING_RUN
-                  : uploading
+                uploading
                     ? 'Waiting for the upload to finish'
                     : running
                       ? `Send — ${agentName} picks it up between steps`
@@ -1025,6 +1024,9 @@ export const Composer = forwardRef<ComposerHandle, {
           </div>
         </div>
       </div>
+      {filesWait ? (
+        <p className="cv-wait" role="status" data-testid="files-wait">{filesDuringRun(agentName, attachments.length)}</p>
+      ) : null}
     </div>
   );
 });

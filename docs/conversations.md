@@ -133,8 +133,18 @@ promoted together become one turn — and `openingPersisted` is set only when
 that transaction landed. The transcript read joins the waiting rows on at the
 end by their own ids, marked *added while working*; the page keeps its
 optimistic bubble under that id and lets it go once the server has read it
-back, so nothing is left behind. Attachments are refused in a sentence and wait
-for the next turn.
+back, so nothing is left behind.
+
+**Files queue too.** A row carries the attachment ids (`attachment_ids`,
+migration 078), and a message may be files alone. They are hydrated when the
+run leases the row — the bytes (or the note, for what a model cannot look at)
+go to the model in the same tool-results turn, and the record keeps
+`artifact_ref` blocks — or, when no run took it, the promoted turn carries the
+references after the words and the library records the upload in the same
+transaction. Mid-run they are never capped into a failure: an oversize file
+goes as a placeholder, the way a replayed one does. The composer says where a
+held file goes in a sentence under the box; the bubble reads *Queued with N
+files*.
 
 **Stop is unchanged.** It ends the run, and what was queued goes out as the
 next turn. An interjection adds context; it cannot cancel a pending approval,

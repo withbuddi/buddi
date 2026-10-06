@@ -27,6 +27,7 @@ import { NATIVE_SEARCH_SYSTEM_NOTE, planNativeSearch } from './search.js';
 import { GROUNDING_RETRY_TEXT, citationSignals, citesUnread } from './grounding.js';
 import { compactObservations } from './projection.js';
 import {
+  degradeContent,
   degradeMessages,
   DEFAULT_CAPABILITIES,
   type ProviderCapabilities,
@@ -243,6 +244,12 @@ export interface Interjection {
   /** Whoever queued it knows it by this. The loop only hands it back. */
   id?: string;
   text: string;
+  /**
+   * Files the owner sent with it. Hydrated when the loop takes the line — the
+   * bytes go to the model in the same tool-results turn as the words — and
+   * stored as references, the way an opening turn's files are.
+   */
+  attachments?: readonly AttachmentRef[];
 }
 
 /**
@@ -1478,19 +1485,32 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
     // maxTurns; the browser's budget is the ceiling. Capped all the same.
     if (toolUses.length > 0 && toolUses.every((call) => registry.hasOwnBudget(call.name))) exemptTurns++;
     const lastTurn = turns - exemptTurns >= agent.maxTurns || turns >= agent.maxTurns + MAX_EXEMPT_TURNS || pendingActionId !== undefined || ctx.signal?.aborted === true;
-    const leased = lastTurn ? [] : ((await opts.interjections?.lease()) ?? []).filter((item) => item.text.trim() !== '');
+    const leased = lastTurn ? [] : ((await opts.interjections?.lease()) ?? [])
+      .filter((item) => item.text.trim() !== '' || (item.attachments?.length ?? 0) > 0);
     // What the model is shown, and what the transcript keeps: the framing is
     // for the model — the record holds the owner's own words.
-    const spokenBlocks: ContentBlock[] = leased.length === 0
-      ? []
-      : [{ type: 'text', text: interjectionText(leased.map((item) => item.text)) }];
-    const storedBlocks: ContentBlock[] = leased.length === 0
-      ? []
-      : [{ type: 'text', text: leased.map((item) => item.text.trim()).join('\n\n') }];
+    const said = leased.map((item) => item.text).filter((text) => text.trim() !== '');
+    // Files that came with them: references in the record, the bytes (or the
+    // note, for what a model cannot look at) in what is sent. Never capped
+    // into a failure here — each file was accepted when it was uploaded, and
+    // a run must not die between two tool calls over one; an oversize one
+    // goes as a placeholder, the way a replayed one does.
+    const leasedRefs = toArtifactRefBlocks(leased.flatMap((item) => item.attachments ?? []));
+    const sentRefs = leasedRefs.length === 0 ? [] : degradeContent(await hydrateContent(leasedRefs, opts.loadArtifact), capabilities);
+    const spokenBlocks: ContentBlock[] = [
+      ...(said.length === 0 ? [] : [{ type: 'text' as const, text: interjectionText(said) }]),
+      ...sentRefs,
+    ];
+    const storedBlocks: ContentBlock[] = [
+      ...(said.length === 0 ? [] : [{ type: 'text' as const, text: said.map((text) => text.trim()).join('\n\n') }]),
+      ...leasedRefs,
+    ];
+    const uploaded: ArtifactUse[] = leased.flatMap((item) => item.attachments ?? [])
+      .map((a) => ({ artifactId: a.artifactId, kind: 'uploaded' as const, agentId: null }));
 
     messages.push({ role: 'user', content: [...results, ...spokenBlocks] });
     const turnMessageId = await persistMessage(
-      pool, conversationId, 'user', [...results, ...storedBlocks], opts.transcript?.speaker, produced,
+      pool, conversationId, 'user', [...results, ...storedBlocks], opts.transcript?.speaker, [...produced, ...uploaded],
     );
     if (leased.length > 0) {
       inFlight = leased;

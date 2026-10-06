@@ -624,6 +624,7 @@ export async function readChatTranscript(
     // on at the end, by its own id, marked for what it is.
     waitingPendingInput(pool, conversationId).catch(() => []),
   ]);
+  const waitingFiles = await artifactsById(pool, [...new Set(waiting.flatMap((row) => row.attachmentIds))]);
   const vitals = await readVitals(pool, conversationId);
   // The size limit is this conversation's model's, not a constant: the header
   // must not promise 80k to a thread that has 400k, or the reverse.
@@ -671,7 +672,10 @@ export async function readChatTranscript(
       id: row.id,
       role: 'user',
       at: row.receivedAt.toISOString(),
-      blocks: [{ type: 'text' as const, text: row.text }],
+      blocks: [
+        ...(row.text.trim() === '' ? [] : [{ type: 'text' as const, text: row.text }]),
+        ...row.attachmentIds.map((artifactId) => toChatBlock({ type: 'artifact_ref', artifactId }, toolNames, waitingFiles, approvals)),
+      ],
       speaker: OWNER_INTERJECTION_SPEAKER,
     }))],
     ...(await runsOf(pool, conversationId)),
@@ -1232,7 +1236,18 @@ class LivePendingInput implements InterjectionSource {
     if (this.#closed) return [];
     try {
       const rows = await leasePendingInput(this.pool, this.conversationId, this.runId);
-      return rows.map((row) => ({ id: row.id, text: row.text }));
+      // Files queued with a line are hydrated now, when the run takes it: the
+      // ids were stored with the row, the references are read here, and the
+      // loop turns them into bytes for the step it is about to send.
+      const ids = [...new Set(rows.flatMap((row) => row.attachmentIds))];
+      const files = await artifactsById(this.pool, ids);
+      return rows.map((row) => {
+        const attachments = row.attachmentIds.flatMap((id) => {
+          const file = files.get(id);
+          return file ? [{ artifactId: file.id, mime: file.mime, kind: file.kind, filename: file.filename, sizeBytes: file.sizeBytes }] : [];
+        });
+        return { id: row.id, text: row.text, ...(attachments.length > 0 ? { attachments } : {}) };
+      });
     } catch (err) {
       // A queue that cannot be read must not fail the turn the owner is
       // waiting on: the rows stay pending and go out as the next turn.
@@ -1330,16 +1345,6 @@ export type SendResult =
       pendingId?: string;
     }
   | { ok: false; status: number; error: string };
-
-/**
- * Why a file cannot ride along mid-run.
- *
- * A turn's attachments are hydrated and capped when the run is built; there is
- * no honest way to add one to a request that has already been sent. So it is
- * refused in a sentence rather than queued into a surprise, and the owner
- * sends it the moment the answer lands.
- */
-export const FILES_DURING_RUN = 'Send files once the agent has answered.';
 
 /**
  * The web surface's run queue.
@@ -1448,9 +1453,15 @@ export class WebChat {
        */
       const live = this.#running.get(conversationId);
       if (live && live.interjections.open) {
-        // Files are hydrated and capped when the run is built; there is no
-        // honest way to add one to a request already in flight.
-        if (attachmentIds.length > 0) return { ok: false, status: 409, error: FILES_DURING_RUN };
+        // Files queue with the words, by id. They are hydrated when the run
+        // takes the line between two tool calls — into the very request it
+        // sends next — or, if it never does, when the line is promoted into
+        // the next turn. Checked to exist now, so a bad id is refused here
+        // rather than discovered by a run.
+        for (const id of attachmentIds) {
+          const row = await getArtifact(this.#deps.pool, id).catch(() => null);
+          if (!row) return { ok: false, status: 404, error: `no such attachment: ${id}` };
+        }
         // Durable before it is acknowledged, and in a table of its own: a row
         // in `core.messages` written here would land between a `tool_use` and
         // its result, which is a transcript no provider will replay.
@@ -1458,6 +1469,7 @@ export class WebChat {
           conversationId,
           runId: live.runId,
           text,
+          attachmentIds,
           now: this.#deps.now(),
         });
         const still = this.#running.get(conversationId);

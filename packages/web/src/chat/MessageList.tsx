@@ -275,7 +275,10 @@ export function MessageList({
         return (
           <div key={message.id} className="wb-msg" data-role={mine || interjected ? 'user' : 'assistant'}>
             {interjected ? (
-              <div className="wb-msg-added" data-testid="added-while-working">added while working</div>
+              <div className="wb-msg-added" data-testid="added-while-working">
+                {/* Files say what rode with the words, so a held picture reads as queued, not lost. */}
+                {carried.length > 0 ? `Queued with ${carried.length} file${carried.length === 1 ? '' : 's'}` : 'added while working'}
+              </div>
             ) : null}
             {opensTurn && !mine && !interjected ? (
               <TurnHead

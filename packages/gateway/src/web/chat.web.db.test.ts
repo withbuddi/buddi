@@ -1620,8 +1620,7 @@ suite('the dashboard chat API', () => {
       expect(said).toBe(1);
     });
 
-    it('refuses a file in a plain sentence rather than queueing it', async () => {
-      const client = await signedIn();
+    const receipt = async (client: Awaited<ReturnType<typeof signedIn>>): Promise<string> => {
       const png = Buffer.from(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
         'base64',
@@ -1629,8 +1628,13 @@ suite('the dashboard chat API', () => {
       const stored = (await (
         await client.upload('/api/chat/attachments', { name: 'receipt.png', type: 'image/png', bytes: png })
       ).json()) as any;
+      return String(stored.artifactId);
+    };
 
-      provider.script = [say('done')];
+    it('queues a file with the words, and the run takes it into the tool-results turn', async () => {
+      const client = await signedIn();
+      const artifactId = await receipt(client);
+      provider.script = [call('t1', 'demo.read', { what: 'the ledger' }), say('Added.')];
       provider.block = () => {};
       const first = (await (
         await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'hold on' })
@@ -1640,13 +1644,117 @@ suite('the dashboard chat API', () => {
       const res = await client.post(`/api/chat/${AGENT_ID}/messages`, {
         conversationId: first.conversationId,
         text: 'and this receipt',
-        attachmentIds: [stored.artifactId],
+        attachmentIds: [artifactId],
       });
-      expect(res.status).toBe(409);
-      expect(((await res.json()) as any).error).toBe('Send files once the agent has answered.');
-      // Nothing was queued: a refused message is not waiting anywhere.
-      expect(await pendingRows(first.conversationId)).toHaveLength(0);
+      expect(res.status).toBe(202);
+      const queued = (await res.json()) as any;
+      expect(queued).toMatchObject({ runId: first.runId, queued: true });
+      const { rows: waiting } = await pool.query(
+        `select attachment_ids from core.pending_input where id = $1::uuid`, [queued.pendingId],
+      );
+      expect(waiting[0].attachment_ids.map(String)).toEqual([artifactId]);
 
+      // The thread shows the file with the words while it waits.
+      const midRun = await client.json<any>(`/api/chat/conversations/${first.conversationId}`);
+      expect(midRun.messages.at(-1)).toMatchObject({
+        id: queued.pendingId,
+        speaker: 'owner:interjection',
+        blocks: [{ type: 'text', text: 'and this receipt' }, { type: 'attachment', artifactId, filename: 'receipt.png' }],
+      });
+
+      provider.block?.();
+      await calls(2);
+      provider.block?.();
+      await settled(first.conversationId);
+
+      // One run; the second step carries the words *and* the file after the
+      // tool results, hydrated at the moment the run took them.
+      const { rows: runs } = await pool.query(
+        `select count(*)::int as n from core.events where conversation_id = $1::uuid and kind = 'run.started'`,
+        [first.conversationId],
+      );
+      expect(runs[0].n).toBe(1);
+      const last = (provider.seen[1]!.messages as any[]).at(-1);
+      expect(last.content[0].type).toBe('tool_result');
+      const sent = JSON.stringify(last.content.slice(1));
+      expect(sent).toContain('the owner adds: and this receipt');
+      expect(sent).toContain('receipt.png');
+      expect(sent).not.toContain('artifact_ref');
+
+      const after = await pendingRows(first.conversationId);
+      expect(after[0].state).toBe('delivered');
+      const { rows: carrier } = await pool.query(
+        `select content from core.messages where conversation_id = $1::uuid and content::text like '%and this receipt%'`,
+        [first.conversationId],
+      );
+      expect(carrier).toHaveLength(1);
+      const blocks = carrier[0].content as any[];
+      expect(blocks[0].type).toBe('tool_result');
+      expect(blocks.slice(1)).toMatchObject([{ type: 'text', text: 'and this receipt' }, { type: 'artifact_ref', artifactId }]);
+      const { rows: uses } = await pool.query(
+        `select kind from core.artifact_uses where artifact_id = $1::uuid and conversation_id = $2::uuid`,
+        [artifactId, first.conversationId],
+      );
+      expect(uses.map((u: any) => u.kind)).toEqual(['uploaded']);
+    });
+
+    it('promotes files sent alone into the next turn when the run ends without taking them', async () => {
+      const client = await signedIn();
+      const artifactId = await receipt(client);
+      provider.script = [say('done'), say('Got the receipt.')];
+      provider.block = () => {};
+      const first = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'hold on' })
+      ).json()) as any;
+      await calls(1);
+
+      // No words at all: the file is the message.
+      const res = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+        conversationId: first.conversationId,
+        text: '',
+        attachmentIds: [artifactId],
+      });
+      expect(res.status).toBe(202);
+      expect(((await res.json()) as any).queued).toBe(true);
+
+      provider.block?.();
+      provider.block = null;
+      await web.chat?.drain();
+      await settled(first.conversationId, 2);
+
+      const promoted = await pendingRows(first.conversationId);
+      expect(promoted.map((r: any) => r.state)).toEqual(['promoted']);
+      const { rows: owner } = await pool.query(
+        `select content from core.messages where id = $1::uuid`, [promoted[0].message_id],
+      );
+      // Files alone: no empty text block, just the reference.
+      expect(owner[0].content).toMatchObject([{ type: 'artifact_ref', artifactId, mime: 'image/png', filename: 'receipt.png' }]);
+      expect(owner[0].content).toHaveLength(1);
+      const sent = JSON.stringify((provider.seen.at(-1)!.messages as any[]).at(-1));
+      expect(sent).toContain('receipt.png');
+      expect(sent).not.toContain('artifact_ref');
+      const { rows: uses } = await pool.query(
+        `select kind from core.artifact_uses where artifact_id = $1::uuid and conversation_id = $2::uuid`,
+        [artifactId, first.conversationId],
+      );
+      expect(uses.map((u: any) => u.kind)).toEqual(['uploaded']);
+    });
+
+    it('refuses a queued file that does not exist, and queues nothing', async () => {
+      const client = await signedIn();
+      provider.script = [say('done')];
+      provider.block = () => {};
+      const first = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'hold on' })
+      ).json()) as any;
+      await calls(1);
+      const res = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+        conversationId: first.conversationId,
+        text: 'this one',
+        attachmentIds: ['00000000-0000-4000-8000-000000000000'],
+      });
+      expect(res.status).toBe(404);
+      expect(await pendingRows(first.conversationId)).toHaveLength(0);
       provider.block?.();
       await settled(first.conversationId);
     });
