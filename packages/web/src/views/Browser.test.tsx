@@ -427,15 +427,15 @@ describe('pairWithCode: a typed code racing the page\'s own pairing', () => {
 describe('Downloads: what agents downloaded, and Clear', () => {
   const held = { bytes: 36_000, files: 2, agents: [{ agent: 'cfo', bytes: 36_000, files: 2 }], fileCap: 50 * 1024 * 1024, agentCap: 500 * 1024 * 1024, retentionDays: 30 };
   it('says what the area holds and its rules in one line', () => {
-    expect(downloadsLine(held)).toBe('2 files · 35 KB · kept 30 days, at most 50.0 MB a file');
-    expect(downloadsLine({ ...held, files: 0, bytes: 0 })).toBe('Empty · kept 30 days, at most 50.0 MB a file');
+    expect(downloadsLine(held)).toBe('2 files waiting · 35 KB · kept 30 days, at most 50.0 MB a file');
+    expect(downloadsLine({ ...held, files: 0, bytes: 0 })).toBe('Nothing waiting · kept 30 days, at most 50.0 MB a file');
   });
   it('clears the area and explains the Chrome permission', async () => {
     vi.mocked(api.browserDownloads).mockResolvedValue(held);
     vi.mocked(api.clearBrowserDownloads).mockResolvedValue({ ...held, files: 0, bytes: 0, agents: [] });
     render(<Browser />);
     const line = await screen.findByTestId('downloads-row');
-    expect(await within(line).findByText(/2 files · 35 KB/)).toBeInTheDocument();
+    expect(await within(line).findByText(/2 files waiting · 35 KB/)).toBeInTheDocument();
     expect(within(line).getByText(/Allow downloads/)).toBeInTheDocument();
     fireEvent.click(within(line).getByRole('button', { name: 'Clear' }));
     await waitFor(() => expect(api.clearBrowserDownloads).toHaveBeenCalled());

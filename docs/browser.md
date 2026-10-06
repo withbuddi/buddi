@@ -343,20 +343,24 @@ statement PDF, an export. buddi keeps it so the agent can pass it on.
   and 500 MB per agent; a download over either is refused, nothing partial is
   kept, and the agent hears why in one sentence. Days older than 30 are swept
   when buddi starts and once a day after.
-- **Files.** Each saved download is also registered in Files (the artifacts
+- **Files.** Each saved download is then registered in Files (the artifacts
   store): credited to the agent, in the conversation, with the caption
   "Downloaded from bank.example", source surface `browser`, the run id as its
   chat id and the address it came from without its query (signed links carry
-  tokens there). The Files copy stays until the owner deletes it; the
-  downloads area is only the landing folder.
+  tokens there). Once registered it is removed from the downloads area, so
+  Files holds the one copy and Files' own rules govern it. The area is only
+  the landing folder: what stays there is a download whose registration
+  failed, and the 30-day sweep clears those. (Files takes the bytes and
+  stores them content-addressed, so the hand-over is a write there and an
+  unlink here rather than a rename.)
 - **What the agent reads.** `browser.act`'s result gains `downloads`, on the
   action that started the download or the next one (a slow export arrives a
   moment later): `[{ artifactId, name, size, type }]`, or
   `{ name, refused }` for one that was not kept, plus a line in `message`.
   The agent passes `artifactId` to the owning plugin's import tool (finance
   imports statements) and does not paste the file into its reply.
-- **Settings → Browser & apps → Downloads** shows what the area holds, its
-  rules, and **Clear** (`GET /api/browser/downloads`,
+- **Settings → Browser & apps → Downloads** says how many files are waiting
+  (normally none), the rules, and **Clear** (`GET /api/browser/downloads`,
   `POST /api/browser/downloads/clear`). Clearing leaves Files alone.
 
 **buddi's own browser** accepts downloads into its profile's temporary folder

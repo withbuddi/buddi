@@ -107,10 +107,10 @@ describe('browser.act and a download', () => {
   const navigate = commandSchema.parse({ action: 'navigate', url: 'https://bank.example/accounts' });
   const click = commandSchema.parse({ action: 'click', target: { ref: 'e1' } });
 
-  async function setup(limits: { fileCap?: number } = {}) {
+  async function setup(limits: { fileCap?: number; failSave?: boolean } = {}) {
     let now = Date.parse('2026-10-05T09:00:00Z');
     const root = path.join(await scratch(), 'downloads');
-    const store = new DownloadStore(root, { now: () => now, ...limits });
+    const store = new DownloadStore(root, { now: () => now, ...(limits.fileCap ? { fileCap: limits.fileCap } : {}) });
     const pending: PendingDownload[] = [];
     const driver: BrowserDriver = { start: vi.fn(async () => {}), perform: vi.fn(async () => {}), observe: vi.fn(async () => observation),
       screenshot: vi.fn(async () => undefined), close: vi.fn(async () => {}), takeDownloads: () => pending.splice(0) };
@@ -124,6 +124,7 @@ describe('browser.act and a download', () => {
     const host = createPluginHost(BROWSER_HOST, facts);
     const files = {
       async save(input: { bytes: Buffer; mime: string; filename?: string; caption?: string; source?: unknown }) {
+        if (limits.failSave) throw new Error('database unavailable');
         saved.push(input);
         return { id: '11111111-2222-4333-8444-555555555555', kind: 'document', mime: input.mime, filename: input.filename ?? null, sizeBytes: input.bytes.length,
           sha256: 'x', caption: input.caption ?? null, createdBy: 'cfo', createdAt: new Date(now).toISOString(), conversationId: null } as never;
@@ -134,8 +135,8 @@ describe('browser.act and a download', () => {
     return { service, ctx, pending, saved, store, root, advance: (ms: number) => { now += ms; } };
   }
 
-  it('lands as an artifact the agent can pass on, tagged with the agent, the run and where it came from; swept later', async () => {
-    const { service, ctx, pending, saved, store, root, advance } = await setup();
+  it('lands as an artifact the agent can pass on, tagged with the agent, the run and where it came from; one copy, in Files', async () => {
+    const { service, ctx, pending, saved, store, root } = await setup();
     await service.execute(navigate, ctx);
     pending.push(streamed(CSV));
     const result = await service.execute(click, ctx) as { completed: boolean; downloads: DownloadReport[]; message: string };
@@ -146,8 +147,19 @@ describe('browser.act and a download', () => {
     expect(saved[0]!.bytes.toString()).toBe(CSV);
     expect(saved[0]).toMatchObject({ mime: 'text/csv', filename: 'transactions.csv', caption: 'Downloaded from bank.example',
       source: { surface: 'browser', chatId: 'run-7', messageId: 'https://bank.example/export' } });
+    // Registered, so nothing waits in the landing folder: Files holds the only copy.
+    expect((await store.usage()).files).toBe(0);
+    expect(await readdir(path.join(root, 'cfo'))).toEqual([]);
+  });
+
+  it('keeps a download whose registration failed as a leftover, which the sweep clears after thirty days', async () => {
+    const { service, ctx, pending, store, root, advance } = await setup({ failSave: true });
+    await service.execute(navigate, ctx);
+    pending.push(streamed(CSV));
+    const result = await service.execute(click, ctx) as { downloads: DownloadReport[] };
+    expect(result.downloads).toEqual([{ name: 'transactions.csv', refused: expect.stringMatching(/could not be saved \(database unavailable\)/) }]);
     expect(await readdir(path.join(root, 'cfo', '2026-10-05'))).toEqual(['transactions.csv']);
-    // Thirty days on, the landing copy is gone; Files keeps its own.
+    expect((await store.usage()).files).toBe(1);
     advance(31 * 24 * 60 * 60 * 1000);
     expect(await store.sweep()).toBe(1);
     expect((await store.usage()).files).toBe(0);

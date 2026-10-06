@@ -193,12 +193,12 @@ function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserS
 }
 
 /**
- * The agents' downloads area (docs/browser.md, "Downloads"): what it holds,
- * the rules it keeps, and Clear. A file an agent downloads is also in Files,
- * which keeps it; this is only the landing folder.
+ * The agents' downloads area (docs/browser.md, "Downloads"): the landing
+ * folder. A download moves to Files once registered, so what waits here is
+ * only what could not be filed; the rules it keeps, and Clear.
  */
 export function downloadsLine(usage: { bytes: number; files: number; fileCap: number; retentionDays: number }): string {
-  const held = usage.files === 0 ? 'Empty' : `${usage.files} ${usage.files === 1 ? 'file' : 'files'} · ${formatBytes(usage.bytes)}`;
+  const held = usage.files === 0 ? 'Nothing waiting' : `${usage.files} ${usage.files === 1 ? 'file' : 'files'} waiting · ${formatBytes(usage.bytes)}`;
   return `${held} · kept ${usage.retentionDays} days, at most ${formatBytes(usage.fileCap)} a file`;
 }
 
@@ -211,7 +211,7 @@ function DownloadsPanel({ busy, run }: { busy: boolean; run: (action: () => Prom
         <div className="ui-list-row" data-testid="downloads-row">
           <span className="ui-list-main">
             <span className="ui-list-title">Files agents download</span>
-            <span className="ui-list-sub">{data ? downloadsLine(data) : 'Checking…'}. Each one is also in Files, where it stays until you delete it.</span>
+            <span className="ui-list-sub">{data ? downloadsLine(data) : 'Checking…'}. A download goes straight to Files; only one that could not be filed waits here.</span>
             <span className="ui-list-sub">In your Chrome, agents’ downloads need the extension’s Downloads permission: open the buddi extension and press Allow downloads. Downloads you start yourself are never read.</span>
           </span>
           <span className="ui-list-side">

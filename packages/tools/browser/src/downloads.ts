@@ -4,9 +4,9 @@
  * A file a page hands an agent — the bank's transactions CSV, a statement PDF —
  * lands here first, under `<data>/downloads/<agent>/<yyyy-mm-dd>/`, and the
  * browser service then registers it in Files so the agent can pass its id to a
- * plugin's import tool. This folder is the landing zone, not the library: it is
- * swept after thirty days, and the owner can clear it from Settings → Browser;
- * the copy in Files stays until the owner deletes it there.
+ * plugin's import tool, and removes it from here: Files holds the one kept copy.
+ * What stays is only what failed to register; that is swept after thirty days,
+ * and the owner can clear it from Settings → Browser.
  *
  * Three rules hold for every file: it is never executable (written 0600, the
  * exec bit never set), no single file is larger than the per-file cap, and no

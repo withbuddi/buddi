@@ -8,7 +8,8 @@ import { LOGIN_GONE, LOGIN_GRACE_MS, APP_BEHIND, BrowserOpenedError, BrowserPrec
 import { ownerCard, siteOf, type ChromeLink, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
 import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
-import { readFile } from 'node:fs/promises';
+import { readFile, rmdir, unlink } from 'node:fs/promises';
+import path from 'node:path';
 import { DownloadRefused, downloadSource, type DownloadStore, type DownloadUsage } from './downloads.js';
 
 /** One download an action produced, as `browser.act` reports it: an artifact id to hand a plugin's import tool, or why not. */
@@ -552,6 +553,9 @@ export class BrowserService {
           caption: site ? `Downloaded from ${site}` : 'Downloaded in the browser',
           source: { surface: 'browser', chatId: runId ?? ctx.conversationId ?? null, messageId: downloadSource(item.url) },
         });
+        // Files holds it now: the landing copy goes, so the area keeps only what failed to register.
+        await unlink(stored.path).catch(() => undefined);
+        await rmdir(path.dirname(stored.path)).catch(() => undefined);
         reports.push({ artifactId: saved.id, name: saved.filename ?? stored.filename, size: saved.sizeBytes, type: saved.mime });
       } catch (error) {
         const reason = error instanceof DownloadRefused ? error.message : `It could not be saved (${error instanceof Error ? error.message : String(error)}).`;
