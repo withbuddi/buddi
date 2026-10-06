@@ -239,6 +239,33 @@ jobs:
           done
           if [ "$latest" != "$VERSION" ]; then echo "::warning::npm still says $latest, not $VERSION; the site rebuild would not show it yet. The hourly check will."; exit 0; fi
           curl -fsS -X POST "$HOOK" -o /dev/null && echo "withbuddi.com rebuild requested for $VERSION"
+      - name: Chrome Web Store
+        # The same zip the GitHub release carries goes to the store and is
+        # submitted for review (chrome-webstore-upload-cli, the way
+        # chrome-extension-my-notes publishes). The store takes one submission
+        # at a time and reviews it in its own time, so a refused upload (a
+        # version still in review, a version that does not increase) is a
+        # notice, never a failed release: the zip stays on the GitHub release
+        # for a manual upload. Three secrets, minted once per publisher account
+        # with chrome-webstore-upload-keys: CWS_CLIENT_ID, CWS_CLIENT_SECRET,
+        # CWS_REFRESH_TOKEN. The extension id is public.
+        if: steps.v.outputs.tag == 'latest'
+        env:
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          EXTENSION_ID: pbfpjefkiijjgefblpnlnlpmeaddfbah
+          ZIP: ${{ steps.pack.outputs.zip }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ] || [ -z "$REFRESH_TOKEN" ]; then
+            echo "::notice title=Extension not sent to the Chrome Web Store::No CWS_CLIENT_ID / CWS_CLIENT_SECRET / CWS_REFRESH_TOKEN; upload $(basename "$ZIP") from the GitHub release by hand."
+            exit 0
+          fi
+          if npx --yes chrome-webstore-upload-cli@3 upload --source "$ZIP" --extension-id "$EXTENSION_ID" --auto-publish 2>&1 | tee cws.log; then
+            echo "Chrome Web Store: $(basename "$ZIP") uploaded and submitted for review."
+          else
+            echo "::warning title=Chrome Web Store upload refused::$(tail -n 3 cws.log | tr '\n' ' ') The zip is on the GitHub release; upload it by hand once the store is free."
+          fi
 
   # buddi.app, phase 2 of the Mac app (apps/mac/README.md). Skipped with a
   # notice, never failed, while the signing secrets are not in the repository:

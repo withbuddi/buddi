@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Changed
+
+- Releases send the Chrome extension to the Chrome Web Store themselves (submitted for review) once the store's API keys are in the repository; a refused upload is a notice and the zip stays on the GitHub release.
+
 ## 0.1.0-pre.46 — 2026-10-06
 
 ### Added

@@ -41,7 +41,19 @@ Two runs of `.github/workflows/release.yml`:
    It checks that the tag carries a request for that version and that
    `package.json` agrees, then: publish to npm with provenance, the GitHub
    release (notes from the version's CHANGELOG section), the withbuddi.com
-   rebuild, then `mac-check` and `mac-app` (buddi.app, DMG, Sparkle feed).
+   rebuild, the Chrome Web Store upload, then `mac-check` and `mac-app`
+   (buddi.app, DMG, Sparkle feed).
+
+   The store step sends the release's `buddi-extension-<version>.zip` with
+   `chrome-webstore-upload-cli` and submits it for review. It needs three
+   repository secrets minted once for the publisher account
+   (`chrome-webstore-upload-keys`): `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`,
+   `CWS_REFRESH_TOKEN`. Without them, or when the store refuses (a version
+   still in review, a version that does not increase), the step leaves a
+   notice and the release goes on; the zip stays on the GitHub release for a
+   manual upload. The manifest version is `0.1.0.N` for `0.1.0-pre.N`
+   (`packages/extension/scripts/version.mjs`), so the first stable store
+   build must be 0.1.1.
 
 Publishing runs on the tag rather than in run 1 because npm's provenance names
 the ref the workflow ran for, and installers and buddi.app accept only
