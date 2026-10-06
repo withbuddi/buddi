@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Plugin pages can hide just the figures: a page query may name the values that are sensitive (a balance, a total) instead of hiding everything that reads it. The page then shows its whole layout with those values as •••• and one "Show amounts" button in its head, which reveals the page (and the next one) until you leave the window or five minutes pass. Over MCP, `buddi.page_query` returns those values as "(hidden)" unless asked with `includeSensitive`. (Host API 1.31.)
+
 ### Changed
 
 - Canvas tabs in long conversations: a tab is now known by the tool and what it was about (a file, an account, a page, a site), titled "Staged import · savings.csv" instead of by the tool alone. A repeat call on the same subject updates that tab and keeps the earlier results one step back inside it. The strip holds three tabs, most recently looked at first; the rest are a scrollable timeline (Now / Earlier this turn / Earlier) with Close others and Close all. A staged result past its expiry closes itself and a failure with nothing to show moves into the timeline; their chat rows still open them. Closed tabs and the order are kept per conversation by buddi, not in the browser.

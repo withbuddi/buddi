@@ -6,6 +6,7 @@
  * the owner's decision on the approval they raise, and `buddi.ask` is a chat
  * turn sent exactly as the dashboard's composer sends one.
  */
+import { maskSensitiveValues } from '@buddi/core';
 import { GatewayError, type Gateway } from './gateway-client.js';
 
 /**
@@ -199,6 +200,9 @@ interface PickerRoute {
 /** What stands in for a sensitive Home block when it is left out. */
 export const SENSITIVE_OMITTED = 'ask with includeSensitive';
 
+/** What stands in for one value a page query marks sensitive (host API 1.31). */
+export const SENSITIVE_VALUE_OMITTED = '(hidden)';
+
 /**
  * The overview with every Home block a plugin marks `sensitive` replaced by
  * its name. The dashboard masks those until the owner asks; this is the same
@@ -217,7 +221,7 @@ export function withoutSensitive(overview: Record<string, unknown>): Record<stri
 
 interface PagesRoute {
   pages: Array<{ plugin: string; id: string; title: string; place: string } & Record<string, unknown>>;
-  queries?: Array<{ plugin: string; name: string; params: Record<string, string>; sensitive?: boolean }>;
+  queries?: Array<{ plugin: string; name: string; params: Record<string, string>; sensitive?: boolean; sensitivePaths?: string[] }>;
 }
 
 /** Every `{ query: name }` in a descriptor, in the order the page reads them. */
@@ -239,6 +243,7 @@ function queriesIn(node: unknown, out: Set<string>): Set<string> {
 export function summarizePages(route: PagesRoute): unknown {
   const params = new Map((route.queries ?? []).map((q) => [`${q.plugin}/${q.name}`, q.params]));
   const sensitive = new Set((route.queries ?? []).filter((q) => q.sensitive === true).map((q) => `${q.plugin}/${q.name}`));
+  const paths = new Map((route.queries ?? []).filter((q) => q.sensitivePaths).map((q) => [`${q.plugin}/${q.name}`, q.sensitivePaths!]));
   return {
     pages: route.pages.map((p) => ({
       plugin: p.plugin,
@@ -249,6 +254,7 @@ export function summarizePages(route: PagesRoute): unknown {
         name,
         params: params.get(`${p.plugin}/${name}`) ?? {},
         ...(sensitive.has(`${p.plugin}/${name}`) ? { sensitive: true } : {}),
+        ...(paths.has(`${p.plugin}/${name}`) ? { sensitivePaths: paths.get(`${p.plugin}/${name}`) } : {}),
       })),
     })),
   };
@@ -414,7 +420,7 @@ export const TOOLS: McpTool[] = [
   {
     name: 'buddi.page_query',
     description:
-      'Run one plugin page query, exactly as the dashboard page does, with its parameters. A query the plugin marks sensitive (balances and the like) is only named unless includeSensitive is set.',
+      'Run one plugin page query, exactly as the dashboard page does, with its parameters. A query the plugin marks sensitive (balances and the like) is only named, and values it marks sensitive read "(hidden)", unless includeSensitive is set.',
     inputSchema: object(
       {
         plugin: str('The plugin, e.g. finance.'),
@@ -422,7 +428,7 @@ export const TOOLS: McpTool[] = [
         params: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] }, description: 'The query parameters.' },
         includeSensitive: {
           type: 'boolean',
-          description: 'Return the data of a query the plugin marks sensitive. Off by default: it is then only named.',
+          description: 'Return the data of a query the plugin marks sensitive, and the values it marks sensitive. Off by default: such a query is then only named, and such values read "(hidden)".',
         },
       },
       ['plugin', 'query'],
@@ -443,14 +449,25 @@ export const TOOLS: McpTool[] = [
        * named, not run, unless the caller asked. Checked before the query is
        * asked, so the data never reaches this process either.
        */
+      let hidden: string[] | undefined;
       if (args.includeSensitive !== true) {
         const route = await rt.gateway.get<PagesRoute>('/api/pages');
-        if ((route.queries ?? []).some((q) => q.plugin === plugin && q.name === query && q.sensitive === true)) {
+        const declared = (route.queries ?? []).find((q) => q.plugin === plugin && q.name === query);
+        if (declared?.sensitive === true) {
           return { plugin, query, sensitive: true, omitted: SENSITIVE_OMITTED };
         }
+        hidden = declared?.sensitivePaths;
       }
       const qs = params.toString();
-      return rt.gateway.get(`/api/pages/${enc(plugin)}/${enc(query)}${qs ? `?${qs}` : ''}`);
+      const answer = await rt.gateway.get<unknown>(`/api/pages/${enc(plugin)}/${enc(query)}${qs ? `?${qs}` : ''}`);
+      /*
+       * 1.31: a query that marks values rather than itself is answered with
+       * those values replaced, as the page masks them until Show amounts.
+       */
+      if (!hidden || hidden.length === 0) return answer;
+      const body = answer as { data?: unknown } | null;
+      if (!body || typeof body !== 'object' || !('data' in body)) return answer;
+      return { ...body, data: maskSensitiveValues(body.data, hidden, SENSITIVE_VALUE_OMITTED), sensitivePaths: hidden, omitted: SENSITIVE_OMITTED };
     },
   },
   {

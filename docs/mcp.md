@@ -91,7 +91,8 @@ Reads:
 - `buddi.pages_list`, `buddi.page_query { plugin, query, params }` — every
   plugin page's queries, through the `/api/pages` contract
   ([plugin-pages.md](plugin-pages.md) §3). A query marked `sensitive` is left
-  out unless asked for.
+  out unless asked for, and the values a query marks sensitive (host API 1.31)
+  read `"(hidden)"` unless asked for (`includeSensitive: true`).
 - `buddi.proposals_list { state? }`, `buddi.activity { since?, kind? }`,
   `buddi.memory_list { agent? }`.
 

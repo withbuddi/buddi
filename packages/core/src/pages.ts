@@ -96,8 +96,60 @@ export interface PageQuery {
    * reads it until the owner asks, and masks it again when the window loses
    * focus; `buddi mcp` leaves its data out unless asked with
    * `includeSensitive`.
+   *
+   * Or, since host API 1.31, the values only: a list of paths into the
+   * answer (`['netWorth', 'accounts[].balance']`, `[]` meaning every item of
+   * an array). The page then draws its whole structure and masks just those
+   * values — `••••` until the owner presses Show amounts — and `buddi mcp`
+   * hands the answer over with those values replaced. Marked here rather than
+   * on each component because one line then covers every place the value is
+   * drawn (a stat, a list's meta, a table cell, a form), and the gateway can
+   * redact the answer by the same paths without reading any layout.
    */
-  sensitive?: boolean;
+  sensitive?: boolean | string[];
+}
+
+/**
+ * A path a query marks sensitive (host API 1.31): dotted field names, each
+ * optionally followed by `[]` for "every item", or a leading `[]` when the
+ * answer itself is a list. `total`, `accounts[].balance`, `[].amount`.
+ */
+export const SENSITIVE_PATH = /^(?:\[\]\.)?[A-Za-z_][A-Za-z0-9_]*(?:\[\])*(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\])*)*$/;
+
+/** At most this many sensitive paths on one query. */
+export const SENSITIVE_PATHS_MAX = 32;
+
+type MaskStep = { key: string } | { each: true };
+
+function maskSteps(path: string): MaskStep[] {
+  const steps: MaskStep[] = [];
+  for (const part of path.split('.')) {
+    const match = /^([^[\]]*)((?:\[\])*)$/.exec(part);
+    if (!match) continue;
+    if (match[1]) steps.push({ key: match[1] });
+    for (let i = 0; i < (match[2] ?? '').length / 2; i++) steps.push({ each: true });
+  }
+  return steps;
+}
+
+function maskAt(node: unknown, steps: MaskStep[], mask: unknown): unknown {
+  if (node === undefined || node === null) return node;
+  const [step, ...rest] = steps;
+  if (step === undefined) return mask;
+  if ('each' in step) return Array.isArray(node) ? node.map((item) => maskAt(item, rest, mask)) : node;
+  if (typeof node !== 'object' || Array.isArray(node) || !Object.prototype.hasOwnProperty.call(node, step.key)) return node;
+  return { ...(node as Record<string, unknown>), [step.key]: maskAt((node as Record<string, unknown>)[step.key], rest, mask) };
+}
+
+/**
+ * A query's answer with every value at one of `paths` replaced by `mask`.
+ * The answer itself is never changed: what is cloned is only the way down to
+ * a masked value. An absent or null value stays as it is.
+ */
+export function maskSensitiveValues(data: unknown, paths: readonly string[], mask: unknown): unknown {
+  let out = data;
+  for (const path of paths) out = maskAt(out, maskSteps(path), mask);
+  return out;
 }
 
 /** The icons the dashboard draws. A pinned set, never an arbitrary image. */
@@ -2293,7 +2345,28 @@ export function parsePageContributions(opts: {
       throw new Error(`plugin ${plugin}: page query ${query.name} has no \`produce\` function`);
     }
     if (query.sensitive !== undefined && typeof query.sensitive !== 'boolean') {
-      throw new Error(`plugin ${plugin}: page query ${query.name} declares \`sensitive\` that is not true or false`);
+      const paths: unknown = query.sensitive;
+      if (!Array.isArray(paths)) {
+        throw new Error(
+          `plugin ${plugin}: page query ${query.name} declares \`sensitive\` that is not true, false or a list of paths`,
+        );
+      }
+      if (paths.length === 0 || paths.length > SENSITIVE_PATHS_MAX) {
+        throw new Error(
+          `plugin ${plugin}: page query ${query.name} declares ${paths.length} sensitive paths — between 1 and ${SENSITIVE_PATHS_MAX}`,
+        );
+      }
+      const seen = new Set<string>();
+      for (const path of paths) {
+        if (typeof path !== 'string' || path.length > 200 || !SENSITIVE_PATH.test(path)) {
+          throw new Error(
+            `plugin ${plugin}: page query ${query.name} marks "${String(path)}" sensitive — a path is dotted field names, ` +
+              '`[]` for every item of a list (`accounts[].balance`)',
+          );
+        }
+        if (seen.has(path)) throw new Error(`plugin ${plugin}: page query ${query.name} marks "${path}" sensitive twice`);
+        seen.add(path);
+      }
     }
     if (query.result !== undefined && !isZodSchema(query.result)) {
       throw new Error(`plugin ${plugin}: page query ${query.name} declares a \`result\` that is not a zod schema`);

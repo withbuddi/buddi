@@ -1478,7 +1478,7 @@ export interface PageQuery {
   params: z.ZodTypeAny;        // validated; unknown keys refused
   produce(params: unknown, ctx: ToolContext): Promise<unknown>;
   result?: z.ZodTypeAny;       // validated before it leaves, when given
-  sensitive?: boolean;         // masked on the page, left out over MCP unless asked
+  sensitive?: boolean | string[]; // masked on the page, left out over MCP unless asked; paths: just those values (1.31)
 }
 ```
 
@@ -3541,7 +3541,7 @@ closed when it is absent rather than guess.
 | `params` | `z.ZodTypeAny` | yes | The parameters, checked before `produce` sees them. They arrive as strings: use `z.coerce.number()`. An undeclared key is refused. |
 | `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.buddi.db` runs every statement in a read-only transaction with a five-second timeout, so a query that tries to write fails loudly — in Postgres's own words — rather than writing something nobody approved. Throw `QueryRefusal` for what the owner can act on ("No conversation here has that id."): its message is their 400. |
 | `result` | `z.ZodTypeAny` | no | The result shape. When given, the answer is validated before it leaves the process — the page draws what it is handed and cannot check it. |
-| `sensitive` | `boolean` | no | Balances, pay, anything not to be read over a shoulder — as a Home block's `sensitive`. The page masks every section that reads it behind Show/Hide and masks it again when the window loses focus; `buddi.page_query` over MCP returns only its name unless called with `includeSensitive: true`. |
+| `sensitive` | `boolean \| string[]` | no | Balances, pay, anything not to be read over a shoulder — as a Home block's `sensitive`. `true`: the page masks every section that reads it behind Show/Hide and masks it again when the window loses focus; `buddi.page_query` over MCP returns only its name unless called with `includeSensitive: true`. A list of paths into the answer (host API 1.31; `['netWorth', 'accounts[].balance']`, `[]` for every item, at most 32): the page draws its whole structure and only those values as `••••` until **Show amounts** in the page head; over MCP they read `"(hidden)"` unless asked. Preferred: the owner sees the shape of their money and reveals the figures once. See plugin-pages.md §3, "Sensitive values". |
 
 #### `OptionsFrom`
 

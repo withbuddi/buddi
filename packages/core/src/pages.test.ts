@@ -13,6 +13,7 @@ import { z } from 'zod';
 import {
   isReadOnlyStatement,
   parsePageContributions,
+  maskSensitiveValues,
   readOnlyPool,
   stripSqlNoise,
   ReadOnlyRefusal,
@@ -834,8 +835,57 @@ describe('a sensitive query', () => {
 
   it('refuses a flag that is not true or false', () => {
     expect(() => parsePageContributions({ plugin: 'demo', queries: [query({ sensitive: 'yes' }) as never] })).toThrow(
-      /page query q declares `sensitive` that is not true or false/,
+      /page query q declares `sensitive` that is not true, false or a list of paths/,
     );
+  });
+});
+
+describe('sensitive values (host API 1.31)', () => {
+  const query = (over: Record<string, unknown>): unknown =>
+    ({ name: 'q', params: z.object({}), produce: async () => ({}), ...over });
+  const parse = (sensitive: unknown) =>
+    parsePageContributions({ plugin: 'demo', queries: [query({ sensitive }) as never] });
+
+  it('accepts a list of paths into the answer, and keeps it', () => {
+    const { queries } = parse(['netWorth', 'accounts[].balance', '[].amount', 'groups[].rows[].total']);
+    expect(queries[0]!.sensitive).toEqual(['netWorth', 'accounts[].balance', '[].amount', 'groups[].rows[].total']);
+  });
+
+  it.each([
+    [[], /between 1 and 32/],
+    [Array.from({ length: 33 }, (_, i) => `f${i}`), /between 1 and 32/],
+    [['accounts.*.balance'], /marks "accounts\.\*\.balance" sensitive — a path is dotted field names/],
+    [['rows[0].amount'], /marks "rows\[0\]\.amount" sensitive/],
+    [['$'], /marks "\$" sensitive/],
+    [[''], /marks "" sensitive/],
+    [[3], /marks "3" sensitive/],
+    [['total', 'total'], /marks "total" sensitive twice/],
+  ])('refuses %j', (sensitive, message) => {
+    expect(() => parse(sensitive)).toThrow(message);
+  });
+
+  it('masks the values at those paths and nothing else, leaving the answer untouched', () => {
+    const answer = {
+      netWorth: 1234.5,
+      currency: 'EUR',
+      accounts: [
+        { name: 'Checking', balance: 100, meta: { bank: 'N26' } },
+        { name: 'Savings', balance: null },
+      ],
+    };
+    const masked = maskSensitiveValues(answer, ['netWorth', 'accounts[].balance', 'missing.path'], '••••');
+    expect(masked).toEqual({
+      netWorth: '••••',
+      currency: 'EUR',
+      accounts: [
+        { name: 'Checking', balance: '••••', meta: { bank: 'N26' } },
+        { name: 'Savings', balance: null },
+      ],
+    });
+    expect(answer.netWorth).toBe(1234.5);
+    expect(answer.accounts[0]!.balance).toBe(100);
+    expect(maskSensitiveValues([{ amount: 5 }, { amount: 6 }], ['[].amount'], 'x')).toEqual([{ amount: 'x' }, { amount: 'x' }]);
+    expect(maskSensitiveValues(null, ['a'], 'x')).toBeNull();
   });
 });
 
