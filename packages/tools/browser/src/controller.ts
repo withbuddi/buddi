@@ -16,6 +16,7 @@ import { agoText, cardAnswer, ownerClock, chooseRoute, detectSignedOut, detectWa
 import { BrowserTelemetry, missionMark, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
 import { canonicalOrigin, fieldBoundTo } from './secrets.js';
 import { LoginKeeper } from './logins.js';
+import { DownloadStore, type DownloadStoreOptions, type DownloadUsage } from './downloads.js';
 import { LOGIN_GONE, LOGIN_NOT_KEPT, type LoginAck, type LoginCheck, type SeenLoginReport } from './types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -85,6 +86,9 @@ export class HostController implements BrowserController {
   readonly telemetry: BrowserTelemetry;
   /** Sign-ins the owner made on a page they held: asked about, kept or refused here, never by a model. */
   readonly logins: LoginKeeper;
+  /** Where agents' downloads land before Files: capped, never executable, swept after thirty days. */
+  readonly downloads: DownloadStore;
+  #sweeper?: ReturnType<typeof setInterval>;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
     extensionBridge?: () => ExtensionBridge;
@@ -104,10 +108,16 @@ export class HostController implements BrowserController {
     limits?: Partial<Record<RouteKind, number>>;
     idleEvictMs?: number;
     queueTimeoutMs?: number;
+    /** The agents' downloads area; `<data>/downloads` (beside this plugin's `<data>/browser`) by default. */
+    downloadsDir?: string;
+    /** Caps and retention for it (tests shrink them). */
+    downloadLimits?: DownloadStoreOptions;
   } = {}) {
     this.#extension = options.extensionBridge;
     this.logins = new LoginKeeper(path.join(dir, 'logins.json'), options.service?.now ? { now: options.service.now } : {});
     this.telemetry = new BrowserTelemetry(path.join(dir, 'telemetry.jsonl'), options.service?.now);
+    this.downloads = new DownloadStore(options.downloadsDir ?? path.join(path.dirname(dir), 'downloads'),
+      { ...(options.service?.now ? { now: options.service.now } : {}), ...options.downloadLimits });
     const self = this;
     const hostOptions: DriverOptions = {
       profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts,
@@ -119,7 +129,7 @@ export class HostController implements BrowserController {
     this.#host = new PlaywrightHost(hostOptions);
     const base: BrowserServiceOptions = { ...options.service, telemetry: this.telemetry, requestTakeover: (sessionId) => { void this.control('takeover', sessionId).catch(() => undefined); },
       requestResume: (sessionId) => { void this.control('resume', sessionId).catch(() => undefined); },
-      loginSeen: (sessionId, login) => this.#loginSeen(sessionId, login) };
+      loginSeen: (sessionId, login) => this.#loginSeen(sessionId, login), downloads: this.downloads };
     this.#ownOptions = { ...base, route: 'own', maxSessions: options.limits?.own ?? this.#settings.maxOwnPages, closeHost: () => this.#host.close(),
       ...(options.idleEvictMs !== undefined ? { idleEvictMs: options.idleEvictMs } : {}), ...(options.queueTimeoutMs !== undefined ? { queueTimeoutMs: options.queueTimeoutMs } : {}) };
     this.#managers = {
@@ -314,8 +324,16 @@ export class HostController implements BrowserController {
     const learned = await this.#readJson('sign-in-sites.json') as string[] | undefined;
     for (const site of Array.isArray(learned) ? learned.slice(-500) : []) if (typeof site === 'string') this.#learned.add(site);
     await Promise.all(ROUTES.map((route) => this.#managers[route].enable()));
+    // Downloads older than the retention go now and once a day after.
+    this.#later(this.downloads.sweep());
+    this.#sweeper = setInterval(() => this.#later(this.downloads.sweep()), 24 * 60 * 60 * 1000);
+    this.#sweeper.unref?.();
     this.#enabled = true;
   }
+  /** What the downloads area holds, for Settings → Browser. */
+  downloadUsage(): Promise<DownloadUsage> { return this.downloads.usage(); }
+  /** Empty the downloads area (Files keeps its copies). */
+  clearDownloads(): Promise<DownloadUsage> { return this.downloads.clear(); }
   #now(): number { return this.options.service?.now?.() ?? Date.now(); }
   /** The global Stop, if it still holds; an expired one is cleared here. */
   #activeStop(): StopRecord | undefined {
@@ -880,6 +898,7 @@ export class HostController implements BrowserController {
   }
   async shutdown(): Promise<void> {
     this.#enabled = false;
+    if (this.#sweeper) { clearInterval(this.#sweeper); this.#sweeper = undefined; }
     this.logins.clear();
     await Promise.all(ROUTES.map((route) => this.#managers[route].shutdown()));
     await Promise.all([...this.#pending]);

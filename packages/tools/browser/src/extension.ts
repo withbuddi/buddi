@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { checkUrl } from '@buddi/core/plugin';
 import { fieldOrigin } from './secrets.js';
+import type { PendingDownload } from './downloads.js';
 import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type LoginAck, type LoginCheck, type LoginSeenListener, LOGIN_GONE, LOGIN_GRACE_MS } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */
@@ -87,7 +88,22 @@ export interface ExtensionBridge {
    * (the bar says Saved, or why not). Returns the unsubscribe.
    */
   logins?(session: string, listener: (login: ExtensionLogin) => Promise<LoginAck | LoginCheck> | void): () => void;
+  /**
+   * A download an agent's action started in this session's tab finished in
+   * the owner's Chrome (extension with the optional `downloads` permission).
+   * Only from the paired socket. Returns the unsubscribe.
+   */
+  downloads?(session: string, listener: (file: ExtensionDownload) => void): () => void;
 }
+/**
+ * A finished download in the owner's Chrome: where Chrome saved it on this
+ * machine and what it reported. The browser service reads the file under the
+ * downloads store's checks (in the owner's home, just written, the size Chrome
+ * reported, not a link) and never anything else.
+ */
+export interface ExtensionDownload { path: string; filename: string; url: string; mime?: string; size?: number }
+/** How long after an agent's action a finished download in the owner's Chrome is still that action's. */
+export const DOWNLOAD_WINDOW_MS = 5 * 60 * 1000;
 /** What the extension sends when the owner answers the save prompt in a held tab. The password only with Save. */
 export interface ExtensionLogin { decision: 'save' | 'never' | 'check'; origin: string; username: string; password?: string }
 /** What the extension needs before it asks: sites never to ask about, and logins already kept. */
@@ -139,7 +155,20 @@ export class ExtensionDriver implements BrowserDriver {
 
   async start(): Promise<void> {
     if (!this.bridge.connected()) throw new Error(NOT_CONNECTED);
+    if (!this.#downloadsOff) this.#downloadsOff = this.bridge.downloads?.(this.session, (file) => this.#downloaded(file));
   }
+
+  #downloadsOff?: () => void;
+  #downloads: PendingDownload[] = [];
+  /** When this driver last sent an action that can start a download; nothing before that is the agent's. */
+  #lastAction = -Infinity;
+  #downloaded(file: ExtensionDownload): void {
+    const now = this.options.now?.() ?? Date.now();
+    if (now - this.#lastAction > DOWNLOAD_WINDOW_MS || this.#downloads.length >= 20) return;
+    this.#downloads.push({ filename: file.filename, url: file.url, read: { path: file.path },
+      ...(file.mime ? { mime: file.mime } : {}), ...(file.size !== undefined ? { size: file.size } : {}) });
+  }
+  takeDownloads(): PendingDownload[] { return this.#downloads.splice(0); }
 
   #events?: () => void;
   #onTakeover?: () => void;
@@ -219,6 +248,7 @@ export class ExtensionDriver implements BrowserDriver {
       if (this.allowedHosts?.length && !this.allowedHosts.includes(checked.hostname)) throw new BrowserPreconditionError('This website is outside the configured browser hosts.');
       this.#invalidate();
       this.#note = undefined;
+      this.#lastAction = this.options.now?.() ?? Date.now();
       const result = await this.#send('navigate', { url: checked.href });
       // The extension's one line about where the page opened, on the observation passthrough.
       const note = (result.observation as { note?: unknown } | null | undefined)?.note;
@@ -235,6 +265,7 @@ export class ExtensionDriver implements BrowserDriver {
     const args: Record<string, unknown> = { ...(target ? { target } : {}), ...(command.value !== undefined ? { value: command.value } : {}),
       ...(command.key !== undefined ? { key: command.key } : {}), ...(command.direction !== undefined ? { direction: command.direction } : {}) };
     this.#invalidate(); // Never replay evidence once dispatch may have started.
+    this.#lastAction = this.options.now?.() ?? Date.now();
     await this.#send(command.action, args);
   }
 
@@ -381,6 +412,8 @@ export class ExtensionDriver implements BrowserDriver {
 
   async close(): Promise<void> {
     this.#invalidate();
+    this.#downloadsOff?.();
+    this.#downloadsOff = undefined;
     // The listener lives as long as the driver: a page re-opened in the same session keeps its bar.
     this.#frames?.();
     this.#frames = undefined;

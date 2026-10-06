@@ -353,6 +353,8 @@ describe('what the model reads', () => {
     expect(act.description).not.toMatch(/browser\.status first|never switch modes|PLAYWRIGHT mode|COMPUTER mode|EXTENSION mode/);
     expect(UNTRUSTED).toContain(OBSERVE_AGAIN);
     expect(act.description).toContain(MAILED_CODE);
+    expect(act.description).toContain('downloads');
+    expect(act.description).toContain('import tool');
   });
   it('a result with needsOwner leaves the decision with the owner; browser turns do not spend maxTurns', () => {
     const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;

@@ -8,6 +8,18 @@ import { LOGIN_GONE, LOGIN_GRACE_MS, APP_BEHIND, BrowserOpenedError, BrowserPrec
 import { ownerCard, siteOf, type ChromeLink, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
 import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
+import { readFile, rmdir, unlink } from 'node:fs/promises';
+import path from 'node:path';
+import { DownloadRefused, downloadSource, type DownloadStore, type DownloadUsage } from './downloads.js';
+
+/** One download an action produced, as `browser.act` reports it: an artifact id to hand a plugin's import tool, or why not. */
+export type DownloadReport =
+  | { artifactId: string; name: string; size: number; type: string }
+  | { name: string; refused: string };
+
+function sizeWord(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 
 /**
  * Said when the owner has stopped agents' browsing. On Telegram the way back
@@ -177,6 +189,10 @@ export interface BrowserController {
   missionWaitMs?(): number;
   /** Hear every give-back of a page the owner held (Give it back, `/browser resume`). Returns the unsubscribe. */
   onGiveBack?(listener: (info: BrowserGiveBack) => void): () => void;
+  /** What the agents' downloads area holds (Settings → Browser). */
+  downloadUsage?(): Promise<DownloadUsage>;
+  /** Empty the agents' downloads area; Files keeps its copies. */
+  clearDownloads?(): Promise<DownloadUsage>;
 }
 
 export interface BrowserServiceOptions {
@@ -197,6 +213,8 @@ export interface BrowserServiceOptions {
   requestResume?: (sessionId: string) => void;
   /** A sign-in went out on this page while the owner held it: to the host's login keeper, and nowhere else. */
   loginSeen?: (sessionId: string, login: SeenLoginReport) => Promise<LoginAck | LoginCheck> | void;
+  /** Where a download lands before it is registered in Files. Without it downloads are dropped. */
+  downloads?: DownloadStore;
 }
 
 /** A result that carries a card: the run stops and the surface draws it. */
@@ -476,7 +494,9 @@ export class BrowserService {
         return { completed: false, dispatched: false, notice: UNTRUSTED, observation: this.#observation,
           message: `${observed} No page was open, so I opened ${siteOf(this.#lastUrl) ?? 'the last page'} again. Nothing else was done; ${asked === 'observe' ? 'here it is' : 'act on this page now'}.` };
       }
-      return { completed: true, notice: UNTRUSTED, observation: this.#observation, message: this.#message ? `${observed} ${this.#message}` : observed };
+      const files = await this.#collectDownloads(ctx);
+      const said = [observed, this.#message, files.line].filter(Boolean).join(' ');
+      return { completed: true, notice: UNTRUSTED, observation: this.#observation, ...(files.downloads ? { downloads: files.downloads } : {}), message: said };
     } catch (error) {
       if (controller.signal.aborted) throw error;
       const message = error instanceof Error ? error.message : String(error);
@@ -508,6 +528,44 @@ export class BrowserService {
       if (this.#controller === controller) this.#controller = undefined;
       this.#busy = false; this.#settled();
     }
+  }
+
+  /**
+   * The files this page's actions downloaded, copied into the agent's
+   * downloads area and registered in Files with the agent, the run and where
+   * they came from (docs/browser.md, "Downloads"). A cap or a failure is a
+   * line the agent repeats, never an exception: the page action itself worked.
+   */
+  async #collectDownloads(ctx: ToolContext): Promise<{ downloads?: DownloadReport[]; line?: string }> {
+    const pending = this.driver.takeDownloads?.() ?? [];
+    if (pending.length === 0) return {};
+    const reports: DownloadReport[] = [];
+    const store = this.options.downloads;
+    const files = ctx.buddi?.files;
+    for (const item of pending) {
+      try {
+        if (!store || !files) throw new DownloadRefused('Downloads are not set up on this buddi.');
+        const stored = await store.save(ctx.agentId!, item);
+        const runId = ctx.provenance?.().runId ?? ctx.jobId ?? null;
+        const site = siteOf(item.url);
+        const saved = await files.save({
+          bytes: await readFile(stored.path), mime: stored.mime, filename: stored.filename,
+          caption: site ? `Downloaded from ${site}` : 'Downloaded in the browser',
+          source: { surface: 'browser', chatId: runId ?? ctx.conversationId ?? null, messageId: downloadSource(item.url) },
+        });
+        // Files holds it now: the landing copy goes, so the area keeps only what failed to register.
+        await unlink(stored.path).catch(() => undefined);
+        await rmdir(path.dirname(stored.path)).catch(() => undefined);
+        reports.push({ artifactId: saved.id, name: saved.filename ?? stored.filename, size: saved.sizeBytes, type: saved.mime });
+      } catch (error) {
+        const reason = error instanceof DownloadRefused ? error.message : `It could not be saved (${error instanceof Error ? error.message : String(error)}).`;
+        reports.push({ name: item.filename, refused: reason });
+      }
+    }
+    const lines = reports.map((report) => 'artifactId' in report
+      ? `Downloaded ${report.name} (${sizeWord(report.size)}, ${report.type}): it is in the owner's Files as artifact ${report.artifactId}. To import it, pass that id to the owning plugin's import tool; do not paste its contents into your reply.`
+      : `The download ${report.name} was refused: ${report.refused}`);
+    return { downloads: reports, line: lines.join(' ') };
   }
 
   /**

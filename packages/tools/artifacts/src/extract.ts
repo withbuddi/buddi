@@ -14,6 +14,12 @@ import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 export const DESCRIBE_TEXT_CHARS = 20_000;
 /** Hard ceiling for `artifacts.text`, so one tool result cannot flood a run. */
 export const MAX_TEXT_CHARS = 200_000;
+/**
+ * What `artifacts.text` actually returns, at most: 16 KB. A 35 KB CSV read
+ * whole once made the agent paste it into a reply that overflowed the length
+ * limit; a statement goes to the plugin that imports it, not into the chat.
+ */
+export const TEXT_REPLY_BYTES = 16 * 1024;
 
 export interface ExtractedText {
   text: string;

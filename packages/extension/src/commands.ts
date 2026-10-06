@@ -16,6 +16,7 @@
  */
 
 import type { TabInfo, WorkerChrome } from './chrome.js';
+import type { AgentDownloads } from './downloads.js';
 import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type CommandResult, type FieldFacts, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
 import { heldLoginRequest, hideBar, hideHeldBar, readBar, showBar, showHeldBar, waitForOwner, watchHeldLogins, type BarChoice, type HeldLoginFacts, type LoginFrame, type OwnerEventMessage } from './bar.js';
@@ -271,6 +272,9 @@ function fieldObservation(read: FieldRead): Observation {
 
 export interface Executor { run(command: Command, cancel?: Cancellation): Promise<CommandResult> }
 
+/** The agent commands that can make a page start a download. */
+const DOWNLOAD_COMMANDS = new Set<string>(['navigate', 'click', 'press', 'select', 'fill']);
+
 export class BrowserCommands implements Executor {
   #chrome: WorkerChrome;
   #sessions = new Map<string, Session>();
@@ -296,8 +300,9 @@ export class BrowserCommands implements Executor {
   #castsByTab = new Map<number, Screencast>();
   #ownerWaitMs: number | undefined;
 
-  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; onLogin?: (frame: LoginFrame) => void; now?: () => number; wait?: (ms: number) => Promise<void>; ownerWaitMs?: number } = {}) {
+  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; onLogin?: (frame: LoginFrame) => void; now?: () => number; wait?: (ms: number) => Promise<void>; ownerWaitMs?: number; downloads?: AgentDownloads } = {}) {
     this.#chrome = chrome;
+    this.downloads = options.downloads;
     this.logins = new HeldLogins(options.onLogin ?? (() => undefined));
     chrome.tabs.onRemoved?.addListener((tabId) => this.logins.clearTab(tabId));
     this.#onEvent = options.onEvent ?? (() => undefined);
@@ -325,8 +330,33 @@ export class BrowserCommands implements Executor {
     this.#contentFile = options.contentFile ?? 'content.js';
   }
 
+  /** Downloads an agent's command starts, noticed while it runs (and a few seconds after). */
+  readonly downloads: AgentDownloads | undefined;
+
+  /** The addresses of a session's tabs, for telling its downloads from the owner's. */
+  async #tabUrls(name: string): Promise<string[]> {
+    const session = this.#sessions.get(name);
+    if (!session) return [];
+    const urls: string[] = [];
+    for (const tabId of session.tabs.values()) {
+      const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
+      if (tab?.url) urls.push(tab.url);
+    }
+    return urls;
+  }
+
   async run(command: Command, cancel: Cancellation = new Cancellation()): Promise<CommandResult> {
     cancel.check();
+    // An agent's action that can start a download: its downloads are watched for while it runs. The owner's own hand is not.
+    if (this.downloads?.attached && !command.owner && DOWNLOAD_COMMANDS.has(command.name)) {
+      this.downloads.begin(command.session, await this.#tabUrls(command.session));
+      try { return await this.#dispatch(command, cancel); }
+      finally { this.downloads.end(command.session, await this.#tabUrls(command.session).catch(() => [])); }
+    }
+    return this.#dispatch(command, cancel);
+  }
+
+  async #dispatch(command: Command, cancel: Cancellation): Promise<CommandResult> {
     switch (command.name) {
       case 'navigate': return this.#navigate(command, cancel);
       case 'observe': return { observation: await this.#observe(command.session, cancel) };
@@ -364,6 +394,7 @@ export class BrowserCommands implements Executor {
     this.#held.clear();
     this.#heldLogins.clear();
     this.logins.clear();
+    this.downloads?.forget();
   }
 
   /* ---- take-over in place ---- */
@@ -731,6 +762,7 @@ export class BrowserCommands implements Executor {
     }
     this.#sessions.delete(command.session);
     this.#refs.delete(command.session);
+    this.downloads?.forget(command.session);
     return {};
   }
 

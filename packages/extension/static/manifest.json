@@ -6,6 +6,7 @@
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwR4JT/OlKKPcZQ33euO9mSv7RrSIWNVanldhT2Uzc9YfzF/X0lg5NfXLc+G/UGFjB8v+uMCbpMhRBZ2SVwDHQH3buv3VEUzuOIDTPHgv99T5lq5imZrDxmIE+EL/fWrsjhcXaIB4e4fn0tJqw6ivJUGmYpG5XhWn65nlLniHfFBKMpZ/y7bVnvfzAgMQUa13qTAVxPTpMRtNl/flQq4Q/vWYm28H7W7OzygDV+/4X2azUrB8yPk67QsipbdDLxiX2GMxjXuKK6iD5CQiytoxTsAqUzB886HbOZsxJfQpRIjrUgBmGjLyaKuz617ZGJW9zS23LmnlL6mkX3+ggca1AQIDAQAB",
   "permissions": ["tabs", "tabGroups", "scripting", "debugger", "storage", "alarms"],
+  "optional_permissions": ["downloads"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "externally_connectable": { "matches": ["http://127.0.0.1/*", "http://localhost/*", "http://[::1]/*"] },
   "background": { "service_worker": "background.js", "type": "module" },

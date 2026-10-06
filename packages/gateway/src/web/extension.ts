@@ -28,7 +28,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionEvent, type ExtensionLogin, type ExtensionResult, type HandFrame, type LoginAck, type LoginCheck, LOGIN_GONE, LOGIN_NOT_KEPT } from '@buddi/tool-browser';
+import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionDownload, type ExtensionEvent, type ExtensionLogin, type ExtensionResult, type HandFrame, type LoginAck, type LoginCheck, LOGIN_GONE, LOGIN_NOT_KEPT } from '@buddi/tool-browser';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
@@ -215,6 +215,8 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #events = new Map<string, Set<(event: ExtensionEvent) => void>>();
   /** Who hears a sign-in the owner answered in a held tab, by browser session. The pair is never kept here. */
   #logins = new Map<string, (login: ExtensionLogin) => Promise<LoginAck | LoginCheck> | void>();
+  /** Who hears that an agent's download finished in the owner's Chrome, by browser session. */
+  #downloads = new Map<string, (file: ExtensionDownload) => void>();
   /** Other upgrade paths on this server's one listener; see `attachPath`. */
   #routes = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>();
   /** Commands the extension was told to abandon, until it says it has. */
@@ -340,6 +342,22 @@ export class ExtensionEndpoint implements ExtensionBridge {
     if (frame.type === 'frame') return this.#screencast(ws, frame);
     if (frame.type === 'event') return this.#event(ws, frame);
     if (frame.type === 'login') return this.#login(ws, frame);
+    if (frame.type === 'download') return this.#download(ws, frame);
+  }
+
+  /**
+   * An agent's download finished in the owner's Chrome: where Chrome saved
+   * it and what it reported. Only from the paired socket, only for a session
+   * someone listens for; the driver decides whether it is its action's, and
+   * the downloads store whether the file may be read.
+   */
+  #download(ws: WebSocket, frame: Record<string, unknown>): void {
+    if (ws !== this.#socket || !this.#live) return;
+    const file = readExtensionDownload(frame);
+    if (!file) return;
+    const listener = this.#downloads.get(file.session);
+    if (!listener) return;
+    try { listener(file.download); } catch { /* a listener never breaks the socket */ }
   }
 
   /**
@@ -769,6 +787,12 @@ export class ExtensionEndpoint implements ExtensionBridge {
     return () => { if (this.#logins.get(session) === listener) this.#logins.delete(session); };
   }
 
+  /** An agent's finished download in one session's tab. One listener per session. Returns the unsubscribe. */
+  downloads(session: string, listener: (file: ExtensionDownload) => void): () => void {
+    this.#downloads.set(session, listener);
+    return () => { if (this.#downloads.get(session) === listener) this.#downloads.delete(session); };
+  }
+
   /**
    * A pairing record exists on disk, whether or not Chrome is connected now.
    * Read on every status poll, so the answer is kept until the file's
@@ -815,6 +839,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     for (const waiter of this.#idle.splice(0)) waiter();
     this.#frames.clear();
     this.#logins.clear();
+    this.#downloads.clear();
     this.#routes.clear();
     for (const client of this.#wss.clients) client.terminate();
     this.#wss.close();
@@ -850,6 +875,21 @@ export function readExtensionLogin(frame: Record<string, unknown>): { session: s
   }
   if (password !== undefined) return undefined;
   return withId({ session, login: { decision, origin: parsed.origin, username } });
+}
+
+/**
+ * A `download` frame, read strictly: `{ type, session, path, filename, url, mime?, size? }`.
+ * The path is absolute and the URL http(s), data or blob; nothing else is believed.
+ */
+export function readExtensionDownload(frame: Record<string, unknown>): { session: string; download: ExtensionDownload } | undefined {
+  const { session, path: file, filename, url, mime, size } = frame;
+  if (typeof session !== 'string' || session === '' || session.length > 80) return undefined;
+  if (typeof file !== 'string' || file === '' || file.length > 4096 || !(file.startsWith('/') || /^[A-Za-z]:\\/.test(file))) return undefined;
+  if (typeof filename !== 'string' || filename === '' || filename.length > 1024) return undefined;
+  if (typeof url !== 'string' || url.length > 8192 || !/^(https?:|data:|blob:)/i.test(url)) return undefined;
+  if (mime !== undefined && (typeof mime !== 'string' || mime.length > 200)) return undefined;
+  if (size !== undefined && (typeof size !== 'number' || !Number.isInteger(size) || size < 0)) return undefined;
+  return { session, download: { path: file, filename, url: url.startsWith('data:') ? 'data:' : url, ...(mime ? { mime } : {}), ...(size !== undefined ? { size } : {}) } };
 }
 
 const endpoints = new Map<string, ExtensionEndpoint>();

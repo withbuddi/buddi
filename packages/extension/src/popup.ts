@@ -16,6 +16,7 @@
  * it against the real `popup.html` with no Chrome in the room.
  */
 
+import { DOWNLOADS_PERMISSION } from './downloads.js';
 import type { ClientState } from './protocol.js';
 
 /** What the popup draws from: the worker's state and the little it keeps itself. */
@@ -211,9 +212,29 @@ interface PopupChrome {
     query(query: Record<string, unknown>): Promise<Array<{ groupId?: number }>>;
   };
   tabGroups: { query(query: { title?: string }): Promise<Array<{ id: number; title?: string }>> };
+  permissions?: {
+    contains(permissions: { permissions: string[] }): Promise<boolean>;
+    request(permissions: { permissions: string[] }): Promise<boolean>;
+  };
 }
 
 declare const chrome: PopupChrome;
+
+/**
+ * Allow downloads: the optional permission agents' downloads need
+ * (downloads.ts). Chrome asks only from a click in an extension page, which
+ * is why it lives here. Shown until it is granted; gone once it is.
+ */
+export async function wireDownloads(doc: Document, permissions: PopupChrome['permissions']): Promise<void> {
+  const box = byId(doc, 'downloads-box');
+  const button = byId<HTMLButtonElement>(doc, 'allow-downloads');
+  if (!permissions || !box || !button) return;
+  const show = (granted: boolean) => { box.hidden = granted; button.hidden = granted; };
+  show(await permissions.contains({ permissions: [DOWNLOADS_PERMISSION] }).catch(() => true));
+  button.addEventListener('click', () => {
+    void permissions.request({ permissions: [DOWNLOADS_PERMISSION] }).then(show, () => undefined);
+  });
+}
 
 /** The tabs in the `buddi` group (the name `commands.ts` gives it), in every window. */
 export async function countBuddiTabs(api: Pick<PopupChrome, 'tabs' | 'tabGroups'>): Promise<number | null> {
@@ -308,6 +329,7 @@ async function main(): Promise<void> {
     });
   });
   byId(document, 'open-buddi').addEventListener('click', () => open(''));
+  void wireDownloads(document, chrome.permissions);
   byId(document, 'forget').addEventListener('click', async () => {
     const answer = await ask<{ state: ClientState }>({ type: 'buddi-forget' });
     if (answer?.state) { model.state = answer.state; model.tabs = null; draw(); }

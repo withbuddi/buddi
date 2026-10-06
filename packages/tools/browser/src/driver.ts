@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
-import type { Page, Locator, ElementHandle, CDPSession } from 'playwright';
+import type { Page, Locator, ElementHandle, CDPSession, Download } from 'playwright';
+import type { PendingDownload } from './downloads.js';
 import { PlaywrightHost, type DriverOptions, type TabOwner } from './host.js';
 import { checkSecretOrigin, fieldOrigin } from './secrets.js';
 import { LOGIN_BINDING, LOGIN_WORLD, loginWatchSource, readLoginPayload } from './logins.js';
@@ -44,6 +45,17 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
   #picture?: Buffer;
   #starting?: Promise<void>;
   constructor(readonly options: DriverOptions, host?: PlaywrightHost) { this.host = host ?? new PlaywrightHost(options); }
+  #downloads: PendingDownload[] = [];
+  /** A file one of this conversation's tabs started: read once it finishes, when the service asks. */
+  download(download: Download): void {
+    if (this.#downloads.length >= 20) { void download.cancel().catch(() => {}); return; }
+    this.#downloads.push({
+      filename: download.suggestedFilename(), url: download.url(),
+      read: { stream: () => download.createReadStream() },
+      failure: () => download.failure(),
+    });
+  }
+  takeDownloads(): PendingDownload[] { return this.#downloads.splice(0); }
   adopt(page: Page): void {
     if ([...this.#tabs.values()].includes(page)) return;
     this.#tabs.set(`tab-${randomUUID().slice(0, 12)}`, page);

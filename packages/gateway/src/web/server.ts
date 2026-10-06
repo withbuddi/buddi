@@ -2058,6 +2058,11 @@ export function createWebApp(deps: WebServerDeps): Server {
         case '/api/browser':
           return sendJson(res, 200, q.has('conversationId') && q.has('agentId')
             ? browser.status({ agentId: q.get('agentId')!, conversationId: q.get('conversationId')! }) : browser.status());
+        case '/api/browser/downloads': {
+          // The agents' downloads area: how much it holds, by agent, and its caps (Settings → Browser).
+          if (!browser.downloadUsage) return sendJson(res, 200, { bytes: 0, files: 0, agents: [], fileCap: 0, agentCap: 0, retentionDays: 0 });
+          return sendJson(res, 200, await browser.downloadUsage());
+        }
         case '/api/browser/telemetry': {
           // Stops by cause, cards and routes over the last week: how flakiness is seen to fall.
           const summary = (browser as { telemetrySummary?: (days?: number) => unknown }).telemetrySummary?.(Number(q.get('days') ?? '7') || 7);
@@ -3178,6 +3183,11 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (!browser.checkLaunch) return sendJson(res, 200, { ok: true });
       try { return sendJson(res, 200, await browser.checkLaunch()); }
       catch (error) { return sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
+    }
+    /* Clear the agents' downloads area. Files keeps the copies registered there. */
+    if (path === '/api/browser/downloads/clear') {
+      if (!browser.clearDownloads) return sendJson(res, 409, { error: 'This host keeps no downloads.' });
+      return sendJson(res, 200, await browser.clearDownloads());
     }
     if (path === '/api/browser/settings') {
       const body = await readJsonBody(req);

@@ -2649,6 +2649,10 @@ export const api = {
   browserInstall: () => post<BrowserStatus>('/browser/install', {}),
   /** Launch the agents' browser once and close it: does it start here? */
   browserCheck: () => post<BrowserLaunchCheck>('/browser/check', {}),
+  /** The agents' downloads area: what it holds and its caps. */
+  browserDownloads: () => get<BrowserDownloads>('/browser/downloads'),
+  /** Empty the agents' downloads area; the copies in Files stay. */
+  clearBrowserDownloads: () => post<BrowserDownloads>('/browser/downloads/clear', {}),
   /**
    * The way into a preview: a URL on the preview origin carrying a
    * single-use ticket. It is asked for per panel and never stored — the
@@ -3384,6 +3388,16 @@ export interface BrowserInstallProgress {
 }
 
 /** Whether the agents' browser opened and closed once, and what to do when it did not. */
+/** `GET /api/browser/downloads`: the agents' downloads area. */
+export interface BrowserDownloads {
+  bytes: number;
+  files: number;
+  agents: Array<{ agent: string; bytes: number; files: number }>;
+  fileCap: number;
+  agentCap: number;
+  retentionDays: number;
+}
+
 export type BrowserLaunchCheck =
   | { ok: true }
   | { ok: false; message: string; command?: string; problem?: 'missing-libraries' | 'no-sandbox' | 'no-browser' };

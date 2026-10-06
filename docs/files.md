@@ -233,6 +233,20 @@ The shipped skill `examples/skills/writing-a-document.md` tells an agent with
 the tool when a file beats a chat answer and how to shape one: title and date
 first, the answer up front, tables only for comparisons, sources last.
 
+## Files agents download
+
+A file a page hands an agent in the browser (a transactions CSV, a statement)
+is registered here like any other, credited to the agent, captioned
+"Downloaded from <site>", with source surface `browser`, the run id and the
+address it came from (docs/browser.md, "Downloads"). The agent passes its id
+to the plugin that imports it.
+
+Reading a file back is capped: `artifacts.text` returns at most 16 KB, with
+`note: "16 KB of 35 KB; use artifacts.describe or the plugin's import tool"`
+when there was more, so a reply built from it cannot overflow. The tool's
+description, and `browser.act`'s, tell agents that a statement or CSV goes to
+the owning plugin's import tool by id, never into the reply.
+
 ## API and access boundaries
 
 Add owner-authenticated, read-only library endpoints:

@@ -3912,6 +3912,8 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | POST | `/api/browser/settings` | Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window. A partial object. | no |
 | POST | `/api/browser/pin` | Pin one conversation to a route, or clear it. | yes |
 | POST | `/api/browser/card` | Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) without a chat message. | yes |
+| GET | `/api/browser/downloads` | The agents' downloads area: bytes and files by agent, the per-file and per-agent caps and the retention in days. | yes |
+| POST | `/api/browser/downloads/clear` | Empty the agents' downloads area. The copies in Files stay. | yes |
 | GET | `/api/browser/telemetry` | Browser stops by cause, cards and routes over the last days. | yes |
 | POST | `/api/browser/stop` | Stop one page, or with no session stop agents' browsing (expires after the set time unless forever). | yes |
 | POST | `/api/browser/takeover` | Take over the screen from the agent. | yes |
@@ -4056,6 +4058,31 @@ Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) witho
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"conversationId":"…","answer":"…"}' "$BUDDI_URL/api/browser/card"
+```
+
+#### `GET /api/browser/downloads`
+
+The agents' downloads area: bytes and files by agent, the per-file and per-agent caps and the retention in days.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ bytes, files, agents: [{ agent, bytes, files }], fileCap, agentCap, retentionDays }`
+- **Since:** 0.1.0-pre.46
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/downloads"
+```
+
+#### `POST /api/browser/downloads/clear`
+
+Empty the agents' downloads area. The copies in Files stay.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `the usage, now empty`
+- **Errors:** 409
+- **Since:** 0.1.0-pre.46
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/downloads/clear"
 ```
 
 #### `GET /api/browser/telemetry`

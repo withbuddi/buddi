@@ -43,6 +43,8 @@ describe('the built extension', () => {
     // would also cover `file://` and every other scheme Chrome invents.
     expect(new Set(manifest['permissions'])).toEqual(new Set(['tabs', 'tabGroups', 'scripting', 'debugger', 'storage', 'alarms']));
     expect(manifest['permissions']).not.toContain('activeTab');
+    // Agents' downloads: asked for from the popup when the owner wants them, never at install.
+    expect(manifest['optional_permissions']).toEqual(['downloads']);
     expect(manifest['host_permissions']).toEqual(['http://*/*', 'https://*/*']);
     expect(String(manifest['description'])).toMatch(/sites it opens are the ones you ask/);
     // The store refuses a manifest description longer than 132 characters.
