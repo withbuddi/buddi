@@ -14,12 +14,19 @@
  */
 
 import { BrowserCommands } from './commands.js';
+import { AgentDownloads, DOWNLOADS_PERMISSION, type DownloadsApi } from './downloads.js';
 import { GIVE_BACK_MESSAGE, LOGIN_MESSAGE, LOGIN_PENDING_MESSAGE, LOGIN_SEEN_MESSAGE } from './bar.js';
 import type { WorkerChrome } from './chrome.js';
 import { handleExternal, type ExtensionStatus } from './external.js';
 import { Protocol, type ClientState } from './protocol.js';
 
 declare const chrome: WorkerChrome & {
+  /** Present only once the owner granted the optional permission. */
+  downloads?: DownloadsApi;
+  permissions?: {
+    contains(permissions: { permissions: string[] }): Promise<boolean>;
+    onAdded?: { addListener(fn: (permissions: { permissions?: string[] }) => void): void };
+  };
   runtime: WorkerChrome['runtime'] & {
     onInstalled: { addListener(fn: () => void): void };
     onStartup: { addListener(fn: () => void): void };
@@ -116,7 +123,17 @@ function flush(open: WebSocket): void {
 
 // Screencast frames are not answers to anything: they arrive while the owner
 // is driving and go straight out, outside the command/result pairing.
-const commands = new BrowserCommands(chrome, { onFrame: send, onEvent: send, onLogin: send });
+/*
+ * Agents' downloads: watched only once the owner allowed the optional
+ * `downloads` permission (the popup's Allow downloads), and only for what an
+ * agent's command started (downloads.ts). A finished one goes to buddi as a
+ * frame; it is a report, not an answer, so a socket that is not open drops it.
+ */
+const downloads = new AgentDownloads({ send });
+const attachDownloads = (): void => { if (chrome.downloads) downloads.attach(chrome.downloads); };
+attachDownloads();
+chrome.permissions?.onAdded?.addListener((added) => { if (added.permissions?.includes(DOWNLOADS_PERMISSION)) attachDownloads(); });
+const commands = new BrowserCommands(chrome, { onFrame: send, onEvent: send, onLogin: send, downloads });
 let attempt = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let silence: ReturnType<typeof setTimeout> | undefined;

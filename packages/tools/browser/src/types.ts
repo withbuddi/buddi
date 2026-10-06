@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { PendingDownload } from './downloads.js';
 
 const target = z.object({
   ref: z.string().min(1).max(40).optional().describe('Preferred: copy a ref from the latest observation.targets. Identifies one exact element, including repeated links.'),
@@ -170,6 +171,12 @@ export interface BrowserDriver {
    * over once.
    */
   takeNote?(): string | undefined;
+  /**
+   * The downloads this page's actions started since the last call, handed
+   * over once. The service copies each into the agent's downloads area and
+   * registers it in Files (docs/browser.md, "Downloads").
+   */
+  takeDownloads?(): PendingDownload[];
   /** OS apps are user-owned and must not be closed on release. */
   preservesWindows?: boolean;
   /**

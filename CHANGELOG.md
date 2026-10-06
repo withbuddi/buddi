@@ -6,6 +6,9 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Agents can download files in the browser. A CFO on a bank site could not get a transactions CSV: buddi's own browser cancelled every download. Now a file an agent's click downloads lands in its downloads area and in your Files ("Downloaded from bank.example", credited to the agent), and the agent gets its id to hand to the plugin that imports it. At most 50 MB a file and 500 MB per agent (a bigger one is refused and the agent says why), never executable, kept 30 days; Settings → Browser & apps → Downloads shows the space used, with Clear. In your Chrome, press Allow downloads in the buddi extension's popup once: then downloads an agent's click starts are picked up too, and the ones you start yourself are never touched.
+- Reading a long file no longer overflows the reply: `artifacts.text` returns at most 16 KB and says how much there was ("16 KB of 35 KB; use artifacts.describe or the plugin's import tool"), and agents are told that a statement or CSV goes to the owning plugin's import tool, not into their answer.
+
 - The chat sends files on their own: drop three statements, press Enter, and they go with no words needed. An empty box with nothing attached still sends nothing.
 
 ## 0.1.0-pre.45 — 2026-10-05

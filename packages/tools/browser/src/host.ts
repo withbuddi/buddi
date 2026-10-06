@@ -1,5 +1,5 @@
 import { mkdir, chmod } from 'node:fs/promises';
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { chromium, type BrowserContext, type Download, type Page } from 'playwright';
 import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/core/plugin';
 import { startProxy, type GuardedLookup } from './proxy.js';
 import { detectBrowser, isMissingLibraries, isSandboxUnavailable, missingLibrariesMessage, noSandboxMessage, NO_BROWSER_ACT, type BrowserAvailability } from './availability.js';
@@ -22,7 +22,8 @@ export interface DriverOptions {
   /** Core's `guardedLookup`, for the SOCKS guard. Without it Playwright mode does not launch. */
   lookup?: GuardedLookup;
 }
-export interface TabOwner { adopt(page: Page): void }
+/** A page's conversation. `download` takes a file the page started; without it the download is cancelled. */
+export interface TabOwner { adopt(page: Page): void; download?(download: Download): void }
 
 /** One profile; page capabilities belong to separate conversations. Unknown
  * manual tabs never silently become an agent's capability. */
@@ -61,7 +62,7 @@ export class PlaywrightHost {
       const context = await chromium.launchPersistentContext(this.options.profileDir, {
         headless: this.options.headless ?? false,
         ...engine,
-        viewport: { width: 1280, height: 800 }, acceptDownloads: false, serviceWorkers: 'block', chromiumSandbox: true,
+        viewport: { width: 1280, height: 800 }, acceptDownloads: true, serviceWorkers: 'block', chromiumSandbox: true,
         proxy: { server: proxy.url, bypass: '<-loopback>' },
         args: ['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'], timeout: 20_000,
       });
@@ -74,7 +75,12 @@ export class PlaywrightHost {
       });
       context.on('page', (page) => {
         page.on('dialog', (dialog) => { void dialog.dismiss().catch(() => {}); });
-        page.on('download', (download) => { void download.cancel().catch(() => {}); });
+        // A download belongs to the conversation whose page started it; a tab nobody leases keeps nothing.
+        page.on('download', (download) => {
+          const owner = this.#owners.get(page);
+          if (owner?.download && this.#leases.has(owner)) owner.download(download);
+          else void download.cancel().catch(() => {});
+        });
         page.on('filechooser', () => {});
         page.on('close', () => this.#owners.delete(page));
         void page.opener().then(async (opener) => {

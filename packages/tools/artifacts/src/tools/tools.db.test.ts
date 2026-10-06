@@ -143,6 +143,31 @@ suite('artifacts tools (postgres)', () => {
     if (!refused.ok) expect(refused.message).toMatch(/image\/png/);
   });
 
+  it('caps a long file at 16 KB and says how much there was and where it goes instead', async () => {
+    const rows = Array.from({ length: 900 }, (_, i) => `2026-09-${String((i % 28) + 1).padStart(2, '0')},Card payment ${i},-${(i * 1.37).toFixed(2)}`);
+    const csv = await saveArtifact(pool, {
+      bytes: Buffer.from(`Date,Description,Amount\n${rows.join('\n')}\n`, 'utf8'),
+      mime: 'text/csv', filename: 'transactions.csv', createdBy: 'owner',
+    });
+    const out = await call('artifacts.text', { id: csv.id });
+    expect(Buffer.byteLength(out.text, 'utf8')).toBeLessThanOrEqual(16 * 1024);
+    expect(out.text.endsWith('\n')).toBe(true);
+    expect(out.truncated).toBe(true);
+    expect(out.note).toMatch(/^1[56] KB of 3\d KB; use artifacts\.describe or the plugin's import tool\./);
+    // Asking for more than the cap still gets the cap.
+    const more = await call('artifacts.text', { id: csv.id, maxChars: 100_000 });
+    expect(Buffer.byteLength(more.text, 'utf8')).toBeLessThanOrEqual(16 * 1024);
+    // A short read stays whole, with no note.
+    const short = await call('artifacts.text', { id: textId });
+    expect(short.note).toBeUndefined();
+  });
+
+  it('tells agents a statement goes to the plugin’s import tool, not into the reply', () => {
+    const tool = manifest.tools.find((t) => t.name === 'artifacts.text')!;
+    expect(tool.description).toMatch(/import tool/);
+    expect(tool.description).toMatch(/Never paste a file's contents into your reply/);
+  });
+
   it('refuses an unknown id with something the model can act on', async () => {
     const missing = await registry.invoke(
       'artifacts.describe',

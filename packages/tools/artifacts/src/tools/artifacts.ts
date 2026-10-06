@@ -15,6 +15,7 @@ import { z } from 'zod';
 import {
   DESCRIBE_TEXT_CHARS,
   MAX_TEXT_CHARS,
+  TEXT_REPLY_BYTES,
   extractText,
   imageDimensions,
   isExtractable,
@@ -105,7 +106,7 @@ export const describe: ToolDefinition<z.infer<typeof idInput>, ArtifactDescripti
   name: 'artifacts.describe',
   untrusted: 'file',
   description:
-    `Look inside one artifact: its metadata plus, for a PDF or a text file, the first ${DESCRIBE_TEXT_CHARS.toLocaleString('en-US')} characters of its text. This is how you read a long statement — cheaper and more searchable than looking at the pages. For an image you are shown the picture itself, so this returns only metadata and, where it is cheap to tell, the pixel size.`,
+    `Look inside one artifact: its metadata plus, for a PDF or a text file, the first ${DESCRIBE_TEXT_CHARS.toLocaleString('en-US')} characters of its text. This is how you read a long statement — cheaper and more searchable than looking at the pages. For an image you are shown the picture itself, so this returns only metadata and, where it is cheap to tell, the pixel size. A statement or CSV to import goes to the owning plugin's import tool by its id, not into your reply.`,
   tier: 'auto',
   input: idInput,
   async execute(input, ctx) {
@@ -153,18 +154,33 @@ const textInput = z.object({
     .max(MAX_TEXT_CHARS)
     .optional()
     .describe(
-      `How much text to return. Defaults to the full document, capped at ${MAX_TEXT_CHARS.toLocaleString('en-US')} characters.`,
+      `How much text to return. Defaults to as much as fits: never more than ${TEXT_REPLY_BYTES / 1024} KB.`,
     ),
 });
 
+/** The KB a byte count is, as the note says it: 35 KB, never 0 KB. */
+function kb(bytes: number): number {
+  return Math.max(1, Math.round(bytes / 1024));
+}
+
+/** Cut to at most `limit` UTF-8 bytes, at a line break when one is near, never inside a character. */
+function cutBytes(text: string, limit: number): string {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= limit) return text;
+  let cut = bytes.subarray(0, limit).toString('utf8');
+  if (cut.endsWith('\uFFFD')) cut = cut.slice(0, -1);
+  const line = cut.lastIndexOf('\n');
+  return line > cut.length * 0.8 ? cut.slice(0, line + 1) : cut;
+}
+
 export const text: ToolDefinition<
   z.infer<typeof textInput>,
-  { id: string; text: string; pages?: number; truncated: boolean; chars: number }
+  { id: string; text: string; pages?: number; truncated: boolean; chars: number; note?: string }
 > = {
   name: 'artifacts.text',
   untrusted: 'file',
   description:
-    'Return the full extracted text of a PDF or text artifact, for when artifacts.describe truncated what you needed. Long: ask for it only when you are going to read or quote the whole thing.',
+    `Return the extracted text of a PDF or text artifact, at most ${TEXT_REPLY_BYTES / 1024} KB of it, for when artifacts.describe truncated what you needed to read or quote. A bank statement, a transactions CSV or an export is not for reading into your reply: hand its artifact id to the owning plugin's import tool (finance imports statements), and tell the owner the result in a sentence or two. Never paste a file's contents into your reply.`,
   tier: 'auto',
   input: textInput,
   async execute(input, ctx) {
@@ -175,13 +191,20 @@ export const text: ToolDefinition<
       );
     }
     const bytes = await ctx.buddi!.files!.read(row.id);
-    const extracted = await extractText(bytes, row.mime, input.maxChars ?? MAX_TEXT_CHARS);
+    const extracted = await extractText(bytes, row.mime, MAX_TEXT_CHARS);
+    const asked = input.maxChars === undefined ? extracted.text : extracted.text.slice(0, input.maxChars);
+    const out = cutBytes(asked, TEXT_REPLY_BYTES);
+    const whole = Buffer.byteLength(extracted.text, 'utf8');
+    const capped = out.length < asked.length;
     return {
       id: row.id,
-      text: extracted.text,
+      text: out,
       ...(extracted.pages === undefined ? {} : { pages: extracted.pages }),
-      truncated: extracted.truncated,
-      chars: extracted.text.length,
+      truncated: extracted.truncated || out.length < extracted.text.length,
+      chars: out.length,
+      ...(capped
+        ? { note: `${kb(Buffer.byteLength(out, 'utf8'))} KB of ${kb(whole)}${extracted.truncated ? '+' : ''} KB; use artifacts.describe or the plugin's import tool. Do not paste this into your reply.` }
+        : {}),
     };
   },
 };

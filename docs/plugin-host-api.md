@@ -42,7 +42,7 @@ Every plugin in both repositories is on the host. The areas each one declares
 | weather (example) | buddi | `http` |
 | weather | buddi-plugins | `http`, `owner:notify`, `owner:places` |
 | calendar | buddi-plugins | `http`, `secrets` |
-| browser | buddi | `secrets` |
+| browser | buddi | `files`, `secrets` |
 | host | buddi | `files:library` |
 | image | buddi-plugins | `accounts`, `files:library` |
 | speech | buddi-plugins | `accounts`, `files:library` |

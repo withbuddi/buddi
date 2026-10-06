@@ -8,7 +8,7 @@ import { createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/co
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
 const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 import { HostController } from './controller.js';
-import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand } from './extension.js';
+import { DOWNLOAD_WINDOW_MS, ExtensionDriver, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionDownload } from './extension.js';
 import { BrowserOpenedError, BrowserPreconditionError, commandSchema } from './types.js';
 
 /** A bridge that records what was asked of it and answers from a script. */
@@ -279,5 +279,29 @@ describe('taking over a page in your Chrome', () => {
     expect(status.state).toBe('paused');
     expect(status.held).toBeUndefined();
     expect(status.message).toContain("Your Chrome couldn't bring the page forward");
+  });
+});
+
+describe('downloads in the owner’s Chrome', () => {
+  it('takes a finished download only for its session and only soon after one of its actions', async () => {
+    let listener: ((file: ExtensionDownload) => void) | undefined;
+    const { fake } = bridge({ navigate: page, observe: page });
+    fake.downloads = (_session, fn) => { listener = fn; return () => { listener = undefined; }; };
+    let now = 1_000_000;
+    const driver = new ExtensionDriver(fake, undefined, { now: () => now });
+    await driver.start();
+    const file: ExtensionDownload = { path: '/Users/owner/Downloads/transactions.csv', filename: 'transactions.csv', url: 'https://bank.example/export', mime: 'text/csv', size: 35_000 };
+    listener!(file); // before any action: the owner’s
+    expect(driver.takeDownloads()).toEqual([]);
+    await driver.perform(command({ action: 'navigate', url: 'https://example.com/' }));
+    now += DOWNLOAD_WINDOW_MS - 1;
+    listener!(file);
+    expect(driver.takeDownloads()).toEqual([{ filename: 'transactions.csv', url: 'https://bank.example/export', read: { path: file.path }, mime: 'text/csv', size: 35_000 }]);
+    expect(driver.takeDownloads()).toEqual([]);
+    now += 2;
+    listener!(file);
+    expect(driver.takeDownloads()).toEqual([]);
+    await driver.close();
+    expect(listener).toBeUndefined();
   });
 });

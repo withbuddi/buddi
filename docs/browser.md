@@ -326,10 +326,66 @@ permissions and limits.
 page or act on it; buddi chooses where it opens and says so in `route`; every
 action returns the page afterwards; `observation` is optional; when the result
 has `needsOwner`, say its question in one sentence and stop. Input gains
-`prefer: own|yours`; output gains `route`, `routeNote` and `needsOwner`.
+`prefer: own|yours`; output gains `route`, `routeNote`, `needsOwner` and,
+when the page downloaded a file, `downloads` (see Downloads below).
 `browser.status` stays for "is a browser available at all" and is never a
 required first call. The try-first rule says: look with `browser.act`; buddi
 picks the browser and signs in with a stored login or asks once with a card.
+
+## Downloads
+
+A page an agent works on can hand it a file: the bank's transactions CSV, a
+statement PDF, an export. buddi keeps it so the agent can pass it on.
+
+- **Where it lands.** `<data>/downloads/<agent>/<yyyy-mm-dd>/`, the agents'
+  downloads area. Each file is written `0600` and never executable; a name
+  that repeats on the same day becomes `name (2).csv`. At most 50 MB a file
+  and 500 MB per agent; a download over either is refused, nothing partial is
+  kept, and the agent hears why in one sentence. Days older than 30 are swept
+  when buddi starts and once a day after.
+- **Files.** Each saved download is also registered in Files (the artifacts
+  store): credited to the agent, in the conversation, with the caption
+  "Downloaded from bank.example", source surface `browser`, the run id as its
+  chat id and the address it came from without its query (signed links carry
+  tokens there). The Files copy stays until the owner deletes it; the
+  downloads area is only the landing folder.
+- **What the agent reads.** `browser.act`'s result gains `downloads`, on the
+  action that started the download or the next one (a slow export arrives a
+  moment later): `[{ artifactId, name, size, type }]`, or
+  `{ name, refused }` for one that was not kept, plus a line in `message`.
+  The agent passes `artifactId` to the owning plugin's import tool (finance
+  imports statements) and does not paste the file into its reply.
+- **Settings → Browser & apps → Downloads** shows what the area holds, its
+  rules, and **Clear** (`GET /api/browser/downloads`,
+  `POST /api/browser/downloads/clear`). Clearing leaves Files alone.
+
+**buddi's own browser** accepts downloads into its profile's temporary folder
+and copies each finished one into the area; a download from a tab no
+conversation holds is cancelled, as before.
+
+**Your Chrome.** The extension needs Chrome's optional `downloads` permission,
+which it never asks for at install: the popup shows **Allow downloads**, and
+Chrome only asks from a click there. Once granted, while an agent's
+`navigate`, `click`, `press`, `select` or `fill` runs in one of its session's
+tabs, and for 15 seconds after, a download that starts from the same site as
+one of those tabs is the agent's. When it completes the extension sends buddi
+a `download` frame with the path Chrome saved it at, its address, type and
+size; buddi reads that file only if it is under the owner's home folder, is a
+plain file (not a link), was written in the last 15 minutes and is exactly the
+size Chrome reported, and only within five minutes of that session's last
+action. The file also stays in the owner's own Downloads folder, where Chrome
+put it. Downloads the owner starts are not touched: none while no agent acts,
+none from another site, none another extension started. Chrome's download
+record names no tab, so a download the owner starts from the very site the
+agent is on, in those same seconds, would be taken for the agent's.
+
+What this cannot do without a native component: the extension reads nothing
+itself, buddi reads the finished file from disk, which works because the
+extension only ever talks to a buddi on the same machine (loopback). A buddi
+reached through an SSH tunnel from another machine cannot read that path, and
+the download is dropped; sending the bytes over the socket instead would need
+the extension to re-fetch the file (which breaks for a POST export or a
+revoked `blob:` link) or a native messaging host to read it.
 
 ## Telemetry: stop causes
 

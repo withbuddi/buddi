@@ -4,9 +4,9 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserRouteStatus, type BrowserStatus } from '../api';
 import { pluginSettingsRoute } from '../routes';
-import { appsProvided, appWord, Browser, chromeState, installTarget, lookingLine, olderExtension, pairWithCode, SANDBOX_COMMAND, SELF_PAIRED_WINDOW_MS, STORE_URL } from './Browser';
+import { appsProvided, appWord, Browser, chromeState, downloadsLine, installTarget, lookingLine, olderExtension, pairWithCode, SANDBOX_COMMAND, SELF_PAIRED_WINDOW_MS, STORE_URL } from './Browser';
 
-vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), browserCheck: vi.fn(), browserInstall: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn(), agents: vi.fn(), setAgentEngine: vi.fn() }, ApiError: class extends Error {} }));
+vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), browserCheck: vi.fn(), browserInstall: vi.fn(), browserDownloads: vi.fn(), clearBrowserDownloads: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn(), agents: vi.fn(), setAgentEngine: vi.fn() }, ApiError: class extends Error {} }));
 
 const settings = { version: 2 as const, yourChrome: true, yourApps: 'on' as const, signInSites: [] as string[], defaultRoute: 'auto' as const, stopExpiryMinutes: 60, maxOwnPages: 3, showWindow: false };
 const routes = (over: Partial<Record<'own' | 'chrome' | 'apps', Partial<BrowserRouteStatus> | null>> = {}): BrowserRouteStatus[] => [
@@ -33,6 +33,7 @@ beforeEach(() => {
   useAgent(CHROME_MAC);
   vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'darwin' });
   vi.mocked(api.browser).mockResolvedValue(base);
+  vi.mocked(api.browserDownloads).mockResolvedValue({ bytes: 0, files: 0, agents: [], fileCap: 50 * 1024 * 1024, agentCap: 500 * 1024 * 1024, retentionDays: 30 });
   vi.mocked(api.browserSettings).mockResolvedValue(base);
   vi.mocked(api.browserControl).mockResolvedValue(base);
   vi.mocked(api.extension).mockResolvedValue(paired);
@@ -420,5 +421,23 @@ describe('pairWithCode: a typed code racing the page\'s own pairing', () => {
     const extension = vi.fn(async () => ({ pairedAt: new Date(NOW).toISOString() }));
     await expect(pairWithCode('482913', { pair: async () => { throw Object.assign(new Error('Wrong code'), { status: 400 }); }, extension, now: () => NOW })).rejects.toThrow('Wrong code');
     expect(extension).not.toHaveBeenCalled();
+  });
+});
+
+describe('Downloads: what agents downloaded, and Clear', () => {
+  const held = { bytes: 36_000, files: 2, agents: [{ agent: 'cfo', bytes: 36_000, files: 2 }], fileCap: 50 * 1024 * 1024, agentCap: 500 * 1024 * 1024, retentionDays: 30 };
+  it('says what the area holds and its rules in one line', () => {
+    expect(downloadsLine(held)).toBe('2 files · 35 KB · kept 30 days, at most 50.0 MB a file');
+    expect(downloadsLine({ ...held, files: 0, bytes: 0 })).toBe('Empty · kept 30 days, at most 50.0 MB a file');
+  });
+  it('clears the area and explains the Chrome permission', async () => {
+    vi.mocked(api.browserDownloads).mockResolvedValue(held);
+    vi.mocked(api.clearBrowserDownloads).mockResolvedValue({ ...held, files: 0, bytes: 0, agents: [] });
+    render(<Browser />);
+    const line = await screen.findByTestId('downloads-row');
+    expect(await within(line).findByText(/2 files · 35 KB/)).toBeInTheDocument();
+    expect(within(line).getByText(/Allow downloads/)).toBeInTheDocument();
+    fireEvent.click(within(line).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(api.clearBrowserDownloads).toHaveBeenCalled());
   });
 });

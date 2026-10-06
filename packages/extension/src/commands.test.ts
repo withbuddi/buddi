@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserCommands, NEW_WINDOW_NOTE, NO_WINDOW_NOTE } from './commands.js';
+import { AgentDownloads, type DownloadFrame } from './downloads.js';
 import type { WorkerChrome } from './chrome.js';
 import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type FrameMessage } from './protocol.js';
 import type { CollectedElement } from './tree.js';
@@ -140,7 +141,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
 
 const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
 
-async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>, options: { onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; onLogin?: (frame: LoginFrame) => void; now?: () => number } = {}) {
+async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>, options: { onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; onLogin?: (frame: LoginFrame) => void; now?: () => number; downloads?: AgentDownloads } = {}) {
   const fake = fakeChrome(frames);
   const waits: number[] = [];
   // A clock the waits move, so waiting thirty seconds for the owner takes no time.
@@ -958,5 +959,32 @@ describe('opening a tab in your Chrome', () => {
     expect(failure).toBeInstanceOf(OpenedError);
     expect((failure as OpenedError).message).toBe('The tab closed while it was loading.');
     expect((failure as OpenedError).page).toEqual({ tabId: 'tab-fixed-uuid-v', url: 'https://amazon.test/', title: '' });
+  });
+});
+
+describe('downloads an agent’s click starts', () => {
+  it('watches for them while an agent command runs in the session’s tab, and forgets them when the session closes', async () => {
+    const sent: DownloadFrame[] = [];
+    const downloads = new AgentDownloads({ send: (frame) => sent.push(frame), now: () => 0 });
+    const created: Array<(item: { id: number; url?: string; referrer?: string }) => void> = [];
+    const changed: Array<(delta: { id: number; state?: { current?: string } }) => Promise<void> | void> = [];
+    downloads.attach({
+      async search({ id }) { return [{ id, url: 'https://example.test/export.csv', filename: `/Users/owner/Downloads/export-${id}.csv`, fileSize: 10 }]; },
+      onCreated: { addListener: (fn) => { created.push(fn); } },
+      onChanged: { addListener: (fn) => { changed.push(fn); } },
+    });
+    const { commands } = await opened(undefined, { downloads });
+    await commands.run(command('observe'));
+    await commands.run(command('click', { target: { ref: 'e2' } }));
+    // Chrome reports it just after the click returned: inside the grace.
+    created.forEach((fn) => fn({ id: 1, url: 'https://example.test/export.csv', referrer: 'https://example.test/' }));
+    changed.forEach((fn) => fn({ id: 1, state: { current: 'complete' } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent.map((frame) => [frame.session, frame.filename])).toEqual([['s1', 'export-1.csv']]);
+    await commands.run(command('close'));
+    created.forEach((fn) => fn({ id: 2, url: 'https://example.test/export.csv', referrer: 'https://example.test/' }));
+    changed.forEach((fn) => fn({ id: 2, state: { current: 'complete' } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toHaveLength(1);
   });
 });

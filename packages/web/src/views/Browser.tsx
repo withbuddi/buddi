@@ -18,6 +18,7 @@ import { fmtClock, fmtTime } from '../format';
 import { chatRoute, parsePairingCode, pluginSettingsRoute, withoutPairingCode } from '../routes';
 import { ActionMenu, Avatar, Icon, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, Panel, Pill, Segment, Sheet, Spacer, Switch, Toolbar, useAsync } from '../ui';
 import { useThisMachine } from '../useThisMachine';
+import { formatBytes } from '../chat/attachments';
 
 /** The fix Ubuntu's AppArmor needs before Chromium's sandbox starts (docs/browser.md, Linux). */
 export const SANDBOX_COMMAND = 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0';
@@ -166,6 +167,7 @@ function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserS
           {showApps && settings ? <AppsRow route={appsRoute!} settings={settings} busy={busy || !data.enabled} save={save} run={run} onSettings={() => go(pluginSettingsRoute(appsRoute!.provider || 'computer'))} /> : null}
         </div>
       </Panel>
+      <DownloadsPanel busy={busy} run={run} />
       {!showApps && macOS ? <p className="pl-note br-foot" data-testid="computer-plugin-offer">Agents can also work in apps on this Mac with the Computer plugin. <a href="#/settings/plugins?tab=browse&kind=plugins">See plugins</a></p> : null}
 
       {sessions.length > 0 ? (
@@ -187,6 +189,37 @@ function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserS
 
       {settings ? <Advanced settings={settings} learned={learned} busy={busy} save={save} run={run} showApps={showApps} /> : null}
     </>
+  );
+}
+
+/**
+ * The agents' downloads area (docs/browser.md, "Downloads"): what it holds,
+ * the rules it keeps, and Clear. A file an agent downloads is also in Files,
+ * which keeps it; this is only the landing folder.
+ */
+export function downloadsLine(usage: { bytes: number; files: number; fileCap: number; retentionDays: number }): string {
+  const held = usage.files === 0 ? 'Empty' : `${usage.files} ${usage.files === 1 ? 'file' : 'files'} · ${formatBytes(usage.bytes)}`;
+  return `${held} · kept ${usage.retentionDays} days, at most ${formatBytes(usage.fileCap)} a file`;
+}
+
+function DownloadsPanel({ busy, run }: { busy: boolean; run: (action: () => Promise<unknown>) => Promise<void> }): JSX.Element {
+  const usage = useAsync(() => api.browserDownloads(), [], 30_000);
+  const data = usage.data;
+  return (
+    <Panel title="Downloads" flush>
+      <div className="ui-list">
+        <div className="ui-list-row" data-testid="downloads-row">
+          <span className="ui-list-main">
+            <span className="ui-list-title">Files agents download</span>
+            <span className="ui-list-sub">{data ? downloadsLine(data) : 'Checking…'}. Each one is also in Files, where it stays until you delete it.</span>
+            <span className="ui-list-sub">In your Chrome, agents’ downloads need the extension’s Downloads permission: open the buddi extension and press Allow downloads. Downloads you start yourself are never read.</span>
+          </span>
+          <span className="ui-list-side">
+            <Button size="sm" disabled={busy || !data || data.files === 0} onClick={() => void run(async () => { await api.clearBrowserDownloads(); usage.reload(); })}>Clear</Button>
+          </span>
+        </div>
+      </div>
+    </Panel>
   );
 }
 

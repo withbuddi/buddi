@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { BrowserOpenedError, BrowserService, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import WebSocket from 'ws';
-import { ExtensionEndpoint, extensionEndpoint, MIN_EXTENSION_VERSION, readExtensionLogin } from './extension.js';
+import { ExtensionEndpoint, extensionEndpoint, MIN_EXTENSION_VERSION, readExtensionDownload, readExtensionLogin } from './extension.js';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName, portOf } from './http.js';
 
@@ -586,5 +586,17 @@ describe('a login frame, read strictly', () => {
     expect(readExtensionLogin({ session: 's', decision: 'never', origin: 'https://a.test', username: 'u' })).toEqual({ session: 's', login: { decision: 'never', origin: 'https://a.test', username: 'u' } });
     expect(readExtensionLogin({ session: 's', decision: 'save', origin: 'https://a.test', username: 'u', password: 'p', id: 'ack-1' })).toMatchObject({ id: 'ack-1' });
     expect(readExtensionLogin({ session: 's', decision: 'save', origin: 'https://a.test', username: 'u', password: 'p', id: 'no spaces <b>' })).toBeUndefined();
+  });
+});
+
+describe('a download frame, read strictly', () => {
+  it('takes an absolute path, a web address and a size; nothing else', () => {
+    const frame = { session: 's', path: '/Users/owner/Downloads/t.csv', filename: 't.csv', url: 'https://bank.test/x?token=1', mime: 'text/csv', size: 12 };
+    expect(readExtensionDownload(frame)).toEqual({ session: 's', download: { path: '/Users/owner/Downloads/t.csv', filename: 't.csv', url: 'https://bank.test/x?token=1', mime: 'text/csv', size: 12 } });
+    expect(readExtensionDownload({ ...frame, path: 'Downloads/t.csv' })).toBeUndefined();
+    expect(readExtensionDownload({ ...frame, url: 'file:///etc/passwd' })).toBeUndefined();
+    expect(readExtensionDownload({ ...frame, size: -1 })).toBeUndefined();
+    expect(readExtensionDownload({ ...frame, session: '' })).toBeUndefined();
+    expect(readExtensionDownload({ ...frame, url: 'data:text/csv;base64,QQ==' })?.download.url).toBe('data:');
   });
 });
