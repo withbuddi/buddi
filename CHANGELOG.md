@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.47 — 2026-10-06
+
 ### Fixed
 
 - Agents answer in the language you wrote in. One answered an English question in Spanish, another in French after reading French news. Every agent is now told to answer in your message's language (your profile language when the message is too short to tell, else English), whatever language its documents, tools and colleagues used; and an answer that still comes out in another language is rewritten once before you see it. With no language on your profile, the front desk may ask for it once.
