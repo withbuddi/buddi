@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
-import { birthdayLine, createSystemManifest, DECISION_LINES, GROUNDING_LINES, formatLine, hostFacts, LIST_ANSWER_LINE, NOTIFY_LINE, ownerLines, resourcefulLines, systemContext, systemTime } from './system-context.js';
+import { birthdayLine, createSystemManifest, DECISION_LINES, GROUNDING_LINES, formatLine, hostFacts, LIST_ANSWER_LINE, NOTIFY_LINE, ownerLines, REPLY_LANGUAGE_LINE, resourcefulLines, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
@@ -77,6 +77,24 @@ describe('shared platform context', () => {
     expect(prompt.indexOf('Before you say you cannot')).toBeLessThan(prompt.indexOf('Read, never recall'));
     expect(prompt.indexOf('Read, never recall')).toBeLessThan(prompt.indexOf('When a step needs a choice'));
     expect((await systemContext(ctx)).prompt).not.toContain('Read, never recall');
+  });
+  it("tells every prompt to answer in the owner's language, whatever the context holds", async () => {
+    const { ctx } = fixture();
+    expect(REPLY_LANGUAGE_LINE).toContain("Answer in the language the owner's message is written in");
+    expect(REPLY_LANGUAGE_LINE).toContain('in their profile language, else English');
+    expect(REPLY_LANGUAGE_LINE).toContain('never change the language of your answer: quote them as they are');
+    const plain = await systemContext(ctx);
+    expect(plain.prompt).toContain(REPLY_LANGUAGE_LINE);
+    expect(plain.language).toBeUndefined();
+    expect((await systemContext(ctx, { agentId: 'concierge', tools: [] })).prompt).toContain(REPLY_LANGUAGE_LINE);
+  });
+  it('carries the profile language, as a fallback that does not contradict the message rule', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ timezone: 'Europe/Paris', language: 'French' }] });
+    const ctx: CoreToolContext = { db: { query } as unknown as CoreToolContext['db'], ownerId: 'owner', timezone: 'UTC', now: () => new Date('2026-10-01T12:00:00Z') };
+    const context = await systemContext(ctx, { agentId: 'concierge', tools: [] });
+    expect(context.language).toBe('French');
+    expect(context.prompt).toContain("- Profile language: French (the answer's language when their message is too short to tell).");
+    expect(context.prompt).not.toContain('prefer to be answered');
   });
   it('adds no edition line when the turn carries no message, and none when no edition matches', async () => {
     const { ctx, query } = fixture();

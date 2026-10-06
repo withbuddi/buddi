@@ -25,6 +25,7 @@ import type {
 import { ProviderError, isThinkingBlock } from './anthropic.js';
 import { NATIVE_SEARCH_SYSTEM_NOTE, planNativeSearch } from './search.js';
 import { GROUNDING_RETRY_TEXT, citationSignals, citesUnread } from './grounding.js';
+import { languageRetryText, offLanguage } from './language.js';
 import { compactObservations } from './projection.js';
 import {
   degradeContent,
@@ -106,7 +107,8 @@ export interface RunAgentOptions {
   /**
    * The words streamed through `onDelta` for the turn just written are
    * withdrawn: the grounding guard held that answer back (it cited sources
-   * nothing in the run had read) and the model is answering again. A surface
+   * nothing in the run had read), or the reply-language guard did (it was in
+   * the wrong language), and the model is answering again. A surface
    * drawing the live text clears it; nothing of it was stored. Never awaited.
    */
   onRetract?: () => void;
@@ -1117,6 +1119,13 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
   let heldBack: { content: ContentBlock[]; text: string } | undefined;
   let unchecked = false;
   /**
+   * The reply-language guard (docs/system-context.md, Reply language).
+   * `relanguaged`: an answer in the wrong language was held back once and the
+   * model asked to answer in the owner's; whatever comes next is delivered.
+   */
+  let relanguaged = false;
+  let langHeldBack: { content: ContentBlock[]; text: string } | undefined;
+  /**
    * What the owner added, leased for the step that has not happened yet.
    *
    * Held between the safe point that took it and the provider call that shows
@@ -1278,6 +1287,46 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
             continue;
           }
           unchecked = true;
+        }
+      }
+    }
+
+    /*
+     * The reply-language guard. A final answer whose language is clearly one
+     * of six, and matches neither the owner's message (when that can be
+     * told) nor their profile language, is held back the way the grounding
+     * guard holds one back: not stored, not said, its streamed words
+     * withdrawn. The model is told "Answer in <language>." once, in a turn
+     * the transcript does not keep, and whatever it answers is delivered.
+     * Only the run the owner reads: a delegate's answer is quoted into its
+     * caller's, and a decided approval coming back carries no owner message.
+     * `offLanguage` is precision-first; see language.ts.
+     */
+    if (finalAnswer && resume === undefined && (ctx.delegationDepth ?? 0) === 0) {
+      if (relanguaged) {
+        // A rewrite that said nothing: the held-back answer goes out.
+        if (turnText === '' && langHeldBack) {
+          delivered = langHeldBack.content;
+          turnText = langHeldBack.text;
+        }
+      } else if (turnText !== '') {
+        const off = offLanguage(turnText, userMessage, platformContext?.language, ownerWords(messages.slice(0, -1)));
+        if (off) {
+          relanguaged = true;
+          const budgetLeft = turns - exemptTurns < agent.maxTurns && turns < agent.maxTurns + MAX_EXEMPT_TURNS;
+          await appendEvent(pool, 'run.language', {
+            stage: budgetLeft ? 'retried' : 'kept',
+            agentId: agent.id,
+            reply: off.reply,
+            target: off.target,
+            ...(opts.runId ? { runId: opts.runId } : {}),
+          }, conversationId);
+          if (budgetLeft) {
+            langHeldBack = { content: delivered, text: turnText };
+            try { opts.onRetract?.(); } catch { /* a surface's drawing never decides a run */ }
+            messages.push({ role: 'user', content: [{ type: 'text', text: languageRetryText(off.target) }] });
+            continue;
+          }
         }
       }
     }
@@ -1625,6 +1674,20 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
     ...(pendingActionId ? { pendingActionId } : {}),
     ...(unchecked ? { unchecked: true } : {}),
   };
+}
+
+/**
+ * The owner's last few messages, for the reply-language guard: an owner who
+ * said "answer in Spanish from now on" a turn ago still meant it.
+ */
+function ownerWords(messages: readonly NeutralMessage[]): string {
+  const said: string[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user') continue;
+    const text = message.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n');
+    if (text.trim() !== '') said.push(text);
+  }
+  return said.slice(-6).join('\n');
 }
 
 /**

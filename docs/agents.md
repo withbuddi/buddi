@@ -110,7 +110,8 @@ the change from its next turn. Nothing is ever taken from a mail signature, a
 display name or a guess. `owner.profile_gaps` (the front desk and Agent Father
 hold it) says which useful fields are still empty and why each matters
 ("fullName: letters, forms and bookings"; "places.work: 'how long to work?' and
-the weather at work"); pronouns and the language are never asked for. The front
+the weather at work"; language: what a message too short to tell is answered
+in); pronouns are never asked for. The front
 desk asks for a missing field only when the task in hand needs it (a letter
 needs your full name, a commute question needs Work), once and in one question,
 then records it. Beyond that it may ask one "knowing you" question a week at
