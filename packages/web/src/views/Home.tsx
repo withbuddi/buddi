@@ -20,6 +20,7 @@ import { api, type ApprovalRow, type ConnectionSignal, type NeedsYouCounts, type
 import type { ChatAgent } from '../chat/types';
 import { fmtDate, fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
 import { useReveal } from '../reveal';
+import { Masked, RevealToggle } from '../pages/sensitive';
 import { agentRoute, catalogueRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, BACKUP_ROUTE, NEEDS_ROUTE, NOTIFICATIONS_RECENT_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import { RECOVERY_BANNER } from './Recovery';
 import type { AgentAttention } from '../shell/roster';
@@ -863,9 +864,7 @@ function HomeBlockView({ block, onHide }: { block: HomeBlock; onHide: () => void
     <span className="ui-row">
       {block.rows.length > 0 && block.rowsTitle && !masked ? <span className="muted">{block.rowsTitle.toLowerCase()} below</span> : null}
       {block.sensitive ? (
-        <Button size="sm" variant="ghost" aria-pressed={!masked} onClick={toggleRevealed}>
-          {masked ? 'Show' : 'Hide'}
-        </Button>
+        <RevealToggle size="sm" shown={!masked} onToggle={toggleRevealed} />
       ) : null}
       <CloseButton label={`Hide ${block.title} from Home`} onClick={onHide} />
     </span>
@@ -877,7 +876,7 @@ function HomeBlockView({ block, onHide }: { block: HomeBlock; onHide: () => void
       {block.stats.length > 0 ? (
         <Stats>
           {block.stats.map((stat) => (
-            <Stat key={stat.label} label={stat.label} value={masked ? '••••' : stat.value} note={masked ? undefined : stat.note} tone={masked ? undefined : stat.tone} />
+            <Stat key={stat.label} label={stat.label} value={masked ? <Masked /> : stat.value} note={masked ? undefined : stat.note} tone={masked ? undefined : stat.tone} />
           ))}
         </Stats>
       ) : null}

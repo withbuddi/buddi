@@ -14,6 +14,8 @@
  * that. The path walk mirrors core's `maskSensitiveValues`.
  */
 import type { ReactNode } from 'react';
+import { Button } from '../ui';
+import { Icon } from '../ui/Icon';
 
 /** What stands where a sensitive value is, until Show amounts. Always this wide. */
 export const MASK = '••••';
@@ -61,12 +63,49 @@ export function maskValues(data: unknown, paths: readonly string[] | undefined):
   return out;
 }
 
-/** The mask, as drawn: a fixed width, and "hidden" to a screen reader. */
+/**
+ * The mask, as drawn: four dots of a fixed width, and "hidden" to a screen
+ * reader. Each dot is drawn rather than set as a bullet glyph, so it sits at
+ * the middle of a figure's height in any font and at any size (a stat's
+ * value line, a row's meta) instead of low and small beside the digits. The
+ * bullets stay in the text for copying and for a page read without styles.
+ */
 export function Masked(): JSX.Element {
   return (
     <span className="pp-masked" role="img" aria-label="hidden">
-      {MASK}
+      {[...MASK].map((dot, index) => (
+        <span key={index} className="pp-mask-dot">
+          {dot}
+        </span>
+      ))}
     </span>
+  );
+}
+
+/**
+ * The one control that shows what is masked and hides it again: a secondary
+ * button with an eye, its words saying what pressing it does. A page head's
+ * Show amounts, a sensitive section's Show and a Home block's Show are all
+ * this, so they read alike.
+ */
+export function RevealToggle({
+  shown,
+  onToggle,
+  show = 'Show',
+  hide = 'Hide',
+  size,
+}: {
+  shown: boolean;
+  onToggle: () => void;
+  show?: string;
+  hide?: string;
+  size?: 'sm';
+}): JSX.Element {
+  return (
+    <Button className="pp-reveal" size={size} aria-pressed={shown} onClick={onToggle}>
+      <Icon name="eye" size={size === 'sm' ? 14 : 16} />
+      <span>{shown ? hide : show}</span>
+    </Button>
   );
 }
 

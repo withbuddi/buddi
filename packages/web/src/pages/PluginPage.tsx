@@ -79,7 +79,7 @@ import { SeriesPanel } from './SeriesPanel';
 import { AssetImage, assetSrc } from './AssetImage';
 import { usePluginDataChanged } from './usePages';
 import { useAmountsShown, useReveal } from '../reveal';
-import { MASK, MaskText, holdsMask, maskValues, rawOf } from './sensitive';
+import { MASK, MaskText, RevealToggle, holdsMask, maskValues, rawOf } from './sensitive';
 import type {
   ArgRef,
   ColumnMap,
@@ -177,19 +177,11 @@ function readsSensitiveValues(node: unknown, paths: Readonly<Record<string, stri
 /** The page's one Show amounts (1.31): on for the session until the window is left, or five minutes. */
 function AmountsToggle(): JSX.Element {
   const [shown, toggle] = useAmountsShown();
-  return (
-    <Button size="sm" variant="ghost" aria-pressed={shown} onClick={toggle}>
-      {shown ? 'Hide amounts' : 'Show amounts'}
-    </Button>
-  );
+  return <RevealToggle shown={shown} onToggle={toggle} show="Show amounts" hide="Hide amounts" />;
 }
 
 function RevealButton({ revealed, onToggle }: { revealed: boolean; onToggle: () => void }): JSX.Element {
-  return (
-    <Button size="sm" variant="ghost" aria-pressed={revealed} onClick={onToggle}>
-      {revealed ? 'Hide' : 'Show'}
-    </Button>
-  );
+  return <RevealToggle size="sm" shown={revealed} onToggle={onToggle} />;
 }
 
 /** What stands where a masked read would be. Nothing is asked for until shown. */

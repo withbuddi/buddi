@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { api } from '../api';
 import { PluginPage } from './PluginPage';
 import { AMOUNTS_SHOWN_MS, setAmountsShown } from '../reveal';
@@ -274,5 +275,75 @@ describe('sensitive values', () => {
     expect((await screen.findAllByText('Checking')).length).toBe(2);
     expect(screen.queryByRole('button', { name: 'Show amounts' })).not.toBeInTheDocument();
     expect(screen.getAllByText(/1,204\.10/).length).toBeGreaterThan(0);
+  });
+});
+
+describe('the Money page head and stat cards', () => {
+  const TOTALS = {
+    cards: [
+      { id: 'cash', icon: 'money', label: 'Cash', value: '€1,204', line: 'in 2 accounts' },
+      { id: 'worth', icon: 'chart', label: 'Net worth', value: '€48,210', line: 'everything, less what you owe' },
+    ],
+  };
+  const totals: PluginPageDescriptor = {
+    plugin: 'finance',
+    id: 'money',
+    title: 'Money',
+    place: 'rail',
+    sensitivePaths: { money_totals: ['cards[].value'] },
+    actions: [{ kind: 'button', action: { tool: 'finance.add', label: 'Add' } }],
+    body: [{ kind: 'tiles', query: { query: 'money_totals' }, items: 'cards', icon: { path: 'icon' }, value: 'value', label: 'label', lines: ['line'], layout: 'grid' }],
+  };
+  const drawTotals = (): ReturnType<typeof render> =>
+    render(<PluginPage page={totals} navigate={vi.fn()} timezone="UTC" siblings={[totals]} />);
+
+  beforeEach(() => {
+    vi.mocked(api.pageQuery).mockImplementation((() => Promise.resolve({ data: TOTALS })) as typeof api.pageQuery);
+  });
+
+  it('draws Show amounts as a secondary button with an eye, first among the head actions, its label flipping with its state', async () => {
+    drawTotals();
+    const toggle = await screen.findByRole('button', { name: 'Show amounts' });
+    expect(toggle).toHaveClass('ui-btn', 'pp-reveal');
+    expect(toggle).not.toHaveAttribute('data-variant');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle.querySelector('svg[data-icon="eye"]')).toHaveAttribute('aria-hidden', 'true');
+    const head = toggle.closest('.ui-page-actions') as HTMLElement;
+    expect(head.firstElementChild).toBe(toggle);
+    expect(within(head).getByRole('button', { name: 'Add' })).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAccessibleName('Hide amounts');
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('reveals from the keyboard: Tab reaches it, Enter shows, Space hides', async () => {
+    const user = userEvent.setup({ delay: null });
+    drawTotals();
+    const toggle = await screen.findByRole('button', { name: 'Show amounts' });
+    await screen.findAllByText('Net worth');
+    for (let i = 0; i < 20 && document.activeElement !== toggle; i++) await user.tab();
+    expect(toggle).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('€48,210')).toBeInTheDocument();
+    expect(toggle).toHaveAccessibleName('Hide amounts');
+    await user.keyboard(' ');
+    await waitFor(() => expect(screen.queryByText('€48,210')).not.toBeInTheDocument());
+    expect(toggle).toHaveAccessibleName('Show amounts');
+  });
+
+  it('a masked stat card keeps its layout: icon, the mask on the value line, the label under it', async () => {
+    drawTotals();
+    await screen.findAllByText('Net worth');
+    const card = document.querySelectorAll('.wb-tile')[1] as HTMLElement;
+    // Read as one sentence, the mask says "hidden".
+    expect(card.querySelector('.sr-only')).toHaveTextContent('Net worth, hidden, everything, less what you owe');
+    const body = card.querySelector('.wb-tile-body') as HTMLElement;
+    expect([...body.children].map((child) => child.className)).toEqual(['wb-tile-icon', 'wb-tile-value tnum', 'wb-tile-label', 'wb-tile-line']);
+    expect(body.querySelector('.wb-tile-value')!.innerHTML).toBe(
+      '<span class="pp-masked" role="img" aria-label="hidden">' +
+        '<span class="pp-mask-dot">•</span>'.repeat(4) +
+        '</span>',
+    );
+    expect(body.querySelector('.wb-tile-label')).toHaveTextContent('Net worth');
   });
 });

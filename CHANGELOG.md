@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Changed
 
 - Releases send the Chrome extension to the Chrome Web Store themselves (submitted for review) once the store's API keys are in the repository; a refused upload is a notice and the zip stays on the GitHub release.
+- Hidden amounts look deliberate: on the Money page's cards (and anywhere a plugin page or Home masks a figure) the mask is four even dots on the value's own line, centred on the figure's height, with the label under it as when the amount shows; a screen reader hears "hidden". "Show amounts" is now a proper button with an eye, first among the page's actions, reading "Hide amounts" while they show; Home's and a section's Show/Hide match it.
 
 ## 0.1.0-pre.46 — 2026-10-06
 

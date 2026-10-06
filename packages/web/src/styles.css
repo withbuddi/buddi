@@ -5704,5 +5704,26 @@ button.br-address:hover:not(:disabled) { border-color: var(--line-strong); }
 .pl-mail-files .wb-msg-files { justify-content: flex-start; }
 .pl-mail-file { display: inline-flex; align-items: center; gap: var(--space-2); }
 
-/* A value a plugin page marks sensitive, until Show amounts (host API 1.31): always as wide, never its length. */
-.pp-masked { display: inline-block; letter-spacing: 0.1em; color: var(--text-muted); white-space: nowrap; }
+/*
+ * A value a plugin page marks sensitive, until Show amounts (host API 1.31):
+ * always as wide, never its length. Four drawn dots, sized from the text they
+ * stand in, lifted so their middle sits at the middle of a figure: on a stat's
+ * value line they take the value's place and height, the label stays under them.
+ * The bullet glyph inside each dot is pushed out of view.
+ */
+.pp-masked { display: inline-block; color: var(--text-muted); white-space: nowrap; }
+.pp-mask-dot {
+  display: inline-block;
+  inline-size: 0.3em;
+  block-size: 0.3em;
+  margin-inline-end: 0.2em;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  vertical-align: 0.22em;
+  overflow: hidden;
+  text-indent: 100%;
+  white-space: nowrap;
+}
+.pp-mask-dot:last-child { margin-inline-end: 0; }
+/* The reveal control keeps its words on every width: they say what it does. */
+.pp-reveal { flex: 0 0 auto; }

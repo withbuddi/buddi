@@ -19,6 +19,7 @@ import { Card } from '../../ui';
 import { Icon } from '../../ui/Icon';
 import { tileGlyph } from '../tileIcons';
 import { usePluginPageHref } from '../../pages/pageLinks';
+import { MASK, MaskText } from '../../pages/sensitive';
 
 export type TilesLayout = 'grid' | 'row' | 'strip';
 
@@ -55,16 +56,20 @@ export function Tiles({
 
 function TileCard({ tile, picked, onPick }: { tile: Tile; picked?: boolean; onPick?: () => void }): JSX.Element {
   const target = usePluginPageHref(tile.link);
-  const summary = [tile.label, tile.value, ...tile.lines].filter((part) => part !== '').join(', ');
+  // A masked value (1.31) is read as "hidden", never as four bullets.
+  const summary = [tile.label, tile.value, ...tile.lines]
+    .filter((part) => part !== '')
+    .map((part) => part.split(MASK).join('hidden'))
+    .join(', ');
   const body = (
     <div className="wb-tile-body" aria-hidden="true">
       <span className="wb-tile-icon" data-icon={tile.icon ?? 'dot'}>
         <Icon name={tileGlyph(tile.icon)} size={22} />
       </span>
-      {tile.value !== '' ? <span className="wb-tile-value tnum">{tile.value}</span> : null}
+      {tile.value !== '' ? <span className="wb-tile-value tnum"><MaskText text={tile.value} /></span> : null}
       <span className="wb-tile-label">{tile.label}</span>
       {tile.lines.map((line, index) => (
-        <span key={index} className="wb-tile-line">{line}</span>
+        <span key={index} className="wb-tile-line"><MaskText text={line} /></span>
       ))}
     </div>
   );
