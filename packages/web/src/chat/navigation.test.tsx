@@ -122,7 +122,11 @@ describe('chat links and history', () => {
 });
 
 describe('dismissible result tabs', () => {
-  it('closes a failed panel, remembers dismissal after reload, and reopens from its chip', async () => {
+  it('closes a failed panel, remembers dismissal after reload (on the server), and reopens from its chip', async () => {
+    // The server's copy: what one page writes, the next one reads.
+    const stored = new Map<string, { closed: string[]; touched: Record<string, number> }>();
+    vi.spyOn(chatApi, 'canvasTabs').mockImplementation(async id => stored.get(id) ?? { closed: [], touched: {} });
+    vi.spyOn(chatApi, 'saveCanvasTabs').mockImplementation(async (id, state) => { stored.set(id, state); return state; });
     vi.mocked(chatApi.conversation).mockImplementation(async id => ({ ...transcript(id), messages: [
       { id: 'call', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'failed-tool', name: 'shed.work', input: {} }] },
       { id: 'result', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'failed-tool', name: 'shed.work', ok: false, output: 'Busy' }] },
@@ -132,6 +136,8 @@ describe('dismissible result tabs', () => {
     await waitFor(() => expect(screen.queryByRole('tab', { name: 'Shed · Work' })).not.toBeInTheDocument());
     expect(within(screen.getByTestId('messages')).getByRole('button', { name: /Shed · Work/ })).toBeInTheDocument();
     expect(api.browserControl).not.toHaveBeenCalled();
+    await waitFor(() => expect(stored.get('keeper-latest')?.closed).toContain('failed-tool'));
+    sessionStorage.clear();
     view.unmount(); render(<App />);
     const chip = await within(screen.getByTestId('messages')).findByRole('button', { name: /Shed · Work/ });
     expect(screen.queryByRole('tab', { name: 'Shed · Work' })).not.toBeInTheDocument();

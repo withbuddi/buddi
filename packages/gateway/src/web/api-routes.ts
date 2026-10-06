@@ -369,6 +369,16 @@ export const API_ROUTES: readonly ApiRoute[] = [
     summary: 'Drop the note a rollover carried into this conversation; it leaves every later turn’s context.', answer: '204',
   },
   {
+    method: 'GET', path: '/api/chat/conversations/:id/canvas-tabs', area: 'chat',
+    summary: 'The canvas tabs the owner closed in this conversation, and when each tab was last looked at (their order).',
+    answer: '{ closed: string[], touched: Record<tabId, epochMs> }',
+  },
+  {
+    method: 'PUT', path: '/api/chat/conversations/:id/canvas-tabs', area: 'chat',
+    summary: 'Replace this conversation’s canvas tab state. The newest 200 of each half are kept.',
+    body: '{ closed: string[], touched: Record<tabId, epochMs> }', answer: 'the state as stored', errors: '400 a field of the wrong shape',
+  },
+  {
     method: 'POST', path: '/api/chat/questions/:id/answer', area: 'chat', summary: 'Answer a question an agent asked in the chat.',
     body: '{ answer: string, optionId?: string } or { skipped: true }', answer: '202', errors: '400; 404 no open question; 409 already answered',
   },
@@ -1427,6 +1437,8 @@ export const API_SINCE: Readonly<Record<string, string>> = {
   'GET /api/chat/conversations/:id/stream': '0.1.0-pre.15',
   'POST /api/chat/conversations/:id/cancel': '0.1.0-pre.15',
   'DELETE /api/chat/conversations/:id/carry-over': '0.1.0-pre.28',
+  'GET /api/chat/conversations/:id/canvas-tabs': '0.1.0-pre.46',
+  'PUT /api/chat/conversations/:id/canvas-tabs': '0.1.0-pre.46',
   'POST /api/chat/questions/:id/answer': '0.1.0-pre.15',
   'POST /api/chat/attachments': '0.1.0-pre.15',
   'GET /api/conversations': '0.1.0-pre.15',

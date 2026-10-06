@@ -2028,6 +2028,13 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-tab-more[data-tone] { color: var(--text-faint); }
 .wb-tab-more[data-tone]:hover { color: var(--text); }
 .wb-tab-more[data-state='open'] { background: var(--surface-sunken); color: var(--text); }
+/* With nothing hidden the control is only the tab menu (Close others / Close all): a chevron. */
+.wb-tab-more[data-bare='true'] { border-style: solid; border-color: transparent; }
+/* The timeline behind the strip scrolls on its own; the close actions stay in view below it. */
+.wb-tab-timeline { max-height: min(60vh, calc(var(--space-12) * 8)); overflow-y: auto; overscroll-behavior: contain; }
+/* A subject tab's earlier results: one quiet row above the panel. */
+.wb-versions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-1); margin-bottom: var(--space-2); color: var(--text-muted); font-size: var(--text-sm); }
+.wb-versions-text { font-variant-numeric: tabular-nums; }
 .ui-menu-item-text {
   display: inline-flex;
   align-items: center;

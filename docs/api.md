@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-327 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+329 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -981,6 +981,8 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/chat/conversations/:id/stream` | Server-sent events for one conversation: messages, tool calls, approvals, the run ending. | yes |
 | POST | `/api/chat/conversations/:id/cancel` | Stop the run in progress (a group’s current request, in a group). | yes |
 | DELETE | `/api/chat/conversations/:id/carry-over` | Drop the note a rollover carried into this conversation; it leaves every later turn’s context. | yes |
+| GET | `/api/chat/conversations/:id/canvas-tabs` | The canvas tabs the owner closed in this conversation, and when each tab was last looked at (their order). | yes |
+| PUT | `/api/chat/conversations/:id/canvas-tabs` | Replace this conversation’s canvas tab state. The newest 200 of each half are kept. | yes |
 | POST | `/api/chat/questions/:id/answer` | Answer a question an agent asked in the chat. | yes |
 | POST | `/api/chat/attachments` | Upload a file for the next message. | yes |
 | GET | `/api/conversations` | Every conversation, newest first (Activity). | yes |
@@ -1142,6 +1144,32 @@ Drop the note a rollover carried into this conversation; it leaves every later t
 
 ```sh
 curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversations/<id>/carry-over"
+```
+
+#### `GET /api/chat/conversations/:id/canvas-tabs`
+
+The canvas tabs the owner closed in this conversation, and when each tab was last looked at (their order).
+
+- **Auth:** Session or API token.
+- **Answer:** `{ closed: string[], touched: Record<tabId, epochMs> }`
+- **Since:** 0.1.0-pre.46
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversations/<id>/canvas-tabs"
+```
+
+#### `PUT /api/chat/conversations/:id/canvas-tabs`
+
+Replace this conversation’s canvas tab state. The newest 200 of each half are kept.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ closed: string[], touched: Record<tabId, epochMs> }`
+- **Answer:** `the state as stored`
+- **Errors:** 400 a field of the wrong shape
+- **Since:** 0.1.0-pre.46
+
+```sh
+curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"closed":[],"touched":{}}' "$BUDDI_URL/api/chat/conversations/<id>/canvas-tabs"
 ```
 
 #### `POST /api/chat/questions/:id/answer`

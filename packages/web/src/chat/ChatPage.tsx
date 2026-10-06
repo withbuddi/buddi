@@ -36,7 +36,8 @@ import { BrowserAsk, browserCardOf } from './BrowserAsk';
 import { WEB_SOURCE_TOOLS } from './sources';
 import { OWN_TOOL_TITLES, QUIET_TOOLS } from './own-tools';
 import { ConversationHistory } from './ConversationHistory';
-import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
+import { useCanvasTabs } from './canvas-tabs';
+import { selfClosed, tabStamp, versionHolding } from '../canvas/tab-order';
 import { agentRoute, chatRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
@@ -152,7 +153,11 @@ export function ChatPage({
   const [running, setRunning] = useState(false);
   const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
   const [activeTab, setActiveTab] = useState<string | null>(null);
-  const [dismissedTabs, setDismissedTabs] = useState(readDismissedTabs);
+  /** The canvas's closed tabs and their order, kept on the server per conversation. */
+  const canvasTabs = useCanvasTabs(conversationId ?? null);
+  /** The minute, so a tab past its expiry closes itself while the page is open. */
+  const [minute, setMinute] = useState(() => Date.now());
+  useEffect(() => { const timer = setInterval(() => setMinute(Date.now()), 60_000); return () => clearInterval(timer); }, []);
   /*
    * Files the owner opened from the thread. Held per conversation and dropped
    * with it: a picture from one thread has no business on another's canvas.
@@ -167,7 +172,7 @@ export function ChatPage({
   const routeAgent = useRef(agentId);
   const selection = useRef({ agentId, conversationId });
   selection.current = { agentId, conversationId };
-  const dismissed = dismissedTabs[conversationId ?? ''] ?? [];
+  const dismissed = canvasTabs.closed;
   const [error, setError] = useState<string | null>(null);
   /**
    * A line about the thread itself, said once, above it. A room that rolled
@@ -578,6 +583,8 @@ export function ChatPage({
   const workspace = useAgentWorkspace(group ? null : agentId);
   const fileChanges = useMemo(() => workspaceChanges(conversation?.messages ?? []), [conversation]);
 
+  /** The transcript's tabs before closing, for a chat row reopening one by any call it holds. */
+  const transcriptTabs = useRef<Renderable[]>([]);
   const renderables: Renderable[] = useMemo(() => {
     const fromTranscript = renderablesFrom({
       messages: conversation?.messages ?? [],
@@ -594,11 +601,29 @@ export function ChatPage({
       quiet: QUIET_TOOLS,
       titles: OWN_TOOL_TITLES,
     });
-    const items = fromTranscript.filter(item => item.source === 'approval' || !dismissed.includes(item.id));
-    // A web call clicked in the conversation opens its turn's Sources tab on that call.
+    transcriptTabs.current = fromTranscript;
+    /*
+     * Closed by the owner, or closed by itself (past its expiry; a failure
+     * with no view is parked in the timeline instead). Either way a chat row
+     * clicked brings it back while it is the one being read.
+     */
+    const asked = (item: Renderable): boolean => activeTab !== null
+      && (item.id === activeTab || (item.versions ?? []).some(version => version.id === activeTab));
+    const items: Renderable[] = [];
+    // Until the stored state is in, the transcript's tabs wait: a tab the owner closed must not flash back.
+    for (const item of canvasTabs.ready ? fromTranscript : fromTranscript.filter(item => item.source === 'approval')) {
+      if (item.source !== 'approval' && dismissed.includes(tabStamp(item)) && !asked(item)) continue;
+      const closedBySelf = selfClosed(item, minute);
+      if (closedBySelf === 'gone' && !asked(item)) continue;
+      items.push(closedBySelf === 'parked' ? { ...item, parked: true } : item);
+    }
+    // A web call clicked in the conversation opens its turn's Sources tab on that call;
+    // an earlier call on a subject opens that subject's tab on that version.
     const holder = activeTab ? sourcesHolding(items, activeTab) : null;
     if (holder) holder.props = { ...(holder.props as SourcesPanelProps), focus: activeTab };
-    if (activeTab && !holder && !dismissed.includes(activeTab) && !items.some(item => item.id === activeTab)) {
+    const versioned = activeTab && !holder ? versionHolding(items, activeTab) : null;
+    if (versioned) versioned.focus = activeTab;
+    if (activeTab && !holder && !versioned && !dismissed.includes(activeTab) && !items.some(item => item.id === activeTab)) {
       const inspection = inspectToolCall(conversation?.messages ?? [], activeTab, { redactInputOf: BROWSER_TOOLS, resultOf: QUIET_TOOLS, titles: OWN_TOOL_TITLES });
       // A browser call is never inspected as raw arguments: what was typed on
       // the owner's screen belongs on the panel as a step, not in a JSON tree
@@ -609,7 +634,7 @@ export function ChatPage({
     for (const file of openedFiles) items.push(artifactRenderable(file));
     if (workspace) items.unshift(filesRenderable(workspace, fileChanges));
     return profile ? [...items, profileRenderable(profile)] : items;
-  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, dismissedTabs, conversationId, openedFiles, servedPreviews.served, workspace, fileChanges]);
+  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, canvasTabs.closed, canvasTabs.ready, minute, conversationId, openedFiles, servedPreviews.served, workspace, fileChanges]);
 
   /*
    * What the owner has said here, newest first, for the composer's Up key.
@@ -663,10 +688,32 @@ export function ChatPage({
   const focusId = useMemo(() => {
     for (let index = renderables.length - 1; index >= 0; index -= 1) {
       const candidate = renderables[index];
-      if (candidate?.substantial) return candidate.id;
+      if (candidate?.substantial) return tabStamp(candidate);
     }
     return null;
   }, [renderables]);
+
+  /** The tab in front: the one holding the call when the owner opened a call. */
+  const shownTab = (activeTab
+    ? sourcesHolding(renderables, activeTab)?.id ?? versionHolding(renderables, activeTab)?.id
+    : null) ?? activeTab;
+  // Looking at a tab puts it first on the strip, here and on the next device.
+  const touchTab = canvasTabs.touch;
+  useEffect(() => {
+    if (shownTab && renderables.some(item => item.id === shownTab)) touchTab(shownTab);
+    // Only when what is in front changes, not on every new result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownTab, touchTab]);
+  /** When the owner last spoke: the timeline's "this turn". */
+  const turnStartedAt = useMemo(() => {
+    const messages = conversation?.messages ?? [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === 'user' && (!message.speaker || message.speaker === 'owner')
+        && message.blocks.some(block => block.type === 'text' && block.text.trim() !== '')) return message.at ?? null;
+    }
+    return null;
+  }, [conversation]);
 
   const previousFocus = useRef<string | null>(null);
   /*
@@ -1083,20 +1130,29 @@ export function ChatPage({
     </GradientField>
   ) : null;
 
+  const closeTabs = (ids: readonly string[]): void => {
+    const stamps: string[] = [];
+    for (const id of ids) {
+      if (profile && id === profileTabId(profile.id)) setProfile(null);
+      else if (openedFiles.some(file => artifactTabId(file.artifactId) === id)) setOpenedFiles(current => current.filter(file => artifactTabId(file.artifactId) !== id));
+      else {
+        const tab = renderables.find(item => item.id === id);
+        stamps.push(tab ? tabStamp(tab) : id);
+      }
+    }
+    if (stamps.length > 0) canvasTabs.close(stamps);
+    if (activeTab !== null && (ids.includes(activeTab) || ids.includes(shownTab ?? ''))) setActiveTab(null);
+  };
+
   const canvas = (
     <Canvas
       renderables={renderables}
-      activeId={(activeTab ? sourcesHolding(renderables, activeTab)?.id : null) ?? activeTab}
+      activeId={shownTab}
       onActivate={setActiveTab}
-      onClose={(id) => {
-        if (profile && id === profileTabId(profile.id)) setProfile(null);
-        else if (openedFiles.some(file => artifactTabId(file.artifactId) === id)) setOpenedFiles(current => current.filter(file => artifactTabId(file.artifactId) !== id));
-        else if (conversationId) setDismissedTabs(current => {
-          const next = { ...current, [conversationId]: [...new Set([...(current[conversationId] ?? []), id])] };
-          storeDismissedTabs(next); return next;
-        });
-        if (activeTab === id) setActiveTab(null);
-      }}
+      onClose={(id) => closeTabs([id])}
+      onCloseMany={closeTabs}
+      touched={canvasTabs.touched}
+      turnStartedAt={turnStartedAt}
       timezone={timezone}
       onDecided={onDecided}
       onChangeAgent={changeVia}
@@ -1369,10 +1425,8 @@ export function ChatPage({
                 return;
               }
             }
-            if (conversationId) setDismissedTabs(current => {
-              const next = { ...current, [conversationId]: (current[conversationId] ?? []).filter(id => id !== toolUseId) };
-              storeDismissedTabs(next); return next;
-            });
+            const holding = transcriptTabs.current.find(item => item.id === toolUseId || (item.versions ?? []).some(version => version.id === toolUseId));
+            canvasTabs.reopen(holding ? [toolUseId, tabStamp(holding)] : [toolUseId]);
             setActiveTab(toolUseId);
             if (narrow) onOpenCanvas?.();
           }}

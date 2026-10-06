@@ -3,17 +3,16 @@
  * conversation produced, one panel below.
  *
  * The tabs exist so that reading an approval does not cost you the chart you
- * were looking at. They are ordered oldest-first, like the conversation, and
- * the newest is selected unless the owner has moved.
+ * were looking at. A tab is known by its tool and its subject — the file, the
+ * account, the page — so a second call on the same thing updates the tab it
+ * has, with the earlier result a step back inside it (`tab-order.ts`).
  *
- * **The strip is capped.** A long conversation produces more tabs than fit, and
- * tabs that do not fit are worse than no tabs: they shrink to nothing, or the
- * bar scrolls sideways and what is on it stops being visible at a glance. So
- * the strip holds as many as the width actually has room for — four or five on
- * a laptop, two on a phone — and the rest go behind one control that names
- * them. Two things are never pushed off it: what the owner is looking at, and
- * a decision waiting to be made. A failure can be pushed off, but not
- * silently: the control wears its dot.
+ * **The strip is capped at three**, most recently looked at first: opening a
+ * fourth moves the oldest into the timeline behind one control, grouped Now /
+ * Earlier this turn / Earlier. Two things are never pushed off it: what the
+ * owner is looking at, and a decision waiting to be made. A failure can be
+ * pushed off, but not silently: the control wears its dot. The same menu
+ * closes all tabs, or all but the one in front.
  *
  * Empty, it teaches rather than apologises. The things it names are the view
  * descriptors of the tools this conversation's agent is granted — real titles
@@ -23,7 +22,7 @@
  */
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ApprovalRow } from '../api';
 import { RenderView } from './registry';
 import type { Renderable, RendererName, StructuredProps, ViewDescriptor } from './types';
@@ -38,6 +37,11 @@ import type { SourcesPanelProps } from './renderables';
 import type { ChatAgent } from '../chat/types';
 import { Icon } from '../ui/Icon';
 import { fmtClock, fmtTime } from '../format';
+import { Button } from '../ui';
+import { splitTabs, STRIP_TABS, timelineOf, type TimelineGroup } from './tab-order';
+import type { TabVersion } from './types';
+
+export { splitTabs } from './tab-order';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
 const MAX_EXAMPLES = 3;
@@ -57,10 +61,10 @@ const STRIP_PADDING = 28 + 72;
 
 /**
  * Never fewer than two, so a strip still reads as a strip on a phone, and
- * never more than five, because a sixth tab is further away than the menu.
+ * never more than three: a fourth tab is further away than the timeline.
  */
 const MIN_TABS = 2;
-const MAX_TABS = 5;
+const MAX_TABS = STRIP_TABS;
 
 export function Canvas({
   renderables,
@@ -79,6 +83,10 @@ export function Canvas({
   browserMenu,
   agents,
   onClose,
+  onCloseMany,
+  touched,
+  turnStartedAt,
+  now = Date.now,
   loading = false,
 }: {
   renderables: Renderable[];
@@ -114,6 +122,14 @@ export function Canvas({
    */
   agents?: readonly ChatAgent[];
   onClose?: (id: string) => void;
+  /** Close all, Close others: every id the owner put away at once. */
+  onCloseMany?: (ids: string[]) => void;
+  /** When each tab was last looked at (epoch ms), by id: the strip's order. */
+  touched?: Readonly<Record<string, number>>;
+  /** When the owner last spoke: the timeline's "this turn" starts there. */
+  turnStartedAt?: string | null;
+  /** The clock, for tests. */
+  now?: () => number;
   /**
    * The conversation is still on its way. The empty canvas stays blank rather
    * than introducing an agent whose tabs may be a moment from arriving.
@@ -121,6 +137,9 @@ export function Canvas({
   loading?: boolean;
 }): JSX.Element {
   const [strip, fits] = useTabsThatFit(maxTabs);
+  /** The version the owner stepped to, per tab, until a newer one arrives. */
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const labels = useMemo(() => labelsOf(renderables, timezone), [renderables, timezone]);
   if (renderables.length === 0) {
     return (
       <div className="wb-canvas" data-testid="canvas">
@@ -143,7 +162,8 @@ export function Canvas({
     ? (activeId as string)
     : (renderables[renderables.length - 1]!.id);
 
-  const { shown, hidden } = splitTabs(renderables, active, fits);
+  const { shown, hidden } = splitTabs(renderables, active, fits, touched);
+  const closeableIds = renderables.filter(closeable).map((item) => item.id);
 
   return (
     <div className="wb-canvas" data-testid="canvas">
@@ -158,25 +178,49 @@ export function Canvas({
                 {item.tone === 'warning' || item.tone === 'critical' ? (
                   <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
                 ) : null}
-                <span className="wb-tab-text">{item.title}</span>
+                <span className="wb-tab-text">{labels.get(item.id) ?? item.title}</span>
                 {item.count ? <span className="wb-tab-count">{item.count}</span> : null}
               </Tabs.Trigger>
-              {onClose && closeable(item) ? <button className="wb-tab-close" aria-label={`Close ${item.title} tab`} title="Dismiss panel; keep conversation history" onClick={() => onClose(item.id)}>×</button> : null}
+              {onClose && closeable(item) ? <button className="wb-tab-close" aria-label={`Close ${labels.get(item.id) ?? item.title} tab`} title="Dismiss panel; keep conversation history" onClick={() => onClose(item.id)}>×</button> : null}
               </div>
             ))}
           </Tabs.List>
-          <MoreTabs items={hidden} onActivate={onActivate} timezone={timezone} />
+          <TabMenu
+            items={hidden}
+            onActivate={onActivate}
+            timezone={timezone}
+            labels={labels}
+            groups={timelineOf(hidden, { now: now(), turnStartedAt: turnStartedAt ?? null, ...(touched ? { touched } : {}) })}
+            {...(onCloseMany ? {
+              onCloseAll: closeableIds.length > 0 ? () => onCloseMany(closeableIds) : undefined,
+              onCloseOthers: closeableIds.some((id) => id !== active) ? () => onCloseMany(closeableIds.filter((id) => id !== active)) : undefined,
+            } : {})}
+          />
           {browserMenu && renderables.find((item) => item.id === active)?.source === 'browser' ? <span className="wb-canvas-menu">{browserMenu}</span> : null}
         </div>
-        {renderables.map((item) => (
+        {renderables.map((tab) => {
+          const versions = tab.versions ?? [];
+          const shownId = picked[`${tab.id}:${versions.length}:${tab.focus ?? ''}`]
+            ?? (tab.focus && versions.some((version) => version.id === tab.focus) ? tab.focus : null);
+          const version = shownId ? versions.find((candidate) => candidate.id === shownId) ?? null : null;
+          const item: Renderable = version ? withVersion(tab, version) : tab;
+          return (
           <Tabs.Content
-            key={item.id}
-            value={item.id}
+            key={tab.id}
+            value={tab.id}
             className="wb-canvas-body"
             data-renderer={item.source === 'descriptor' && item.renderer === 'preview' ? 'preview' : undefined}
             data-dense={DENSE.has(item.renderer) ? 'true' : undefined}
             data-page={item.source === 'browser' ? 'true' : undefined}
           >
+            {versions.length > 1 ? (
+              <VersionStepper
+                versions={versions}
+                current={item.id === tab.id && !version ? versions.at(-1)!.id : (version?.id ?? versions.at(-1)!.id)}
+                timezone={timezone}
+                onPick={(id) => setPicked((current) => ({ ...current, [`${tab.id}:${versions.length}:${tab.focus ?? ''}`]: id }))}
+              />
+            ) : null}
             {/* The Page tab draws on the canvas's ground, as the kit does: no panel around it. */}
             {item.source === 'browser' ? browserPanel : <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
               {item.source !== 'files' && !genericCard(item) && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
@@ -224,7 +268,8 @@ export function Canvas({
               )}
             </section>}
           </Tabs.Content>
-        ))}
+          );
+        })}
       </Tabs.Root>
     </div>
   );
@@ -289,63 +334,93 @@ function useTabsThatFit(forced?: number): [(node: HTMLDivElement | null) => void
     [forced],
   );
 
-  return [attach, forced ?? fits];
+  return [attach, forced === undefined ? fits : Math.min(MAX_TABS, forced)];
 }
 
 /**
- * Which tabs are on the strip and which are behind the menu.
- *
- * The recent ones are on the strip, because that is where the conversation
- * is. Two claims beat recency: the tab being read, since moving it would move
- * the screen out from under a reader, and a decision waiting on the owner,
- * since that is the one thing here they have to answer. Those two can together
- * exceed the room; they still both show, because the alternative is hiding
- * one of them.
- *
- * A third claim is the same kind of thing: platform state the page has marked
- * as *happening now* — the screen an agent is driving — which holds the strip
- * until it stops being live.
- *
- * A failure is not pinned — it would crowd out the work — but it is never
- * silent either: the menu carries its red dot, so the strip says a failure is
- * back there before it is opened.
+ * The tab's version as the panel draws it: the tab's identity (id, tool,
+ * subject), that call's result.
  */
-export function splitTabs(
-  renderables: Renderable[],
-  activeId: string,
-  fits: number,
-): { shown: Renderable[]; hidden: Renderable[] } {
-  const pinned = new Set(
-    renderables
-      .filter((item) => item.id === activeId || item.source === 'approval' || item.pinned === true)
-      .map((item) => item.id),
-  );
+function withVersion(tab: Renderable, version: TabVersion): Renderable {
+  const view: Renderable = { ...tab, title: version.title, renderer: version.renderer, props: version.props, at: version.at, substantial: version.substantial };
+  if (version.tone) view.tone = version.tone; else delete view.tone;
+  return view;
+}
 
-  const keep = new Set(pinned);
-  for (let index = renderables.length - 1; index >= 0 && keep.size < fits; index -= 1) {
-    keep.add(renderables[index]!.id);
+/**
+ * What each tab is called on the strip and in the timeline. A tab with a
+ * subject says it already; two without one that share a title get their
+ * clock, which is what tells them apart.
+ */
+function labelsOf(items: readonly Renderable[], timezone: string): Map<string, string> {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.title, (counts.get(item.title) ?? 0) + 1);
+  const labels = new Map<string, string>();
+  for (const item of items) {
+    const time = item.subject || (counts.get(item.title) ?? 0) < 2 ? null : clock(item.at, timezone);
+    labels.set(item.id, time ? `${item.title} · ${time}` : item.title);
   }
-
-  return {
-    shown: renderables.filter((item) => keep.has(item.id)),
-    hidden: renderables.filter((item) => !keep.has(item.id)),
-  };
+  return labels;
 }
 
 /**
- * Everything the strip had no room for, named. Newest first — the menu is
- * reached for to go *back*, and back is the direction it opens in.
+ * The earlier results a tab holds: back and forward through the calls on its
+ * subject, newest last. "Latest" says when the owner is on the newest one.
  */
-function MoreTabs({
+function VersionStepper({
+  versions,
+  current,
+  timezone,
+  onPick,
+}: {
+  versions: readonly TabVersion[];
+  current: string;
+  timezone: string;
+  onPick: (id: string) => void;
+}): JSX.Element {
+  const index = Math.max(0, versions.findIndex((version) => version.id === current));
+  const version = versions[index]!;
+  const latest = index === versions.length - 1;
+  const at = clock(version.at, timezone);
+  return (
+    <div className="wb-versions" role="group" aria-label="Earlier results">
+      <Button variant="ghost" size="sm" aria-label="Earlier result" disabled={index === 0} onClick={() => onPick(versions[index - 1]!.id)}>
+        <Icon name="chevron-left" />
+      </Button>
+      <span className="wb-versions-text">
+        {latest ? 'Latest' : 'Earlier'} · {index + 1} of {versions.length}
+        {at ? <span className="mono"> · {at}</span> : null}
+      </span>
+      <Button variant="ghost" size="sm" aria-label="Later result" disabled={latest} onClick={() => onPick(versions[index + 1]!.id)}>
+        <Icon name="chevron-right" />
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Everything the strip had no room for, as a timeline: Now, Earlier this
+ * turn, Earlier, newest first in each — the menu is reached for to go
+ * *back*, and back is the direction it opens in. It also closes tabs in bulk.
+ */
+function TabMenu({
   items,
+  groups,
+  labels,
   onActivate,
+  onCloseAll,
+  onCloseOthers,
   timezone,
 }: {
   items: Renderable[];
+  groups: TimelineGroup[];
+  labels: ReadonlyMap<string, string>;
   onActivate: (id: string) => void;
+  onCloseAll?: (() => void) | undefined;
+  onCloseOthers?: (() => void) | undefined;
   timezone: string;
 }): JSX.Element | null {
-  if (items.length === 0) return null;
+  if (items.length === 0 && !onCloseAll && !onCloseOthers) return null;
   const worst = items.some((item) => item.tone === 'critical')
     ? 'critical'
     : items.some((item) => item.tone === 'warning')
@@ -360,34 +435,54 @@ function MoreTabs({
         <button
           className="wb-tab wb-tab-more"
           data-tone={worst ?? undefined}
-          aria-label={`${items.length} more ${items.length === 1 ? 'view' : 'views'} in this conversation`}
+          data-bare={items.length === 0 ? 'true' : undefined}
+          aria-label={items.length > 0
+            ? `${items.length} more ${items.length === 1 ? 'view' : 'views'} in this conversation`
+            : 'Tab actions'}
         >
           {worst ? <span className="wb-tab-dot" data-tone={worst} aria-hidden="true" /> : null}
-          <span className="wb-tab-text">{items.length} more</span>
+          {items.length > 0 ? <span className="wb-tab-text">{items.length} more</span> : null}
           <Icon name="chevron-down" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="ui-menu" data-wide="true" align="end" sideOffset={6}>
-          <DropdownMenu.Label className="ui-menu-label">Earlier in this conversation</DropdownMenu.Label>
-          {[...items].reverse().map((item) => (
-            <DropdownMenu.Item
-              key={item.id}
-              className="ui-menu-item"
-              onSelect={() => onActivate(item.id)}
-            >
-              <span className="ui-menu-item-text">
-                {item.tone === 'warning' || item.tone === 'critical' ? (
-                  <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
-                ) : null}
-                {item.title}
-              </span>
-              {/* The clock, not the tool name: a run that called one tool four
-                  times makes four rows with the same title, and the time is
-                  what tells them apart. */}
-              <span className="ui-menu-note mono">{clock(item.at, timezone) ?? item.tool}</span>
-            </DropdownMenu.Item>
-          ))}
+          {groups.length > 0 ? (
+            <div className="wb-tab-timeline">
+              {groups.map((group) => (
+                <DropdownMenu.Group key={group.label}>
+                  <DropdownMenu.Label className="ui-menu-label">{group.label}</DropdownMenu.Label>
+                  {group.items.map((item) => (
+                    <DropdownMenu.Item
+                      key={item.id}
+                      className="ui-menu-item"
+                      onSelect={() => onActivate(item.id)}
+                    >
+                      <span className="ui-menu-item-text">
+                        {item.tone === 'warning' || item.tone === 'critical' ? (
+                          <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
+                        ) : null}
+                        {labels.get(item.id) ?? item.title}
+                      </span>
+                      {/* The clock, not the tool name: it is what places a row on the timeline. */}
+                      <span className="ui-menu-note mono">{clock(item.versions?.at(-1)?.at ?? item.at, timezone) ?? item.tool}</span>
+                    </DropdownMenu.Item>
+                  ))}
+                </DropdownMenu.Group>
+              ))}
+            </div>
+          ) : null}
+          {onCloseAll || onCloseOthers ? (
+            <>
+              {groups.length > 0 ? <DropdownMenu.Separator className="ui-menu-sep" /> : null}
+              <DropdownMenu.Item className="ui-menu-item" disabled={!onCloseOthers} onSelect={() => onCloseOthers?.()}>
+                <span className="ui-menu-item-text">Close others</span>
+              </DropdownMenu.Item>
+              <DropdownMenu.Item className="ui-menu-item" disabled={!onCloseAll} onSelect={() => onCloseAll?.()}>
+                <span className="ui-menu-item-text">Close all</span>
+              </DropdownMenu.Item>
+            </>
+          ) : null}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

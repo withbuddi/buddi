@@ -182,6 +182,12 @@ export interface IntroAgent {
 }
 
 /** GET /api/agents/:id/intro: the strip a new agent's chat opens with, once. */
+/** One conversation's canvas tabs: stamps closed, and last looked at (epoch ms) by tab id. */
+export interface CanvasTabsState {
+  closed: string[];
+  touched: Record<string, number>;
+}
+
 export type AgentIntro =
   | { show: false }
   | { show: true; id: string; handle: string; asks: 'everyone' | IntroAgent[]; askedBy: IntroAgent[] };
@@ -2540,6 +2546,10 @@ export const chatApi = {
   conversation: (id: string) => get<ChatConversation>(`/chat/conversations/${encodeURIComponent(id)}`),
   /** Take the carried-over note out of a conversation, page and context both. */
   deleteCarryOver: (id: string) => del<null>(`/chat/conversations/${encodeURIComponent(id)}/carry-over`),
+  /** The canvas tabs closed here and when each was last looked at (chat/canvas-tabs.ts). */
+  canvasTabs: (id: string) => get<CanvasTabsState>(`/chat/conversations/${encodeURIComponent(id)}/canvas-tabs`),
+  saveCanvasTabs: (id: string, state: CanvasTabsState) =>
+    put<CanvasTabsState>(`/chat/conversations/${encodeURIComponent(id)}/canvas-tabs`, state),
   send: (agentId: string, body: { conversationId?: string; text: string; attachmentIds?: string[]; opening?: boolean }) =>
     post<{
       conversationId: string;
