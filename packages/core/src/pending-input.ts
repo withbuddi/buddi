@@ -143,10 +143,12 @@ export async function conversationsWithPendingInput(pool: Queryable): Promise<st
  * Files queued with them ride in the same turn, as references after the
  * words — the shape an ordinary turn's files are stored in — and the library
  * records the upload in the same transaction. A turn of files alone has no
- * text block at all.
+ * text block at all. A file deleted while it waited is left out; when that
+ * leaves nothing at all (no words, every file gone) the rows are marked
+ * promoted with no turn, rather than writing an empty bubble to answer.
  *
- * Returns null when nothing was waiting, or when the transaction did not
- * land. A caller that gets null must not claim the turn is already stored.
+ * Returns null when nothing was waiting, when nothing of it was left to
+ * become a turn, or when the transaction did not land. A caller that gets null must not claim the turn is already stored.
  */
 export async function promotePendingInput(
   pool: Queryable & { connect?: () => Promise<any> },
@@ -172,7 +174,8 @@ export async function promotePendingInput(
     const text = join(waiting.map((r: any) => String(r.text)).filter((t: string) => t.trim() !== ''));
     const attachmentIds: string[] = waiting.flatMap((r: any) => (Array.isArray(r.attachment_ids) ? r.attachment_ids.map(String) : []));
     const { rows: files } = attachmentIds.length === 0 ? { rows: [] as any[] } : await run.query(
-      `select id, mime, kind, filename, size_bytes from core.artifacts where id = any($1::uuid[])`,
+      `select id, mime, kind, filename, size_bytes from core.artifacts
+        where id = any($1::uuid[]) and deleted_at is null`,
       [attachmentIds],
     );
     const byId = new Map<string, any>(files.map((f: any) => [String(f.id), f]));
@@ -188,7 +191,15 @@ export async function promotePendingInput(
         ...(Number.isFinite(size) && size > 0 ? { sizeBytes: size } : {}),
       };
     });
+    const ids = waiting.map((r: any) => String(r.id));
     const content = [...(text.trim() === '' ? [] : [{ type: 'text', text }]), ...refs];
+    if (content.length === 0) {
+      // Files alone, and every one of them deleted while it waited: there is
+      // nothing to say and nothing to answer. The rows are settled all the same.
+      await run.query(`update core.pending_input set state = 'promoted' where id = any($1::uuid[])`, [ids]);
+      await run.query('commit');
+      return null;
+    }
     const { rows: written } = await run.query(
       `insert into core.messages (conversation_id, role, content)
        values ($1::uuid, 'user', $2::jsonb) returning id`,
@@ -211,7 +222,6 @@ export async function promotePendingInput(
         [refs.map((r) => r.artifactId), conversationId],
       );
     }
-    const ids = waiting.map((r: any) => String(r.id));
     await run.query(
       `update core.pending_input set state = 'promoted', message_id = $2::uuid where id = any($1::uuid[])`,
       [ids, messageId],

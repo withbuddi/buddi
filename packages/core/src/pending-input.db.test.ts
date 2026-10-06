@@ -24,6 +24,7 @@ import {
   waitingPendingInput,
 } from './pending-input.js';
 import { urlForDatabase } from './backup/restore.js';
+import { discardUnreferencedUpload, isArtifactReferenced, sweepOrphanUploads } from './artifacts/orphans.js';
 import { testDatabaseUrl } from './testing/database-url.js';
 
 const databaseUrl = await testDatabaseUrl();
@@ -57,8 +58,21 @@ suite('what the owner said while the agent was working', () => {
   });
 
   afterEach(async () => {
-    await pool.query('truncate core.pending_input, core.messages, core.conversations cascade');
+    await pool.query('truncate core.pending_input, core.messages, core.conversations, core.artifacts cascade');
   });
+
+  const upload = async (filename: string, createdAt = new Date('2026-01-01T09:00:00Z')): Promise<string> => {
+    const { rows } = await pool.query(
+      `insert into core.artifacts (kind, mime, filename, size_bytes, sha256, storage_path, source_surface, created_by, created_at)
+       values ('document', 'text/csv', $1, 10, md5(random()::text), 'x', 'web', 'owner', $2) returning id`,
+      [filename, createdAt],
+    );
+    return String(rows[0].id);
+  };
+  const deleted = async (id: string): Promise<boolean> => {
+    const { rows } = await pool.query(`select deleted_at from core.artifacts where id = $1::uuid`, [id]);
+    return rows[0].deleted_at !== null;
+  };
 
   it('leases in the order it was said, and a lease is not a delivery', async () => {
     const id = await conversation();
@@ -157,5 +171,56 @@ suite('what the owner said while the agent was working', () => {
 
     // And it can still be promoted afterwards, exactly once.
     expect((await promotePendingInput(pool, id))?.text).toBe('wait');
+  });
+
+  it('keeps a queued file alive while it waits, through a late delivery and a restart', async () => {
+    const id = await conversation();
+    const file = await upload('statement.csv');
+    await queuePendingInput(pool, { conversationId: id, text: '', attachmentIds: [file] });
+    const later = new Date('2026-01-03T00:00:00Z');
+
+    // Waiting: neither the page's discard nor the day-old sweep may touch it.
+    expect(await isArtifactReferenced(pool as any, file)).toBe(true);
+    expect(await discardUnreferencedUpload(pool as any, file, 'web')).toBe('referenced');
+    expect(await sweepOrphanUploads(pool as any, { surface: 'web', olderThan: later })).toBe(0);
+
+    // Leased to a run that then died (the restart case): still live.
+    await leasePendingInput(pool, id, null);
+    expect(await sweepOrphanUploads(pool as any, { surface: 'web', olderThan: later })).toBe(0);
+    expect(await deleted(file)).toBe(false);
+
+    // Recovery promotes it, file included, and the turn now carries it.
+    const promoted = await promotePendingInput(pool, id);
+    expect(promoted?.attachmentIds).toEqual([file]);
+    expect(await sweepOrphanUploads(pool as any, { surface: 'web', olderThan: later })).toBe(0);
+    expect(await deleted(file)).toBe(false);
+
+    // An upload nobody queued or sent still goes.
+    const stray = await upload('stray.csv');
+    expect(await sweepOrphanUploads(pool as any, { surface: 'web', olderThan: later })).toBe(1);
+    expect(await deleted(stray)).toBe(true);
+  });
+
+  it('leaves out a file deleted while it waited, and writes no empty turn when nothing remains', async () => {
+    const id = await conversation();
+    const kept = await upload('kept.csv');
+    const gone = await upload('gone.csv');
+    await queuePendingInput(pool, { conversationId: id, text: 'these', attachmentIds: [kept, gone] });
+    await pool.query(`update core.artifacts set deleted_at = now() where id = $1::uuid`, [gone]);
+    const promoted = await promotePendingInput(pool, id);
+    expect(promoted?.attachmentIds).toEqual([kept]);
+
+    const other = await conversation();
+    const lost = await upload('lost.csv');
+    await queuePendingInput(pool, { conversationId: other, text: '  ', attachmentIds: [lost] });
+    await pool.query(`update core.artifacts set deleted_at = now() where id = $1::uuid`, [lost]);
+    expect(await promotePendingInput(pool, other)).toBeNull();
+    // Settled, not left waiting for ever, and no bubble with nothing in it.
+    expect(await waitingPendingInput(pool, other)).toHaveLength(0);
+    const { rows } = await pool.query(
+      `select count(*)::int as n from core.messages where conversation_id = $1::uuid`,
+      [other],
+    );
+    expect(rows[0].n).toBe(0);
   });
 });

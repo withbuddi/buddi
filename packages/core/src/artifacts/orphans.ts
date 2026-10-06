@@ -9,14 +9,16 @@
  *  - the page discards a file it removed (`discardUnreferencedUpload`), and
  *  - a sweep tombstones uploads older than a day that no message ever carried.
  *
- * Both refuse to touch anything a message references — the same bytes dropped
+ * Both refuse to touch anything a message references, or that waits in the
+ * queue of what the owner said mid-run (`core.pending_input`, pending or
+ * leased) — that file was accepted and is on its way into a turn — the same bytes dropped
  * twice are one artifact, and the first send owns it — and both are confined
  * to what a surface handed in. A file an agent made is never an orphan.
  */
 import type { Pool } from 'pg';
 import { deleteArtifact } from './store.js';
 
-/** Whether any transcript turn or surface record still points at this artifact. */
+/** Whether any transcript turn, surface record or queued line still points at this artifact. */
 export async function isArtifactReferenced(pool: Pool, id: string): Promise<boolean> {
   const { rows } = await pool.query(
     `select exists (
@@ -24,6 +26,9 @@ export async function isArtifactReferenced(pool: Pool, id: string): Promise<bool
         where content @> jsonb_build_array(jsonb_build_object('type', 'artifact_ref', 'artifactId', $1::text))
      ) or exists (
        select 1 from core.surface_attachments where artifact_id = $1::text
+     ) or exists (
+       select 1 from core.pending_input
+        where state in ('pending', 'leased') and $1::uuid = any(attachment_ids)
      ) as referenced`,
     [id],
   );
@@ -54,8 +59,8 @@ export async function discardUnreferencedUpload(
 }
 
 /**
- * Tombstone every upload from `surface` older than `olderThan` that no message
- * or surface record references. Returns how many went.
+ * Tombstone every upload from `surface` older than `olderThan` that no message,
+ * surface record or waiting queued line references. Returns how many went.
  */
 export async function sweepOrphanUploads(
   pool: Pool,
@@ -73,6 +78,10 @@ export async function sweepOrphanUploads(
         )
         and not exists (
           select 1 from core.surface_attachments s where s.artifact_id = a.id::text
+        )
+        and not exists (
+          select 1 from core.pending_input p
+           where p.state in ('pending', 'leased') and a.id = any(p.attachment_ids)
         )
       returning a.id`,
     [input.surface, input.olderThan, input.at ?? new Date()],
