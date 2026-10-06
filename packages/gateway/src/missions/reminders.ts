@@ -47,6 +47,8 @@ import {
   setMissionEnabled,
   AGENT_MISSION_DEFAULT_DAYS,
   upsertScheduledMission,
+  missionBrowserOf,
+  type MissionBrowser,
   type PluginManifest,
   type Reminder,
   type ReminderLimits,
@@ -54,6 +56,7 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { z } from 'zod';
+import { chromeLine, createUseChromeTool, signInSiteIn } from './chrome-scope.js';
 
 /* ------------------------------------------------------------------ *
  * Reminders
@@ -513,6 +516,19 @@ const proposeInput = z.object({
       `The last day it runs, YYYY-MM-DD in the owner's zone. Left out, it ends after ${AGENT_MISSION_DEFAULT_DAYS} days; ` +
         'after that it switches itself off quietly and stays listed.',
     ),
+  browser: z
+    .enum(['none', 'own', 'owner'])
+    .optional()
+    .describe(
+      "Whether each run opens web pages while the owner is away: 'own' in buddi's own browser, 'owner' in the owner's signed-in Chrome " +
+        "(a bank or any site that needs their sign-in; the card says so in one line and approving it grants it). " +
+        "Left out, buddi decides from the instruction: a site that needs the owner's sign-in means 'owner', otherwise no pages.",
+    ),
+  browserFor: z
+    .string()
+    .max(253)
+    .optional()
+    .describe("With browser 'owner': the site it needs the owner's Chrome for, a host like pnc.com."),
 });
 
 export interface ScheduleEnvelope {
@@ -529,12 +545,18 @@ export interface ScheduleEnvelope {
   stopWhen?: string;
   /** When it switches itself off (ISO): the day it named, or 30 days on. */
   endsAt: string;
+  /** Where its runs may browse unattended; absent: no pages. Approving the card grants exactly this. */
+  browser?: MissionBrowser;
+  /** With `owner`: the site it needs the owner's Chrome for, when known. */
+  browserSite?: string;
 }
 
 export function renderSchedulePreview(envelope: ScheduleEnvelope): string {
   return [
     `Let ${envelope.agentId} run itself on a schedule: ${envelope.name}`,
     '',
+    // The owner's Chrome is never granted silently: one line, right under the ask.
+    ...(envelope.browser === 'owner' ? [chromeLine(describeCadence(envelope.cron, envelope.timezone), envelope.browserSite), ''] : []),
     `Cadence: ${describeCadence(envelope.cron, envelope.timezone)}`,
     `Cron:    ${envelope.cron} (${envelope.timezone}, misfire ${envelope.misfirePolicy})`,
     '',
@@ -548,6 +570,7 @@ export function renderSchedulePreview(envelope: ScheduleEnvelope): string {
     'Each run does exactly this:',
     envelope.prompt,
     '',
+    ...(envelope.browser === 'own' ? ["It may look at pages in buddi's own browser while you are away (never your Chrome or apps)."] : []),
     ...(envelope.stopWhen ? [`It stops itself when: ${envelope.stopWhen}`] : []),
     `It ends on its own after ${localDateTimeString(new Date(envelope.endsAt), envelope.timezone)}.`,
     '',
@@ -586,7 +609,32 @@ function zoneOffsetMs(at: Date, timezone: string): number {
 }
 
 /** The schedule tools: propose (gated), list mine, cancel mine. */
-export function createScheduleManifest(): PluginManifest {
+export interface ScheduleManifestOptions {
+  /** The sites that need the owner's sign-in (the browser's list), to tell when a proposal needs his Chrome. */
+  signInSites?: () => Promise<readonly string[]>;
+}
+
+/**
+ * Where a proposed schedule's runs may browse. The agent's word wins; left
+ * out, a plan that names a site needing the owner's sign-in, from an agent
+ * that may browse at all, needs his Chrome. Nothing else browses.
+ */
+async function proposedBrowser(
+  input: z.infer<typeof proposeInput>,
+  ctx: CoreToolContext,
+  options: ScheduleManifestOptions,
+): Promise<{ browser?: MissionBrowser; browserSite?: string }> {
+  const named = input.browserFor?.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '') || undefined;
+  if (input.browser === 'none') return {};
+  if (input.browser === 'own') return { browser: 'own' };
+  if (input.browser === 'owner') return { browser: 'owner', ...(named ? { browserSite: named } : {}) };
+  if (!ctx.sessionTools?.includes('browser.act') || !options.signInSites) return {};
+  const sites = await options.signInSites().catch(() => [] as readonly string[]);
+  const site = signInSiteIn(`${input.name}\n${input.prompt}`, sites);
+  return site ? { browser: 'owner', browserSite: site } : {};
+}
+
+export function createScheduleManifest(options: ScheduleManifestOptions = {}): PluginManifest {
   const propose: ToolDefinition<z.infer<typeof proposeInput>, unknown> = {
     name: 'schedule.propose',
     description:
@@ -597,7 +645,7 @@ export function createScheduleManifest(): PluginManifest {
       NOT_FOR_WATCHERS,
     tier: 'gated',
     input: proposeInput,
-    describe(input, ctx: CoreToolContext) {
+    async describe(input, ctx: CoreToolContext) {
       const agentId = ctx.agentId ?? 'unknown';
       const timezone = (input.timezone ?? '').trim() || ctx.timezone;
       parseCron(input.cron); // an unparseable cron refuses here, before any approval exists
@@ -613,6 +661,7 @@ export function createScheduleManifest(): PluginManifest {
         nextThreeRuns: nextRuns(input.cron, timezone, ctx.now(), 3),
         ...(input.stopWhen?.trim() ? { stopWhen: input.stopWhen.trim() } : {}),
         endsAt: missionEnd(input.endsOn, timezone, ctx.now()).toISOString(),
+        ...(await proposedBrowser(input, ctx, options)),
       };
       if (tooFrequent(envelope.cron, timezone, ctx.now())) {
         throw new Error(
@@ -653,6 +702,8 @@ export function createScheduleManifest(): PluginManifest {
           // The notify policy applies: a schedule the agent asked for does not get
           // to speak unconditionally.
           alwaysDeliver: false,
+          // Where it browses is what the owner approved on the card, never worked out again now.
+          browser: missionBrowserOf(approved?.browser),
         },
         schedule: {
           cron: input.cron.trim(),
@@ -749,6 +800,6 @@ export function createScheduleManifest(): PluginManifest {
     // schema of its own, like the delegation manifest.
     schema: 'core',
     migrationsDir: '',
-    tools: [propose, listMine, cancelMine],
+    tools: [propose, listMine, cancelMine, createUseChromeTool()],
   };
 }

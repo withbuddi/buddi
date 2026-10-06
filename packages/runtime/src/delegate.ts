@@ -510,6 +510,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
             delegatedSession: delegableFrom(ctx, deps),
             // An unattended mission's grant never reaches a delegate.
             unattendedSession: [],
+            unattendedChrome: false,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           },
           pool,

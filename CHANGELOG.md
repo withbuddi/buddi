@@ -4,6 +4,15 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Changed
+
+- A scheduled mission that needs your signed-in Chrome no longer tells you to "ask me in a normal chat" to change it. The run stops without opening anything and you get one card, "Let the PNC pull use your Chrome?", saying nothing was read or changed and when it last brought you something, with Allow and Not now, on Home, in chat and on Telegram. Allow lets that mission use your Chrome from now on and runs it once straight away; Not now leaves it as it was. While the card is open, another refused run does not ask again.
+
+### Added
+
+- When an agent proposes a schedule (or an agent package adds a mission) that will use your Chrome, the card says so in one line right under the ask, like "Runs every day at 07:00, using your Chrome for PNC", and approving it grants exactly that. Agents can say so themselves (`browser: 'owner'` in `schedule.propose`); otherwise buddi works it out when the plan names a site on your "needs my sign-in" list. Nothing gets your Chrome silently.
+- Missions: a mission that looks at pages shows "Uses your Chrome" or "Own browser", with a switch to change it either way.
+
 ## 0.1.0-pre.47 — 2026-10-06
 
 ### Fixed

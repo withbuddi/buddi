@@ -718,6 +718,19 @@ three instants in the owner's zone, and the exact instruction. Only
 and `alwaysDeliver: false`. `schedule.cancel_mine` is `auto`: an agent may
 always take its own foot off the pedal.
 
+**Where a proposed schedule browses** is on its card too. `browser: 'own'`
+lets its runs look at pages in buddi's own browser; `browser: 'owner'` (with
+`browserFor`, a host) lets them use the owner's signed-in Chrome, and the card
+then carries one line right under the ask, *Runs every day at 07:00, using
+your Chrome for PNC*. Left out, a plan that names a site on the browser's
+sign-in list, from an agent holding `browser.act`, is `owner`; anything else
+opens no page. `executeApproved` writes the browsing from the approved
+envelope, never worked out again. A run that later needs the owner's Chrome
+without the grant stops and raises one approval, *Let the PNC pull use your
+Chrome?* (Allow / Not now; `schedule.use_chrome`, which also runs the mission
+once now), and Missions has the switch (docs/browser.md, "Your Chrome for a
+mission").
+
 **Missions that stop themselves.** A watch the agent proposed carries its own
 end: `stopWhen` (its words for "done", shown in the preview and to every run)
 and `endsOn` (the last day, in the owner's zone; left out, 30 days on). Past

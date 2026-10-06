@@ -300,7 +300,7 @@ import { createCatalogueService } from './catalogue-source.js';
 import { catalogueBindingOf } from '../agents/platform.js';
 import { pluginFoldersRoute } from './folders.js';
 import { tipsRoute } from '../tips/route.js';
-import { approvalAsk } from './approval-ask.js';
+import { approvalAnswers, approvalAsk } from './approval-ask.js';
 import { createWidgets, widgetsRoute } from './widgets.js';
 import { createRequirements, type Requirements } from '../plugins/requires.js';
 import { placesList, placesRoute } from './places.js';
@@ -348,6 +348,7 @@ import {
   dismissJobsFromWeb,
   undismissJobsFromWeb,
   setMissionEnabledFromWeb,
+  setMissionChromeFromWeb,
   keepMissionFromWeb,
   answerStillUsefulFromWeb,
   setPausedFromWeb,
@@ -853,6 +854,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   const approvalExtras = (a: { tool: string; envelope?: unknown; preview: string }): Record<string, unknown> => ({
     ...permissionScopes(a.tool, a.envelope),
     ask: approvalAsk(a.tool, a.preview, deps.registry.list().find((t) => t.name === a.tool)?.description),
+    ...(approvalAnswers(a.tool) ? { answers: approvalAnswers(a.tool) } : {}),
   });
   writeDeps.resumeInteractive = (action, outcome) => chat?.resumeHost(action, outcome);
   /*
@@ -3618,6 +3620,13 @@ export function createWebApp(deps: WebServerDeps): Server {
           enabled,
         ),
       );
+    }
+
+    const missionBrowser = /^\/api\/missions\/([^/]+)\/browser$/.exec(path);
+    if (missionBrowser) {
+      const chrome = body.chrome;
+      if (typeof chrome !== 'boolean') return sendJson(res, 400, { error: '`chrome` must be true or false' });
+      return finish(res, await setMissionChromeFromWeb(writeDeps, decodeURIComponent(missionBrowser[1] as string), chrome));
     }
 
     const missionKeep = /^\/api\/missions\/([^/]+)\/keep$/.exec(path);

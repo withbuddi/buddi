@@ -19,6 +19,7 @@ import {
   ensureOwner,
   enqueue,
   executeApproved,
+  getAction,
   getActiveSchedule,
   getMission,
   endExpiredMissions,
@@ -61,6 +62,7 @@ const jobContext = (): JobContext => ({
 import {
   agentMissionId,
   createReminderTick,
+  createScheduleManifest,
   reminderDedupKey,
 } from './reminders.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -324,6 +326,49 @@ suite('reminders and proposed schedules (postgres)', () => {
     expect((await executeApproved(pool, { actionId: proposed.actionId, registry, ctx, worker: 'test', now: NOW })).ok).toBe(true);
     const spec = await getActiveSchedule(pool, agentMissionId('finance-advisor', 'tokyo-open'));
     expect(spec).toMatchObject({ timezone: 'Asia/Tokyo', timezoneExplicit: true });
+  });
+
+  it("says in one line when the schedule will use the owner's Chrome, and approving it grants exactly that", async () => {
+    const registry = createToolRegistry();
+    const proposed = await registry.invoke(
+      'schedule.propose',
+      { name: 'PNC pull', cron: '0 7 * * *', prompt: 'Pull the PNC balances and record them.', browser: 'owner', browserFor: 'https://www.pnc.com/accounts' },
+      { ...ctx, agentId: 'cfo' },
+    );
+    if (proposed.ok || proposed.reason !== 'approval-required') throw new Error('expected an approval');
+    const [action] = await listPendingActions(pool, { now: NOW });
+    const lines = action!.preview.split('\n');
+    // Right under the ask, never only in the envelope.
+    expect(lines[0]).toBe('Let cfo run itself on a schedule: PNC pull');
+    expect(lines[2]).toBe('Runs every day at 07:00 America/New_York, using your Chrome for PNC.');
+    expect(action!.envelope).toMatchObject({ browser: 'owner', browserSite: 'pnc.com' });
+    await decideApproval(pool, { actionId: proposed.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
+    expect((await executeApproved(pool, { actionId: proposed.actionId, registry, ctx, worker: 'test', now: NOW })).ok).toBe(true);
+    expect((await getMission(pool, agentMissionId('cfo', 'pnc-pull')))?.browser).toBe('owner');
+  });
+
+  it("works out from the plan when a schedule needs the owner's Chrome; otherwise it opens no page", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createScheduleManifest({ signInSites: async () => ['pnc.com'] }));
+    const browsing: CoreToolContext = { ...ctx, agentId: 'cfo', sessionTools: ['browser.act'] };
+    const derived = await registry.invoke('schedule.propose', { name: 'Morning balances', cron: '0 7 * * *', prompt: 'Pull the PNC balances.' }, browsing);
+    if (derived.ok || derived.reason !== 'approval-required') throw new Error('expected an approval');
+    expect((await getAction(pool, derived.actionId))?.envelope).toMatchObject({ browser: 'owner', browserSite: 'pnc.com' });
+    expect((await getAction(pool, derived.actionId))?.preview).toContain('using your Chrome for PNC');
+    // An agent that may not browse, or a plan naming no such site: no pages, no line.
+    const noBrowser = await registry.invoke('schedule.propose', { name: 'Balances', cron: '0 8 * * *', prompt: 'Pull the PNC balances.' }, { ...ctx, agentId: 'cfo' });
+    const elsewhere = await registry.invoke('schedule.propose', { name: 'Weather', cron: '0 9 * * *', prompt: 'Check the weather.' }, browsing);
+    for (const result of [noBrowser, elsewhere]) {
+      if (result.ok || result.reason !== 'approval-required') throw new Error('expected an approval');
+      const action = await getAction(pool, result.actionId);
+      expect(action?.envelope).not.toHaveProperty('browser');
+      expect(action?.preview).not.toContain('your Chrome');
+    }
+    // Approved, the one that names nothing writes no browsing.
+    if (elsewhere.ok || elsewhere.reason !== 'approval-required') return;
+    await decideApproval(pool, { actionId: elsewhere.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
+    expect((await executeApproved(pool, { actionId: elsewhere.actionId, registry, ctx, worker: 'test', now: NOW })).ok).toBe(true);
+    expect((await getMission(pool, agentMissionId('cfo', 'weather')))?.browser).toBeNull();
   });
 
   it('a built-in mission follows the owner zone unless its suggestion names one', async () => {

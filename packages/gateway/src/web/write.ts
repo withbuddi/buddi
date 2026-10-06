@@ -41,6 +41,8 @@ import {
   listFailureGroups,
   takeOffer,
   setMissionEnabled,
+  setMissionBrowser,
+  type MissionBrowser,
   answerStillUseful,
   type StillUsefulOutcome,
   setPaused,
@@ -227,6 +229,25 @@ export async function setMissionEnabledFromWeb(
   const mission = await setMissionEnabled(deps.pool, missionId, enabled);
   if (!mission) return fail(404, `no such mission: ${missionId}`);
   return { ok: true, status: 200, body: { id: mission.id, enabled: mission.enabled } };
+}
+
+/**
+ * The owner's switch on Missions for a mission that browses: on lets it use
+ * his signed-in Chrome while he is away (`owner`), off keeps it in buddi's
+ * own browser (`own`). A mission that opens no page has no switch: whether
+ * it browses at all is its package's or its proposal's, approved there.
+ */
+export async function setMissionChromeFromWeb(
+  deps: WriteDeps,
+  missionId: string,
+  chrome: boolean,
+): Promise<WriteResult<{ id: string; browser: MissionBrowser }>> {
+  const mission = await getMission(deps.pool, missionId);
+  if (!mission) return fail(404, `no such mission: ${missionId}`);
+  if (!mission.browser) return fail(409, `${mission.name} opens no page, so there is no browser to choose`);
+  const updated = await setMissionBrowser(deps.pool, missionId, chrome ? 'owner' : 'own');
+  if (!updated) return fail(404, `no such mission: ${missionId}`);
+  return { ok: true, status: 200, body: { id: updated.id, browser: updated.browser ?? 'own' } };
 }
 
 /**

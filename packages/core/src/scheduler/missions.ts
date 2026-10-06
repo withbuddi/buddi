@@ -4,9 +4,11 @@ import { parseCron } from './cron.js';
 import { coalesceOptions, type CoalesceOptions } from './enqueue.js';
 import {
   MISFIRE_POLICIES,
+  missionBrowserOf,
   toMission,
   toScheduleSpec,
   type Mission,
+  type MissionBrowser,
   type MissionRow,
   type MisfirePolicy,
   type ScheduleSpec,
@@ -27,8 +29,8 @@ export type UpsertMissionInput = {
   context?: { plugin: string; export: string; args?: Record<string, unknown> } | null;
   /** The longest report it takes (200–6,000). Default `REPORT_MAX_DEFAULT`. */
   reportMax?: number | null;
-  /** `own`: browses unattended in buddi's own browser (docs/browser.md, "Missions"). Default none. */
-  browser?: 'own' | null;
+  /** `own`: browses unattended in buddi's own browser; `owner`: the owner's Chrome too (docs/browser.md, "Missions"). Default none. */
+  browser?: MissionBrowser | null;
 };
 
 export type SetScheduleInput = {
@@ -83,7 +85,7 @@ export async function upsertMission(pool: Pool, input: UpsertMissionInput): Prom
       coalesce?.maxWaitSeconds ?? null,
       input.context ? JSON.stringify(input.context) : null,
       input.reportMax ?? null,
-      input.browser === 'own' ? 'own' : null,
+      missionBrowserOf(input.browser),
     ],
   );
   return toMission(rows[0] as MissionRow);
@@ -101,7 +103,20 @@ export async function setMissionExtras(
 ): Promise<Mission | null> {
   const { rows } = await pool.query<MissionRow>(
     `update core.missions set context = $2::jsonb, report_max = $3, browser = $4 where id = $1 returning ${MISSION_COLUMNS}`,
-    [missionId, extras.context ? JSON.stringify(extras.context) : null, extras.reportMax ?? null, extras.browser === 'own' ? 'own' : null],
+    [missionId, extras.context ? JSON.stringify(extras.context) : null, extras.reportMax ?? null, missionBrowserOf(extras.browser)],
+  );
+  return rows.length > 0 ? toMission(rows[0] as MissionRow) : null;
+}
+
+/**
+ * Where a mission may browse, and nothing else: the owner's switch on
+ * Missions and the "Let … use your Chrome?" approval. Null when there is no
+ * such mission.
+ */
+export async function setMissionBrowser(pool: Pool, missionId: string, browser: MissionBrowser | null): Promise<Mission | null> {
+  const { rows } = await pool.query<MissionRow>(
+    `update core.missions set browser = $2 where id = $1 returning ${MISSION_COLUMNS}`,
+    [missionId, missionBrowserOf(browser)],
   );
   return rows.length > 0 ? toMission(rows[0] as MissionRow) : null;
 }

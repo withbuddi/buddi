@@ -110,6 +110,17 @@ describe('approval callbacks (pure)', () => {
     );
   });
 
+  it("draws a question core asks in its own words with its own answers: Not now, then Allow", () => {
+    const keyboard = approvalKeyboard(ACTION_ID, false, undefined, { approve: 'Allow', reject: 'Not now' });
+    expect(keyboard.inline_keyboard).toEqual([[
+      { text: 'Not now', callback_data: `apr:${ACTION_ID}:reject` },
+      { text: '✅ Allow', callback_data: `apr:${ACTION_ID}:approve` },
+    ]]);
+    const chrome = { ...sampleAction, tool: 'schedule.use_chrome', preview: 'Let the PNC pull use your Chrome?\n\nIts scheduled run needed your signed-in Chrome for PNC and stopped there: nothing was read or changed.' };
+    expect(approvalRequestText(chrome, 'UTC')).toContain('Let the PNC pull use your Chrome?');
+    expect(decidedText(chrome, 'rejected').split('\n')[0]).toBe('Not now — left as it was');
+  });
+
   it('builds one row of two buttons, each bound to this action', () => {
     const keyboard = approvalKeyboard(ACTION_ID);
     expect(keyboard.inline_keyboard).toHaveLength(1);

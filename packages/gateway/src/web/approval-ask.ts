@@ -11,6 +11,25 @@
  * plain line naming the plugin.
  */
 
+import { USE_CHROME_ANSWERS, USE_CHROME_TOOL } from '../missions/chrome-scope.js';
+
+/** A card's two answers when they are not Approve and Reject. */
+export interface ApprovalAnswers { approve: string; reject: string }
+
+/**
+ * Core's own asks that read better as a question than an approval: "Let the
+ * PNC pull use your Chrome?" is answered Allow or Not now. Keyed by core's
+ * tool names only, never read from an envelope, so no plugin can relabel a
+ * button. Absent: Approve and Reject.
+ */
+const ANSWERS: Readonly<Record<string, ApprovalAnswers>> = {
+  [USE_CHROME_TOOL]: USE_CHROME_ANSWERS,
+};
+
+export function approvalAnswers(tool: string): ApprovalAnswers | undefined {
+  return ANSWERS[tool];
+}
+
 /** The longest ask drawn as is; a longer line is cut at a word. */
 export const ASK_MAX = 120;
 

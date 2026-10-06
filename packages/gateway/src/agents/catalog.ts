@@ -33,7 +33,7 @@ import { buildPreamble, manifest as memoryManifest,
 } from '@buddi/tool-memory';
 import { manifest as webManifest } from '@buddi/tool-web';
 import { createBrowserManifest } from '@buddi/tool-browser';
-import { browserHost } from '../browser-host.js';
+import { browserHost, signInSitesOnDisk } from '../browser-host.js';
 import { createHostManifest, hostService } from '@buddi/tool-host';
 import { createConnectionsManifest } from '@buddi/tool-mcp';
 import { externalManifests } from '../plugins/load.js';
@@ -169,7 +169,7 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   // mission tools: an agent can put something on the clock from any run, and a
   // reminder set in a chat is the same object as one set by the daily check.
   registry.register(createReminderManifest(reminderLimitsFromEnv(env)));
-  registry.register(createScheduleManifest());
+  registry.register(createScheduleManifest({ signInSites: () => signInSitesOnDisk(env) }));
   // Goals, for the same reason and in the same place: a goal is core's row and
   // this is only the surface onto it. It takes the registry because a goal
   // watches a *metric*, and metrics are a plugin contribution — so what can be

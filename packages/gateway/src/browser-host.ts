@@ -70,3 +70,21 @@ export function browserDelegable(
     }
   };
 }
+
+/**
+ * The sites that need the owner's sign-in, as the browser keeps them on disk:
+ * the owner's own list (Settings → Browser & apps) and the ones it learned
+ * from a login wall. Read for a proposal, to say when a mission will need his
+ * Chrome (missions/chrome-scope.ts). Nothing on disk is an empty list.
+ */
+export async function signInSitesOnDisk(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+  const dir = path.join(dataDir(env), 'browser');
+  const read = async (name: string): Promise<unknown> => {
+    try { return JSON.parse(await readFile(path.join(dir, name), 'utf8')) as unknown; } catch { return undefined; }
+  };
+  const settings = (await read('settings.json')) as { signInSites?: unknown } | undefined;
+  const learned = await read('sign-in-sites.json');
+  const listed: unknown[] = Array.isArray(settings?.signInSites) ? settings.signInSites : [];
+  const all = [...listed, ...(Array.isArray(learned) ? (learned as unknown[]) : [])];
+  return [...new Set(all.filter((s): s is string => typeof s === 'string' && s.trim() !== '').map((s) => s.trim().toLowerCase()))];
+}

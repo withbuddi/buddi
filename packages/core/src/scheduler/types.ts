@@ -63,12 +63,21 @@ export type Mission = {
   reportMax?: number | null;
   /**
    * `own`: the package opted this mission in to browsing unattended, in
-   * buddi's own browser only (docs/browser.md, "Missions"). Null: it opens
-   * no page.
+   * buddi's own browser only (docs/browser.md, "Missions"). `owner`: the
+   * owner also let it use their signed-in Chrome (an approval, never a
+   * package alone). Null: it opens no page.
    */
-  browser?: 'own' | null;
+  browser?: MissionBrowser | null;
   createdAt: Date;
 };
+
+/** Where a mission may browse unattended: buddi's own browser, or the owner's signed-in Chrome as well. */
+export type MissionBrowser = 'own' | 'owner';
+
+/** A stored or declared browser scope, read strictly: anything else is none. */
+export function missionBrowserOf(value: unknown): MissionBrowser | null {
+  return value === 'own' || value === 'owner' ? value : null;
+}
 
 export type ScheduleSpec = {
   id: string;
@@ -171,7 +180,7 @@ export function toMission(row: MissionRow): Mission {
       : null,
     context: contextOf(row.context),
     reportMax: typeof row.report_max === 'number' ? row.report_max : null,
-    browser: row.browser === 'own' ? 'own' : null,
+    browser: missionBrowserOf(row.browser),
     createdAt: row.created_at,
   };
 }

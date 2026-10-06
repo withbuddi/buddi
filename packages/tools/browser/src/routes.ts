@@ -33,6 +33,12 @@ export interface RouteInput {
   signInSite: boolean;
   /** No owner is behind this run (a mission): the own browser only, never the owner's Chrome. */
   unattended?: boolean;
+  /**
+   * With `unattended`: the owner let this mission use their signed-in Chrome
+   * (`browser: owner`). Chrome is then chosen as for the owner's own run;
+   * apps never are.
+   */
+  unattendedChrome?: boolean;
 }
 
 const usable = (input: RouteInput, route: RouteKind): boolean => input.allowed[route] && input.available[route];
@@ -42,11 +48,11 @@ export function chooseRoute(input: RouteInput): RouteChoice {
     if (input.unattended) return { route: undefined, reason: 'unattended' };
     return usable(input, 'apps') ? { route: 'apps', reason: 'app' } : { route: undefined, reason: 'apps-unavailable' };
   }
-  if (input.unattended) return { route: 'own', reason: 'unattended' };
+  if (input.unattended && !input.unattendedChrome) return { route: 'own', reason: 'unattended' };
   const pin = [input.pins.conversation, input.pins.agent, input.pins.global].find((value) => value !== undefined && value !== 'auto');
   if (pin === 'own' || input.prefer === 'own') return { route: 'own', reason: pin === 'own' ? 'pin' : 'prefer' };
   if (pin === 'apps') {
-    if (usable(input, 'apps')) return { route: 'apps', reason: 'pin' };
+    if (usable(input, 'apps') && !input.unattended) return { route: 'apps', reason: 'pin' };
     return { route: 'own', reason: 'apps-unavailable', fallbackFrom: 'apps' };
   }
   const wantsChrome = pin === 'chrome' || input.prefer === 'yours' || input.signInSite;

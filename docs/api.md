@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-05
+updated: 2026-10-06
 ---
 
 # The HTTP API
@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-332 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+333 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2197,6 +2197,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | --- | --- | --- | --- |
 | GET | `/api/missions` | Every mission, its schedule, next run and recent occurrences. | yes |
 | POST | `/api/missions/:id/enabled` | Switch a mission on or off. | yes |
+| POST | `/api/missions/:id/browser` | For a mission that browses: let it use your signed-in Chrome while you are away (`chrome: true`), or keep it in buddi’s own browser. | no |
 | POST | `/api/missions/:id/keep` | Keep an agent’s quiet watch after “Still useful?”: its count of silent runs starts again. | yes |
 | POST | `/api/missions/:id/still-useful` | Answer “Still useful?” with Keep or Stop. The first answer from any surface decides; a later one changes nothing and says what was decided. | yes |
 | POST | `/api/missions/:id/schedule` | Change a mission’s schedule (a new revision). | yes |
@@ -2242,6 +2243,20 @@ Switch a mission on or off.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"enabled":true}' "$BUDDI_URL/api/missions/<id>/enabled"
+```
+
+#### `POST /api/missions/:id/browser`
+
+For a mission that browses: let it use your signed-in Chrome while you are away (`chrome: true`), or keep it in buddi’s own browser.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes what an agent may do without asking.
+- **Body:** `{ chrome: boolean }`
+- **Answer:** `{ id, browser: 'own' | 'owner' }`
+- **Errors:** 400; 404; 409 (it opens no page)
+- **Since:** 0.1.0-pre.48
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"chrome":true}' "$BUDDI_URL/api/missions/<id>/browser"
 ```
 
 #### `POST /api/missions/:id/keep`
