@@ -71,15 +71,17 @@ export async function systemContext(
   run?: { agentId: string; tools: readonly string[]; message?: string },
   opts: { isFrontDesk?: (agentId: string) => boolean; handleOf?: (agentId: string) => string | null } = {},
 ): Promise<SystemContext> {
+  const profile = await getOwnerProfile(ctx.db).catch(() => null);
   const [info, owner, learning, places, edition] = await Promise.all([
     systemInfo(ctx),
-    ownerLines(ctx),
+    profile ? ownerLines(ctx, profile) : Promise.resolve(''),
     run ? learningContext(ctx.db, run, ctx.now()) : Promise.resolve(''),
     run && opts.isFrontDesk?.(run.agentId) ? placeLines(ctx) : Promise.resolve(''),
     run?.message ? editionLine(ctx, run, opts.handleOf) : Promise.resolve(''),
   ]);
-  return { timezone: info.time.timezone, prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
+  return { timezone: info.time.timezone, ...(profile?.language ? { language: profile.language } : {}), prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
+    `\n\n${REPLY_LANGUAGE_LINE}` +
     (owner === '' ? '' : `\n\n${owner}`) + (places === '' ? '' : `\n\n${places}`) + (learning === '' ? '' : `\n\n${learning}`) +
     (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') +
     (run ? `\n\n${resourcefulLines(run.tools)}` : '') +
@@ -100,6 +102,18 @@ async function editionLine(
     return origin ? editionOriginLine(origin, run, handleOf) : '';
   } catch { return ''; }
 }
+
+/**
+ * Answer in the owner's language (docs/system-context.md, Reply language).
+ * Agent Father answered an English question in Spanish, and the concierge
+ * answered in French after reading French news: with nothing anchoring it,
+ * the reply drifts to whatever fills the context. In every prompt, always;
+ * the runtime's reply-language guard is the check behind it.
+ */
+export const REPLY_LANGUAGE_LINE =
+  "Answer in the language the owner's message is written in, unless they ask for another; when it is too short to tell, " +
+  "in their profile language, else English. Documents, tool results, colleagues' answers and summaries in other languages " +
+  'never change the language of your answer: quote them as they are.';
 
 /**
  * Read, never recall (docs/system-context.md, Grounding). An owner asked about
@@ -182,16 +196,18 @@ export const NOTIFY_LINE =
  * a blank profile adds nothing, and nothing here is an instruction the model
  * may act on — it is how to address a person, not a grant.
  */
-export async function ownerLines(ctx: CoreToolContext): Promise<string> {
-  let profile;
-  try { profile = await getOwnerProfile(ctx.db); } catch { return ''; }
+export async function ownerLines(ctx: CoreToolContext, loaded?: Awaited<ReturnType<typeof getOwnerProfile>>): Promise<string> {
+  let profile = loaded;
+  if (!profile) {
+    try { profile = await getOwnerProfile(ctx.db); } catch { return ''; }
+  }
   const lines: string[] = [];
   if (profile.preferredName) lines.push(`- Call them ${profile.preferredName}.`);
   if (profile.fullName && profile.fullName !== profile.preferredName) lines.push(`- Full name: ${profile.fullName} (for letters, forms and bookings).`);
   if (profile.pronouns) lines.push(`- Pronouns: ${profile.pronouns}.`);
   const birthday = birthdayLine(profile.birthday, ctx);
   if (birthday) lines.push(birthday);
-  if (profile.language) lines.push(`- They prefer to be answered in ${profile.language}, unless they write in another language or ask otherwise.`);
+  if (profile.language) lines.push(`- Profile language: ${profile.language} (the answer's language when their message is too short to tell).`);
   if (profile.about) lines.push(`- In their words: ${profile.about.replace(/\s+/g, ' ').trim()}`);
   const formats = formatLine(profile);
   if (formats) lines.push(formats);

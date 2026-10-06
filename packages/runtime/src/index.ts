@@ -9,6 +9,7 @@ export * from './transport.js';
 export * from './attachments.js';
 export * from './loop.js';
 export * from './grounding.js';
+export * from './language.js';
 export * from './delegate.js';
 export * from './projection.js';
 export * from './context-window.js';

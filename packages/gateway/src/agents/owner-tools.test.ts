@@ -402,32 +402,33 @@ describe('owner.set_profile', () => {
 });
 
 describe('owner.profile_gaps', () => {
-  it('lists the empty useful fields, each with why it matters, and never pronouns or the language', async () => {
+  it('lists the empty useful fields, each with why it matters, the language among them, and never pronouns', async () => {
     const h = harness();
     const result = await h.tool('owner.profile_gaps').execute({}, h.ctx);
     const fields = result.gaps.map((g: any) => g.field);
-    expect(fields).toEqual(['preferredName', 'timezone', 'fullName', 'places.home', 'places.work', 'birthday', 'timeFormat', 'dateFormat', 'about']);
+    expect(fields).toEqual(['preferredName', 'timezone', 'language', 'fullName', 'places.home', 'places.work', 'birthday', 'timeFormat', 'dateFormat', 'about']);
     expect(fields).not.toContain('pronouns');
-    expect(fields).not.toContain('language');
+    expect(result.gaps.find((g: any) => g.field === 'language').why).toContain('too short to tell');
     expect(result.gaps.find((g: any) => g.field === 'fullName').why).toBe('letters, forms and bookings');
     expect(result.gaps.find((g: any) => g.field === 'places.work').why).toContain('"how long to work?"');
     expect(result.nudge).toEqual({ field: 'preferredName', why: 'what every agent calls you' });
-    expect(result).toMatchObject({ filled: 0, of: 9, lastAskedAt: null });
+    expect(result).toMatchObject({ filled: 0, of: 10, lastAskedAt: null });
   });
 
   it('drops a field once it is filled', async () => {
     const h = harness();
-    await h.tool('owner.set_profile').execute({ fullName: 'Ada Lovelace', places: [{ label: 'Work', address: 'Lyon' }] }, h.ctx);
+    await h.tool('owner.set_profile').execute({ fullName: 'Ada Lovelace', language: 'French', places: [{ label: 'Work', address: 'Lyon' }] }, h.ctx);
     const fields = (await h.tool('owner.profile_gaps').execute({}, h.ctx)).gaps.map((g: any) => g.field);
     expect(fields).not.toContain('fullName');
     expect(fields).not.toContain('places.work');
+    expect(fields).not.toContain('language');
     expect(fields).toContain('places.home');
   });
 
   it('never nudges twice for one field, nor about a declined one, and at most once a week', async () => {
     const h = harness();
     h.db.preferences.push(
-      { key: 'knowing_you_asked', value: 'preferredName, timezone', created_at: new Date('2026-09-10T09:00:00Z') },
+      { key: 'knowing_you_asked', value: 'preferredName, timezone, language', created_at: new Date('2026-09-10T09:00:00Z') },
       { key: 'knowing_you_dont_ask', value: 'fullName', created_at: new Date('2026-09-01T09:00:00Z') },
     );
     const result = await h.tool('owner.profile_gaps').execute({}, h.ctx);

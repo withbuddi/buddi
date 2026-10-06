@@ -301,12 +301,14 @@ export function describeProfileEdit(edit: ProfileEdit): string[] {
 
 /**
  * The fields worth asking for, in the order they matter, each with its one
- * line. Pronouns and the language are not here on purpose: they are recorded
- * when the owner offers them, never asked for.
+ * line. Pronouns are not here on purpose: they are recorded when the owner
+ * offers them, never asked for. The language is: with none set, a message too
+ * short to tell is answered in English (docs/system-context.md, Reply language).
  */
 export const PROFILE_GAP_REASONS: ReadonlyArray<{ field: string; why: string }> = [
   { field: 'preferredName', why: 'what every agent calls you' },
   { field: 'timezone', why: 'what "today", reminders and schedules mean' },
+  { field: 'language', why: 'the language buddi answers in when your message is too short to tell' },
   { field: 'fullName', why: 'letters, forms and bookings' },
   { field: 'places.home', why: '"how long to get home?", the weather at home, nearby suggestions' },
   { field: 'places.work', why: '"how long to work?" and the weather at work' },

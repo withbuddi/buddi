@@ -99,6 +99,40 @@ returned them) or the agent carries (its persona, its memory preamble, the
 platform context) are not counted; code
 and email addresses are ignored; figures alone never count.
 
+## Reply language
+
+Every prompt, with or without a run, carries one line (`REPLY_LANGUAGE_LINE`):
+answer in the language the owner's message is written in, unless they ask for
+another; when the message is too short to tell, in the profile language, else
+English; documents, tool results, colleagues' answers and summaries in other
+languages never change the answer's language, they are quoted as they are.
+The profile's language, when set, shows under "About the owner" as the
+fallback for a message too short to tell, and rides on the platform context
+as `language` for the runtime. When it is unset, `owner.profile_gaps` lists
+it, so the front desk asks it once like any other gap.
+
+The runtime checks it (`packages/runtime/src/language.ts`), with no model: a
+stopword count for English, French, Spanish, German, Portuguese and Italian.
+Code, links, blockquotes and quoted passages are not counted; a word several
+languages share counts for each by a fraction; a language is named only with
+three hits at least (two for the owner's message), twice the runner-up's
+score, and a tenth of the words. When the final answer of a turn is
+confidently in a language that matches neither the owner's message (when
+that can be told) nor the profile language, it is held back the way the
+grounding guard holds an answer back (not stored, not sent, streamed words
+withdrawn through `onRetract`) and the model gets one turn, not kept in the
+transcript: "Answer in <language>." (the message's language, else the
+profile's). Whatever it answers then is delivered, without a flag; an empty
+rewrite delivers the held-back answer. Each firing writes a `run.language`
+event (`stage: retried`, or `kept` when the run had no budget left for a
+rewrite; `reply` and `target`).
+
+It never fires on a reply under 12 words or one that is mostly code, when the
+owner's message cannot be told and no profile language buddi can read is set,
+when the owner's message (or one of their last few) asks for a language ("in
+French", "auf Deutsch") or a translation, in a delegate's run (its answer is
+quoted into its caller's), or on a decided approval coming back.
+
 ## Edition origin
 
 When the turn's opening words name a headline from today's edition — case

@@ -35,6 +35,7 @@ import {
   type Queryable,
 } from './loop.js';
 import { GROUNDING_RETRY_TEXT, UNCHECKED_LINE } from './grounding.js';
+import { languageRetryText } from './language.js';
 
 /* ---------------- in-memory fake DB (only `query`) ---------------- */
 
@@ -2806,5 +2807,90 @@ describe('the grounding guard', () => {
     const systemContext = vi.fn(async () => ({ timezone: 'UTC', prompt: 'ctx' }));
     await run([say('ok')], { ctx: { ...ctx, systemContext } });
     expect(systemContext).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'finance', message: 'tell me more about the court ruling in the news today' }));
+  });
+});
+
+describe('the reply-language guard', () => {
+  const SPANISH = 'He revisado tu calendario y no hay nada el jueves, así que la cena con Marc encaja bien a las ocho. ¿Quieres que la añada?';
+  const ENGLISH = 'I checked your calendar and there is nothing on Thursday, so the dinner with Marc fits well at eight. Do you want me to add it?';
+  const FRENCH = "J'ai regardé ton agenda et il n'y a rien jeudi, donc le dîner avec Marc tombe bien à vingt heures. Tu veux que je l'ajoute ?";
+  const ASKED = 'Is there room for a dinner with Marc on Thursday evening?';
+  const say = (text: string): CompletionResponse => ({ content: [{ type: 'text', text }], stopReason: 'end_turn', usage, model: 'claude-sonnet-5' });
+  const call = (n: number): CompletionResponse => ({
+    content: [{ type: 'tool_use', id: `tu_${n}`, name: 'demo.double', input: { n } }], stopReason: 'tool_use', usage, model: 'claude-sonnet-5',
+  });
+  async function run(script: CompletionResponse[], extra: Partial<Parameters<typeof runAgent>[0]> = {}) {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider(script);
+    const onText = vi.fn();
+    const onRetract = vi.fn();
+    const result = await runAgent({
+      agent, provider, registry: registryWithDouble(), ctx, pool: db, conversationId, userMessage: ASKED, onText, onRetract, ...extra,
+    });
+    return { db, provider, result, onText, onRetract };
+  }
+  const fired = (db: FakeDb) => db.events.filter((e) => e.kind === 'run.language');
+
+  it('holds back a Spanish reply to an English message and asks once for English', async () => {
+    const { db, provider, result, onText, onRetract } = await run([call(2), say(SPANISH), say(ENGLISH)]);
+    expect(result.text).toBe(ENGLISH);
+    expect(onText).not.toHaveBeenCalledWith(SPANISH);
+    expect(onRetract).toHaveBeenCalledTimes(1);
+    expect(provider.calls[2]?.messages.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: languageRetryText('English') }] });
+    expect(JSON.stringify(db.messages)).not.toContain('He revisado');
+    expect(JSON.stringify(db.messages)).not.toContain('Answer in English.');
+    expect(fired(db)).toHaveLength(1);
+    expect(fired(db)[0]?.payload).toMatchObject({ stage: 'retried', agentId: 'finance', reply: 'es', target: 'English' });
+  });
+
+  it('delivers the rewrite even when it is still off, without asking again', async () => {
+    const other = 'Lo siento, la cena con Marc encaja bien el jueves a las ocho y no hay nada más en tu calendario ese día.';
+    const { db, provider, result } = await run([say(SPANISH), say(other)]);
+    expect(result.text).toBe(other);
+    expect(provider.calls).toHaveLength(2);
+    expect(fired(db)).toHaveLength(1);
+    expect(result.unchecked).toBeUndefined();
+  });
+
+  it('delivers the held-back answer when the rewrite says nothing', async () => {
+    const { result, onText } = await run([say(SPANISH), say('  ')]);
+    expect(result.text).toBe(SPANISH);
+    expect(onText).toHaveBeenCalledWith(SPANISH);
+  });
+
+  it('stays silent on French to French', async () => {
+    const { db, provider } = await run([say(FRENCH)], { userMessage: 'Est-ce que je peux caser un dîner avec Marc jeudi soir ?' });
+    expect(provider.calls).toHaveLength(1);
+    expect(db.eventKinds()).not.toContain('run.language');
+  });
+
+  it('stays silent on a short reply and on a code reply', async () => {
+    const short = await run([say('Sí, hecho. La cena está en tu calendario.')]);
+    expect(short.provider.calls).toHaveLength(1);
+    const code = await run([say('```js\nconst los = las.map((el) => el.de);\nconsole.log(los, las, el);\n```\nAquí está el código que querías.')]);
+    expect(code.provider.calls).toHaveLength(1);
+    expect(code.db.eventKinds()).not.toContain('run.language');
+  });
+
+  it('stays silent when nothing anchors the answer', async () => {
+    const { db, provider } = await run([say(SPANISH)], { userMessage: 'Marc, Thursday?' });
+    expect(provider.calls).toHaveLength(1);
+    expect(db.eventKinds()).not.toContain('run.language');
+  });
+
+  it('falls back to the profile language from the platform context', async () => {
+    const systemContext = vi.fn(async () => ({ timezone: 'UTC', prompt: 'ctx', language: 'French' }));
+    const { db, provider } = await run([say(SPANISH), say(FRENCH)], { userMessage: 'Marc, Thursday?', ctx: { ...ctx, systemContext } });
+    expect(provider.calls[1]?.messages.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: 'Answer in French.' }] });
+    expect(fired(db)[0]?.payload).toMatchObject({ target: 'French' });
+  });
+
+  it('stays silent in a delegate and on a decided approval coming back', async () => {
+    const nested = await run([say(SPANISH)], { ctx: { ...ctx, delegationDepth: 1 } });
+    expect(nested.provider.calls).toHaveLength(1);
+    const resumed = await run([say(SPANISH)], { userMessage: undefined, resume: { actionId: ACTION_ID, state: 'succeeded', result: {} } });
+    expect(resumed.provider.calls).toHaveLength(1);
+    expect(resumed.db.eventKinds()).not.toContain('run.language');
   });
 });
