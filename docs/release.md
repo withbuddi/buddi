@@ -51,7 +51,9 @@ Two runs of `.github/workflows/release.yml`:
    `CWS_REFRESH_TOKEN`. Without them, or when the store refuses (a version
    still in review, a version that does not increase), the step leaves a
    notice and the release goes on; the zip stays on the GitHub release for a
-   manual upload. The manifest version is `0.1.0.N` for `0.1.0-pre.N`
+   manual upload: Actions → extension-store → Run workflow with the version
+   (`.github/workflows/extension-store.yml` fetches that release's zip and
+   submits it). The manifest version is `0.1.0.N` for `0.1.0-pre.N`
    (`packages/extension/scripts/version.mjs`), so the first stable store
    build must be 0.1.1.
 

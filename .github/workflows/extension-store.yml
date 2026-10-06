@@ -1,0 +1,47 @@
+# Send a released extension zip to the Chrome Web Store by hand: the retry path
+# when a release's own upload was refused (a version still in review), and the
+# way to submit a release that went out before the store step existed. Takes
+# the zip from the GitHub release, so what the store gets is what was released.
+# Same three secrets as release.yml's "Chrome Web Store" step.
+name: extension-store
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'A released buddi version (0.1.0-pre.46); its buddi-extension-<version>.zip is submitted.'
+        required: true
+      publish:
+        description: 'Submit for review and publish when approved (off: upload as a draft only).'
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    env:
+      EXTENSION_ID: pbfpjefkiijjgefblpnlnlpmeaddfbah
+    steps:
+      - name: Fetch the release zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          zip="buddi-extension-${VERSION}.zip"
+          gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --pattern "$zip"
+          test -f "$zip"
+          unzip -p "$zip" manifest.json | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const m=JSON.parse(d);console.log(`manifest ${m.version}${m.version_name?" ("+m.version_name+")":""}`)})'
+          echo "zip=$zip" >> "$GITHUB_ENV"
+      - name: Upload to the Chrome Web Store
+        env:
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          [ -n "$CLIENT_ID" ] && [ -n "$CLIENT_SECRET" ] && [ -n "$REFRESH_TOKEN" ] || { echo "::error::CWS_CLIENT_ID / CWS_CLIENT_SECRET / CWS_REFRESH_TOKEN are not all set."; exit 1; }
+          args=(upload --source "$zip" --extension-id "$EXTENSION_ID")
+          [ "$PUBLISH" = "true" ] && args+=(--auto-publish)
+          npx --yes chrome-webstore-upload-cli@3 "${args[@]}"
