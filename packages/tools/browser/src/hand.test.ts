@@ -9,7 +9,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { ExtensionDriver, type ExtensionBridge, type ExtensionCommand } from './extension.js';
-import { PlaywrightDriver } from './driver.js';
+import { PlaywrightDriver, selectedTextSource } from './driver.js';
 import { RouteProviderDriver } from './routes.js';
 import { BrowserService } from './service.js';
 import type { HandFrame } from './types.js';
@@ -209,6 +209,39 @@ describe('the Playwright driver’s hand', () => {
     expect(keyboard.insertText).toHaveBeenCalledTimes(4);
 
     await driver.hand.stop();
+  });
+
+  it('copies what is selected on the held page: the main frame first, then a frame, never more than a paste', async () => {
+    const { page, frame } = fakePage();
+    const child = { url: () => page.here, evaluate: vi.fn(async () => 'from the iframe') };
+    Object.assign(frame, { evaluate: vi.fn(async () => '') });
+    Object.assign(page, { frames: () => [frame, child] });
+    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));
+    await driver.start();
+    await driver.hand.start(() => {});
+    await expect(driver.hand.copy!()).resolves.toBe('from the iframe');
+    (frame as unknown as { evaluate: ReturnType<typeof vi.fn> }).evaluate.mockResolvedValue('x'.repeat(5_000));
+    await expect(driver.hand.copy!()).resolves.toHaveLength(4_000);
+    // The ask itself types nothing.
+    await driver.hand.input({ kind: 'copy' });
+    await driver.hand.stop();
+    await expect(driver.hand.copy!()).rejects.toThrow('gone');
+  });
+
+  it('reads the selection the way the page shows it: the document’s, or the focused field’s, never a password', () => {
+    const field = { tagName: 'INPUT', type: 'text', value: 'sam@example.com', selectionStart: 0, selectionEnd: 3 };
+    let selection = '';
+    vi.stubGlobal('window', { getSelection: () => ({ toString: () => selection }) });
+    vi.stubGlobal('document', { activeElement: field });
+    try {
+      expect(selectedTextSource(4_000)).toBe('sam');
+      selection = 'Order #112-334';
+      expect(selectedTextSource(4_000)).toBe('Order #112-334');
+      expect(selectedTextSource(5)).toBe('Order');
+      selection = '';
+      field.type = 'password';
+      expect(selectedTextSource(4_000)).toBe('');
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it('ends rather than typing into the tab that replaced the one being shown', async () => {

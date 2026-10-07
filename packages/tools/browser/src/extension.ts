@@ -400,6 +400,7 @@ export class ExtensionDriver implements BrowserDriver {
     input: async (event: HandInput) => {
       // Back, forward and an address are Chrome's own buttons, right there in the owner's window.
       if (event.kind === 'nav') throw new BrowserPreconditionError('Use Chrome’s own buttons for that page.');
+      if (event.kind === 'copy') return;
       await this.#send('input', event as unknown as Record<string, unknown>, true);
     },
     stop: async () => {

@@ -25,7 +25,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HAND_QUALITY, HAND_QUALITY_LOW, type BrowserController, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type LoginPrompt } from '@buddi/tool-browser';
+import { HAND_QUALITY, HAND_QUALITY_LOW, MAX_HAND_COPY, type BrowserController, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type LoginPrompt } from '@buddi/tool-browser';
 import { SessionStore, type Session } from './sessions.js';
 
 /** The dashboard's half of the take-over, on the same upgrade listener. */
@@ -174,6 +174,8 @@ export function readInput(raw: unknown): HandInput | null {
     if (!pastable(pasted)) return null;
     return { kind: 'text', text: pasted };
   }
+  // Cmd/Ctrl+C: nothing travels this way but the ask; the selection comes back as `clipboard`.
+  if (input.kind === 'copy') return Object.keys(input).length === 1 ? { kind: 'copy' } : null;
   if (input.kind === 'nav') {
     // The window's buttons. An address is only shaped here; the driver runs
     // the same check every agent navigation goes through before it goes.
@@ -440,7 +442,10 @@ export class RemoteHandEndpoint {
       if (together !== 'alone') while (count < IN_FLIGHT && count < live.queue.length && pipelined(live.queue[count]!) === together) count++;
       const batch = live.queue.splice(0, count);
       const sent: Array<Promise<void>> = [];
-      for (const input of batch) { sent.push(live.hand.input(input)); this.#track(live.held, input); }
+      for (const input of batch) {
+        sent.push(input.kind === 'copy' ? this.#copy(live) : live.hand.input(input));
+        this.#track(live.held, input);
+      }
       const settled = await Promise.allSettled(sent);
       if (settled.some((result) => result.status === 'rejected')) {
         live.queue.length = 0;
@@ -451,10 +456,24 @@ export class RemoteHandEndpoint {
     }
   }
 
+  /**
+   * The owner's Cmd/Ctrl+C, answered: what is selected on the held page goes
+   * back on this socket as `clipboard`, and the dashboard puts it on the
+   * owner's own clipboard. In order with the rest, so a select-all just before
+   * it is what gets copied. Never logged; a host that cannot read a selection
+   * answers with nothing, and the dashboard leaves the clipboard alone.
+   */
+  async #copy(live: Live): Promise<void> {
+    const text = await (live.hand.copy?.() ?? Promise.resolve('')).catch(() => '');
+    const ws = live.ws;
+    if (this.#live !== live || ws.readyState !== ws.OPEN) return;
+    try { ws.send(JSON.stringify({ type: 'clipboard', text: typeof text === 'string' ? text.slice(0, MAX_HAND_COPY) : '' })); } catch { /* the close handler says so */ }
+  }
+
   /** What is down, so what is down can be let go of. Never the typed text. */
   #track(held: Held, input: HandInput): void {
     // A paste holds nothing down, and nothing about it is worth remembering; nor does a window button.
-    if (input.kind === 'text' || input.kind === 'nav') return;
+    if (input.kind === 'text' || input.kind === 'nav' || input.kind === 'copy') return;
     if (input.kind === 'wheel') { held.x = input.x; held.y = input.y; return; }
     if (input.kind === 'mouse') {
       held.x = input.x; held.y = input.y;

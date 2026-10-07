@@ -5,7 +5,7 @@ import { watchTransfer, type PendingDownload } from './downloads.js';
 import { PlaywrightHost, type DriverOptions, type TabOwner } from './host.js';
 import { checkSecretOrigin, fieldOrigin } from './secrets.js';
 import { LOGIN_BINDING, LOGIN_WORLD, loginWatchSource, readLoginPayload } from './logins.js';
-import { HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type ObservedTarget, type SeenLoginReport } from './types.js';
+import { HAND_QUALITY, MAX_HAND_COPY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type ObservedTarget, type SeenLoginReport } from './types.js';
 import { BrowserPreconditionError } from './types.js';
 export type { DriverOptions } from './host.js';
 
@@ -362,6 +362,7 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
         catch (error) { await this.hand.stop(); throw error; }
       }
       if (event.kind === 'nav') { await this.#handNav(page, event); return; }
+      if (event.kind === 'copy') return;
       if (event.kind === 'wheel') { await page.mouse.move(event.x, event.y); await page.mouse.wheel(event.deltaX, event.deltaY); return; }
       if (event.kind === 'mouse') {
         await page.mouse.move(event.x, event.y);
@@ -382,6 +383,16 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
       // and Playwright omits the text once a real modifier is held.
       if (printableKey(event.key) && (event.modifiers & SHORTCUT_MODIFIERS) === 0) return;
       if (event.type === 'keyDown') await page.keyboard.down(event.key); else await page.keyboard.up(event.key);
+    },
+    copy: async () => {
+      const page = this.#handPage;
+      if (!page || page.isClosed()) throw new BrowserPreconditionError('The screen you were driving is gone. Take over again.');
+      // The main frame first, then any frame the owner may have selected in (a sign-in form in an iframe).
+      for (const frame of [page.mainFrame(), ...page.frames().filter((f) => f !== page.mainFrame())]) {
+        const text = await frame.evaluate(selectedTextSource, MAX_HAND_COPY).catch(() => '');
+        if (typeof text === 'string' && text !== '') return text.slice(0, MAX_HAND_COPY);
+      }
+      return '';
     },
     stop: async () => {
       const cdp = this.#cdp;
@@ -462,4 +473,20 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
     await this.hand.stop();
     await this.host.release(this); this.#tabs.clear();
   }
+}
+
+/**
+ * Runs in the held page: what the owner has selected there. The document's
+ * selection first; a field's selection does not show in it, so then the
+ * focused input or textarea's selected part. A password field copies nothing.
+ */
+export function selectedTextSource(limit: number): string {
+  const selection = typeof window.getSelection === 'function' ? String(window.getSelection() ?? '') : '';
+  if (selection !== '') return selection.slice(0, limit);
+  const active = document.activeElement as (HTMLInputElement | HTMLTextAreaElement | null);
+  if (!active || (active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA')) return '';
+  if (active.tagName === 'INPUT' && (active as HTMLInputElement).type === 'password') return '';
+  const start = active.selectionStart, end = active.selectionEnd;
+  if (typeof start !== 'number' || typeof end !== 'number' || end <= start) return '';
+  return String(active.value).slice(start, end).slice(0, limit);
 }

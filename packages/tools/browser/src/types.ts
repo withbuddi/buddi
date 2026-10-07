@@ -120,7 +120,9 @@ export type HandInput =
   | { kind: 'key'; type: 'keyDown' | 'keyUp' | 'char'; key: string; code: string; text?: string; modifiers: number }
   | { kind: 'text'; text: string }
   | { kind: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }
-  | { kind: 'nav'; action: 'back' | 'forward' | 'reload' | 'navigate'; url?: string };
+  | { kind: 'nav'; action: 'back' | 'forward' | 'reload' | 'navigate'; url?: string }
+  /** Cmd/Ctrl+C: the gateway asks the hand for the selection (`BrowserHand.copy`) and answers the dashboard; never typed. */
+  | { kind: 'copy' };
 
 /**
  * How big and how good a picture is worth sending.
@@ -143,7 +145,16 @@ export interface BrowserHand {
   stop(): Promise<void>;
   /** Re-aim the screencast at a link that turned out to be slower, or faster. */
   tune?(quality: HandQuality): Promise<void>;
+  /**
+   * What is selected on the held page, for the owner's Cmd/Ctrl+C: the page's
+   * selection, or the selected part of the focused field (never a password
+   * field). At most `MAX_HAND_COPY` characters; empty when nothing is selected.
+   */
+  copy?(): Promise<string>;
 }
+
+/** The most a copy carries back to the owner's clipboard, the same bound as a paste going the other way. */
+export const MAX_HAND_COPY = 4_000;
 
 export interface BrowserDriver {
   start(): Promise<void>;

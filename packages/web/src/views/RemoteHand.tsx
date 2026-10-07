@@ -85,6 +85,40 @@ export function pastedText(raw: string): string {
   return text.slice(0, MAX_PASTE);
 }
 
+/** How long a copy waits for the host to say what is selected. */
+export const COPY_TIMEOUT_MS = 3_000;
+
+/** Just enough of `navigator.clipboard`, so a test can hand over its own. */
+export interface ClipboardLike {
+  write?(items: unknown[]): Promise<void>;
+  writeText?(text: string): Promise<void>;
+}
+type ClipboardItemCtor = new (items: Record<string, Promise<Blob> | Blob | string>) => unknown;
+
+/**
+ * Put what the host says is selected on the owner's own clipboard.
+ *
+ * Called inside the keystroke, while the text is still on its way from the
+ * host. Safari lets a page write the clipboard only during the gesture, and a
+ * `ClipboardItem` built on a promise is how it lets the data arrive later;
+ * Chrome takes the same item (and only needs the page focused). Where there is
+ * no `ClipboardItem`, the text is written once it arrives. Nothing selected
+ * (or no answer) rejects the promise, and the clipboard is left as it was.
+ */
+export async function writeClipboard(text: Promise<string>, clipboard: ClipboardLike | undefined = typeof navigator === 'undefined' ? undefined : navigator.clipboard as ClipboardLike | undefined,
+  Item: ClipboardItemCtor | undefined = (globalThis as { ClipboardItem?: ClipboardItemCtor }).ClipboardItem): Promise<boolean> {
+  if (!clipboard) return false;
+  if (Item && clipboard.write) {
+    try {
+      await clipboard.write([new Item({ 'text/plain': text.then((value) => new Blob([value], { type: 'text/plain' })) })]);
+      return true;
+    } catch { /* an older browser without promised items: try the text below, once it is here */ }
+  }
+  const value = await text.catch(() => null);
+  if (value === null || !clipboard.writeText) return false;
+  try { await clipboard.writeText(value); return true; } catch { return false; }
+}
+
 const BUTTONS = ['left', 'middle', 'right'] as const;
 
 /**
@@ -172,6 +206,11 @@ export function paintWhileScrolling(shown: HandFrameMetadata | null, next: HandF
   if (movedX === 0 && movedY === 0) return true;
   const against = (moved: number, way: number): boolean => moved !== 0 && way !== 0 && Math.sign(moved) !== Math.sign(way);
   return !against(movedX, gesture.dx) && !against(movedY, gesture.dy);
+}
+
+/** Cmd+C or Ctrl+C (or V): the clipboard shortcuts, whichever key the platform uses. */
+function clipboardKey(event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }, letter: 'c' | 'v'): boolean {
+  return (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === letter;
 }
 
 /** Has anything a click depends on moved? */
@@ -272,6 +311,10 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
     if (typingProp) keyboard.current?.focus?.(); else keyboard.current?.blur?.();
   }, [typingProp]);
 
+  /** A copy waiting for the host's answer. */
+  const pendingCopy = useRef<{ answer: (text: string) => void } | null>(null);
+  /** Where focus goes back to once a paste has gone through the hidden field. */
+  const pasteFrom = useRef<HTMLElement | null>(null);
   /** Wheel deltas waiting for the next animation frame. */
   const wheels = useRef<WheelCoalescer | null>(null);
   /** The scroll gesture in progress: its direction, and when its last wheel was. */
@@ -338,6 +381,12 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
       }
       const message = JSON.parse(event.data) as { type?: string; error?: string; id?: unknown; site?: unknown; username?: unknown; update?: unknown };
       if (message.type === 'driving') { setPhase('driving'); setRefusal(null); return; }
+      if (message.type === 'clipboard') {
+        const waiting = pendingCopy.current;
+        pendingCopy.current = null;
+        waiting?.answer(typeof (message as { text?: unknown }).text === 'string' ? (message as { text: string }).text : '');
+        return;
+      }
       if (message.type === 'loginSeen') {
         if (typeof message.id === 'string' && typeof message.site === 'string' && typeof message.username === 'string') loginSeen.current?.({ id: message.id, site: message.site, username: message.username, ...(message.update === true ? { update: true } : {}) });
         return;
@@ -491,11 +540,18 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
       (event.target as HTMLElement).blur?.();
       return;
     }
-    event.preventDefault();
     // Paste is the owner's clipboard, which is here and not on the host: the
     // shortcut would paste whatever the *host* machine happens to be holding,
-    // which is not theirs to reach. The `paste` event below does the real one.
-    if ((event.metaKey || event.ctrlKey) && (event.key === 'v' || event.key === 'V')) return;
+    // which is not theirs to reach. So the key is not sent, and — this is the
+    // part that matters — not prevented either: a keydown whose default is
+    // prevented cancels the paste, and no `paste` event fires at all (what
+    // macOS Chrome did). The browser's own paste lands in the hidden field,
+    // which is editable in every browser, and its handler sends the text.
+    if (clipboardKey(event, 'v')) { pasteHere(event.currentTarget as HTMLElement); return; }
+    event.preventDefault();
+    // Copy is the other way round: the selection is on the host, the clipboard
+    // is here. Ask the host for it, and write it here inside this keystroke.
+    if (clipboardKey(event, 'c')) { copySelection(); return; }
     const modifiers = modifiersOf(event);
     if (typedCharacter(event.key) && !shortcut(event)) {
       send({ kind: 'key', type: 'char', key: event.key, code: event.code, text: event.key, modifiers });
@@ -506,8 +562,9 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
 
   const keyUp = (event: React.KeyboardEvent): void => {
     if (event.key === 'Escape' && shortcut(event)) return;
+    if (clipboardKey(event, 'v')) return;
     event.preventDefault();
-    if ((event.metaKey || event.ctrlKey) && (event.key === 'v' || event.key === 'V')) return;
+    if (clipboardKey(event, 'c')) return;
     // The character went as a `char` on the way down; there is no key here to
     // let go of, and a `keyUp` would be a second event for one keystroke.
     if (typedCharacter(event.key) && !shortcut(event)) return;
@@ -524,9 +581,38 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
    */
   const paste = (event: React.ClipboardEvent): void => {
     event.preventDefault();
+    restoreFocus();
     const text = pastedText(event.clipboardData?.getData('text/plain') ?? '');
     if (text === '') return;
     send({ kind: 'text', text });
+  };
+
+  /** The paste shortcut: focus the hidden field so the browser's paste lands there, and come back after. */
+  const pasteHere = (from: HTMLElement): void => {
+    const field = keyboard.current;
+    if (!field || from === field) return;
+    pasteFrom.current = from;
+    field.focus?.({ preventScroll: true });
+    // A paste the browser did not deliver (an empty clipboard, a refusal) still gives focus back.
+    setTimeout(restoreFocus, 250);
+  };
+  const restoreFocus = (): void => {
+    const back = pasteFrom.current;
+    pasteFrom.current = null;
+    back?.focus?.({ preventScroll: true });
+  };
+
+  /** Cmd/Ctrl+C: ask the host for its selection; the answer goes on this machine's clipboard. */
+  const copySelection = (): void => {
+    pendingCopy.current?.answer('');
+    const text = new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => { if (pendingCopy.current?.answer === answer) pendingCopy.current = null; reject(new Error('no answer')); }, COPY_TIMEOUT_MS);
+      const answer = (value: string): void => { clearTimeout(timer); if (value === '') reject(new Error('nothing selected')); else resolve(value); };
+      pendingCopy.current = { answer };
+    });
+    text.catch(() => undefined);
+    send({ kind: 'copy' });
+    void writeClipboard(text);
   };
 
   return (
@@ -591,7 +677,7 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
         onKeyDown={keyDown}
         onKeyUp={keyUp}
         onPaste={paste}
-        onBlur={() => setTyping(false)}
+        onBlur={() => { if (!pasteFrom.current) setTyping(false); }}
       />
     </section>
   );

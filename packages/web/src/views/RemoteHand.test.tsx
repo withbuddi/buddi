@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_PASTE, RemoteHand, WheelCoalescer, modifiersOf, pagePoint, paintWhileScrolling, pastedText, readFrame, wheelPixels, type HandSocket } from './RemoteHand';
+import { MAX_PASTE, RemoteHand, WheelCoalescer, writeClipboard, modifiersOf, pagePoint, paintWhileScrolling, pastedText, readFrame, wheelPixels, type HandSocket } from './RemoteHand';
 
 const metadata = { deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0 };
 
@@ -278,6 +278,62 @@ describe('driving the host browser', () => {
     // And nothing longer than a form field's worth goes at all.
     fireEvent.paste(picture, { clipboardData: { getData: () => 'x'.repeat(5_000) } });
     expect((wire.inputs().at(-1)!.text as string).length).toBe(MAX_PASTE);
+  });
+
+  it('lets the paste shortcut through to the browser, into the hidden field, and brings focus back', async () => {
+    const wire = fakeSocket();
+    panel(wire.socket);
+    wire.open();
+    wire.say({ type: 'driving', sessionId: 's1' });
+    wire.picture('jpeg-bytes');
+    const picture = await screen.findByLabelText('The host browser, live');
+    const field = screen.getByLabelText('Type into the host browser');
+    picture.focus();
+    // Not prevented: a prevented keydown is a paste that never fires (macOS Chrome).
+    const allowed = fireEvent.keyDown(picture, { key: 'v', code: 'KeyV', metaKey: true });
+    expect(allowed).toBe(true);
+    expect(document.activeElement).toBe(field);
+    // The browser's paste lands in the field, goes down as text, and focus returns to the picture.
+    fireEvent.paste(field, { clipboardData: { getData: () => 'one-time 123456' } });
+    expect(wire.inputs()).toEqual([{ kind: 'text', text: 'one-time 123456' }]);
+    expect(document.activeElement).toBe(picture);
+  });
+
+  it('copies the host page’s selection onto this machine’s clipboard, inside the keystroke', async () => {
+    const write = vi.fn(async (_items: unknown[]) => {});
+    class Item { constructor(readonly items: Record<string, Promise<Blob>>) {} }
+    vi.stubGlobal('ClipboardItem', Item);
+    Object.defineProperty(navigator, 'clipboard', { value: { write, writeText: vi.fn() }, configurable: true });
+    const wire = fakeSocket();
+    panel(wire.socket);
+    wire.open();
+    wire.say({ type: 'driving', sessionId: 's1' });
+    wire.picture('jpeg-bytes');
+    const picture = await screen.findByLabelText('The host browser, live');
+    const prevented = !fireEvent.keyDown(picture, { key: 'c', code: 'KeyC', metaKey: true });
+    fireEvent.keyUp(picture, { key: 'c', code: 'KeyC', metaKey: true });
+    expect(prevented).toBe(true);
+    // One ask, no keystroke: the host's own clipboard is nobody's.
+    expect(wire.inputs()).toEqual([{ kind: 'copy' }]);
+    // Written during the keystroke, with the text still to come.
+    expect(write).toHaveBeenCalledTimes(1);
+    const item = write.mock.calls[0]![0][0] as Item;
+    wire.say({ type: 'clipboard', text: 'Order #112-334' });
+    const blob = await item.items['text/plain']!;
+    expect(blob.type).toBe('text/plain');
+    expect(await new Promise<string>((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsText(blob); })).toBe('Order #112-334');
+  });
+
+  it('writes the text once it arrives where there is no ClipboardItem, and leaves the clipboard alone when nothing is selected', async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    let answer: (text: string) => void = () => {};
+    const done = writeClipboard(new Promise<string>((resolve) => { answer = resolve; }), { writeText }, undefined);
+    answer('copied');
+    await expect(done).resolves.toBe(true);
+    expect(writeText).toHaveBeenCalledWith('copied');
+    writeText.mockClear();
+    await expect(writeClipboard(Promise.reject(new Error('nothing selected')), { writeText }, undefined)).resolves.toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
   });
 
   it('sends at most one pointer position every thirty milliseconds, and always the last one', async () => {

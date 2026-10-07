@@ -215,6 +215,31 @@ describe('the remote hand socket', () => {
     expect(input.at(-1)).toEqual({ kind: 'text', text: 'one\ntwo\tthree' });
   });
 
+  it('answers Cmd/Ctrl+C with the host page’s selection, in order with what came before, never as a keystroke', async () => {
+    const { browser, hand: fake, input } = controller();
+    const logged: string[] = [];
+    let selected = '';
+    fake.copy = async () => selected;
+    const { url, headers, csrf, origin } = await setup(browser, (line) => logged.push(line));
+    const hand = drive(url, { Cookie: headers.Cookie, Origin: origin });
+    await hand.open;
+    hand.send({ type: 'hello', csrf, sessionId: SESSION });
+    await hand.next('driving');
+    // A select-all, then the copy: the copy sees what the select-all selected.
+    fake.input = async (event) => { input.push(event); if (event.kind === 'key' && event.type === 'keyUp') selected = 'Order #112-334'; };
+    hand.send({ type: 'input', input: { kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 4 } });
+    hand.send({ type: 'input', input: { kind: 'key', type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 4 } });
+    hand.send({ type: 'input', input: { kind: 'copy' } });
+    expect(await hand.next('clipboard')).toEqual({ type: 'clipboard', text: 'Order #112-334' });
+    // The ask itself never reaches the page as input.
+    expect(input.some((event) => event.kind === 'copy')).toBe(false);
+    expect(logged.join('\n')).not.toContain('Order #112-334');
+    // Only the bare ask is understood.
+    hand.send({ type: 'input', input: { kind: 'copy', text: 'x' } });
+    await hand.next('refused');
+    expect(readInput({ kind: 'copy' })).toEqual({ kind: 'copy' });
+  });
+
   it('answers Take over with whether this screen can be driven, and ends the hand on resume', async () => {
     const { browser, hand: driverHand } = controller();
     const { url, headers, origin, csrf } = await setup(browser);
