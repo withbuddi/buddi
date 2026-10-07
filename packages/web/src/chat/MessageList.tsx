@@ -1,4 +1,4 @@
-import { SavedEditionAudio, retrievedEditionId } from './EditionCard';
+import { FileAudio, ReportAudio, attachedAudio } from './EditionCard';
 import { MissionRequestText } from './MissionRequestText';
 /**
  * The conversation itself.
@@ -77,7 +77,10 @@ export function MessageList({
   workingLine,
   runs,
   onContinue,
+  mediaTools,
 }: {
+  /** Tools whose views declare `messenger.mediaFirst` (1.33): their audio `attachments` play under the tool row. */
+  mediaTools?: ReadonlySet<string>;
   messages: ChatMessage[];
   live: LiveCall[];
   /** Passed in so the elapsed counter ticks without this component owning a clock. */
@@ -358,7 +361,11 @@ export function MessageList({
                     opens
                     onOpen={() => onOpen(block.id)}
                   />
-                  {!gate && block.name === 'news.editions' && result?.ok && retrievedEditionId(result.output) ? <SavedEditionAudio editionId={retrievedEditionId(result.output)!} /> : null}
+                  {!gate && result?.ok && mediaTools?.has(block.name)
+                    ? attachedAudio(block.name.split('.')[0] ?? '', result.output).map((item) => ('report' in item
+                      ? <ReportAudio key={item.report} link={item.report} />
+                      : <FileAudio key={item.artifact} id={item.artifact} />))
+                    : null}
                   {report ? <MissionReport view={report} /> : null}
                   </Fragment>
                 );

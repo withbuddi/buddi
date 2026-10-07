@@ -109,13 +109,13 @@ describe('the agent an empty thread opens on', () => {
 
   it('carries a removable story reference without sending until the owner asks', async () => {
     window.history.replaceState(null, '', chatRoute('keeper', 'new'));
-    leaveReference('keeper', { title: 'Trade talks', text: 'News story ID: story-123', suggestions: ['Compare the sources'] });
+    leaveReference('keeper', { title: 'Trade talks', text: 'Story ID: story-123', suggestions: ['Compare the sources'] });
     render(<App />);
     expect(await screen.findByRole('region', { name: 'Story reference' })).toHaveTextContent('Trade talks');
     expect(chatApi.send).not.toHaveBeenCalled();
     expect(chatApi.conversations).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Compare the sources' })); });
-    expect(chatApi.send).toHaveBeenCalledWith('keeper', expect.objectContaining({ text: 'Compare the sources\n\nReference: Trade talks\nNews story ID: story-123' }));
+    expect(chatApi.send).toHaveBeenCalledWith('keeper', expect.objectContaining({ text: 'Compare the sources\n\nReference: Trade talks\nStory ID: story-123' }));
     expect(vi.mocked(chatApi.send).mock.calls[0]?.[1]).not.toHaveProperty('conversationId');
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Story reference' })).not.toBeInTheDocument());
     expect(readReference('keeper')).toBeNull();
@@ -123,7 +123,7 @@ describe('the agent an empty thread opens on', () => {
 
   it('preserves an existing composer draft when a story suggestion is chosen', async () => {
     window.localStorage.setItem('buddi.draft.keeper', 'My own question');
-    leaveReference('keeper', { title: 'Trade talks', text: 'News story ID: story-123', suggestions: ['Compare the sources'] });
+    leaveReference('keeper', { title: 'Trade talks', text: 'Story ID: story-123', suggestions: ['Compare the sources'] });
     render(<App />);
     const button = await screen.findByRole('button', { name: 'Compare the sources' });
     await act(async () => { fireEvent.click(button); });
@@ -134,7 +134,7 @@ describe('the agent an empty thread opens on', () => {
   });
 
   it('removes the reference and does not attach it to an unrelated question', async () => {
-    leaveReference('keeper', { title: 'Trade talks', text: 'News story ID: story-123', suggestions: [] });
+    leaveReference('keeper', { title: 'Trade talks', text: 'Story ID: story-123', suggestions: [] });
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: 'Remove reference' }));
     expect(readReference('keeper')).toBeNull();
@@ -144,7 +144,7 @@ describe('the agent an empty thread opens on', () => {
   });
 
   it('keeps a reference when sending fails, and never leaks it to another agent', async () => {
-    leaveReference('keeper', { title: 'Trade talks', text: 'News story ID: story-123', suggestions: [] });
+    leaveReference('keeper', { title: 'Trade talks', text: 'Story ID: story-123', suggestions: [] });
     expect(readReference('plain')).toBeNull();
     vi.mocked(chatApi.send).mockRejectedValue(new Error('Offline'));
     render(<App />);

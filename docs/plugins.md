@@ -1117,11 +1117,58 @@ owner accepting the suggestion.
 export interface ViewDescriptor {
   tool: string;        // 'weather.forecast'
   renderer: 'timeseries' | 'table' | 'bars' | 'keyvalue' | 'tiles' | 'document'
-          | 'diff' | 'terminal' | 'image' | 'preview' | 'envelope' | 'structured';
+          | 'diff' | 'terminal' | 'image' | 'preview' | 'envelope'
+          | 'story' | 'audio' | 'query' | 'structured';
   title?: string;      // the canvas panel's heading
   map: ViewMap;        // declarative: paths, columns, formats. Never a function.
+  messenger?: { mediaFirst: true; when?: { path: string; equals: unknown } }; // 1.33
 }
 ```
+
+Three renderers since host API 1.33 read shapes the host already defines:
+
+- **`story`** draws a `StoryRow` (the row a page's `stories` feed reads,
+  [plugin-pages.md](plugin-pages.md)): `kicker`, `title`, `titleAttribution`,
+  `image`, `summary` (or `lead`), `summaryAttribution`, `update`,
+  `updateAttribution`, `meta`, `sources` (`title`, `url`, `outlet`, `logo`,
+  `meta`) and `timeline` (`at`, `text`, `told`). `map: {}` reads the output as
+  one row; `map: { rows: 'hits' }` draws the rows at that path as a list.
+  Every word is the row's own; images and logos are your assets; links out
+  are http(s) only; what the view does not draw sits under Technical details.
+- **`audio`** plays a saved recording: `id`, `mime`, optional `name`,
+  `bytes`, `voice`, `model`. `map: {}`.
+- **`query`** asks one of your page queries and draws page components
+  against its answer: `map: { query: 'digest', params: { id: 'saved' }, body:
+  [{ kind: 'digest', path: 'digest' }] }`, each param a path into the output.
+  The body is checked at load like a page's body; it is read-only (no tool),
+  names only your queries and pages, and its query may not be `sensitive`.
+
+#### Media first on a messenger (1.33)
+
+A view may say that its tool's result leads with media on a messenger:
+`messenger: { mediaFirst: true }`, or only for some calls,
+`messenger: { mediaFirst: true, when: { path: 'play', equals: true } }`
+(`when` is read against the tool's *input*). From that call on, Telegram
+holds the reply's streamed text back; when the run ends it sends what the
+last such result listed under its reserved `attachments` field, then the full
+answer as a new message below it. The dashboard plays the audio ones under
+the tool's row.
+
+```ts
+// a tool output
+{ ..., attachments: [
+  { kind: 'image', asset: 'story-a1', caption: 'Headline\nCredit · Outlet' }, // your asset, 768 px
+  { kind: 'audio', report: '#/p/news/stories?edition=e_1' },               // your report's recording
+  { kind: 'audio', artifact: '<file id>' },                                  // a saved audio file
+] }
+```
+
+At most four. An image is read from your own asset area by key, never from a
+URL or another plugin's assets; a report link must be one of your own pages
+(`#/p/<you>/…`), and it plays the recording of the newest notification sent
+under exactly that link; an artifact must be audio. Anything else is dropped,
+a missing image is skipped, and the text always follows. A tool whose view
+does not declare `messenger` has its `attachments` ignored.
 
 The dashboard has a canvas beside the conversation, and it draws tool results on
 it. The renderers are **shapes, not domains** — a line, a table, a bar, a list of
@@ -1984,6 +2031,32 @@ while it is, under the same refusals:
 const voice = ctx.buddi!.plugins!.has?.('speech') ?? false;
 return { readAloud: voice ? settings.voiceEditions : [], readAloudNote: voice ? '' : 'Needs the Speech plugin and a voice.' };
 ```
+
+#### Vouching for a tool in a mission run (1.33)
+
+A mission whose `context` is your export may let you vouch for a tool in
+that one run, on the owner's own standing settings: export
+`consent_for_run` (`RUN_CONSENT_EXPORT`). Core calls it with
+`{ tool, export, args }` — the tool asking, and the context's export and
+arguments — each time that tool's plugin asks
+`ctx.buddi.approvals.configuredForRun(tool)`, and only `true` vouches.
+
+```ts
+exports: {
+  consent_for_run: {
+    params: z.object({ tool: z.string(), export: z.string(), args: z.record(z.unknown()) }).strict(),
+    async produce({ tool, export: name, args }, ctx) {
+      if (tool !== 'speech.say' || name !== 'edition_material') return false;
+      return (await readAloudEditions(ctx.buddi!.db)).includes(String(args.edition));
+    },
+  },
+},
+```
+
+Only the run's own context plugin is asked; a delegated run, another agent
+or another conversation never inherits it; a missing export or an error is
+no. The tool's plugin decides whether it honours the answer — a plugin that
+never calls `configuredForRun` is unaffected.
 
 ---
 
@@ -3504,9 +3577,32 @@ closed when it is absent rather than guess.
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
 | `tool` | `string` | yes | The tool whose result this draws. Naming a tool your manifest does not contribute is a startup error. |
-| `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| tiles \| document \| diff \| terminal \| image \| preview \| envelope \| structured`. Shapes, never domains. |
+| `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| tiles \| document \| diff \| terminal \| image \| preview \| envelope \| story \| audio \| query \| structured`. Shapes, never domains. `story`, `audio` and `query` since 1.33. |
 | `map` | `ViewMap` | yes | Declarative paths, columns and formats. Data, never a function: it is serialised to the browser. |
 | `title` | `string` | no | The canvas tab and panel heading. Defaults to the tool name. |
+| `messenger` | `MessengerDelivery` | no | 1.33: `{ mediaFirst: true, when?: { path, equals } }`. The result leads with its `attachments` on a messenger (§2.5). |
+
+#### `StoryMap` (1.33)
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `rows` | `string` | no | Path to an array of `StoryRow`s, drawn as a list. Without it the output is one row. |
+
+#### `QueryMap` (1.33)
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `query` | `string` | yes | One of your page queries; not a `sensitive` one. |
+| `params` | `Record<string, string>` | no | Each parameter, a path into the tool's output. |
+| `body` | `Component[]` | yes | One to 24 page components drawn against the query's answer. Read-only: no tool. |
+
+#### `MessengerAttachment` (1.33)
+
+| Shape | What it sends |
+| --- | --- |
+| `{ kind: 'image', asset, caption? }` | Your asset by key, at 768 px, with the caption (1,024 characters at most). |
+| `{ kind: 'audio', report }` | The recording filed with your saved report at that page link (`#/p/<you>/…`). |
+| `{ kind: 'audio', artifact }` | A saved audio file by id. |
 
 #### `TilesMap`
 
@@ -3668,6 +3764,7 @@ that say otherwise.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
+| `configuredForRun` | `(tool) => Promise<boolean>` | no | 1.33 | Whether the plugin this mission run was started from (its `context`) vouches for your `tool` in this exact run, through its `consent_for_run` export, asked afresh each call. False in a delegated run, for another agent or conversation, and outside a mission run with a context. Refused for another plugin's tool. §2.10. |
 | `assert` | `(ctx, envelope) => void` | yes | 1.0 | Throw unless `envelope` is the effect the owner approved on this call. |
 | `standing` | `(tool) => Promise<ToolPermission \| null>` | yes | 1.0 | The standing permission that answers for one of your tools on this call. Refused for another plugin's tool. |
 | `approvedInConversation` | `(tool, conversationId) => Promise<boolean>` | yes | 1.0 | Whether the owner approved your `tool` in this conversation or one delegated from it. Refused for another plugin's tool. |

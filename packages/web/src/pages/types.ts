@@ -570,7 +570,10 @@ export type Component =
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
   /** 1.28: one button opening a short menu of tools and drawers. */
   | (ComponentCommon & { kind: 'menu'; label: string; tone?: 'accent'; items: MenuItem[] })
-  | (ComponentCommon & { kind: 'edition'; query: QueryRef; param: string })
+  /** 1.33: a drawer over the page while the page parameter `param` is set. */
+  | (ComponentCommon & { kind: 'sheet'; title: string; param: string; heading?: ValueRef; query?: QueryRef; body: Component[] })
+  /** 1.33: a saved digest at `path`, drawn as chat's digest card. */
+  | (ComponentCommon & { kind: 'digest'; path: string; emptyTitle?: string })
   | (ComponentCommon & { kind: 'approval'; path: string })
   /** One of the plugin's proposed agents: a line, and the gated accept. */
   | (ComponentCommon & { kind: 'agent-offer'; agent: string; text: string; label: string })

@@ -4109,15 +4109,15 @@ describe("the front desk's handoff buttons", () => {
   });
 });
 
-it('sends a retrieved edition recording before its text in a new message', async () => {
+it('sends the recording a result leads with before its text, in a new message', async () => {
   const db = withOwner(new FakeDb());
   const { store } = fakeStore();
-  const audio = await store.save({ bytes: Buffer.from('OggS'), mime: 'audio/ogg', filename: 'edition.ogg', createdBy: 'anchor' });
-  const { surface, sent } = surfaceWith(db, vi.fn(async () => ({ text: 'Evening edition. Six stories.\n\n### International\n\n**Story title**\n\n[The Guardian](https://example.com/story)', leadingAudio: [audio.id] })) as any, { artifacts: { ...store, describe: async () => audio } });
-  await surface.processUpdates([message(9901, OWNER, OWNER, 'Get the last edition')]);
+  const audio = await store.save({ bytes: Buffer.from('OggS'), mime: 'audio/ogg', filename: 'report.ogg', createdBy: 'agent' });
+  const { surface, sent } = surfaceWith(db, vi.fn(async () => ({ text: 'Late digest. Six stories.\n\n### International\n\n**Story title**\n\n[The Guardian](https://example.com/story)', leadingAudio: [audio.id] })) as any, { artifacts: { ...store, describe: async () => audio } });
+  await surface.processUpdates([message(9901, OWNER, OWNER, 'Play the last digest')]);
   await surface.drain();
   const voice = sent.findIndex(s => s.method === 'sendVoice');
-  const text = sent.findIndex(s => s.method === 'sendMessage' && String(s.body.text).includes('Evening edition. Six stories.'));
+  const text = sent.findIndex(s => s.method === 'sendMessage' && String(s.body.text).includes('Late digest. Six stories.'));
   expect(voice).toBeGreaterThanOrEqual(0);
   expect(text).toBeGreaterThan(voice);
   expect(sent[text]?.body.parse_mode).toBe('HTML');
@@ -4126,11 +4126,11 @@ it('sends a retrieved edition recording before its text in a new message', async
   expect(sent[text]?.body.text).toContain('<a href="https://example.com/story">The Guardian</a>');
   expect(sent[text]?.body.text).not.toContain('(https://example.com/story)');
   expect(sent.filter(s => s.method === 'sendVoice')).toHaveLength(1);
-  expect(sent.some(s => s.method === 'editMessageText' && String(s.body.text).includes('Evening edition. Six stories.'))).toBe(false);
+  expect(sent.some(s => s.method === 'editMessageText' && String(s.body.text).includes('Late digest. Six stories.'))).toBe(false);
 });
 
 
-it('keeps publisher links labeled in an ordinary story reply without edition tools', async () => {
+it('keeps source links labeled in an ordinary reply', async () => {
   const db = alreadyGreeted(withOwner(new FakeDb()));
   const reply = "The Maine debate.\n\n- **Her record:** [The Hill](https://thehill.com/story?x=1&y=2) reports her position.\n- **Jackson:** [The Guardian](https://theguardian.com/story) has more. <untrusted>";
   const { surface, sent } = surfaceWith(db, vi.fn(async () => reply));
@@ -4144,7 +4144,7 @@ it('keeps publisher links labeled in an ordinary story reply without edition too
   expect(final?.body.text).not.toContain('(https://');
 });
 
-it('places the full story explanation below an already delivered photo', async () => {
+it('places the full answer below an already delivered leading photo', async () => {
   const db = alreadyGreeted(withOwner(new FakeDb()));
   const { surface, sent } = surfaceWith(db, vi.fn(async (req: any) => {
     req.onTextRetract?.();

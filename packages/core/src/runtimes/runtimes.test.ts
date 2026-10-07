@@ -340,7 +340,7 @@ describe('who may reach it', () => {
     const withIt = createPluginHost(hostBindingOf(manifest(['onnx'])), facts);
     expect(typeof withIt.onnx?.ensure).toBe('function');
     expect(typeof withIt.models?.ensure).toBe('function');
-    expect(withIt.version).toBe('1.32');
+    expect(withIt.version).toBe('1.33');
   });
 
   it('keeps an export to reading the state', async () => {

@@ -285,7 +285,13 @@ A voice note is also sent to your listening service and a spoken answer's
 text to your speaking service when those are cloud accounts; with Whisper and
 Kokoro on this computer neither leaves it (see [Speech](speech.md)).
 
-When Anchor opens a news story to explain it, Telegram also receives its cached
-publisher image, if available, with source attribution, followed by the full
-explanation in a separate message. Missing images leave the
-text answer intact; no article image is fetched from a remote URL during delivery.
+A tool whose view says it leads with media (host API 1.33, `messenger` in
+[plugins.md](plugins.md) §2.5) — opening a story, playing a saved edition —
+sends its picture or recording first: a picture its plugin keeps on this
+computer, with the caption the plugin wrote, or a recording already saved.
+The full answer follows as a new message below it. A missing picture or
+recording leaves the text answer as it is; nothing is fetched from a remote
+address on the way.
+
+If Telegram ever refuses a formatted answer, the same words are sent again as
+plain text, so an answer is never lost to its formatting.

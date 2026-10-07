@@ -23,7 +23,7 @@ import type { ExecutableTool } from './actions/execute.js';
 import type { CarryOverRequest, EffectDescription, PluginManifest, PreviewProvider, Tier, CoreToolContext, ToolDefinition } from './tools.js';
 import { isToolRefusal } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
-import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery, type WorkspaceFiles } from './pages.js';
+import { checkQueryViews, OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery, type WorkspaceFiles } from './pages.js';
 import type { HomeContribution } from './home.js';
 import { parseMetrics, metricContext, type RegisteredMetric } from './metrics.js';
 import { parseWidgets, type RegisteredWidget } from './widgets.js';
@@ -387,6 +387,13 @@ export class ToolRegistry {
             agents: (manifest.agents ?? []).map((a) => a.id),
           })
         : undefined;
+    // A `query` view draws page components against a page query (1.33): checked with the pages.
+    checkQueryViews({
+      plugin: manifest.name,
+      ...(manifest.views ? { views: manifest.views } : {}),
+      ...(manifest.queries ? { queries: manifest.queries } : {}),
+      pages: (manifest.pages ?? []).map((p) => p.id),
+    });
     /*
      * Metrics are checked here for the same reason pages are: a goal set on a
      * badly declared metric is a thing that fails silently on a Tuesday six

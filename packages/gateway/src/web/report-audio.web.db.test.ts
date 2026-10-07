@@ -14,7 +14,7 @@ const emptyCatalog = (): AgentCatalog => ({ get: () => undefined, byHandle: () =
 suite('saved report audio', () => {
   let admin: Pool, pool: Pool, web: WebServer;
   let base: string, dir: string, token: string, audioId: string;
-  const link = '#/p/news/stories?edition=e_evening';
+  const link = '#/p/demo/digest?saved=d_evening';
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);
     await admin.query(`drop database if exists ${TEST_DB}`);
@@ -26,8 +26,8 @@ suite('saved report audio', () => {
     await ensureOwner(pool, 'owner');
     dir = await mkdtemp(path.join(tmpdir(), 'buddi-export-'));
     const env = { ...process.env, BUDDI_DATA_DIR: dir };
-    audioId = (await saveArtifact(pool, { bytes: Buffer.from('recording'), mime: 'audio/ogg', filename: 'edition.ogg', createdBy: 'anchor' }, env)).id;
-    await pool.query(`insert into core.owner_notifications (kind, urgency, title, state, link, audio) values ('plugin', 'today', 'Edition', 'shown', $1, $2)`, [link, audioId]);
+    audioId = (await saveArtifact(pool, { bytes: Buffer.from('recording'), mime: 'audio/ogg', filename: 'report.ogg', createdBy: 'agent' }, env)).id;
+    await pool.query(`insert into core.owner_notifications (kind, urgency, title, state, link, audio) values ('plugin', 'today', 'Report', 'shown', $1, $2)`, [link, audioId]);
     const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
     web = await startWebServer({
       pool, registry: new ToolRegistry(), catalog: emptyCatalog(), ctx, timezone: 'UTC', now: () => new Date(), env,
@@ -47,11 +47,11 @@ suite('saved report audio', () => {
 
 
   const get = (route: string, auth = true) => fetch(`${base}/api/reports/audio?link=${encodeURIComponent(route)}`, auth ? { headers: { authorization: `Bearer ${token}` } } : {});
-  it('returns the exact edition recording and never another edition recording', async () => {
+  it("returns the exact report's recording and never another report's", async () => {
     const response = await get(link);
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ audio: { fileId: audioId, mime: 'audio/ogg', filename: 'edition.ogg', sizeBytes: 9 } });
-    expect(await (await get('#/p/news/stories?edition=e_other')).json()).toEqual({ audio: null });
+    expect(await response.json()).toEqual({ audio: { fileId: audioId, mime: 'audio/ogg', filename: 'report.ogg', sizeBytes: 9 } });
+    expect(await (await get('#/p/demo/digest?saved=d_other')).json()).toEqual({ audio: null });
   });
   it('requires authentication and a local report link', async () => {
     expect((await get(link, false)).status).toBe(401);

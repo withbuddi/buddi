@@ -1,5 +1,5 @@
 /**
- * Host API 1.27's page grammar for the News page and its source manager: the
+ * Host API 1.27's page grammar for a stories page and its source manager: the
  * `stories` component, a page's head actions, a chip pick with its add chip, a
  * tab kept in a page parameter, a quiet notice with a link and a button, and a
  * list row's logo, tag, status line and ⋯ menu actions.
@@ -8,11 +8,11 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { parsePageContributions } from './pages.js';
 
-const TOOLS = ['news.hide_story', 'news.mute_outlet', 'news.refresh', 'news.set_source', 'news.remove_source'];
+const TOOLS = ['demo.hide_story', 'demo.mute_outlet', 'demo.refresh', 'demo.set_source', 'demo.remove_source'];
 
 const parse = (page: unknown, extra: unknown[] = []) =>
   parsePageContributions({
-    plugin: 'news',
+    plugin: 'demo',
     pages: [page, ...extra],
     queries: [
       { name: 'stories', params: z.object({ topic: z.string().optional(), filter: z.string().optional() }), produce: async () => ({}) },
@@ -23,7 +23,7 @@ const parse = (page: unknown, extra: unknown[] = []) =>
     tools: TOOLS,
   }).pages;
 
-const settings = { id: 'sources', title: 'News', place: 'settings', body: [{ kind: 'notice', text: 'x' }] };
+const settings = { id: 'sources', title: 'Stories', place: 'settings', body: [{ kind: 'notice', text: 'x' }] };
 
 const stories = (extra: Record<string, unknown> = {}) => ({
   kind: 'stories',
@@ -32,11 +32,11 @@ const stories = (extra: Record<string, unknown> = {}) => ({
   groups: { param: 'topic' },
   ways: [
     {
-      tool: 'news.hide_story', label: 'Not interested', hint: 'Hides it and shows fewer like it', hides: true,
+      tool: 'demo.hide_story', label: 'Not interested', hint: 'Hides it and shows fewer like it', hides: true,
       args: { id: { row: 'id' }, action: { const: 'not_interested' } }, done: 'Hidden. You’ll see fewer like it.',
-      undo: { tool: 'news.hide_story', label: 'Undo', args: { id: { row: 'id' }, action: { const: 'undo' } } },
+      undo: { tool: 'demo.hide_story', label: 'Undo', args: { id: { row: 'id' }, action: { const: 'undo' } } },
     },
-    { tool: 'news.mute_outlet', label: 'Mute {name}', group: 'Mute an outlet', each: 'outlets', hides: true, args: { outlet: { item: 'id' }, muted: { const: true } } },
+    { tool: 'demo.mute_outlet', label: 'Mute {name}', group: 'Mute an outlet', each: 'outlets', hides: true, args: { outlet: { item: 'id' }, muted: { const: true } } },
   ],
   ask: { label: 'Ask Anchor', to: { chat: { path: 'anchor' } } },
   edition: { label: 'Read the edition', to: { chat: { path: 'anchor' } }, when: { path: 'told', equals: true } },
@@ -47,9 +47,9 @@ const stories = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-const page = (body: unknown[], extra: Record<string, unknown> = {}) => ({ id: 'stories', title: 'News', place: 'rail', icon: 'news', data: { query: 'overview' }, body, ...extra });
+const page = (body: unknown[], extra: Record<string, unknown> = {}) => ({ id: 'stories', title: 'Stories', place: 'rail', icon: 'news', data: { query: 'overview' }, body, ...extra });
 
-describe('host API 1.27: the News page grammar', () => {
+describe('host API 1.27: the stories page grammar', () => {
   it('accepts a chat reference and limits question suggestions', () => {
     const context = { title: { path: 'title' }, text: { path: 'chatContext' }, suggestions: ['Explain this story', 'Compare the sources'] };
     const withContext = (value: unknown) => stories({ ask: { label: 'Ask Anchor', to: { chat: { path: 'anchor' } }, context: value } });
@@ -62,12 +62,12 @@ describe('host API 1.27: the News page grammar', () => {
   });
 
   it('refuses an Undo on a way that does not hide, an { item } with no each, and a way to an unknown tool', () => {
-    const undoNoHide = stories({ ways: [{ tool: 'news.hide_story', label: 'X', args: {}, undo: { tool: 'news.hide_story', label: 'Undo', args: {} } }] });
+    const undoNoHide = stories({ ways: [{ tool: 'demo.hide_story', label: 'X', args: {}, undo: { tool: 'demo.hide_story', label: 'Undo', args: {} } }] });
     expect(() => parse(page([undoNoHide]))).toThrow(/undo/);
-    const itemNoEach = stories({ ways: [{ tool: 'news.mute_outlet', label: 'X', args: { outlet: { item: 'id' } } }] });
+    const itemNoEach = stories({ ways: [{ tool: 'demo.mute_outlet', label: 'X', args: { outlet: { item: 'id' } } }] });
     expect(() => parse(page([itemNoEach]))).toThrow(/each/);
-    const unknown = stories({ ways: [{ tool: 'news.nope', label: 'X', args: {} }] });
-    expect(() => parse(page([unknown]))).toThrow(/news\.nope/);
+    const unknown = stories({ ways: [{ tool: 'demo.nope', label: 'X', args: {} }] });
+    expect(() => parse(page([unknown]))).toThrow(/demo\.nope/);
   });
 
   it('refuses an empty state action that both goes and sets, and one that does neither', () => {
@@ -106,7 +106,7 @@ describe('host API 1.27: the News page grammar', () => {
       kind: 'notice', look: 'quiet', icon: 'globe', text: { path: 'fetched' },
       link: { label: { path: 'failingWords' }, to: { page: 'sources' }, when: { path: 'failing', not: true, equals: 0 } },
     };
-    const warning = { kind: 'notice', tone: 'warning', title: 'Couldn’t fetch', text: 'x', action: { tool: 'news.refresh', label: 'Try now' } };
+    const warning = { kind: 'notice', tone: 'warning', title: 'Couldn’t fetch', text: 'x', action: { tool: 'demo.refresh', label: 'Try now' } };
     expect(() => parse(page([notice, warning, stories()]), [settings])).not.toThrow();
     expect(() => parse(page([{ ...notice, icon: 'rocket' }]), [settings])).toThrow();
   });
@@ -125,7 +125,7 @@ describe('host API 1.27: the News page grammar', () => {
         actions: [action],
       }],
     });
-    expect(() => parse(list({ tool: 'news.set_source', label: 'Mute {name}', menu: true, hint: 'Everywhere, not only here', args: { id: { row: 'id' } } }))).not.toThrow();
-    expect(() => parse(list({ tool: 'news.set_source', label: 'Mute', hint: 'Everywhere', args: { id: { row: 'id' } } }))).toThrow(/menu/);
+    expect(() => parse(list({ tool: 'demo.set_source', label: 'Mute {name}', menu: true, hint: 'Everywhere, not only here', args: { id: { row: 'id' } } }))).not.toThrow();
+    expect(() => parse(list({ tool: 'demo.set_source', label: 'Mute', hint: 'Everywhere', args: { id: { row: 'id' } } }))).toThrow(/menu/);
   });
 });

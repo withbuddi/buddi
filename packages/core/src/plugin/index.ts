@@ -61,8 +61,8 @@ export {
 export type { AddressPolicy, BlockReason, CheckedUrl } from './url.js';
 export type { PageFile } from './page-file.js';
 export type { PluginUse } from './uses.js';
-export type { PluginExport, PluginReadiness, PluginSetup } from './requires.js';
-export { PluginCallRefusal } from './requires.js';
+export type { PluginExport, PluginReadiness, PluginSetup, RunConsentRequest } from './requires.js';
+export { PluginCallRefusal, RUN_CONSENT_EXPORT } from './requires.js';
 export type { PluginAuthor } from './author.js';
 export type { NativeSearchEvent, NativeSearchRecord, SearchBackendChoice } from './search.js';
 export type {
@@ -99,7 +99,7 @@ export type {
   SentinelResult,
   Severity,
 } from '../sentinels/types.js';
-export type { ViewDescriptor, ViewMap, RendererName, TilesMap, TileIcon, TileLink } from '../views.js';
+export type { ViewDescriptor, ViewMap, RendererName, TilesMap, TileIcon, TileLink, StoryMap, QueryMap, MessengerDelivery, MessengerAttachment } from '../views.js';
 export { TILE_ICONS } from '../views.js';
 export type {
   CalendarMap,

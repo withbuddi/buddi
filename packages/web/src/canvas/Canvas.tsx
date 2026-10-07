@@ -513,7 +513,7 @@ const PLURAL: Record<RendererName, string> = {
   envelope: 'drafts',
   story: 'stories',
   audio: 'recordings',
-  edition: 'editions',
+  query: 'results',
   structured: 'results',
 };
 

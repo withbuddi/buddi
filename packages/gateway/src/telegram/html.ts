@@ -1,7 +1,7 @@
 /**
  * A report's Markdown as Telegram HTML (`parse_mode: 'HTML'`).
  *
- * Reports are written in light Markdown (Anchor's editions above all: a
+ * Reports are written in light Markdown (scheduled digests above all: a
  * heading per topic, bold headlines, the source in italics with its link on
  * the outlet's name). Shown as plain text, every asterisk and hash reaches the
  * phone; shown through Telegram's own Markdown modes, one stray `_` refuses
@@ -21,7 +21,7 @@
  *
  * Splitting happens here too, on the converted text: a message never passes
  * 4,096 characters and never cuts a tag, the cut falls between paragraphs,
- * and before a heading when one is in the second half (a longer edition
+ * and before a heading when one is in the second half (a longer digest
  * splits at a topic).
  */
 import { TELEGRAM_MAX_MESSAGE_CHARS } from './api.js';

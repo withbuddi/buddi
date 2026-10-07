@@ -130,3 +130,35 @@ describe('a report on Telegram, sent as HTML', () => {
     expect(sent).toEqual([['Title\n\nx and site (https://a.org)', {}]]);
   });
 });
+
+describe('any agent answer as Telegram HTML: nothing Telegram could refuse', () => {
+  /** Every tag in the output is one the converter wrote, and each is closed in the same message. */
+  const balanced = (html: string): boolean => {
+    const open: string[] = [];
+    for (const m of html.matchAll(/<(\/?)([a-z]+)(?:\s[^>]*)?>/g)) {
+      if (!['b', 'i', 's', 'code', 'pre', 'a'].includes(m[2]!)) return false;
+      if (m[1] === '') open.push(m[2]!);
+      else if (open.pop() !== m[2]) return false;
+    }
+    return open.length === 0;
+  };
+
+  it('escapes raw HTML, stray markers and entities, and never leaves a tag open', () => {
+    const answers = [
+      'Use <b>bold</b> & <script>alert(1)</script> here > there',
+      '**unclosed bold and _half italic',
+      'a ** b * c __ d _ e ` f [label](javascript:alert(1)) [x](<https://ok.test/a b>)',
+      '&amp; &lt; already-escaped text stays literal &',
+      '```\n<pre> inside a fence & </pre>\n',
+      `${'**long** '.repeat(700)}`,
+    ];
+    for (const answer of answers) {
+      for (const part of markdownToTelegramHtml(answer)) {
+        expect(balanced(part), part).toBe(true);
+        expect(part.length).toBeLessThanOrEqual(4096);
+        // No raw `<` or `&` outside the converter's own tags and entities.
+        expect(part.replace(/<\/?(b|i|s|code|pre)>|<a href="[^"<>]*">|<\/a>/g, '').replace(/&(amp|lt|gt|quot);/g, '')).not.toMatch(/[<>&]/);
+      }
+    }
+  });
+});

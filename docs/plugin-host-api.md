@@ -128,7 +128,9 @@ plugin cannot `connect()` and change role.
 use. Never the data directory itself, where the file vault and the Files
 library live.
 
-**approvals.** `assert(ctx, envelope): void` (the approved-effect check),
+**approvals.** `configuredForRun(tool): Promise<boolean>` (1.33: whether
+the plugin a mission run was started from vouches for one of this plugin's
+own tools in that run, below), `assert(ctx, envelope): void` (the approved-effect check),
 `standing(tool): Promise<ToolPermission | null>` (for this plugin's own tools
 only), and `approvedInConversation(tool, conversationId): Promise<boolean>`
 (whether the owner already approved this tool in this conversation, own tools
@@ -936,6 +938,38 @@ buddi refuses `onnx` in `uses` at staging, so a plugin that declares it asks
 for `^1.32`. A plugin that must still run on an older buddi keeps its own
 `onnxruntime-node` as an optional fallback and checks `ctx.buddi.onnx`.
 
+1.33 adds one method and one export name, and nothing in core that names a
+plugin:
+
+- **A mission run's context may vouch for a tool.** A mission whose `context`
+  is plugin P's export E with arguments A may have P vouch for a tool in that
+  run. When a tool's own plugin asks `ctx.buddi.approvals.configuredForRun(tool)`
+  (its own tools only), core calls P's export `consent_for_run`
+  (`RUN_CONSENT_EXPORT`) with `{ tool, export: E, args: A }`, afresh on every
+  call, and answers true only if it returns exactly `true`. Always false
+  outside a mission run with a context, in a delegated run, for another agent
+  or conversation, and when P has no such export, refuses or fails. The
+  export runs like any other (read-only pool, P's own host, five seconds). P
+  decides from the owner's own settings; whether a yes lowers the tool's tier
+  is the tool's plugin's decision. Speech honours it for `speech.say`; News
+  vouches for it in an edition the owner set to be read aloud.
+- **Canvas renderers** `story` (one `StoryRow`, or a list at `map.rows`),
+  `audio` (a saved recording) and `query` (one of the plugin's page queries,
+  drawn as page components the view declares), and a view's `messenger`
+  declaration with the reserved `attachments` field of a tool's output:
+  [plugins.md](plugins.md) §2.5.
+- **Page components and grammar**: `sheet` (a drawer opened by a page
+  parameter), `digest` (a saved digest card), `section.look: 'setup'`, links
+  with `params`, an `expand` without a query, and on a story row `image`, the
+  `…Attribution` labels and `ask.context`: [plugin-pages.md](plugin-pages.md).
+- **Assets** also keep an aspect-preserving PNG up to 768 pixels on its
+  longest side, never upscaled, read with `?size=768`. The 64 and 128 squares
+  and the limits are unchanged; an asset kept before 1.33 has no 768 variant,
+  and whatever draws one hides a missing image.
+
+An older buddi refuses the renderers, components and fields it does not
+know, so a plugin using any of them asks for `^1.33`.
+
 ## 8. End to end
 
 1. `plugin-imports.test.ts` passes, and fails naming the file when a plugin
@@ -952,20 +986,3 @@ for `^1.32`. A plugin that must still run on an older buddi keeps its own
 A tarball install of the scaffold has a known problem that predates the host:
 it needs the `link:` devDependency removed, the peer resolution fixed and
 `buddi.name` in the scaffold ([plugins.md](plugins.md) §8).
-
-1.33 adds `section.look: "setup"` to page descriptors: a first-run card that follows the Appearance page-width setting, with vertically arranged title and note and actions aligned at the bottom right, with the primary action last.
-
-1.33 also adds optional story `ask.context` (title, text, and up to three question suggestions). It carries a removable reference into a fresh conversation with the destination agent; the host sends it with the owner’s next message or clicked question action, never on navigation.
-
-1.33 adds the `story` canvas renderer (`map: {}`). The output has a headline (`title`), optional `titleOutlet`, `lead`, `leadOutlet`, `topic`, article `sources` (title, URL, outlet, language, publishedAt, paywall, opinion, local logo key), and a `timeline` (at, outlet, title). Story IDs and internal metadata appear only in a collapsed disclosure. Tabs use the story ID for identity and the headline for their label. Missing-story outputs fall back to the structured view.
-
-Host API 1.33 also adds the `edition` page component and parameterized page links for saved edition drawers (see plugin-pages.md).
-
-Enabling Read aloud for a News edition authorizes `speech.say` within that edition’s mission run, using the configured Speech service and normal daily limits. The host rechecks the saved preference for each call; other agents, conversations and delegated runs do not inherit it. Disabling the edition’s voice removes this consent. Host API 1.33 exposes this as `approvals.configuredForRun(tool)`.
-
-Host API 1.33 adds `audio` and `edition` canvas renderers (empty maps). Audio expects the Speech result fields `id`, `mime`, `name`, with optional voice/model metadata. Edition expects the saved edition ID in `edition` and reads its saved News view. Both retain raw metadata in collapsed Technical details.
-
-Story imagery (1.33): assets also keep an aspect-preserving PNG variant up to
-768 pixels on its longest side, without upscaling, read with `?size=768`.
-The existing 64/128 square variants and input/storage limits remain unchanged.
-Old cached assets may lack this variant; consumers must hide missing images.

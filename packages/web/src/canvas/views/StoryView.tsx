@@ -1,65 +1,140 @@
-import { StoryImage, type StoryPicture } from '../../pages/StoryImage';
-/** A sourced story: publisher text, linked articles and a chronological timeline. */
+/**
+ * `story` (host API 1.33): a `StoryRow` — the shape a plugin page's `stories`
+ * feed reads — drawn on the canvas, or a list of them. Every word is the
+ * row's own: the headline and its attribution, the summary and its
+ * attribution, the update, the quiet line, the sources with their lines, the
+ * timeline as the plugin wrote it. Images and logos are the tool's own
+ * plugin's assets; links out are http(s) only.
+ */
 import { AssetImage, assetSrc } from '../../pages/AssetImage';
+import { StoryImage, type StoryPicture } from '../../pages/StoryImage';
+import type { StoryProps } from '../types';
 import { Structured } from './Structured';
 
 type Row = Record<string, unknown>;
-const record = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
-const text = (value: unknown): string => typeof value === 'string' ? value : '';
-const rows = (value: unknown): Row[] => Array.isArray(value) ? value.map(record) : [];
+const record = (value: unknown): Row => (value && typeof value === 'object' && !Array.isArray(value) ? (value as Row) : {});
+const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+const rows = (value: unknown): Row[] => (Array.isArray(value) ? value.map(record) : []);
+
 function link(value: unknown): string | undefined {
-  try { const url = new URL(text(value)); return ['https:', 'http:'].includes(url.protocol) ? url.href : undefined; } catch { return undefined; }
-}
-function stamp(value: unknown, timezone?: string): string {
-  const date = new Date(text(value));
-  if (!Number.isFinite(date.getTime())) return '';
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(timezone ? { timeZone: timezone } : {}) }).format(date);
-}
-export function StoryView({ props, timezone }: { props: { value: unknown; plugin?: string }; timezone?: string }): JSX.Element {
-  const story = record(props.value);
-  if (Array.isArray(story.articles)) return <SearchResults value={story} plugin={props.plugin ?? 'news'} timezone={timezone} />;
-  if (!text(story.title)) return <Structured props={{ value: props.value }} />;
-  const sources = rows(story.sources);
-  const timeline = rows(story.timeline).sort((a, b) => Date.parse(text(a.at)) - Date.parse(text(b.at)));
-  const details = Object.fromEntries(['id', 'topicId', 'score', 'status', 'firstSeen', 'updatedAt', 'lastToldAt'].filter(key => story[key] !== undefined).map(key => [key, story[key]]));
-  return <article className="pl-story-sheet">
-    <header className="pl-story-sheet-lead">
-      {text(story.topic) ? <p className="pl-story-sheet-meta">{text(story.topic)}</p> : null}
-      <h2 className="pl-story-sheet-title">{text(story.title)}</h2>
-      <p className="pl-story-sheet-meta">{text(story.titleOutlet) ? `Headline from ${text(story.titleOutlet)}` : 'Source headline'}</p>
-      <StoryImage image={story.image as StoryPicture | undefined} plugin={props.plugin ?? 'news'} />
-      {text(story.lead) ? <><p className="pl-story-sheet-summary">{text(story.lead)}</p><p className="pl-story-sheet-meta">{text(story.leadOutlet) ? `Feed excerpt from ${text(story.leadOutlet)}` : 'Feed excerpt'}</p></> : null}
-    </header>
-    <section className="pl-story-sheet-block"><h3 className="pl-story-sheet-head">Sources</h3>
-      {sources.length ? <ul className="cv-story-sources">{sources.map((source, index) => {
-        const href = link(source.url);
-        return <li key={text(source.id) || index}>
-          <AssetImage src={assetSrc(props.plugin ?? '', source.logo)} label={text(source.outlet)} />
-          <div>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{text(source.title)} ↗</a> : <span>{text(source.title)}</span>}
-          <p className="pl-story-sheet-meta">{[text(source.outlet), source.language === 'en' ? 'English' : source.language === 'fr' ? 'French' : text(source.language), stamp(source.publishedAt, timezone), source.paywall === true ? 'Paywalled' : '', source.opinion === true ? 'Opinion' : ''].filter(Boolean).join(' · ')}</p></div>
-        </li>;
-      })}</ul> : <p className="muted">No sources in this saved result.</p>}
-    </section>
-    {timeline.length ? <section className="pl-story-sheet-block"><h3 className="pl-story-sheet-head">Coverage timeline</h3><ol className="cv-story-timeline">{timeline.map((event, index) => <li key={index}><time>{stamp(event.at, timezone)}</time><div>{index === 0 ? <p className="pl-story-sheet-meta">Earliest collected coverage</p> : null}<strong>{text(event.outlet)}</strong><p>{text(event.title)}</p></div></li>)}</ol></section> : null}
-    <details className="pl-story-sheet-block"><summary>Technical details</summary><Structured props={{ value: details }} /></details>
-  </article>;
+  try {
+    const url = new URL(text(value));
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function SearchResults({ value, plugin, timezone }: { value: Row; plugin: string; timezone?: string }): JSX.Element {
-  const articles = rows(value.articles);
-  return <section className="cv-news-search">
-    <header><h2>Results for “{text(value.query)}”</h2><p className="muted">{articles.length} {articles.length === 1 ? 'article' : 'articles'}</p></header>
-    {articles.length ? <ul>{articles.map((article, index) => {
-      const href = link(article.url);
-      return <li key={text(article.articleId) || index}>
-        <StoryImage image={article.image as StoryPicture | undefined} plugin={plugin} compact />
-        <div><p className="pl-story-sheet-meta">{[text(article.topic), text(article.outlet), stamp(article.publishedAt, timezone), article.opinion === true ? 'Opinion' : ''].filter(Boolean).join(' · ')}</p>
-          <h3>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{text(article.title)} ↗</a> : text(article.title)}</h3>
-          {text(article.lead) ? <p>{text(article.lead)}</p> : null}
-          {article.image ? <p className="pl-story-sheet-meta">Image: {text(record(article.image).outlet)}</p> : null}
-        </div>
-      </li>;
-    })}</ul> : <p>No matching articles. Try another name or a broader search.</p>}
-    <details className="pl-story-sheet-block"><summary>Technical details</summary><Structured props={{ value }} /></details>
-  </section>;
+function picture(value: unknown): StoryPicture | undefined {
+  const image = record(value);
+  return text(image.key) ? (image as unknown as StoryPicture) : undefined;
+}
+
+/** What the row says that the view does not draw: ids and the plugin's own metadata, collapsed. */
+const DRAWN = new Set(['kicker', 'title', 'titleAttribution', 'image', 'summary', 'lead', 'summaryAttribution', 'update', 'updateAttribution', 'meta', 'sources', 'timeline', 'url', 'attachments']);
+function rest(value: unknown, drawn: ReadonlySet<string>): Row {
+  return Object.fromEntries(Object.entries(record(value)).filter(([key]) => !drawn.has(key)));
+}
+
+function Technical({ value }: { value: Row }): JSX.Element | null {
+  if (Object.keys(value).length === 0) return null;
+  return (
+    <details className="pl-story-sheet-block">
+      <summary>Technical details</summary>
+      <Structured props={{ value }} />
+    </details>
+  );
+}
+
+export function StoryView({ props }: { props: StoryProps }): JSX.Element {
+  if (props.rows) return <StoryList rows={rows(props.rows)} plugin={props.plugin} value={rest(props.value, new Set([...Object.keys(record(props.value)).filter((key) => record(props.value)[key] === props.rows), 'attachments']))} />;
+  const story = record(props.value);
+  if (!text(story.title)) return <Structured props={{ value: props.value }} />;
+  const summary = text(story.summary) || text(story.lead);
+  const sources = rows(story.sources).filter((source) => text(source.title));
+  const timeline = rows(story.timeline).filter((step) => text(step.text));
+  return (
+    <article className="pl-story-sheet">
+      <header className="pl-story-sheet-lead">
+        {text(story.kicker) ? <p className="pl-story-sheet-meta">{text(story.kicker)}</p> : null}
+        <h2 className="pl-story-sheet-title">{text(story.title)}</h2>
+        {text(story.titleAttribution) ? <p className="pl-story-sheet-meta">{text(story.titleAttribution)}</p> : null}
+        <StoryImage image={picture(story.image)} plugin={props.plugin} />
+        {summary ? <p className="pl-story-sheet-summary">{summary}</p> : null}
+        {summary && text(story.summaryAttribution) ? <p className="pl-story-sheet-meta">{text(story.summaryAttribution)}</p> : null}
+        {text(story.update) ? (
+          <div className="pl-story-sheet-update">
+            <p>{text(story.update)}</p>
+            {text(story.updateAttribution) ? <p className="pl-story-sheet-meta">{text(story.updateAttribution)}</p> : null}
+          </div>
+        ) : null}
+        {text(story.meta) ? <p className="pl-story-sheet-meta">{text(story.meta)}</p> : null}
+      </header>
+      {sources.length > 0 ? (
+        <section className="pl-story-sheet-block">
+          <h3 className="pl-story-sheet-head">Sources</h3>
+          <ul className="cv-story-sources">
+            {sources.map((source, index) => {
+              const href = link(source.url);
+              return (
+                <li key={index}>
+                  <AssetImage src={assetSrc(props.plugin, source.logo)} label={text(source.outlet)} />
+                  <div>
+                    {href ? <a href={href} target="_blank" rel="noopener noreferrer">{text(source.title)} ↗</a> : <span>{text(source.title)}</span>}
+                    <p className="pl-story-sheet-meta">{text(source.meta) || text(source.outlet)}</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+      {timeline.length > 0 ? (
+        <section className="pl-story-sheet-block">
+          <h3 className="pl-story-sheet-head">Timeline</h3>
+          <ol className="cv-story-timeline">
+            {timeline.map((step, index) => (
+              <li key={index} data-told={step.told === true || undefined}>
+                <time>{text(step.at)}</time>
+                <div><p>{text(step.text)}</p></div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+      <Technical value={rest(props.value, DRAWN)} />
+    </article>
+  );
+}
+
+function StoryList({ rows: list, plugin, value }: { rows: Row[]; plugin: string; value: Row }): JSX.Element {
+  const shown = list.filter((row) => text(row.title));
+  return (
+    <section className="cv-story-list">
+      {shown.length > 0 ? (
+        <ul>
+          {shown.map((row, index) => {
+            const href = link(row.url);
+            const image = picture(row.image);
+            const line = text(row.meta) || text(row.kicker);
+            const credit = image ? [image.credit, image.outlet].filter(Boolean).join(' · ') : '';
+            return (
+              <li key={text(row.id) || index}>
+                <StoryImage image={image} plugin={plugin} compact />
+                <div>
+                  {line ? <p className="pl-story-sheet-meta">{line}</p> : null}
+                  <h3>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{text(row.title)} ↗</a> : text(row.title)}</h3>
+                  {text(row.lead) || text(row.summary) ? <p>{text(row.lead) || text(row.summary)}</p> : null}
+                  {credit ? <p className="pl-story-sheet-meta">{credit}</p> : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="muted">Nothing to show.</p>
+      )}
+      <Technical value={value} />
+    </section>
+  );
 }

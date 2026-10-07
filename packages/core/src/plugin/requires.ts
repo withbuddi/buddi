@@ -49,6 +49,28 @@ export interface PluginExport {
   produce(params: any, ctx: ToolContext): Promise<unknown>;
 }
 
+/**
+ * The export a mission's context plugin may implement to vouch for one tool
+ * in that mission's run (host API 1.33). Core calls it, and only it, on the
+ * plugin named by the running mission's `context`, with
+ * `{ tool, export, args }` — the tool asking, and the context's own export
+ * and arguments — each time a tool's plugin asks
+ * `ctx.buddi.approvals.configuredForRun(tool)`. Only the answer `true`
+ * vouches; anything else, a refusal or an error is no. The tool's own plugin
+ * still decides whether it honours the answer.
+ */
+export const RUN_CONSENT_EXPORT = 'consent_for_run';
+
+/** What `consent_for_run` is called with. */
+export interface RunConsentRequest {
+  /** The tool whose plugin asked, `plugin.tool`. */
+  tool: string;
+  /** The mission context's export: what the run was started to do. */
+  export: string;
+  /** The mission context's arguments, as declared. */
+  args: Record<string, unknown>;
+}
+
 /** A call another plugin made that core refused, with the sentence why. */
 export class PluginCallRefusal extends Error {
   override readonly name = 'PluginCallRefusal';

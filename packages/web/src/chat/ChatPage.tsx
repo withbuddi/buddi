@@ -151,6 +151,7 @@ export function ChatPage({
   </div>;
 
   const [descriptors, setDescriptors] = useState<ViewDescriptor[]>([]);
+  const mediaTools = useMemo(() => new Set(descriptors.filter((view) => view.messenger?.mediaFirst === true).map((view) => view.tool)), [descriptors]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
   /*
@@ -1419,6 +1420,7 @@ export function ChatPage({
         ) : null}
 
         <MessageList
+          mediaTools={mediaTools}
           messages={[...(conversation?.messages ?? []), ...optimistic]}
           live={live}
           now={now}

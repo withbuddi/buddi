@@ -605,21 +605,57 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
   held back and shown on the Agents page, out of every roster, handle map,
   delegation list and default.
 
-A section can use `look: 'setup'` (host API 1.33) for a first-run card that follows the Appearance page-width setting. Its note sits beneath the heading and body buttons form a bottom-right action row, with the primary action last.
+### Host API 1.33
 
-Story rows may supply `titleAttribution`, `summaryAttribution`, and `updateAttribution` labels for the corresponding text in the story drawer. Repeated update text is suppressed, and source publication events appear under Coverage timeline.
+**A setup card.** A section can use `look: 'setup'` for a first-run card
+that follows the Appearance page-width setting. Its note sits beneath the
+heading and its body's buttons form a bottom-right action row, the accent
+(primary) one last.
 
-An `expand` may omit `query` when its body components fetch their own data. The body is mounted only while expanded, so a nested list needs just one query.
+**Story rows** may supply `titleAttribution`, `summaryAttribution` and
+`updateAttribution`: the plugin's own labels for where the headline, the
+summary and the update came from, drawn under each in the story drawer. An
+update that repeats the summary or the title is not drawn twice; the
+timeline's head reads Coverage timeline. A row may also carry
+`image: { key, outlet, url, caption?, credit? }`: `key` names one of the
+plugin's assets, `url` links to the source article, never the remote image.
+Cards show a thumbnail, the drawer keeps the image's proportions with its
+caption and credit, and a missing asset hides the image.
 
-A story's `ask` action may include `context: { title: ValueRef, text: ValueRef, suggestions?: string[] }` (1.33). When its destination is an agent chat, the host opens a fresh conversation and carries this reference into the composer without sending. The owner can inspect or remove it and click up to three suggested question buttons to send directly, preserving their composer draft. The reference is appended to the owner's message when sent from the composer or a question button, retained on failure, and cleared on success. Other chat links keep their existing behavior.
+**An `expand` without `query`** draws its body against the row it sits in;
+the body is mounted only while open, so a nested list asks once.
 
-### Saved edition drawers (host API 1.33)
+**A story's `ask`** may include `context: { title: ValueRef, text: ValueRef,
+suggestions?: string[] }`. When its destination is an agent chat, the host
+opens a fresh conversation and carries the reference into the composer
+without sending. The owner can read or remove it, and up to three suggested
+questions send at once, keeping the composer's draft. The reference is
+appended to the owner's next message, kept if sending fails and cleared once
+it is sent. Other chat links are unchanged.
 
-`{ kind: 'edition', param: 'edition', query: { query: 'edition', params: { id: { param: 'edition' } } } }` opens a scrollable drawer only when the named page parameter is present. Its query returns `{ edition }` in the same format as the chat edition card, or `{ edition: null }` for a missing edition. Loading, query failures and missing editions have separate states. Closing keeps the rest of the page parameters.
+**Links with parameters.** `{ page, params: Record<string, ValueRef> }`
+sets those page parameters (URL-encoded) on the target page, which is how a
+link opens a `sheet`.
 
-Page links accept `params: Record<string, ValueRef>`; values are URL-encoded. News uses `{ page: 'stories', params: { edition: { const: 'latest' } } }` for Latest edition. An exact saved ID opens that edition, including existing notification links. `latest` resolves the most recent saved nonempty edition, regardless of whether its notification has been delivered.
+**`sheet`**: a drawer over the page while one of its parameters is set.
 
-Story rows may supply `image: { key, outlet, url, caption?, credit? }`. `key`
-names a locally cached plugin asset; `url` links to the source article, never
-the remote image. Cards show a thumbnail, and the drawer preserves the image
-proportions with its caption and credit. Missing assets hide the image.
+```ts
+{ kind: 'sheet', param: 'edition', title: 'Edition', heading: { path: 'edition.name' },
+  query: { query: 'edition', params: { id: { param: 'edition' } } },
+  body: [{ kind: 'digest', path: 'edition', emptyTitle: 'No saved edition', empty: 'Editions appear here once saved.' }] }
+```
+
+`query` is asked only while the sheet is open and `body` is drawn against
+its answer; the head is `heading` read from the answer, `title` when that
+reads nothing. Loading and a failed read have their own states. Closing
+clears the parameter and keeps the page's others.
+
+**`digest`**: a saved digest at `path`, drawn as the card chat draws for a
+report: `{ id, name, when, lede, groups: [{ topic, stories: [{ title, lead,
+outlet, more, link?: { url, label }, logos: [{ name, logo? }], mark?:
+'update' | 'opinion', topicName?, actions? }] }], notes, foot?, report? }`.
+Logos are the plugin's assets; a story's `actions` are page actions run as
+the owner. `foot` is the plugin's own closing line. `report` is the page link
+the plugin filed the digest's report under (`#/p/<plugin>/…`, its own pages
+only): the card plays the recording sent with it. When the value is null or
+absent, `emptyTitle` and `empty` are drawn instead.
