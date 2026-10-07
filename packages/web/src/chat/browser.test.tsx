@@ -149,21 +149,11 @@ describe('conversation browser canvas', () => {
     ] });
     vi.spyOn(api, 'approval').mockResolvedValue({ id: 'a1', state: 'pending', tool: 'browser.act', permissionScopes: ['conversation'], preview: 'Click Pay', envelope: {}, canonicalArgs: {} } as never);
     render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
-    // Settled, not merely present: the envelope takes the canvas by itself,
-    // and until it has, the selection is still the one the page fell back to.
-    // Clicking through an unsettled canvas would be clicking a tab that is
-    // already selected — a no-op the assertions below would blame on the page.
-    await waitFor(() => expect(screen.getByRole('tab', { name: 'Approval' })).toHaveAttribute('data-state', 'active'));
-    // The Page tab is beside it, and the decision is not folded into it.
-    //
-    // The tab strip is still settling while the approval and the browser state
-    // arrive, so the press is retried rather than fired once at whatever node
-    // happened to be there: a click that lands between two renders is a flake,
-    // not a failure of what this test is about.
-    await waitFor(() => {
-      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Page' }), { button: 0 });
-      expect(screen.getByTestId('browser-view')).toBeInTheDocument();
-    });
+    // The envelope has its own tab beside the Page, but with a page open the
+    // Page keeps the front: the decision is in the dock under the composer.
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Approval' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Page' })).toHaveAttribute('data-state', 'active'));
+    expect(screen.getByTestId('browser-view')).toBeInTheDocument();
     expect(within(screen.getByTestId('browser-view')).queryByText(/Pay/)).not.toBeInTheDocument();
     // And its row goes to the envelope, not to the panel.
     fireEvent.click(screen.getByRole('button', { name: /Approval · browser\.act/ }));

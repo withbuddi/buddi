@@ -2016,6 +2016,8 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
   background: var(--warning);
 }
 .wb-tab-dot[data-tone='critical'] { background: var(--critical); }
+/* New behind the tab in front: quiet, the accent rather than an alarm. */
+.wb-tab-dot[data-tone='unread'] { background: var(--accent); }
 .wb-tab-text {
   overflow: hidden;
   text-overflow: ellipsis;

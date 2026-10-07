@@ -215,14 +215,29 @@ export function byRecency(items: readonly Renderable[], touched: Readonly<Record
  * as happening now (`pinned`) — those can together exceed the room and still
  * all show. A parked failure is never brought back by recency alone.
  * Pinned panels lead the strip; the timeline is newest first.
+ *
+ * **A new turn folds the last one away.** Given when the owner last spoke
+ * (`turnStartedAt`), a tab whose newest result came before it leaves the
+ * strip for the timeline, unless the owner opened it himself (it is in
+ * `touched`, which only his own clicks write) — so the strip reads: the live
+ * Page, this turn's tabs, and what he chose to keep. A tab with no time of
+ * its own (the page's panels: a file, the profile, a finished Page) is not a
+ * turn's and never folds; nothing here closes anything.
  */
 export function splitTabs(
   renderables: readonly Renderable[],
   activeId: string,
   fits: number = STRIP_TABS,
   touched: Readonly<Record<string, number>> = {},
+  { turnStartedAt = null }: { turnStartedAt?: string | null } = {},
 ): { shown: Renderable[]; hidden: Renderable[] } {
   const ordered = byRecency(renderables, touched);
+  const turn = time(turnStartedAt);
+  const stale = (item: Renderable): boolean => {
+    if (turn === 0 || touched[item.id] !== undefined) return false;
+    const at = time(latestVersion(item)?.at ?? item.at);
+    return at > 0 && at < turn;
+  };
   const keep = new Set(
     renderables
       .filter((item) => item.id === activeId || item.source === 'approval' || item.pinned === true)
@@ -230,7 +245,7 @@ export function splitTabs(
   );
   for (const item of ordered) {
     if (keep.size >= fits) break;
-    if (item.parked) continue;
+    if (item.parked || stale(item)) continue;
     keep.add(item.id);
   }
   const shown = ordered.filter((item) => keep.has(item.id));

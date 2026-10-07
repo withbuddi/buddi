@@ -146,14 +146,12 @@ describe('acts fold into the panel', () => {
   });
 
   /*
-   * Today's behaviour, unchanged: the failure keeps its tab because a reason
-   * has to be readable in full somewhere, and the successful act earns none
-   * because `{observation: …}` is not worth a panel.
+   * No session, no panel: still no tab. A browser step is row-only
+   * (`tab-worthy.ts`); its row carries the failure's red mark and expands to
+   * the reason in full.
    */
-  it('falls back to today"s behaviour when no session is alive', () => {
-    const tabs = renderablesFrom({ messages: acted(), descriptors: [] });
-    expect(tabs).toHaveLength(1);
-    expect(tabs[0]).toMatchObject({ id: 'a2', tone: 'critical', source: 'fallback' });
+  it('opens no tab when no session is alive either, failure included', () => {
+    expect(renderablesFrom({ messages: acted(), descriptors: [] })).toEqual([]);
   });
 
   /*

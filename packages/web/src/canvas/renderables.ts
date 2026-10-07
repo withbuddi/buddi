@@ -22,8 +22,9 @@
  * points, a document, a decision to make. A result whose whole content is a
  * sentence, and an acknowledgement of a write (`{ok: true, recorded: 1}`), are
  * already in the answer; drawing them again beside it says nothing twice. That
- * judgement is `earnsTab`, and it reads the *shape* of the result — this file
- * knows the name of no tool.
+ * judgement is `opensTab` (`tab-worthy.ts`, the one list of which renderers
+ * are views and which platform tools act rather than show) and, for the
+ * generic card, `earnsTab`, which reads the *shape* of the result.
  *
  * A failure is the exception in both directions: it always keeps its tab, so
  * nothing that went wrong is ever hidden, and it never takes the screen away
@@ -44,6 +45,7 @@ import type { ChatBlock, ChatMessage } from '../chat/types';
 import { delegatedFiles, type AttachmentBlock } from '../chat/attachments';
 import { commandResult } from './command-result';
 import { expiryOf, subjectIdentityOf, type Subject } from './tab-order';
+import { opensTab, rowOnlyTool } from './tab-worthy';
 
 /**
  * One agent asking another. Its call is drawn as the colleague's own run —
@@ -393,27 +395,15 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // a failure still keeps its tab.
       if (quiet?.has(tool) && block.ok !== false) continue;
 
+      // A fill, a step, a report, a message sent: the thread row holds it,
+      // success or failure, and opens it on demand (`tab-worthy.ts`).
+      if (rowOnlyTool(tool)) continue;
+
       // A web read or search lands in its turn's Sources tab, failure or not.
       if (gathered?.has(tool)) {
         gather({
           id: block.toolUseId, tool, input: use?.input ?? null, output: forOwner(block.output) ?? null,
           ok: block.ok !== false, ...(block.error === undefined ? {} : { error: block.error }), at,
-        });
-        continue;
-      }
-
-      // A message an agent sent the owner: drawn as the message, with where it went.
-      if (tool === NOTIFY_TOOL) {
-        collected.push({
-          id: block.toolUseId,
-          tool,
-          title: 'Message to you',
-          renderer: 'notify',
-          props: { input: use?.input ?? null, output: block.output ?? null, ok: block.ok !== false } satisfies NotifyViewProps,
-          at,
-          tone: block.ok === false ? 'critical' : undefined,
-          source: 'notify',
-          substantial: false,
         });
         continue;
       }
@@ -467,6 +457,9 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         // A declared view is the plugin author's judgement that this result is
         // worth looking at. It keeps its tab even when it came back empty —
         // "no rows this month" is an answer, drawn the way its author meant.
+        // A descriptor that resolves to the generic card is held to the same
+        // test as a result with none: real content, or the row keeps it.
+        if (!opensTab({ tool, renderer, substantial: hasSubstance(renderer, props) })) continue;
         const item: Renderable = {
           id: block.toolUseId,
           tool,
@@ -676,6 +669,21 @@ export function inspectToolCall(
   const call = blocks.find(block => block.type === 'tool_use' && block.id === id);
   if (call?.type !== 'tool_use') return null;
   const result = blocks.find(block => block.type === 'tool_result' && block.toolUseId === id);
+  // A message an agent sent the owner, opened from its row: drawn as the
+  // message, with where it went.
+  if (call.name === NOTIFY_TOOL && result?.type === 'tool_result') {
+    return {
+      id,
+      tool: call.name,
+      title: 'Message to you',
+      renderer: 'notify',
+      props: { input: call.input ?? null, output: result.output ?? null, ok: result.ok !== false } satisfies NotifyViewProps,
+      at: null,
+      tone: result.ok === false ? 'critical' : undefined,
+      source: 'notify',
+      substantial: false,
+    };
+  }
   // A quiet tool the owner opened shows what came back, drawn like any result:
   // its arguments ("which profile?") are not what they asked to see.
   if (options.resultOf?.has(call.name) && result?.type === 'tool_result' && result.ok && !result.approval) {

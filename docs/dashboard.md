@@ -345,6 +345,30 @@ you closed and their order are kept per conversation by buddi
 (`/api/chat/conversations/:id/canvas-tabs`), so the strip comes back the same
 after a reload and on another device.
 
+Only results with a view open a tab: a table or list, a chart, figures, a
+story, a document, a diff, a picture, audio, a preview, a query, terminal
+output, or a structured result with real content in it, and a decision waiting
+on you. A browser step (navigate, observe, click, fill), anything from
+`secret.*` or `secrets.*`, `mission.*` reports and `owner.notify` stay in their
+chat row, which expands to the whole result and opens it on the canvas on
+demand; so does a status or yes/no answer. Plugins get the same rule: a
+plugin's view opens a tab when the renderer it resolves to is one of these.
+The list lives in one place, `packages/web/src/canvas/tab-worthy.ts`.
+
+**A live page keeps the front.** While an agent has a page open in this
+conversation, the **Page** tab stays in front: nothing the run produces takes
+it away, and a new tab opens behind it with a quiet dot, which clears when you
+open it. Only the agent's own `canvas.show` brings something forward. Without a
+live page the canvas follows the work as before: the newest result with
+something in it comes to the front, and anything else that arrives behind the
+tab you are reading wears the dot. On a phone, where the canvas is a sheet you
+open, it follows the work as before.
+
+**A new turn folds the last one away.** When you write again, tabs from earlier
+turns move into the **N more** menu, so the strip reads: the Page (while it is
+live), this turn's tabs, and anything you opened yourself. Nothing is closed by
+this, and the Page tab is never closed for you.
+
 Every web page an agent reads and every web search it runs in one turn share a
 single **Sources** tab, with the number of calls beside its name, instead of a
 tab each. Pages come first: a letter tile for the site (the dashboard never

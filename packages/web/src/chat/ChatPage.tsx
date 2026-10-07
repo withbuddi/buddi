@@ -178,6 +178,19 @@ export function ChatPage({
    */
   const [settledApprovals, setSettledApprovals] = useState<ReadonlySet<string>>(new Set());
   const [activeTab, setActiveTab] = useState<string | null>(null);
+  /*
+   * The owner put this in front himself: a tab clicked, a chat row opened, a
+   * file or the profile. Counted rather than flagged so that a second click
+   * on the tab already in front still counts. Only these write `touched`,
+   * which is what keeps a tab on the strip past its turn (`splitTabs`).
+   */
+  const [ownerPicks, setOwnerPicks] = useState(0);
+  const openTab = useCallback((id: string): void => {
+    setActiveTab(id);
+    setOwnerPicks((count) => count + 1);
+  }, []);
+  /** Tabs that arrived or changed behind the one in front, until opened. */
+  const [unread, setUnread] = useState<ReadonlySet<string>>(() => new Set());
   /** The canvas's closed tabs and their order, kept on the server per conversation. */
   const canvasTabs = useCanvasTabs(conversationId ?? null);
   /** The minute, so a tab past its expiry closes itself while the page is open. */
@@ -729,13 +742,25 @@ export function ChatPage({
   const shownTab = (activeTab
     ? sourcesHolding(renderables, activeTab)?.id ?? versionHolding(renderables, activeTab)?.id
     : null) ?? activeTab;
-  // Looking at a tab puts it first on the strip, here and on the next device.
+  // The owner opening a tab puts it first on the strip and keeps it there past
+  // its turn, here and on the next device. What the canvas turned to by
+  // itself is not touched: that is the canvas's choice, not his.
   const touchTab = canvasTabs.touch;
   useEffect(() => {
+    if (ownerPicks === 0) return;
     if (shownTab && renderables.some(item => item.id === shownTab)) touchTab(shownTab);
-    // Only when what is in front changes, not on every new result.
+    // Only when the owner picks, not on every new result.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shownTab, touchTab]);
+  }, [ownerPicks, shownTab, touchTab]);
+  // Opening a tab reads it.
+  useEffect(() => {
+    if (shownTab) setUnread((current) => {
+      if (!current.has(shownTab)) return current;
+      const next = new Set(current);
+      next.delete(shownTab);
+      return next;
+    });
+  }, [shownTab]);
   /** When the owner last spoke: the timeline's "this turn". */
   const turnStartedAt = useMemo(() => {
     const messages = conversation?.messages ?? [];
@@ -759,15 +784,60 @@ export function ChatPage({
    */
   const lastId = renderables.filter((item) => (item.source !== 'browser' || item.pinned === true) && item.id !== FILES_TAB_ID).at(-1)?.id
     ?? renderables.filter((item) => item.id !== FILES_TAB_ID).at(-1)?.id ?? null;
+  /*
+   * The Page keeps the front while a page is open for this conversation.
+   *
+   * The owner is watching an agent work on a screen; a list of saved names or
+   * a step's result taking the front would bury what he is watching under
+   * what he never asked to see. So while a session is live nothing the run
+   * produces takes the front — it opens behind, with a dot — except a
+   * `canvas.show`, which is the agent asking on purpose. On a phone the canvas
+   * is a sheet the owner opens; the canvas inside it follows the work as
+   * before.
+   */
+  const holdPage = liveBrowser !== null && !narrow;
+  const takesFront = useCallback((item: Renderable | undefined): boolean =>
+    item !== undefined && (!holdPage || item.source === 'canvas'), [holdPage]);
   useEffect(() => {
     if (focusId && focusId !== previousFocus.current) {
       previousFocus.current = focusId;
-      setActiveTab(focusId);
-      return;
+      const candidate = renderables.find((item) => tabStamp(item) === focusId);
+      if (takesFront(candidate)) {
+        setActiveTab(focusId);
+        return;
+      }
     }
     // Nothing substantial has ever arrived: show the newest tab rather than none.
     if (activeTab === null && lastId) setActiveTab(lastId);
-  }, [focusId, activeTab, lastId]);
+  }, [focusId, activeTab, lastId, renderables, takesFront]);
+
+  /*
+   * What arrived behind the tab in front gets a quiet dot until it is opened.
+   * Seeded when a conversation loads, so opening an old thread marks nothing;
+   * after that, a tab that is new, or holds a newer result than when last
+   * seen, is unread unless it is about to take the front itself. The page's
+   * own panels (the Page, a file, the profile) are not news.
+   */
+  const seen = useRef<{ key: string | null; stamps: Map<string, string> }>({ key: null, stamps: new Map() });
+  const seenKey = conversation && canvasTabs.ready ? conversationId ?? null : null;
+  useEffect(() => {
+    const stamps = new Map(renderables.map((item) => [item.id, tabStamp(item)]));
+    if (seenKey === null || seen.current.key !== seenKey) {
+      seen.current = { key: seenKey, stamps };
+      setUnread((current) => (current.size === 0 ? current : new Set()));
+      return;
+    }
+    const before = seen.current.stamps;
+    seen.current.stamps = stamps;
+    const arrived = renderables.filter((item) => before.get(item.id) !== stamps.get(item.id)
+      && item.at !== null
+      && item.id !== shownTab
+      && !(tabStamp(item) === focusId && takesFront(item)));
+    if (arrived.length === 0) return;
+    setUnread((current) => new Set([...current, ...arrived.map((item) => item.id)]));
+    // Only when the tabs change; what is in front is read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderables, seenKey]);
 
   /*
    * A preview that has just started being served is selected once, the way a
@@ -780,7 +850,7 @@ export function ChatPage({
     const before = previousLive.current;
     previousLive.current = servedPreviews.live;
     const arrived = [...servedPreviews.live].filter((key) => !before.has(key));
-    if (arrived.length === 0 || inlineApproval) return;
+    if (arrived.length === 0 || inlineApproval || holdPage) return;
     const ownerMoved = activeTab !== null && activeTab !== previousFocus.current;
     if (ownerMoved) return;
     const tab = [...renderables].reverse().find((item) => item.source === 'descriptor'
@@ -788,7 +858,7 @@ export function ChatPage({
       && (item.props as PreviewProps).target !== null
       && arrived.includes(previewKey((item.props as PreviewProps).target!)));
     if (tab) setActiveTab(tab.id);
-  }, [servedPreviews.live, renderables, inlineApproval, activeTab]);
+  }, [servedPreviews.live, renderables, inlineApproval, activeTab, holdPage]);
 
   // Select once when a session appears. Polls must not steal a chart the owner
   // selected, and a pending approval remains more important than the preview.
@@ -837,7 +907,7 @@ export function ChatPage({
   /** A file, from the thread or the tray, onto the canvas. */
   const openFile = (file: AttachmentBlock): void => {
     setOpenedFiles(current => current.some(item => item.artifactId === file.artifactId) ? current : [...current, file]);
-    setActiveTab(artifactTabId(file.artifactId));
+    openTab(artifactTabId(file.artifactId));
     if (narrow) onOpenCanvas?.();
   };
 
@@ -1023,7 +1093,7 @@ export function ChatPage({
       .agentProfile(agentId)
       .then((loaded) => {
         setProfile(loaded);
-        setActiveTab(profileTabId(loaded.id));
+        openTab(profileTabId(loaded.id));
         if (narrow) onOpenCanvas?.();
       })
       .catch((err: unknown) => setError(message(err)))
@@ -1189,11 +1259,12 @@ export function ChatPage({
     <Canvas
       renderables={renderables}
       activeId={shownTab}
-      onActivate={setActiveTab}
+      onActivate={openTab}
       onClose={(id) => closeTabs([id])}
       onCloseMany={closeTabs}
       touched={canvasTabs.touched}
       turnStartedAt={turnStartedAt}
+      unread={unread}
       timezone={timezone}
       onDecided={onDecided}
       onChangeAgent={changeVia}
@@ -1465,14 +1536,14 @@ export function ChatPage({
               const step = stepFor([...(conversation?.messages ?? []), ...optimistic], toolUseId);
               if (step) {
                 setFocusedStep(step);
-                setActiveTab(browserTab.id);
+                openTab(browserTab.id);
                 if (narrow) onOpenCanvas?.();
                 return;
               }
             }
             const holding = transcriptTabs.current.find(item => item.id === toolUseId || (item.versions ?? []).some(version => version.id === toolUseId));
             canvasTabs.reopen(holding ? [toolUseId, tabStamp(holding)] : [toolUseId]);
-            setActiveTab(toolUseId);
+            openTab(toolUseId);
             if (narrow) onOpenCanvas?.();
           }}
           {...(agent ? { agentName: agent.name, agentId: agent.id } : {})}
@@ -1564,7 +1635,7 @@ export function ChatPage({
             version={conversation}
             onDecided={onDecided}
             onSay={(text) => send(text, [])}
-            onOpenFull={(toolUseId) => { setActiveTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
+            onOpenFull={(toolUseId) => { openTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
             phone={narrow}
             onSecretSet={setSecretSetShown}
             {...(ownStatus?.page?.title ? { pageTitle: ownStatus.page.title } : {})}

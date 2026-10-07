@@ -12,6 +12,7 @@ What changes in buddi from one release to the next, newest first.
 ### Changed
 
 - A `secret.fill` for a site with nothing saved now tells the agent to ask with the sign-in card (`secret.request`) instead of asking you in chat where the password is; a set of secrets saved together asks once for the set the first time an agent fills it there, not once per field.
+- The Canvas no longer takes the screen from a live page. While an agent has a page open in the conversation the Page tab stays in front: results open behind it with a quiet dot that clears when you open them, and only the agent's own `canvas.show` brings something forward (on a phone the sheet behaves as before). Only results with a view open a tab at all (tables, lists, charts, stories, documents, diffs, pictures, audio, previews, terminal output, a structured result with real content); a browser step, a `secret.*` fill or list, a `mission.*` report and `owner.notify` stay in their chat row, which still opens them on the canvas. When you start a new turn, the previous turn's tabs fold into the **N more** menu unless you opened them yourself.
 - The live picture of a page you hold gets sharp on a link that keeps up: after a few seconds of frames going out promptly it grows to the page's own size (up to 1440×900) at JPEG quality 70, and steps back down on lag, waiting longer each time before trying again. The window bar says *sharp* or *fast*.
 
 ### Fixed

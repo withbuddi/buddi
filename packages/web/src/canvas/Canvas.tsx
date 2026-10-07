@@ -86,6 +86,7 @@ export function Canvas({
   onCloseMany,
   touched,
   turnStartedAt,
+  unread,
   now = Date.now,
   loading = false,
 }: {
@@ -126,8 +127,16 @@ export function Canvas({
   onCloseMany?: (ids: string[]) => void;
   /** When each tab was last looked at (epoch ms), by id: the strip's order. */
   touched?: Readonly<Record<string, number>>;
-  /** When the owner last spoke: the timeline's "this turn" starts there. */
+  /**
+   * When the owner last spoke: the timeline's "this turn" starts there, and
+   * tabs from before it fold off the strip (`splitTabs`).
+   */
   turnStartedAt?: string | null;
+  /**
+   * Tabs that arrived, or changed, behind the one in front: each wears a
+   * quiet dot until it is opened. The page keeps the set; the canvas draws it.
+   */
+  unread?: ReadonlySet<string>;
   /** The clock, for tests. */
   now?: () => number;
   /**
@@ -162,7 +171,8 @@ export function Canvas({
     ? (activeId as string)
     : (renderables[renderables.length - 1]!.id);
 
-  const { shown, hidden } = splitTabs(renderables, active, fits, touched);
+  const { shown, hidden } = splitTabs(renderables, active, fits, touched, { turnStartedAt: turnStartedAt ?? null });
+  const isUnread = (item: Renderable): boolean => item.id !== active && unread?.has(item.id) === true;
   const closeableIds = renderables.filter(closeable).map((item) => item.id);
 
   return (
@@ -173,11 +183,11 @@ export function Canvas({
           <Tabs.List className="wb-tabstrip" aria-label="Canvas">
             {shown.map((item) => (
               <div key={item.id} className="wb-tab-item">
-              <Tabs.Trigger value={item.id} className="wb-tab" data-tone={item.tone}
+              <Tabs.Trigger value={item.id} className="wb-tab" data-tone={item.tone} data-unread={isUnread(item) ? 'true' : undefined}
                 onKeyDown={event => { if (event.key === 'Delete' && onClose && closeable(item)) { event.preventDefault(); onClose(item.id); } }}>
                 {item.tone === 'warning' || item.tone === 'critical' ? (
                   <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
-                ) : null}
+                ) : isUnread(item) ? <span className="wb-tab-dot" data-tone="unread" aria-hidden="true" /> : null}
                 <span className="wb-tab-text">{labels.get(item.id) ?? item.title}</span>
                 {item.count ? <span className="wb-tab-count">{item.count}</span> : null}
               </Tabs.Trigger>
@@ -187,6 +197,7 @@ export function Canvas({
           </Tabs.List>
           <TabMenu
             items={hidden}
+            unread={new Set(hidden.filter(isUnread).map((item) => item.id))}
             onActivate={onActivate}
             timezone={timezone}
             labels={labels}
@@ -405,6 +416,7 @@ function VersionStepper({
  */
 function TabMenu({
   items,
+  unread,
   groups,
   labels,
   onActivate,
@@ -413,6 +425,8 @@ function TabMenu({
   timezone,
 }: {
   items: Renderable[];
+  /** Hidden tabs not yet opened: a quiet dot on their row, and on the control when nothing worse is there. */
+  unread: ReadonlySet<string>;
   groups: TimelineGroup[];
   labels: ReadonlyMap<string, string>;
   onActivate: (id: string) => void;
@@ -425,7 +439,7 @@ function TabMenu({
     ? 'critical'
     : items.some((item) => item.tone === 'warning')
       ? 'warning'
-      : null;
+      : unread.size > 0 ? 'unread' : null;
 
   return (
     // Not modal: this menu names tabs, it does not take the page hostage — the
@@ -461,7 +475,7 @@ function TabMenu({
                       <span className="ui-menu-item-text">
                         {item.tone === 'warning' || item.tone === 'critical' ? (
                           <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
-                        ) : null}
+                        ) : unread.has(item.id) ? <span className="wb-tab-dot" data-tone="unread" aria-hidden="true" /> : null}
                         {labels.get(item.id) ?? item.title}
                       </span>
                       {/* The clock, not the tool name: it is what places a row on the timeline. */}
