@@ -368,6 +368,21 @@ describe('an upgrade inside buddi.app', () => {
     expect(existsSync(path.join(ctx.root, 'node_modules'))).toBe(false);
   });
 
+  test('relinks the plugins to the new release\'s core once current names it, and a failed relink does not stop the hand-over', async () => {
+    const { ctx, releases } = await appInstallation();
+    const seen: Array<{ coreDir: string; current?: string }> = [];
+    const s = appService(ctx, {
+      relinkPlugins: async (coreDir) => {
+        seen.push({ coreDir, ...await releaseLinks(releases) });
+        throw new Error('disk full');
+      },
+    });
+    const job = await finished(s.upgrade, (s.upgrade.start() as BackupJob).id);
+    expect(job.phase).toBe('restarting');
+    const next = releaseRoot(path.join(releases, 'buddi-0.1.1'));
+    expect(seen).toEqual([{ coreDir: path.join(next, 'node_modules', '@buddi', 'core'), current: next, previous: ctx.root }]);
+  });
+
   test('a release that fails verification changes nothing and never stops the gateway', async () => {
     const { ctx, releases } = await appInstallation();
     const s = appService(ctx, { npm: fakeNpm({ audit: auditReport({ invalid: true }) }).runner });

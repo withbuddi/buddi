@@ -44,6 +44,7 @@ import {
   runPluginsCli,
   runRemindersCli,
   runServe,
+  relinkPluginsOnLoad,
   supervisorCall,
   readOllamaDevices,
   connectedLine,
@@ -254,6 +255,8 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       return process.exitCode === undefined ? 0 : Number(process.exitCode);
     }
     case 'serve':
+      // The plugins load in loadEnvironment; relink them to this core first.
+      relinkPluginsOnLoad();
       await loadEnvironment();
       await runServe();
       return 0;

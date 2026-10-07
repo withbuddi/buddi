@@ -471,6 +471,39 @@ describe('the plugins section', () => {
     expect(within(dialog).getByText('0.1.0')).toBeInTheDocument();
   });
 
+  it('says a plugin left behind by an update needs a restart, keeping the path in the details', async () => {
+    const raw =
+      "importing it threw: Cannot find module '/Users/o/Library/Application Support/buddi/releases/buddi-0.1.0-pre.46/node_modules/@withbuddi/buddi/node_modules/@buddi/core/dist/plugin/index.js' imported from /Users/o/Library/Application Support/buddi/plugins/finance/node_modules/@buddi/core/plugin.js";
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({ checkout: false, installed: [{ ...INSTALLED, name: 'finance', loaded: false, error: raw, needsRelink: true }] }),
+    );
+    vi.mocked(api.serviceAction).mockResolvedValue({ supervised: true });
+    render(<Plugins />);
+    fireEvent.click(await screen.findByLabelText('finance: details'));
+    const dialog = await screen.findByRole('dialog');
+    const headline = within(dialog).getByText('buddi was updated and this plugin needs relinking. Restart buddi to repair it.');
+    expect(headline.textContent).not.toMatch(/\//);
+    // The raw error is still there, behind Technical details.
+    const details = within(dialog).getByText('Technical details').closest('details')!;
+    expect(details).not.toHaveAttribute('open');
+    expect(within(details).getByText(raw)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restart buddi' }));
+    expect(restartState()).toMatchObject({ kind: 'plugins', line: 'Repairing finance…' });
+    await waitFor(() => expect(api.serviceAction).toHaveBeenCalledWith('restart'));
+  });
+
+  it('shows any other load error as it is, with no restart offered for it', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({ checkout: false, installed: [{ ...INSTALLED, name: 'finance', loaded: false, error: 'importing it threw: boom' }] }),
+    );
+    render(<Plugins />);
+    fireEvent.click(await screen.findByLabelText('finance: details'));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('importing it threw: boom')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/needs relinking/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Restart buddi' })).not.toBeInTheDocument();
+  });
+
   it('tells a checkout the command instead of offering a restart button', async () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ restartNeeded: true, checkout: true }));
     render(<Plugins />);

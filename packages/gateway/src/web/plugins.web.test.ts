@@ -315,6 +315,36 @@ it('does not ask for a restart for a plugin that will not load', async () => {
   expect(body.restartNeeded).toBe(false);
   expect(body.installed[0].loaded).toBe(false);
   expect(body.installed[0].error).toMatch(/importing it threw/);
+  expect(body.installed[0].needsRelink).toBeUndefined();
+});
+
+it('marks a plugin whose linked core an upgrade removed, so the page can say restart', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'buddi-plugins-'));
+  const file = path.join(dir, 'plugins.json');
+  await writeFile(
+    file,
+    JSON.stringify({
+      version: 1,
+      plugins: [
+        {
+          name: 'finance',
+          version: '0.1.6',
+          entry: '/p/finance/index.js',
+          schema: 'finance',
+          installedAt: '2026-01-01T00:00:00.000Z',
+          source: { kind: 'registry', name: 'finance', version: '0.1.6' },
+        },
+      ],
+    }),
+    'utf8',
+  );
+  const error =
+    "importing it threw: Cannot find module '/d/releases/buddi-0.1.0-pre.46/node_modules/@withbuddi/buddi/node_modules/@buddi/core/dist/plugin/index.js' imported from /d/plugins/finance/node_modules/@buddi/core/plugin.js";
+  const engine = fakeEngine({ pluginLoadReport: vi.fn(() => [{ name: 'finance', version: '0.1.6', error }]) });
+  const { origin, headers } = await dashboard(engine, { BUDDI_PLUGINS_FILE: file });
+  const body = (await (await fetch(`${origin}/api/plugins`, { headers })).json()) as any;
+  expect(body.installed[0].needsRelink).toBe(true);
+  expect(body.installed[0].error).toBe(error);
 });
 
 it('says which plugins load at the next restart: new, or moved on since this process imported it', async () => {

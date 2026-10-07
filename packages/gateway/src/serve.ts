@@ -76,6 +76,7 @@ import { scrubText, settleScheduleZones } from '@buddi/core';
 import { adoptEnvMailbox, adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
+import { relinkPluginsOnLoad } from './plugins/load.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler, OFFER_HINT_PREFIX } from './missions/agent-run.js';
 import {
   composePrepare,
@@ -487,6 +488,9 @@ export function createMissionJobHandler(deps: {
 }
 
 export async function main(): Promise<void> {
+  // Before the plugins load: an upgrade may have removed the core their
+  // shims were written against (plugins/relink.ts).
+  relinkPluginsOnLoad();
   await loadEnvironment();
 
   // The service waits for the database rather than dying on it. Under launchd's

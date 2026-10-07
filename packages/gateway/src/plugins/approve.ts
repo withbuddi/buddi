@@ -51,8 +51,10 @@ import { entryPointOf, planInstall, type InstallPlan } from './install.js';
 import { InstallRefusal } from './refusals.js';
 import { assertInsidePluginsRoot, installedPackageDir } from './paths.js';
 import { treeHash, TreeRefusal } from './tree.js';
+import { relinkPackage } from './relink.js';
 import {
   readStaged,
+  resolveCoreDir,
   rejectStaged,
   stagedPackageExists,
   writeStaged,
@@ -168,6 +170,14 @@ async function approveOne(
           `Reject it (buddi plugins reject ${id}) and stage it again.`,
       );
     }
+  }
+
+  // A stage read under an earlier version than the one running now (an upgrade
+  // came between) names a core that may be gone: point it at this one. The
+  // shim is outside the hash, so this changes nothing the owner approved.
+  if (staged.source.kind !== 'directory') {
+    const running = resolveCoreDir();
+    if (running !== undefined) relinkPackage(staged.packageDir, running);
   }
 
   // Recorded before the import, not after. The whole point of the record is

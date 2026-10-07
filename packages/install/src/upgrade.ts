@@ -39,6 +39,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { request } from 'node:http';
+import { createRequire } from 'node:module';
 import { open, readFile, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -841,6 +842,13 @@ export interface UpgradeServiceOptions {
   startGateway: () => void;
   /** Shut down and hand over to the newly installed code. Never returns. */
   restart: () => void;
+  /**
+   * Point every installed plugin's `@buddi/core` at this core folder: the new
+   * release's, once buddi.app's `current` names it. The gateway does the same
+   * at every start; this closes the gap before it. A seam, because this file
+   * imports no `@buddi/*` value (see the top).
+   */
+  relinkPlugins?: ((coreDir: string) => void | Promise<void>) | undefined;
   install?: UpgradeInstaller | undefined;
   /** npm, as buddi.app's layout runs it (install into a release folder, audit signatures). A seam for tests. */
   npm?: NpmRunner | undefined;
@@ -853,6 +861,15 @@ export interface UpgradeServiceOptions {
   checkIntervalMs?: number | undefined;
   /** How long the backup before the upgrade may take. Shortened in tests. */
   backupWaitMs?: number | undefined;
+}
+
+/** The `@buddi/core` folder a release root resolves, as the new gateway will. */
+export function releaseCoreDir(root: string): string {
+  try {
+    return path.dirname(createRequire(path.join(root, 'package.json')).resolve('@buddi/core/package.json'));
+  } catch {
+    return path.join(root, 'node_modules', '@buddi', 'core');
+  }
 }
 
 function message(err: unknown): string {
@@ -1139,6 +1156,12 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       await switchCurrent(dir, placed.root, ctx.root);
     } catch (err) {
       return await give('installing', `could not switch to ${to}: ${message(err)}`, true);
+    }
+    // The previous release's folder may be gone now, and with it the core every
+    // plugin was linked to. Never in the way of the hand-over.
+    if (opts.relinkPlugins !== undefined) {
+      try { await opts.relinkPlugins(releaseCoreDir(placed.root)); }
+      catch (err) { log(`upgrade: relinking plugins to ${to} failed (${message(err)}); the gateway relinks them at start.`); }
     }
     await handOverTo(job, to, startedAt, taken.archive);
   };

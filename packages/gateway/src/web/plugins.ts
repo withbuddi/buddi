@@ -20,6 +20,7 @@
  */
 import { canRestartGateway } from './service.js';
 import { InstallRefusal } from '../plugins/refusals.js';
+import { isCoreMovedError } from '../plugins/relink.js';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, readFileSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
@@ -568,6 +569,8 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
       ...(loadsAtRestart(entry) ? { loadsAtRestart: true } : {}),
       ...(entry.enabled === false ? { enabled: false } : {}),
       ...(error === undefined ? {} : { error }),
+      // The core its shim names is gone (an upgrade removed it): a restart relinks it.
+      ...(error !== undefined && isCoreMovedError(error) ? { needsRelink: true } : {}),
       // Not set up yet: the row says "Needs setup" and opens the page.
       ...(ready && !ready.ready
         ? { setup: { ready: false, ...(ready.note === undefined ? {} : { note: ready.note }), ...(setupPage ? { page: setupPage } : {}) } }

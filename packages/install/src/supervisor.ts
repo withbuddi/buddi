@@ -647,6 +647,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       startGateway: () => start(),
       restart: () => { handingOver = true; onSignal(); },
       http: gateway.defaultHttpTransport,
+      relinkPlugins: coreDir => { gateway.relinkPlugins(ready.env, { coreDir, log: line => console.error(line) }); },
       log: line => console.error(line),
     });
     // Uninstall from the product: the last backup and its words first, then the removal (product-uninstall.ts).

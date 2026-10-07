@@ -312,6 +312,9 @@ function OpenPages({
   );
 }
 
+/** The headline for a plugin whose core moved under it in an upgrade. Never a path. */
+export const RELINK_WORDS = 'buddi was updated and this plugin needs relinking. Restart buddi to repair it.';
+
 /** A plugin's state, in the tone it deserves. */
 function StatePill({ plugin }: { plugin: InstalledPluginView }): JSX.Element {
   if (plugin.enabled === false) return <Pill>disabled</Pill>;
@@ -622,6 +625,7 @@ export function Plugins({
       onUpdate={(version) => update(openedPlugin.name, version)}
       onSettings={openedPlugin.enabled === false ? undefined : settingsFor(openedPlugin.name)}
       firstStep={firstStepFor(openedPlugin)}
+      onRestart={checkout ? undefined : () => restartWhile({ kind: 'plugins', line: `Repairing ${openedPlugin.name}…` }, () => api.serviceAction('restart'))}
       busy={flowBusy}
     />
   ) : openedEntry ? (
@@ -1723,6 +1727,7 @@ function InstalledSheet({
   onRemove,
   onUpdate,
   firstStep,
+  onRestart,
 }: {
   plugin: InstalledPluginView;
   listing: MarketEntryView | undefined;
@@ -1740,8 +1745,12 @@ function InstalledSheet({
   onUpdate: (version?: string) => void;
   /** Its first step when it waits, as on its row. */
   firstStep?: { label: string; run: () => void } | undefined;
+  /** Restart buddi, when this installation can restart itself (not a foreground checkout). */
+  onRestart?: (() => Promise<unknown>) | undefined;
 }): JSX.Element {
   const disabled = plugin.enabled === false;
+  const [restarting, setRestarting] = useState(false);
+  const [restartFailed, setRestartFailed] = useState<string | null>(null);
   /*
    * Code off this machine was put there by the owner, so "you, from this
    * machine" says nothing an author line does not say better. A registry's
@@ -1805,7 +1814,30 @@ function InstalledSheet({
         </Toolbar>
       }
     >
-      {plugin.error ? <Notice tone="critical">{plugin.error}</Notice> : null}
+      {plugin.error && plugin.needsRelink ? (
+        <Notice
+          tone="critical"
+          action={onRestart ? (
+            <Button size="sm" variant="accent" disabled={restarting} onClick={() => {
+              setRestarting(true);
+              setRestartFailed(null);
+              void onRestart().catch((error: unknown) => setRestartFailed(errorText(error))).finally(() => setRestarting(false));
+            }}>
+              Restart buddi
+            </Button>
+          ) : undefined}
+        >
+          <Stack gap="sm">
+            <ErrorBanner message={restartFailed} />
+            <span>{RELINK_WORDS}</span>
+            <Details summary="Technical details">
+              <code className="plugins-quiet">{plugin.error}</code>
+            </Details>
+          </Stack>
+        </Notice>
+      ) : plugin.error ? (
+        <Notice tone="critical">{plugin.error}</Notice>
+      ) : null}
       {notes && notes.length > 0 ? <Notice role="status">{notes.join(' ')}</Notice> : null}
       {disabled ? (
         <Notice>Disabled: its tools, pages and watchers are off and its missions are paused. Its data is kept.</Notice>

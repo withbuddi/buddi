@@ -1125,6 +1125,11 @@ code migrates and starts. If a step fails, the gateway is deliberately left
 down and `buddi doctor` names the archive taken first and the two commands that
 put you back.
 
+Each installed plugin reaches buddi through a small `@buddi/core` written into
+its folder, pointing at the core of the version that approved it; the upgrader
+and every gateway start rewrite it to the version now running, so plugins keep
+loading after the old release's folder is removed.
+
 ### In a source checkout
 
 A checkout builds its own code, so the migration is no longer the step you can

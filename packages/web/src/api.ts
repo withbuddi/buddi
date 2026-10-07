@@ -2225,6 +2225,8 @@ export interface InstalledPluginView {
   enabled?: false;
   /** Why its entry point did not load. Set only when `loaded` is false. */
   error?: string;
+  /** The core it was linked to is gone (buddi was updated): a restart relinks it. */
+  needsRelink?: true;
   /** Loaded, but it says it cannot do anything yet: what to do first, and the page where. */
   setup?: { ready: false; note?: string; page?: PluginPageRef };
   /** Held back by what it requires: each need in the row's words. */

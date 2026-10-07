@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- Plugins installed under an earlier version load again after an upgrade: buddi relinks each plugin to the running version at every start and once the upgrade is in place, and a plugin still left behind says "Restart buddi to repair it" instead of a missing-file path.
+
 ## 0.1.0-pre.49 — 2026-10-07
 
 ### Added

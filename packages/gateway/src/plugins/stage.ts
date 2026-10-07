@@ -511,8 +511,12 @@ export function linkCore(packageDir: string, coreDir?: string): string | undefin
   return resolved;
 }
 
-/** The narrowed `@buddi/core`: `./plugin` and `./package.json`, re-exporting `coreDir`'s. */
-export function writePluginOnlyCore(dir: string, coreDir: string): void {
+/** What the narrowed core's package.json says it is; how a shim buddi wrote is told from anything else. */
+export const PLUGIN_ONLY_CORE_DESCRIPTION =
+  'The buddi plugin API, as an installed plugin sees it: @buddi/core/plugin and nothing else.';
+
+/** The three files of a plugin-only core over `coreDir`, by name. */
+export function pluginOnlyCoreFiles(coreDir: string): Record<string, string> {
   let version = '0.0.0';
   try {
     const pkg = JSON.parse(readFileSync(path.join(coreDir, 'package.json'), 'utf8')) as { version?: unknown };
@@ -521,14 +525,12 @@ export function writePluginOnlyCore(dir: string, coreDir: string): void {
     // A core without a readable package.json still has a plugin entry to point at.
   }
   const entry = path.join(coreDir, 'dist', 'plugin', 'index.js');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    path.join(dir, 'package.json'),
-    `${JSON.stringify(
+  return {
+    'package.json': `${JSON.stringify(
       {
         name: '@buddi/core',
         version,
-        description: 'The buddi plugin API, as an installed plugin sees it: @buddi/core/plugin and nothing else.',
+        description: PLUGIN_ONLY_CORE_DESCRIPTION,
         type: 'module',
         exports: {
           './plugin': { types: './plugin.d.ts', default: './plugin.js' },
@@ -538,9 +540,43 @@ export function writePluginOnlyCore(dir: string, coreDir: string): void {
       null,
       2,
     )}\n`,
-  );
-  writeFileSync(path.join(dir, 'plugin.js'), `export * from ${JSON.stringify(pathToFileURL(entry).href)};\n`);
-  writeFileSync(path.join(dir, 'plugin.d.ts'), `export * from ${JSON.stringify(entry)};\n`);
+    'plugin.js': `export * from ${JSON.stringify(pathToFileURL(entry).href)};\n`,
+    'plugin.d.ts': `export * from ${JSON.stringify(entry)};\n`,
+  };
+}
+
+/** The narrowed `@buddi/core`: `./plugin` and `./package.json`, re-exporting `coreDir`'s. */
+export function writePluginOnlyCore(dir: string, coreDir: string): void {
+  mkdirSync(dir, { recursive: true });
+  for (const [name, text] of Object.entries(pluginOnlyCoreFiles(coreDir))) writeFileSync(path.join(dir, name), text);
+}
+
+/** Is `dir` a plugin-only core buddi wrote (over any core)? A link, or a real core, is not. */
+export function isPluginOnlyCore(dir: string): boolean {
+  if (!lstatOrUndefined(dir)?.isDirectory()) return false;
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { description?: unknown };
+    return pkg.description === PLUGIN_ONLY_CORE_DESCRIPTION;
+  } catch {
+    return false;
+  }
+}
+
+/** Is `dir` already exactly the plugin-only core over `coreDir`? */
+export function pluginOnlyCoreIsCurrent(dir: string, coreDir: string): boolean {
+  if (!lstatOrUndefined(dir)?.isDirectory()) return false;
+  const want = pluginOnlyCoreFiles(coreDir);
+  const names = new Set(Object.keys(want));
+  try {
+    for (const entry of readdirSync(dir)) if (!names.has(entry)) return false;
+    for (const [name, text] of Object.entries(want)) {
+      const file = path.join(dir, name);
+      if (!lstatOrUndefined(file)?.isFile() || readFileSync(file, 'utf8') !== text) return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 /** `lstat`, or nothing. Never follows what it is asked about. */
@@ -920,10 +956,10 @@ function runningCoreVersion(): string {
 
 /**
  * Every `node_modules/@buddi/core` below the package's own, which only a
- * dependency asking for core can have put there: each becomes the same
- * plugin-only core `linkCore` writes at the top.
+ * dependency asking for core can have put there. Never follows a link.
  */
-function linkNestedCores(packageDir: string, coreDir: string | undefined): void {
+export function nestedCoreDirs(packageDir: string): string[] {
+  const found: string[] = [];
   const visit = (modules: string, depth: number): void => {
     if (depth > 32 || !lstatOrUndefined(modules)?.isDirectory()) return;
     for (const entry of readdirSync(modules, { withFileTypes: true })) {
@@ -938,15 +974,24 @@ function linkNestedCores(packageDir: string, coreDir: string | undefined): void 
         if (!lstatOrUndefined(pkg.dir)?.isDirectory()) continue;
         const nested = path.join(pkg.dir, 'node_modules');
         const core = path.join(nested, '@buddi', 'core');
-        if (lstatOrUndefined(core) !== undefined) {
-          rmSync(core, { recursive: true, force: true });
-          if (coreDir !== undefined) writePluginOnlyCore(core, coreDir);
-        }
+        if (lstatOrUndefined(core) !== undefined) found.push(core);
         visit(nested, depth + 1);
       }
     }
   };
   visit(path.join(packageDir, 'node_modules'), 0);
+  return found;
+}
+
+/**
+ * Each nested core (`nestedCoreDirs`) becomes the same plugin-only core
+ * `linkCore` writes at the top.
+ */
+export function linkNestedCores(packageDir: string, coreDir: string | undefined): void {
+  for (const core of nestedCoreDirs(packageDir)) {
+    rmSync(core, { recursive: true, force: true });
+    if (coreDir !== undefined) writePluginOnlyCore(core, coreDir);
+  }
 }
 
 /** Does this package directory still look like the one that was staged? */

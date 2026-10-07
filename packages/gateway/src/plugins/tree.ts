@@ -41,7 +41,9 @@ const NEVER = new Set(['.git']);
  * The peer staging writes itself: the plugin-only `@buddi/core`, which
  * re-exports the core this gateway is running from outside the staged tree
  * (`linkCore`). Buddi's, not the package's, so it is neither refused nor
- * hashed.
+ * hashed. The same goes for every nested `node_modules/@buddi/core` below a
+ * dependency (`linkNestedCores` rewrites each one), so relinking after an
+ * upgrade moved the core never reads as the files having changed.
  */
 export const CORE_PEER_LINK = 'node_modules/@buddi/core';
 
@@ -91,7 +93,7 @@ export function walkTree(root: string, opts: TreeOptions = {}): Visited[] {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (NEVER.has(entry.name)) continue;
       const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
-      if (relative === CORE_PEER_LINK) continue;
+      if (relative === CORE_PEER_LINK || relative.endsWith(`/${CORE_PEER_LINK}`)) continue;
       if (!opts.includeModules && relative === 'node_modules') continue;
       const full = path.join(dir, entry.name);
       if (entry.isSymbolicLink()) {

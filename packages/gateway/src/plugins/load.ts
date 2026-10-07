@@ -49,6 +49,7 @@ import { createMissionManifest } from '../missions/report.js';
 import { createAskManifest } from '../surfaces/pending-question.js';
 import { createOfferManifest } from '../surfaces/offered-actions.js';
 import { createHandoffManifest } from '../surfaces/handoff.js';
+import { relinkInstalledPlugins, type RelinkOptions, type RelinkReport } from './relink.js';
 
 /**
  * The families that are *not* in the base registry: they are registered onto a
@@ -354,11 +355,39 @@ export async function loadManifest(
   return { ok: true, manifest: candidate as PluginManifest };
 }
 
+/**
+ * Point every installed plugin at this process's core (`relink.ts`), reading
+ * this installation's record.
+ */
+export function relinkPlugins(env: NodeJS.ProcessEnv = process.env, opts: Omit<RelinkOptions, 'file'> = {}): RelinkReport {
+  return relinkInstalledPlugins(env, { ...opts, file: recordFile(env) });
+}
+
+let relinkBeforeLoading = false;
+
+/**
+ * Relink every installed plugin before the next load. The gateway's serve
+ * entry points call this first, and only they: the shims are shared by every
+ * process on the data directory, and the one that should own them is the one
+ * that keeps the plugins loaded — not a `buddi plugins list` from another
+ * installation's CLI.
+ */
+export function relinkPluginsOnLoad(on = true): void {
+  relinkBeforeLoading = on;
+}
+
 /** Read the record and load everything in it. Never throws on a single plugin. */
 export async function loadInstalledPlugins(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<LoadedPlugins> {
   const file = recordFile(env);
+  if (relinkBeforeLoading) {
+    try {
+      relinkInstalledPlugins(env, { file });
+    } catch {
+      // Never in the way of a start: whatever stays broken says so below.
+    }
+  }
   const loaded: LoadedPlugin[] = [];
   const problems: PluginProblem[] = [];
   let contents;

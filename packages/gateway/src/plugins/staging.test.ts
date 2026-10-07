@@ -31,7 +31,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
-import { adoptPlugins, loadInstalledPlugins, pluginLoadReport, resetAdoptedPlugins } from './load.js';
+import { adoptPlugins, loadInstalledPlugins, pluginLoadReport, relinkPlugins, relinkPluginsOnLoad, resetAdoptedPlugins } from './load.js';
+import { isCoreMovedError } from './relink.js';
 import { isPluginSchemaName, type InstalledPlugin } from '@buddi/core';
 import { approveStaged } from './approve.js';
 import { InstallRefusal } from './install.js';
@@ -51,8 +52,10 @@ import {
   markStagedOpened,
   readStaged,
   rejectStaged,
+  linkCore,
   resolveCoreDir,
   scanDependencies,
+  writePluginOnlyCore,
   stagePlugin,
   sweepStages,
   TRUST_SENTENCE,
@@ -943,5 +946,142 @@ describe('which version is newer', () => {
     expect(() => isNewerVersion('1.0', '1.0.0')).toThrow(/not a version this can compare/);
     expect(() => isNewerVersion('1.0.0', '')).toThrow(/not a version this can compare/);
     expect(parseSemver('1.2.3-rc.1')).toEqual({ major: 1, minor: 2, patch: 3, prerelease: ['rc', 1] });
+  });
+});
+
+describe('after an upgrade moved the core', () => {
+  /**
+   * A core folder that can vanish, the way `releases/buddi-<v>` does: a link to
+   * the core this test runs, under a versioned name. Plain Node follows it to
+   * the same files, so a plugin linked to it shares the running core.
+   */
+  const releaseCore = (version: string): string => {
+    const dir = path.join(root, 'releases', `buddi-${version}`, 'node_modules', '@buddi');
+    mkdirSync(dir, { recursive: true });
+    const core = path.join(dir, 'core');
+    symlinkSync(resolveCoreDir()!, core, 'junction');
+    return core;
+  };
+  /** Import a file in plain Node, as a fresh gateway would: what it prints, or what it threw. */
+  const importInNode = (file: string, expr: string): { ok: boolean; out: string } => {
+    try {
+      const out = execFileSync(
+        process.execPath,
+        ['--input-type=module', '-e', `const m = await import(${JSON.stringify(pathToFileURL(file).href)}); process.stdout.write(String(${expr}));`],
+        { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, BUDDI_FIXTURE_MARKER: marker } },
+      ).toString();
+      return { ok: true, out };
+    } catch (err) {
+      return { ok: false, out: String((err as { stderr?: Buffer }).stderr ?? err) };
+    }
+  };
+
+  afterEach(() => relinkPluginsOnLoad(false));
+
+  it('relinks a plugin approved under a release that is gone, and it loads again', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    const outcome = await approveStaged(staged.id, { integrity: staged.integrity, env });
+    if (outcome.kind !== 'installed') throw new Error('expected an install');
+    const dir = installedPackageDir('fixture-marker', env);
+
+    // Approved while pre.46 ran; then pre.48 replaced it and pre.46's folder went.
+    const old = releaseCore('0.1.0-pre.46');
+    linkCore(dir, old);
+    const next = releaseCore('0.1.0-pre.48');
+    rmSync(path.join(root, 'releases', 'buddi-0.1.0-pre.46'), { recursive: true, force: true });
+
+    const broken = importInNode(outcome.record.entry, 'm.manifest.name');
+    expect(broken.ok).toBe(false);
+    expect(broken.out).toContain('buddi-0.1.0-pre.46');
+    expect(isCoreMovedError(`importing it threw: ${broken.out}`)).toBe(true);
+
+    const lines: string[] = [];
+    expect(relinkPlugins(env, { coreDir: next, log: (line) => lines.push(line) }).relinked).toEqual(['fixture-marker']);
+    expect(lines).toEqual(['plugins: relinked fixture-marker to the running @buddi/core']);
+    expect(importInNode(outcome.record.entry, 'm.manifest.name')).toEqual({ ok: true, out: 'fixture-marker' });
+
+    // Cheap and quiet the second time: nothing changed, nothing written, nothing said.
+    expect(relinkPlugins(env, { coreDir: next, log: (line) => lines.push(line) }).relinked).toEqual([]);
+    expect(lines).toHaveLength(1);
+    // The shim is buddi's, not the package's: doctor still sees what was approved.
+    expect(verifyInstalledHash(outcome.record, { env }).matches).toBe(true);
+  });
+
+  it('relinks at load when the gateway asks it to, before anything is imported', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    const outcome = await approveStaged(staged.id, { integrity: staged.integrity, env });
+    if (outcome.kind !== 'installed') throw new Error('expected an install');
+    const dir = installedPackageDir('fixture-marker', env);
+    linkCore(dir, releaseCore('0.1.0-pre.46'));
+    rmSync(path.join(root, 'releases'), { recursive: true, force: true });
+
+    relinkPluginsOnLoad();
+    const loaded = await loadInstalledPlugins(env);
+    expect(loaded.problems).toEqual([]);
+    expect(loaded.loaded.map((p) => p.record.name)).toEqual(['fixture-marker']);
+    // Linked to the core this process runs, so a fresh Node loads it too.
+    const shim = readFileSync(path.join(dir, 'node_modules', '@buddi', 'core', 'plugin.js'), 'utf8');
+    expect(shim).toContain(pathToFileURL(path.join(resolveCoreDir()!, 'dist', 'plugin', 'index.js')).href);
+    expect(importInNode(outcome.record.entry, 'm.manifest.name')).toEqual({ ok: true, out: 'fixture-marker' });
+  });
+
+  it('relinks the cores nested under a dependency too, and the hash does not move', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    const outcome = await approveStaged(staged.id, { integrity: staged.integrity, env });
+    if (outcome.kind !== 'installed') throw new Error('expected an install');
+    const dir = installedPackageDir('fixture-marker', env);
+    // A dependency that asks for core itself, as approval leaves it: its own plugin-only core.
+    const helper = path.join(dir, 'node_modules', 'buddi-helper');
+    mkdirSync(helper, { recursive: true });
+    writeFileSync(path.join(helper, 'package.json'), JSON.stringify({ name: 'buddi-helper', version: '1.0.0', type: 'module', main: 'index.js' }));
+    writeFileSync(path.join(helper, 'index.js'), "export { HOST_API_VERSION } from '@buddi/core/plugin';\n");
+    const old = releaseCore('0.1.0-pre.46');
+    linkCore(dir, old);
+    writePluginOnlyCore(path.join(helper, 'node_modules', '@buddi', 'core'), old);
+    const approvedHash = installedHashOf(dir);
+    const next = releaseCore('0.1.0-pre.48');
+    rmSync(path.join(root, 'releases', 'buddi-0.1.0-pre.46'), { recursive: true, force: true });
+
+    expect(importInNode(path.join(helper, 'index.js'), 'm.HOST_API_VERSION').ok).toBe(false);
+    expect(relinkPlugins(env, { coreDir: next, log: () => {} }).relinked).toEqual(['fixture-marker']);
+    expect(importInNode(path.join(helper, 'index.js'), 'm.HOST_API_VERSION').ok).toBe(true);
+    expect(installedHashOf(dir)).toBe(approvedHash);
+  });
+
+  it("rewrites a folder install's core only when buddi wrote it", () => {
+    const own = path.join(root, 'own-plugin');
+    const linked = path.join(root, 'linked-plugin');
+    for (const d of [own, linked]) {
+      mkdirSync(path.join(d, 'node_modules', '@buddi'), { recursive: true });
+      writeFileSync(path.join(d, 'package.json'), '{}');
+    }
+    writePluginOnlyCore(path.join(own, 'node_modules', '@buddi', 'core'), path.join(root, 'gone-core'));
+    // A developer's own `link:` to a checkout: theirs, never touched.
+    symlinkSync(resolveCoreDir()!, path.join(linked, 'node_modules', '@buddi', 'core'), 'junction');
+    const record = (name: string, d: string): InstalledPlugin => ({
+      name,
+      version: '1.0.0',
+      entry: path.join(d, 'index.js'),
+      schema: name.replace('-', '_'),
+      installedAt: new Date().toISOString(),
+      source: { kind: 'directory', path: d },
+    }) as InstalledPlugin;
+    const report = relinkPlugins(env, {
+      coreDir: resolveCoreDir()!,
+      log: () => {},
+      plugins: [record('own-plugin', own), record('linked-plugin', linked), record('gone-plugin', path.join(root, 'nowhere'))],
+    });
+    expect(report.relinked).toEqual(['own-plugin']);
+    expect(lstatSync(path.join(linked, 'node_modules', '@buddi', 'core')).isSymbolicLink()).toBe(true);
+  });
+
+  it('tells a moved core from any other import failure', () => {
+    expect(
+      isCoreMovedError(
+        "importing it threw: Cannot find module '/Users/x/Library/Application Support/buddi/releases/buddi-0.1.0-pre.46/node_modules/@withbuddi/buddi/node_modules/@buddi/core/dist/plugin/index.js' imported from /Users/x/Library/Application Support/buddi/plugins/finance/node_modules/@buddi/core/plugin.js",
+      ),
+    ).toBe(true);
+    expect(isCoreMovedError("importing it threw: Cannot find package 'left-pad' imported from /x/plugins/a/index.js")).toBe(false);
+    expect(isCoreMovedError('importing it threw: this fixture throws on import')).toBe(false);
   });
 });
