@@ -174,6 +174,8 @@ export interface ToolContext {
  * export this.
  */
 export interface CoreToolContext extends ToolContext {
+  /** Owner-configured consent for this exact run. Executor-issued, never model input. */
+  configuredConsent?: { agentId: string; conversationId: string; allows: (tool: string) => Promise<boolean> };
   /** The pool. A plugin's host wraps it as `buddi.db`. */
   db: Pool;
   /** The owner's id: `buddi.owner.id`. */

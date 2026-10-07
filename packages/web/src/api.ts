@@ -1870,8 +1870,8 @@ export interface RuntimesView {
 export interface ServiceView {
   supervised: boolean;
   status?: ServiceStatus;
-  /** A launchd job with no control socket: supervised, with nothing to control from here. */
-  supervisor?: 'launchd';
+  /** An OS-managed service without a control socket; restart is available. */
+  supervisor?: 'launchd' | 'systemd';
   label?: string;
   /** A stop or a restart that was accepted; it takes this page down with it. */
   pending?: 'stop' | 'restart';
@@ -2356,7 +2356,9 @@ export interface PluginsView {
   builtIn?: BuiltInPluginView[];
   staged: StagedPluginView[];
   restartNeeded: boolean;
-  /** True in a developer checkout, where a restart is a command and not a button. */
+  /** Whether the running gateway has a supported restart mechanism. */
+  canRestart?: boolean;
+  /** True in a developer checkout. */
   checkout: boolean;
   /** Set when this build has no plugin engine at all. */
   unavailable?: string;
@@ -2451,6 +2453,7 @@ export interface PluginJob {
   phase: 'fetching' | 'installing-dependencies' | 'reading' | 'done' | 'failed';
   error?: string;
   stagedId?: string;
+  upToDate?: string;
   startedAt: string;
   finishedAt?: string;
 }
@@ -2887,6 +2890,7 @@ export const api = {
    * views: the page owns the components and learns from here which of them go
    * where — an installation without a plugin is served none of its screen.
    */
+  reportAudio: (link: string) => get<{ audio: { fileId: string; mime: string; filename: string | null; sizeBytes: number | null } | null }>('/reports/audio', { link }),
   pages: () => get<{ pages: PluginPageDescriptor[]; files?: PluginWorkspaceFiles[] }>('/pages'),
   /** One plugin page query. Every parameter is a string; the plugin's schema decides. */
   pageQuery: <T = unknown>(plugin: string, query: string, params: Record<string, string> = {}) =>

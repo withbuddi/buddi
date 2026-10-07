@@ -53,7 +53,7 @@ export type ArgRef = ValueRef | { param: string } | { field: string } | { row: s
 /** Another page of the same plugin, or — the one exception — an agent's chat. */
 /** `{ proposals: true }`: the owner's Proposals inbox, filtered to the plugin drawing the page. */
 /** `{ href }` (1.27): an https address read from the data, opened in a new tab. */
-export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true } | { href: ValueRef };
+export type RouteRef = { page: string; item?: ValueRef; params?: Record<string, ValueRef> } | { chat: ValueRef } | { proposals: true } | { href: ValueRef };
 
 export interface ToolRef {
   tool: string;
@@ -325,8 +325,13 @@ export interface TabsPick {
 
 /** One story, as a `stories` component reads it (1.27). */
 export interface StoryRow {
+  image?: import('./StoryImage').StoryPicture;
   id: string;
   title: string;
+  /** Source labels supplied by the plugin for the text actually displayed. */
+  titleAttribution?: string;
+  summaryAttribution?: string;
+  updateAttribution?: string;
   lead?: string;
   summary?: string;
   update?: string;
@@ -371,7 +376,7 @@ export type StoriesComponent = ComponentCommon & {
   rows: string;
   groups?: { param: string; label?: string };
   ways?: StoryWay[];
-  ask?: { label: string; to: RouteRef; when?: Visibility };
+  ask?: { label: string; to: RouteRef; when?: Visibility; context?: { title: ValueRef; text: ValueRef; suggestions?: string[] } };
   edition?: { label: string; to: RouteRef; when?: Visibility };
   param?: string;
   emptyStates?: StoriesEmpty[];
@@ -462,6 +467,8 @@ export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'butto
 export type Component =
   | (ComponentCommon & {
       kind: 'section';
+      /** A compact, centered first-run card (host API 1.33). */
+      look?: 'setup';
       actions?: SectionAction[];
       body: Component[];
       /** 1.30: the body is drawn against this query's answer. */
@@ -559,10 +566,11 @@ export type Component =
     })
   | (ComponentCommon & { kind: 'tabs'; tabs: PageTab[]; default?: string; pick?: TabsPick; param?: string })
   | StoriesComponent
-  | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
+  | (ComponentCommon & { kind: 'expand'; query?: QueryRef; label: string | ValueRef; body: Component[] })
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
   /** 1.28: one button opening a short menu of tools and drawers. */
   | (ComponentCommon & { kind: 'menu'; label: string; tone?: 'accent'; items: MenuItem[] })
+  | (ComponentCommon & { kind: 'edition'; query: QueryRef; param: string })
   | (ComponentCommon & { kind: 'approval'; path: string })
   /** One of the plugin's proposed agents: a line, and the gated accept. */
   | (ComponentCommon & { kind: 'agent-offer'; agent: string; text: string; label: string })

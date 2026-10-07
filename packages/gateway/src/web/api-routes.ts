@@ -750,6 +750,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
     body: "{ content?: string, scope?: string, kind?: 'fact'|'observation'|'todo' }", errors: '400; 404',
   },
   { method: 'POST', path: '/api/memory/notes/:id/forget', area: 'memory', summary: 'Forget a note.', answer: '204', errors: '404' },
+  { method: 'GET', path: '/api/reports/audio', area: 'files', summary: 'Read the saved audio attached to a report link.', query: 'link: local report route', answer: '{ audio: { fileId, mime, filename, sizeBytes } | null }', errors: '400' },
   { method: 'GET', path: '/api/memory/people', area: 'memory', summary: 'The owner’s people: who they are, how to address them, their dates, the next one and whether its reminders are on.', answer: '{ people: Array<{ id, name, relationship, addressAs, birthday, anniversary, notes, next: { what, inDays, turning }|null, reminders: boolean|null }>, today }' },
   {
     method: 'POST', path: '/api/memory/people', area: 'memory', summary: 'Add a person, or change one by id; reminders switches their date missions.',
@@ -871,7 +872,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'GET', path: '/api/plugins', area: 'plugins', summary: 'Installed plugins, staged ones waiting to be read, and the trust sentence.' },
   {
     method: 'GET', path: '/api/plugin-assets/:plugin/:key', area: 'plugins', kind: 'bytes', whileLocked: true,
-    summary: "A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin fetched, 128 px square, or 64 with ?size=64.",
+    summary: "A plugin's kept image: a PNG drawn by buddi, 128 px square by default, ?size=64 for small icons or ?size=768 for aspect-preserving story images.",
     answer: 'image/png, with an ETag', errors: '404 no such asset',
   },
   { method: 'POST', path: '/api/plugins/stage', area: 'plugins', token: 'code', summary: 'Fetch a plugin to read before installing (npm name, tarball path or folder).', body: '{ spec: string }', answer: '202 { job }', errors: '400' },
@@ -961,8 +962,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
   /* ---------------- system ---------------- */
   { method: 'GET', path: '/api/service', area: 'system', summary: 'Is buddi run by a supervisor, and its status.', answer: '{ supervised: boolean, supervisor?, status? }', errors: '502; 503 the supervisor does not answer' },
   { method: 'POST', path: '/api/service/start', area: 'system', summary: 'Start through the supervisor.', errors: '404 no supervisor; 502; 503' },
-  { method: 'POST', path: '/api/service/stop', area: 'system', summary: 'Stop buddi. Accepted, then done once the answer is sent; nothing answers after.', answer: "202 { supervised: true, pending: 'stop' }", errors: '404 no supervisor' },
-  { method: 'POST', path: '/api/service/restart', area: 'system', summary: 'Restart buddi; it is back in seconds.', answer: "202 { supervised: true, pending: 'restart' }", errors: '404 no supervisor' },
+  { method: 'POST', path: '/api/service/stop', area: 'system', summary: 'Stop buddi. Accepted, then done once the answer is sent; nothing answers after.', answer: "202 { supervised: true, pending: 'stop' }", errors: '404 no supported service control' },
+  { method: 'POST', path: '/api/service/restart', area: 'system', summary: 'Restart buddi; it is back in seconds.', answer: "202 { supervised: true, pending: 'restart' }", errors: '404 no supported service control' },
   { method: 'GET', path: '/api/runtimes', area: 'system', summary: 'The local-model engine (ONNX Runtime) and the shared models: state, version, sizes.', answer: '{ onnx: { state, version, sizeBytes, downloadBytes, platform, available, reason?, sessions }, models: ModelState[] }' },
   { method: 'DELETE', path: '/api/runtimes/onnx', area: 'system', summary: 'Remove the engine, and any recorded failure; the next plugin to need it asks again.', answer: 'the same as GET /api/runtimes', errors: '409 downloading' },
   { method: 'DELETE', path: '/api/runtimes/models/:id', area: 'system', summary: 'Remove one shared model.', answer: 'the same as GET /api/runtimes', errors: '409 downloading' },
@@ -1316,6 +1317,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'GET /api/reports/audio': '0.1.0-pre.49',
   'GET /api/runtimes': '0.1.0-pre.48',
   'DELETE /api/runtimes/onnx': '0.1.0-pre.48',
   'DELETE /api/runtimes/models/:id': '0.1.0-pre.48',

@@ -35,6 +35,9 @@ export type RendererName =
   | 'image'
   | 'preview'
   | 'envelope'
+  | 'story'
+  | 'audio'
+  | 'edition'
   | 'structured';
 
 /**
@@ -619,6 +622,9 @@ export const viewDescriptorSchema = z.discriminatedUnion('renderer', [
   z.object({ ...common, renderer: z.literal('image'), map: imageMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('preview'), map: previewMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('envelope'), map: emptyMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('audio'), map: emptyMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('edition'), map: emptyMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('story'), map: emptyMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('structured'), map: emptyMapSchema }).strict(),
 ]);
 

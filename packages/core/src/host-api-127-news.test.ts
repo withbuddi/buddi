@@ -50,6 +50,13 @@ const stories = (extra: Record<string, unknown> = {}) => ({
 const page = (body: unknown[], extra: Record<string, unknown> = {}) => ({ id: 'stories', title: 'News', place: 'rail', icon: 'news', data: { query: 'overview' }, body, ...extra });
 
 describe('host API 1.27: the News page grammar', () => {
+  it('accepts a chat reference and limits question suggestions', () => {
+    const context = { title: { path: 'title' }, text: { path: 'chatContext' }, suggestions: ['Explain this story', 'Compare the sources'] };
+    const withContext = (value: unknown) => stories({ ask: { label: 'Ask Anchor', to: { chat: { path: 'anchor' } }, context: value } });
+    expect(() => parse(page([withContext(context)]))).not.toThrow();
+    expect(() => parse(page([withContext({ ...context, suggestions: ['a', 'b', 'c', 'd'] })]))).toThrow();
+  });
+
   it('takes a stories feed with its ways out, sheet buttons and empty states', () => {
     expect(() => parse(page([stories()]), [settings])).not.toThrow();
   });

@@ -31,6 +31,9 @@ const manifest = (views: unknown[]): PluginManifest => ({
 });
 
 describe('view descriptors', () => {
+  it('accepts a story view with a shape contract and no field mapping', () => {
+    expect(viewDescriptorSchema.parse({ tool: 'demo.read', renderer: 'story', map: {} }).renderer).toBe('story');
+  });
   it('accepts a timeseries that names its points, its axes and its floor', () => {
     const parsed = viewDescriptorSchema.parse({
       tool: 'demo.read',

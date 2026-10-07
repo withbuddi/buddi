@@ -19,7 +19,7 @@
  * Installed plugins are compact rows; a row opens its detail in a sheet.
  * Disable and Remove ask in a small dialog centred over the page. Loading a
  * newly installed plugin needs a restart, which is the supervisor's job; a
- * checkout has no supervisor, so it gets the command instead.
+ * foreground checkout gets manual instructions; the managed launchd checkout can restart.
  *
  * Browse is the second tab: the plugin list from withbuddi.com, asked for
  * through the gateway only when the tab is opened, as one grid behind filter
@@ -45,6 +45,7 @@ import {
   type PluginUnlock,
   type StagedPluginView,
 } from '../api';
+import { Markdown } from '../chat/markdown';
 import { fmtRelative } from '../format';
 import { AGENTS_ROUTE, catalogueRoute, parseBrowseKind, parsePluginsInstall, parsePluginsTab, pluginPageRoute, pluginSettingsRoute, settingsRoute, type BrowseKind } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
@@ -239,7 +240,10 @@ function useStageJob(id: string | null): { job: PluginJob | undefined; error: st
       return undefined;
     }
     let stopped = false;
+    setError(null);
+    setJob(undefined);
     const ask = (): void => {
+      if (stopped) return;
       api
         .pluginJob(id)
         .then((next) => {
@@ -260,7 +264,7 @@ function useStageJob(id: string | null): { job: PluginJob | undefined; error: st
       window.clearInterval(timer);
     };
   }, [id]);
-  return { job, error };
+  return { job: job?.id === id ? job : undefined, error };
 }
 
 /**
@@ -315,7 +319,7 @@ function StatePill({ plugin }: { plugin: InstalledPluginView }): JSX.Element {
   const need = plugin.needs?.[0];
   if (need) return <Pill tone="warning">needs {need.plugin}</Pill>;
   // Installed or updated since buddi started: not a failure, a restart away.
-  if (plugin.loadsAtRestart) return <Pill tone="accent">loads at restart</Pill>;
+  if (plugin.loadsAtRestart) return <Pill tone="accent">Waiting for restart</Pill>;
   if (plugin.loaded && plugin.setup) return <Pill tone="warning">needs setup</Pill>;
   return plugin.loaded ? (
     <Pill tone="good" dot>
@@ -396,17 +400,27 @@ export function Plugins({
   const onStaged = (id: string): void => {
     setFailed(null);
     setJobId(id);
+    setFlowOpen(true);
+    setInstalledName(null);
   };
   const fail = (error: unknown): void => setFailed(errorText(error));
   const [stagingBusy, setStagingBusy] = useState(false);
-  /** Install or update, from a listing or a row: stage it, then read the card on Installed. */
-  const stageFrom = (work: Promise<{ job: PluginJob }>): void => {
+  const [flowOpen, setFlowOpen] = useState(false);
+  const [flowName, setFlowName] = useState('plugin');
+  const [installedName, setInstalledName] = useState<string | null>(null);
+  const flowBusy = stagingBusy || (!jobError && jobId !== null && (!job || (job.phase !== 'done' && job.phase !== 'failed')));
+  /** Install or update in a sheet over the current tab, visible before the request returns. */
+  const stageFrom = (work: Promise<{ job: PluginJob }>, name = 'plugin'): void => {
     setStagingBusy(true);
+    setFailed(null);
+    setJobId(null);
+    setInstalledName(null);
+    setFlowName(name);
+    setFlowOpen(true);
     setOpened(null);
     work
       .then((answer) => {
-        onStaged(answer.job.id);
-        setTab('installed');
+        setJobId(answer.job.id);
       })
       .catch(fail)
       .finally(() => setStagingBusy(false));
@@ -445,7 +459,7 @@ export function Plugins({
   }, [job?.phase]);
 
   const data = view.data;
-  const checkout = data?.checkout ?? true;
+  const checkout = data ? !data.canRestart : true;
   const list = data?.installed ?? [];
   const listingOf = (plugin: InstalledPluginView): MarketEntryView | undefined =>
     market?.plugins.find((entry) => entry.installed !== undefined && (entry.installed.name ?? entry.name) === plugin.name);
@@ -489,7 +503,7 @@ export function Plugins({
   const update = (name: string, version?: string): void => {
     const listed = market?.plugins.find((entry) => (entry.installed?.name ?? entry.name) === name && entry.installed !== undefined);
     const from = listed && version ? `${listed.npm}@${version}` : undefined;
-    stageFrom(from ? api.updatePlugin(name, version, from) : api.updatePlugin(name, version));
+    stageFrom(from ? api.updatePlugin(name, version, from) : api.updatePlugin(name, version), name);
   };
 
   /*
@@ -505,7 +519,7 @@ export function Plugins({
         setFailed(`${name} is not listed on withbuddi.com. Add it from npm, a file or a directory above, then install this one.`);
         return;
       }
-      stageFrom(api.stagePlugin(`${entry.npm}@${entry.version}`));
+      stageFrom(api.stagePlugin(`${entry.npm}@${entry.version}`), entry.name);
     };
     if (market && market.plugins.length > 0) return stage(market);
     setStagingBusy(true);
@@ -567,10 +581,16 @@ export function Plugins({
   const onStagedInstalled = (name: string): void => {
     setOpened(null);
     rememberInstalled(name);
+    setTab('installed');
+    navigate?.(TAB_ROUTES.installed);
+    setInstalledName(name);
+    setFlowName(name);
+    setFlowOpen(true);
+    if (market) loadMarket(false);
     setJobId(null);
     view.reload();
   };
-  const openedStage = opened?.kind === 'staged' ? waiting.find((entry) => entry.id === opened.name) : undefined;
+  const openedStage = opened?.kind === 'staged' ? allStaged.find((entry) => entry.id === opened.name) : undefined;
   const openedPlugin = opened?.kind === 'installed' ? list.find((p) => p.name === opened.name) : undefined;
   const openedEntry =
     opened?.kind === 'market' ? market?.plugins.find((entry) => entry.name === opened.name) : undefined;
@@ -602,7 +622,7 @@ export function Plugins({
       onUpdate={(version) => update(openedPlugin.name, version)}
       onSettings={openedPlugin.enabled === false ? undefined : settingsFor(openedPlugin.name)}
       firstStep={firstStepFor(openedPlugin)}
-      busy={stagingBusy}
+      busy={flowBusy}
     />
   ) : openedEntry ? (
     <ListingSheet
@@ -610,11 +630,31 @@ export function Plugins({
       canOpen={openedEntry.installed !== undefined && hasPages(openedEntry.installed.name ?? openedEntry.name)}
       onOpen={() => goToPage(openedEntry.installed?.name ?? openedEntry.name)}
       onClose={() => setOpened(null)}
-      onInstall={() => stageFrom(api.stagePlugin(`${openedEntry.npm}@${openedEntry.version}`))}
+      onInstall={() => stageFrom(api.stagePlugin(`${openedEntry.npm}@${openedEntry.version}`), openedEntry.name)}
       onUpdate={(version) => update(openedEntry.installed?.name ?? openedEntry.name, version)}
-      busy={stagingBusy}
+      busy={flowBusy}
     />
   ) : null;
+
+  const closeFlow = (): void => setFlowOpen(false);
+  const flowStage = job?.phase === 'done' && job.stagedId ? allStaged.find((s) => s.id === job.stagedId) : undefined;
+  const flow = !flowOpen ? null : installedName ? (
+    <RestartToLoad checkout={checkout} waiting={list.filter((p) => p.name === installedName)} installedName={installedName} onClose={closeFlow} />
+  ) : flowStage ? (
+    <StagedSheet key={flowStage.id} staged={flowStage} onClose={closeFlow} onInstalled={onStagedInstalled}
+      onGone={() => { closeFlow(); setJobId(null); view.reload(); }} onInstallFirst={installFirst} />
+  ) : (
+    <Sheet title={`${job?.kind === 'update' ? 'Check' : 'Install'} ${flowName}`} onClose={closeFlow}
+      foot={<Toolbar><Spacer /><Button onClick={closeFlow}>Close</Button></Toolbar>}>
+      <Stack gap="lg">
+        {failed || jobError || view.error || job?.phase === 'failed' ? <ErrorBanner message={failed ?? jobError ?? view.error ?? job?.error ?? 'Preparation failed. Close and try again.'} />
+          : job?.upToDate ? <Notice role="status">{job.upToDate}</Notice>
+          : <div className="plugins-preparing" role="status" aria-live="polite" aria-busy="true"><span className="plugins-spinner" aria-hidden="true" /><strong>{job ? PHASE_WORDS[job.phase] : 'Preparing the package…'}</strong></div>}
+        {flowBusy ? <p className="plugins-quiet">You can close this panel. Preparation continues, and the review will wait in Plugins.</p> : null}
+        {job?.upToDate && data?.restartNeeded ? <RestartToLoad checkout={checkout} waiting={list.filter((p) => p.loadsAtRestart)} /> : null}
+      </Stack>
+    </Sheet>
+  );
 
   const askingPlugin = asking ? list.find((p) => p.name === asking.name) : undefined;
   const dialog = asking ? (
@@ -642,13 +682,14 @@ export function Plugins({
           navigate={navigate}
           market={market}
           loading={marketLoading}
-          busy={stagingBusy}
+          busy={flowBusy}
           onRetry={() => loadMarket(true)}
           onOpen={(entry) => setOpened({ kind: 'market', name: entry.name })}
-          onInstall={(entry) => stageFrom(api.stagePlugin(`${entry.npm}@${entry.version}`))}
+          onInstall={(entry) => stageFrom(api.stagePlugin(`${entry.npm}@${entry.version}`), entry.name)}
           onUpdate={(entry, version) => update(entry.installed?.name ?? entry.name, version)}
         />
         {sheet}
+        {flow}
       </Stack>
     );
   }
@@ -665,12 +706,12 @@ export function Plugins({
       <AddPlugin
         trust={data?.trust ?? ''}
         job={job}
-        busy={job !== undefined && job.phase !== 'done' && job.phase !== 'failed'}
+        busy={flowBusy}
         onStaged={onStaged}
         onFailed={setFailed}
       />
 
-      {fresh ? (
+      {fresh && !flowOpen ? (
         <Staged key={fresh.id} staged={fresh} onInstalled={onStagedInstalled} onGone={() => view.reload()} onInstallFirst={installFirst} />
       ) : null}
 
@@ -718,7 +759,7 @@ export function Plugins({
                   listing={listingOf(plugin)}
                   open={plugin.enabled === false ? undefined : openFor(plugin.name, 'ghost')}
                   canOpen={hasPages(plugin.name) && plugin.enabled !== false}
-                  busy={stagingBusy}
+                  busy={flowBusy}
                   onDetails={() => setOpened({ kind: 'installed', name: plugin.name })}
                   onOpen={() => goToPage(plugin.name)}
                   onSettings={plugin.enabled === false ? undefined : settingsFor(plugin.name)}
@@ -736,6 +777,7 @@ export function Plugins({
 
       {builtIn.length > 0 ? <ShipsWithBuddi plugins={builtIn} openFor={openFor} /> : null}
       {sheet}
+      {flow}
       {dialog}
     </Stack>
   );
@@ -888,7 +930,7 @@ function AddPlugin({
         )}
         {job ? (
           <p className="plugins-status" role="status" data-tone={job.phase === 'failed' ? 'critical' : undefined}>
-            {PHASE_WORDS[job.phase]} {job.error ?? ''}
+            {job.upToDate ?? PHASE_WORDS[job.phase]} {job.error ?? ''}
           </p>
         ) : null}
         {/* Verbatim, never paraphrased: it is what the two approvals are approving. */}
@@ -972,7 +1014,7 @@ function useStagedDecision(
         ...(acknowledgeDrift ? { acknowledgeDrift: true } : {}),
       })
       .then((answer) => {
-        if (answer.installed) onInstalled(staged.name);
+        if (answer.installed) onInstalled(answer.installed.name);
         else if (answer.plan) setPlan(answer.plan);
       })
       .catch((error: unknown) => setFailed(errorText(error)))
@@ -1048,16 +1090,22 @@ function StagedRequires({ staged, onInstallFirst }: { staged: StagedPluginView; 
 
 function StagedFacts({
   staged,
-  inSheet,
   onInstallFirst,
 }: {
   staged: StagedPluginView;
-  inSheet?: boolean;
   onInstallFirst?: ((name: string) => void) | undefined;
 }): JSX.Element {
   const deps = staged.dependencies;
   return (
-    <div className="plugins-staged" data-in={inSheet ? 'sheet' : undefined}>
+    <Stack gap="lg">
+      <p className="plugins-summary">{staged.claims.missing ? 'Review this plugin’s access before installing.' : <>Excerpt from the author’s description: {staged.claims.text.split(/\n\s*\n/).find((part) => part.trim() && !part.trim().startsWith('#'))?.slice(0, 320)}</>}</p>
+      <Section title="What it accesses"><StagedUses staged={staged} /></Section>
+      {(staged.requires ?? []).length > 0 ? <StagedRequires staged={staged} onInstallFirst={onInstallFirst} /> : null}
+      <Details summary="Read full description" boxed>
+        <p className="plugins-quiet">Written by the plugin’s author. These are its claims.</p>
+        <Markdown text={staged.claims.missing ? 'No description provided.' : staged.claims.text} />
+      </Details>
+      <Details summary="Technical details" boxed>
       <div className="plugins-facts">
         <KV
           items={[
@@ -1098,44 +1146,16 @@ function StagedFacts({
                         : `, of which these run install scripts: ${deps.withScripts.join(', ')}`
                     }`,
             },
-            { label: 'What it reaches', value: <StagedUses staged={staged} /> },
-            ...((staged.requires ?? []).length > 0
-              ? [{ label: 'Needs', value: <StagedRequires staged={staged} onInstallFirst={onInstallFirst} /> }]
-              : []),
+
+            { label: 'Schema it owns', value: staged.claims.schema ?? 'it claims none' },
+            { label: 'Hosts it reaches', value: staged.claims.hosts.join(', ') || 'it claims none' },
             { label: 'Integrity', value: <Hash value={staged.integrity} /> },
             ...(staged.stagedHash ? [{ label: 'Files on disk', value: <Hash value={staged.stagedHash} /> }] : []),
           ]}
         />
       </div>
-      <div className="plugins-claim">
-        <div className="plugins-claim-head">What it says about itself</div>
-        <div className="plugins-claim-note">From its own buddi.md. Nothing has checked it yet.</div>
-        {staged.claims.missing ? (
-          <p className="plugins-claim-text">It ships no buddi.md, so it says nothing about itself at all.</p>
-        ) : (
-          <p className="plugins-claim-text">“{staged.claims.text}”</p>
-        )}
-        <div className="plugins-facts">
-          <KV
-            items={[
-              {
-                label: 'Schema it owns',
-                value: staged.claims.schema ? <span className="mono">{staged.claims.schema}</span> : 'it claims none',
-              },
-              {
-                label: 'Hosts it reaches',
-                value:
-                  staged.claims.hosts.length === 0 ? (
-                    'it claims none'
-                  ) : (
-                    <span className="mono">{staged.claims.hosts.join(', ')}</span>
-                  ),
-              },
-            ]}
-          />
-        </div>
-      </div>
-    </div>
+      </Details>
+    </Stack>
   );
 }
 
@@ -1292,12 +1312,14 @@ function StagedSheet({
 }): JSX.Element {
   const { plan, busy, failed, approve, reject } = useStagedDecision(staged, onInstalled, onGone);
   const drift = plan?.drift ?? [];
+  useEffect(() => tellOpened(staged), [staged.id]);
   return (
     <Sheet
+      scrollBody
       title={
         <SheetTitle
           svg={undefined}
-          name={staged.name}
+          name={staged.installsAs ?? staged.name}
           version={staged.version}
           by={staged.author ? <AuthorName author={staged.author} /> : publisherWords(staged.source, staged.publisher)}
           pills={
@@ -1308,22 +1330,23 @@ function StagedSheet({
           }
         />
       }
-      onClose={onClose}
+      onClose={busy ? () => {} : onClose}
       foot={
         <Toolbar>
-          <span className="plugins-foot-note">Nothing of it has run.</span>
+          <span className="plugins-foot-note">{busy ? 'Installing…' : 'Nothing of it has run.'}</span>
           <Spacer />
           <Button variant="ghost" disabled={busy} onClick={reject}>
             Not this one
           </Button>
           <Button variant="accent" disabled={busy || drift.length > 0} onClick={() => approve(false)}>
-            Install
+            {busy ? 'Installing…' : `Install ${staged.installsAs ?? staged.name}`}
           </Button>
         </Toolbar>
       }
     >
       <ErrorBanner message={failed} />
-      <StagedFacts staged={staged} inSheet onInstallFirst={onInstallFirst} />
+      <StagedFacts staged={staged} onInstallFirst={onInstallFirst} />
+      <Notice tone="warning">Only install plugins from people you trust. A plugin runs with buddi’s access to this computer and can bypass tool approvals.</Notice>
       {plan && drift.length > 0 ? (
         <DriftCard plan={plan} busy={busy} onReject={reject} onInstallAnyway={() => approve(true)} />
       ) : null}
@@ -1358,50 +1381,44 @@ export function freshStageId(staged: StagedPluginView[], ownId: string | undefin
  * remembers doing, so it is gone the moment the plugins are loaded. A packaged
  * installation restarts through the supervisor, under "Restarting buddi"
  * (`shell/Restarting.tsx`), which reloads the page once buddi is back. A
- * checkout has no supervisor and gets the command.
+ * foreground checkout gets a command; a managed launchd checkout can restart.
  */
-function RestartToLoad({ checkout, waiting }: { checkout: boolean; waiting: InstalledPluginView[] }): JSX.Element {
+function RestartToLoad({ checkout, waiting, installedName, onClose }: {
+  checkout: boolean;
+  waiting: InstalledPluginView[];
+  installedName?: string;
+  onClose?: () => void;
+}): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const named = pluginWords(waiting);
+  const named = pluginWords(waiting) || installedName;
   const what = named
-    ? `${named} ${waiting.length === 1 ? 'is' : 'are'} installed.`
+    ? `${named} ${waiting.length <= 1 ? 'is' : 'are'} installed.`
     : 'A plugin was installed, disabled or enabled since buddi started, and this buddi has not caught up.';
-  return (
-    <Stack gap="sm">
-      <ErrorBanner message={failed} />
-      <Notice
-        tone={checkout ? 'warning' : 'accent'}
-        role="status"
-        action={
-          checkout ? undefined : (
-            <Button
-              size="sm"
-              variant="accent"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                setFailed(null);
-                void restartWhile(
-                  { kind: 'plugins', ...(named ? { line: `Loading ${named}…` } : { line: 'Applying your plugin changes…' }) },
-                  () => api.serviceAction('restart'),
-                )
-                  .catch((error: unknown) => setFailed(errorText(error)))
-                  .finally(() => setBusy(false));
-              }}
-            >
-              Restart to load it
-            </Button>
-          )
-        }
-      >
-        {what}{' '}
-        {checkout
-          ? CHECKOUT_RESTART
-          : `${named ? (waiting.length === 1 ? 'Its tools appear' : 'Their tools appear') : 'It takes effect'} once buddi restarts, which takes a few seconds. This page waits and comes back by itself.`}
-      </Notice>
-    </Stack>
+  const action = checkout ? undefined : (
+    <Button size="sm" variant="accent" disabled={busy} onClick={() => {
+      setBusy(true);
+      setFailed(null);
+      void restartWhile(
+        { kind: 'plugins', ...(named ? { line: `Loading ${named}…` } : { line: 'Applying your plugin changes…' }) },
+        () => api.serviceAction('restart'),
+      ).catch((error: unknown) => setFailed(errorText(error))).finally(() => setBusy(false));
+    }}>
+      Restart to finish
+    </Button>
   );
+  const content = <Stack gap="sm">
+    <ErrorBanner message={failed} />
+    <Notice tone={checkout ? 'warning' : 'accent'} role="status" action={onClose ? undefined : action}>
+      {what}{' '}
+      {checkout ? CHECKOUT_RESTART
+        : `${named ? (waiting.length <= 1 ? 'Its tools appear' : 'Their tools appear') : 'It takes effect'} once buddi restarts, which takes a few seconds. This page waits and comes back by itself.`}
+    </Notice>
+  </Stack>;
+  return onClose ? <Sheet title={`${installedName ?? 'Plugin'} is installed`} onClose={onClose} scrollBody
+    foot={<Toolbar><Spacer /><Button onClick={onClose}>Later</Button>{action}</Toolbar>}>
+    {content}
+  </Sheet> : content;
 }
 
 /** Where the plugin just installed is remembered across the restart that loads it. */
@@ -1455,22 +1472,14 @@ function FirstStep({
   if (!plugin || !waits) return null;
   const step = firstStepFor(plugin);
   return (
-    <Notice
-      tone="accent"
-      role="status"
-      action={
-        <>
-          <Button size="sm" variant="ghost" onClick={done}>Later</Button>
-          {step ? (
-            <Button size="sm" variant="accent" onClick={() => { done(); step.run(); }}>
-              {step.label}
-            </Button>
-          ) : null}
-        </>
-      }
-    >
-      {plugin.needs ? `${plugin.name} is installed and waits. ${waitingWords(plugin)}.` : `${plugin.name} is loaded. First: ${plugin.setup?.note ?? 'set it up on its settings page.'}`}
-    </Notice>
+    <Sheet title={`${plugin.name} is ready to set up`} onClose={done} scrollBody
+      foot={<Toolbar><Spacer /><Button size="sm" variant="ghost" onClick={done}>Later</Button>
+        {step ? <Button size="sm" variant="accent" onClick={() => { done(); step.run(); }}>{step.label}</Button> : null}
+      </Toolbar>}>
+      <Notice tone="accent" role="status">
+        {plugin.needs ? `${plugin.name} is installed and waits. ${waitingWords(plugin)}.` : `${plugin.name} is loaded. First: ${plugin.setup?.note ?? 'set it up on its settings page.'}`}
+      </Notice>
+    </Sheet>
   );
 }
 
@@ -1551,7 +1560,7 @@ function InstalledRow({
         waiting ? (
           <span className="plugins-sub" data-tone="warning">{waitingWords(plugin)}</span>
         ) : (
-          `by ${byWords(plugin)} · from ${sourceShort(plugin.source)} · ${contributionWords(plugin.contribution)}`
+          `by ${byWords(plugin)} · from ${sourceShort(plugin.source)} · ${plugin.loadsAtRestart ? 'Ready to load after restart' : contributionWords(plugin.contribution)}`
         )
       }
       side={
@@ -2081,7 +2090,7 @@ function MarketCard({
           </Button>
         ) : entry.installed ? null : (
           <Button size="sm" variant="accent" disabled={busy} onClick={stop(onInstall)}>
-            Install
+            Review &amp; install
           </Button>
         )}
       </div>
@@ -2166,7 +2175,7 @@ function ListingSheet({
             </Button>
           ) : entry.installed ? null : (
             <Button variant="accent" disabled={busy} onClick={onInstall}>
-              Install
+              Review &amp; install
             </Button>
           )}
         </Toolbar>
@@ -2295,7 +2304,7 @@ function WidgetShelf({
                   <span className="plugins-witem-have">Installed</span>
                 ) : (
                   <Button size="sm" variant="accent" disabled={busy} aria-label={`Install ${entry.title}`} onClick={() => onInstall(entry)}>
-                    Install
+                    Review &amp; install
                   </Button>
                 )}
               </div>

@@ -355,15 +355,16 @@ export async function landAnswer(
   messageId: number | undefined,
   reply: string,
   keyboard?: InlineKeyboardMarkup,
+  htmlParts?: readonly string[],
 ): Promise<number[]> {
   const text = reply.trim() === '' ? '(no reply)' : reply;
   // Every message the answer landed in, so a reaction on any part of it can
   // find the turn behind it.
   const landed: number[] = [];
-  const parts = splitMessage(text, TELEGRAM_MAX_MESSAGE_CHARS);
+  const parts = htmlParts ?? splitMessage(text, TELEGRAM_MAX_MESSAGE_CHARS);
   for (const [index, part] of parts.entries()) {
     const last = index === parts.length - 1;
-    const markup = last && keyboard ? { replyMarkup: keyboard } : {};
+    const markup = { ...(last && keyboard ? { replyMarkup: keyboard } : {}), ...(htmlParts ? { parseMode: 'HTML' as const } : {}) };
     const send = { ...markup, splitAt: TELEGRAM_MAX_MESSAGE_CHARS };
     if (index === 0 && messageId !== undefined) {
       const edited = await retrying(deps, () => deps.api.editMessageText(chatId, messageId, part, markup))
@@ -579,7 +580,7 @@ export class StreamedAnswer {
    * Write the whole answer, with its keyboard, as the last word. Waits for any
    * edit in flight and out any back-off first, so nothing older lands after it.
    */
-  async finish(reply: string, keyboard?: InlineKeyboardMarkup): Promise<number[]> {
+  async finish(reply: string, keyboard?: InlineKeyboardMarkup, freshMessage = false, htmlParts?: readonly string[]): Promise<number[]> {
     this.#closed = true;
     if (this.#timer !== undefined) clearTimeout(this.#timer);
     this.#timer = undefined;
@@ -587,7 +588,11 @@ export class StreamedAnswer {
     if (!this.#started && this.#opts.takeOver) await this.#opts.takeOver();
     const wait = this.#pausedUntil - this.#now();
     if (wait > 0) await sleep(wait);
-    const landed = await landAnswer(this.#deps, this.#chatId, this.#messageId, reply, keyboard);
+    if (freshMessage && this.#messageId !== undefined) {
+      await this.#deps.api.deleteMessage(this.#chatId, this.#messageId).catch(() => {});
+      this.#messageId = undefined;
+    }
+    const landed = await landAnswer(this.#deps, this.#chatId, this.#messageId, reply, keyboard, htmlParts);
     await this.#land();
     return landed;
   }
@@ -776,7 +781,9 @@ async function sendFile(deps: ExtrasDeps, chatId: string, id: string, filesUrl?:
     if (!loaded) throw new Error('the file is gone');
     const bytes = Buffer.from(loaded.data, 'base64');
     const mime = row.mime || loaded.mime;
-    if (PHOTO_MIMES.has(mime) && bytes.length <= MAX_PHOTO_BYTES) {
+    if (['audio/ogg', 'audio/mpeg', 'audio/mp4'].includes(mime)) {
+      await deps.api.sendVoice(chatId, bytes, { filename: name, contentType: mime });
+    } else if (PHOTO_MIMES.has(mime) && bytes.length <= MAX_PHOTO_BYTES) {
       // A picture shows no name of its own, so the caption carries it.
       await deps.api.sendPhoto(chatId, bytes, { filename: name, contentType: mime, caption: name });
     } else {

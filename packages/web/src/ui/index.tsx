@@ -740,11 +740,13 @@ export function Sheet({
   onClose,
   size,
   foot,
+  scrollBody,
   children,
 }: {
   title: ReactNode;
   onClose: () => void;
   size?: 'wide';
+  scrollBody?: boolean;
   /** The sheet's last row, held at its bottom behind a hairline: its actions. */
   foot?: ReactNode;
   children: ReactNode;
@@ -753,14 +755,14 @@ export function Sheet({
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="ui-sheet-overlay" />
-        <Dialog.Content className="ui-sheet" data-size={size} aria-describedby={undefined}>
+        <Dialog.Content className="ui-sheet" data-size={size} data-scroll-body={scrollBody || undefined} aria-describedby={undefined}>
           <div className="ui-sheet-head">
             <Dialog.Title className="ui-sheet-title">{title}</Dialog.Title>
             <Dialog.Close asChild>
               <Button size="sm">Close</Button>
             </Dialog.Close>
           </div>
-          {children}
+          {scrollBody ? <div className="ui-sheet-body">{children}</div> : children}
           {foot ? <div className="ui-sheet-foot">{foot}</div> : null}
         </Dialog.Content>
       </Dialog.Portal>

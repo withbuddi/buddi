@@ -618,12 +618,13 @@ export class TelegramApi {
     chatId: string | number,
     messageId: number,
     text: string,
-    opts: { replyMarkup?: InlineKeyboardMarkup } = {},
+    opts: { replyMarkup?: InlineKeyboardMarkup; parseMode?: 'HTML' } = {},
   ): Promise<void> {
     await this.call('editMessageText', {
       chat_id: chatId,
       message_id: messageId,
       text,
+      ...(opts.parseMode ? { parse_mode: opts.parseMode } : {}),
       disable_web_page_preview: true,
       // An omitted `reply_markup` leaves the old keyboard in place; an empty
       // one takes it away. A decided approval must never keep its buttons.

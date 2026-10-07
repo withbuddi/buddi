@@ -511,6 +511,9 @@ const PLURAL: Record<RendererName, string> = {
   image: 'pictures',
   preview: 'running apps',
   envelope: 'drafts',
+  story: 'stories',
+  audio: 'recordings',
+  edition: 'editions',
   structured: 'results',
 };
 

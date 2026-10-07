@@ -604,3 +604,22 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
   that already had an agent by one of those names still boots: the file is
   held back and shown on the Agents page, out of every roster, handle map,
   delegation list and default.
+
+A section can use `look: 'setup'` (host API 1.33) for a first-run card that follows the Appearance page-width setting. Its note sits beneath the heading and body buttons form a bottom-right action row, with the primary action last.
+
+Story rows may supply `titleAttribution`, `summaryAttribution`, and `updateAttribution` labels for the corresponding text in the story drawer. Repeated update text is suppressed, and source publication events appear under Coverage timeline.
+
+An `expand` may omit `query` when its body components fetch their own data. The body is mounted only while expanded, so a nested list needs just one query.
+
+A story's `ask` action may include `context: { title: ValueRef, text: ValueRef, suggestions?: string[] }` (1.33). When its destination is an agent chat, the host opens a fresh conversation and carries this reference into the composer without sending. The owner can inspect or remove it and click up to three suggested question buttons to send directly, preserving their composer draft. The reference is appended to the owner's message when sent from the composer or a question button, retained on failure, and cleared on success. Other chat links keep their existing behavior.
+
+### Saved edition drawers (host API 1.33)
+
+`{ kind: 'edition', param: 'edition', query: { query: 'edition', params: { id: { param: 'edition' } } } }` opens a scrollable drawer only when the named page parameter is present. Its query returns `{ edition }` in the same format as the chat edition card, or `{ edition: null }` for a missing edition. Loading, query failures and missing editions have separate states. Closing keeps the rest of the page parameters.
+
+Page links accept `params: Record<string, ValueRef>`; values are URL-encoded. News uses `{ page: 'stories', params: { edition: { const: 'latest' } } }` for Latest edition. An exact saved ID opens that edition, including existing notification links. `latest` resolves the most recent saved nonempty edition, regardless of whether its notification has been delivered.
+
+Story rows may supply `image: { key, outlet, url, caption?, credit? }`. `key`
+names a locally cached plugin asset; `url` links to the source article, never
+the remote image. Cards show a thumbnail, and the drawer preserves the image
+proportions with its caption and credit. Missing assets hide the image.

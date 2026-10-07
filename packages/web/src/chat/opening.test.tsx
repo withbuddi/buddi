@@ -1,3 +1,4 @@
+import { leaveReference, readReference } from './reference';
 /**
  * An empty thread, and the agent's own opening in it.
  *
@@ -34,6 +35,7 @@ const agents = [
 beforeEach(() => {
   window.history.replaceState(null, '', chatRoute('keeper'));
   sessionStorage.clear();
+  window.localStorage.clear();
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
   vi.spyOn(api, 'session').mockResolvedValue({ timezone: 'UTC' } as never);
   vi.spyOn(api, 'overview').mockResolvedValue({ approvals: { pending: 0 }, jobs: { failed: 0 } } as never);
@@ -51,6 +53,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   window.history.replaceState(null, '', '#/');
   sessionStorage.clear();
+  window.localStorage.clear();
 });
 
 describe('the agent an empty thread opens on', () => {
@@ -61,6 +64,25 @@ describe('the agent an empty thread opens on', () => {
     expect(startersOf({ starters: ['a', 'b', 'c', 'd'] }, 'Ada')).toEqual(['a', 'b', 'c']);
     expect(introOf({ description: 'Only a description' })).toBe('Only a description');
     expect(introOf({ intro: INTRO, description: 'd' })).toBe(INTRO);
+  });
+
+  it('adjusts message size in the menu, remembers it across mounts, and resets', async () => {
+    const view = render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'More about this agent' }));
+    const column = screen.getByTestId('chat-column');
+    expect(column.style.getPropertyValue('--chat-text-scale')).toBe('1');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Increase message text size' }));
+    expect(column.style.getPropertyValue('--chat-text-scale')).toBe(String(14 / 13));
+    expect(window.localStorage.getItem('buddi.chatTextSize')).toBe('14');
+    view.unmount();
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'More about this agent' }));
+    expect(screen.getByTestId('chat-column').style.getPropertyValue('--chat-text-scale')).toBe(String(14 / 13));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Decrease message text size' }));
+    expect(screen.getByTestId('chat-column').style.getPropertyValue('--chat-text-scale')).toBe('1');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Increase message text size' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reset message text size' }));
+    expect(screen.getByTestId('chat-column').style.getPropertyValue('--chat-text-scale')).toBe('1');
   });
 
   it('shows its face, its intro and its starters as chips', async () => {
@@ -83,6 +105,54 @@ describe('the agent an empty thread opens on', () => {
     await waitFor(() => expect(area.value).toBe('What is on today?'));
     expect(area).toHaveFocus();
     expect(chatApi.send).not.toHaveBeenCalled();
+  });
+
+  it('carries a removable story reference without sending until the owner asks', async () => {
+    window.history.replaceState(null, '', chatRoute('keeper', 'new'));
+    leaveReference('keeper', { title: 'Trade talks', text: 'News story ID: story-123', suggestions: ['Compare the sources'] });
+    render(<App />);
+    expect(await screen.findByRole('region', { name: 'Story reference' })).toHaveTextContent('Trade talks');
+    expect(chatApi.send).not.toHaveBeenCalled();
+    expect(chatApi.conversations).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Compare the sources' })); });
+    expect(chatApi.send).toHaveBeenCalledWith('keeper', expect.objectContaining({ text: 'Compare the sources\n\nReference: Trade talks\nNews story ID: story-123' }));
+    expect(vi.mocked(chatApi.send).mock.calls[0]?.[1]).not.toHaveProperty('conversationId');
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Story reference' })).not.toBeInTheDocument());
+    expect(readReference('keeper')).toBeNull();
+  });
+
+  it('preserves an existing composer draft when a story suggestion is chosen', async () => {
+    window.localStorage.setItem('buddi.draft.keeper', 'My own question');
+    leaveReference('keeper', { title: 'Trade talks', text: 'News story ID: story-123', suggestions: ['Compare the sources'] });
+    render(<App />);
+    const button = await screen.findByRole('button', { name: 'Compare the sources' });
+    await act(async () => { fireEvent.click(button); });
+    expect(chatApi.send).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(chatApi.send).mock.calls[0]?.[1].text).toMatch(/^Compare the sources/);
+    expect(screen.getByRole('textbox')).toHaveValue('My own question');
+    expect(window.localStorage.getItem('buddi.draft.c-1')).toBe('My own question');
+  });
+
+  it('removes the reference and does not attach it to an unrelated question', async () => {
+    leaveReference('keeper', { title: 'Trade talks', text: 'News story ID: story-123', suggestions: [] });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove reference' }));
+    expect(readReference('keeper')).toBeNull();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Hello' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Send/ })); });
+    expect(chatApi.send).toHaveBeenCalledWith('keeper', expect.objectContaining({ text: 'Hello' }));
+  });
+
+  it('keeps a reference when sending fails, and never leaks it to another agent', async () => {
+    leaveReference('keeper', { title: 'Trade talks', text: 'News story ID: story-123', suggestions: [] });
+    expect(readReference('plain')).toBeNull();
+    vi.mocked(chatApi.send).mockRejectedValue(new Error('Offline'));
+    render(<App />);
+    await screen.findByRole('region', { name: 'Story reference' });
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Explain' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Send/ })); });
+    expect(readReference('keeper')?.title).toBe('Trade talks');
+    expect(screen.getByRole('region', { name: 'Story reference' })).toBeInTheDocument();
   });
 
   it('shows the agent’s face on the empty canvas over one line in its name', async () => {

@@ -84,13 +84,16 @@ function toolPair(id: string, name: string, output: unknown, ok = true): ChatMes
 describe('the renderer registry', () => {
   it('holds one renderer per shape and nothing per domain', () => {
     expect(Object.keys(RENDERERS).sort()).toEqual([
+      'audio',
       'bars',
       'diff',
       'document',
+      'edition',
       'envelope',
       'image',
       'keyvalue',
       'preview',
+      'story',
       'structured',
       'table',
       'terminal',

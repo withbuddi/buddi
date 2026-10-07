@@ -21,8 +21,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import { AssetImage, assetSrc } from '../pages/AssetImage';
-import { ActionMenu, Button, ButtonLink, Modal } from '../ui';
+import { ActionMenu, Button, ButtonLink, Modal, Icon } from '../ui';
 import { AudioCard, clock, useAudioPlayer } from './AudioCard';
+import { downloadUrl } from './attachments';
+import { downloadMp3 } from './download-audio';
 import type { ReportView } from './report';
 
 /** The plugin that saves editions, and its read-back. */
@@ -276,25 +278,51 @@ const BARS = Array.from({ length: 64 }, (_, i) => 30 + Math.round(Math.abs(Math.
 
 /** The edition read aloud, as the kit's pill: play, the waveform filling as it plays, the time. */
 export function EditionAudio({ audio }: { audio: NonNullable<ReportView['audio']> }): JSX.Element {
-  const { playing, loading, failed, position, duration, toggle, bind } = useAudioPlayer(audio.fileId, audio.mime);
+  const { playing, loading, failed, position, duration, toggle, seek, bind } = useAudioPlayer(audio.fileId, audio.mime, true);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState(false);
   const done = duration ? Math.min(1, position / duration) : 0;
-  const time = failed ? 'Could not play' : loading ? 'Loading…' : duration === null ? 'Listen' : playing || position > 0 ? `${clock(position)} / ${clock(duration)}` : clock(duration);
-  return (
-    <button type="button" className="ed-audio" aria-label={playing ? 'Pause the edition' : 'Listen to the edition'} aria-pressed={playing} disabled={loading} onClick={() => void toggle()} data-testid="edition-audio">
-      <span className="ed-play" aria-hidden="true">
-        {playing ? (
-          <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><rect x="4" y="3" width="3" height="10" rx="1" /><rect x="9" y="3" width="3" height="10" rx="1" /></svg>
-        ) : (
-          <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M5 3.2v9.6c0 .5.5.8.9.5l7.2-4.8a.6.6 0 0 0 0-1L5.9 2.7c-.4-.3-.9 0-.9.5Z" /></svg>
-        )}
+  return <div>
+    <div className="ed-audio" data-testid="edition-audio">
+      <button type="button" className="ed-play ui-icon-btn" aria-label={playing ? 'Pause the edition' : 'Listen to the edition'} aria-pressed={playing} disabled={loading} onClick={() => void toggle()}>
+        <Icon name={playing ? 'pause' : 'play'} size={14} />
+      </button>
+      <span className="ed-seek">
+        <span className="ed-wave" aria-hidden="true">{BARS.map((h, i) => <i key={i} style={{ ['--h' as string]: `${h}%` }} data-on={i < Math.round(done * BARS.length) ? 'true' : undefined} />)}</span>
+        <input type="range" aria-label="Edition playback position" aria-valuetext={`${clock(position)} of ${clock(duration)}`} min={0} max={duration ?? 0} step={0.1} value={position} disabled={!duration} onChange={e => seek(Number(e.target.value))} />
       </span>
-      <span className="ed-wave" aria-hidden="true">
-        {BARS.map((h, i) => <i key={i} style={{ ['--h' as string]: `${h}%` }} data-on={(playing || position > 0) && i < Math.round(done * BARS.length) ? 'true' : undefined} />)}
-      </span>
-      <span className="ed-dur">{time}</span>
+      <span className="ed-dur" role="status">{failed ? 'Could not play' : loading ? 'Loading…' : `${clock(position)} / ${clock(duration)}`}</span>
+      <button className="ui-icon-btn" type="button" aria-label="Download edition as MP3" title="Download MP3" disabled={downloading} onClick={() => {
+        setDownloading(true); setDownloadError(false);
+        void downloadMp3(audio).catch(() => setDownloadError(true)).finally(() => setDownloading(false));
+      }}><Icon name="download" size={16} /></button>
       <audio {...bind} />
-    </button>
-  );
+    </div>
+    {downloading ? <p className="muted" role="status">Preparing MP3…</p> : null}
+    {downloadError ? <p role="alert">Could not create MP3. <a href={downloadUrl(audio.fileId)} download={audio.filename ?? 'edition.ogg'}>Download the original audio</a>.</p> : null}
+  </div>;
+}
+
+/** Audio is attached to the saved report, so every edition surface can find it. */
+export function SavedEditionAudio({ editionId }: { editionId: string }): JSX.Element | null {
+  const [audio, setAudio] = useState<ReportView['audio']>(null);
+  useEffect(() => {
+    let live = true;
+    setAudio(null);
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = async (): Promise<void> => {
+      try {
+        const result = await api.reportAudio(`#/p/news/stories?edition=${encodeURIComponent(editionId)}`);
+        if (!live) return;
+        setAudio(result.audio);
+        if (!result.audio && ++attempts < 24) timer = setTimeout(() => void read(), 5000);
+      } catch { /* The edition text stays readable when its audio is unavailable. */ }
+    };
+    void read();
+    return () => { live = false; if (timer) clearTimeout(timer); };
+  }, [editionId]);
+  return audio ? <EditionAudio key={audio.fileId} audio={audio} /> : null;
 }
 
 /** The card itself, from the query's answer. `audio` sits under the head, as the kit's player does. */
@@ -373,4 +401,13 @@ export function EditionReport({
       </div>
     </div>
   );
+}
+
+/** Read the saved recording for single-edition retrievals, including Telegram transcripts. */
+export function retrievedEditionId(output: unknown): string | null {
+  if (!output || typeof output !== 'object') return null;
+  const value = output as { attachAudio?: unknown; editions?: unknown };
+  if (value.attachAudio !== true || !Array.isArray(value.editions) || value.editions.length !== 1) return null;
+  const id: unknown = value.editions[0]?.id;
+  return typeof id === 'string' && /^e_[a-zA-Z0-9_-]+$/.test(id) ? id : null;
 }

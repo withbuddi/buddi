@@ -114,6 +114,9 @@ export async function updatePlugin(name: string, opts: UpdateOptions = {}): Prom
     // The stage holds unapproved third-party code; it goes, exactly as a
     // rejection would remove it.
     rejectStaged(staged.id, env);
+    if (compareSemver(parseSemver(staged.version)!, parseSemver(record.version)!) === 0) {
+      throw new InstallRefusal('up-to-date', `${record.name} ${record.version} is up to date.`);
+    }
     throw new InstallRefusal(
       'not-newer',
       `${record.name} ${record.version} is installed and ${staged.version} is what that resolves to now, ` +

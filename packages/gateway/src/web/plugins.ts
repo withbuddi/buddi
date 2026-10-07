@@ -18,6 +18,8 @@
  * Nothing here decides authorization: every write sits behind the same session,
  * Origin and CSRF gate as the rest of `server.ts`.
  */
+import { canRestartGateway } from './service.js';
+import { InstallRefusal } from '../plugins/refusals.js';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, readFileSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
@@ -264,6 +266,7 @@ export interface StageJob {
   phase: StagePhase;
   error?: string;
   stagedId?: string;
+  upToDate?: string;
   startedAt: string;
   finishedAt?: string;
 }
@@ -307,6 +310,12 @@ function runStaging(
       job.finishedAt = new Date().toISOString();
     })
     .catch((err: unknown) => {
+      if (err instanceof InstallRefusal && err.code === 'up-to-date') {
+        job.phase = 'done';
+        job.upToDate = err.message;
+        job.finishedAt = new Date().toISOString();
+        return;
+      }
       job.phase = 'failed';
       job.error = err instanceof Error ? err.message : String(err);
       job.finishedAt = new Date().toISOString();
@@ -460,7 +469,7 @@ function installedPackageAuthor(entry: InstalledPlugin, env: NodeJS.ProcessEnv):
  *
  * The same question the backup page asks, answered the same way: a packaged
  * installation has a supervisor on a control socket and a checkout does not,
- * which is what decides whether "Restart to load it" is a button or a command.
+ * kept for install-mode consumers. Restart capability is reported separately.
  */
 function isCheckout(env: NodeJS.ProcessEnv): boolean {
   const socket = env.BUDDI_SUPERVISOR_SOCKET?.trim();
@@ -610,6 +619,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
       staged,
       restartNeeded,
       checkout: isCheckout(env),
+      canRestart: await canRestartGateway(env),
       ...(unavailable === undefined ? {} : { unavailable }),
     },
   };

@@ -230,7 +230,9 @@ saved and the reply says where to fix that.
 
 Agents know you read Telegram on a phone: they lead with the point, keep to a
 few short sentences, and offer detail rather than giving it. Ask for more
-and you get more. No markdown: the chat shows plain text.
+and you get more. Replies preserve bold labels, lists and clickable source names.
+Light Markdown is converted to safe Telegram HTML; source links stay on their
+labels instead of expanding into long URLs.
 
 ## Reactions
 
@@ -282,3 +284,8 @@ is sent to Telegram.
 A voice note is also sent to your listening service and a spoken answer's
 text to your speaking service when those are cloud accounts; with Whisper and
 Kokoro on this computer neither leaves it (see [Speech](speech.md)).
+
+When Anchor opens a news story to explain it, Telegram also receives its cached
+publisher image, if available, with source attribution, followed by the full
+explanation in a separate message. Missing images leave the
+text answer intact; no article image is fetched from a remote URL during delivery.

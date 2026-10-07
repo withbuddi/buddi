@@ -10,11 +10,13 @@ import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
+import * as serviceControl from './service.js';
 import { csrfCookieName } from './http.js';
 
 const servers: WebServer[] = [];
 const fakes: Server[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(servers.splice(0).map((s) => s.close()));
   await Promise.all(fakes.splice(0).map((s) => new Promise((resolve) => s.close(resolve))));
 });
@@ -102,7 +104,8 @@ it('answers 503 when the socket is named but nothing is listening', async () => 
   expect((await fetch(`${origin}/api/service`, { headers: { Cookie: cookies.join('; ') } })).status).toBe(503);
 });
 
-it('reports a launchd job as supervised, with nothing to control from here', async () => {
+it('restarts only the known launchd job after acknowledging the request', async () => {
+  const restart = vi.spyOn(serviceControl, 'restartManagedGateway').mockImplementation(() => {});
   // What launchd hands the job `buddi service` installs: its label, no socket.
   const app = await dashboard({ XPC_SERVICE_NAME: 'com.buddi.serve' });
   const origin = `http://127.0.0.1:${app.port}`;
@@ -111,7 +114,9 @@ it('reports a launchd job as supervised, with nothing to control from here', asy
   const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf };
   expect(await (await fetch(`${origin}/api/service`, { headers })).json()).toEqual({ supervised: true, supervisor: 'launchd', label: 'com.buddi.serve' });
-  expect((await fetch(`${origin}/api/service/restart`, { method: 'POST', headers })).status).toBe(404);
+  expect((await fetch(`${origin}/api/service/restart`, { method: 'POST', headers })).status).toBe(202);
+  expect(restart).toHaveBeenCalledOnce();
+  expect((await fetch(`${origin}/api/service/stop`, { method: 'POST', headers })).status).toBe(404);
   // Another launchd job (a terminal opened from one, say) is not this service.
   const other = await dashboard({ XPC_SERVICE_NAME: 'application.com.apple.Terminal.123' });
   const o2 = `http://127.0.0.1:${other.port}`;
@@ -172,3 +177,36 @@ it('tells its open streams it is closing, and that a restart was asked for', asy
   servers.splice(servers.indexOf(app), 1);
   expect(heard).toContain('event: closing\ndata: {"for":"restart"}\n\n');
 });
+
+
+it('restarts a systemd service after replying, but offers no start or stop without a socket', async () => {
+  const restart = vi.spyOn(serviceControl, 'restartManagedGateway').mockImplementation(() => {});
+  const app = await dashboard({ INVOCATION_ID: 'ab'.repeat(16) });
+  const origin = `http://127.0.0.1:${app.port}`;
+  const session = await fetch(`${origin}/api/session`);
+  const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
+  const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
+  const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf };
+  expect(await (await fetch(`${origin}/api/service`, { headers })).json()).toEqual({ supervised: true, supervisor: 'systemd' });
+  expect((await fetch(`${origin}/api/service/restart`, { method: 'POST', headers })).status).toBe(202);
+  expect(restart).toHaveBeenCalledOnce();
+  for (const action of ['start', 'stop']) expect((await fetch(`${origin}/api/service/${action}`, { method: 'POST', headers })).status).toBe(404);
+});
+
+it('only advertises a configured supervisor socket when its status endpoint answers successfully', async () => {
+  const { socket } = await fakeSupervisor();
+  expect(await serviceControl.canRestartGateway({ BUDDI_SUPERVISOR_SOCKET: socket })).toBe(true);
+  expect(await serviceControl.canRestartGateway({ BUDDI_SUPERVISOR_SOCKET: `${socket}.missing` })).toBe(false);
+  // A reachable socket with a refusing status endpoint is also unavailable.
+  fakes[0]!.removeAllListeners('request');
+  fakes[0]!.on('request', (_req, res) => { res.writeHead(503); res.end('{}'); });
+  expect(await serviceControl.canRestartGateway({ BUDDI_SUPERVISOR_SOCKET: socket })).toBe(false);
+});
+
+
+it('bounds the capability probe when a supervisor accepts the socket but never replies', async () => {
+  const { socket } = await fakeSupervisor();
+  fakes[0]!.removeAllListeners('request');
+  fakes[0]!.on('request', () => {});
+  expect(await serviceControl.canRestartGateway({ BUDDI_SUPERVISOR_SOCKET: socket })).toBe(false);
+}, 5000);

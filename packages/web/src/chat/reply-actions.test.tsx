@@ -4,7 +4,7 @@
  * route and the same audio element as the composer's toggle.
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageList } from './MessageList';
 import { resetVoiceNote, speakReply } from './ChatPage';
@@ -39,6 +39,17 @@ describe('reply actions', () => {
     expect(screen.getAllByTestId('reply-actions')).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: 'Read aloud' })).toHaveLength(1);
+  });
+
+  it('shows original text blocks without trimming, joining, or rendering Markdown', async () => {
+    const raw = ['  **Heading**\n\n- First\n- Second\n', '1. One\n2. Two\n<script>example</script>'];
+    render(<Tooltip.Provider><MessageList messages={[{ id: 'raw', role: 'assistant', at: '', blocks: raw.map(text => ({ type: 'text' as const, text })) }]} live={[]} now={0} onOpen={() => {}} emptyHint="" agentName="Ada" /></Tooltip.Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'View raw response' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Raw response' });
+    expect(Array.from(dialog.querySelectorAll('pre code')).map(node => node.textContent)).toEqual(raw);
+    expect(dialog.querySelector('ul, ol, script')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('copies the reply as plain text and says so for a second', async () => {

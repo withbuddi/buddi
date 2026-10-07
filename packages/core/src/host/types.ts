@@ -157,7 +157,7 @@ export interface PluginsArea {
  *
  * `put` takes PNG, JPEG, GIF (its first frame) or ICO, at most 256 KB, and
  * refuses SVG; core decodes it and keeps PNGs it drew itself, 64 and 128
- * pixels square, served session-gated at `/api/plugin-assets/<plugin>/<key>`.
+ * pixels square plus an aspect-preserving variant up to 768 pixels, served session-gated at `/api/plugin-assets/<plugin>/<key>`.
  * 20 MB per plugin; everything is removed with the plugin. Refusals are
  * thrown with the sentence why.
  */
@@ -313,6 +313,8 @@ export interface NetworkArea {
 
 /** The owner's decisions about this plugin's own tools. */
 export interface ApprovalsArea {
+  /** Live owner settings authorize this tool in this exact executor run; never inherited by delegates. Since 1.33. */
+  configuredForRun?(tool: string): Promise<boolean>;
   /** Throw unless `envelope` is the effect the owner approved on this call. */
   assert(ctx: ToolContext, envelope: unknown): void;
   /** The standing permission that answers for one of this plugin's tools on this call, or null. */

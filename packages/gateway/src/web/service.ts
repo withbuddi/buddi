@@ -18,6 +18,38 @@
  */
 import { request } from 'node:http';
 
+export const LAUNCHD_LABEL = 'com.buddi.serve';
+
+/** Only the known KeepAlive job may restart by exiting. Never infer this from a checkout. */
+export function isLaunchdManaged(env: NodeJS.ProcessEnv): boolean {
+  return env.XPC_SERVICE_NAME === LAUNCHD_LABEL;
+}
+
+/** systemd gives each service invocation its own ID; the installed unit uses Restart=always. */
+export function isSystemdManaged(env: NodeJS.ProcessEnv): boolean {
+  return !!env.INVOCATION_ID?.trim();
+}
+
+export function isServiceManaged(env: NodeJS.ProcessEnv): boolean {
+  return isLaunchdManaged(env) || isSystemdManaged(env);
+}
+
+export async function canRestartGateway(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const socket = env.BUDDI_SUPERVISOR_SOCKET?.trim();
+  if (!socket) return isServiceManaged(env);
+  try {
+    return (await supervisorCall(socket, '/status', 'GET', undefined, 1000)).status === 200;
+  } catch {
+    return false;
+  }
+}
+
+/** Graceful shutdown; launchd KeepAlive or systemd Restart=always starts its replacement. */
+export function restartManagedGateway(): void {
+  process.kill(process.pid, 'SIGTERM');
+}
+
+
 export interface SupervisorReply {
   status: number;
   body: unknown;

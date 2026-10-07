@@ -66,7 +66,7 @@ export async function listPluginAssets(plugin: string, env: EnvLike = process.en
   }
   const byKey = new Map<string, PluginAsset>();
   for (const name of names.sort()) {
-    const match = /^(.+)\.(64|128)\.png$/.exec(name);
+    const match = /^(.+)\.(64|128|768)\.png$/.exec(name);
     if (!match || !isAssetKey(match[1])) continue;
     const info = await stat(path.join(dir, name)).catch(() => null);
     if (!info) continue;
@@ -111,6 +111,7 @@ export async function putPluginAsset(
   await mkdir(dir, { recursive: true });
   for (const s of ASSET_SIZES) {
     const png = encoded[s];
+    if (!png && s === 768) continue;
     if (!png) throw new AssetRefusal(`${plugin}: the image could not be drawn at ${s} px`);
     // Written beside and renamed over: a page never reads half a file.
     const target = fileOf(dir, key, s);

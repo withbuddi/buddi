@@ -487,6 +487,11 @@ export function applyDescriptor(
       return { renderer: 'keyvalue', props: resolveKeyValue(output, map as KeyValueMap) };
     case 'tiles':
       return { renderer: 'tiles', props: resolveTiles(output, map as TilesMap, descriptor.tool) };
+    case 'audio':
+    case 'edition':
+      return { renderer: descriptor.renderer, props: { value: output } };
+    case 'story':
+      return { renderer: 'story', props: { value: output, plugin: descriptor.tool.split('.')[0] } };
     case 'document':
       return { renderer: 'document', props: resolveDocument(output, map as DocumentMap) };
     case 'diff':

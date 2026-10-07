@@ -1,3 +1,5 @@
+import { SavedEditionAudio, retrievedEditionId } from './EditionCard';
+import { MissionRequestText } from './MissionRequestText';
 /**
  * The conversation itself.
  *
@@ -324,7 +326,7 @@ export function MessageList({
                 // The owner's words stay exactly as typed; the agent's are
                 // markdown, because that is how a model writes a list.
                 return block.text.trim() === '' ? null : mine ? (
-                  <div key={blockIndex} className="wb-bubble">{block.text}</div>
+                  <div key={blockIndex} className="wb-bubble"><MissionRequestText text={block.text} /></div>
                 ) : (
                   <div key={blockIndex} className="wb-bubble" data-rich="true"><Markdown text={block.text} /></div>
                 );
@@ -356,6 +358,7 @@ export function MessageList({
                     opens
                     onOpen={() => onOpen(block.id)}
                   />
+                  {!gate && block.name === 'news.editions' && result?.ok && retrievedEditionId(result.output) ? <SavedEditionAudio editionId={retrievedEditionId(result.output)!} /> : null}
                   {report ? <MissionReport view={report} /> : null}
                   </Fragment>
                 );
@@ -374,7 +377,7 @@ export function MessageList({
               <div className="wb-msg-unchecked" data-testid="unchecked-answer">{UNCHECKED_LINE}</div>
             ) : null}
             {message.feedback && !mine && !interjected ? <FeedbackMark feedback={message.feedback} /> : null}
-            {said !== '' ? <ReplyActions messageId={message.id} text={said} onReadAloud={onReadAloud} /> : null}
+            {said !== '' ? <ReplyActions messageId={message.id} text={said} rawTextBlocks={(messages.find((original) => original.id === message.id)?.blocks ?? []).flatMap((block) => block.type === 'text' ? [block.text] : [])} onReadAloud={onReadAloud} /> : null}
           </div>
         );
       })}

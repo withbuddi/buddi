@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ApiError, api, type InstalledPluginView, type MarketEntryView, type PluginsView, type StagedPluginView } from '../api';
 import { PAGES_CHANGED_EVENT } from '../pages/usePages';
@@ -77,6 +77,7 @@ function view(over: Partial<PluginsView> = {}): PluginsView {
     staged: [],
     restartNeeded: false,
     checkout: true,
+    canRestart: over.checkout === false,
     ...over,
   };
 }
@@ -115,7 +116,8 @@ async function openMenuItem(plugin: string, item: string): Promise<void> {
   // fireEvent does not. No typing delay and no pointer-events check: with the
   // defaults the press took 5–14 s under jsdom, and CI timed out on it.
   await userEvent.setup({ delay: null, pointerEventsCheck: 0 }).click(await screen.findByLabelText(`More for ${plugin}`));
-  fireEvent.click(await screen.findByRole('menuitem', { name: new RegExp(`^${item}`) }));
+  const choice = await screen.findByRole('menuitem', { name: new RegExp(`^${item}`) });
+  await act(async () => { fireEvent.click(choice); });
 }
 
 describe('the plugins section', () => {
@@ -179,7 +181,7 @@ describe('the plugins section', () => {
     };
     vi.mocked(api.plugins).mockResolvedValue(view({ staged: [update] }));
     render(<Plugins />);
-    expect(await screen.findByText('What it reaches')).toBeInTheDocument();
+    expect(await screen.findByText('What it accesses')).toBeInTheDocument();
     expect(screen.getByText(/It sends web requests\./)).toBeInTheDocument();
     expect(screen.getByText(/It reads every file in your Files library\./)).toBeInTheDocument();
     expect(screen.getByText('new in 2.1.0')).toBeInTheDocument();
@@ -232,7 +234,7 @@ describe('the plugins section', () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ staged: [STAGED, OLD_STAGED, OLDER_STAGED] }));
     render(<Plugins />);
     // One card: one Install, and the fresh stage's claim on the page.
-    expect(await screen.findByText('“It tells you the weather.”')).toBeInTheDocument();
+    expect(await screen.findAllByText('It tells you the weather.').then((items) => items[0]!)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Install' })).toHaveLength(1);
     expect(screen.getByText('Waiting for you')).toBeInTheDocument();
     expect(screen.getByText('2 packages')).toBeInTheDocument();
@@ -257,10 +259,11 @@ describe('the plugins section', () => {
     render(<Plugins />);
     fireEvent.click(await screen.findByRole('button', { name: 'Review' }));
     const sheet = await screen.findByRole('dialog');
-    expect(sheet).toHaveTextContent('What it says about itself');
+    expect(sheet).toHaveTextContent('Read full description');
+    expect(sheet).toHaveTextContent('Excerpt from the author’s description:');
     expect(sheet).toHaveTextContent('Nothing of it has run.');
     expect(api.openedStaged).toHaveBeenCalledWith('stage-old');
-    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install tides' }));
     await waitFor(() => expect(api.approveStaged).toHaveBeenCalledWith('stage-old', { integrity: 'sha512-AAAA' }));
   });
 
@@ -291,6 +294,7 @@ describe('the plugins section', () => {
     fireEvent.change(await screen.findByPlaceholderText('buddi-plugin-weather'), { target: { value: 'mine' } });
     fireEvent.click(screen.getByRole('button', { name: 'Read it first' }));
     await waitFor(() => expect(api.openedStaged).toHaveBeenCalledWith('stage-mine'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     // The other one, newer or not, is a row.
     expect(await screen.findByLabelText('weather: review')).toBeInTheDocument();
   });
@@ -471,7 +475,7 @@ describe('the plugins section', () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ restartNeeded: true, checkout: true }));
     render(<Plugins />);
     expect(await screen.findByText(/buddi serve/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Restart to load it' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restart to finish' })).not.toBeInTheDocument();
   });
 
   it('offers the service restart on a packaged installation, under the restart screen', async () => {
@@ -486,7 +490,7 @@ describe('the plugins section', () => {
     vi.mocked(api.serviceAction).mockResolvedValue({ supervised: true });
     render(<Plugins />);
     expect(await screen.findByText(/weather 0\.1\.3 and 4 more are installed\./)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Restart to load it' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart to finish' }));
     // The screen goes up with the click, before the gateway has said a word.
     expect(restartState()).toMatchObject({ kind: 'plugins', line: 'Loading weather 0.1.3 and 4 more…' });
     await waitFor(() => expect(api.serviceAction).toHaveBeenCalledWith('restart'));
@@ -496,7 +500,7 @@ describe('the plugins section', () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ restartNeeded: true, checkout: false }));
     vi.mocked(api.serviceAction).mockRejectedValue(new ApiError(503, 'The supervisor is not answering on its control socket.'));
     render(<Plugins />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Restart to load it' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart to finish' }));
     expect(await screen.findByText('The supervisor is not answering on its control socket.')).toBeInTheDocument();
     expect(restartState()).toBeNull();
   });
@@ -508,12 +512,12 @@ describe('the plugins section', () => {
     const { unmount } = render(<Plugins />);
     expect(await screen.findByText(/weather 0\.1\.3 is installed\. Its tools appear once buddi restarts/)).toBeInTheDocument();
     // The row says the same, rather than "did not load" or "loaded".
-    expect(screen.getByText('loads at restart')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for restart')).toBeInTheDocument();
     unmount();
     // The same page, after the restart: the row says loaded and nothing asks for a restart.
     render(<Plugins />);
     expect(await screen.findByText('weather')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Restart to load it' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restart to finish' })).not.toBeInTheDocument();
     expect(screen.queryByText(/is installed\./)).not.toBeInTheDocument();
   });
   /**
@@ -536,6 +540,7 @@ describe('the plugins section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Read it first' }));
     await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('/home/you/code/weather'));
 
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0]!);
     // A file is not typed, so that mode has no button of its own at all.
     fireEvent.click(screen.getByRole('radio', { name: 'A file' }));
     expect(screen.queryByRole('button', { name: 'Read it first' })).not.toBeInTheDocument();
@@ -684,7 +689,7 @@ describe('the plugins section', () => {
     const dialog = await screen.findByRole('alertdialog', { name: 'Disable garden?' });
     expect(dialog).toHaveTextContent('Its tools, pages and watchers stop now and its missions pause.');
     expect(dialog).toHaveTextContent('Its data and the agents you accepted from it are kept');
-    fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Disable' })); });
     await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('garden', false));
     // It takes effect at once: the sheet says so, the rail reads its pages again, and nothing asks for a restart.
     expect(await screen.findByText('Disabled. Its tools, pages and watchers are off now; its data is kept.')).toBeInTheDocument();
@@ -924,21 +929,21 @@ describe('browsing the market', () => {
     expect(screen.getByRole('link', { name: "its maker's page" })).toHaveAttribute('href', 'https://garden.example');
     expect(sheet).toHaveTextContent('Install reads it first. Nothing of it runs until you say yes.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review & install' }));
     await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('buddi-plugin-garden@0.1.0'));
     // Back on Installed, reading it.
-    expect(await screen.findByText(TRUST)).toBeInTheDocument();
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
-  it('stages the listed version and goes back to Installed to read the card', async () => {
+  it('stages the listed version in a progress sheet over Browse', async () => {
     vi.mocked(api.plugins).mockResolvedValue(view());
     vi.mocked(api.market).mockResolvedValue({ plugins: [WEATHER] });
     vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
     vi.mocked(api.pluginJob).mockResolvedValue(JOB);
     render(<Plugins hash="#/settings/plugins?tab=browse" />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Review & install' }));
     await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('@withbuddi/plugin-weather@0.1.0'));
-    expect(await screen.findByText(TRUST)).toBeInTheDocument();
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(await screen.findByText(/Fetching the package/)).toBeInTheDocument();
   });
 
@@ -950,7 +955,9 @@ describe('browsing the market', () => {
     render(<Plugins hash="#/settings/plugins?tab=browse" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Update to 1.2.0' }));
     await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('finance', '1.2.0', '@withbuddi/plugin-finance@1.2.0'));
-    // Back on Installed, the row names the version too, wears the market's icon, and the tab counts it.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0]!);
+    fireEvent.click(screen.getByRole('link', { name: /Installed/ }));
+    // The installed row still shows the available update.
     expect(await screen.findByRole('button', { name: 'Update to 1.2.0' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Installed/ })).toHaveTextContent('Installed1');
     expect(screen.getByLabelText('finance: details').querySelector('.ui-app-icon-svg svg')).not.toBeNull();
@@ -1003,8 +1010,12 @@ describe('browsing the market', () => {
     await openMenuItem('garden', 'Reinstall from folder');
     await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('garden', undefined));
     vi.mocked(api.updatePlugin).mockClear();
+    vi.mocked(api.pluginJob).mockResolvedValue({ ...JOB, phase: 'done', upToDate: 'Already read.' });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0]!);
     fireEvent.click(screen.getByLabelText('garden: details'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Reinstall from folder' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reinstall from folder' })).toBeEnabled());
+    const reinstall = await screen.findByRole('button', { name: 'Reinstall from folder' });
+    await act(async () => { fireEvent.click(reinstall); });
     await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('garden', undefined));
     expect(screen.queryByRole('button', { name: 'Check for an update' })).toBeNull();
   });
@@ -1025,7 +1036,7 @@ describe('browsing the market', () => {
     const { rerender } = render(<Plugins hash={hash} />);
     await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('@withbuddi/plugin-weather@0.1.0'));
     rerender(<Plugins hash={hash} />);
-    expect(await screen.findByText(TRUST)).toBeInTheDocument();
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(api.stagePlugin).toHaveBeenCalledTimes(1);
     expect(api.market).not.toHaveBeenCalled();
     expect(window.location.hash).toBe('#/settings/plugins');
@@ -1124,5 +1135,43 @@ describe('readiness and requirements', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Later' }));
     expect(screen.queryByText(/calendar is loaded\. First/)).not.toBeInTheDocument();
     expect(window.sessionStorage.getItem('buddi.plugins.justInstalled')).toBeNull();
+  });
+});
+
+describe('installation flow feedback', () => {
+  it('shows preparation before the staging request returns and keeps Browse underneath', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.market).mockResolvedValue({ plugins: [{ name: 'weather', title: 'Weather', npm: '@withbuddi/plugin-weather', version: '0.1.0', summary: 'Weather', category: 'days', trust: 'by-buddi', pricing: { kind: 'free' } }] });
+    vi.mocked(api.stagePlugin).mockImplementation(() => new Promise(() => {}));
+    render(<Plugins hash="#/settings/plugins?tab=browse" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review & install' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Preparing the package…');
+    expect(screen.getByRole('status')).toHaveAttribute('aria-busy', 'true');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0]!);
+    expect(screen.getByRole('button', { name: 'Review & install' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: 'Browse' })).toBeInTheDocument();
+    expect(api.stagePlugin).toHaveBeenCalledTimes(1);
+  });
+
+  it('remembers the installed plugin ID, not the npm package name, for setup after restart', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [{ ...STAGED, name: '@example/weather', installsAs: 'weather' }] }));
+    vi.mocked(api.approveStaged).mockResolvedValue({ installed: { name: 'weather', version: '2.1.0' }, restartNeeded: true });
+    render(<Plugins />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('weather is installed');
+    expect(window.sessionStorage.getItem('buddi.plugins.justInstalled')).toBe('weather');
+  });
+
+  it('keeps restart available when an update check says the pending plugin is up to date', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ checkout: true, canRestart: true, restartNeeded: true, installed: [{ ...INSTALLED, loadsAtRestart: true, loaded: false }] }));
+    vi.mocked(api.updatePlugin).mockResolvedValue({ job: { ...JOB, kind: 'update' } });
+    vi.mocked(api.pluginJob).mockResolvedValue({ ...JOB, kind: 'update', phase: 'done', upToDate: 'garden 1.0.0 is up to date.' });
+    render(<Plugins />);
+    fireEvent.click(await screen.findByLabelText('garden: details'));
+    fireEvent.click(screen.getByRole('button', { name: 'Check for an update' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(await within(sheet).findByText('garden 1.0.0 is up to date.')).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Restart to finish' })).toBeEnabled();
+    expect(within(sheet).queryByRole('alert')).not.toBeInTheDocument();
   });
 });

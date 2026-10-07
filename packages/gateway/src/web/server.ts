@@ -254,7 +254,7 @@ import {
   type Session,
   type SessionScope,
 } from './sessions.js';
-import { supervisorCall } from './service.js';
+import { supervisorCall, isServiceManaged, isSystemdManaged, restartManagedGateway, LAUNCHD_LABEL } from './service.js';
 import {
   backupJobRoute,
   createBackupRoute,
@@ -508,7 +508,7 @@ export interface WebServer {
  * garbage-collected takes its queue with it.
  */
 /** `buddi service`'s launchd label (SERVICE_LABEL in the cli, which depends on this package, not the other way). */
-export const LAUNCHD_LABEL = 'com.buddi.serve';
+export { LAUNCHD_LABEL } from './service.js';
 
 const WEB_CHATS = new WeakMap<Server, WebChat>();
 
@@ -1946,6 +1946,16 @@ export function createWebApp(deps: WebServerDeps): Server {
         });
       }
 
+      if (path === '/api/reports/audio') {
+        const link = q.get('link');
+        if (!link || !link.startsWith('#/') || link.length > 2048) return sendJson(res, 400, { error: 'a local report link is required' });
+        const { rows } = await deps.pool.query<{ audio: string }>(
+          `select audio from core.owner_notifications where link = $1 and audio is not null order by created_at desc limit 1`, [link],
+        );
+        const file = rows[0] ? await getArtifact(deps.pool, rows[0].audio) : null;
+        return sendJson(res, 200, { audio: file?.mime.startsWith('audio/') ? { fileId: file.id, mime: file.mime, filename: file.filename, sizeBytes: file.sizeBytes } : null });
+      }
+
       if (path === '/api/artifacts') {
         const origin = q.get('origin');
         const family = q.get('family');
@@ -2307,15 +2317,16 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/service': {
           const env = deps.env ?? process.env;
-          const socket = env.BUDDI_SUPERVISOR_SOCKET;
+          const socket = env.BUDDI_SUPERVISOR_SOCKET?.trim();
           if (!socket) {
             // `buddi service` runs serve.js straight under launchd, with no
             // control socket. launchd names its job in XPC_SERVICE_NAME, so
-            // the gateway is supervised all the same; there is only nothing
-            // here to stop or restart it with.
+            // the gateway can restart by shutting down under KeepAlive.
+            // Start and stop still require the CLI.
             if (env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
               return sendJson(res, 200, { supervised: true, supervisor: 'launchd', label: LAUNCHD_LABEL });
             }
+            if (isSystemdManaged(env)) return sendJson(res, 200, { supervised: true, supervisor: 'systemd' });
             return sendJson(res, 200, { supervised: false });
           }
           try {
@@ -2536,7 +2547,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       const asset = /^\/api\/plugin-assets\/([a-z][a-z0-9_-]{0,63})\/([^/]+)$/.exec(path);
       if (asset) {
         const key = decodeURIComponent(asset[2]!);
-        const size = url.searchParams.get('size') === '64' ? 64 : 128;
+        const size = url.searchParams.get('size') === '768' ? 768 : url.searchParams.get('size') === '64' ? 64 : 128;
         const png = isAssetKey(key) ? await readPluginAsset(asset[1]!, key, size, deps.env ?? process.env).catch(() => null) : null;
         if (!png) return sendEmpty(res, 404);
         const etag = `"${createHash('sha256').update(png).digest('hex').slice(0, 32)}"`;
@@ -3870,7 +3881,7 @@ export function createWebApp(deps: WebServerDeps): Server {
        * checkout there is no supervisor to ask and the loops start the next
        * time `buddi serve` is started by whoever started this.
        */
-      const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET;
+      const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET?.trim();
       if (socket) {
         try {
           const reachable = await supervisorCall(socket, '/status', 'GET');
@@ -3918,9 +3929,16 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     const serviceAction = /^\/api\/service\/(start|stop|restart)$/.exec(path);
     if (serviceAction) {
-      const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET;
-      if (!socket) return sendJson(res, 404, { error: 'This gateway is not run by a supervisor; there is nothing to control.' });
+      const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET?.trim();
       const action = serviceAction[1]!;
+      if (!socket) {
+        if (action !== 'restart' || !isServiceManaged(deps.env ?? process.env)) {
+          return sendJson(res, 404, { error: 'This gateway has no control socket for that action.' });
+        }
+        goingAway = 'restart';
+        res.once('finish', () => restartManagedGateway());
+        return sendJson(res, 202, { supervised: true, pending: 'restart' });
+      }
       if (action === 'start') {
         try {
           const reply = await supervisorCall(socket, '/start', 'POST');

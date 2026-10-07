@@ -120,6 +120,7 @@ export interface ComposerDraft {
 export interface ComposerHandle {
   addFiles: (files: FileList | File[] | null) => void;
   focus: () => void;
+  carryDraftTo: (threadKey: string) => void;
 }
 
 /** Who `@` offers in a one-to-one chat: the roster, and which agent the box talks to. */
@@ -501,6 +502,15 @@ export const Composer = forwardRef<ComposerHandle, {
       area.current?.focus();
     },
     focus: () => area.current?.focus(),
+    carryDraftTo: (thread) => {
+      const nextKey = `buddi.draft.${thread}`;
+      loadedFor.current = nextKey;
+      try {
+        if (text) window.localStorage.setItem(nextKey, text);
+        else window.localStorage.removeItem(nextKey);
+        if (storageKey && storageKey !== nextKey) window.localStorage.removeItem(storageKey);
+      } catch { /* Keep the visible draft even when storage is unavailable. */ }
+    },
   }));
 
   // Thumbnails are browser memory; let go of them with the component.

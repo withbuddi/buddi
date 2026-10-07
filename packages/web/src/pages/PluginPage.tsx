@@ -1,3 +1,6 @@
+import { StoryImage } from './StoryImage';
+import { EditionCard, editionOf, SavedEditionAudio } from '../chat/EditionCard';
+import { leaveReference } from '../chat/reference';
 /**
  * One generic page, drawn from a descriptor.
  *
@@ -318,7 +321,13 @@ function routeOf(scope: PageScope, to: RouteRef, data: unknown): string {
   const target = scope.pages.find((page) => page.id === to.page);
   if (target?.place === 'settings') return pluginSettingsRoute(scope.plugin, to.page);
   const item = to.item === undefined ? null : readRef(data, to.item);
-  return pluginPageRoute(scope.plugin, to.page, item === null || item === undefined ? null : String(item));
+  const route = pluginPageRoute(scope.plugin, to.page, item === null || item === undefined ? null : String(item));
+  const params = new URLSearchParams();
+  for (const [key, ref] of Object.entries(to.params ?? {})) {
+    const value = readRef(data, ref);
+    if (value !== null && value !== undefined) params.set(key, String(value));
+  }
+  return params.size ? `${route}?${params}` : route;
 }
 
 /**
@@ -1163,19 +1172,40 @@ function PieceSection({
   note,
   actions,
   children,
+  plain,
 }: {
   title?: string | undefined;
   note?: string | undefined;
   actions?: ReactNode;
   children: ReactNode;
+  plain?: boolean;
 }): JSX.Element {
-  const boxed = useContext(Boxed);
+  const inheritedBox = useContext(Boxed);
+  const boxed = inheritedBox && !plain;
   return (
     <Section title={title} aside={note} actions={actions} panel={boxed}>
       <Boxed.Provider value={false}>
         <PanelTop.Provider value={boxed}>{children}</PanelTop.Provider>
       </Boxed.Provider>
     </Section>
+  );
+}
+
+function EditionPiece({ component }: { component: Of<'edition'> }): JSX.Element {
+  const scope = useScope();
+  const query = usePageQuery(component.query, null);
+  const edition = editionOf(query.data);
+  return (
+    <Sheet scrollBody title="News edition" onClose={() => {
+      scope.setParams({ [component.param]: null });
+      const params = new URLSearchParams(scope.params);
+      params.delete(component.param);
+      scope.navigate(`${pluginPageRoute(scope.plugin, scope.page, scope.item)}${params.size ? `?${params}` : ''}`);
+    }}>
+      {query.loading ? <Notice>Loading the edition…</Notice> : query.error ? <ErrorBanner message={query.error} /> : edition ? (
+        <EditionCard edition={edition} audio={<SavedEditionAudio editionId={edition.id} />} />
+      ) : <Empty title="No saved edition">Anchor hasn’t saved this edition yet. Scheduled editions will appear here once they’re ready.</Empty>}
+    </Sheet>
   );
 }
 
@@ -1256,6 +1286,8 @@ function Piece({
       return <ButtonPiece component={component} data={data} />;
     case 'menu':
       return <MenuPiece component={component} data={data} />;
+    case 'edition':
+      return scope.params[component.param] ? <EditionPiece component={component} /> : null;
     case 'approval':
       return <ApprovalPiece component={component} data={data} />;
     case 'artifact':
@@ -1311,14 +1343,21 @@ function SectionPiece({ component, data: given }: { component: Of<'section'>; da
     piece.kind === 'link' ||
     piece.kind === 'menu' ||
     (piece.kind === 'form' && piece.drawer?.button !== undefined && !piece.title);
-  while (boxed && end > 0 && headable(component.body[end - 1]!)) end -= 1;
-  const body = component.body.slice(0, end);
+  while (boxed && component.look !== 'setup' && end > 0 && headable(component.body[end - 1]!)) end -= 1;
+  const content = component.body.slice(0, end);
+  const footer = component.look === 'setup'
+    ? content.filter((child) => child.kind === 'button').sort((a, b) =>
+      Number(a.kind === 'button' && a.action.tone === 'accent') - Number(b.kind === 'button' && b.action.tone === 'accent'))
+    : [];
+  const body = component.look === 'setup' ? content.filter((child) => child.kind !== 'button') : content;
   const actions = [...(component.actions ?? []), ...component.body.slice(end)];
   // What a menu in the head said (1.28): drawn at the top of the body, not in the head.
   const [headNote, setHeadNote] = useState<ReactNode>(null);
   return (
     <HeadNote.Provider value={setHeadNote}>
+    <div className={component.look === 'setup' ? 'pp-setup' : undefined} style={component.look === 'setup' ? undefined : { display: 'contents' }}>
     <PieceSection
+      plain={component.look === 'setup'}
       title={title}
       note={component.note}
       /*
@@ -1350,11 +1389,17 @@ function SectionPiece({ component, data: given }: { component: Of<'section'>; da
               {body.map((child, index) => (
                 <Piece key={index} component={child} data={data} />
               ))}
+              {footer.length > 0 ? (
+                <div className="pp-setup-actions">
+                  {footer.map((child, index) => <Piece key={index} component={child} data={data} />)}
+                </div>
+              ) : null}
             </HeadNote.Provider>
           </Unmasked.Provider>
         )}
       </Stack>
     </PieceSection>
+    </div>
     </HeadNote.Provider>
   );
 }
@@ -2931,6 +2976,8 @@ function ListDetailPiece({ component, data }: { component: Of<'list-detail'>; da
  */
 function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unknown }): JSX.Element {
   const scope = useScope();
+  const boxed = useContext(Boxed);
+  const sectionGroups = component.body.length > 0 && component.body.every((child) => child.kind === 'section');
   // `poll`: this query alone is asked again while its own answer says so.
   const [polling, setPolling] = useState(false);
   const query = usePageQuery(component.query, data, polling && component.poll ? component.poll.seconds * 1000 : undefined);
@@ -2963,9 +3010,10 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
     // row that came due while busy was skipped, not dropped).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dueKey, act.busy]);
+  const setupCard = rows.some((row) => component.body.some((child) => child.kind === 'section' && child.look === 'setup' && (!child.when || holds(row, child.when))));
   const finishing = finish !== undefined && act.running === finish.action.tool;
   return (
-    <PieceSection title={component.title} note={component.note}>
+    <PieceSection title={component.title} note={component.note} plain={setupCard || sectionGroups}>
       <ErrorBanner message={query.error} />
       {finishing ? (
         <p className="pl-wait" role="status">
@@ -2986,9 +3034,11 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
           }).map(({ key, row }) => (
             <Section key={key}>
               <Stack>
-                {component.body.map((child, i) => (
-                  <Piece key={i} component={child} data={row} />
-                ))}
+                <Boxed.Provider value={sectionGroups && boxed}>
+                  {component.body.map((child, i) => (
+                    <Piece key={i} component={child} data={row} />
+                  ))}
+                </Boxed.Provider>
               </Stack>
             </Section>
           ))}
@@ -3328,17 +3378,18 @@ function TabsPiece({ component, data }: { component: Of<'tabs'>; data: unknown }
 function ExpandPiece({ component, data }: { component: Of<'expand'>; data: unknown }): JSX.Element {
   const [open, setOpen] = useState(false);
   const query = usePageQuery(open ? component.query : undefined, data);
+  const expandedData = component.query ? query.data : data;
   const summary =
     typeof component.label === 'string' ? component.label : String(readRef(data, component.label) ?? '');
   return (
     <Details summary={summary} boxed onToggle={(isOpen) => setOpen(isOpen)}>
       <ErrorBanner message={query.error} />
-      {query.data === undefined ? (
+      {!open ? null : component.query && query.data === undefined ? (
         <Empty>Loading…</Empty>
       ) : (
         <Stack>
           {component.body.map((child, index) => (
-            <Piece key={index} component={child} data={query.data} />
+            <Piece key={index} component={child} data={expandedData} />
           ))}
         </Stack>
       )}
@@ -3640,6 +3691,7 @@ function StoriesPiece({ component, data }: { component: Of<'stories'>; data: unk
       {body}
       {open ? (
         <Sheet
+          scrollBody
           title={open.kicker ?? open.group?.name ?? component.title ?? 'Story'}
           onClose={() => scope.setParams({ [param]: null })}
           foot={
@@ -3664,7 +3716,7 @@ function StoriesPiece({ component, data }: { component: Of<'stories'>; data: unk
               ) : null}
               <Spacer />
               {component.ask && holds(open, component.ask.when) ? (
-                <StoryLink to={component.ask.to} row={open} label={component.ask.label} accent />
+                <StoryLink to={component.ask.to} row={open} label={component.ask.label} context={component.ask.context} accent />
               ) : null}
             </Toolbar>
           }
@@ -3684,9 +3736,10 @@ function ActOutcomeQuiet({ act }: { act: ActState }): JSX.Element | null {
 }
 
 /** A descriptor's route as a button, read against one story. */
-function StoryLink({ to, row, label, accent }: { to: RouteRef; row: unknown; label: string; accent?: boolean }): JSX.Element | null {
+function StoryLink({ to, row, label, accent, context }: { to: RouteRef; row: unknown; label: string; accent?: boolean; context?: NonNullable<Of<'stories'>['ask']>['context'] }): JSX.Element | null {
   const scope = useScope();
-  const href = routeOf(scope, to, row);
+  const agentId = context && 'chat' in to ? readRef(row, to.chat) : null;
+  const href = typeof agentId === 'string' && agentId ? chatRoute(agentId, 'new') : routeOf(scope, to, row);
   if (href === '') return null;
   if ('href' in to) {
     return (
@@ -3701,6 +3754,14 @@ function StoryLink({ to, row, label, accent }: { to: RouteRef; row: unknown; lab
       href={href}
       onClick={(e) => {
         e.preventDefault();
+        if (context && 'chat' in to) {
+          const agent = readRef(row, to.chat);
+          const title = readRef(row, context.title);
+          const text = readRef(row, context.text);
+          if (typeof agent === 'string' && typeof title === 'string' && typeof text === 'string') {
+            leaveReference(agent, { title, text, suggestions: context.suggestions ?? [] });
+          }
+        }
         scope.navigate(href);
       }}
     >
@@ -3786,6 +3847,7 @@ function StoryCard({
           </span>
         ) : null}
       </header>
+      <StoryImage image={row.image} plugin={plugin} compact />
       <h3 className="pl-story-title">{row.title}</h3>
       {row.lead ? <p className="pl-story-lead">{row.lead}</p> : null}
       <StoryMarks row={row} />
@@ -3798,17 +3860,23 @@ function StorySheet({ row, plugin, edition }: { row: StoryRow; plugin: string; e
   const sources = Array.isArray(row.sources) ? row.sources.filter((s) => s && typeof s.title === 'string') : [];
   const timeline = Array.isArray(row.timeline) ? row.timeline.filter((t) => t && typeof t.text === 'string') : [];
   const editionLink = edition && holds(row, edition.when) ? edition : undefined;
+  const summary = row.summary ?? row.lead;
+  const normalized = (text: string) => text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+  const update = row.update && normalized(row.update) !== normalized(summary ?? '') && normalized(row.update) !== normalized(row.title) ? row.update : undefined;
   return (
     <div className="pl-story-sheet">
       <div className="pl-story-sheet-lead">
         {row.opinion ? <Tag>Opinion</Tag> : null}
         <h3 className="pl-story-sheet-title">{row.title}</h3>
-        {row.summary ?? row.lead ? <p className="pl-story-sheet-summary">{row.summary ?? row.lead}</p> : null}
-        {row.update ? (
-          <p className="pl-story-sheet-update">
+        {row.titleAttribution ? <p className="pl-story-sheet-meta">{row.titleAttribution}</p> : null}
+        <StoryImage image={row.image} plugin={plugin} />
+        {summary ? <><p className="pl-story-sheet-summary">{summary}</p>{row.summaryAttribution ? <p className="pl-story-sheet-meta">{row.summaryAttribution}</p> : null}</> : null}
+        {update ? (
+          <div className="pl-story-sheet-update">
             {row.mark && row.mark.kind === 'new' ? <span className="pl-story-new">{row.mark.text}</span> : null}
-            {row.update}
-          </p>
+            <p>{update}</p>
+            {row.updateAttribution ? <p className="pl-story-sheet-meta">{row.updateAttribution}</p> : null}
+          </div>
         ) : null}
         {row.meta || editionLink ? (
           <p className="pl-story-sheet-meta">
@@ -3849,7 +3917,7 @@ function StorySheet({ row, plugin, edition }: { row: StoryRow; plugin: string; e
       ) : null}
       {timeline.length > 0 ? (
         <section className="pl-story-sheet-block">
-          <h4 className="pl-story-sheet-head">How it moved</h4>
+          <h4 className="pl-story-sheet-head">Coverage timeline</h4>
           <ol className="pl-story-timeline">
             {timeline.map((step, index) => (
               <li

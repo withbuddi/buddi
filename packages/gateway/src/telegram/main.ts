@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { sendStoryPhoto } from './story-photo.js';
+import { savedEditionAudio } from './edition-audio.js';
 /**
  * `buddi-telegram` — the Telegram surface process (roadmap step 2).
  *
@@ -550,6 +552,9 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       // its tools saved (the list the dashboard shows under an answer) and
       // the last view it drew. Both are sent after the text.
       const produced: string[] = [];
+      const editionRecordings: Promise<string[]>[] = [];
+      let holdMediaText = false;
+      let selectedStory: unknown;
       let canvas: CanvasView | undefined;
       // A tool call between two stretches of text is a paragraph break in the
       // streamed answer, as it is in the final one.
@@ -599,6 +604,10 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         // does; see @buddi/tool-web's native.ts.
         onNativeSearch: nativeSearchRecorder(pool),
         onToolCall: (name, input) => {
+          if (name === 'news.story' || (name === 'news.editions' && input && typeof input === 'object' && (input as { attachAudio?: unknown }).attachAudio === true)) {
+            holdMediaText = true;
+            onTextRetract?.();
+          }
           log(`⚙ ${name} ${JSON.stringify(input)}`);
           // Held until the result comes back, so the caption can say what the
           // step was *for* rather than only naming its verb.
@@ -610,7 +619,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         ...(onTextDelta
           ? {
               onDelta: (delta) => {
-                if (delta.kind !== 'text' || delta.text === '') return;
+                if (holdMediaText || delta.kind !== 'text' || delta.text === '') return;
                 if (spoke && broke) onTextDelta('\n\n');
                 spoke = true;
                 broke = false;
@@ -627,7 +636,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         // Presentation only, and never awaited: the photo is queued on its own
         // tail, so Telegram can never slow a step down or fail one.
         onToolResult: (name, outcome) => {
-          if (outcome.ok) produced.push(...producedArtifactIds(outcome.output));
+          if (outcome.ok) {
+            produced.push(...producedArtifactIds(outcome.output));
+            if (name === 'news.story') selectedStory = outcome.output;
+            if (name === 'news.editions') {
+              editionRecordings.push(savedEditionAudio(pool, outcome.output).catch(() => []));
+            }
+          }
           if (name !== BROWSER_ACT) return;
           void photos.step({
             chatId,
@@ -645,6 +660,14 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         options.loadArtifact = (id) => artifacts.load(id);
       }
       const result = await runAgent(options);
+      let leadingPhotoSent = false;
+      if (selectedStory && result.stopped !== 'awaiting-approval') {
+        leadingPhotoSent = await sendStoryPhoto(api, chatId, selectedStory, env).catch(err => {
+          log(`telegram: story image unavailable: ${String(err)}`);
+          return false;
+        });
+      }
+      const leadingAudio = [...new Set((await Promise.all(editionRecordings)).flat())];
 
       // The run proposed a gated effect and stopped. The owner is asked in this
       // same chat, with the preview the *tool* rendered and buttons bound to
@@ -685,7 +708,9 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         // The grounding guard's verdict, one quiet line under the answer.
         text: result.unchecked ? `${result.text}\n\n_${UNCHECKED_LINE}_` : result.text,
         askedOwner: sink.asked !== undefined,
-        ...(produced.length > 0 ? { artifacts: [...new Set(produced)] } : {}),
+        ...(produced.length > 0 ? { artifacts: [...new Set(produced)].filter(id => !leadingAudio.includes(id)) } : {}),
+        ...(leadingAudio.length > 0 ? { leadingAudio } : {}),
+        ...(leadingPhotoSent ? { leadingPhotoSent: true } : {}),
         ...(canvas ? { canvas } : {}),
         ...(stored.length > 0 ? { offers: stored } : {}),
         ...(question ? { question } : {}),

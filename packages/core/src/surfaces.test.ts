@@ -42,9 +42,9 @@ describe('surfaceSection', () => {
     expect(surfaceSection(WEB_SURFACE)).toContain('You are answering on the dashboard.');
   });
 
-  it('states Telegram honestly: no markdown, no tables, a cap, buttons, a person, no canvas', () => {
+  it('states Telegram honestly: light markdown, no tables, a cap, buttons, a person, no canvas', () => {
     const section = surfaceSection(TELEGRAM_SURFACE);
-    expect(section).toContain('Markdown is not rendered here');
+    expect(section).toContain('Markdown is rendered here');
     expect(section).toContain('Tables do not render here.');
     expect(section).toContain('One message holds at most 4000 characters here.');
     expect(section).toContain('Files can be sent and received here.');
@@ -53,7 +53,6 @@ describe('surfaceSection', () => {
     expect(section).toContain('The owner is here now and can answer you.');
     // The claim that must never appear on this surface.
     expect(section).not.toContain('There is a canvas here');
-    expect(section).not.toContain('Markdown is rendered here');
   });
 
   it('states the terminal honestly: markdown renders, no cap, no button, no canvas', () => {
