@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.51 — 2026-10-07
+
 ### Added
 
 - Run now on a mission: on its row in Missions, `buddi missions run <id>` or `POST /api/missions/:id/run`. It runs at once exactly as the schedule would, report and notifications included, says "Running…" until done, and counts like any run.
