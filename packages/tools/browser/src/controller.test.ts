@@ -30,6 +30,7 @@ function routeDriver(name: string, log: string[], page: (url: string) => Partial
       start: vi.fn(async () => {}), close: vi.fn(async () => {}), screenshot: async () => undefined,
       perform: vi.fn(async (command) => { if (command.action === 'navigate' && command.url) { url = command.url; log.push(`${name} ${url}`); } else log.push(`${name} ${command.action}`); }),
       observe: async () => ({ id: `${name}-${log.length}`, url, title: 'Page', tree: '', tabs: [], capturedAt: new Date().toISOString(), ...page(url) }),
+      ...(name === 'own' ? { capture: async () => ({ png: Buffer.from('png'), title: 'Page', url }) } : {}),
     };
   };
 }
@@ -429,6 +430,17 @@ describe('the owner cards, through the existing question card', () => {
     await controller.control('takeover', id);
     await controller.control('resume', id);
     expect(heard.at(-1)?.waiting).toBeUndefined();
+  });
+  it('Capture: the page as it is, whoever holds it, and no step of the agent\'s', async () => {
+    const { controller } = await routes();
+    await controller.execute(navigate('https://a.test/orders'), ctx('a'));
+    const id = controller.status({ agentId: 'a', conversationId: 'a' }).session!.id;
+    const steps = controller.status({ sessionId: id }).session!.steps;
+    await expect(controller.capture(id)).resolves.toMatchObject({ title: 'Page', url: 'https://a.test/orders', agentId: 'a', conversationId: 'a' });
+    expect(controller.status({ sessionId: id }).session!.steps).toBe(steps);
+    await controller.control('takeover', id);
+    await expect(controller.capture(id)).resolves.toMatchObject({ url: 'https://a.test/orders' });
+    await expect(controller.capture('gone')).rejects.toThrow('Refresh before capturing');
   });
   it('take-over: one page in the owner\'s hands at a time', async () => {
     const { controller } = await routes();

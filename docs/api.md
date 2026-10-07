@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-338 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+339 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -3960,6 +3960,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | POST | `/api/browser/downloads/clear` | Empty the agents' downloads area. What waits there is not in Files, so it is gone for good. | yes |
 | POST | `/api/browser/downloads/file` | File it: register one waiting download in Files as its agent's, then drop it from the area. | yes |
 | GET | `/api/browser/telemetry` | Browser stops by cause, cards and routes over the last days. | yes |
+| POST | `/api/browser/capture` | Capture: a full-resolution PNG of one page as it is now, whoever holds it, saved to Files under its title and the time. | yes |
 | POST | `/api/browser/stop` | Stop one page, or with no session stop agents' browsing (expires after the set time unless forever). | yes |
 | POST | `/api/browser/takeover` | Take over the screen from the agent. | yes |
 | POST | `/api/browser/resume` | Give the screen back to the agent. | yes |
@@ -4155,6 +4156,20 @@ Browser stops by cause, cards and routes over the last days.
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/telemetry"
+```
+
+#### `POST /api/browser/capture`
+
+Capture: a full-resolution PNG of one page as it is now, whoever holds it, saved to Files under its title and the time.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ sessionId: string }`
+- **Answer:** `{ artifactId, name, mime }`
+- **Errors:** 400; 409 when the page is gone or its route cannot capture
+- **Since:** 0.1.0-pre.52
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"sessionId":"…"}' "$BUDDI_URL/api/browser/capture"
 ```
 
 #### `POST /api/browser/stop`

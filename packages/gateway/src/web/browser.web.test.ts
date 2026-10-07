@@ -351,6 +351,46 @@ describe('browser dashboard endpoints', () => {
       await rm(scratch, { recursive: true, force: true });
     }
   });
+  it('Capture: a PNG of the page saved to Files as the owner’s, named after its title and the time; 409 for a page that is gone', async () => {
+    const scratch = await mkdtemp(path.join(tmpdir(), 'buddi-web-capture-'));
+    try {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+      const capture = vi.fn(async (sessionId: string) => {
+        if (sessionId !== 's1') throw new Error('That page changed. Refresh before capturing it.');
+        return { png, title: 'Your orders', url: 'https://www.amazon.com/orders', agentId: 'cfo', conversationId: '99999999-2222-4333-8444-555555555555' };
+      });
+      const driver: BrowserDriver = { start: vi.fn(), perform: vi.fn(), observe: vi.fn(), screenshot: vi.fn(), close: vi.fn() };
+      const browser: BrowserController = new BrowserService(driver); services.push(browser); await browser.enable();
+      Object.assign(browser, { capture });
+      const queries: Array<{ text: string; params: unknown[] }> = [];
+      const pool = { query: async (text: string, params: unknown[] = []) => {
+        queries.push({ text, params });
+        if (/insert into core\.artifacts/.test(text)) {
+          return { rows: [{ id: '11111111-2222-4333-8444-555555555555', kind: 'image', mime: params[1], filename: params[2], size_bytes: params[3], sha256: params[4], storage_path: params[5], caption: params[9], created_at: new Date(), inserted: true }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      } };
+      const app = await startWebServer({ pool: pool as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
+        ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date('2026-10-07T12:32:00Z'), env: { BUDDI_DATA_DIR: path.join(scratch, 'data') },
+        config: { enabled: true, host: '127.0.0.1', port: 0 }, openAccess: true, token: TOKEN, browser });
+      instances.push(app);
+      const origin = `http://127.0.0.1:${app.port}`;
+      const headers = await session(origin);
+      expect((await fetch(`${origin}/api/browser/capture`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: JSON.stringify({ sessionId: 's1' }) })).status).toBe(403);
+      expect((await fetch(`${origin}/api/browser/capture`, { method: 'POST', headers, body: '{}' })).status).toBe(400);
+      const saved = await fetch(`${origin}/api/browser/capture`, { method: 'POST', headers, body: JSON.stringify({ sessionId: 's1' }) });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toEqual({ artifactId: '11111111-2222-4333-8444-555555555555', name: 'Your orders 2026-10-07 12.32.png', mime: 'image/png' });
+      const insert = queries.find((q) => /insert into core\.artifacts/.test(q.text))!;
+      expect(insert.params.slice(1, 3)).toEqual(['image/png', 'Your orders 2026-10-07 12.32.png']);
+      expect(insert.params).toContain('owner');
+      const gone = await fetch(`${origin}/api/browser/capture`, { method: 'POST', headers, body: JSON.stringify({ sessionId: 'old' }) });
+      expect(gone.status).toBe(409);
+      expect(await gone.json()).toEqual({ error: 'That page changed. Refresh before capturing it.' });
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
   it('checks that the browser launches, for the owner only, and relays the reason when it does not', async () => {
     const { origin, browser } = await setup(); const headers = await session(origin);
     const checkLaunch = vi.fn(async () => ({ ok: false as const, message: 'The browser is installed, but this machine lacks system libraries it needs. Run once, with sudo:', command: 'sudo npx playwright install-deps chromium', problem: 'missing-libraries' as const }));

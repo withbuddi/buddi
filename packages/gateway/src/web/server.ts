@@ -129,6 +129,7 @@ import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactByt
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
 import { createVault, saveArtifactReporting } from '@buddi/core';
+import { captureFilename } from './browser-capture.js';
 import { beginOnboarding, completeOnboarding, getOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
@@ -3289,6 +3290,25 @@ export function createWebApp(deps: WebServerDeps): Server {
         // Never the error's own words: they are the store's, and the store had the password.
         return sendJson(res, 409, { error: 'buddi could not keep that login. Add it in Settings → Keys and secrets.' });
       }
+    }
+    /*
+     * Capture: the page as it is now, at full resolution, saved to the owner's
+     * Files under its title and the time (docs/browser.md, "Capture"). Whoever
+     * holds the page; it is not one of the agent's steps.
+     */
+    if (path === '/api/browser/capture') {
+      const body = await readJsonBody(req) as { sessionId?: unknown } | null;
+      if (typeof body?.sessionId !== 'string' || body.sessionId.length > 200) return sendJson(res, 400, { error: 'Name the page to capture: { sessionId }.' });
+      if (!browser.capture) return sendJson(res, 409, { error: 'This host can’t capture a page.' });
+      let shot: Awaited<ReturnType<NonNullable<BrowserController['capture']>>>;
+      try { shot = await browser.capture(body.sessionId); }
+      catch (error) { return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) }); }
+      const filename = captureFilename({ title: shot.title, url: shot.url, at: deps.now(), timezone: deps.timezone });
+      const { row } = await saveArtifactReporting(deps.pool, {
+        bytes: shot.png, mime: 'image/png', filename, caption: shot.url ? `Captured from ${shot.url}` : 'Captured in the browser',
+        source: { surface: 'browser', chatId: null, messageId: null }, createdBy: deps.ctx.ownerId, conversationId: shot.conversationId,
+      }, deps.env ?? process.env);
+      return sendJson(res, 200, { artifactId: row.id, name: row.filename ?? filename, mime: row.mime });
     }
     const control = /^\/api\/browser\/(stop|takeover|resume|release)$/.exec(path);
     if (control) {

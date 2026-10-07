@@ -244,6 +244,18 @@ describe('the Playwright driver’s hand', () => {
     } finally { vi.unstubAllGlobals(); }
   });
 
+  it('captures the viewport as a PNG at full resolution, password fields masked', async () => {
+    const { page, frame } = fakePage();
+    const screenshot = vi.fn(async (_options: Record<string, unknown>) => Buffer.from('png-bytes'));
+    Object.assign(frame, { locator: (selector: string) => ({ selector }) });
+    Object.assign(page, { screenshot, title: async () => 'Your account', frames: () => [frame] });
+    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));
+    await driver.start();
+    await expect(driver.capture()).resolves.toEqual({ png: Buffer.from('png-bytes'), title: 'Your account', url: page.here });
+    expect(screenshot.mock.calls[0]![0]).toMatchObject({ type: 'png', mask: [{ selector: 'input[type=password]' }] });
+    expect(screenshot.mock.calls[0]![0].fullPage).toBeUndefined();
+  });
+
   it('ends rather than typing into the tab that replaced the one being shown', async () => {
     const { page, keyboard } = fakePage();
     const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));

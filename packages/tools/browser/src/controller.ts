@@ -8,7 +8,7 @@ import { PlaywrightHost, type DriverOptions, type LaunchProblem } from './host.j
 import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
-import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngineStatus, type BrowserHandOffer, type BrowserScope, type BrowserServiceOptions, type BrowserStatus, type BrowserRollover, type BrowserTouch, type BrowserGiveBack, type CardResult, type RouteStatus, type SecretFillInput, type SecretTypeInput } from './service.js';
+import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngineStatus, type BrowserHandOffer, type BrowserScope, type BrowserServiceOptions, type BrowserStatus, type BrowserRollover, type BrowserTouch, type BrowserGiveBack, type BrowserCapture, type CardResult, type RouteStatus, type SecretFillInput, type SecretTypeInput } from './service.js';
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
 import { applySettingsChange, migrateSettings, PIN_VALUES, settingsSchema, type ControlSettings, type RouteKind, type RoutePin } from './settings.js';
@@ -902,6 +902,15 @@ export class HostController implements BrowserController {
     }
     // The page asked about, not whichever page changed last.
     return this.status({ sessionId });
+  }
+
+  /** Capture one page, owner's or agent's: its PNG, title and address. */
+  async capture(sessionId: string): Promise<BrowserCapture> {
+    if (!this.#enabled) throw new Error('The host browser service is unavailable.');
+    const found = this.#pageOf({ sessionId });
+    const child = found?.manager.child({ sessionId });
+    if (!child) throw new Error('That page changed. Refresh before capturing it.');
+    return child.capture();
   }
 
   /** Hear every give-back of a page the owner held. Returns the unsubscribe. */

@@ -249,6 +249,11 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
       tabs: await Promise.all([...this.#tabs].map(async ([id, tab]) => ({ id, url: tab.url(), title: await tab.title().catch(() => '') }))), capturedAt: new Date().toISOString() };
   }
   async screenshot(): Promise<Buffer | undefined> { return this.#picture; }
+  async capture(): Promise<{ png: Buffer; title: string; url: string }> {
+    const page = this.#active();
+    const png = await page.screenshot({ type: 'png', mask: page.frames().map((frame) => frame.locator('input[type=password]')), timeout: 10_000 });
+    return { png, title: await page.title().catch(() => ''), url: page.url() };
+  }
   async takeover(): Promise<void> { this.#invalidate(); if (this.#page && !this.#page.isClosed()) await this.host.foreground(this, this.#page, true); }
   /**
    * Abandon the command in flight without abandoning the tab.

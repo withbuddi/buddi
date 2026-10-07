@@ -132,7 +132,7 @@ export default manifest;
 export { BrowserService, browserStoppedMessage, modeOf, RETRY_DELAYS_MS, MAX_TARGETING_FAILURES, DEFAULT_MAX_STEPS, DEFAULT_LIFETIME_MS, PARK_MS } from './service.js';
 export { detectBrowser, needsHeadless, installBrowser, browserLine, playwrightCli, installDepsCommand, missingLibrariesMessage, noSandboxMessage, probeLaunch, InstallProgressReader, MISSING_LIBRARIES_SENTENCE, NO_SANDBOX_SENTENCE, SANDBOX_COMMAND, NO_BROWSER_ACT, NO_BROWSER_STATUS, HEADLESS_NOTE } from './availability.js';
 export type { BrowserAvailability, BrowserEngine, DetectDeps, InstallOutcome, InstallProgress, LaunchCheck, ProbeDeps } from './availability.js';
-export type { BrowserEngineStatus, BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode, BrowserTouch, BrowserGiveBack, RouteStatus, CardResult } from './service.js';
+export type { BrowserEngineStatus, BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode, BrowserTouch, BrowserGiveBack, BrowserCapture, RouteStatus, CardResult } from './service.js';
 export { settingsSchema, migrateSettings, applySettingsChange, ROUTE_KINDS, PIN_VALUES } from './settings.js';
 export type { ControlSettings, RouteKind, RoutePin, MigrationFacts } from './settings.js';
 export { chooseRoute, detectWall, ownerCard, cardAnswer, routeNote, siteOf, originOf, CARD_LABELS, RouteProviderDriver } from './routes.js';

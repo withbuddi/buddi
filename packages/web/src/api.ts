@@ -2680,6 +2680,8 @@ export const api = {
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string, options?: { forever?: boolean }) => post<BrowserStatus>(`/browser/${action}`, { ...(sessionId === undefined ? {} : { sessionId }), ...(options?.forever ? { forever: true } : {}) }),
   /** `forgetSignInSite` removes one site from the owner's list and the learned one alike. */
   browserSettings: (settings: Partial<ControlSettings> & { forgetSignInSite?: string }) => post<BrowserStatus>('/browser/settings', settings),
+  /** Capture: a full-resolution PNG of the page, saved to Files. */
+  browserCapture: (sessionId: string) => post<{ artifactId: string; name: string; mime: string }>('/browser/capture', { sessionId }),
   browserPin: (conversationId: string, route: 'auto' | BrowserRoute) => post<BrowserStatus>('/browser/pin', { conversationId, route }),
   /** "Save this login?" answered: the question's id and the owner's word. The password never leaves the host. */
   browserLogin: (id: string, decision: LoginDecision) => post<LoginAnswer>('/browser/login', { id, decision }),

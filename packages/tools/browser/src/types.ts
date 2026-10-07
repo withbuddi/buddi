@@ -173,6 +173,13 @@ export interface BrowserDriver {
   perform(command: BrowserCommand): Promise<void>;
   observe(): Promise<Observation>;
   screenshot(): Promise<Buffer | undefined>;
+  /**
+   * Capture: the page as it is now, the whole viewport at full resolution as
+   * PNG (not the observation's JPEG, not a screencast frame), with its title
+   * and address. Password fields are masked. Changes nothing on the page and
+   * spends nothing of the agent's evidence or budget.
+   */
+  capture?(): Promise<{ png: Buffer; title: string; url: string }>;
   close(): Promise<void>;
   /** Owner handoff invalidates agent evidence and controls host foreground focus. */
   takeover?(): Promise<void>;

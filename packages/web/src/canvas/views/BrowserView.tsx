@@ -36,6 +36,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as Reac
 import { api, csrfToken, type BrowserStatus, type LoginSeen } from '../../api';
 import { fmtClock } from '../../format';
 import { ActionMenu, Button, Icon, Notice, Toolbar } from '../../ui';
+import { fileRoute } from '../../routes';
 import { RemoteHand, type HandNav, type RemoteHandHandle } from '../../views/RemoteHand';
 import { useMediaQuery } from '../../useMediaQuery';
 import { appWord, lookingLine, siteOfUrl } from '../../views/Browser';
@@ -273,6 +274,19 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   }, [ownedId, driving, touch, busy]);
   useEffect(() => { if (!owned) asked.current = null; }, [owned]);
 
+  /* ---- Capture ---- */
+  const [capturing, setCapturing] = useState(false);
+  const [captured, setCaptured] = useState<{ artifactId: string; name: string } | null>(null);
+  const capture = (): void => {
+    const id = status?.session?.id;
+    if (!id || capturing) return;
+    setCapturing(true); setFailure(null); setCaptured(null);
+    void api.browserCapture(id)
+      .then((saved) => setCaptured({ artifactId: saved.artifactId, name: saved.name }))
+      .catch((err: unknown) => setFailure(err instanceof Error ? err.message : String(err)))
+      .finally(() => setCapturing(false));
+  };
+
   /* ---- the window ---- */
   const [enlarged, setEnlarged] = useState(false);
   useEffect(() => {
@@ -357,6 +371,12 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
       {taking ? <p className="br-hand-said" role="status">{inChrome ? 'Finish in Chrome, then give it back.' : hand ? `Nothing you type here is kept. ${agentName} carries on when you give it back.${touch ? ' Tap Type into the page to bring up your keyboard.' : ''}` : `${agentName} waits. It carries on when you give the page back.`}</p> : null}
       {failure || error ? <Notice tone="critical" role="alert">{failure ?? error}</Notice> : null}
       {note ? <Notice tone="warning" role="status">{note}</Notice> : null}
+      {captured ? (
+        <Notice tone="good" role="status"
+          action={<Toolbar align="end"><Button size="sm" variant="ghost" onClick={() => setCaptured(null)}>Dismiss</Button><Button size="sm" variant="accent" onClick={() => { window.location.hash = fileRoute(captured.artifactId); }}>Open in Files</Button></Toolbar>}>
+          {`Saved to Files as ${captured.name}.`}
+        </Notice>
+      ) : null}
       {offline ? (
         <Notice tone="warning" role="status" title="Your Chrome isn’t connected."
           action={<Toolbar align="end"><Button size="sm" disabled={busy} onClick={ownBrowser}>Use buddi’s browser</Button><Button size="sm" variant="accent" disabled={busy} onClick={takeOver}>Try again</Button></Toolbar>}>
@@ -375,6 +395,8 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
             held={!!hand}
             level={hand && level ? (level === 'sharp' ? 'sharp' : 'fast') : null}
             loading={loading}
+            onCapture={live && status?.session && !app ? capture : undefined}
+            capturing={capturing}
             onNav={nav}
             onRefused={(message) => setFailure(message)}
           />
@@ -412,13 +434,16 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
  * click. Awake while the owner holds the page: the buttons go down the hand,
  * and the address is a field — Enter goes there, Esc puts it back.
  */
-function WindowBar({ app, title, address, held, level = null, loading, onNav, onRefused }: {
+function WindowBar({ app, title, address, held, level = null, loading, onCapture, capturing = false, onNav, onRefused }: {
   app: string | null;
   title?: string;
   address?: string;
   held: boolean;
   /** The live picture's quality, quietly: "sharp" or "fast". */
   level?: 'sharp' | 'fast' | null;
+  /** Capture the page to Files; absent when there is no page (or an app window) to capture. */
+  onCapture?: () => void;
+  capturing?: boolean;
   loading: boolean;
   onNav: (action: HandNav, url?: string) => void;
   onRefused: (message: string) => void;
@@ -487,6 +512,7 @@ function WindowBar({ app, title, address, held, level = null, loading, onNav, on
       )}
       {title ? <span className="br-window-title" title={title}>{title}</span> : null}
       {level ? <span className="br-window-level" data-testid="hand-level" title={level === 'sharp' ? 'The picture is at full quality' : 'The picture is kept small so it stays live on this link'}>{level}</span> : null}
+      {onCapture ? <button type="button" className="ui-icon-btn" data-size="sm" aria-label="Capture the page to Files" title="Capture the page to Files" disabled={capturing} onClick={onCapture}><Icon name="camera" /></button> : null}
       {loading ? <span className="br-window-progress" role="progressbar" aria-label="Loading" /> : null}
     </div>
   );

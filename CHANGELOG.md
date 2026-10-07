@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Capture on the Page tab's window bar: a full-resolution PNG of the page as it is now (password fields masked), whoever holds it, saved to Files under the page's title and the time, with Open in Files. `POST /api/browser/capture`.
+
 ### Changed
 
 - The live picture of a page you hold gets sharp on a link that keeps up: after a few seconds of frames going out promptly it grows to the page's own size (up to 1440×900) at JPEG quality 70, and steps back down on lag, waiting longer each time before trying again. The window bar says *sharp* or *fast*.

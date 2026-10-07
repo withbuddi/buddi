@@ -308,7 +308,21 @@ keyboard). The picture sits in a small browser window: back, forward, reload
 and the address on a bar above it, asleep while the agent drives (a click on
 the address copies it) and live while you hold a page in buddi's browser — the
 buttons and a typed address go down the remote hand as `nav` input, through the
-same address check an agent's navigate passes. An Enlarge button (and ⋯ → full
+same address check an agent's navigate passes. Reload stays asleep while the
+agent drives on purpose: reloading under it can resubmit a form it just sent
+and pulls the page out from under the refs it is about to act on, and the
+buttons travel on the hand, which exists only while you hold the page. While
+you hold it the bar also says, quietly, how the picture is coming: *sharp*
+(full quality) or *fast* (kept small so it stays live on this link).
+
+**Capture** (the camera at the end of the bar) works whoever holds the page:
+a full-resolution PNG of the page's viewport, taken by the host browser itself
+(`page.screenshot`, not the streamed JPEG), password fields masked, saved to
+Files as yours under the page's title and the time (*Your orders 2026-10-07
+14.32.png*) and filed with the conversation. *Saved to Files as …* with **Open
+in Files** follows. It is not one of the agent's steps and spends nothing of
+its evidence. `POST /api/browser/capture { sessionId }`; an app window, a page
+in your Chrome and a page that has closed answer 409 with the reason. An Enlarge button (and ⋯ → full
 page view) opens the same window over the whole dashboard; Esc brings it back.
 After a dashboard reload with a page in your hands, a desktop reattaches the
 hand by itself. No step list, counter, mode or observation time. While a Stop holds, a conversation that asked for a page
@@ -750,6 +764,41 @@ here is kept*, with **Give it back** beside it and, on a phone, a **Type into
 the page** toggle that raises the keyboard. **Give it back** is `resume`: the agent's evidence is
 invalidated and it must observe again before acting.
 
+**Give it back carries a turn on only when one waited.** An agent waits on
+the page when you took it over from its card, when the take-over interrupted
+an action, or when it tried to act while you held the page (it is told it
+continues when you give it back). Then Give it back wakes a parked mission run
+(`missions/parked.ts`) or starts the conversation's turn, stamped *Gave the
+page back*. A page you took from an idle conversation in the Canvas is just
+given back: the thread gets the same stamp as a note the next turn reads, and
+no model call is made. The browser host tracks this as `agentWaiting` on the
+paused page's status and passes it as `waiting` on the give-back.
+
+**On the dashboard, the Page tab trusts only the answer.** After Give it back
+or Stop it no longer treats that page as yours, whatever a status still in
+flight says, until the server confirms the agent holds it; its buttons stay
+asleep until the status asked for after the action has arrived; and the last
+picture the hand drew stays on screen until the next observation brings one.
+
+**Copy and paste.** The clipboard you use is on your machine, and the page is
+on the host, so neither shortcut is forwarded as a keystroke. **Cmd/Ctrl+V**
+is left to your browser: the hand moves focus to its hidden field for that one
+keystroke (a field is editable everywhere, so the paste event fires in Chrome,
+Safari and Firefox), and the field's paste handler sends the text as one
+`{ kind: 'text' }` insertion, bounded like any paste; focus comes back to the
+picture. (On macOS Chrome the paste never fired before: the shortcut's keydown
+was being cancelled, and a cancelled keydown cancels the paste.) **Cmd/Ctrl+C**
+sends `{ kind: 'copy' }` down the hand, in order behind what came before it, so
+a select-all just before it is what gets copied. The host reads the page's
+selection, or the selected part of the focused field (never a password field),
+up to 4,000 characters, and answers `{ type: 'clipboard', text }` on the same
+socket. The dashboard writes your clipboard inside the keystroke with a
+`ClipboardItem` whose text is still on its way: Safari allows a clipboard write
+only during the gesture and accepts a promised item for exactly this, and Chrome
+takes the same item. A browser without `ClipboardItem` writes the text once it
+arrives. Nothing selected leaves your clipboard as it was. The copied text is
+never logged.
+
 A page in your Chrome is not streamed: Take over brings its tab to the front
 of your Chrome instead (see "Work in view" above), and the status says so with
 `held`.
@@ -798,20 +847,41 @@ feeding every frame to the socket does not make the picture faster — it makes
 it *older*, by however much backlog has piled up since you pressed Take over.
 So exactly one frame is on the wire at a time and only the newest one waits
 behind it; everything painted in between is dropped, because a picture nobody
-will see is not worth a second of your link. Frames start at 960×600 at JPEG
-quality 50, and drop to 640×400 at 40 when the socket stays more than 256 KB
-behind for a second, growing back once it has been clear for five. What you
-lose is frames you would never have seen; what you gain is that the picture is
-always now.
+will see is not worth a second of your link. Three quality levels, chosen by
+the gateway from how the socket takes each frame:
+
+| Level | Size (at most) | JPEG | When |
+|---|---|---|---|
+| normal | 960×600 | 50 | where every take-over starts |
+| low (*fast*) | 640×400 | 40 | the socket stayed more than 256 KB behind, or took longer than 600 ms over a frame, for a second |
+| sharp | 1440×900, never larger than the page | 70 | every frame went out within 150 ms for three seconds |
+
+Low grows back to normal after five clear seconds; sharp steps back to normal
+on the same lag, and each time it has to, the wait before trying sharp again
+doubles (up to 48 seconds), so a link on the edge does not see-saw. Each frame
+carries its level (`level` in the frame header), which is what the window bar
+shows as *sharp* or *fast*. What you lose is frames you would never have seen;
+what you gain is that the picture is always now.
+
+**Scrolling** is paced the same way. A trackpad fires a wheel event per pixel;
+the dashboard sums them and sends one wheel per animation frame, and a click
+takes any scroll still waiting with it so it lands on the page as scrolled.
+The picture's own wheel listener keeps the dashboard from scrolling under it.
+Frames are drawn in the order they came (decoding finishes out of order, and an
+older frame drawn last is a picture that jumps back), and while a scroll
+gesture is going (150 ms after its last wheel) a frame that only moves the
+page back against the gesture waits; the newest one is drawn when the gesture
+ends.
 
 Your own events are paced too. A finger dragging across the picture fires a
 move per pixel: the dashboard sends at most one position every 33 ms and always
 the latest, and the gateway coalesces again on its side, so the pointer goes
 where your finger is rather than replaying where it has been. A press, a
-release, a wheel or a key is never coalesced, and takes any pending position
-with it so the button lands where you are pointing. Keys and moves are
-forwarded without waiting for the previous one's result — in order, but
-pipelined, so typing is not one host round trip per character.
+release or a key is never coalesced, and takes any pending position (and any
+waiting scroll) with it so the button lands where you are pointing; wheels are
+summed per animation frame, as above. Keys and moves are forwarded without
+waiting for the previous one's result — in order, but pipelined, so typing is
+not one host round trip per character.
 
 The socket does not outlive what let it in. It holds a lease on the dashboard
 session: that session is checked again at most a second after any input and at

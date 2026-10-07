@@ -166,6 +166,8 @@ export interface SecretFillInput { name: string; ref: string; observation?: stri
 export interface SecretTypeInput { name: string }
 /** An owner touch: a message or a card tap in a conversation. */
 export interface BrowserTouch { conversationId: string; agentId?: string; text?: string }
+/** Capture: the page's PNG, its title and address, and whose page it is. */
+export interface BrowserCapture { png: Buffer; title: string; url: string; agentId: string; conversationId: string }
 /** The owner gave back a page they held: whose it was. */
 export interface BrowserGiveBack {
   sessionId: string; agentId: string; conversationId: string;
@@ -197,6 +199,8 @@ export interface BrowserController {
   pin?(conversationId: string, pin: string): Promise<BrowserStatus>;
   /** How long a mission run waits on a card for the owner, in milliseconds (settings `missionWaitMinutes`). */
   missionWaitMs?(): number;
+  /** Capture: a full-resolution PNG of one page as it is now, for the owner's Files. */
+  capture?(sessionId: string): Promise<BrowserCapture>;
   /** Hear every give-back of a page the owner held (Give it back, `/browser resume`). Returns the unsubscribe. */
   onGiveBack?(listener: (info: BrowserGiveBack) => void): () => void;
   /** What the agents' downloads area holds (Settings → Browser). */
@@ -344,6 +348,18 @@ export class BrowserService {
    * The remote hand, and only while the owner holds this screen. Paused is the
    * take-over state, the only one in which a dashboard may drive.
    */
+  /**
+   * Capture, for the owner: the page as it is, whoever holds it. Not queued
+   * behind the agent's actions and not one of them: no step, no evidence.
+   */
+  async capture(): Promise<BrowserCapture> {
+    const session = this.#session;
+    if (!session) throw new BrowserPreconditionError('No page is open to capture.');
+    if (!this.driver.capture) throw new BrowserPreconditionError(this.#route === 'apps' ? 'An app window can’t be captured from here.' : 'This page can’t be captured from here.');
+    const shot = await this.driver.capture();
+    return { ...shot, agentId: session.agentId, conversationId: session.conversationId };
+  }
+
   hand(_scope?: BrowserScope): BrowserHandOffer {
     if (this.#held && this.#state === 'paused') return { supported: false, message: 'The page is in front of you in your Chrome.' };
     if (this.driver.supportsHand === false || !this.driver.hand) {

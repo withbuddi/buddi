@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserStatus } from '../api';
 import { addressFrom, BrowserMenu, BrowserView, BROWSER_POLL_MS, MAX_SCREENSHOT_FAILURES, TOUCH_QUERY } from './views/BrowserView';
 
-vi.mock('../api', async (original) => ({ ...(await original<typeof import('../api')>()), csrfToken: () => 'c', api: { session: vi.fn(async () => ({ platform: 'darwin' })), browserControl: vi.fn(), browserPin: vi.fn(), browserSettings: vi.fn(async () => ({})) } }));
+vi.mock('../api', async (original) => ({ ...(await original<typeof import('../api')>()), csrfToken: () => 'c', api: { session: vi.fn(async () => ({ platform: 'darwin' })), browserControl: vi.fn(), browserPin: vi.fn(), browserSettings: vi.fn(async () => ({})), browserCapture: vi.fn() } }));
 import { browserSteps, stepFor, BROWSER_TOOLS } from '../chat/browser';
 import { inspectToolCall, renderablesFrom } from './renderables';
 import type { ChatMessage } from '../chat/types';
@@ -345,6 +345,25 @@ describe('the Page tab', () => {
     expect(await screen.findByTestId('hand-level')).toHaveTextContent('fast');
     FakeSocket.all[0]!.drive('https://example.com/account', 'sharp');
     await waitFor(() => expect(screen.getByTestId('hand-level')).toHaveTextContent('sharp'));
+  });
+
+  it('Capture saves the page to Files while the agent drives, and offers Open in Files', async () => {
+    vi.mocked(api.browserCapture).mockResolvedValue({ artifactId: 'art-9', name: 'Statements 2026-10-07 14.32.png', mime: 'image/png' });
+    render(<BrowserView status={status} error={null} reload={() => {}} live agentName="Home Manager" />);
+    // The rest of the bar sleeps while the agent drives; Capture does not.
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Capture the page to Files' }));
+    await waitFor(() => expect(api.browserCapture).toHaveBeenCalledWith('s1'));
+    expect(await screen.findByText('Saved to Files as Statements 2026-10-07 14.32.png.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Files' }));
+    expect(window.location.hash).toBe('#/files/art-9');
+  });
+
+  it('Capture says why when the page cannot be captured', async () => {
+    vi.mocked(api.browserCapture).mockRejectedValue(new Error('That page changed. Refresh before capturing it.'));
+    render(<BrowserView status={status} error={null} reload={() => {}} live agentName="Home Manager" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Capture the page to Files' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('That page changed. Refresh before capturing it.');
   });
 
   it('a page held in your Chrome: it is in front there, so no hand is asked for and no frame waited on; Give it back resumes', async () => {
