@@ -18,6 +18,7 @@ What changes in buddi from one release to the next, newest first.
 - Take over and Give it back no longer flash or take the page back by themselves: the Page tab ignores a status still in flight for a page it just gave back or stopped, keeps its buttons asleep until the status after the action has arrived, and keeps showing the last picture the hand drew instead of an empty frame.
 - Scrolling a page you hold no longer shakes: the wheel goes to the host once per animation frame with its deltas summed, frames are drawn in the order they came (an older one finishing its decode late is dropped), a frame that only scrolls back against your gesture waits until the gesture ends, and the dashboard no longer scrolls under the picture.
 - Cmd/Ctrl+C and Cmd/Ctrl+V work on a page you hold. Copy puts the host page's selection (or the focused field's, never a password field's) on your own clipboard instead of the headless browser's; paste fires again on macOS Chrome, where the shortcut's keydown was being cancelled before the browser could paste.
+- A question can always be answered from the chat: it now stands above any approval waiting there instead of behind it, and an approval decided elsewhere, expired, or an owner secret's use that went through (`secret.fill`) leaves the dock instead of hiding the question and the composer behind a card that drew nothing.
 
 ## 0.1.0-pre.51 — 2026-10-07
 

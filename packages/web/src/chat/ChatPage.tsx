@@ -169,6 +169,13 @@ export function ChatPage({
   const [partial, setPartial] = useState<LiveTurnView | null>(null);
   const [running, setRunning] = useState(false);
   const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
+  /**
+   * Approvals this page has seen settle (decided here or elsewhere, expired):
+   * gone from the dock at once, whatever transcript the page still holds. A
+   * dock that kept one would hide the question and the composer behind a card
+   * that draws nothing.
+   */
+  const [settledApprovals, setSettledApprovals] = useState<ReadonlySet<string>>(new Set());
   const [activeTab, setActiveTab] = useState<string | null>(null);
   /** The canvas's closed tabs and their order, kept on the server per conversation. */
   const canvasTabs = useCanvasTabs(conversationId ?? null);
@@ -350,6 +357,7 @@ export function ChatPage({
     if (!conversationId) return undefined;
     let cancelled = false;
     setAwaiting(new Map());
+    setSettledApprovals(new Set());
     setLive([]);
     void chatApi
       .conversation(conversationId)
@@ -687,10 +695,10 @@ export function ChatPage({
       // A colleague's approval under one of this thread's delegations is
       // decided here as well: the owner is here, not in the colleague's thread.
       ...delegatedApprovals(conversation, everyone),
-    ],
+    ].filter((item) => !settledApprovals.has(item.approvalId)),
     // `everyone` is only read for handles; the roster is stable for a render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inlineApprovals, conversation?.delegatedApprovals],
+    [inlineApprovals, conversation?.delegatedApprovals, settledApprovals],
   );
 
   /*
@@ -1080,6 +1088,7 @@ export function ChatPage({
     setNotice(null);
     setLive([]);
     setAwaiting(new Map());
+    setSettledApprovals(new Set());
     setActiveTab(null); setOpenedFiles([]); setFocusedStep(null);
     previousFocus.current = null;
     if (group) {
@@ -1105,7 +1114,10 @@ export function ChatPage({
     if (conversationId) void refresh(conversationId);
     // The rest of the dashboard counts pending approvals; keep it honest.
     void api.overview().catch(() => {});
-    if (action.state !== 'pending') setAwaiting((current) => new Map([...current].filter(([, id]) => id !== action.id)));
+    if (action.state !== 'pending') {
+      setAwaiting((current) => new Map([...current].filter(([, id]) => id !== action.id)));
+      setSettledApprovals((current) => (current.has(action.id) ? current : new Set([...current, action.id])));
+    }
   };
 
 
@@ -1492,18 +1504,13 @@ export function ChatPage({
               <a href={settingsRoute(blockedFix.section)}>{blockedFix.label}</a>
             </Notice>
           </div>
-        ) : docked.length > 0 ? (
-          <ApprovalDock
-            approvals={docked}
-            timezone={timezone}
-            now={now}
-            version={conversation}
-            onDecided={onDecided}
-            onSay={(text) => send(text, [])}
-            onOpenFull={(toolUseId) => { setActiveTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
-          />
         ) : null}
-        {blocked || docked.length > 0 ? null : conversation?.question && browserCard ? (
+        {/*
+          * A question first, then the approvals: a pending question is always
+          * answerable from the chat, whatever else waits. Both stand in the
+          * composer's place.
+          */}
+        {blocked ? null : conversation?.question && browserCard ? (
           <BrowserAsk
             key={conversation.question.id}
             card={browserCard}
@@ -1518,6 +1525,17 @@ export function ChatPage({
             disabled={answeringQuestion || running}
             onAnswer={answerQuestion}
             onSkip={skipQuestion}
+          />
+        ) : null}
+        {!blocked && docked.length > 0 ? (
+          <ApprovalDock
+            approvals={docked}
+            timezone={timezone}
+            now={now}
+            version={conversation}
+            onDecided={onDecided}
+            onSay={(text) => send(text, [])}
+            onOpenFull={(toolUseId) => { setActiveTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
           />
         ) : null}
         {blocked || roomBlocked ? null : (

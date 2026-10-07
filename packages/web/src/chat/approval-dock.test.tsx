@@ -189,6 +189,42 @@ describe('the dock in the chat page', () => {
     expect(api.decide).toHaveBeenCalledWith('a1', 'reject', undefined);
   });
 
+  /** The QA flow: a secret.fill asked for a use (decided since), then the agent asked for the SMS code. */
+  const asked = (useState: string): ChatConversation => ({ conversationId: 'c1', agentId: 'keeper', messages: [
+    { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'fill', name: 'secret.fill', input: { name: 'amazon', ref: 'e3' } }] },
+    { id: 'm2', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'fill', name: 'secret.fill', ok: true, output: { pending: true, actionId: 'use1', message: 'The owner has a decision card for this use.' }, ...(useState === 'none' ? {} : { approval: { id: 'use1', state: useState } }) }] },
+    { id: 'm3', role: 'assistant', at: '', blocks: [{ type: 'text', text: 'What is the 6-digit SMS code Amazon sent you?' }] },
+  ], question: { id: 'q1', question: 'What is the 6-digit SMS code Amazon sent you?', options: [], allowOther: true, expiresAt: '2999-01-01T00:00:00Z' } });
+
+  it('a use decided since leaves the dock; the question is there to answer', async () => {
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue(asked('succeeded'));
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    await waitFor(() => expect(screen.getAllByText('What is the 6-digit SMS code Amazon sent you?').length).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.getByTestId('composer-slot')).toHaveAttribute('hidden'));
+    expect(screen.queryByTestId('approval-dock')).toBeNull();
+  });
+
+  it('a card the transcript still calls pending but the server has settled leaves the dock, and the question stays answerable', async () => {
+    // An older transcript with no durable state on the block: the dock asks, finds it settled, and lets go.
+    rows.set('use1', row('use1', { tool: 'secrets.use', state: 'succeeded' }));
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue(asked('none'));
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    await waitFor(() => expect(api.approval).toHaveBeenCalledWith('use1'));
+    await waitFor(() => expect(screen.queryByTestId('approval-dock')).toBeNull());
+    expect(screen.getAllByText('What is the 6-digit SMS code Amazon sent you?').length).toBeGreaterThan(1);
+    expect(screen.getByTestId('composer-slot')).toHaveAttribute('hidden');
+  });
+
+  it('stacks a pending question over a pending approval: both answerable, question first', async () => {
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue({ ...gated('pending'), question: { id: 'q1', question: 'Which card should I pay from?', options: [], allowOther: true, expiresAt: '2999-01-01T00:00:00Z' } });
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    const dock = await screen.findByTestId('approval-dock');
+    const question = screen.getAllByText('Which card should I pay from?').at(-1)!;
+    // The question comes before the dock in the page.
+    expect(question.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId('composer-slot')).toHaveAttribute('hidden');
+  });
+
   it('leaves when the approval is decided somewhere else', async () => {
     vi.spyOn(chatApi, 'conversation').mockResolvedValue(gated('pending'));
     render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);

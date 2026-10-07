@@ -227,6 +227,48 @@ describe('a gated call whose approval has settled', () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * An owner secret's use, asked from inside a call
+ * ------------------------------------------------------------------ */
+
+/**
+ * `secret.fill` answers `{ pending: true, actionId }` and the run carries on;
+ * the card is a `secrets.use` action. Its durable state rides on the block, so
+ * a use decided anywhere leaves the dock rather than standing there (QA
+ * 2026-10-07: the question and the composer vanished behind a stale card).
+ */
+describe('a secret.fill that asked for a secret\'s use', () => {
+  const conversationId = '00000000-0000-4000-8000-00000000001c';
+  const actionId = '00000000-0000-4000-8000-00000000001d';
+  function pool(tool: string, state: string): never {
+    return {
+      query: vi.fn(async (sql: string) => {
+        if (/from core\.conversations/.test(sql)) return { rows: [{ id: conversationId, agent_id: 'ada', group_id: null, created_at: new Date() }] };
+        if (/from core\.messages/.test(sql)) {
+          return { rows: [
+            { id: 'm1', role: 'assistant', created_at: new Date(), speaker: null, content: [{ type: 'tool_use', id: 'tu-s', name: 'secret.fill', input: { name: 'amazon', ref: 'e3' } }] },
+            { id: 'm2', role: 'user', created_at: new Date(), speaker: null, content: [{ type: 'tool_result', tool_use_id: 'tu-s', content: JSON.stringify({ pending: true, actionId, message: 'The owner has a decision card for this use.' }) }] },
+          ] };
+        }
+        if (/from core\.actions/.test(sql)) return { rows: [{ id: actionId, tool, state, outcome: null }] };
+        return { rows: [] };
+      }),
+    } as never;
+  }
+  const resultOf = async (tool: string, state: string) => (await readChatTranscript(pool(tool, state), conversationId))!.messages
+    .flatMap((m) => m.blocks).find((b) => b.type === 'tool_result') as never as { ok: boolean; approval?: { id: string; state: string } };
+
+  it('carries the use\'s state, pending or settled', async () => {
+    expect((await resultOf('secrets.use', 'pending')).approval).toEqual({ id: actionId, state: 'pending' });
+    expect((await resultOf('secrets.use', 'succeeded')).approval).toEqual({ id: actionId, state: 'succeeded' });
+    expect((await resultOf('secrets.use', 'expired')).approval).toEqual({ id: actionId, state: 'expired' });
+  });
+
+  it('names no other action that way: only a secret\'s use', async () => {
+    expect((await resultOf('email.send', 'succeeded')).approval).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------ *
  * A delegation, told where it went
  * ------------------------------------------------------------------ */
 

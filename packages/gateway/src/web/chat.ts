@@ -911,6 +911,8 @@ function safeParse(text: string): unknown {
 }
 
 interface TranscriptApproval { id: string; tool: string; state: string; outcome: unknown }
+/** The approval an owner secret's use raises (core's `SECRETS_TOOL`). */
+const SECRET_USE_TOOL = 'secrets.use';
 
 function toChatBlock(
   block: Record<string, any>,
@@ -955,12 +957,22 @@ function toChatBlock(
           ...(failed ? { error: failureOf(action) } : {}),
         };
       }
+      // A call that asked for an owner secret's use (`secret.fill`, `secret.type`)
+      // answers `{ pending: true, actionId }` and carries on; the card is a
+      // `secrets.use` action of its own. Its durable state goes on the block,
+      // so a use decided anywhere (or expired) leaves the dock instead of
+      // standing there, hiding the question and the composer behind it.
+      const pendingId = output !== null && typeof output === 'object' && !Array.isArray(output)
+        && (output as Record<string, unknown>).pending === true && typeof (output as Record<string, unknown>).actionId === 'string'
+        ? String((output as Record<string, unknown>).actionId) : undefined;
+      const use = pendingId ? approvals.get(pendingId) : undefined;
       return {
         type: 'tool_result',
         toolUseId,
         name: toolNames.get(toolUseId) ?? '',
         ok,
         output,
+        ...(use && use.tool === SECRET_USE_TOOL ? { approval: { id: use.id, state: use.state } } : {}),
         ...(ok ? {} : { error: typeof content === 'string' ? content : JSON.stringify(content ?? null) }),
       };
     }
