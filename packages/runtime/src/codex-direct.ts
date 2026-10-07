@@ -47,7 +47,7 @@ export const CODEX_FALLBACK_MODELS = ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol',
  * list by it, so a stale number hides new models; a network test in
  * codex-version.test.ts fails when npm's latest @openai/codex is newer.
  */
-export const CODEX_CLIENT_VERSION = '0.160.1';
+export const CODEX_CLIENT_VERSION = '0.161.0';
 /** Wire names the backend reserves for its own tools. */
 const RESERVED_TOOL_NAMES = ['request_user_input', 'skills'];
 
