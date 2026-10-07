@@ -1224,10 +1224,19 @@ export class ToolRegistry {
     /** Whether a `tierFor` chose this call's tier at all. */
     decidedPerCall = false,
   ): Promise<InvokeResult> {
+    /*
+     * One instant for the preview and the record. The executor re-describes
+     * with the clock frozen at the action's `createdAt`, so a description
+     * that reads the clock (a schedule's next runs, a default end) has to be
+     * made at exactly that instant, or the hashes never match and every such
+     * approval is refused as an effect that changed.
+     */
+    const now = ctx.now();
+    const frozen: CoreToolContext = { ...ctx, now: () => now };
     let described: EffectDescription;
     try {
       described = tool.describe
-        ? await tool.describe(args, ctx)
+        ? await tool.describe(args, frozen)
         : // No `describe`: the canonical arguments *are* the envelope and the
           // preview is their JSON. Honest, complete, and plainly a fallback.
           { envelope: args, preview: `${tool.name} ${JSON.stringify(args ?? null)}` };
@@ -1279,7 +1288,7 @@ export class ToolRegistry {
          * nothing to assert.
          */
         tier: 'gated',
-        now: ctx.now(),
+        now,
       });
       /*
        * A standing permission is keyed on the tool, not on the call.

@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- Approving a schedule an agent proposed without an end date works again; it was refused every time with "the effect changed since its preview". Such a watch now ends with the 30th day in the owner's zone, and every approval card is described at the same instant it is recorded.
+
 ## 0.1.0-pre.50 — 2026-10-07
 
 ### Fixed

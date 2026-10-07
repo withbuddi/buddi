@@ -96,6 +96,8 @@ function fixtureCatalog(registry: ToolRegistry): AgentCatalog {
 }
 const NOW = new Date('2026-09-14T12:00:00Z');
 const TZ = 'America/New_York';
+/** A watch with no day named ends with the 30th day from NOW, where the owner is (2026-10-14 in New York). */
+const DEFAULT_END = new Date('2026-10-15T03:59:59.999Z');
 
 /** A provider that calls one mission tool and stops — an unattended run's shape. */
 function decidingProvider(
@@ -405,8 +407,8 @@ suite('reminders and proposed schedules (postgres)', () => {
     const id = agentMissionId('finance-advisor', 'store-watch');
     const mission = await getMission(pool, id);
     expect(mission?.stopWhen).toBe('the listing is approved');
-    // Thirty days, as nothing else was named.
-    expect(mission?.endsAt?.getTime()).toBe(NOW.getTime() + 30 * 86_400_000);
+    // The end of the 30th day, as nothing else was named.
+    expect(mission?.endsAt?.getTime()).toBe(DEFAULT_END.getTime());
 
     // The day after: switched off quietly, still listed, as ended.
     const after = new Date(NOW.getTime() + 31 * 86_400_000);
@@ -415,6 +417,22 @@ suite('reminders and proposed schedules (postgres)', () => {
     // Switched back on by the owner: the end goes with it.
     expect(await setMissionEnabled(pool, id, true)).toMatchObject({ enabled: true, endsAt: null, endedAt: null });
     expect(await endExpiredMissions(pool, after)).toEqual([]);
+  });
+
+  it('approves a watch with no end named while the clock keeps moving', async () => {
+    // The release refused every one of these as an effect that changed: the
+    // preview read the clock a few milliseconds before the action recorded it.
+    const registry = createToolRegistry();
+    let tick = NOW.getTime();
+    const ticking = (agentId?: string): CoreToolContext => ({ ...ctx, ...(agentId ? { agentId } : {}), now: () => new Date(tick++) });
+    const proposed = await registry.invoke('schedule.propose', { name: 'Ticking watch', cron: '0 * * * *', prompt: 'p' }, ticking('finance-advisor'));
+    if (proposed.ok || proposed.reason !== 'approval-required') throw new Error('expected an approval');
+    tick += 5 * 60_000;
+    await decideApproval(pool, { actionId: proposed.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: new Date(tick) });
+    tick += 1_000;
+    const ran = await executeApproved(pool, { actionId: proposed.actionId, registry, ctx: ticking(), worker: 'test', now: new Date(tick) });
+    expect(ran).toMatchObject({ ok: true });
+    expect((await getMission(pool, agentMissionId('finance-advisor', 'ticking-watch')))?.endsAt?.getTime()).toBe(DEFAULT_END.getTime());
   });
 
   it('keeps the end the owner approved, and an approval executed after it writes nothing', async () => {
@@ -426,7 +444,7 @@ suite('reminders and proposed schedules (postgres)', () => {
     if (open.ok || open.reason !== 'approval-required') throw new Error('expected an approval');
     await decideApproval(pool, { actionId: open.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
     expect((await executeApproved(pool, { actionId: open.actionId, registry, ctx: { ...ctx, now: () => later }, worker: 'test', now: later })).ok).toBe(true);
-    expect((await getMission(pool, agentMissionId('finance-advisor', 'slow-approval')))?.endsAt?.getTime()).toBe(NOW.getTime() + 30 * 86_400_000);
+    expect((await getMission(pool, agentMissionId('finance-advisor', 'slow-approval')))?.endsAt?.getTime()).toBe(DEFAULT_END.getTime());
 
     // Today, in the owner's zone, approved — and run only after the day is over.
     const today = await registry.invoke('schedule.propose', { name: 'Same day', cron: '0 * * * *', prompt: 'p', endsOn: '2026-09-14' }, agentCtx);

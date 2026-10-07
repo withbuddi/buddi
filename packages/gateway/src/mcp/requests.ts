@@ -361,7 +361,15 @@ export function createMcpManifest(registry: ToolRegistry): PluginManifest {
     },
     async execute(input, ctx: CoreToolContext) {
       const inner = await innerEffect(input, ctx);
-      const run = { ...ownerCtx(ctx), approvedEffect: { envelope: inner.envelope } };
+      /*
+       * The plugin's effect as the owner approved it, from this action's own
+       * envelope (the executor has just checked it against a description made
+       * at the action's clock). Described again here the clock is the live
+       * one, and a plugin effect that reads it would drift from the card.
+       */
+      const approved = (ctx.approvedEffect?.envelope as { change?: { effect?: unknown } } | undefined)?.change;
+      const envelope = approved !== undefined && 'effect' in approved ? approved.effect : inner.envelope;
+      const run = { ...ownerCtx(ctx), approvedEffect: { envelope: structuredClone(envelope) } };
       if (inner.tool.claim) await inner.tool.claim(inner.args, run);
       return inner.tool.execute(inner.args, run);
     },

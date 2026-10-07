@@ -580,22 +580,43 @@ export function renderSchedulePreview(envelope: ScheduleEnvelope): string {
 
 /**
  * When an agent's watch ends: the end of the day it named, in `timezone`, or
- * 30 days from now. A day already past, or more than a year out, is refused:
- * the first is a watch that would never run, the second is not a watch.
+ * the end of the 30th day from today there. A day already past, or more than
+ * a year out, is refused: the first is a watch that would never run, the
+ * second is not a watch.
+ *
+ * The default is a whole day, not now + 30 days to the millisecond: the end
+ * is part of the approved envelope, and an end that moves with every tick of
+ * the clock makes the preview and its re-description differ.
  */
 export function missionEnd(endsOn: string | undefined, timezone: string, now: Date): Date {
-  if (!endsOn) return new Date(now.getTime() + AGENT_MISSION_DEFAULT_DAYS * 86_400_000);
+  if (!endsOn) {
+    const [y, m, d] = localDateParts(new Date(now.getTime() + AGENT_MISSION_DEFAULT_DAYS * 86_400_000), timezone);
+    return endOfLocalDay(y, m, d, timezone);
+  }
   const [y, m, d] = endsOn.split('-').map(Number) as [number, number, number];
-  // The last instant of that day where the owner is: midnight after it, in
-  // the zone, found by correcting a UTC guess by the zone's offset there.
-  const guess = Date.UTC(y, m - 1, d + 1);
-  const offset = zoneOffsetMs(new Date(guess), timezone);
-  const end = new Date(guess - offset - 1);
+  const end = endOfLocalDay(y, m, d, timezone);
   if (Number.isNaN(end.getTime()) || end.getTime() <= now.getTime()) {
     throw new Error(`endsOn ${endsOn} is not a day still to come`);
   }
   if (end.getTime() - now.getTime() > 366 * 86_400_000) throw new Error('endsOn may be at most a year away');
   return end;
+}
+
+/**
+ * The last instant of a calendar day where the owner is: midnight after it,
+ * in the zone, found by correcting a UTC guess by the zone's offset there.
+ */
+function endOfLocalDay(y: number, m: number, d: number, timezone: string): Date {
+  const guess = Date.UTC(y, m - 1, d + 1);
+  const offset = zoneOffsetMs(new Date(guess), timezone);
+  return new Date(guess - offset - 1);
+}
+
+/** The calendar day `at` falls on in the zone, as [year, month, day]. */
+function localDateParts(at: Date, timezone: string): [number, number, number] {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(at);
+  const get = (type: string): number => Number(parts.find((p) => p.type === type)?.value);
+  return [get('year'), get('month'), get('day')];
 }
 
 /** The zone's offset from UTC at `at`, in ms (positive east of Greenwich). */

@@ -166,6 +166,38 @@ suite('actions and approvals (postgres)', () => {
       expect(action?.preview).toContain('mail.send');
     });
 
+    it('describes at the instant it records, so a clock-reading preview survives a ticking clock', async () => {
+      // Every read of the clock is a millisecond later: the gap between the
+      // preview and `createAction`, and the owner's wait, are both real.
+      let tick = Date.parse('2026-10-07T09:00:00.000Z');
+      const ticking = (): CoreToolContext => ({ ...ctx(), now: () => new Date(tick++) });
+      const sent: unknown[] = [];
+      const registry = new ToolRegistry();
+      registry.register({
+        name: 'mail', version: '1.2.3', schema: 'mail', migrationsDir: '/tmp/mail',
+        tools: [{
+          name: 'mail.later',
+          description: 'Send an email in a day.',
+          tier: 'gated',
+          input: z.object({ to: z.string() }),
+          describe: (input: any, describeCtx: CoreToolContext) => ({
+            envelope: { to: input.to, sendAt: new Date(describeCtx.now().getTime() + 86_400_000).toISOString() },
+            preview: `Send to ${input.to} tomorrow`,
+          }),
+          execute: async (input: any) => { sent.push(input); return { ok: true }; },
+        }],
+      });
+      const res = await registry.invoke('mail.later', { to: 'a@b.c' }, ticking());
+      if (res.ok || res.reason !== 'approval-required') throw new Error('expected approval');
+      const action = await getAction(pool, res.actionId);
+      expect((action?.envelope as { sendAt: string }).sendAt).toBe(new Date(action!.createdAt.getTime() + 86_400_000).toISOString());
+      tick += 60_000;
+      expect((await decideApproval(pool, { actionId: res.actionId, decision: 'approved', by: 'owner', via: 'test' })).ok).toBe(true);
+      const executed = await executeApproved(pool, { actionId: res.actionId, registry, ctx: ticking(), worker: 'test' });
+      expect(executed).toMatchObject({ ok: true });
+      expect(sent).toEqual([{ to: 'a@b.c' }]);
+    });
+
     it('refuses draft and session without session authority', async () => {
       for (const tier of ['draft', 'session'] as Tier[]) {
         const { manifest, sent } = sendManifest({ tier });
