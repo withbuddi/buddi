@@ -361,6 +361,9 @@ export function MessageList({
                 const gate = result ? approvalLine(result) : null;
                 // A message to the owner says where it went, not just that it ran.
                 const sent = !gate && block.name === NOTIFY_TOOL && result ? deliveredOf(result.output) : null;
+                // Never run: the turn stopped for the owner (a card, an approval) before this call's turn came.
+                // That is not a failure, and a red row says one happened.
+                const skipped = !gate && result !== null && !result.ok && typeof result.error === 'string' && result.error.startsWith('not-executed:');
                 // A scheduled run's report is the message it sent: its voice note, its text, its link (1.27).
                 const report = !gate && block.name === REPORT_TOOL && result?.ok ? reportView(block.input, result.output) : null;
                 // An edition card carries its own head (name, time, Open edition): the generic row above it is noise.
@@ -371,9 +374,9 @@ export function MessageList({
                     key={blockIndex}
                     label={gate && !result?.delegation ? `Approval · ${block.name}` : labelFor(block.name)}
                     tool={block.name}
-                    ok={result?.ok ?? null}
+                    ok={skipped ? null : result?.ok ?? null}
                     running={result === null}
-                    {...(gate ? { status: gate.status, waiting: gate.waiting, approval: true } : sent ? { status: sent } : {})}
+                    {...(gate ? { status: gate.status, waiting: gate.waiting, approval: true } : sent ? { status: sent } : skipped ? { status: 'not run' } : {})}
                     gist={gistFor(block.name, block.input)}
                     body={result ? toolBodyFor(result.output) : null}
                     opens

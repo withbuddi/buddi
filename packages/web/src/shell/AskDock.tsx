@@ -483,7 +483,7 @@ function DockThread({
           />
         ) : question && secretRequestOf(question) ? (
           // An agent's sign-in card: the same card as the chat's, its sheet over the whole screen.
-          <SecretRequestDock key={question.id} question={question} card={secretRequestOf(question)!} phone container={null} disabled={running} onSettled={() => { if (conversationId) void refresh(conversationId); }} />
+          <SecretRequestDock key={question.id} question={question} card={secretRequestOf(question)!} phone container={null} disabled={running} onSettled={() => { if (conversationId) void refresh(conversationId); }} onChoice={answerQuestion} />
         ) : question && browserCardOf(question) ? (
           <BrowserAsk key={question.id} card={browserCardOf(question)!} disabled={answeringQuestion || running} onAnswer={answerQuestion} />
         ) : question ? (

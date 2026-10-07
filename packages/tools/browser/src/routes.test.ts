@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardAnswer, chooseRoute, detectSignedOut, detectWall, ownerCard, routeNote, siteListed, siteName, siteOf, type RouteInput } from './routes.js';
+import { cardAnswer, chooseRoute, detectSignedOut, detectWall, ownerCard, signInFields, routeNote, siteListed, siteName, siteOf, type RouteInput } from './routes.js';
 import { STOP_CAUSES, summarize, telemetryLines, BrowserTelemetry } from './telemetry.js';
 
 const all = { own: true, chrome: true, apps: true };
@@ -144,5 +144,29 @@ describe('a page that renders signed out', () => {
     expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'unpaired')).toBe("Your Chrome isn't connected to this buddi, so I looked in my own browser.");
     expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'closed')).toBe("Your Chrome isn't open right now, so I looked in my own browser.");
     expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'off')).toBe('Your Chrome is turned off for agents in Settings, so I looked in my own browser.');
+  });
+});
+
+describe('signInFields', () => {
+  it('reads the username and password boxes a login page shows, with their refs, in the card\'s words', () => {
+    const targets = [
+      { ref: 'e1', frame: 0, role: 'searchbox', name: 'Search Wikipedia' },
+      { ref: 'e3', frame: 0, role: 'textbox', name: 'Enter your username' },
+      { ref: 'e4', frame: 0, role: 'textbox', name: 'Enter your password' },
+      { ref: 'e5', frame: 0, role: 'button', name: 'Log in' },
+    ];
+    expect(signInFields({ targets }, 'sign-in')).toEqual([
+      { label: 'Username', kind: 'username', ref: 'e3' },
+      { label: 'Password', kind: 'password', ref: 'e4' },
+    ]);
+    expect(signInFields({ targets: [{ ref: 'e2', frame: 0, role: 'textbox', name: 'Email address' }] }, 'sign-in')).toEqual([
+      { label: 'Email', kind: 'username', ref: 'e2' },
+      { label: 'Password', kind: 'password' },
+    ]);
+  });
+
+  it('asks for a username and a password on a page with no boxes yet, and on a code page fills nothing by itself', () => {
+    expect(signInFields({ targets: [] }, 'sign-in')).toEqual([{ label: 'Username', kind: 'username' }, { label: 'Password', kind: 'password' }]);
+    expect(signInFields({ targets: [{ ref: 'e9', frame: 0, role: 'textbox', name: 'Verification code' }] }, 'code').every((field) => field.ref === undefined)).toBe(true);
   });
 });

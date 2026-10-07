@@ -22,6 +22,7 @@ import type { Pool } from 'pg';
 import {
   OWNER_INTERJECTION_SPEAKER,
   ToolRefusal,
+  type AskSignIn,
   type CoreToolContext,
   type PluginManifest,
   type SecretRequestCard,
@@ -264,6 +265,35 @@ export function telegramSignInReply(said: string, card: Pick<SecretRequestCard, 
 export function conversationLink(publicOrigin: string | undefined, agentId: string, conversationId: string): string | undefined {
   if (!publicOrigin) return undefined;
   return `${publicOrigin.replace(/\/$/, '')}/#/chat/${encodeURIComponent(agentId)}/${encodeURIComponent(conversationId)}`;
+}
+
+/**
+ * The card for a login wall the browser met (`ctx.ask`'s `signIn`): the site
+ * the page is on, the fields it saw with their refs. Null for a page buddi
+ * cannot bind a secret to.
+ */
+export function signInCardFor(signIn: AskSignIn, agentName: string | undefined): SecretRequestCard | null {
+  const origin = canonicalOrigin(signIn.url);
+  if (!origin) return null;
+  const site = siteOfHost(new URL(origin).hostname);
+  if (normalizeSite(site) === undefined) return null;
+  const name = agentName ?? 'The agent';
+  const warnings: string[] = [];
+  const fields = signIn.fields.slice(0, MAX_REQUEST_FIELDS).map((field) => {
+    const what = sensitiveLabel(field.label, field.kind);
+    const warning = what ? warningLine(name, what, site) : undefined;
+    if (warning) warnings.push(warning);
+    return { label: field.label, kind: field.kind, ...(field.ref ? { ref: field.ref } : {}), ...(warning ? { warning } : {}) };
+  });
+  return {
+    kind: 'secret.request',
+    site,
+    origins: requestOrigins(site, origin),
+    page: { url: signIn.url, ...(signIn.title ? { title: signIn.title.slice(0, 200) } : {}) },
+    fields,
+    agentName: name,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 /** The question line the card stands on: what Telegram and the agent rail read. */

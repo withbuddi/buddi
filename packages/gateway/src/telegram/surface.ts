@@ -188,7 +188,7 @@ import {
   turnAskedOwner,
   type PendingQuestion,
 } from '../surfaces/pending-question.js';
-import { outcomeTurnText } from '../surfaces/secret-request.js';
+import { DECLINE_LABEL, outcomeTurnText } from '../surfaces/secret-request.js';
 import { failedTurnReply } from '../surfaces/failure.js';
 import {
   conversationForTurn,
@@ -2783,7 +2783,7 @@ export class TelegramSurface {
     }
     this.#pending.clear(chatId);
     // A sign-in card's Decline: the agent hears it as the card's own outcome, never as a word to act on.
-    const prompt = question.request?.kind === 'secret.request' ? outcomeTurnText({ declined: 'cancelled' }) : option.label;
+    const prompt = question.request?.kind === 'secret.request' && option.label === DECLINE_LABEL ? outcomeTurnText({ declined: 'cancelled' }) : option.label;
     await this.#runFor(chatId, agent, prompt, { continuation: true });
   }
 

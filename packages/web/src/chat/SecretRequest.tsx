@@ -26,7 +26,13 @@ import type { ChatQuestion, SecretRequestCard, SecretRequestField } from './type
 /** The sign-in card this question is, or null for any other question. */
 export function secretRequestOf(question: ChatQuestion | null | undefined): SecretRequestCard | null {
   const request = question?.request;
-  return request && request.kind === 'secret.request' ? request : null;
+  return request && request.kind === 'secret.request' && !request.expand ? request : null;
+}
+
+/** The sign-in card a browser card opens in place from "Save a login for next time" (a code page). */
+export function expandedRequestOf(question: ChatQuestion | null | undefined): SecretRequestCard | null {
+  const request = question?.request;
+  return request && request.kind === 'secret.request' && request.expand ? request : null;
 }
 
 /** "Wikipedia": the site's name as a secret's name starts (the gateway's `secretNameFor`). */
@@ -111,7 +117,9 @@ function fieldsOf(card: SecretRequestCard, typed: Typed): SecretSetField[] {
  * the chat column the sheet is drawn in on a desk; on a phone it covers the
  * screen and folds the page in at its top.
  */
-export function SecretRequestDock({ question, card, phone, container, page, disabled, onSettled }: {
+export function SecretRequestDock({ question, card, phone, container, page, disabled, onSettled, onChoice }: {
+  /** One of the browser's other choices ("Use my Chrome"), answered as the question's option. */
+  onChoice?: ((label: string, optionId?: string) => void) | undefined;
   question: ChatQuestion;
   card: SecretRequestCard;
   phone: boolean;
@@ -182,6 +190,10 @@ export function SecretRequestDock({ question, card, phone, container, page, disa
         </div>
         <div className="wb-dock-section">
           <Toolbar align="end">
+            {(card.choices ?? []).map((label) => {
+              const option = question.options.find((candidate) => candidate.label === label);
+              return onChoice && option ? <Button key={label} size="sm" variant="ghost" disabled={off} title={option.hint ?? undefined} onClick={() => onChoice(label, option.id)}>{label}</Button> : null;
+            })}
             <Button size="sm" variant="ghost" disabled={off} onClick={self}>{busy === 'self' ? 'Handing it over…' : 'I’ll sign in myself'}</Button>
             <Button size="sm" disabled={off} onClick={() => setSheet(true)}>More options</Button>
             <Button size="sm" variant="accent" disabled={off} onClick={() => save('fill')}>{busy === 'fill' ? 'Saving…' : 'Save and fill'}</Button>

@@ -933,7 +933,9 @@ export function answeredMessage(question: string, answer: string, browses = true
 function askVia(sink: AskSink): NonNullable<CoreToolContext['ask']> {
   return (question) => {
     const one: AskSink = {};
-    askInto(one)(question);
+    // A parked mission wakes on a card's answer: it keeps the browser's own card, not the sign-in card.
+    const { signIn: _signIn, ...plain } = question;
+    askInto(one)(plain);
     sink.asked = one.asked;
   };
 }

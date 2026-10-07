@@ -282,3 +282,56 @@ describe('the card in the chat page', () => {
     for (const call of [...send.mock.calls, ...answer.mock.calls]) expect(JSON.stringify(call)).not.toContain(PASSWORD);
   });
 });
+
+describe('a login wall the browser met', () => {
+  const chrome = 'Use Chrome when it’s open';
+  const wall: SecretRequestCard = { ...card, site: 'wikimedia.org', choices: [chrome] };
+  const wallQuestion: ChatQuestion = {
+    ...question, question: 'No saved sign-in for wikimedia.org',
+    options: [{ id: 'option-1', label: chrome, hint: 'I wait for Chrome', recommended: false }, { id: 'option-2', label: 'Decline', hint: null, recommended: false }],
+    request: wall,
+  };
+
+  it('is the sign-in card with the browser\'s Chrome choice as a secondary action, answered as itself', () => {
+    const choice = vi.fn();
+    render(<SecretRequestDock question={wallQuestion} card={wall} phone={false} container={null} disabled={false} onSettled={vi.fn()} onChoice={choice} />);
+    const buttons = within(screen.getByTestId('secret-request').querySelector('.ui-toolbar') as HTMLElement).getAllByRole('button').map((b) => b.textContent);
+    expect(buttons).toEqual([chrome, 'I’ll sign in myself', 'More options', 'Save and fill']);
+    expect(screen.queryByText('Take over')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Save a login for next time' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: chrome }));
+    expect(choice).toHaveBeenCalledWith(chrome, 'option-1');
+  });
+
+  it('a code page keeps the browser card, and "Save a login for next time" opens the sign-in card in place, never Settings', async () => {
+    const { BrowserAsk, browserCardOf } = await import('./BrowserAsk');
+    const codeQuestion: ChatQuestion = {
+      id: 'q2', question: 'Wikimedia asks for a code\nEnter the code on the page and give it back, and I carry on.',
+      options: [{ id: 'o1', label: 'Take over', hint: null, recommended: true }, { id: 'o2', label: 'Save a login for next time', hint: null, recommended: false }],
+      allowOther: false, expiresAt: '2999-01-01T00:00:00Z', request: { ...card, site: 'wikimedia.org', expand: true },
+    };
+    const save = vi.spyOn(api, 'saveSecretSet').mockResolvedValue({ saved: ['Wikimedia password'], filled: true });
+    render(<BrowserAsk card={browserCardOf(codeQuestion)!} disabled={false} onAnswer={vi.fn()} signIn={{ question: codeQuestion, card: codeQuestion.request!, phone: false, container: null, onSettled: vi.fn() }} />);
+    expect(screen.getByRole('button', { name: 'Take over' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Save a login for next time' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save a login for next time' }));
+    const dock = screen.getByTestId('secret-request');
+    expect(within(dock).getByText('No saved sign-in for wikimedia.org')).toBeInTheDocument();
+    type('Password', PASSWORD, dock);
+    fireEvent.click(within(dock).getByRole('button', { name: 'Save and fill' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ questionId: 'q2', then: 'fill' })));
+  });
+
+  it('a call the turn never ran (it stopped on the card first) reads "not run", not failed', () => {
+    render(
+      <Tooltip.Provider>
+        <MessageList timezone="UTC" now={0} live={[]} onOpen={vi.fn()} emptyHint="" messages={[
+          { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'list', name: 'secret.list', input: {} }] },
+          { id: 'm2', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'list', name: 'secret.list', ok: false, output: null, error: 'not-executed: waiting for the owner to answer the question; finish your reply and do not call more tools' }] },
+        ]} />
+      </Tooltip.Provider>,
+    );
+    expect(screen.getByText('not run')).toBeInTheDocument();
+    expect(screen.queryByText('failed')).toBeNull();
+  });
+});

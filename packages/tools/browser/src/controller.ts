@@ -12,7 +12,7 @@ import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngi
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
 import { applySettingsChange, migrateSettings, PIN_VALUES, settingsSchema, type ControlSettings, type RouteKind, type RoutePin } from './settings.js';
-import { agoText, cardAnswer, ownerClock, chooseRoute, detectSignedOut, detectWall, ownerCard, RouteProviderDriver, routeNote, siteListed, siteOf, type ChromeLink, type ChromeMiss, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
+import { agoText, cardAnswer, ownerClock, chooseRoute, detectSignedOut, detectWall, ownerCard, signInFields, RouteProviderDriver, routeNote, siteListed, siteOf, type ChromeLink, type ChromeMiss, type OwnerCard, type RouteChoice, type RouteReason } from './routes.js';
 import { BrowserTelemetry, missionMark, readTelemetry, summarize, type TelemetrySummary } from './telemetry.js';
 import { canonicalOrigin, fieldBoundTo } from './secrets.js';
 import { LoginKeeper } from './logins.js';
@@ -581,7 +581,7 @@ export class HostController implements BrowserController {
   #ask(ctx: ToolContext, card: OwnerCard): void {
     if (this.#asked.has(card)) return;
     this.#asked.add(card);
-    try { ctx.ask?.({ question: card.question, options: card.options.map((option) => ({ label: option.label, ...(option.hint ? { hint: option.hint } : {}), ...(option.recommended ? { recommended: true } : {}) })), allowOther: false }); }
+    try { ctx.ask?.({ question: card.question, options: card.options.map((option) => ({ label: option.label, ...(option.hint ? { hint: option.hint } : {}), ...(option.recommended ? { recommended: true } : {}) })), allowOther: false, ...(card.signIn ? { signIn: card.signIn } : {}) }); }
     catch { /* a surface's drawing never decides a run */ }
   }
 
@@ -770,7 +770,11 @@ export class HostController implements BrowserController {
     }
     // A mission's sign-in is one of the four moments too: the card parks the run until the owner answers (Take over, or a saved login).
     this.telemetry.stop('sign-in', { route, agent: ctx.agentId!, ...missionMark(ctx), ...(site ? { host: site } : {}) });
-    const card = child.park(wall === 'code' ? 'code' : 'sign-in', { chrome: route === 'chrome' ? 'none' : chromeUsable ? 'usable' : allowed.chrome && !available.chrome ? 'offline' : 'none', storedLogin: false });
+    const kind = wall === 'code' ? 'code' as const : 'sign-in' as const;
+    const card: OwnerCard = child.park(kind, { chrome: route === 'chrome' ? 'none' : chromeUsable ? 'usable' : allowed.chrome && !available.chrome ? 'offline' : 'none', storedLogin: false });
+    // Nothing saved for the site: the card can take the sign-in in place (docs/owner-secrets.md §6).
+    // On the parked card itself, so the page's later reads hand on the same card and it is asked once.
+    card.signIn = { kind, url, ...(observation.observation.title ? { title: observation.observation.title } : {}), fields: signInFields(observation.observation, kind) };
     return { result: { ...observation, completed: false, needsOwner: card, message: `${card.title}. Say that in one sentence and stop; the card has Take over. You continue when the owner gives the page back.` }, route, choice };
   }
 

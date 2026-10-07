@@ -12,9 +12,11 @@
  * holds, Browsing is paused (Keep paused · Resume). A tap answers with the
  * label, exactly as a tap on the plain question card would.
  */
+import { useState } from 'react';
 import { SECRETS_ADD_ROUTE } from '../routes';
 import { Button, Spacer, Toolbar } from '../ui';
-import type { ChatQuestion, ChatQuestionOption } from './types';
+import { SecretRequestDock } from './SecretRequest';
+import type { ChatQuestion, ChatQuestionOption, SecretRequestCard } from './types';
 
 export type BrowserCardKind = 'signin' | 'human' | 'look' | 'budget' | 'paused';
 
@@ -54,13 +56,23 @@ export function browserCardOf(question: ChatQuestion | null | undefined): Browse
   return { kind, title, line: rest.join(' ').trim(), saveLogin, actions };
 }
 
-export function BrowserAsk({ card, disabled, onAnswer, site }: {
+export function BrowserAsk({ card, disabled, onAnswer, site, signIn }: {
   card: BrowserCard;
   disabled: boolean;
   onAnswer: (answer: string, optionId?: string) => void;
   /** The page's site, so Save a login opens with it filled in. */
   site?: string | undefined;
+  /**
+   * The sign-in card this browser card carries (docs/owner-secrets.md §6):
+   * "Save a login for next time" opens it right here instead of a trip to
+   * Settings, and it answers the card the way the agent's own does.
+   */
+  signIn?: { question: ChatQuestion; card: SecretRequestCard; phone: boolean; container: HTMLElement | null; onSettled: () => void } | undefined;
 }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  if (expanded && signIn) {
+    return <SecretRequestDock question={signIn.question} card={signIn.card} phone={signIn.phone} container={signIn.container} disabled={disabled} onSettled={signIn.onSettled} />;
+  }
   const saveHref = `${SECRETS_ADD_ROUTE}${site ? `&site=${encodeURIComponent(site)}` : ''}`;
   return (
     <section className="wb-question br-ask" data-kind={card.kind} aria-label={card.kind === 'paused' ? 'Browsing is paused' : 'The agent needs you'} data-testid="browser-ask">
@@ -71,7 +83,9 @@ export function BrowserAsk({ card, disabled, onAnswer, site }: {
       </div>
       <div className="wb-dock-section">
         <Toolbar align="end">
-          {card.saveLogin ? <><a className="wb-link" href={saveHref}>{card.saveLogin.label}</a><Spacer /></> : null}
+          {card.saveLogin ? <>{signIn
+            ? <button type="button" className="wb-link" aria-expanded={false} onClick={() => setExpanded(true)}>{card.saveLogin.label}</button>
+            : <a className="wb-link" href={saveHref}>{card.saveLogin.label}</a>}<Spacer /></> : null}
           {card.actions.map((option) => (
             <Button
               key={option.id}

@@ -128,7 +128,7 @@ import {
 } from '../surfaces/pending-question.js';
 import { failedTurnReply } from '../surfaces/failure.js';
 import { askInto, touchBrowser } from '../surfaces/browser-cards.js';
-import { createSecretRequestManifest, grantsSecretRequest, outcomeStamp, outcomeTurnText, SECRET_REQUEST_TOOLS, stampTurnSpeaker } from '../surfaces/secret-request.js';
+import { createSecretRequestManifest, DECLINE_LABEL, grantsSecretRequest, outcomeStamp, outcomeTurnText, SECRET_REQUEST_TOOLS, stampTurnSpeaker } from '../surfaces/secret-request.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
 import { transcriptBudget } from '../surfaces/context-budget.js';
 import {
@@ -1585,7 +1585,7 @@ export class WebChat {
     }
     // A sign-in card answered by a plain tap (its Decline) is the card turned
     // down: the agent hears the card's own outcome, never the word.
-    if (settled.question.request?.kind === 'secret.request') {
+    if (settled.question.request?.kind === 'secret.request' && (settled.question.answer ?? input.answer) === DECLINE_LABEL) {
       const outcome = { declined: 'cancelled' as const };
       const runId = await this.continueWithStamp({
         conversationId: settled.question.conversationId,
@@ -2342,7 +2342,7 @@ export class WebChat {
       : ownerRequestContext(deps.ctx, turn.text, runId);
     // A tool that needs the owner (the browser's four moments, the Stop's
     // Resume) asks with one card, drawn like any question; delegates never ask.
-    const baseCtx = turn.delegated ? { ...ownerCtx, delegationDepth: turn.delegated.depth } : { ...ownerCtx, ask: askInto(ask) };
+    const baseCtx = turn.delegated ? { ...ownerCtx, delegationDepth: turn.delegated.depth } : { ...ownerCtx, ask: askInto(ask, { agentName: agent.name }) };
     const delegated = turn.delegated !== undefined;
     // The owner spoke here: the browser's budgets renew and a waiting card is answered.
     if (!delegated && !turn.resume && !turn.opening) {

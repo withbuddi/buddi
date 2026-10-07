@@ -342,6 +342,8 @@ describe('the owner cards, through the existing question card', () => {
     expect(asked).toHaveLength(1);
     expect(asked[0]!.question).toBe('Amazon needs your sign-in\nSign in on the page and give it back, and I carry on.');
     expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', 'Save a login for next time']);
+    // The page and the fields it saw go with it, so a surface can take the sign-in in place.
+    expect((asked[0] as { signIn?: { kind: string; url: string } }).signIn).toMatchObject({ kind: 'sign-in', url: 'https://www.amazon.com/ap/signin' });
     await controller.execute(observe, ctx('a', asked));
     expect(asked).toHaveLength(1);
   });

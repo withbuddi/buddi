@@ -37,6 +37,22 @@ export interface GroupContext {
   requestId: string;
 }
 
+/**
+ * A sign-in moment a tool raised (the browser's login wall): the page and the
+ * fields it saw, labels and refs only. A surface that can take a sign-in in
+ * place draws the sign-in card from it (docs/owner-secrets.md §6) instead of
+ * the plain question. Optional: a surface that ignores it draws the question
+ * as before.
+ */
+export interface AskSignIn {
+  /** `sign-in`: a username and password form; `code`: a page asking for a code. */
+  kind: 'sign-in' | 'code';
+  /** The page's address, as the backend read it. */
+  url: string;
+  title?: string;
+  fields: Array<{ label: string; kind: 'username' | 'password' | 'totp' | 'other'; ref?: string }>;
+}
+
 export interface ToolContext {
   /**
    * The host: everything a plugin reaches beyond its arguments, bound to this
@@ -61,7 +77,7 @@ export interface ToolContext {
    * here instead of hoping the model will. Absent on unattended runs. Since
    * host API 1.29.
    */
-  ask?: (question: { question: string; options: Array<{ label: string; hint?: string | null; recommended?: boolean }>; allowOther: boolean }) => void;
+  ask?: (question: { question: string; options: Array<{ label: string; hint?: string | null; recommended?: boolean }>; allowOther: boolean; signIn?: AskSignIn }) => void;
   /** Runtime-resolved session tool grants. Cannot be inherited by a delegate. */
   sessionTools?: readonly string[];
   /** Cooperative cancellation. Check before each external operation. */

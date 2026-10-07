@@ -89,7 +89,8 @@ card's buttons), on four occasions only:
 | --- | --- | --- |
 | **I'm not sure that went through. Look?** | A click or fill that failed part-way, or a page that did not answer six reads over fifteen seconds | Look (take over) · Carry on |
 | **Keep going?** | The task used its 200 actions or its hour, or eight targeting refusals in a row | Keep going · Stop here |
-| **Sign in** (*amazon.com needs your sign-in* / *asks for a code*) | A login wall with no stored login and no Chrome to move to | Take over · Use my Chrome (or Open Chrome and I'll use it there) · Save a login for next time |
+| **Sign in** (*No saved sign-in for amazon.com*) | A login wall with no stored login and no Chrome to move to | The sign-in card ([owner-secrets.md](owner-secrets.md) §6): the fields in the card · I'll sign in myself · More options · Save and fill, Save only; Use my Chrome (or Use Chrome when it's open) beside them when that route exists |
+| **Code** (*amazon.com asks for a code*) | A page asking for a one-time code | Take over · Use my Chrome · Save a login for next time, which opens the sign-in card in place |
 | **Human check** (*… asks for a human*) | A captcha or "verify you are human" | Take over · Skip it |
 
 The run stops on the card (the tool result carries `needsOwner`) and the page
@@ -99,6 +100,19 @@ Keep going renews the budget. After a take-over, **Give it back** renews the
 budget and the agent's next action returns the page as you left it. A stored
 login is used before any card: the agent is pointed at `secret.list` and
 `secret.fill`, and a TOTP secret answers a code.
+
+**The login wall is the sign-in card.** The browser's own sign-in moment
+carries the page and the fields it saw (`ctx.ask`'s `signIn`: labels and refs,
+never a value). On the dashboard and Telegram it is drawn as the sign-in card
+below, Take over folded into *I'll sign in myself* and "Save a login for next
+time" into the card itself; its answers resume the agent exactly as
+`secret.request`'s do. A code page keeps its own card, and its "Save a login
+for next time" opens the sign-in card in place, never a link to Settings. One
+card per turn: a login wall and the agent's own `secret.request` never both
+stand for the same page (the first wins, and `secret.request` refuses after
+it). Missions and the terminal keep the browser's plain card. A call the turn
+never ran because it stopped on a card first reads "not run" in the thread,
+not failed.
 
 **No saved sign-in for the site.** When `secret.list` has nothing for the page,
 or `secret.fill` answers that nothing is saved there, the refusal tells the

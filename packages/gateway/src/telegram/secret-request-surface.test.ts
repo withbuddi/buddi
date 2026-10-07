@@ -48,15 +48,17 @@ const row = (q: Question, answered?: { at: Date; via: string; answer: string }):
 /** Just enough of core: the pairing, the card, and a conversation to continue in. */
 class FakeDb implements Queryable {
   answered: { at: Date; via: string; answer: string } | undefined;
+  readonly card: Question;
+  constructor(question?: Question) { this.card = question ?? card; }
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
     if (text.startsWith('select id, owner_id, surface, external_user_id, external_chat_id')) {
       return params[1] === OWNER ? { rows: [{ id: 'sid-1', owner_id: 'owner', surface: SURFACE, external_user_id: OWNER, external_chat_id: OWNER }] } : { rows: [] };
     }
-    if (text.includes('from core.questions where id = $1')) return { rows: [row(card, this.answered)] };
+    if (text.includes('from core.questions where id = $1')) return { rows: [row(this.card, this.answered)] };
     if (text.startsWith('update core.questions set answered_at')) {
       this.answered = { at: params[1], via: params[2], answer: params[3] };
-      return { rows: [row(card, this.answered)] };
+      return { rows: [row(this.card, this.answered)] };
     }
     // No mission is parked on this card.
     if (text.startsWith('update core.jobs')) return { rows: [] };
@@ -125,5 +127,20 @@ describe('a sign-in card on Telegram', () => {
     const turn = (run.mock.calls[0] as unknown as [{ text: string }])[0];
     expect(turn.text).toContain('tool result (deferred) for secret.request: {"declined":"cancelled"}');
     expect(turn.text).not.toBe(DECLINE_LABEL);
+  });
+
+  it('a browser choice folded into the card ("Use Chrome") is answered as itself', async () => {
+    const withChrome: Question = { ...card, options: [{ id: 'option-1', label: 'Use Chrome when it’s open', hint: null, recommended: false }, { id: 'option-2', label: DECLINE_LABEL, hint: null, recommended: false }], request: { ...card.request!, choices: ['Use Chrome when it’s open'] } };
+    expect(questionKeyboard(withChrome).inline_keyboard.flat().map((button) => button.text)).toEqual(['Use Chrome when it’s open', DECLINE_LABEL]);
+    const { api } = fakeApi();
+    const run = vi.fn(async () => 'Waiting for Chrome.');
+    const surface = new TelegramSurface({ api, pool: new FakeDb(withChrome), catalog: catalog(), timezone: 'UTC', run, log: () => {}, typingIntervalMs: 60_000 } as any);
+    await surface.handleQuestionCallback({
+      id: 'cb-2',
+      from: { id: Number(OWNER), is_bot: false, first_name: 'Owner' },
+      message: { message_id: 56, chat: { id: Number(OWNER), type: 'private' }, date: 0 },
+      data: questionCallbackData(QUESTION_ID, 0),
+    } as unknown as NonNullable<TelegramUpdate['callback_query']>);
+    expect((run.mock.calls[0] as unknown as [{ text: string }])[0].text).toBe('Use Chrome when it’s open');
   });
 });

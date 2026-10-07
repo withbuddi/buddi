@@ -54,6 +54,14 @@ export interface SecretRequestCard {
   agentName?: string;
   /** One line per warned field, as the card prints it. */
   warnings?: string[];
+  /**
+   * Raised by the browser at a login wall rather than by the agent: its other
+   * choices that still apply ("Use my Chrome"), drawn as secondary actions and
+   * answered like any question option.
+   */
+  choices?: string[];
+  /** The browser's own card stays (a code page): this card opens in place from its "Save a login for next time". */
+  expand?: boolean;
 }
 
 export type QuestionRequest = SecretRequestCard;

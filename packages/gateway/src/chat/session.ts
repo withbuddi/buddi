@@ -1134,7 +1134,8 @@ export class ChatSession {
           : turn.userMessage !== undefined
             ? ownerRequestContext(deps.ctx, turn.userMessage)
             : deps.ctx),
-        ask: askInto(sink),
+        // The terminal draws questions as text: the browser's own card, never the sign-in card.
+        ask: (question) => { const { signIn: _signIn, ...plain } = question; askInto(sink)(plain); },
       },
       pool: deps.pool,
       // The provider's own web search leaves the same audit row `web.search`

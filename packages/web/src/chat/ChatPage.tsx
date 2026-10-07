@@ -34,7 +34,7 @@ import { HostControls } from '../views/HostControls';
 import { ErrorBanner, Notice } from '../ui';
 import { BROWSER_TOOLS, conversationBrowser, endedBrowser, pausedBrowser, stepFor } from './browser';
 import { BrowserAsk, browserCardOf } from './BrowserAsk';
-import { SecretRequestDock, secretRequestOf } from './SecretRequest';
+import { expandedRequestOf, SecretRequestDock, secretRequestOf } from './SecretRequest';
 import { WEB_SOURCE_TOOLS } from './sources';
 import { OWN_TOOL_TITLES, QUIET_TOOLS } from './own-tools';
 import { ConversationHistory } from './ConversationHistory';
@@ -1530,6 +1530,7 @@ export function ChatPage({
               if (conversationId) void refresh(conversationId);
               browser.reload();
             }}
+            onChoice={answerQuestion}
           />
         ) : conversation?.question && browserCard ? (
           <BrowserAsk
@@ -1537,6 +1538,13 @@ export function ChatPage({
             card={browserCard}
             disabled={answeringQuestion || running}
             onAnswer={answerQuestion}
+            signIn={expandedRequestOf(conversation.question) ? {
+              question: conversation.question,
+              card: expandedRequestOf(conversation.question)!,
+              phone: narrow,
+              container: columnRef.current,
+              onSettled: () => { if (conversationId) void refresh(conversationId); browser.reload(); },
+            } : undefined}
             site={browserStatus?.needsOwner?.site ?? browserStatus?.page?.url?.replace(/^https?:\/\/(www\.)?([^/]+).*$/, '$2')}
           />
         ) : conversation?.question ? (

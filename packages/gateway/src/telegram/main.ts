@@ -583,7 +583,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
             ? (approval ? approvalResumeContext(deps.ctx, approval) : deps.ctx)
             : ownerRequestContext(deps.ctx, text)),
           // The browser's owner moments and the Stop's Resume: one card with buttons.
-          ask: askInto(sink),
+          ask: askInto(sink, { agentName: agent.name }),
         },
         pool,
         conversationId,

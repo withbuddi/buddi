@@ -360,6 +360,10 @@ tools include `secret.fill`. It never runs unattended or for a delegate.
   the set's approval and of the fill, so its first use asks on its own card.
   The patterns are a short list in `secret-request.ts`; a miss only means no
   warning line.
+- **Raised by the browser too.** A login wall the browser meets with nothing
+  saved for the site is this card, built from the fields it saw, with the
+  browser's other choices that still apply ("Use my Chrome") beside the
+  actions ([browser.md](browser.md), "The login wall is the sign-in card").
 - **Asked by chat too.** "Help me save new secrets" makes the agent call
   `secret.request` with the fields it chooses: the same card.
 

@@ -1,4 +1,4 @@
-import type { RouteCommand, RoutePage, RouteProvider } from '@buddi/core/plugin';
+import type { AskSignIn, RouteCommand, RoutePage, RouteProvider } from '@buddi/core/plugin';
 import type { RouteKind, RoutePin } from './settings.js';
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 
@@ -209,6 +209,29 @@ export interface OwnerCard {
   line: string;
   options: Array<{ label: string; hint?: string; recommended?: boolean }>;
   site?: string;
+  /** A login wall: the page and the fields seen on it, so a surface can take the sign-in in place (`ctx.ask`'s `signIn`). */
+  signIn?: AskSignIn;
+}
+
+const USERNAME = /\b(?:user ?name|username|e-?mail|login|log-in|account|phone|identifier|user id)\b/i;
+
+/**
+ * The fields a sign-in card asks the owner for, read off the page: the
+ * password boxes, and the first box before them that names a user. Labels and
+ * refs only. A page that shows none yet (an identifier-first page with its
+ * password to come) asks for a username and a password all the same.
+ */
+export function signInFields(page: Pick<Observation, 'targets'> | undefined, kind: 'sign-in' | 'code'): AskSignIn['fields'] {
+  if (kind === 'code') return [{ label: 'Username', kind: 'username' }, { label: 'Password', kind: 'password' }];
+  const boxes = (page?.targets ?? []).filter((target) => ['textbox', 'searchbox', 'spinbutton'].includes(target.role) && target.name.trim() !== '');
+  const password = boxes.find((box) => PASSWORD.test(box.name));
+  const user = boxes.find((box) => box !== password && USERNAME.test(box.name)) ?? boxes.find((box) => box !== password && !/search/i.test(box.name));
+  // The card's words, not the page's placeholder ("Enter your username").
+  const userLabel = user && /e-?mail/i.test(user.name) ? 'Email' : user && /phone/i.test(user.name) ? 'Phone' : 'Username';
+  return [
+    { label: userLabel, kind: 'username', ...(user ? { ref: user.ref } : {}) },
+    { label: 'Password', kind: 'password', ...(password ? { ref: password.ref } : {}) },
+  ];
 }
 
 /** The card's labels, which the owner's tap comes back as. */

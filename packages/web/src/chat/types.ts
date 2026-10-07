@@ -227,6 +227,10 @@ export interface SecretRequestCard {
   reason?: string;
   agentName?: string;
   warnings?: string[];
+  /** The browser's other choices that still apply ("Use my Chrome"): secondary actions, answered as question options. */
+  choices?: string[];
+  /** The browser's own card stays; this opens in place from its "Save a login for next time". */
+  expand?: boolean;
 }
 
 /**

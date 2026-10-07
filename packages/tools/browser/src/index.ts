@@ -135,7 +135,7 @@ export type { BrowserAvailability, BrowserEngine, DetectDeps, InstallOutcome, In
 export type { BrowserEngineStatus, BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode, BrowserTouch, BrowserGiveBack, BrowserCapture, RouteStatus, CardResult } from './service.js';
 export { settingsSchema, migrateSettings, applySettingsChange, ROUTE_KINDS, PIN_VALUES } from './settings.js';
 export type { ControlSettings, RouteKind, RoutePin, MigrationFacts } from './settings.js';
-export { chooseRoute, detectWall, ownerCard, cardAnswer, routeNote, siteOf, siteName, originOf, CARD_LABELS, RouteProviderDriver } from './routes.js';
+export { chooseRoute, detectWall, ownerCard, signInFields, cardAnswer, routeNote, siteOf, siteName, originOf, CARD_LABELS, RouteProviderDriver } from './routes.js';
 export { isPublicSuffix } from './public-suffixes.js';
 export { canonicalOrigin, fieldDestination } from './secrets.js';
 export type { OwnerCard, CardKind, Wall, RouteChoice, RouteReason } from './routes.js';

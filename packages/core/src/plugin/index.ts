@@ -84,6 +84,7 @@ export type {
   SuggestedSkill,
   Tier,
   ToolContext,
+  AskSignIn,
   ToolDefinition,
   ZodToolDefinition,
   JsonSchemaToolDefinition,
