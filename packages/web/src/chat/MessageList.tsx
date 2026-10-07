@@ -29,8 +29,9 @@ import { ReplyActions } from './ReplyActions';
 import { gistFor } from './gist';
 import { toolBodyFor, type ToolBody } from './tool-body';
 import { Markdown, MarkdownAgents } from './markdown';
-import { addedWhileWorking, briefTurnLabel, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun, type MessageFeedback } from '../chat/types';
+import { addedWhileWorking, briefTurnLabel, offerTurnLabel, stampTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun, type MessageFeedback } from '../chat/types';
 import { Avatar, Blob, Button, Icon } from '../ui';
+import { fmtClock } from '../format';
 import { useIsBlobStill } from '../ui/Blob';
 
 /**
@@ -78,7 +79,10 @@ export function MessageList({
   runs,
   onContinue,
   mediaTools,
+  timezone,
 }: {
+  /** The owner's zone, for a thread stamp's time. */
+  timezone?: string;
   /** Tools whose views declare `messenger.mediaFirst` (1.33): their audio `attachments` play under the tool row. */
   mediaTools?: ReadonlySet<string>;
   messages: ChatMessage[];
@@ -239,6 +243,18 @@ export function MessageList({
         const interjected = message.role === 'user' && addedWhileWorking(speaker);
         // An Ask from Alerts: the line the owner pressed, and nothing behind it
         // — the agent's brief never reaches the page.
+        // A sign-in card answered: one quiet line with its time, not a bubble (the kit's `ss-stamp`).
+        const stampLine = message.role === 'user' ? stampTurnLabel(speaker) : null;
+        if (stampLine) {
+          const at = message.at ? new Date(message.at) : null;
+          return (
+            <p key={message.id} className="ss-stamp" role="status" data-testid="thread-stamp">
+              <Icon name="key" size={14} />
+              <span>{stampLine}</span>
+              {at && !Number.isNaN(at.getTime()) ? <span className="ss-stamp-when">{fmtClock(at, timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone)}</span> : null}
+            </p>
+          );
+        }
         const briefLabel = message.role === 'user' ? briefTurnLabel(speaker) : null;
         if (briefLabel) {
           return (
@@ -337,6 +353,8 @@ export function MessageList({
               if (block.type === 'attachment') return null;
               if (block.type === 'tool_use') {
                 if (plain) return null;
+                // An agent's sign-in card is the card itself and then the stamp: no tool row besides.
+                if (block.name === 'secret.request') return null;
                 const result = findResult(messages, block.id);
                 // A gated call is one line here: the decision itself is in
                 // the dock, and the whole request is on the canvas.

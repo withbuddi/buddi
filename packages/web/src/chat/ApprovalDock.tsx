@@ -30,6 +30,7 @@ import { useOwnerChoices } from '../views/parts/OwnerChoices';
 import { Button, ErrorBanner } from '../ui';
 import { gistFor } from './gist';
 import { SkillRunDock, skillRunOf } from './SkillRunDock';
+import { SecretSetDock, secretSetOf } from './SecretRequest';
 import { PLATFORM_NAME, isPlatformAsker } from '../views/parts/Avatar';
 
 export interface DockedApproval {
@@ -68,9 +69,15 @@ export function ApprovalDock({
   onDecided,
   onSay,
   onOpenFull,
+  phone,
+  onSignInMyself,
 }: {
   /** Pending, oldest first. */
   approvals: readonly DockedApproval[];
+  /** Drawn at phone width: a set's card stacks its actions. */
+  phone?: boolean;
+  /** "I'll sign in myself" on a set's card: the page goes to the owner. */
+  onSignInMyself?: () => void;
   timezone: string;
   now: number;
   /** Changes whenever the transcript is read again: the current row is re-asked. */
@@ -104,6 +111,8 @@ export function ApprovalDock({
       }}
       onSay={onSay}
       onOpenFull={() => onOpenFull(current.toolUseId)}
+      phone={phone === true}
+      {...(onSignInMyself ? { onSignInMyself } : {})}
     />
   );
 }
@@ -117,7 +126,11 @@ function DockCard({
   onSettled,
   onSay,
   onOpenFull,
+  phone = false,
+  onSignInMyself,
 }: {
+  phone?: boolean;
+  onSignInMyself?: () => void;
   item: DockedApproval;
   count: number;
   timezone: string;
@@ -185,6 +198,23 @@ function DockCard({
   if (action && skillRun) {
     const name = isPlatformAsker(action.agentId) ? PLATFORM_NAME : action.agentId ? action.agentId.charAt(0).toUpperCase() + action.agentId.slice(1) : 'An agent';
     return <SkillRunDock action={action} run={skillRun} agentName={name} count={count} busy={busy} error={error} onDecide={(d) => decide(d)} />;
+  }
+
+  // A set of secrets saved together (a sign-in's username and password): its own card, the kit's "saved".
+  const secretSet = secretSetOf(action);
+  if (action && secretSet) {
+    const name = isPlatformAsker(action.agentId) ? PLATFORM_NAME : action.agentId ? action.agentId.charAt(0).toUpperCase() + action.agentId.slice(1) : 'The agent';
+    return (
+      <SecretSetDock
+        set={secretSet}
+        agentName={name}
+        phone={phone}
+        busy={busy}
+        error={error}
+        onFill={() => decide('approve')}
+        onSelf={() => { decide('reject'); onSignInMyself?.(); }}
+      />
+    );
   }
 
   const disabled = busy !== null || action === null || action.state !== 'pending';

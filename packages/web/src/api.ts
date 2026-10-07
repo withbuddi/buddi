@@ -2548,7 +2548,14 @@ export interface SecretListingView {
   usageUnknown?: boolean;
   /** A login buddi kept from the owner's own sign-in: the site, the user name (not a secret) and when. */
   login?: { site: string; username: string; savedAt: string };
+  /** Saved on an agent's sign-in card: the conversation it came from (its first line as the title), and when. */
+  savedFrom?: { conversationId: string; agentId: string | null; title: string | null; site: string | null; at: string };
 }
+
+/** One field typed on a sign-in card. The value goes to the secrets API only, never into a chat message. */
+export interface SecretSetField { label: string; kind: 'username' | 'password' | 'totp' | 'other'; value: string }
+/** What saving a set answers: names, whether buddi filled the page, the thread's line. Never a value. */
+export interface SecretSetSaved { saved: string[]; filled?: boolean; stamp?: string }
 
 /** A sign-in the owner just made on a page they hold, waiting for Save, Not now or Never. Never the password. */
 export interface LoginSeen { id: string; site: string; username: string; /** A login kept for this site and user name already: Save replaces its value. */ update?: boolean }
@@ -3067,6 +3074,14 @@ export const api = {
    * carries the error, which `post` turns into an ApiError.
    */
   secretsAct: (tool: SecretWriteTool, args: Record<string, unknown>) => post<{ result: unknown }>('/secrets/act', { tool, args }),
+  /**
+   * A set of secrets for one site, saved in one call (docs/owner-secrets.md §6).
+   * With `questionId` it answers an agent's sign-in card: `fill` (Save and fill)
+   * or `save` (Save only). A locked vault is a 409 whose detail says `locked` (423 is the dashboard lock).
+   */
+  saveSecretSet: (body: { fields: SecretSetField[]; site?: string; questionId?: string; then?: 'fill' | 'save' }) => post<SecretSetSaved>('/secrets', body),
+  /** Answer a sign-in card without saving: "I'll sign in myself" hands the page over. */
+  declineSecretRequest: (questionId: string, reason: 'sign-in-myself' | 'cancelled') => post<{ declined: string; stamp: string }>('/secrets/request/decline', { questionId, reason }),
   stopHost: (agentId: string, conversationId: string) => post<{ stopped: number }>('/host/stop', { agentId, conversationId }),
   revokeHost: (id: string) => post<{ revoked: boolean }>('/host/revoke', { id }),
   decide: (

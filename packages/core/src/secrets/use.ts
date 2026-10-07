@@ -28,8 +28,8 @@ import type { ActionRecord } from '../actions/types.js';
 import type { BuddiHost, SecretUseResult } from '../host/types.js';
 import { ownerSecretVaultName, type Vault } from '../vault/types.js';
 import { isAccountKind, secretDestination, stricterRule } from './destinations.js';
-import { findSecret, secretBindings, type SecretBindingRow } from './store.js';
-import { describeSecretUse, SECRETS_TOOL, SECRETS_TOOL_VERSION } from './approval.js';
+import { findSecret, secretBindings, secretSetSiblings, type SecretBindingRow } from './store.js';
+import { describeSecretSetUse, describeSecretUse, SECRETS_SET_TOOL, SECRETS_TOOL, SECRETS_TOOL_VERSION, type SecretSetApproval } from './approval.js';
 import { TOTP_STEP_SECONDS, currentTotp, totpCounter } from './totp.js';
 import { scrubText } from './scrub.js';
 
@@ -160,7 +160,12 @@ export async function useOwnerSecret(deps: UseSecretDeps, req: UseSecretRequest)
       } else if (decided !== null && decided.state === 'pending') {
         return { pending: decided.id };
       } else {
-        return ask();
+        // A secret saved with others on one card (a username and its
+        // password): one card for the set, asked once, never one per field.
+        const setPending = await pendingSetApproval(pool, binding.id, deps.now());
+        if (setPending !== null) return { pending: setPending };
+        const set = await askForSet();
+        return set ?? ask();
       }
     }
     if (rule === 'every-time') {
@@ -219,6 +224,51 @@ export async function useOwnerSecret(deps: UseSecretDeps, req: UseSecretRequest)
   }
   return { done: true, use: useId };
 
+  /**
+   * The set's card, when this secret was saved with others and at least one
+   * of them is also waiting for its first approval on this site. Null when
+   * there is no set to ask about: the single card is asked instead.
+   */
+  async function askForSet(): Promise<SecretUseResult | null> {
+    const siblings = await secretSetSiblings(pool, secret!.id);
+    if (siblings.length < 2) return null;
+    const items: SecretSetApproval['items'] = [];
+    for (const sibling of siblings) {
+      for (const candidate of sibling.bindings) {
+        if (candidate.kind !== req.kind || candidate.firstApprovedAt !== null) continue;
+        if (stricterRule(candidate.rule, destination!.maxRule) !== 'first-time') continue;
+        let ok = false;
+        try {
+          ok = (await destination!.checkTarget(target, candidate.target, deps.buddi)) === true;
+        } catch {
+          ok = false;
+        }
+        if (!ok) continue;
+        items.push({ bindingId: candidate.id, secret: sibling.secret.name, kind: candidate.kind });
+        break;
+      }
+    }
+    if (items.length < 2 || !items.some((item) => item.bindingId === binding!.id)) return null;
+    const { rows } = await pool.query(`select site from core.secrets where id = $1`, [secret!.id]);
+    const site = (rows[0]?.site as string | null | undefined) ?? destination!.describe(target);
+    const args: SecretSetApproval = { site, plugin, items };
+    const card = describeSecretSetUse(args);
+    const action = await createAction(pool, {
+      tool: SECRETS_SET_TOOL,
+      toolVersion: SECRETS_TOOL_VERSION,
+      agentId: deps.agentId ?? plugin,
+      conversationId,
+      canonicalArgs: args,
+      envelope: card.envelope,
+      preview: card.preview,
+      tier: 'gated',
+      now: deps.now(),
+    });
+    await record({ secretId: secret!.id, outcome: 'pending', actionId: action.id });
+    if (deps.askApproval !== undefined) await deps.askApproval(action).catch(() => {});
+    return { pending: action.id };
+  }
+
   async function ask(): Promise<SecretUseResult> {
     const args = { bindingId: binding!.id, secret: req.name, kind: req.kind, target, plugin, rule: rule as 'every-time' | 'first-time' };
     const card = describeSecretUse(args);
@@ -268,4 +318,16 @@ async function latestApproval(
   );
   const row = rows[0] as { id: string; state: string; consumed: boolean } | undefined;
   return row === undefined ? null : { id: String(row.id), state: String(row.state), consumed: row.consumed === true };
+}
+
+/** A set's card still waiting that covers this binding, by action id; null when there is none. */
+async function pendingSetApproval(pool: Pool, bindingId: string, now: Date): Promise<string | null> {
+  const { rows } = await pool.query(
+    `select a.id from core.actions a join core.approvals ap on ap.action_id = a.id
+      where a.tool = $1 and ap.state = 'pending' and a.expires_at > $3
+        and exists (select 1 from jsonb_array_elements(a.canonical_args->'items') item where item->>'bindingId' = $2)
+      order by a.created_at desc limit 1`,
+    [SECRETS_SET_TOOL, bindingId, now],
+  );
+  return rows[0] ? String(rows[0].id) : null;
 }

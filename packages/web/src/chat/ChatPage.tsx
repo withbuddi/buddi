@@ -34,6 +34,7 @@ import { HostControls } from '../views/HostControls';
 import { ErrorBanner, Notice } from '../ui';
 import { BROWSER_TOOLS, conversationBrowser, endedBrowser, pausedBrowser, stepFor } from './browser';
 import { BrowserAsk, browserCardOf } from './BrowserAsk';
+import { SecretRequestDock, secretRequestOf } from './SecretRequest';
 import { WEB_SOURCE_TOOLS } from './sources';
 import { OWN_TOOL_TITLES, QUIET_TOOLS } from './own-tools';
 import { ConversationHistory } from './ConversationHistory';
@@ -566,6 +567,8 @@ export function ChatPage({
    * reason the Page tab shows the pause with no page open.
    */
   const browserCard = browserCardOf(conversation?.question);
+  /* An agent's `secret.request`: its own card, with the composer still under it as the kit draws it. */
+  const signInCard = secretRequestOf(conversation?.question);
   const pausedTab = liveBrowser ? null : pausedBrowser(browserStatus, conversationId ?? null, browserCard?.kind === 'paused');
   const browserTab = liveBrowser ?? pausedTab ?? keptBrowserTab;
   /*
@@ -1432,6 +1435,7 @@ export function ChatPage({
         ) : null}
 
         <MessageList
+          timezone={timezone}
           mediaTools={mediaTools}
           messages={[...(conversation?.messages ?? []), ...optimistic]}
           live={live}
@@ -1510,7 +1514,22 @@ export function ChatPage({
           * answerable from the chat, whatever else waits. Both stand in the
           * composer's place.
           */}
-        {blocked ? null : conversation?.question && browserCard ? (
+        {blocked ? null : conversation?.question && signInCard ? (
+          /* An agent's sign-in card: the fields as inputs, posted to the secrets API and never into the thread. */
+          <SecretRequestDock
+            key={conversation.question.id}
+            question={conversation.question}
+            card={signInCard}
+            phone={narrow}
+            container={columnRef.current}
+            page={ownStatus}
+            disabled={running}
+            onSettled={() => {
+              if (conversationId) void refresh(conversationId);
+              browser.reload();
+            }}
+          />
+        ) : conversation?.question && browserCard ? (
           <BrowserAsk
             key={conversation.question.id}
             card={browserCard}
@@ -1536,6 +1555,11 @@ export function ChatPage({
             onDecided={onDecided}
             onSay={(text) => send(text, [])}
             onOpenFull={(toolUseId) => { setActiveTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
+            phone={narrow}
+            onSignInMyself={() => {
+              const sessionId = ownStatus?.session?.id;
+              if (sessionId) void api.browserControl('takeover', sessionId).catch(() => undefined).finally(browser.reload);
+            }}
           />
         ) : null}
         {blocked || roomBlocked ? null : (
@@ -1544,7 +1568,7 @@ export function ChatPage({
            * its place: the half-written line and its files are exactly where
            * the owner left them when it comes back.
            */
-          <div hidden={docked.length > 0 || Boolean(conversation?.question)} data-testid="composer-slot">
+          <div hidden={docked.length > 0 || (Boolean(conversation?.question) && !signInCard)} data-testid="composer-slot">
           {!group && reference ? <section className="wb-chat-reference" aria-label="Story reference">
             <div className="wb-chat-reference-head">
               <div><small>Asking about</small><p><strong>{reference.title}</strong></p></div>

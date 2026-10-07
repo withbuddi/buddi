@@ -183,7 +183,9 @@ describe('secret.fill', () => {
   it('refuses a secret the browser destinations have never heard of, before any card', async () => {
     const unknown = await setup({ listing: [] });
     const error = await unknown.service.secretFill({ name: 'Other secret', ref: 'e7', observation: 'o1' }, ctx(unknown.secrets) as never).catch((e: unknown) => e);
-    expect(JSON.parse((error as Error).message)).toMatchObject({ dispatched: false, error: expect.stringContaining('There is no secret named "Other secret"') });
+    expect(JSON.parse((error as Error).message)).toMatchObject({ dispatched: false, error: expect.stringContaining('There is no saved secret named "Other secret"') });
+    // It leads to the card, never to a question in chat about where the secret is.
+    expect(JSON.parse((error as Error).message).error).toContain('call secret.request');
     expect(unknown.calls).toEqual([]);
   });
 

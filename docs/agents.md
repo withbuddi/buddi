@@ -62,7 +62,9 @@ cart, a statement): an agent with `browser.act` reads `browser.status` and
 looks, with your approval for the session. In your own browser ("Your
 browser" mode) you are usually signed in already; in buddi's own browser it
 signs in with a login you stored in Settings → Keys and secrets (`secret.list`,
-then `secret.fill`, which keeps its own approval rules), and when a code or a
+then `secret.fill`, which keeps its own approval rules) or, with none stored
+for the site, asks you for one with a card in the chat where you type it
+(`secret.request`, which comes with `secret.fill`), and when a code or a
 challenge appears that no stored TOTP secret answers, it asks you to press
 Take over and carries on after. A question that belongs to a colleague it can
 delegate to is handed over and the answer relayed, rather than sending you to

@@ -420,13 +420,31 @@ export function whereLine(secret: SecretListingView): string {
     return host ? `Sign-in token · sent only to ${host}` : connection ? 'Sign-in for this connection' : 'No connection uses it';
   }
   if (secret.bindings.length === 0) return '';
-  const places = secret.bindings.map((b) => placeWords(b.kind, b.target));
+  // Saved on a sign-in card for one site: its page, the site and every host under it read as that one site.
+  const site = oneSite(secret);
+  const places = site ? [`Filled on ${site}`] : secret.bindings.map((b) => placeWords(b.kind, b.target));
   let line = places.length <= 2 ? places.join(' · ') : `${places[0]} and ${places.length - 1} more places`;
   const rules = new Set(secret.bindings.map((b) => (b.rule === 'first-time' && b.firstApprovedAt !== null ? 'pre-approved' : b.rule)));
   if (rules.size === 1 && rules.has('every-time')) line += ' · asks you every time';
   if (rules.size === 1 && rules.has('first-time')) line += ' · asks you the first time';
   if (secret.totp) line += ' · a fresh code each time';
   return line;
+}
+
+/**
+ * The site a secret saved on a sign-in card goes to, when every place it may
+ * go is a page of that site (`https://wikipedia.org`, `https://*.wikipedia.org`,
+ * `https://en.wikipedia.org`). Null otherwise.
+ */
+function oneSite(secret: SecretListingView): string | null {
+  const site = secret.savedFrom?.site;
+  if (!site) return null;
+  const under = (target: unknown): boolean => {
+    if (typeof target !== 'string') return false;
+    const host = target.replace(/^https?:\/\//, '').replace(/:\d+$/, '').replace(/^\*\./, '').replace(/^www\./, '');
+    return host === site || host.endsWith(`.${site}`);
+  };
+  return secret.bindings.every((b) => b.kind === 'browser.field' && under(b.target)) ? site : null;
 }
 
 /** "Last used 5 minutes ago" or "Never used". */

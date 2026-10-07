@@ -22,9 +22,9 @@ import type { ToolDefinition, CoreToolContext } from '../tools.js';
 import { OWNER_AGENT_ID, type PageQuery } from '../pages.js';
 import { pluginHostVault } from '../host/build.js';
 import { KNOWN_SECRETS } from '../vault/resolve.js';
-import { ownerSecretVaultName, type Vault } from '../vault/types.js';
+import { ownerSecretVaultName, VaultLockedError, type Vault } from '../vault/types.js';
 import { isSecretRule, secretDestinations } from './destinations.js';
-import { assertBindings, deleteOwnerSecret, findSecret, listOwnerSecrets, putOwnerSecret, rebindOwnerSecret, renameOwnerSecret } from './store.js';
+import { assertBindings, deleteOwnerSecret, findSecret, listOwnerSecrets, putOwnerSecret, putOwnerSecretSet, rebindOwnerSecret, renameOwnerSecret } from './store.js';
 import type { SecretBinding } from '../host/types.js';
 import { scanTextsForValue, scrubValueFrom } from './scrub.js';
 
@@ -143,19 +143,36 @@ const list: PageQuery = {
      * recorded with — a refusal's reason, a failed delivery's scrubbed error.
      */
     const { rows: facts } = await ctx.db.query(
-      `select s.name, s.id::text as id,
+      `select s.name, s.id::text as id, s.created_at, s.site,
+              s.conversation_id::text as conversation_id, c.agent_id as conversation_agent,
+              (select left(m.content->0->>'text', 120) from core.messages m
+                where m.conversation_id = s.conversation_id and m.role = 'user'
+                order by m.created_at, m.id limit 1) as conversation_title,
               (select u.detail from core.secret_uses u where u.secret_id = s.id order by u.at desc, u.id desc limit 1) as detail
-         from core.secrets s`,
+         from core.secrets s
+         left join core.conversations c on c.id = s.conversation_id`,
     );
     const held = names === null ? null : new Set(names);
-    const byName = new Map(facts.map((row: { name: string; id: string; detail: string | null }) => [row.name, row]));
+    type Fact = { name: string; id: string; detail: string | null; created_at: Date | string; site: string | null; conversation_id: string | null; conversation_agent: string | null; conversation_title: string | null };
+    const byName = new Map(facts.map((row: Fact) => [row.name, row]));
     const secrets = listed.map((secret) => {
       const fact = byName.get(secret.name);
       const hasValue = held === null || fact === undefined ? null : held.has(`owner-secret:${fact.id.toLowerCase()}`);
+      // Saved on an agent's card in a conversation (docs/owner-secrets.md §6): where it came from, so the row links back.
+      const savedFrom = fact?.conversation_id
+        ? {
+            conversationId: fact.conversation_id,
+            agentId: fact.conversation_agent ?? null,
+            title: fact.conversation_title ?? null,
+            site: fact.site ?? null,
+            at: fact.created_at instanceof Date ? fact.created_at.toISOString() : String(fact.created_at),
+          }
+        : null;
       return {
         ...secret,
         hasValue,
         lastUse: secret.lastUse === null ? null : { ...secret.lastUse, detail: fact?.detail ?? null },
+        ...(savedFrom ? { savedFrom } : {}),
       };
     });
     return listResult.parse({ secrets, destinations, ownKeys: [...new Set([...ownKeys, ...KNOWN_SECRETS])].sort() });
@@ -238,6 +255,48 @@ const put = {
   },
 } satisfies ToolDefinition<z.infer<typeof putInput>, unknown>;
 
+const putSetInput = z.object({
+  site: z.string().min(1).max(253),
+  conversationId: z.string().uuid().optional(),
+  items: z.array(z.object({
+    name: z.string().min(1).max(200),
+    value: z.string().min(1).max(16_384),
+    totp: z.boolean().optional(),
+    bindings: z.array(bindingInput).min(1).max(20),
+  }).strict()).min(1).max(12),
+}).strict();
+
+/** The sentence a locked vault is answered with: the card says it inline, and nothing was saved. */
+export const VAULT_LOCKED_SAVE = 'Nothing was saved: the vault is locked.';
+
+/**
+ * Store several secrets the owner typed together on an agent's sign-in card
+ * (docs/owner-secrets.md §6, "Saved from a conversation"): all or none, each
+ * tagged with the set, the site and the conversation. Answers the names only.
+ */
+const putSet = {
+  name: 'secrets.put_set',
+  description: "Store a set of the owner's secrets saved together for one site, with their bindings. Owner only; no model sees this tool.",
+  tier: 'auto',
+  ownerOnly: true,
+  input: putSetInput,
+  async execute(input, ctx: CoreToolContext) {
+    asOwner(ctx);
+    let saved;
+    try {
+      saved = await putOwnerSecretSet(ctx.db, vaultOf(), {
+        site: input.site,
+        conversationId: input.conversationId ?? null,
+        items: input.items.map((item) => ({ name: item.name, value: item.value, totp: item.totp === true, bindings: item.bindings as SecretBinding[] })),
+      });
+    } catch (err) {
+      if (err instanceof VaultLockedError || (err as { code?: unknown } | null)?.code === 'vault-locked') throw new Error(VAULT_LOCKED_SAVE);
+      throw err;
+    }
+    return { setId: saved.setId, names: saved.secrets.map((secret) => secret.name) };
+  },
+} satisfies ToolDefinition<z.infer<typeof putSetInput>, unknown>;
+
 const renameInput = z.object({ name: z.string().min(1).max(200), to: z.string().min(1).max(200) }).strict();
 
 const rename = {
@@ -315,9 +374,9 @@ const scrubHistory = {
   },
 } satisfies ToolDefinition<z.infer<typeof scrubInput>, unknown>;
 
-export const secretsSettingsTools = [put, rename, rebind, remove, scrubHistory];
+export const secretsSettingsTools = [put, putSet, rename, rebind, remove, scrubHistory];
 /** The manifest's page queries, as the registry's contributions machinery takes them. */
 export const SECRETS_QUERIES: PageQuery[] = [list, uses];
 
 /** The ownerOnly writes, as the registry takes them beside the use tool. */
-export const SECRETS_SETTINGS_TOOLS = [put, rename, rebind, remove, scrubHistory];
+export const SECRETS_SETTINGS_TOOLS = [put, putSet, rename, rebind, remove, scrubHistory];

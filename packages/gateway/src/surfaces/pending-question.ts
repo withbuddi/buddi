@@ -48,6 +48,7 @@ import {
   MAX_QUESTION_OPTIONS,
   type PluginManifest,
   type QuestionOption,
+  type SecretRequestCard,
   type ToolDefinition,
 } from '@buddi/core';
 import { z } from 'zod';
@@ -74,6 +75,8 @@ export interface AskSink {
     question: string;
     options: Array<Omit<QuestionOption, 'id'>>;
     allowOther: boolean;
+    /** An agent's `secret.request` card (secret-request.ts): the site and the labels, never a value. */
+    request?: SecretRequestCard;
   };
 }
 

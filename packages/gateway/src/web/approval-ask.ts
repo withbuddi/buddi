@@ -11,7 +11,7 @@
  * plain line naming the plugin.
  */
 
-import { RUNTIMES_TOOL, SECRETS_TOOL } from '@buddi/core';
+import { RUNTIMES_TOOL, SECRETS_SET_TOOL, SECRETS_TOOL } from '@buddi/core';
 import { USE_CHROME_ANSWERS, USE_CHROME_TOOL } from '../missions/chrome-scope.js';
 
 /** A card's two answers when they are not Approve and Reject. */
@@ -37,7 +37,7 @@ export function approvalAnswers(tool: string): ApprovalAnswers | undefined {
  * notification and Telegram head with that line, never "needs your approval
  * to run runtimes.download". Core's tool names only.
  */
-const OWN_WORDS: ReadonlySet<string> = new Set([USE_CHROME_TOOL, RUNTIMES_TOOL, SECRETS_TOOL]);
+const OWN_WORDS: ReadonlySet<string> = new Set([USE_CHROME_TOOL, RUNTIMES_TOOL, SECRETS_TOOL, SECRETS_SET_TOOL]);
 
 /** Whether this card's heading is its own ask (`approvalAsk`) rather than the tool's name. */
 export function asksInOwnWords(tool: string): boolean {

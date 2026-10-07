@@ -687,6 +687,8 @@ fieldset:disabled { opacity: 0.6; }
 }
 @keyframes ui-sheet-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .ui-sheet[data-size='wide'] { width: min(760px, 100%); }
+/* Contained: inside its positioned parent (the chat column), not over the whole screen. */
+.ui-sheet[data-contained='true'], .ui-sheet-overlay[data-contained='true'] { position: absolute; }
 .ui-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 /* The sheet's actions, held at its bottom behind a hairline. */
 .ui-sheet-foot { margin-top: auto; padding-top: var(--space-4); border-top: 1px solid var(--line); }

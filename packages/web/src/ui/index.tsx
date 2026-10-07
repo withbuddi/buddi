@@ -741,6 +741,7 @@ export function Sheet({
   size,
   foot,
   scrollBody,
+  container,
   children,
 }: {
   title: ReactNode;
@@ -749,13 +750,28 @@ export function Sheet({
   scrollBody?: boolean;
   /** The sheet's last row, held at its bottom behind a hairline: its actions. */
   foot?: ReactNode;
+  /**
+   * Draw the sheet inside this element instead of over the whole screen (the
+   * kit's `contained`): over the chat column, with the canvas beside it still
+   * in view and still usable. The element is the positioned parent.
+   */
+  container?: HTMLElement | null;
   children: ReactNode;
 }): JSX.Element {
+  const contained = container ? 'true' : undefined;
   return (
-    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="ui-sheet-overlay" />
-        <Dialog.Content className="ui-sheet" data-size={size} data-scroll-body={scrollBody || undefined} aria-describedby={undefined}>
+    <Dialog.Root open modal={!container} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <Dialog.Portal {...(container ? { container } : {})}>
+        {container ? <div className="ui-sheet-overlay" data-contained={contained} onClick={onClose} aria-hidden="true" /> : <Dialog.Overlay className="ui-sheet-overlay" />}
+        <Dialog.Content
+          className="ui-sheet"
+          data-size={size}
+          data-contained={contained}
+          data-scroll-body={scrollBody || undefined}
+          aria-describedby={undefined}
+          // Contained, the page beside it stays the owner's to look at and use: a click there does not close it.
+          {...(container ? { onInteractOutside: (event: Event) => event.preventDefault() } : {})}
+        >
           <div className="ui-sheet-head">
             <Dialog.Title className="ui-sheet-title">{title}</Dialog.Title>
             <Dialog.Close asChild>

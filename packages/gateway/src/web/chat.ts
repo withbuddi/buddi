@@ -128,6 +128,7 @@ import {
 } from '../surfaces/pending-question.js';
 import { failedTurnReply } from '../surfaces/failure.js';
 import { askInto, touchBrowser } from '../surfaces/browser-cards.js';
+import { createSecretRequestManifest, grantsSecretRequest, outcomeStamp, outcomeTurnText, SECRET_REQUEST_TOOLS, stampTurnSpeaker } from '../surfaces/secret-request.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
 import { transcriptBudget } from '../surfaces/context-budget.js';
 import {
@@ -913,6 +914,8 @@ function safeParse(text: string): unknown {
 interface TranscriptApproval { id: string; tool: string; state: string; outcome: unknown }
 /** The approval an owner secret's use raises (core's `SECRETS_TOOL`). */
 const SECRET_USE_TOOL = 'secrets.use';
+/** The one card for a set of secrets saved together (core's `SECRETS_SET_TOOL`). */
+const SECRET_SET_TOOL = 'secrets.use_set';
 
 function toChatBlock(
   block: Record<string, any>,
@@ -972,7 +975,7 @@ function toChatBlock(
         name: toolNames.get(toolUseId) ?? '',
         ok,
         output,
-        ...(use && use.tool === SECRET_USE_TOOL ? { approval: { id: use.id, state: use.state } } : {}),
+        ...(use && (use.tool === SECRET_USE_TOOL || use.tool === SECRET_SET_TOOL) ? { approval: { id: use.id, state: use.state } } : {}),
         ...(ok ? {} : { error: typeof content === 'string' ? content : JSON.stringify(content ?? null) }),
       };
     }
@@ -1193,7 +1196,7 @@ interface RunTurn {
    * The chip the owner clicked, when this turn is a taken offer. `brief`:
    * the text is an agent-only brief (Alerts' Ask) that readers never return.
    */
-  offer?: { id: string; label: string; brief?: boolean };
+  offer?: { id: string; label: string; brief?: boolean; stamp?: boolean };
   /**
    * The owner's words are already a row in `core.messages`: they were typed
    * during the previous run, stored at once, and never picked up by it. The
@@ -1329,7 +1332,7 @@ export interface SendRequest {
    * take route sets it, from a row it has just claimed; nothing a browser posts
    * reaches this field.
    */
-  offer?: { id: string; label: string; brief?: boolean } | undefined;
+  offer?: { id: string; label: string; brief?: boolean; stamp?: boolean } | undefined;
   /**
    * The MCP client this turn came through (`buddi.ask`), by the name it gave
    * in its handshake. Recorded as an `mcp.ask` event on the conversation, so
@@ -1580,6 +1583,18 @@ export class WebChat {
       const status = settled.reason === 'unknown' ? 404 : 409;
       return { ok: false, status, error: 'That question is no longer waiting for an answer.' };
     }
+    // A sign-in card answered by a plain tap (its Decline) is the card turned
+    // down: the agent hears the card's own outcome, never the word.
+    if (settled.question.request?.kind === 'secret.request') {
+      const outcome = { declined: 'cancelled' as const };
+      const runId = await this.continueWithStamp({
+        conversationId: settled.question.conversationId,
+        agentId: settled.question.agentId,
+        text: outcomeTurnText(outcome),
+        stamp: outcomeStamp(outcome, settled.question.request.site, []),
+      });
+      return runId ? { ok: true, conversationId: settled.question.conversationId, runId } : { ok: false, status: 409, error: 'That agent is no longer here.' };
+    }
     // What was recorded is what the agent reads: the option's label, the
     // owner's own words, or the skipped sentence.
     const text = settled.question.answer ?? input.answer;
@@ -1645,6 +1660,26 @@ export class WebChat {
     const runId = randomUUID();
     this.#enqueue(conversationId, async () => {
       await this.#run({ agent, conversationId, runId, text: GIVE_BACK_TURN, files: [], offer: { id: 'browser-give-back', label: GIVE_BACK_LABEL } });
+    });
+    return runId;
+  }
+
+  /**
+   * A `secret.request` card was decided on the dashboard (web/secret-request.ts):
+   * the agent that asked carries on with the outcome as its turn, and the
+   * thread shows the one quiet line `stamp` says instead of the words behind
+   * it. No value is in either. Returns the run id, or null when the agent is
+   * gone or the conversation is a room's.
+   */
+  async continueWithStamp(input: { conversationId: string; agentId: string; text: string; stamp: string }): Promise<string | null> {
+    const { conversationId } = input;
+    if (await conversationGroup(this.#deps.pool, conversationId).catch(() => null)) return null;
+    const agent = this.#resolve(input.agentId);
+    if (!agent) return null;
+    await this.#event(conversationId, QUESTION_CLEARED, { agentId: agent.id });
+    const runId = randomUUID();
+    this.#enqueue(conversationId, async () => {
+      await this.#run({ agent, conversationId, runId, text: input.text, files: [], offer: { id: 'secret-request', label: input.stamp, brief: true, stamp: true } });
     });
     return runId;
   }
@@ -2287,6 +2322,16 @@ export class WebChat {
     await withdrawTurnOffers(deps.pool, conversationId, deps.now(), this.#log);
 
     const base = agent.definition(deps.now(), deps.timezone);
+    // An agent that may fill the owner's secrets may also ask for one it does
+    // not have: one card in the chat, never a password in a message.
+    const asksForSecrets = !turn.delegated && !room && !turn.opening && grantsSecretRequest(base.tools);
+    if (asksForSecrets) {
+      registry.register(createSecretRequestManifest(ask, {
+        pool: deps.pool,
+        browser: deps.browser,
+        agentName: (id) => this.#deps.catalog.get(id)?.name,
+      }));
+    }
     // A decided approval is the owner acting in this conversation, so the run
     // it wakes carries an owner request of its own — otherwise a `session`
     // tool the agent used a moment ago fails the instant it is resumed. A
@@ -2327,6 +2372,7 @@ export class WebChat {
           ...OFFER_TOOLS,
           ...(handsOff ? HANDOFF_TOOLS : []),
           ...(turn.opening ? [] : ASK_TOOLS),
+          ...(asksForSecrets ? SECRET_REQUEST_TOOLS : []),
           ...(room?.askTool ? [GROUP_ASK_TOOL] : []),
         ],
       },
@@ -2353,7 +2399,7 @@ export class WebChat {
         // A taken chip is the owner's turn, stamped with the label they clicked
         // so the thread shows "Send it" instead of the sentence behind it.
         : turn.offer
-          ? { openingSpeaker: turn.offer.brief ? briefTurnSpeaker(turn.offer.label) : offerTurnSpeaker(turn.offer.label) }
+          ? { openingSpeaker: turn.offer.stamp ? stampTurnSpeaker(turn.offer.label) : turn.offer.brief ? briefTurnSpeaker(turn.offer.label) : offerTurnSpeaker(turn.offer.label) }
           : {}),
       systemSuffix: delegated ? systemSuffix : [OFFER_POLICY_SUFFIX, ...(handsOff ? [HANDOFF_POLICY_SUFFIX] : []), ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
         '\n\n',
@@ -2462,6 +2508,7 @@ export class WebChat {
         question: ask.asked.question,
         options: ask.asked.options,
         allowOther: ask.asked.allowOther,
+        ...(ask.asked.request ? { request: ask.asked.request } : {}),
         now: deps.now(),
       }).catch((err) => {
         this.#log(`web chat: storing question failed: ${message(err)}`);

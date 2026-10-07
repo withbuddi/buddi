@@ -100,6 +100,20 @@ budget and the agent's next action returns the page as you left it. A stored
 login is used before any card: the agent is pointed at `secret.list` and
 `secret.fill`, and a TOTP secret answers a code.
 
+**No saved sign-in for the site.** When `secret.list` has nothing for the page,
+or `secret.fill` answers that nothing is saved there, the refusal tells the
+agent to call `secret.request` with the form's fields (label, kind, ref) instead
+of asking you in chat where the password is. That raises one card in the chat,
+*No saved sign-in for wikipedia.org*, with the fields as inputs: **Save and
+fill** saves them for that site and fills the form at once (one approval for
+the set, which the press is), **Save only** saves them and hands you the page,
+**I'll sign in myself** hands you the page as Take over does, and **More
+options** opens the sheet with a code field and more fields. Once filled, the
+thread shows "Filled username and password on wikipedia.org" and the Page tab
+the form with the password masked. The agent never sees a value: it is told
+the names saved and whether the form was filled. The whole flow is in
+[owner-secrets.md](owner-secrets.md) §6, "Saved from a conversation".
+
 ## Missions: browsing while you are away
 
 A mission may look at pages unattended **in buddi's own browser**, never your

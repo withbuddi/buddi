@@ -221,10 +221,16 @@ export function briefTurnSpeaker(label: string): string {
 
 /** The label behind a brief turn's stamp, or null for any other turn. */
 export function briefTurnLabel(speaker: string | null | undefined): string | null {
-  if (typeof speaker !== 'string' || !speaker.startsWith(BRIEF_TURN_SPEAKER_PREFIX)) return null;
-  const label = speaker.slice(BRIEF_TURN_SPEAKER_PREFIX.length).trim();
+  if (typeof speaker !== 'string') return null;
+  // A thread stamp (`stamp:`, secret-request.ts) is a brief too: its words are the agent's, its line the owner's.
+  const prefix = speaker.startsWith(BRIEF_TURN_SPEAKER_PREFIX) ? BRIEF_TURN_SPEAKER_PREFIX : speaker.startsWith(STAMP_PREFIX) ? STAMP_PREFIX : null;
+  if (prefix === null) return null;
+  const label = speaker.slice(prefix.length).trim();
   return label === '' ? null : label;
 }
+
+/** `secret-request.ts`'s `STAMP_TURN_SPEAKER_PREFIX`, kept here so this module imports nothing of it. */
+const STAMP_PREFIX = 'stamp:';
 
 /**
  * What a reader may show of a stored turn: its blocks, except a brief turn's,

@@ -19,6 +19,12 @@ import { SECRETS_QUERIES, SECRETS_SETTINGS_TOOLS } from './settings.js';
 export const SECRETS_PLUGIN = 'secrets';
 export const SECRETS_TOOL = 'secrets.use';
 export const SECRETS_TOOL_VERSION = '1.0.0';
+/**
+ * The approval for a set saved together (a sign-in's username and password):
+ * one card for the whole set, the first time its secrets are filled on their
+ * site. Approving records the first approval of every binding in it.
+ */
+export const SECRETS_SET_TOOL = 'secrets.use_set';
 
 const input = z
   .object({
@@ -83,6 +89,67 @@ const useTool: ToolDefinition<SecretUseApproval, unknown> = {
   },
 };
 
+const setInput = z
+  .object({
+    site: z.string().min(1).max(253),
+    plugin: z.string(),
+    items: z.array(z.object({
+      bindingId: z.string().uuid(),
+      /** Its other bindings on the same site (the page, the site, `*.` the site): approved with it. */
+      alsoBindingIds: z.array(z.string().uuid()).max(20).optional(),
+      secret: z.string(),
+      kind: z.string(),
+      /** The page field it goes into, as the agent's card named it ("Username"). */
+      field: z.string().max(80).optional(),
+    }).strict()).min(1).max(12),
+  })
+  .strict();
+
+export type SecretSetApproval = z.infer<typeof setInput>;
+
+/** "Wikipedia username and Wikipedia password" — the names, quoted, as one phrase. */
+function namesPhrase(names: readonly string[]): string {
+  const quoted = names.map((name) => `"${name}"`);
+  return quoted.length < 3 ? quoted.join(' and ') : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+}
+
+/** The set's card: which secrets, into which fields, on which site. */
+export function describeSecretSetUse(args: SecretSetApproval): EffectDescription {
+  return {
+    envelope: {
+      site: args.site,
+      plugin: args.plugin,
+      secrets: args.items.map((item) => ({ secret: item.secret, kind: item.kind, ...(item.field ? { field: item.field } : {}) })),
+      rule: 'first-time',
+    },
+    preview:
+      `${args.plugin} asks to fill your saved sign-in for ${args.site}: ${namesPhrase(args.items.map((item) => item.secret))}.\n` +
+      'Approve once, and later uses of them there go ahead without asking.',
+  };
+}
+
+const useSetTool: ToolDefinition<SecretSetApproval, unknown> = {
+  name: SECRETS_SET_TOOL,
+  description: "Record the owner's approval to fill a set of their secrets saved together on one site. Runs only from an approved action.",
+  tier: 'gated',
+  ownerOnly: true,
+  input: setInput,
+  describe: (args) => describeSecretSetUse(args),
+  async execute(args, ctx: CoreToolContext) {
+    for (const item of args.items) {
+      await ctx.db.query(
+        `update core.secret_bindings set first_approved_at = coalesce(first_approved_at, $2) where id = any($1::uuid[])`,
+        [[item.bindingId, ...(item.alsoBindingIds ?? [])], ctx.now()],
+      );
+    }
+    return {
+      approved: true,
+      secrets: args.items.map((item) => item.secret),
+      note: `Approved: ${args.plugin} may fill ${namesPhrase(args.items.map((item) => item.secret))} on ${args.site} from now on.`,
+    };
+  },
+};
+
 /** Core's own manifest for the approval tool and the Keys and secrets page. Registered by the gateway beside the other core families. */
 export function createSecretsManifest(): PluginManifest {
   return {
@@ -90,7 +157,7 @@ export function createSecretsManifest(): PluginManifest {
     version: SECRETS_TOOL_VERSION,
     schema: 'core',
     migrationsDir: '',
-    tools: [useTool, ...SECRETS_SETTINGS_TOOLS],
+    tools: [useTool, useSetTool, ...SECRETS_SETTINGS_TOOLS],
     queries: SECRETS_QUERIES,
   } as PluginManifest;
 }

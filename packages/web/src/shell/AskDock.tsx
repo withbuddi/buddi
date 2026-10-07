@@ -25,6 +25,7 @@ import { ApiError, api, chatApi } from '../api';
 import { ApprovalDock } from '../chat/ApprovalDock';
 import { QuestionPicker } from '../chat/QuestionPicker';
 import { BrowserAsk, browserCardOf } from '../chat/BrowserAsk';
+import { SecretRequestDock, secretRequestOf } from '../chat/SecretRequest';
 import { OfferButtons, pendingApprovals, useThreadActions } from '../chat/thread-actions';
 import { speakReply } from '../chat/ChatPage';
 import { Composer, type ComposerDraft, type ComposerHandle } from '../chat/Composer';
@@ -480,6 +481,9 @@ function DockThread({
             onSay={(text) => send(text, [])}
             onOpenFull={() => navigate(route)}
           />
+        ) : question && secretRequestOf(question) ? (
+          // An agent's sign-in card: the same card as the chat's, its sheet over the whole screen.
+          <SecretRequestDock key={question.id} question={question} card={secretRequestOf(question)!} phone container={null} disabled={running} onSettled={() => { if (conversationId) void refresh(conversationId); }} />
         ) : question && browserCardOf(question) ? (
           <BrowserAsk key={question.id} card={browserCardOf(question)!} disabled={answeringQuestion || running} onAnswer={answerQuestion} />
         ) : question ? (
@@ -491,7 +495,7 @@ function DockThread({
             onSkip={skipQuestion}
           />
         ) : null}
-        <div hidden={approvals.length > 0 || question !== null} data-testid="composer-slot">
+        <div hidden={approvals.length > 0 || (question !== null && !secretRequestOf(question))} data-testid="composer-slot">
         <Composer
           ref={composer}
           disabled={sending || !agent.available}

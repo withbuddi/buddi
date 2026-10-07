@@ -36,7 +36,7 @@ const reply = (status: number, body: unknown): RouteReply => ({ status, body });
 
 /** Writes from one session: the act route's own budget, reused here. */
 const lastWrite = new Map<string, number>();
-function writeRateLimited(session: string, at: number): boolean {
+export function writeRateLimited(session: string, at: number): boolean {
   const last = lastWrite.get(session) ?? 0;
   if (at - last < 1_000) return true;
   lastWrite.set(session, at);

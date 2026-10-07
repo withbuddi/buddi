@@ -6,10 +6,12 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Secrets in the sign-in flow, in place: an agent on a sign-in form with nothing saved for the site calls `secret.request` and a card in the chat asks for the fields it saw (username, password), with the site as a chip. Save and fill saves them for that site and fills the form at once, one approval for the set; Save only saves and hands you the page; I'll sign in myself hands it over; More options opens a sheet beside the page with a code field and more fields. The agent hears only the names saved and whether the form was filled. The thread says "Filled username and password on wikipedia.org", and Keys and secrets links each saved secret back to its conversation. On Telegram the card says to open the dashboard, with Decline. `POST /api/secrets` saves a set for one site in one call; `POST /api/secrets/request/decline`.
 - Capture on the Page tab's window bar: a full-resolution PNG of the page as it is now (password fields masked), whoever holds it, saved to Files under the page's title and the time, with Open in Files. `POST /api/browser/capture`.
 
 ### Changed
 
+- A `secret.fill` for a site with nothing saved now tells the agent to ask with the sign-in card (`secret.request`) instead of asking you in chat where the password is; a set of secrets saved together asks once for the set the first time an agent fills it there, not once per field.
 - The live picture of a page you hold gets sharp on a link that keeps up: after a few seconds of frames going out promptly it grows to the page's own size (up to 1440×900) at JPEG quality 70, and steps back down on lag, waiting longer each time before trying again. The window bar says *sharp* or *fast*.
 
 ### Fixed

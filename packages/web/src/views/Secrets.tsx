@@ -22,7 +22,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { api, type SecretListingView, type SecretRule, type SecretsView } from '../api';
-import { fmtRelative, fmtTime } from '../format';
+import { fmtClock, fmtDate, fmtRelative, fmtTime } from '../format';
 import {
   ActionMenu,
   AppIcon,
@@ -84,7 +84,7 @@ import {
   type SecretGroupId,
 } from './secret-rules';
 import { providerName } from './Providers';
-import { settingsRoute } from '../routes';
+import { chatRoute, settingsRoute } from '../routes';
 
 /** One write: the tool invoked as the owner, its answer or `null` on a refusal. */
 async function writeSecret(
@@ -366,6 +366,7 @@ function SecretRow({
           ) : null}
           {unused ? <span className="secrets-status">{unused}</span> : null}
           {unchecked ? <span className="secrets-status">{unchecked}</span> : null}
+          {secret.savedFrom ? <SavedFrom from={secret.savedFrom} timezone={timezone} /> : null}
         </>
       }
       side={
@@ -387,6 +388,26 @@ function SecretRow({
         </span>
       }
     />
+  );
+}
+
+/**
+ * "Saved today at 10:22, from a conversation": a secret the owner typed on an
+ * agent's sign-in card links back to that conversation (docs/owner-secrets.md §6).
+ */
+function SavedFrom({ from, timezone }: { from: NonNullable<SecretListingView['savedFrom']>; timezone?: string | undefined }): JSX.Element {
+  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const at = new Date(from.at);
+  const day = fmtDate(at, zone, { compact: true });
+  const today = fmtDate(new Date(), zone, { compact: true });
+  const when = Number.isNaN(at.getTime()) ? '' : `${day === today ? 'today' : day} at ${fmtClock(at, zone)}`;
+  const title = [from.title, from.agentId ? from.agentId.charAt(0).toUpperCase() + from.agentId.slice(1) : null].filter(Boolean).join(' · ');
+  return (
+    <span className="ss-from">
+      Saved {when}, {from.agentId
+        ? <a href={chatRoute(from.agentId, from.conversationId)} title={title || undefined} onClick={stop()}>from a conversation</a>
+        : 'from a conversation'}
+    </span>
   );
 }
 

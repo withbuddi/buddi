@@ -21,10 +21,45 @@ export interface Question {
   answeredAt: string | null;
   answeredVia: string | null;
   answer: string | null;
+  /**
+   * What the card asks for beyond a question with choices: today only an
+   * agent's `secret.request` (docs/owner-secrets.md §6) — the site and the
+   * labels of the fields it saw, never a value. Null for a plain question.
+   */
+  request?: QuestionRequest | null;
 }
 
+/** One field a `secret.request` card asks the owner to type. A label, never a value. */
+export interface SecretRequestField {
+  label: string;
+  kind: 'username' | 'password' | 'totp' | 'other';
+  /** The page's field the agent saw it in, so Save and fill can fill it at once. */
+  ref?: string;
+  /** Set when the label looks like a card number, a CVV, an SSN or a one-time code: shown, and never filled by itself. */
+  warning?: string;
+}
+
+/** The card a `secret.request` raises. */
+export interface SecretRequestCard {
+  kind: 'secret.request';
+  /** The site as the owner reads it on the chip: `wikipedia.org`. */
+  site: string;
+  /** Where the values may go: exact origins and wildcard origins (`https://*.wikipedia.org`). */
+  origins: string[];
+  /** The page the agent had open when it asked, when it had one. */
+  page?: { url: string; title?: string };
+  fields: SecretRequestField[];
+  reason?: string;
+  /** The agent's name, as the card says it ("Scout never sees them"). */
+  agentName?: string;
+  /** One line per warned field, as the card prints it. */
+  warnings?: string[];
+}
+
+export type QuestionRequest = SecretRequestCard;
+
 export const QUESTION_COLUMNS =
-  'id, agent_id, conversation_id, question, options, allow_other, created_at, expires_at, answered_at, answered_via, answer';
+  'id, agent_id, conversation_id, question, options, allow_other, created_at, expires_at, answered_at, answered_via, answer, request';
 
 const iso = (value: unknown): string | null =>
   value == null ? null : value instanceof Date ? value.toISOString() : String(value);
@@ -42,6 +77,7 @@ export function toQuestion(row: Record<string, any>): Question {
     answeredAt: iso(row.answered_at),
     answeredVia: row.answered_via ?? null,
     answer: row.answer ?? null,
+    request: row.request && typeof row.request === 'object' && !Array.isArray(row.request) ? (row.request as QuestionRequest) : null,
   };
 }
 

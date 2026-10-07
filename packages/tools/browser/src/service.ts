@@ -4,7 +4,7 @@ import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { LoginKeeper } from './logins.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, LoginAck, LoginCheck, Observation, SeenLoginReport } from './types.js';
-import { LOGIN_GONE, LOGIN_GRACE_MS, APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
+import { LOGIN_GONE, LOGIN_GRACE_MS, APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, NO_SAVED_SIGN_IN, UNTRUSTED, observedLine } from './types.js';
 import { ownerCard, siteOf, type ChromeLink, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
 import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
@@ -195,6 +195,8 @@ export interface BrowserController {
   rollover?(input: BrowserRollover): boolean;
   /** The owner spoke or tapped in a conversation: budgets renew and a waiting card is answered. */
   touch?(input: BrowserTouch): Promise<{ answered?: string } | void>;
+  /** Hand this conversation's page to the owner, the agent waiting on it (a secret.request card's "I'll sign in myself"). */
+  handOver?(scope: { conversationId: string; agentId?: string }): Promise<boolean>;
   /** Pin a conversation to a route, or clear its pin (`auto`). */
   pin?(conversationId: string, pin: string): Promise<BrowserStatus>;
   /** How long a mission run waits on a card for the owner, in milliseconds (settings `missionWaitMinutes`). */
@@ -770,7 +772,7 @@ export class BrowserService {
       if (secrets === undefined) throw new Error('This plugin has no secrets area; the owner updates the browser plugin to one that declares it.');
       const secret = (await secrets.list()).find((entry) => entry.name === input.name);
       if (secret === undefined) {
-        throw new BrowserPreconditionError(`There is no secret named "${input.name}" bound to this browser's destinations. The owner keeps one in Settings, under Keys and secrets.`);
+        throw new BrowserPreconditionError(`There is no saved secret named "${input.name}" for this browser. ${NO_SAVED_SIGN_IN}`);
       }
       const visibleField = !secret.totp && !facts.password && fieldBoundTo(secret.bindings, facts.origin);
       const kind = secretKindFor(secret.totp, facts.password, visibleField);
@@ -783,7 +785,8 @@ export class BrowserService {
       if ('pending' in outcome) {
         return { pending: true, actionId: outcome.pending, message: 'The owner has a decision card for this use. Nothing was filled; ask again once it is decided.' };
       }
-      if ('refused' in outcome) throw new BrowserPreconditionError(outcome.refused);
+      // Bound somewhere else: as far as this site goes, nothing is saved.
+      if ('refused' in outcome) throw new BrowserPreconditionError(/ is not bound to /.test(outcome.refused) ? `${outcome.refused} ${NO_SAVED_SIGN_IN}` : outcome.refused);
       const value = takeDelivered(outcome.use);
       if (value === undefined) throw new Error('The use delivered nothing to fill with. Ask for the secret again.');
       await this.driver.secretFillField(observation, input.ref, value, facts.origin);

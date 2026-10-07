@@ -923,6 +923,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'GET', path: '/api/secrets', area: 'secrets', summary: 'Owner secrets by name, with where each may be used. Never a value.' },
   { method: 'GET', path: '/api/secrets/uses', area: 'secrets', summary: 'Where a secret was used.', query: 'name: string, limit?: number' },
   { method: 'POST', path: '/api/secrets/act', area: 'secrets', token: 'secret', summary: 'Add, change or remove a secret or its rules.', body: '{ tool: string, args: object }', errors: '400; 429' },
+  { method: 'POST', path: '/api/secrets', area: 'secrets', token: 'secret', summary: 'Save a set of secrets for one site in one call, bound to that site; with `questionId`, answer an agent\'s sign-in card (Save and fill, or Save only). Never answers a value.', body: '{ site?: string, fields: Array<{ label, kind: "username"|"password"|"totp"|"other", value }>, questionId?: string, then?: "fill"|"save" }', answer: '{ saved: string[], filled?: boolean, stamp?: string }', errors: '400; 409 the card is no longer waiting, or { locked: true } the vault is locked and nothing was saved; 429' },
+  { method: 'POST', path: '/api/secrets/request/decline', area: 'secrets', token: 'secret', summary: 'Answer an agent\'s sign-in card without saving: "I\'ll sign in myself" hands the page over, `cancelled` closes it.', body: '{ questionId: string, reason: "sign-in-myself"|"cancelled" }', answer: '{ declined: string, stamp: string }', errors: '400; 409; 429' },
 
   /* ---------------- computer and browser ---------------- */
   {
@@ -1324,6 +1326,8 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'POST /api/secrets': '0.1.0-pre.52',
+  'POST /api/secrets/request/decline': '0.1.0-pre.52',
   'POST /api/missions/:id/run': '0.1.0-pre.51',
   'GET /api/reports/audio': '0.1.0-pre.49',
   'GET /api/runtimes': '0.1.0-pre.48',

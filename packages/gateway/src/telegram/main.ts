@@ -53,6 +53,7 @@ import {
   createAskManifest,
   type AskSink,
 } from '../surfaces/pending-question.js';
+import { conversationLink, createSecretRequestManifest, grantsSecretRequest, SECRET_REQUEST_TOOLS, telegramSignInReply } from '../surfaces/secret-request.js';
 import {
   OFFER_POLICY_SUFFIX,
   OFFER_TOOLS,
@@ -564,8 +565,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       let broke = false;
 
       const base = deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone);
+      // An agent that may fill secrets may ask for one: the card says to open the dashboard, never to type it here.
+      const asksForSecrets = grantsSecretRequest(base.tools);
+      if (asksForSecrets) {
+        registry.register(createSecretRequestManifest(sink, { pool, browser: browserHost(env), agentName: (id) => deps.catalog.get(id)?.name }));
+      }
       const options: RunAgentOptions = {
-        agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS, ...(handsOff ? HANDOFF_TOOLS : [])] },
+        agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS, ...(asksForSecrets ? SECRET_REQUEST_TOOLS : []), ...(handsOff ? HANDOFF_TOOLS : [])] },
         provider: deps.providerFor ? deps.providerFor(deps.catalog.resolve(agent.id)) : deps.provider,
         registry,
         // A resume carries the owner's decision, which is the owner acting in
@@ -696,15 +702,20 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
             question: sink.asked.question,
             options: sink.asked.options,
             allowOther: sink.asked.allowOther,
+            ...(sink.asked.request ? { request: sink.asked.request } : {}),
             now: new Date(now()),
           }).catch((err) => {
             log(`telegram: storing question failed: ${err instanceof Error ? err.message : String(err)}`);
             return null;
           })
         : null;
+      // A sign-in card: never collected here. The answer says where to save it, with Decline.
+      const said = sink.asked?.request
+        ? telegramSignInReply(result.text, sink.asked.request, conversationLink(publicOrigin, agent.id, conversationId))
+        : result.text;
       return {
         // The grounding guard's verdict, one quiet line under the answer.
-        text: result.unchecked ? `${result.text}\n\n_${UNCHECKED_LINE}_` : result.text,
+        text: result.unchecked ? `${said}\n\n_${UNCHECKED_LINE}_` : said,
         askedOwner: sink.asked !== undefined,
         ...(produced.length > 0 ? { artifacts: [...new Set(produced)].filter(id => !leadingAudio.includes(id)) } : {}),
         ...(leadingAudio.length > 0 ? { leadingAudio } : {}),

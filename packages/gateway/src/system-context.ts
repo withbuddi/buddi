@@ -139,7 +139,7 @@ export function resourcefulLines(tools: readonly string[]): string {
   const lines = ['Before you say you cannot do something, use what you can reach:'];
   if (has('browser.act')) {
     const login = has('secret.fill') && has('secret.list')
-      ? 'it signs in with a login the owner stored (secret.list, then secret.fill) or asks the owner once with a card.'
+      ? 'it signs in with a login the owner stored (secret.list, then secret.fill); with none stored for the site, secret.request asks the owner once with a card where they type it.'
       : 'it asks the owner once with a card when a page needs their sign-in.';
     lines.push(
       '- A website the owner uses (an account page, a cart, an order, a statement): look with browser.act; buddi picks the browser ' +

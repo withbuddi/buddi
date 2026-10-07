@@ -256,6 +256,19 @@ silently.
 Answers sent before this existed, cards, and your own messages carry no
 feedback.
 
+## Sign-in cards
+
+An agent that needs a sign-in buddi does not have asks for it with a card
+(`secret.request`, [owner-secrets.md](owner-secrets.md) §6). Telegram is not a
+place to type a password, so the card collects nothing here: the answer ends
+with **"Open the dashboard to save the sign-in for wikipedia.org"** and the
+dashboard link to that conversation (when buddi knows its public address), and
+the one button is **Decline**. Save it on the dashboard, where the same card
+stands with the fields as inputs; the agent carries on there. Decline tells the
+agent the owner turned the card down (`{ declined: 'cancelled' }`), never the
+word "Decline" as a message to act on. Nothing you type in this chat is ever
+saved as a secret.
+
 ## What stays on the dashboard
 
 Settings, editing an agent, installing a plugin, the library, charts and the

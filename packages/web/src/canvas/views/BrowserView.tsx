@@ -114,14 +114,14 @@ export interface BrowserViewProps {
 }
 
 /** Where the route serves the picture for the observation on screen now. */
-function screenshotUrl(status: BrowserStatus, refresh?: number): string | null {
+export function screenshotUrl(status: BrowserStatus, refresh?: number): string | null {
   if (!status.hasScreenshot || !status.page) return null;
   const session = status.session ? `&sessionId=${encodeURIComponent(status.session.id)}` : '';
   return `/api/browser/screenshot?v=${encodeURIComponent(status.page.id)}${session}${refresh ? `&tick=${refresh}` : ''}`;
 }
 
 /** The letter on the page's tile: the site's, or the app's. */
-function tileLetter(status: BrowserStatus | undefined): string {
+export function tileLetter(status: BrowserStatus | undefined): string {
   if (status?.route === 'apps' && status.page?.appId) return appWord(status.page.appId).charAt(0).toUpperCase();
   const site = siteOfUrl(status?.page?.url);
   return (site ?? status?.page?.title ?? '·').charAt(0).toUpperCase();

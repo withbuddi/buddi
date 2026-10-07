@@ -152,6 +152,19 @@ export function briefTurnLabel(speaker: string | null | undefined): string | nul
   return label === '' ? null : label;
 }
 
+/**
+ * A thread stamp (`stamp:<line>`): a turn that carried an outcome to the agent
+ * — an agent's sign-in card answered, "Filled username and password on
+ * wikipedia.org" — drawn as that one quiet line, never as a bubble.
+ */
+export const STAMP_TURN_SPEAKER_PREFIX = 'stamp:';
+
+export function stampTurnLabel(speaker: string | null | undefined): string | null {
+  if (typeof speaker !== 'string' || !speaker.startsWith(STAMP_TURN_SPEAKER_PREFIX)) return null;
+  const line = speaker.slice(STAMP_TURN_SPEAKER_PREFIX.length).trim();
+  return line === '' ? null : line;
+}
+
 /** A group of agents that share one conversation (docs/groups.md). */
 export interface GroupView {
   id: string;
@@ -191,6 +204,29 @@ export interface ChatQuestion {
   options: ChatQuestionOption[];
   allowOther: boolean;
   expiresAt: string;
+  /** An agent's `secret.request` card: the site and the labels it saw, never a value. */
+  request?: SecretRequestCard | null;
+}
+
+/** One field a sign-in card asks for (core's `SecretRequestField`). */
+export interface SecretRequestField {
+  label: string;
+  kind: 'username' | 'password' | 'totp' | 'other';
+  ref?: string;
+  /** "Scout asked for something that looks like a card number; buddi keeps it only on wikipedia.org". */
+  warning?: string;
+}
+
+/** An agent's sign-in card (core's `SecretRequestCard`). */
+export interface SecretRequestCard {
+  kind: 'secret.request';
+  site: string;
+  origins: string[];
+  page?: { url: string; title?: string };
+  fields: SecretRequestField[];
+  reason?: string;
+  agentName?: string;
+  warnings?: string[];
 }
 
 /**

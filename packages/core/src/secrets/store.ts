@@ -157,6 +157,99 @@ export async function putOwnerSecret(
   });
 }
 
+/** One secret of a set saved together (`putOwnerSecretSet`). */
+export interface OwnerSecretSetItem {
+  name: string;
+  value: string;
+  totp?: boolean;
+  bindings: readonly SecretBinding[];
+}
+
+/** What a saved set answers: the rows, in the order given. Never a value. */
+export interface OwnerSecretSetSaved {
+  setId: string;
+  secrets: SecretRow[];
+}
+
+/**
+ * Store several secrets the owner typed together on one card (a sign-in's
+ * username and password, docs/owner-secrets.md §6, "Saved from a
+ * conversation"), all or none. Each is a new row — a name already taken is
+ * refused before anything is written — tagged with the set, the site and the
+ * conversation it came from. The values go to the vault inside the
+ * transaction; a vault that refuses one rolls the rows back and deletes the
+ * entries already written, so a locked keychain leaves nothing behind.
+ */
+export async function putOwnerSecretSet(
+  pool: Pool,
+  vault: Vault,
+  input: { items: readonly OwnerSecretSetItem[]; site: string; conversationId?: string | null },
+): Promise<OwnerSecretSetSaved> {
+  if (input.items.length === 0) throw new Error('A set needs at least one secret.');
+  if (input.items.length > 12) throw new Error('A set holds at most 12 secrets.');
+  const checked = input.items.map((item) => {
+    const name = assertOwnerSecretName(item.name);
+    if (typeof item.value !== 'string' || item.value.trim() === '') throw new Error(`"${name}" needs a value.`);
+    return { name, value: item.value, totp: item.totp === true, bindings: assertBindings(item.bindings) };
+  });
+  const names = new Set<string>();
+  for (const item of checked) {
+    if (names.has(item.name.toLowerCase())) throw new Error(`"${item.name}" is in the set twice.`);
+    names.add(item.name.toLowerCase());
+  }
+  const site = String(input.site ?? '').trim().slice(0, 253) || null;
+  const written: string[] = [];
+  try {
+    return await inTransaction(pool, async (client) => {
+      const conversationId = input.conversationId
+        ? ((await client.query(`select id from core.conversations where id::text = $1`, [input.conversationId])).rows[0]?.id ?? null)
+        : null;
+      const { rows: setRows } = await client.query(`select gen_random_uuid() as id`);
+      const setId = String(setRows[0].id);
+      const saved: SecretRow[] = [];
+      for (const item of checked) {
+        const taken = await findSecret(client, item.name);
+        if (taken !== null) throw new Error(`There is already a secret named "${item.name}".`);
+        const { rows } = await client.query(
+          // clock_timestamp, not now(): the set keeps the order the card listed its fields in.
+          `insert into core.secrets (name, totp, conversation_id, set_id, site, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp())
+           returning id, name, totp`,
+          [item.name, item.totp, conversationId, setId, site],
+        );
+        const secret = toSecret(rows[0]);
+        await writeBindings(client, secret.id, item.bindings);
+        await vault.set(ownerSecretVaultName(secret.id), item.value);
+        written.push(ownerSecretVaultName(secret.id));
+        saved.push(secret);
+      }
+      invalidateSecretScrubber();
+      return { setId, secrets: saved };
+    });
+  } catch (err) {
+    // The rows are gone with the rollback; the values written before the
+    // failure go with them.
+    for (const entry of written) await vault.delete(entry).catch(() => false);
+    throw err;
+  }
+}
+
+/** The other secrets saved in the same set as this one, with their bindings of one kind. */
+export async function secretSetSiblings(db: Queryable, secretId: string): Promise<Array<{ secret: SecretRow; bindings: SecretBindingRow[] }>> {
+  const { rows } = await db.query(
+    `select s.id, s.name, s.totp from core.secrets s
+      where s.set_id is not null and s.set_id = (select set_id from core.secrets where id = $1)
+      order by s.created_at, s.name`,
+    [secretId],
+  );
+  const out: Array<{ secret: SecretRow; bindings: SecretBindingRow[] }> = [];
+  for (const row of rows) {
+    const secret = toSecret(row);
+    out.push({ secret, bindings: await secretBindings(db, secret.id) });
+  }
+  return out;
+}
+
 /** Rename. False when there is no such secret; throws when the new name is taken. */
 export async function renameOwnerSecret(db: Queryable, name: string, to: string): Promise<boolean> {
   const next = assertOwnerSecretName(to);

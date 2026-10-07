@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-339 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+341 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -3902,6 +3902,8 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/preview/<plugin>/<n
 | GET | `/api/secrets` | Owner secrets by name, with where each may be used. Never a value. | yes |
 | GET | `/api/secrets/uses` | Where a secret was used. | yes |
 | POST | `/api/secrets/act` | Add, change or remove a secret or its rules. | no |
+| POST | `/api/secrets` | Save a set of secrets for one site in one call, bound to that site; with `questionId`, answer an agent's sign-in card (Save and fill, or Save only). Never answers a value. | no |
+| POST | `/api/secrets/request/decline` | Answer an agent's sign-in card without saving: "I'll sign in myself" hands the page over, `cancelled` closes it. | no |
 
 #### `GET /api/secrets`
 
@@ -3940,6 +3942,34 @@ Add, change or remove a secret or its rules.
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"tool":"…","args":{}}' "$BUDDI_URL/api/secrets/act"
+```
+
+#### `POST /api/secrets`
+
+Save a set of secrets for one site in one call, bound to that site; with `questionId`, answer an agent's sign-in card (Save and fill, or Save only). Never answers a value.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It reads or stores a secret.
+- **Body:** `{ site?: string, fields: Array<{ label, kind: "username"|"password"|"totp"|"other", value }>, questionId?: string, then?: "fill"|"save" }`
+- **Answer:** `{ saved: string[], filled?: boolean, stamp?: string }`
+- **Errors:** 400; 409 the card is no longer waiting, or { locked: true } the vault is locked and nothing was saved; 429
+- **Since:** 0.1.0-pre.52
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"fields":[]}' "$BUDDI_URL/api/secrets"
+```
+
+#### `POST /api/secrets/request/decline`
+
+Answer an agent's sign-in card without saving: "I'll sign in myself" hands the page over, `cancelled` closes it.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It reads or stores a secret.
+- **Body:** `{ questionId: string, reason: "sign-in-myself"|"cancelled" }`
+- **Answer:** `{ declined: string, stamp: string }`
+- **Errors:** 400; 409; 429
+- **Since:** 0.1.0-pre.52
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"questionId":"…","reason":"…"}' "$BUDDI_URL/api/secrets/request/decline"
 ```
 
 ### Computer and browser

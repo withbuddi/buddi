@@ -812,6 +812,27 @@ export class HostController implements BrowserController {
   }
 
   /**
+   * Hand this conversation's page to the owner, the way Take over on a card
+   * does: the page pauses in their hands and the agent that asked waits on
+   * it, so Give it back carries its turn on. The secret.request card's "I'll
+   * sign in myself" and "Save only" (docs/owner-secrets.md §6). False when
+   * the conversation has no page, or the owner already holds another one.
+   */
+  async handOver(scope: { conversationId: string; agentId?: string }): Promise<boolean> {
+    for (const route of ROUTES) {
+      const child = this.#managers[route].child(scope.agentId ? { conversationId: scope.conversationId, agentId: scope.agentId } : { conversationId: scope.conversationId });
+      const id = child?.status().session?.id;
+      if (!child || !id) continue;
+      if (child.status().state !== 'paused') {
+        try { await this.control('takeover', id); } catch { return false; }
+      }
+      child.agentWaits();
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * The owner spoke or tapped in a conversation. Every page there gets a
    * fresh budget and its card is answered: Look / Take over hands the page
    * over, Use my Chrome pins the conversation to it, Resume lifts the Stop.

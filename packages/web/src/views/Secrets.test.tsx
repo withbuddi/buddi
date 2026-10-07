@@ -442,3 +442,32 @@ describe('the add form', { timeout: 180_000 }, () => {
     expect(api.secretsAct).not.toHaveBeenCalled();
   });
 });
+
+describe('7. a secret saved on an agent\'s sign-in card', { timeout: 180_000 }, () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reads as its site and links back to the conversation it came from', async () => {
+    const savedAt = new Date().toISOString();
+    const FROM_CARD: SecretListingView = {
+      name: 'Wikipedia password',
+      totp: false,
+      hasValue: true,
+      bindings: [
+        binding('browser.field', 'https://en.wikipedia.org', 'first-time'),
+        binding('browser.field', 'https://wikipedia.org', 'first-time'),
+        binding('browser.field', 'https://*.wikipedia.org', 'first-time'),
+      ],
+      lastUse: { at: ago(120), kind: 'browser.field', target: 'https://en.wikipedia.org', agentId: 'scout', outcome: 'delivered', detail: null },
+      usedBy: [],
+      unused: false,
+      savedFrom: { conversationId: 'conv-1', agentId: 'scout', title: 'Add Lyon to my Wikipedia watchlist', site: 'wikipedia.org', at: savedAt },
+    };
+    await openPage({ ...VIEW, secrets: [...VIEW.secrets, FROM_CARD] });
+    const row = within(group('Your secrets')).getByText('Wikipedia password').closest('.ui-list-row') as HTMLElement;
+    expect(within(row).getByText(/^Filled on wikipedia\.org · asks you the first time · Last used/)).toBeInTheDocument();
+    expect(within(row).getByText(/^Saved today at/)).toBeInTheDocument();
+    const link = within(row).getByRole('link', { name: 'from a conversation' });
+    expect(link).toHaveAttribute('href', '#/chat/scout/conv-1');
+    expect(link).toHaveAttribute('title', 'Add Lyon to my Wikipedia watchlist · Scout');
+  });
+});

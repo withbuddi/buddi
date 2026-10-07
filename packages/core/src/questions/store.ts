@@ -7,6 +7,7 @@ import {
   toQuestion,
   type Question,
   type QuestionOption,
+  type QuestionRequest,
 } from './types.js';
 
 export interface AskQuestionInput {
@@ -18,6 +19,8 @@ export interface AskQuestionInput {
   now: Date;
   /** How long it stays open; default `QUESTION_TTL_MS`. A parked mission's wait (docs/browser.md, "Missions"). */
   ttlMs?: number;
+  /** A card beyond a plain question: an agent's `secret.request` (labels and the site, never a value). */
+  request?: QuestionRequest | null;
 }
 
 function normalizeOptions(input: AskQuestionInput['options']): QuestionOption[] {
@@ -57,10 +60,10 @@ export async function askQuestion(pool: Queryable, input: AskQuestionInput): Pro
   );
   const { rows } = await pool.query(
     `insert into core.questions
-       (agent_id, conversation_id, question, options, allow_other, created_at, expires_at)
-     values ($1, $2, $3, $4::jsonb, $5, $6, $7)
+       (agent_id, conversation_id, question, options, allow_other, created_at, expires_at, request)
+     values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8::jsonb)
      returning ${QUESTION_COLUMNS}`,
-    [input.agentId, input.conversationId, input.question.trim(), JSON.stringify(options), input.allowOther, input.now, expiresAt],
+    [input.agentId, input.conversationId, input.question.trim(), JSON.stringify(options), input.allowOther, input.now, expiresAt, input.request ? JSON.stringify(input.request) : null],
   );
   return toQuestion(rows[0]);
 }

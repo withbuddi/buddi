@@ -112,7 +112,8 @@ import {
   runPageQuery,
   type PagesDeps,
 } from './pages.js';
-import { listSecrets, ownerLoginKey, ownerLoginNames, ownerLoginStore, secretUses, secretsAct, type SecretsDeps } from './secrets.js';
+import { listSecrets, ownerLoginKey, ownerLoginNames, ownerLoginStore, secretUses, secretsAct, writeRateLimited, type SecretsDeps } from './secrets.js';
+import { declineSecretRequest, saveSecretSet, type SecretRequestRouteDeps } from './secret-request.js';
 import { sayRoute, transcribeRoute, type SpeechRouteDeps } from './speech.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -1646,6 +1647,11 @@ export function createWebApp(deps: WebServerDeps): Server {
     });
     /** The Keys and secrets page (docs/owner-secrets.md §6): core's own queries and ownerOnly tools. */
     const secretsDeps = (): SecretsDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, ...(browser.logins ? { logins: browser.logins } : {}) });
+    /** An agent's sign-in card (web/secret-request.ts): the set saved, the page handed over, the agent carried on. */
+    const secretRequestDeps = (): SecretRequestRouteDeps => ({
+      pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, log, browser,
+      ...(chat ? { carryOn: (input: { conversationId: string; agentId: string; text: string; stamp: string }) => chat.continueWithStamp(input) } : {}),
+    });
     /** Talking to buddi on the dashboard: the speech plugin's two tools, as the owner. */
     const speechDeps = (): SpeechRouteDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, agents: () => deps.catalog.list() });
     /** The same, for the version and upgrade routes. */
@@ -4269,6 +4275,15 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     if (path === '/api/secrets/act') {
       return reply(res, await secretsAct(secretsDeps(), body, session));
+    }
+    /*
+     * An agent's sign-in card, answered in place (docs/owner-secrets.md §6):
+     * a set saved in one call, then filled or the page handed over, and the
+     * agent told the names — never a value.
+     */
+    if (path === '/api/secrets' || path === '/api/secrets/request/decline') {
+      if (writeRateLimited(session.id, deps.now().getTime())) return sendJson(res, 429, { error: 'Too many writes from this page. Wait a moment and try again.' });
+      return reply(res, path === '/api/secrets' ? await saveSecretSet(secretRequestDeps(), body) : await declineSecretRequest(secretRequestDeps(), body));
     }
 
     /*

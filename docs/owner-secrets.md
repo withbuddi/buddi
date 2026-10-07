@@ -1,7 +1,7 @@
 ---
 title: Secrets the agent can use but never see
 status: reference
-updated: 2026-10-03
+updated: 2026-10-07
 ---
 
 # Secrets the agent can use but never see
@@ -80,7 +80,9 @@ and in that one `deliver` call, and nowhere else.
   password. The extension uses the debugger's insertText, Playwright its
   `fill`. The result says "filled". `secret.list` tells the agent which
   names it may use and where each may go (kinds and targets, never a
-  value), so it never has to ask the owner for a name.
+  value), so it never has to ask the owner for a name. When nothing is saved
+  for the page, `secret.fill`'s refusal points the agent at `secret.request`
+  (§6, "Saved from a conversation"), never at a question in chat.
 - **Wildcard origins.** A site that signs in on a sister host (Wikipedia's
   page is `en.wikipedia.org`, its sign-in `auth.wikimedia.org`) is one
   binding, not two: a `browser.field` or `browser.form.data` origin may be
@@ -321,17 +323,114 @@ keeps are theirs to change.
 - Every write is an `ownerOnly` tool: no model sees it, as with email's
   add-account.
 
+### Saved from a conversation
+
+An agent on a sign-in form with nothing saved for the site does not ask "have
+you stored the username?". It calls **`secret.request`** and the owner types the
+values on a card in the chat, beside the page (buddi-design
+`secrets-signin.html`).
+
+**The tool.** `secret.request { fields: [{ label, kind, ref? }], site?, reason? }`,
+`kind` one of `username`, `password`, `totp` (an authenticator seed) or
+`other`. Platform-owned, registered per interactive turn like
+`conversation.ask` (`packages/gateway/src/surfaces/secret-request.ts`), tier
+`auto` (the card is the ask), not `ownerOnly`, and granted to every agent whose
+tools include `secret.fill`. It never runs unattended or for a delegate.
+
+- **The place.** The site defaults to the page the agent is on (its host's
+  registrable name: `en.wikipedia.org` → `wikipedia.org`). A `site` naming any
+  other host is refused with a plain reason, unless the owner named it in this
+  conversation — its address or its name as a word ("Wikipedia" for
+  `wikipedia.org`), in text the owner typed, never a page, a tool result or an
+  agent's reply. The values are bound as `browser.field`, asking the first
+  time, to the page's origin when it belongs to the site, to
+  `https://<site>` and to `https://*.<site>`; a public suffix is never a site.
+- **The turn parks** the way `conversation.ask` does: the call answers
+  `{ pending: true }`, the run ends, and the owner's choice comes back as the
+  next turn, said as a tool result delivered late: `{ saved: [names], filled:
+  true }`, `{ saved, filled: false }`, `{ declined: 'sign-in-myself' }` or
+  `{ declined: 'cancelled' }`. Names and flags only: a value is never in a tool
+  result, the transcript, the event log, a question's row or a log line. The
+  thread shows that turn as one quiet line (a `stamp:` speaker), never its words.
+- **Warning labels.** A label that looks like a card number, a card security
+  code (CVV, CVC), a social security or tax number, or a one-time code
+  (`One-time code`, `OTP`, `SMS code`, `2FA`) gets a line on the card — "Scout
+  asked for something that looks like a card number; buddi keeps it only on
+  wikipedia.org" — and is never filled by itself: Save and fill leaves it out of
+  the set's approval and of the fill, so its first use asks on its own card.
+  The patterns are a short list in `secret-request.ts`; a miss only means no
+  warning line.
+- **Asked by chat too.** "Help me save new secrets" makes the agent call
+  `secret.request` with the fields it chooses: the same card.
+
+**The card** stands in the dock with the composer still under it: *No saved
+sign-in for wikipedia.org*, the fields inline (a username plain, everything else
+masked with Show), the site chip "only on this site · Scout never sees them",
+and **I'll sign in myself** (ghost) · **More options** · **Save and fill**
+(accent), with "Rather sign in yourself this time? **Save only** keeps them for
+next time and hands you the page." under them. It posts to `POST /api/secrets`
+— never through a chat message:
+
+- **Save and fill** saves the set (`secrets.put_set`, all or none), records one
+  `secrets.use_set` approval for the set, approved by that press, and fills each
+  field the agent named a ref for through `secret.fill` as that agent, which no
+  longer asks. The agent hears `{ saved, filled: true }`; the thread says
+  "Filled username and password on wikipedia.org · 10:23", and the Page tab
+  shows the form filled with the password masked. A field buddi could not fill
+  is the agent's to fill with `secret.fill`, without a card.
+- **Save only** saves the set and hands the page to the owner as Take over
+  does; the agent hears `{ saved, filled: false }` and carries on when the page
+  is given back.
+- **I'll sign in myself** (`POST /api/secrets/request/decline`) saves nothing
+  and hands the page over; the agent hears `{ declined: 'sign-in-myself' }`.
+- **A locked vault** saves nothing (the rows roll back and any value already
+  written is deleted): the card says "Nothing was saved: the vault is locked."
+  inline, keeps what was typed and stays open (`409 { locked: true }`).
+
+**The sheet** (More options) opens over the chat column with the page still
+beside it, the values carried over: the fields, **Add a code field** (a TOTP
+seed: buddi fills the current code, never the seed), **Add another field**, the
+site as a chip with where the values may go, and the notes ("Kept in the vault
+and never shown again…", "Saved as Wikipedia username and Wikipedia password
+in Keys and secrets."). Cancel · Save and fill, and Save only under them. On a
+phone it covers the screen and folds the page in at its top behind **Show the
+page**.
+
+**One card for a set.** Secrets saved on one card share a set (`set_id`). When
+an agent later fills one of them for the first time on its site (after Save
+only), core raises one `secrets.use_set` card for every secret of the set still
+waiting there — "Saved 2 secrets for wikipedia.org", each with the field it goes
+into, **Fill them in** · **I'll sign in myself** · Edit in Keys and secrets — and
+the second field's use waits on the same card instead of raising another.
+Approving records the first approval of each binding in the set.
+
+**The row** in Keys and secrets says where it came from: "Filled on
+wikipedia.org · asks you the first time · Last used 2 min ago", then "Saved
+today at 10:22, **from a conversation**", the link opening that conversation
+(`core.secrets.conversation_id`). A row from a card reads as its one site,
+however many of the site's hosts it is bound to.
+
+**On Telegram** the card collects nothing: Telegram is not a place to type a
+password. The answer says "Open the dashboard to save the sign-in for
+wikipedia.org" with the dashboard link to the conversation, and the one button
+is **Decline** ([telegram.md](telegram.md), "Sign-in cards").
+
 ## 7. Storage
 
 The vault buddi already uses: the macOS keychain, or the file vault
 elsewhere. The value is stored under `owner-secret:<id>`, so a rename never
 touches the vault. Names, bindings and uses are rows, never values:
 
-- `core.secrets`: id, name (unique), totp, created_at, updated_at.
+- `core.secrets`: id, name (unique), totp, created_at, updated_at, and for a
+  secret saved on an agent's card the conversation it came from, its set and
+  its site (`conversation_id`, `set_id`, `site`).
 - `core.secret_bindings`: secret, kind, target jsonb, rule, first approved
   at.
 - `core.secret_uses`: secret, kind, target, agent, conversation, action,
   outcome, at.
+- `core.questions.request`: an agent's `secret.request` card — the site, the
+  places, the field labels and refs, any warning — never a value; the answer
+  column holds the outcome (names and flags).
 
 `held` uses are swept after 30 days. A credential read by its own plugin (a
 mail poll, a model call) is one row each, thousands a week; the hourly

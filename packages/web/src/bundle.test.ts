@@ -176,6 +176,12 @@ describe('the canvas knows no domain', () => {
     // A scheduled run's report is the platform's own tool too (host API
     // 1.27): the chat draws it as the message it sent, voice note and link.
     "'mission.report'",
+    // An agent's sign-in card and core's one approval for a set of secrets
+    // saved together (docs/owner-secrets.md §6): the platform's own, registered
+    // per interactive run and by core, never a plugin's. The chat draws the
+    // card, the stamp and the set's approval instead of a tool row.
+    "'secret.request'",
+    "'secrets.use_set'",
     "'canvas.clear'",
     "'run.started'",
     "'run.finished'",
