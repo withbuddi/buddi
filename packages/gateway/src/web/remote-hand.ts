@@ -25,7 +25,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HAND_QUALITY, HAND_QUALITY_LOW, MAX_HAND_COPY, type BrowserController, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type LoginPrompt } from '@buddi/tool-browser';
+import { HAND_QUALITY, HAND_QUALITY_LOW, HAND_QUALITY_SHARP, MAX_HAND_COPY, handLevel, type BrowserController, type BrowserHand, type HandFrame, type HandInput, type HandLevel, type HandQuality, type LoginPrompt } from '@buddi/tool-browser';
 import { SessionStore, type Session } from './sessions.js';
 
 /** The dashboard's half of the take-over, on the same upgrade listener. */
@@ -60,6 +60,53 @@ const SLOW_LINK_BYTES = 256 * 1024;
 const SLOW_LINK_MS = 1_000;
 /** And how long it has to be clear again before the picture grows back. */
 const FAST_LINK_MS = 5_000;
+/** A frame the socket took within this long was acked promptly. */
+const PROMPT_ACK_MS = 150;
+/** One that took longer than this is lag, whatever the buffer says. */
+const LAGGING_ACK_MS = 600;
+/** How long frames have to go out promptly before the picture gets sharp; doubled after each step back down. */
+const SHARP_LINK_MS = 3_000;
+const MAX_SHARP_WAIT_MS = 48_000;
+
+/** How the link has been doing, as the stepping below remembers it. */
+export interface LinkTrack {
+  quality: HandQuality;
+  slowSince?: number;
+  fastSince?: number;
+  promptSince?: number;
+  /** How long prompt frames have to last before the next step up to sharp. */
+  sharpWaitMs: number;
+}
+
+/**
+ * The picture's next size, or nothing: one sample per frame that left.
+ *
+ * Three steps. A link that stays behind (megabytes buffered, or a frame the
+ * socket took more than `LAGGING_ACK_MS` to take) for a second steps down:
+ * sharp to normal, normal to low. A low picture grows back to normal after
+ * five clear seconds; a normal one goes sharp once every frame has been taken
+ * promptly for `sharpWaitMs`, which doubles each time sharp had to step down
+ * again, so a link on the edge does not see-saw.
+ */
+export function stepQuality(track: LinkTrack, sample: { now: number; buffered: number; ackMs: number }): HandQuality | undefined {
+  const { now } = sample;
+  const slow = sample.buffered > SLOW_LINK_BYTES || sample.ackMs > LAGGING_ACK_MS;
+  const prompt = !slow && sample.ackMs <= PROMPT_ACK_MS && sample.buffered <= SLOW_LINK_BYTES / 4;
+  if (slow) { track.slowSince ??= now; track.fastSince = undefined; track.promptSince = undefined; }
+  else { track.fastSince ??= now; track.slowSince = undefined; }
+  if (prompt) track.promptSince ??= now; else track.promptSince = undefined;
+  const level = handLevel(track.quality);
+  const lagged = track.slowSince !== undefined && now - track.slowSince >= SLOW_LINK_MS;
+  let wanted: HandQuality | undefined;
+  if (level === 'sharp' && lagged) { wanted = HAND_QUALITY; track.sharpWaitMs = Math.min(MAX_SHARP_WAIT_MS, track.sharpWaitMs * 2); }
+  else if (level === 'normal' && lagged) wanted = HAND_QUALITY_LOW;
+  else if (level === 'normal' && track.promptSince !== undefined && now - track.promptSince >= track.sharpWaitMs) wanted = HAND_QUALITY_SHARP;
+  else if (level === 'low' && track.fastSince !== undefined && now - track.fastSince >= FAST_LINK_MS) wanted = HAND_QUALITY;
+  if (!wanted) return undefined;
+  track.quality = wanted;
+  track.slowSince = undefined; track.fastSince = undefined; track.promptSince = undefined;
+  return wanted;
+}
 
 /**
  * At most this many of the owner's events are in flight at the host at once.
@@ -79,8 +126,8 @@ const IN_FLIGHT = 4;
  * byte, the metadata's length, the metadata as JSON, and the JPEG. The
  * dashboard's `readFrame` is the other half of this and nothing else reads it.
  */
-export function packFrame(picture: HandFrame): Buffer {
-  const head = Buffer.from(JSON.stringify(picture.metadata), 'utf8');
+export function packFrame(picture: HandFrame, level?: HandLevel): Buffer {
+  const head = Buffer.from(JSON.stringify(level ? { ...picture.metadata, level } : picture.metadata), 'utf8');
   const prefix = Buffer.alloc(3);
   prefix.writeUInt8(1, 0);
   prefix.writeUInt16BE(head.length, 1);
@@ -265,10 +312,8 @@ interface Live {
   sending: boolean;
   /** When the frame now on the wire was handed to the socket. */
   sendingSince?: number;
-  /** How big the picture is right now, and when the link last looked slow or fast. */
-  quality: HandQuality;
-  slowSince?: number;
-  fastSince?: number;
+  /** How big the picture is right now, and how the link has been doing. */
+  link: LinkTrack;
   tuning: boolean;
   /** The owner's events, in order, with mouse moves coalesced to the last one. */
   queue: HandInput[];
@@ -536,7 +581,7 @@ export class RemoteHandEndpoint {
     }
     const now = Date.now();
     const live: Live = { ws, req, lease: session.id, sessionId, hand: offer.hand, since: now, lastInput: now,
-      checkedAt: now, missed: 0, closing: false, sending: false, quality: HAND_QUALITY, tuning: false, queue: [], inDrain: false,
+      checkedAt: now, missed: 0, closing: false, sending: false, link: { quality: HAND_QUALITY, sharpWaitMs: SHARP_LINK_MS }, tuning: false, queue: [], inDrain: false,
       held: { keys: new Map(), buttons: new Set(), x: 0, y: 0 } };
     this.#live = live;
     try {
@@ -615,12 +660,13 @@ export class RemoteHandEndpoint {
     const picture = live.latest;
     live.latest = undefined;
     live.sending = true;
-    live.sendingSince = Date.now();
+    const since = Date.now();
+    live.sendingSince = since;
     try {
-      ws.send(packFrame(picture), { binary: true }, () => {
+      ws.send(packFrame(picture, handLevel(live.link.quality)), { binary: true }, () => {
         live.sending = false;
         live.sendingSince = undefined;
-        this.#link(live);
+        this.#link(live, Date.now() - since);
         this.#flush(live);
       });
     } catch { live.sending = false; live.sendingSince = undefined; }
@@ -632,22 +678,13 @@ export class RemoteHandEndpoint {
    * `bufferedAmount` is what this process is still holding for a socket that
    * has not taken it. With one frame in flight, a number that stays above a
    * frame's worth means the link cannot carry this picture — so the picture
-   * gets smaller, and grows back when the link is clear again.
+   * gets smaller, grows back when the link is clear again, and gets sharp when
+   * every frame goes out promptly (`stepQuality`).
    */
-  #link(live: Live): void {
+  #link(live: Live, ackMs: number): void {
     if (!live.hand.tune || live.tuning || live.closing) return;
-    const now = Date.now();
-    const slow = live.ws.bufferedAmount > SLOW_LINK_BYTES;
-    if (slow) { live.slowSince ??= now; live.fastSince = undefined; }
-    else { live.fastSince ??= now; live.slowSince = undefined; }
-    const low = live.quality === HAND_QUALITY_LOW;
-    const wanted = !low && live.slowSince && now - live.slowSince >= SLOW_LINK_MS ? HAND_QUALITY_LOW
-      : low && live.fastSince && now - live.fastSince >= FAST_LINK_MS ? HAND_QUALITY
-        : undefined;
+    const wanted = stepQuality(live.link, { now: Date.now(), buffered: live.ws.bufferedAmount, ackMs });
     if (!wanted) return;
-    live.quality = wanted;
-    live.slowSince = undefined;
-    live.fastSince = undefined;
     live.tuning = true;
     void live.hand.tune(wanted).catch(() => this.#say('the picture could not be resized')).finally(() => { live.tuning = false; });
   }

@@ -152,5 +152,5 @@ export { PlaywrightDriver } from './driver.js';
 export { HostController } from './controller.js';
 export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED, DOWNLOAD_WINDOW_MS } from './extension.js';
 export type { ExtensionBridge, ExtensionDownload, ExtensionCommand, ExtensionCommandName, ExtensionEvent, ExtensionLogin, ExtensionLoginFacts, ExtensionResult } from './extension.js';
-export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, BrowserOpenedError, HAND_QUALITY, HAND_QUALITY_LOW, MAX_HAND_COPY, LOGIN_GONE, LOGIN_GRACE_MS, LOGIN_NOT_KEPT } from './types.js';
-export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandQuality, Observation, ObservedTarget, SeenLoginReport, LoginAck, LoginCheck, LoginSeenListener } from './types.js';
+export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, BrowserOpenedError, HAND_QUALITY, HAND_QUALITY_LOW, HAND_QUALITY_SHARP, handLevel, MAX_HAND_COPY, LOGIN_GONE, LOGIN_GRACE_MS, LOGIN_NOT_KEPT } from './types.js';
+export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandLevel, HandQuality, Observation, ObservedTarget, SeenLoginReport, LoginAck, LoginCheck, LoginSeenListener } from './types.js';

@@ -12,7 +12,8 @@ import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/co
 import type { BrowserController, BrowserHand, BrowserStatus, HandFrame, HandInput } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
-import { packFrame, readInput } from './remote-hand.js';
+import { packFrame, readInput, stepQuality, type LinkTrack } from './remote-hand.js';
+import { HAND_QUALITY, HAND_QUALITY_LOW, HAND_QUALITY_SHARP } from '@buddi/tool-browser';
 
 /** The dashboard's half of `packFrame`: one message, header then JPEG. */
 function unpack(message: Buffer): { metadata: Record<string, number>; jpeg: Buffer } {
@@ -494,5 +495,57 @@ describe('the window buttons on the hand', () => {
     expect(readInput({ kind: 'nav', action: 'navigate', url: `https://x.com/${'a'.repeat(3000)}` })).toBeNull();
     expect(readInput({ kind: 'nav', action: 'back', url: 'https://example.com' })).toBeNull();
     expect(readInput({ kind: 'nav', action: 'close' })).toBeNull();
+  });
+});
+
+describe('how sharp the picture is', () => {
+  const track = (): LinkTrack => ({ quality: HAND_QUALITY, sharpWaitMs: 3_000 });
+  /** Frames every 100 ms from `from` for `ms`, each taken in `ackMs` with `buffered` still waiting. */
+  const frames = (t: LinkTrack, from: number, ms: number, ackMs: number, buffered = 0) => {
+    const changes: Array<{ at: number; to: string }> = [];
+    for (let now = from; now <= from + ms; now += 100) {
+      const wanted = stepQuality(t, { now, buffered, ackMs });
+      if (wanted) changes.push({ at: now - from, to: `${wanted.maxWidth}x${wanted.maxHeight}@${wanted.quality}` });
+    }
+    return changes;
+  };
+
+  it('goes sharp once frames have been taken promptly for a few seconds, and not before', () => {
+    const t = track();
+    expect(frames(t, 0, 2_900, 20)).toEqual([]);
+    expect(frames(t, 3_000, 100, 20)).toEqual([{ at: 0, to: '1440x900@70' }]);
+    expect(t.quality).toBe(HAND_QUALITY_SHARP);
+  });
+
+  it('a slow frame now and then resets the count; lag for a second steps back down, one step at a time', () => {
+    const t = track();
+    frames(t, 0, 2_000, 20);
+    // One frame the socket took 300 ms over: not lag, but not prompt either.
+    expect(stepQuality(t, { now: 2_100, buffered: 0, ackMs: 300 })).toBeUndefined();
+    expect(frames(t, 2_200, 2_500, 20)).toEqual([]);
+    expect(frames(t, 4_800, 1_000, 20)).toHaveLength(1);
+    // Sharp, then the link lags: back to normal, then to low.
+    expect(frames(t, 10_000, 1_000, 900)).toEqual([{ at: 1_000, to: '960x600@50' }]);
+    expect(frames(t, 11_100, 1_000, 20, 300 * 1024)).toEqual([{ at: 1_000, to: '640x400@40' }]);
+    expect(t.quality).toBe(HAND_QUALITY_LOW);
+    // Clear again: normal after five seconds.
+    expect(frames(t, 13_000, 5_000, 20)).toEqual([{ at: 5_000, to: '960x600@50' }]);
+  });
+
+  it('waits longer each time sharp had to step back down, so a link on the edge does not see-saw', () => {
+    const t = track();
+    frames(t, 0, 3_000, 20);
+    expect(t.quality).toBe(HAND_QUALITY_SHARP);
+    frames(t, 3_100, 1_000, 900);
+    expect(t.quality).toBe(HAND_QUALITY);
+    expect(t.sharpWaitMs).toBe(6_000);
+    expect(frames(t, 5_000, 5_000, 20)).toEqual([]);
+    expect(frames(t, 10_100, 1_000, 20)).toHaveLength(1);
+  });
+
+  it('says how it is painting in the frame it sends', () => {
+    const packed = packFrame({ jpeg: Buffer.from('x'), metadata }, 'sharp');
+    const length = packed.readUInt16BE(1);
+    expect(JSON.parse(packed.subarray(3, 3 + length).toString('utf8'))).toMatchObject({ level: 'sharp' });
   });
 });

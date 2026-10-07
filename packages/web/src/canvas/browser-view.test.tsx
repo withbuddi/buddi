@@ -49,10 +49,10 @@ class FakeSocket {
   send(data: string): void { this.sent.push(JSON.parse(data) as Record<string, unknown>); }
   close(): void {}
   /** The gateway's side: open, driving, and one frame from a page at `url`. */
-  drive(url = 'https://example.com/account'): void {
+  drive(url = 'https://example.com/account', level?: string): void {
     act(() => { this.onopen?.({}); });
     act(() => { this.onmessage?.({ data: JSON.stringify({ type: 'driving', sessionId: 's1' }) }); });
-    const head = new TextEncoder().encode(JSON.stringify({ deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0, url }));
+    const head = new TextEncoder().encode(JSON.stringify({ deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0, url, ...(level ? { level } : {}) }));
     const buffer = new ArrayBuffer(3 + head.length + 4);
     const view = new DataView(buffer);
     view.setUint8(0, 1); view.setUint16(1, head.length);
@@ -333,6 +333,18 @@ describe('the Page tab', () => {
     await act(async () => { reloaded(); });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Give it back' })).toBeEnabled());
     expect(vi.mocked(api.browserControl).mock.calls.filter(([action]) => action === 'takeover')).toHaveLength(1);
+  });
+
+  it('says quietly how sharp the live picture is: sharp, or fast while the link keeps it small', async () => {
+    device('desktop');
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const held = heldBy();
+    render(<BrowserView status={held} error={null} reload={() => {}} live agentName="Home Manager" />);
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+    FakeSocket.all[0]!.drive('https://example.com/account', 'normal');
+    expect(await screen.findByTestId('hand-level')).toHaveTextContent('fast');
+    FakeSocket.all[0]!.drive('https://example.com/account', 'sharp');
+    await waitFor(() => expect(screen.getByTestId('hand-level')).toHaveTextContent('sharp'));
   });
 
   it('a page held in your Chrome: it is in front there, so no hand is asked for and no frame waited on; Give it back resumes', async () => {

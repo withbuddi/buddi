@@ -290,7 +290,9 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   /** Where the held page is now, as its frames say; the last observation until one does. */
   const [location, setLocation] = useState<string | null>(null);
   const [navigating, setNavigating] = useState(false);
-  useEffect(() => { setLocation(null); setNavigating(false); }, [hand]);
+  /** How sharp the hand's picture is: "sharp" on a link that keeps up, "fast" while it is kept small. */
+  const [level, setLevel] = useState<'sharp' | 'normal' | 'low' | null>(null);
+  useEffect(() => { setLocation(null); setNavigating(false); setLevel(null); }, [hand]);
   useEffect(() => {
     if (!navigating) return undefined;
     const timer = window.setTimeout(() => setNavigating(false), NAV_SPIN_MS);
@@ -371,13 +373,14 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
             title={shown?.page?.title || undefined}
             address={address}
             held={!!hand}
+            level={hand && level ? (level === 'sharp' ? 'sharp' : 'fast') : null}
             loading={loading}
             onNav={nav}
             onRefused={(message) => setFailure(message)}
           />
           {hand ? (
             <div className="br-frame" data-state="yours">
-              <RemoteHand ref={handRef} sessionId={hand} csrf={csrfToken()} onGiveBack={giveBack} bare typing={typing} onTyping={setTyping} onLocation={onLocation} onLoginSeen={setLogin} />
+              <RemoteHand ref={handRef} sessionId={hand} csrf={csrfToken()} onGiveBack={giveBack} bare typing={typing} onTyping={setTyping} onLocation={onLocation} onLoginSeen={setLogin} onLevel={setLevel} />
             </div>
           ) : (
         <div className="br-frame" data-state={waiting ? 'waiting' : done ? 'done' : 'live'}>
@@ -409,11 +412,13 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
  * click. Awake while the owner holds the page: the buttons go down the hand,
  * and the address is a field — Enter goes there, Esc puts it back.
  */
-function WindowBar({ app, title, address, held, loading, onNav, onRefused }: {
+function WindowBar({ app, title, address, held, level = null, loading, onNav, onRefused }: {
   app: string | null;
   title?: string;
   address?: string;
   held: boolean;
+  /** The live picture's quality, quietly: "sharp" or "fast". */
+  level?: 'sharp' | 'fast' | null;
   loading: boolean;
   onNav: (action: HandNav, url?: string) => void;
   onRefused: (message: string) => void;
@@ -481,6 +486,7 @@ function WindowBar({ app, title, address, held, loading, onNav, onRefused }: {
         </>
       )}
       {title ? <span className="br-window-title" title={title}>{title}</span> : null}
+      {level ? <span className="br-window-level" data-testid="hand-level" title={level === 'sharp' ? 'The picture is at full quality' : 'The picture is kept small so it stays live on this link'}>{level}</span> : null}
       {loading ? <span className="br-window-progress" role="progressbar" aria-label="Loading" /> : null}
     </div>
   );

@@ -36,6 +36,8 @@ export interface HandFrameMetadata {
   scrollOffsetY: number;
   /** Where the page was when this frame was painted; the address field follows it. */
   url?: string;
+  /** How the gateway is painting it: `sharp` on a link that keeps up easily, `normal`, or `low` on a slow one. */
+  level?: 'sharp' | 'normal' | 'low';
 }
 
 /** A displayed rectangle, which is all of `DOMRect` this needs. */
@@ -272,6 +274,8 @@ export interface RemoteHandProps {
   onLocation?: (url: string) => void;
   /** The owner signed in on the page: the site and the user name to ask "Save this login?" about. Never the password. */
   onLoginSeen?: (login: LoginSeen) => void;
+  /** How sharp the picture is now, as the frames say, for the hand bar's quiet label. */
+  onLevel?: (level: 'sharp' | 'normal' | 'low') => void;
 }
 
 /** The window's buttons, sent down the same socket as the clicks. */
@@ -287,12 +291,13 @@ export interface RemoteHandHandle {
 
 type Phase = 'connecting' | 'driving' | 'lost' | 'refused';
 
-export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false, typing: typingProp, onTyping, onLocation, onLoginSeen }, handle): JSX.Element {
+export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function RemoteHand({ sessionId, csrf, onGiveBack, connect, bare = false, typing: typingProp, onTyping, onLocation, onLoginSeen, onLevel }, handle): JSX.Element {
   const [phase, setPhase] = useState<Phase>('connecting');
   const [refusal, setRefusal] = useState<string | null>(null);
   /** Whether any picture has arrived. The picture itself lives on the canvas. */
   const [painted, setPainted] = useState(false);
   const [metadata, setMetadata] = useState<HandFrameMetadata | null>(null);
+  const [level, setLevel] = useState<HandFrameMetadata['level']>(undefined);
   const [typingOwn, setTypingOwn] = useState(false);
   const typing = typingProp ?? typingOwn;
   const setTyping = (next: boolean) => { if (onTyping) onTyping(next); else setTypingOwn(next); };
@@ -376,6 +381,7 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
         // panel re-rendered for it.
         setMetadata((current) => (current && sameFrameShape(current, picked.metadata) ? current : picked.metadata));
         setPainted(true);
+        if (picked.metadata.level) setLevel(picked.metadata.level);
         paint(picked);
         return;
       }
@@ -412,6 +418,7 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
   // The address the page reports, whenever it changes (a link the owner clicked, a back).
   const location = metadata?.url;
   useEffect(() => { if (location) onLocation?.(location); }, [location]);
+  useEffect(() => { if (level) onLevel?.(level); }, [level]);
 
   /** One event, straight out to the socket. Never stored on the way. */
   const send = useCallback((input: Record<string, unknown>): void => {

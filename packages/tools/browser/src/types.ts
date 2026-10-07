@@ -90,6 +90,8 @@ export interface HandFrameMetadata {
    * leaves it out and the dashboard keeps the last observed address.
    */
   url?: string;
+  /** How the relay is painting it right now (`HandLevel`); added by the gateway, not the driver. */
+  level?: HandLevel;
 }
 /** One picture of the page, as JPEG bytes. Never stored, never logged. */
 export interface HandFrame { jpeg: Buffer; metadata: HandFrameMetadata }
@@ -137,6 +139,16 @@ export interface HandQuality { maxWidth: number; maxHeight: number; quality: num
 export const HAND_QUALITY: HandQuality = { maxWidth: 960, maxHeight: 600, quality: 50 };
 /** And what it falls back to when the link cannot keep up with that. */
 export const HAND_QUALITY_LOW: HandQuality = { maxWidth: 640, maxHeight: 400, quality: 40 };
+/**
+ * And what it grows to on a link that keeps up easily: the page at its own
+ * size (a screencast never paints larger than the viewport), up to 1440×900.
+ */
+export const HAND_QUALITY_SHARP: HandQuality = { maxWidth: 1440, maxHeight: 900, quality: 70 };
+/** The three, by name: what the hand bar says as "sharp" or "fast". */
+export type HandLevel = 'sharp' | 'normal' | 'low';
+export function handLevel(quality: HandQuality): HandLevel {
+  return quality.maxWidth >= HAND_QUALITY_SHARP.maxWidth ? 'sharp' : quality.maxWidth <= HAND_QUALITY_LOW.maxWidth ? 'low' : 'normal';
+}
 
 /** A live picture of the page, and the owner's hand on it. */
 export interface BrowserHand {

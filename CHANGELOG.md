@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Changed
+
+- The live picture of a page you hold gets sharp on a link that keeps up: after a few seconds of frames going out promptly it grows to the page's own size (up to 1440×900) at JPEG quality 70, and steps back down on lag, waiting longer each time before trying again. The window bar says *sharp* or *fast*.
+
 ### Fixed
 
 - Give it back starts a turn only when an agent was waiting on the page (its card was answered with Take over, the take-over interrupted it, or it tried to act while you held the page). A page taken from an idle conversation is given back with the "Gave the page back" stamp and no model call.
