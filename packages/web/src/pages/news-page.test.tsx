@@ -1,3 +1,4 @@
+import { readReference } from '../chat/reference';
 /**
  * Host API 1.27's News page grammar, drawn: the `stories` feed (cards under
  * group heads with See all, the ⋯ ways out that hide a card behind its
@@ -24,6 +25,9 @@ const ECOWAS = {
   title: 'ECOWAS leaders open a two-day summit in Lomé',
   lead: 'Closing statement expected Sunday.',
   summary: 'Trade corridors top the agenda.',
+  titleAttribution: 'Headline from RFI Afrique',
+  summaryAttribution: 'Feed excerpt from Reuters',
+  updateAttribution: 'Feed excerpt from Jeune Afrique',
   update: 'Ghana proposes a common customs window by 2028.',
   ago: '4 h ago',
   languages: 'EN · FR',
@@ -43,7 +47,7 @@ const ECOWAS = {
     { title: 'A bad link', url: 'javascript:alert(1)', outlet: 'Reuters', logo: 'reuters.com', meta: 'Reuters · English · 08:20' },
   ],
   timeline: [
-    { at: '06:10', text: 'First reported by RFI Afrique.' },
+    { at: '06:10', text: 'Earliest collected coverage: RFI Afrique.' },
     { at: '07:30', text: 'Told you in the morning edition.', told: true },
   ],
 };
@@ -76,7 +80,7 @@ const STORIES = {
       undo: { tool: 'news.mute_outlet', label: 'Undo', args: { outlet: { item: 'id' }, muted: { const: false } } },
     },
   ],
-  ask: { label: 'Ask Anchor', to: { chat: { const: 'anchor' } } },
+  ask: { label: 'Ask Anchor', to: { chat: { const: 'anchor' } }, context: { title: { path: 'title' }, text: { const: 'News story ID: ecowas' }, suggestions: ['Explain this story'] } },
   edition: { label: 'Read the edition', to: { chat: { const: 'anchor' } }, when: { path: 'told', equals: true } },
   emptyStates: [
     { when: { path: 'state', equals: 'told' }, title: 'Anchor has told you all of this', text: { path: 'note' }, actions: [{ label: 'Show all', set: { filter: 'all' } }] },
@@ -190,6 +194,19 @@ describe('the News page grammar (host API 1.27)', { timeout: 180_000 }, () => {
     expect(await screen.findByText('ECOWAS leaders open a two-day summit in Lomé')).toBeInTheDocument();
   });
 
+  it('does not repeat the description as an update', async () => {
+    answer([{ ...ECOWAS, update: '  Trade corridors top the agenda.  ' }]);
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    draw();
+    await user.click(await screen.findByText(ECOWAS.title));
+    const sheet = await screen.findByRole('dialog');
+    expect(sheet).toHaveAttribute('data-scroll-body', 'true');
+    expect(sheet.querySelector('.ui-sheet-body .pl-story-sheet')).not.toBeNull();
+    expect(sheet.querySelector('.ui-sheet-body .ui-sheet-foot')).toBeNull();
+    expect(within(sheet).getAllByText('Trade corridors top the agenda.')).toHaveLength(1);
+    expect(sheet.querySelector('.pl-story-sheet-update')).toBeNull();
+  });
+
   it('opens a story in its sheet: the update, the sources linked out, how it moved, and the ways out at its foot', async () => {
     answer([ECOWAS, OPINION]);
     vi.mocked(api.pageAct).mockResolvedValue({ result: { ok: true } } as never);
@@ -205,10 +222,17 @@ describe('the News page grammar (host API 1.27)', { timeout: 180_000 }, () => {
     expect(out).toHaveAttribute('href', 'https://www.rfi.fr/fr/afrique/x');
     expect(out).toHaveAttribute('rel', 'noopener noreferrer');
     expect(within(sheet).queryByRole('link', { name: /A bad link/ })).not.toBeInTheDocument();
-    expect(within(sheet).getByText('How it moved')).toBeInTheDocument();
+    expect(within(sheet).getByText('Coverage timeline')).toBeInTheDocument();
+    expect(within(sheet).getByText('Headline from RFI Afrique')).toBeInTheDocument();
+    expect(within(sheet).getByText('Feed excerpt from Reuters')).toBeInTheDocument();
+    expect(within(sheet).getByText('Feed excerpt from Jeune Afrique')).toBeInTheDocument();
     expect(within(sheet).getByText('Told you in the morning edition.').closest('li')).toHaveAttribute('data-told', 'true');
     expect(within(sheet).getByRole('link', { name: 'Read the edition' })).toHaveAttribute('href', '#/chat/anchor');
     expect(within(sheet).getByRole('link', { name: 'Ask Anchor' })).toHaveAttribute('data-variant', 'accent');
+    expect(within(sheet).getByRole('link', { name: 'Ask Anchor' })).toHaveAttribute('href', '#/chat/anchor/new');
+    await user.click(within(sheet).getByRole('link', { name: 'Ask Anchor' }));
+    expect(navigate).toHaveBeenCalledWith('#/chat/anchor/new');
+    expect(readReference('anchor')).toEqual({ title: ECOWAS.title, text: 'News story ID: ecowas', suggestions: ['Explain this story'] });
     answer([OPINION]);
     await user.click(within(sheet).getByRole('button', { name: 'Not interested' }));
     expect(api.pageAct).toHaveBeenCalledWith('news', { tool: 'news.hide_story', args: { id: 'ecowas', action: 'not_interested' } });

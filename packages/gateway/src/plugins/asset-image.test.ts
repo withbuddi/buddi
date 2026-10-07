@@ -61,6 +61,14 @@ describe('the plugin-asset codec', () => {
     expect(pixel(out[64], 32, 2)[3]).toBe(0);
   });
 
+  it('keeps landscape proportions in the larger story variant without upscaling', async () => {
+    const out = await normaliseAsset(png(1000, 500, [20, 40, 60, 255]));
+    const image = pngjs.PNG.sync.read(out[768]);
+    expect([image.width, image.height]).toEqual([768, 384]);
+    const small = pngjs.PNG.sync.read((await normaliseAsset(png(32, 16, [20, 40, 60, 255])))[768]);
+    expect([small.width, small.height]).toEqual([32, 16]);
+  });
+
   it('reads a JPEG, an ICO holding a PNG and an ICO holding a 32-bit bitmap', async () => {
     const data = Buffer.alloc(16 * 16 * 4);
     for (let i = 0; i < 16 * 16; i++) data.set([0, 0, 255, 255], i * 4);

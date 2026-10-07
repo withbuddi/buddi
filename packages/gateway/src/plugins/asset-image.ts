@@ -256,7 +256,14 @@ export function normaliseAssetHere(bytes: Buffer): Record<AssetSize, Buffer> {
   if (kind === null) throw new AssetRefusal('the bytes are not a PNG, JPEG, GIF or ICO');
   const rgba = kind === 'png' ? decodePng(bytes) : kind === 'jpeg' ? decodeJpeg(bytes) : kind === 'gif' ? decodeGif(bytes) : decodeIco(bytes);
   const out = {} as Record<AssetSize, Buffer>;
-  for (const side of ASSET_SIZES) out[side] = fitSquare(rgba, side);
+  for (const side of ASSET_SIZES) {
+    if (side !== 768) { out[side] = fitSquare(rgba, side); continue; }
+    const scale = Math.min(1, side / Math.max(rgba.width, rgba.height));
+    const resized = resample(rgba, Math.max(1, Math.round(rgba.width * scale)), Math.max(1, Math.round(rgba.height * scale)));
+    const png = new pngjs.PNG({ width: resized.width, height: resized.height });
+    png.data = Buffer.from(resized.data);
+    out[side] = pngjs.PNG.sync.write(png, { deflateLevel: 9 });
+  }
   return out;
 }
 

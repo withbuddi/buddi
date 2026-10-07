@@ -909,7 +909,7 @@ describe('a settings page', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Add an account' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).queryByLabelText('IMAP host')).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByLabelText('Give the hosts myself'));
+    await act(async () => { fireEvent.click(within(dialog).getByLabelText('Give the hosts myself')); });
     expect(within(dialog).getByLabelText('IMAP host')).toBeInTheDocument();
   });
 
@@ -1986,4 +1986,51 @@ describe('a row action that asks first', () => {
     await screen.findAllByRole('button', { name: 'Set password' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+});
+
+
+it('keeps setup actions in a compact card rather than promoting them into its heading', async () => {
+  const page: PluginPageDescriptor = { plugin: 'demo', id: 'setup', title: 'Setup', place: 'settings', body: [
+    { kind: 'section', look: 'setup', title: 'Set up', note: 'Step 1 of 2', body: [
+      { kind: 'notice', text: 'Prepare your local tools.' },
+      { kind: 'button', action: { tool: 'demo.prepare', label: 'Download and continue', tone: 'accent' } },
+      { kind: 'button', action: { tool: 'demo.skip', label: 'Skip download' } },
+    ] },
+  ] };
+  const { container } = render(<PluginPage page={page} navigate={() => {}} timezone="UTC" embedded />);
+  const button = await screen.findByRole('button', { name: 'Download and continue' });
+  expect(button.closest('.pp-setup-actions')).not.toBeNull();
+  expect(within(button.closest('.pp-setup-actions') as HTMLElement).getAllByRole('button').map((b) => b.textContent)).toEqual(['Skip download', 'Download and continue']);
+  expect(button.closest('.ui-section-head')).toBeNull();
+  expect(container.querySelector('.pp-setup')).toHaveTextContent('Step 1 of 2');
+  fireEvent.click(button);
+  await waitFor(() => expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.prepare', args: {} }));
+});
+
+it('keeps sections inside a polling container in separate panels', async () => {
+  vi.mocked(api.pageQuery).mockResolvedValue({ data: { rows: [{ id: 'settings' }] } });
+  const page: PluginPageDescriptor = { plugin: 'demo', id: 'settings', title: 'Settings', place: 'settings', body: [
+    { kind: 'repeat', query: { query: 'settings' }, rows: 'rows', key: 'id', body: [
+      { kind: 'section', title: 'Sources', body: [{ kind: 'notice', text: 'Source content' }] },
+      { kind: 'section', title: 'Topics', body: [{ kind: 'notice', text: 'Topic content' }] },
+    ] },
+  ] };
+  render(<PluginPage page={page} navigate={() => {}} timezone="UTC" embedded />);
+  const sources = await screen.findByText('Source content');
+  const topics = await screen.findByText('Topic content');
+  expect(sources.closest('.ui-panel')).not.toBeNull();
+  expect(sources.closest('.ui-panel')).not.toBe(topics.closest('.ui-panel'));
+});
+
+it('lets an expand defer its one query to a child list', async () => {
+  const page: PluginPageDescriptor = { plugin: 'demo', id: 'review', title: 'Review', place: 'settings', body: [
+    { kind: 'expand', label: 'Review sources', body: [
+      { kind: 'list', query: { query: 'items' }, rows: 'items', key: 'id', item: { title: { path: 'title' } } },
+    ] },
+  ] };
+  render(<PluginPage page={page} navigate={() => {}} timezone="UTC" embedded />);
+  expect(api.pageQuery).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText('Review sources'));
+  await screen.findByText('The first thing');
+  expect(api.pageQuery).toHaveBeenCalledTimes(1);
 });

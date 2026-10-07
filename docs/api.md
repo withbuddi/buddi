@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-06
+updated: 2026-10-07
 ---
 
 # The HTTP API
@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-336 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+337 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2802,12 +2802,27 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
+| GET | `/api/reports/audio` | Read the saved audio attached to a report link. | yes |
 | GET | `/api/artifacts` | The library: every file buddi holds, paged. | yes |
 | GET | `/api/artifacts/:id` | One file: its metadata, where it was used, whether its bytes are still there. | yes |
 | GET | `/api/artifacts/:id/download` | The file, as a download. | yes |
 | GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds. | yes |
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
 | DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
+
+#### `GET /api/reports/audio`
+
+Read the saved audio attached to a report link.
+
+- **Auth:** Session or API token.
+- **Query:** `link: local report route`
+- **Answer:** `{ audio: { fileId, mime, filename, sizeBytes } | null }`
+- **Errors:** 400
+- **Since:** 0.1.0-pre.49
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/reports/audio"
+```
 
 #### `GET /api/artifacts`
 
@@ -3568,7 +3583,7 @@ curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
 | GET | `/api/plugins` | Installed plugins, staged ones waiting to be read, and the trust sentence. | yes |
-| GET | `/api/plugin-assets/:plugin/:key` | A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin fetched, 128 px square, or 64 with ?size=64. | yes |
+| GET | `/api/plugin-assets/:plugin/:key` | A plugin's kept image: a PNG drawn by buddi, 128 px square by default, ?size=64 for small icons or ?size=768 for aspect-preserving story images. | yes |
 | POST | `/api/plugins/stage` | Fetch a plugin to read before installing (npm name, tarball path or folder). | no |
 | POST | `/api/plugins/upload` | Stage a plugin tarball sent as the body. | no |
 | GET | `/api/plugins/jobs/:id` | A staging, install or update job. | yes |
@@ -3603,7 +3618,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/plugins"
 
 #### `GET /api/plugin-assets/:plugin/:key`
 
-A plugin's kept image (an outlet's logo): a PNG buddi drew from what the plugin fetched, 128 px square, or 64 with ?size=64.
+A plugin's kept image: a PNG drawn by buddi, 128 px square by default, ?size=64 for small icons or ?size=768 for aspect-preserving story images.
 
 - **Auth:** Session or API token; answered while locked.
 - **Kind:** bytes, not JSON
@@ -4405,7 +4420,7 @@ Stop buddi. Accepted, then done once the answer is sent; nothing answers after.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** `202 { supervised: true, pending: 'stop' }`
-- **Errors:** 404 no supervisor
+- **Errors:** 404 no supported service control
 - **Since:** 0.1.0-pre.15
 
 ```sh
@@ -4418,7 +4433,7 @@ Restart buddi; it is back in seconds.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** `202 { supervised: true, pending: 'restart' }`
-- **Errors:** 404 no supervisor
+- **Errors:** 404 no supported service control
 - **Since:** 0.1.0-pre.15
 
 ```sh

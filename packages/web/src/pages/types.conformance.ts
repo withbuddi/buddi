@@ -287,6 +287,7 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   tabs: true,
   expand: true,
   button: true,
+  edition: true,
   approval: true,
   artifact: true,
   message: true,

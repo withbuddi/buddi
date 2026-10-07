@@ -254,7 +254,7 @@ export type ArgRef =
  * link the owner follows, never a request the dashboard makes: nothing is
  * fetched, previewed or embedded from it.
  */
-export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true } | { href: ValueRef };
+export type RouteRef = { page: string; item?: ValueRef; params?: Record<string, ValueRef> } | { chat: ValueRef } | { proposals: true } | { href: ValueRef };
 
 /** A write: a tool of this plugin, invoked as the owner. */
 export interface ToolRef {
@@ -741,8 +741,13 @@ export interface ComponentCommon {
  * logos are keys of the plugin's own assets.
  */
 export interface StoryRow {
+  image?: { key: string; caption?: string; credit?: string; outlet: string; url: string };
   id: string;
   title: string;
+  /** Source labels supplied by the plugin for the text actually displayed. */
+  titleAttribution?: string;
+  summaryAttribution?: string;
+  updateAttribution?: string;
   /** Two lines on the card: the update, when the story has one since it was told. */
   lead?: string;
   /** The sheet's paragraph; `lead` when left out. */
@@ -883,6 +888,8 @@ export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'butto
 export type Component =
   | (ComponentCommon & {
       kind: 'section';
+      /** A compact, centered first-run card (host API 1.33). */
+      look?: 'setup';
       /** Right of the heading: a link away, or one button. Never a list of them. */
       actions?: SectionAction[];
       body: Component[];
@@ -1165,7 +1172,7 @@ export type Component =
       /** The ⋯ menu, in order; the first one that `hides` is also the sheet's left button. At most eight. */
       ways?: StoryWay[];
       /** The sheet's primary button, read against the story: Ask Anchor. */
-      ask?: { label: string; to: RouteRef; when?: Visibility };
+      ask?: { label: string; to: RouteRef; when?: Visibility; context?: { title: ValueRef; text: ValueRef; suggestions?: string[] } };
       /** A link at the end of the sheet's quiet line, read against the story: "Read the edition". */
       edition?: { label: string; to: RouteRef; when?: Visibility };
       /** The page parameter the open story's id is kept in, so a story can be linked to. `story` when left out. */
@@ -1181,7 +1188,7 @@ export type Component =
    */
   | (ComponentCommon & { kind: 'menu'; label: string; tone?: 'accent'; items: MenuItem[] })
   /** A fold. `label` may be a path, so a row's own words are on it. */
-  | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
+  | (ComponentCommon & { kind: 'expand'; query?: QueryRef; label: string | ValueRef; body: Component[] })
   /**
    * One button, anywhere — including inside a `repeat`, where its `ValueRef`
    * arguments resolve against that row. What makes an attachment one block: a
@@ -1190,6 +1197,7 @@ export type Component =
    */
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
   /** An approval id in the data; draws the ApprovalCard, choices and all. */
+  | (ComponentCommon & { kind: 'edition'; query: QueryRef; param: string })
   | (ComponentCommon & { kind: 'approval'; path: string })
   /** An artifact id in the data; draws the download link. */
   | (ComponentCommon & { kind: 'artifact'; path: string; label: string })
@@ -1264,7 +1272,7 @@ const queryRefSchema = z
 
 const routeRefSchema = z.union([
   z
-    .object({ page: z.string().regex(PAGE_ID, 'a page id is lower-kebab-case'), item: valueRefSchema.optional() })
+    .object({ page: z.string().regex(PAGE_ID, 'a page id is lower-kebab-case'), item: valueRefSchema.optional(), params: z.record(z.string().regex(PAGE_ID), valueRefSchema).optional() })
     .strict(),
   // An agent's chat. `chat` is a value read out of the data — an agent id the
   // query answered — never a page id and never a URL the descriptor wrote.
@@ -1549,6 +1557,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
       .object({
         ...common,
         kind: z.literal('section'),
+        look: z.literal('setup').optional(),
         actions: z
           .array(componentSchema)
           .max(4)
@@ -1900,7 +1909,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
           .strict()
           .optional(),
         ways: z.array(storyWaySchema).max(8).optional(),
-        ask: z.object({ label, to: routeRefSchema, when: visibilitySchema.optional() }).strict().optional(),
+        ask: z.object({ label, to: routeRefSchema, when: visibilitySchema.optional(), context: z.object({ title: valueRefSchema, text: valueRefSchema, suggestions: z.array(z.string().min(1).max(200)).max(3).optional() }).strict().optional() }).strict().optional(),
         edition: z.object({ label, to: routeRefSchema, when: visibilitySchema.optional() }).strict().optional(),
         param: z.string().regex(PAGE_NAME, 'a page parameter is a name').optional(),
         emptyStates: z
@@ -1935,7 +1944,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
       .object({
         ...common,
         kind: z.literal('expand'),
-        query: queryRefSchema,
+        query: queryRefSchema.optional(),
         label: z.union([label, valueRefSchema]),
         body: z.array(componentSchema).max(24),
       })
@@ -1944,6 +1953,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
     z
       .object({ ...common, kind: z.literal('menu'), label, tone: z.literal('accent').optional(), items: z.array(menuItemSchema).min(1).max(8) })
       .strict(),
+    z.object({ ...common, kind: z.literal('edition'), query: queryRefSchema, param: z.string().regex(PAGE_ID) }).strict(),
     z.object({ ...common, kind: z.literal('approval'), path: viewPathSchema }).strict(),
     z.object({ ...common, kind: z.literal('artifact'), path: viewPathSchema, label }).strict(),
     z
@@ -2118,8 +2128,8 @@ const REF_PARENT: Record<'query' | 'tool' | 'page', (parent: Record<string, unkn
   query: (parent) => Object.keys(parent).every((key) => key === 'query' || key === 'params'),
   // A ToolRef always carries the button's words.
   tool: (parent) => typeof parent.label === 'string',
-  // `{ page, item? }` — a RouteRef.
-  page: (parent) => Object.keys(parent).every((key) => key === 'page' || key === 'item'),
+  // `{ page, item?, params? }` — a RouteRef.
+  page: (parent) => Object.keys(parent).every((key) => key === 'page' || key === 'item' || key === 'params'),
 };
 
 interface Ref {

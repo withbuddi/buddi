@@ -746,3 +746,14 @@ Notifications → Recent. See [Notifications](notifications.md).
   sections.
 - **⌃⌘L** on a Mac, **Ctrl+Alt+L** elsewhere, locks the dashboard once a PIN
   is set (see [Lock screen](#lock-screen)).
+
+For rendering diagnostics, **View raw response** (the code icon beside Copy under an agent reply) opens the original stored text blocks, before Markdown rendering. Whitespace and block boundaries are preserved. This shows response text, not provider transport metadata or hidden reasoning.
+
+The chat header’s ⋯ menu includes A−, A+ and Reset for message text size. The choice is stored in this browser, applies across conversations, and scales prose and tables without changing the composer or canvas.
+
+News’s Latest edition opens the latest saved edition in a scrollable drawer. Story edition links and notification links open the specific saved edition. These reads are available even while Do Not Disturb holds the notification.
+
+Edition audio offers play/pause, keyboard-accessible seeking, elapsed/total time and an MP3 download converted locally in the browser. The original recording remains unchanged; conversion failures offer the original file. Drawer and saved-edition canvas cards look up the recording from the saved report link. Appended mission material is collapsed in chat and remains available verbatim.
+
+News search results use article cards with publisher, date, excerpt, source link
+and available cached story image. Internal identifiers stay under Technical details.

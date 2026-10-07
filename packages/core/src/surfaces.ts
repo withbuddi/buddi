@@ -69,11 +69,11 @@ export interface SurfaceProfile {
   spokenLanguage?: string;
 }
 
-/** Telegram: plain text, a hard message cap, buttons, a person reading. */
+/** Telegram: light Markdown rendered as HTML, a hard cap, buttons, a person reading. */
 export const TELEGRAM_SURFACE: SurfaceProfile = {
   id: 'telegram',
   name: 'Telegram',
-  markdown: false,
+  markdown: true,
   tables: false,
   // The gateway splits at this width; a longer answer arrives in pieces.
   maxMessageChars: 4000,

@@ -6,8 +6,8 @@
  */
 /** A key: lower case, digits, `.`, `_` and `-`, starting with a letter or digit; no `..`. */
 export const ASSET_KEY = /^[a-z0-9](?:[a-z0-9._-]{0,94}[a-z0-9])?$/;
-/** The sizes core keeps, in pixels (a square each). */
-export const ASSET_SIZES = [64, 128] as const;
+/** The sizes core keeps, in pixels (64/128 square; 768 preserves proportions). */
+export const ASSET_SIZES = [64, 128, 768] as const;
 export type AssetSize = (typeof ASSET_SIZES)[number];
 /** The most bytes `put` takes in. */
 export const ASSET_INPUT_MAX = 256 * 1024;
@@ -25,7 +25,7 @@ export const ASSET_ROUTE = '/api/plugin-assets';
 /** One stored asset, as `list` and `put` answer it. */
 export interface PluginAsset {
   key: string;
-  /** Bytes of both PNGs together. */
+  /** Bytes of all kept PNG variants together. */
   bytes: number;
   /** When it was last written. */
   updatedAt: string;
@@ -41,7 +41,7 @@ export class AssetRefusal extends Error {
  * (`plugins/asset-image.ts`); a refusal is thrown as `AssetRefusal`.
  */
 export interface AssetImageCodec {
-  normalise(bytes: Buffer, mime: string): Promise<Record<AssetSize, Buffer>>;
+  normalise(bytes: Buffer, mime: string): Promise<Record<64 | 128, Buffer> & Partial<Record<768, Buffer>>>;
 }
 
 /** Whether `key` may name an asset. */

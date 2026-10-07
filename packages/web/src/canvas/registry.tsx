@@ -1,3 +1,5 @@
+import { AudioView, EditionView } from './views/EditionViews';
+import { StoryView } from './views/StoryView';
 /**
  * The renderer registry.
  *
@@ -71,6 +73,9 @@ export const RENDERERS: Record<RendererName, RendererComponent> = {
   image: erase<ImageProps>(ImageView),
   preview: erase<PreviewProps>(PreviewView),
   envelope: erase<EnvelopeProps>(Envelope),
+  story: erase(StoryView),
+  audio: erase(AudioView),
+  edition: erase(EditionView),
   structured: erase<StructuredProps>(Structured),
 };
 

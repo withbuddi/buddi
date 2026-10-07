@@ -15,14 +15,14 @@ const ASSET_KEY = /^[a-z0-9](?:[a-z0-9._-]{0,94}[a-z0-9])?$/;
 const PLUGIN = /^[a-z][a-z0-9_-]{0,63}$/;
 
 /** The route an asset is drawn from, or null when the plugin or key could not be one. */
-export function assetSrc(plugin: string, key: unknown, size: 64 | 128 = 64): string | null {
+export function assetSrc(plugin: string, key: unknown, size: 64 | 128 | 768 = 64): string | null {
   if (!PLUGIN.test(plugin) || typeof key !== 'string' || !ASSET_KEY.test(key) || key.includes('..')) return null;
   return `/api/plugin-assets/${plugin}/${key}?size=${size}`;
 }
 
 /** Only a path buddi serves assets on is ever put in an `<img>`. */
 export function isAssetSrc(src: unknown): src is string {
-  return typeof src === 'string' && /^\/api\/plugin-assets\/[a-z][a-z0-9_-]{0,63}\/[a-z0-9._-]+(\?size=(64|128))?$/.test(src);
+  return typeof src === 'string' && /^\/api\/plugin-assets\/[a-z][a-z0-9_-]{0,63}\/[a-z0-9._-]+(\?size=(64|128|768))?$/.test(src);
 }
 
 /** A tile's letters: the first letter or digit of the words. */

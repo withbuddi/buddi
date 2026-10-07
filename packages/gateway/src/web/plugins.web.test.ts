@@ -521,3 +521,32 @@ it('gates accepting a proposed agent on the session and the CSRF token', async (
   expect(reached.status).toBe(404);
   expect(((await reached.json()) as { error: string }).error).toContain('gardener');
 });
+
+it('reports an equal-version update as completed and up to date, without a failed job', async () => {
+  const { InstallRefusal } = await import('../plugins/refusals.js');
+  const engine = fakeEngine({ updatePlugin: vi.fn(async () => { throw new InstallRefusal('up-to-date', 'weather 2.1.0 is up to date.'); }) });
+  const { origin, headers } = await dashboard(engine, await emptyRecord());
+  const response = await fetch(`${origin}/api/plugins/weather/update`, { method: 'POST', headers: json(headers), body: '{}' });
+  expect(response.status).toBe(202);
+  const { job } = await response.json() as any;
+  await vi.waitFor(async () => {
+    const result = await (await fetch(`${origin}/api/plugins/jobs/${job.id}`, { headers })).json() as any;
+    expect(result).toMatchObject({ phase: 'done', upToDate: 'weather 2.1.0 is up to date.' });
+    expect(result.error).toBeUndefined();
+    expect(result.stagedId).toBeUndefined();
+  });
+});
+
+it.each([
+  [{}, false],
+  [{ XPC_SERVICE_NAME: 'com.buddi.serve' }, true],
+  [{ INVOCATION_ID: 'ab'.repeat(16) }, true],
+  [{ INVOCATION_ID: ' ' }, false],
+  [{ BUDDI_SUPERVISOR_SOCKET: '/tmp/buddi-fixture-nonexistent.sock' }, false],
+])('reports restart capability for its service environment %j', async (serviceEnv, expected) => {
+  const env = { ...await emptyRecord(), ...serviceEnv };
+  const { origin, headers } = await dashboard(fakeEngine(), env);
+  const result = await (await fetch(`${origin}/api/plugins`, { headers })).json() as any;
+  expect(result.checkout).toBe(!('BUDDI_SUPERVISOR_SOCKET' in serviceEnv));
+  expect(result.canRestart).toBe(expected);
+});

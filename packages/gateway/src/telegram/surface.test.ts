@@ -1165,7 +1165,7 @@ describe('TelegramSurface conversation handling', () => {
     expect(run.mock.calls.at(-1)?.[0].conversationId).toBe('conv-2');
   });
 
-  it('sends the final answer as plain text, markdown markers removed', async () => {
+  it('renders the final answer with safe Telegram formatting', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));
     const run = vi.fn(async (_req?: any) => '**Status — 2026-09-13**\n\nYou have 1 240,50 € left.');
     const { surface, sent } = surfaceWith(db, run as any);
@@ -1173,7 +1173,8 @@ describe('TelegramSurface conversation handling', () => {
     await surface.drain();
 
     const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
-    expect(final?.body.text).toBe('Status — 2026-09-13\n\nYou have 1 240,50 € left.');
+    expect(final?.body.text).toBe('<b>Status — 2026-09-13</b>\n\nYou have 1 240,50 € left.');
+    expect(final?.body.parse_mode).toBe('HTML');
   });
 
   /*
@@ -3505,7 +3506,7 @@ describe('the surface contract on Telegram', () => {
     // gone; what the model is told about Telegram is TELEGRAM_SURFACE, which
     // every other surface reads the same way.
     expect('SURFACE_HINT' in telegramSurface).toBe(false);
-    expect(surfaceSection(TELEGRAM_SURFACE)).toContain('Markdown is not rendered here');
+    expect(surfaceSection(TELEGRAM_SURFACE)).toContain('Markdown is rendered here');
   });
 
   it('still strips markdown on the way out, as a net under the profile', () => {
@@ -4106,4 +4107,57 @@ describe("the front desk's handoff buttons", () => {
     expect(db.activeAgents.get(String(OWNER))).toBeUndefined();
     expect(db.offers[0].taken_at).toBeNull();
   });
+});
+
+it('sends a retrieved edition recording before its text in a new message', async () => {
+  const db = withOwner(new FakeDb());
+  const { store } = fakeStore();
+  const audio = await store.save({ bytes: Buffer.from('OggS'), mime: 'audio/ogg', filename: 'edition.ogg', createdBy: 'anchor' });
+  const { surface, sent } = surfaceWith(db, vi.fn(async () => ({ text: 'Evening edition. Six stories.\n\n### International\n\n**Story title**\n\n[The Guardian](https://example.com/story)', leadingAudio: [audio.id] })) as any, { artifacts: { ...store, describe: async () => audio } });
+  await surface.processUpdates([message(9901, OWNER, OWNER, 'Get the last edition')]);
+  await surface.drain();
+  const voice = sent.findIndex(s => s.method === 'sendVoice');
+  const text = sent.findIndex(s => s.method === 'sendMessage' && String(s.body.text).includes('Evening edition. Six stories.'));
+  expect(voice).toBeGreaterThanOrEqual(0);
+  expect(text).toBeGreaterThan(voice);
+  expect(sent[text]?.body.parse_mode).toBe('HTML');
+  expect(sent[text]?.body.text).toContain('<b>INTERNATIONAL</b>');
+  expect(sent[text]?.body.text).toContain('<b>Story title</b>');
+  expect(sent[text]?.body.text).toContain('<a href="https://example.com/story">The Guardian</a>');
+  expect(sent[text]?.body.text).not.toContain('(https://example.com/story)');
+  expect(sent.filter(s => s.method === 'sendVoice')).toHaveLength(1);
+  expect(sent.some(s => s.method === 'editMessageText' && String(s.body.text).includes('Evening edition. Six stories.'))).toBe(false);
+});
+
+
+it('keeps publisher links labeled in an ordinary story reply without edition tools', async () => {
+  const db = alreadyGreeted(withOwner(new FakeDb()));
+  const reply = "The Maine debate.\n\n- **Her record:** [The Hill](https://thehill.com/story?x=1&y=2) reports her position.\n- **Jackson:** [The Guardian](https://theguardian.com/story) has more. <untrusted>";
+  const { surface, sent } = surfaceWith(db, vi.fn(async () => reply));
+  await surface.processUpdates([message(9902, OWNER, OWNER, 'What is the Susan Collins story?')]);
+  await surface.drain();
+  const final = sent.filter(s => s.method === 'editMessageText').at(-1);
+  expect(final?.body.parse_mode).toBe('HTML');
+  expect(final?.body.text).toContain('• <b>Her record:</b> <a href="https://thehill.com/story?x=1&amp;y=2">The Hill</a>');
+  expect(final?.body.text).toContain('<a href="https://theguardian.com/story">The Guardian</a>');
+  expect(final?.body.text).toContain('&lt;untrusted&gt;');
+  expect(final?.body.text).not.toContain('(https://');
+});
+
+it('places the full story explanation below an already delivered photo', async () => {
+  const db = alreadyGreeted(withOwner(new FakeDb()));
+  const { surface, sent } = surfaceWith(db, vi.fn(async (req: any) => {
+    req.onTextRetract?.();
+    sent.push({ method: 'sendPhoto', body: { photo: 'cached-story' } });
+    return { text: '**Debate:** [Publisher](https://example.com/story) explains the exchange.', leadingPhotoSent: true };
+  }) as any);
+  await surface.processUpdates([message(9903, OWNER, OWNER, 'Explain the debate')]);
+  await surface.drain();
+  const photo = sent.findIndex(s => s.method === 'sendPhoto');
+  const answer = sent.findIndex(s => s.method === 'sendMessage' && String(s.body.text).includes('<b>Debate:</b>'));
+  expect(answer).toBeGreaterThan(photo);
+  expect(sent[answer]?.body.parse_mode).toBe('HTML');
+  expect(sent[answer]?.body.text).toContain('<a href="https://example.com/story">Publisher</a>');
+  expect(sent.some(s => s.method === 'deleteMessage')).toBe(true);
+  expect(sent.some(s => s.method === 'editMessageText' && String(s.body.text).includes('Debate:'))).toBe(false);
 });

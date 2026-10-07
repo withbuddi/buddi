@@ -24,6 +24,9 @@ export type RendererName =
   | 'image'
   | 'preview'
   | 'envelope'
+  | 'story'
+  | 'audio'
+  | 'edition'
   | 'structured';
 
 export type ValueRef = { path: string } | { const: string | number | boolean | null };

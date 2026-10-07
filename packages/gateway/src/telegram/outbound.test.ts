@@ -41,6 +41,7 @@ function fakeApi(fail?: (method: string, args: any[]) => Error | undefined) {
     editMessageText: record('editMessageText'),
     sendPhoto: record('sendPhoto'),
     sendDocument: record('sendDocument'),
+    sendVoice: record('sendVoice'),
     sendChatAction: record('sendChatAction'),
     deleteMessage: record('deleteMessage'),
   } as unknown as TelegramApi;
@@ -486,4 +487,11 @@ describe('the Bot API calls outbound uses', () => {
     expect(bodies[0]).toMatchObject({ parse_mode: 'HTML', text: '<pre>x</pre>' });
     await expect(api.sendMessage('c1', 'x'.repeat(5000), { parseMode: 'HTML' })).rejects.toThrow(/over Telegram/);
   });
+});
+
+ it('sends an existing Ogg recording as a playable Telegram voice note', async () => {
+  const { api, calls } = fakeApi();
+  await sendRunExtras({ api, log: () => {}, artifacts: store([row('voice', { mime: 'audio/ogg', filename: 'edition.ogg' })]) }, 'c1', { artifacts: ['voice', 'voice'] });
+  expect(calls.filter(call => call.method === 'sendVoice')).toHaveLength(1);
+  expect(calls.some(call => call.method === 'sendDocument')).toBe(false);
 });

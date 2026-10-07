@@ -6,7 +6,7 @@
  * download route answers no range requests, which Safari needs to stream an
  * `<audio src>`. Starting a file stops a reply being read aloud.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../ui';
 import { downloadUrl, formatBytes } from './attachments';
 import { stopPlayback } from './voice';
@@ -29,7 +29,7 @@ export function clock(seconds: number | null): string {
  * The player's state and its one action, for any face drawn over it (this
  * card, the edition card's waveform). `bind` goes on the `<audio>` element.
  */
-export function useAudioPlayer(artifactId: string, mime: string) {
+export function useAudioPlayer(artifactId: string, mime: string, preloadAudio = false) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const objectUrl = useRef<string | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -38,10 +38,36 @@ export function useAudioPlayer(artifactId: string, mime: string) {
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState<number | null>(null);
 
-  useEffect(() => () => {
-    audio.current?.pause();
-    if (objectUrl.current && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(objectUrl.current);
-  }, []);
+  const pending = useRef<Promise<void> | null>(null);
+  const prepare = useCallback(async (): Promise<void> => {
+    const element = audio.current;
+    if (!element || objectUrl.current) return;
+    if (pending.current) return pending.current;
+    const task = (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(downloadUrl(artifactId), { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(String(res.status));
+        const bytes = await res.arrayBuffer();
+        if (audio.current !== element) return;
+        objectUrl.current = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        element.src = objectUrl.current;
+        element.load();
+      } finally { setLoading(false); pending.current = null; }
+    })();
+    pending.current = task;
+    return task;
+  }, [artifactId, mime]);
+
+  useEffect(() => {
+    if (preloadAudio) void prepare().catch(() => setFailed(true));
+    const element = audio.current;
+    return () => {
+      element?.pause();
+      if (objectUrl.current && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(objectUrl.current);
+      objectUrl.current = null;
+    };
+  }, [prepare, preloadAudio]);
 
   const toggle = async (): Promise<void> => {
     const element = audio.current;
@@ -53,19 +79,20 @@ export function useAudioPlayer(artifactId: string, mime: string) {
     stopPlayback();
     setFailed(false);
     try {
-      if (!objectUrl.current) {
-        setLoading(true);
-        const res = await fetch(downloadUrl(artifactId), { credentials: 'same-origin' });
-        if (!res.ok) throw new Error(String(res.status));
-        objectUrl.current = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: mime }));
-        element.src = objectUrl.current;
-      }
+      await prepare();
       await element.play();
     } catch {
       setFailed(true);
     } finally {
       setLoading(false);
     }
+  };
+
+  const seek = (seconds: number): void => {
+    const element = audio.current;
+    if (!element || duration === null || !Number.isFinite(seconds)) return;
+    element.currentTime = Math.max(0, Math.min(duration, seconds));
+    setPosition(element.currentTime);
   };
 
   const bind = {
@@ -78,7 +105,7 @@ export function useAudioPlayer(artifactId: string, mime: string) {
     onLoadedMetadata: (event: { currentTarget: HTMLAudioElement }) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : null),
     onDurationChange: (event: { currentTarget: HTMLAudioElement }) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : null),
   };
-  return { playing, loading, failed, position, duration, toggle, bind };
+  return { playing, loading, failed, position, duration, toggle, seek, bind };
 }
 
 export function AudioCard({

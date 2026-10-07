@@ -4,6 +4,56 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- News search results show readable article cards with cached story images; Anchor opens the matching story before explaining it, and Telegram includes its available publisher image.
+
+- Story cards, drawers and canvas show cached publisher feed images with source credits; plugin assets support an aspect-preserving 768px variant.
+
+### Fixed
+
+- Telegram sends a story photo before its explanation, placing the full linked text in a new message below it.
+
+- Ordinary Telegram replies preserve clickable source names, bold labels and lists, just like saved editions.
+
+- Retrieved editions keep labeled links and bold topic headings on Telegram; their saved audio also appears in dashboard transcripts, with clearer topic separation.
+
+- Telegram attaches the existing voice recording when Anchor retrieves a saved edition for playback; count and list requests do not send audio.
+
+- Audio waveforms fill the full seek area in wide canvas cards, keeping visual progress aligned with playback position.
+
+### Changed
+
+- Retrieved editions on Telegram send their existing recording first, then the full text in a new message so listeners can read along.
+
+- Collapse appended mission material in chat while keeping its original text available for inspection.
+
+- Saved editions include their recording in the drawer; edition players support seeking and local MP3 downloads. Speech and saved-edition canvas results show the content with technical details collapsed.
+
+- Enabling Read aloud for a News edition authorizes Speech for that edition run; other conversations keep their approval rules.
+
+- Latest edition and story edition links open the saved edition in a scrollable drawer, including an empty state when none is saved.
+
+- News story results open as readable canvas stories with attributed excerpts, linked sources, a coverage timeline and collapsed technical details.
+
+- Chat keeps its original text size by default; A−, A+ and Reset in the chat menu adjust message text and tables, remembered in this browser.
+
+- Restore paragraph spacing in rendered chat replies so separate paragraphs remain easy to scan.
+
+- Inspect unrendered response text blocks from each chat reply; story drawer actions stay visible while long content scrolls.
+
+- Ask Anchor carries a removable story reference into a new conversation, with question buttons that send immediately when clicked and preserve your composer draft. Opening chat sends nothing.
+
+- Dashboard restart supports systemd and launchd; configured supervisor sockets are checked before a restart is offered.
+
+- Attribute story headlines and excerpts to their source publishers, suppress duplicate update text, and label the coverage timeline without claiming who first reported a story.
+
+- Host API 1.33 adds compact setup cards to plugin pages.
+
+- Plugin settings sections inside a polling container retain separate panels and header actions.
+
+- Plugin installs show preparation progress immediately, keep long descriptions in an expandable review with visible install actions, and guide you through restarting and setup. Managed development installs can restart from the dashboard; checking an already-current plugin says it is up to date.
+
 ## 0.1.0-pre.48 — 2026-10-06
 
 ### Added
@@ -213,7 +263,6 @@ What changes in buddi from one release to the next, newest first.
 - Telegram sends one page photo when a run needs you, not one per step, captioned with the card's own words and a Take over ↗ link; step counts are gone from captions and /browser.
 - The Canvas tab is called **Page** whichever route the agent looks through: the page's letter, its title and one quiet line ("Looking at amazon.com · in buddi’s browser", "· in your Chrome · background tab", "Waiting for you · it asks for your sign-in"), Stop and Take over, then the live picture — no step list, counter, mode or observation time. ⋯ holds Stop agents' browsing (for an hour, or until you say), Show the window and the full page view. Take over happens in the same frame: "You have the page", nothing you type is kept, Keyboard · Give it back. Give it back carries the conversation on by itself, and the page shows You have the page with Give it back however you took it (from a chat card, after a reload, or where there is no remote hand). Nothing still waiting for a page acts after Stop. While a Stop holds, a conversation that asked for a page shows the pause there with Resume.
 - Computer control is now a plugin: agents working in your apps ("Use my apps") moved out of buddi into `@withbuddi/plugin-computer` (macOS), with the native helper, the list of apps and the permissions on its own settings page (Settings → Computer). buddi no longer ships the helper. Without the plugin, Settings → Where agents may look offers it in one line instead of the Your apps row; if you had Use my apps on, Home tells you once, with a button that opens the plugin's install card. The apps you had allowed are carried over to the plugin the first time it starts. `GET /api/host/apps`, `GET /api/host/browser-profiles` and `POST /api/browser/permissions` are gone, and `buddi doctor` has no computer helper row.
-
 
 ## 0.1.0-pre.37 — 2026-10-03
 

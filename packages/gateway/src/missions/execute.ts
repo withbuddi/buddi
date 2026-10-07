@@ -1,3 +1,4 @@
+import { editionVoiceConsent } from './voice-consent.js';
 /**
  * Mission execution: the bridge between the core scheduler and the runtime.
  *
@@ -662,6 +663,10 @@ export function createMissionExecutor(
     // and that is the only way the owner's decision later finds this run.
     const ctx: CoreToolContext = {
       ...deps.ctx,
+      configuredConsent: {
+        agentId, conversationId,
+        allows: (tool) => editionVoiceConsent(registry, mission, deps.ctx, tool),
+      },
       ...(control?.jobId ? { jobId: control.jobId } : {}),
       ...(control?.signal ? { signal: control.signal } : {}),
       ...(browses ? { unattendedSession: UNATTENDED_BROWSER_TOOLS, ask: askVia(asked), unattendedChrome: mission.browser === 'owner' } : {}),

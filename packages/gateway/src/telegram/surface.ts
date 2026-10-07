@@ -1,3 +1,4 @@
+import { markdownToTelegramHtml } from './html.js';
 /**
  * The Telegram surface (roadmap step 2).
  *
@@ -629,6 +630,10 @@ export interface RunReply {
    * dashboard shows under the answer. Sent after the text.
    */
   artifacts?: readonly string[];
+  /** Existing edition recordings sent before the readable text. */
+  leadingAudio?: readonly string[];
+  /** A story photo already sent; the answer must follow in a new message. */
+  leadingPhotoSent?: boolean;
   /** What the turn left on the canvas, if it drew anything. */
   canvas?: CanvasView;
   /**
@@ -641,16 +646,22 @@ export interface RunReply {
 type RenderedTurn = RenderedOffers & {
   question?: Question;
   artifacts?: readonly string[];
+  /** Existing edition recordings sent before the readable text. */
+  leadingAudio?: readonly string[];
+  /** A story photo already sent; the answer must follow in a new message. */
+  leadingPhotoSent?: boolean;
   canvas?: CanvasView;
   /** The agent whose run spent its step budget: the answer offers Continue. */
   continueAgentId?: string;
 };
 
 /** The extras a reply carries past its text, copied onto the drawn turn. */
-function extrasOf(produced: string | RunReply, agentId?: string): Pick<RenderedTurn, 'artifacts' | 'canvas' | 'continueAgentId'> {
+function extrasOf(produced: string | RunReply, agentId?: string): Pick<RenderedTurn, 'artifacts' | 'leadingAudio' | 'leadingPhotoSent' | 'canvas' | 'continueAgentId'> {
   if (typeof produced === 'string') return {};
   return {
     ...(produced.artifacts && produced.artifacts.length > 0 ? { artifacts: produced.artifacts } : {}),
+    ...(produced.leadingAudio?.length ? { leadingAudio: produced.leadingAudio } : {}),
+    ...(produced.leadingPhotoSent ? { leadingPhotoSent: true } : {}),
     ...(produced.canvas ? { canvas: produced.canvas } : {}),
     ...(produced.budgetStopped === true && agentId !== undefined ? { continueAgentId: agentId } : {}),
   };
@@ -2033,8 +2044,7 @@ export class TelegramSurface {
     const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
     const stopTyping = this.#startTyping(chatId);
     try {
-      // Safety net, not the mechanism: TELEGRAM_SURFACE already told the model
-      // markdown does not render here. This catches a model that ignored it.
+      // The first-run greeting uses a short plain-text burst.
       const reply = toPlainText(
         replyText(
           await this.#opts.run({
@@ -3122,9 +3132,7 @@ export class TelegramSurface {
     });
 
     try {
-      // Safety net, not the mechanism: TELEGRAM_SURFACE already told the model
-      // markdown does not render here, and we never send `parse_mode`. This
-      // catches the answer of a model that ignored the profile.
+      // Keep the original Markdown for display; plain text is for speech only.
       const produced = await produce(progress, stream);
       const drawn: RenderedTurn = typeof produced === 'string' ? { text: produced, controls: [] } : produced;
       const reply = toPlainText(drawn.text);
@@ -3139,8 +3147,10 @@ export class TelegramSurface {
         : { inline_keyboard: [...(offered?.inline_keyboard ?? []), ...continueKeyboard(drawn.continueAgentId).inline_keyboard] };
       // Buttons need a text message to sit under: an answer that carries any
       // stays text, as cards and questions do.
-      const voice = speak && keyboard === undefined ? await this.#speakAnswer(chatId, placeholderId, reply, progress) : { sent: false };
-      const landed = voice.sent ? (voice.landed ?? []) : await stream.finish(reply, keyboard);
+      const audioFirst = Boolean(drawn.leadingAudio?.length);
+      if (audioFirst) await sendRunExtras({ ...outbound, ...(this.#opts.artifacts ? { artifacts: this.#opts.artifacts } : {}) }, chatId, { artifacts: drawn.leadingAudio! });
+      const voice = !audioFirst && !drawn.leadingPhotoSent && speak && keyboard === undefined ? await this.#speakAnswer(chatId, placeholderId, reply, progress) : { sent: false };
+      const landed = voice.sent ? (voice.landed ?? []) : await stream.finish(reply, keyboard, audioFirst || drawn.leadingPhotoSent === true, markdownToTelegramHtml(drawn.text.trim() || '(no reply)'));
       if (onLanded && landed.length > 0) {
         await onLanded(landed).catch((err) => this.#log(`telegram: chat ${chatId} — the sent answer was not mapped for reactions: ${message(err)}`));
       }

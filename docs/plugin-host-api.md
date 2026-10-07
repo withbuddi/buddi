@@ -578,7 +578,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.32`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.33`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -952,3 +952,20 @@ for `^1.32`. A plugin that must still run on an older buddi keeps its own
 A tarball install of the scaffold has a known problem that predates the host:
 it needs the `link:` devDependency removed, the peer resolution fixed and
 `buddi.name` in the scaffold ([plugins.md](plugins.md) §8).
+
+1.33 adds `section.look: "setup"` to page descriptors: a first-run card that follows the Appearance page-width setting, with vertically arranged title and note and actions aligned at the bottom right, with the primary action last.
+
+1.33 also adds optional story `ask.context` (title, text, and up to three question suggestions). It carries a removable reference into a fresh conversation with the destination agent; the host sends it with the owner’s next message or clicked question action, never on navigation.
+
+1.33 adds the `story` canvas renderer (`map: {}`). The output has a headline (`title`), optional `titleOutlet`, `lead`, `leadOutlet`, `topic`, article `sources` (title, URL, outlet, language, publishedAt, paywall, opinion, local logo key), and a `timeline` (at, outlet, title). Story IDs and internal metadata appear only in a collapsed disclosure. Tabs use the story ID for identity and the headline for their label. Missing-story outputs fall back to the structured view.
+
+Host API 1.33 also adds the `edition` page component and parameterized page links for saved edition drawers (see plugin-pages.md).
+
+Enabling Read aloud for a News edition authorizes `speech.say` within that edition’s mission run, using the configured Speech service and normal daily limits. The host rechecks the saved preference for each call; other agents, conversations and delegated runs do not inherit it. Disabling the edition’s voice removes this consent. Host API 1.33 exposes this as `approvals.configuredForRun(tool)`.
+
+Host API 1.33 adds `audio` and `edition` canvas renderers (empty maps). Audio expects the Speech result fields `id`, `mime`, `name`, with optional voice/model metadata. Edition expects the saved edition ID in `edition` and reads its saved News view. Both retain raw metadata in collapsed Technical details.
+
+Story imagery (1.33): assets also keep an aspect-preserving PNG variant up to
+768 pixels on its longest side, without upscaling, read with `?size=768`.
+The existing 64/128 square variants and input/storage limits remain unchanged.
+Old cached assets may lack this variant; consumers must hide missing images.

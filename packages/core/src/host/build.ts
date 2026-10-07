@@ -433,6 +433,12 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
     db,
     dir: pluginDir(plugin),
     approvals: {
+      async configuredForRun(tool) {
+        ownTool(tool);
+        const consent = facts.configuredConsent;
+        if (!consent || (facts.delegationDepth ?? 0) !== 0 || facts.agentId !== consent.agentId || facts.conversationId !== consent.conversationId) return false;
+        try { return await consent.allows(tool); } catch { return false; }
+      },
       assert: (ctx, envelope) => assertApprovedEffect(ctx, envelope),
       async standing(tool) {
         ownTool(tool);

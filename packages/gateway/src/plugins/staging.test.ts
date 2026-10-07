@@ -443,13 +443,14 @@ describe('approval 2: the prose and the code disagree', () => {
 });
 
 describe('update', () => {
-  it('refuses a version that is not newer, and keeps nothing it fetched', async () => {
+  it('reports an equal version as up to date, and keeps nothing it fetched', async () => {
     const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
     await approveStaged(staged.id, { integrity: staged.integrity, env });
 
     await expect(updatePlugin('fixture-marker', { env, npm: fakeNpm({ version: '1.0.0' }) })).rejects.toThrow(
-      /not newer/,
+      /up to date/,
     );
+    await expect(updatePlugin('fixture-marker', { env, npm: fakeNpm({ version: '0.9.0' }) })).rejects.toMatchObject({ code: 'not-newer' });
     expect(listStaged(env)).toEqual([]);
   });
 

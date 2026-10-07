@@ -3811,3 +3811,11 @@ Declared as `onnx`. One folder per model id across plugins; the types are
 | --- | --- | --- | --- | --- |
 | `state` | `(id) => Promise<ModelState>` | yes | 1.32 | `{ id, state, sizeBytes, path?, reason?, receivedBytes? }`; `path` is the model's folder once it is ready. An export's read-only host keeps only this. |
 | `ensure` | `({ id, files, reason, name? }) => Promise<ModelState>` | yes | 1.32 | Ask for a model: one card, then one download into `<data>/models/<id>/`, every file https, checked against its `sha256` and `bytes` before the folder is renamed into place. `id` is lower case, digits, `.`, `_`, `-`; a file's `name` (default: the URL's last segment) may be up to four folders deep. An id already kept with other files is refused. Answers at once, with `pending` while the card waits. |
+
+### Installing from Browse
+
+Choose **Review & install** to prepare a plugin in a sheet over Browse. The sheet shows fetching, dependency preparation and reading as they happen. Closing it lets preparation continue; the review waits on Installed. Permissions stay visible, while the full Markdown description and technical details expand on request. Install actions stay at the bottom while the review scrolls.
+
+After installation, choose **Restart to finish**. Packaged installs with a responding supervisor socket, the managed macOS launchd job, and Linux systemd services support this action; a foreground checkout shows manual instructions. After restarting, the dashboard offers the plugin’s setup step when it declares one. An equal-version update check reports that the plugin is up to date and retains any pending restart reminder.
+
+The install review labels its shortened description as an excerpt; “Read full description” expands the author’s complete claims. Restart capability is checked against the supervisor status endpoint when a control socket is configured.

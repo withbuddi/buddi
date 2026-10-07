@@ -419,7 +419,10 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       }
 
       const output = forOwner(block.output);
-      const subject = subjectIdentityOf(use?.input ?? null, output);
+      const storyOutput = byTool.get(tool)?.renderer === 'story' && output && typeof output === 'object' ? output as Record<string, unknown> : null;
+      const subject = storyOutput && typeof storyOutput.title === 'string' && typeof storyOutput.id === 'string'
+        ? { key: storyOutput.id, label: storyOutput.title.length > 60 ? `${storyOutput.title.slice(0, 59)}…` : storyOutput.title }
+        : subjectIdentityOf(use?.input ?? null, output);
       if (block.ok === false) {
         place({
           id: block.toolUseId,

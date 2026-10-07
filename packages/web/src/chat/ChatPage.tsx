@@ -14,6 +14,7 @@
  * knowing a canvas exists. Properties and the live host-browser session are
  * trusted platform panels beside those results, not agent-authored views.
  */
+import { readReference, clearReference, withReference, type ChatReference } from './reference';
 import { leaveDraft, takeDraft } from './draft';
 import type { ChatCommandName } from './commands';
 import { leadingMention } from './composer-text';
@@ -134,6 +135,21 @@ export function ChatPage({
   onConversationOpened,
 }: ChatPageProps): JSX.Element {
   const thisMachine = useThisMachine();
+  const [textSize, setTextSize] = useState(() => {
+    try { const value = Number(localStorage.getItem('buddi.chatTextSize')); return Number.isInteger(value) && value >= 11 && value <= 19 ? value : 13; }
+    catch { return 13; }
+  });
+  const changeTextSize = (value: number): void => {
+    setTextSize(value);
+    try { localStorage.setItem('buddi.chatTextSize', String(value)); } catch { /* Session-only when storage is unavailable. */ }
+  };
+  const readingControls = <div className="wb-reading-controls" role="group" aria-label="Message text size">
+    <span>Text size</span>
+    <button className="ui-btn" data-size="sm" role="menuitem" aria-label="Decrease message text size" disabled={textSize <= 11} onClick={() => changeTextSize(textSize - 1)}>A−</button>
+    <button className="ui-btn" data-size="sm" role="menuitem" aria-label="Increase message text size" disabled={textSize >= 19} onClick={() => changeTextSize(textSize + 1)}>A+</button>
+    <button className="ui-btn" data-size="sm" role="menuitem" aria-label="Reset message text size" disabled={textSize === 13} onClick={() => changeTextSize(13)}>Reset</button>
+  </div>;
+
   const [descriptors, setDescriptors] = useState<ViewDescriptor[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
@@ -201,6 +217,7 @@ export function ChatPage({
    */
   const [profile, setProfile] = useState<AgentProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [reference, setReference] = useState<ChatReference | null>(null);
   /** A line the panel put in the composer's mouth. Never sent for the owner. */
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
   /*
@@ -235,6 +252,7 @@ export function ChatPage({
   // It is read once, for the agent it was written for, and then forgotten.
   useEffect(() => {
     if (!agentId) return;
+    setReference(readReference(agentId));
     const left = takeDraft(agentId);
     if (left) setDraft({ text: left, at: Date.now() });
   }, [agentId]);
@@ -879,7 +897,7 @@ export function ChatPage({
     });
   };
 
-  const send = (text: string, attachments: UploadedAttachment[]): void => {
+  const send = (text: string, attachments: UploadedAttachment[], preserveDraft = false): void => {
     if (!agentId) return;
     /*
      * `@father …` at the start of a one-to-one message: Agent Father is
@@ -895,6 +913,7 @@ export function ChatPage({
         .catch((err: unknown) => setError(message(err)));
       return;
     }
+    text = withReference(text, group ? null : reference);
     const attachmentIds = attachments.map((file) => file.artifactId);
     /*
      * Said while the agent is working: it goes into the run that is going,
@@ -927,11 +946,16 @@ export function ChatPage({
       : chatApi.send(agentId, { ...(conversationId ? { conversationId } : {}), text, attachmentIds }))
       .then(async (result: { conversationId: string; rolledOver?: boolean; queued?: boolean }) => {
         if (selection.current.agentId !== agentId || selection.current.conversationId !== conversationId) return;
+        if (!group && reference) {
+          clearReference(agentId);
+          setReference(null);
+        }
         // A room summarises itself across a rollover, and says so. A one-to-one
         // conversation says nothing: the page lands in the new thread, and the
         // carry-over note is in the transcript when there was work to carry.
         setNotice(result.rolledOver === true ? '(New thread — the room had grown long. Where it stopped carries over as a summary.)' : null);
         if (result.conversationId !== conversationId) {
+          if (preserveDraft) composer.current?.carryDraftTo(result.conversationId);
           setConversation(null);
           setConversationId(result.conversationId);
         }
@@ -1202,7 +1226,7 @@ export function ChatPage({
       <section
         className="wb-chat"
         ref={columnRef}
-        style={narrow || width === null ? undefined : ({ [WIDTH_VAR]: `${width}px` } as CSSProperties)}
+        style={{ ...(narrow || width === null ? {} : { [WIDTH_VAR]: `${width}px` }), "--chat-text-scale": textSize / 13 } as CSSProperties}
         data-sized={!narrow && width !== null ? 'true' : undefined}
         data-testid="chat-column"
         data-dropping={dropping || undefined}
@@ -1308,6 +1332,7 @@ export function ChatPage({
                * hairline — what takes something away.
                */
               <HeadMenu
+                readingControls={readingControls}
                 disabled={false}
                 label="More about this group"
                 title={group.name}
@@ -1323,6 +1348,7 @@ export function ChatPage({
               />
             ) : (
               <HeadMenu
+                readingControls={readingControls}
                 disabled={!agentId}
                 label="More about this agent"
                 title={agent?.name ?? 'Agent'}
@@ -1499,6 +1525,21 @@ export function ChatPage({
            * the owner left them when it comes back.
            */
           <div hidden={docked.length > 0 || Boolean(conversation?.question)} data-testid="composer-slot">
+          {!group && reference ? <section className="wb-chat-reference" aria-label="Story reference">
+            <div className="wb-chat-reference-head">
+              <div><small>Asking about</small><p><strong>{reference.title}</strong></p></div>
+              <button type="button" className="ui-btn" onClick={() => { if (agentId) clearReference(agentId); setReference(null); }}>Remove reference</button>
+            </div>
+            <details><summary>Context sent with your question</summary><p>{reference.text}</p></details>
+            <div className="wb-starters" role="group" aria-label="Questions about this story">
+              {reference.suggestions.map((suggestion) => (
+                <button key={suggestion} type="button" className="wb-starter" disabled={running || !agentId}
+                  title="Send this question" onClick={() => send(suggestion, [], true)}>
+                  {suggestion} <Icon name="send" size={16} />
+                </button>
+              ))}
+            </div>
+          </section> : null}
           <Composer
             ref={composer}
             disabled={!agentId}
@@ -1642,7 +1683,8 @@ interface HeadMenuItem {
  * away. On a phone the stylesheet lays the same list out as a sheet from the
  * bottom, with whose menu it is on top and Cancel under the rows.
  */
-function HeadMenu({ items, disabled, label, title, sub, face }: {
+function HeadMenu({ items, disabled, label, title, sub, face, readingControls }: {
+  readingControls?: JSX.Element;
   items: Array<HeadMenuItem | 'separator'>;
   disabled: boolean;
   label: string;
@@ -1709,6 +1751,7 @@ function HeadMenu({ items, disabled, label, title, sub, face }: {
                 {sub ? <span className="wb-head-menu-sub">{sub}</span> : null}
               </span>
             </div>
+            {readingControls}
             {items.map((item, index) => item === 'separator' ? <div key={`sep-${index}`} className="ui-menu-sep" role="separator" /> : row(item))}
             <button type="button" className="ui-btn wb-head-menu-cancel" onClick={() => setOpen(false)}>Cancel</button>
           </div>
