@@ -17,6 +17,7 @@ import {
   listJobs,
   listMissions,
   listOccurrences,
+  isManualOccurrence,
   listPendingActions,
   listClosedOffers,
   listOpenOffers,
@@ -460,6 +461,8 @@ export interface MissionView {
     finishedAt: string | null;
     error: string | null;
     runConversationId: string | null;
+    /** Started by Run now rather than the schedule or a watcher. */
+    manual?: true;
   }>;
   lastNotification: { kind: string; at: string; reason?: string; chars?: number } | null;
   /** An agent's watch: when it is done, in the agent's words. */
@@ -519,6 +522,7 @@ export async function readMissions(pool: Pool, now: Date): Promise<MissionView[]
         finishedAt: o.finishedAt ? o.finishedAt.toISOString() : null,
         error: o.error,
         runConversationId: o.runConversationId,
+        ...(isManualOccurrence(o.payload) ? { manual: true as const } : {}),
       })),
       lastNotification: notification
         ? { ...notification, at: notification.at.toISOString() }

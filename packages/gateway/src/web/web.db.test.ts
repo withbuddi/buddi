@@ -912,6 +912,34 @@ suite('the dashboard API', () => {
     expect((await client.post('/api/missions/nope/browser', { chrome: true })).status).toBe(404);
   });
 
+  it('runs a mission now: 202 with the job, listed as a manual occurrence, then 409 while it runs, when it is off, and 404', async () => {
+    const client = await signedIn();
+    await upsertMission(pool, { id: 'web-run-now', name: 'Morning brief', agentId: 'demo-agent', prompt: 'brief me' });
+    const started = await client.post('/api/missions/web-run-now/run', {});
+    expect(started.status).toBe(202);
+    const body = (await started.json()) as { job: string; occurrence: { id: string; state: string; manual: boolean } };
+    expect(body.occurrence).toMatchObject({ state: 'claimed', manual: true });
+    // The scheduler's own job: the same kind, keyed by the occurrence.
+    const job = (await pool.query(`select kind, dedup_key, payload from core.jobs where id = $1`, [body.job])).rows[0];
+    expect(job).toMatchObject({ kind: 'mission-run', dedup_key: body.occurrence.id, payload: { occurrenceId: body.occurrence.id, missionId: 'web-run-now' } });
+    const listed = (await client.json<any>('/api/missions')).missions.find((m: any) => m.id === 'web-run-now');
+    expect(listed.occurrences[0]).toMatchObject({ id: body.occurrence.id, state: 'claimed', manual: true });
+
+    const again = await client.post('/api/missions/web-run-now/run', {});
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: string }).error).toMatch(/already running/);
+    // Once it has finished, it may run again.
+    await pool.query(`update core.occurrences set state = 'succeeded', finished_at = now() where id = $1`, [body.occurrence.id]);
+    expect((await client.post('/api/missions/web-run-now/run', {})).status).toBe(202);
+    await pool.query(`update core.occurrences set state = 'succeeded', finished_at = now() where mission_id = 'web-run-now'`);
+
+    await client.post('/api/missions/web-run-now/enabled', { enabled: false });
+    const off = await client.post('/api/missions/web-run-now/run', {});
+    expect(off.status).toBe(409);
+    expect(((await off.json()) as { error: string }).error).toMatch(/Switch it on first/);
+    expect((await client.post('/api/missions/nope/run', {})).status).toBe(404);
+  });
+
   it('enables, disables and re-schedules a mission', async () => {
     const client = await signedIn();
     await upsertMission(pool, {

@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-10-05
+updated: 2026-10-07
 ---
 
 # The buddi command line
@@ -296,7 +296,8 @@ Your agents, what they have scheduled, and the plugins they use.
 - [`buddi missions add-defaults`](#buddi-missions-add-defaults): Register every mission the installed plugins suggest.
 - [`buddi missions add-recap`](#buddi-missions-add-recap): Register the recap mission, or refresh it.
 - [`buddi missions add-friday-recap`](#buddi-missions-add-friday-recap): The same as buddi missions add-recap, under its older name.
-- [`buddi missions run-now`](#buddi-missions-run-now): Queue a run of a mission for now, or run it here with --inline.
+- [`buddi missions run`](#buddi-missions-run): Run a mission now, like Run now on the dashboard: the service runs it as a scheduled run and its report goes where your notifications go. Refused while one is queued or running, or while the mission is off.
+- [`buddi missions run-now`](#buddi-missions-run-now): The same as buddi missions run, or run it in this terminal with --inline.
 - [`buddi missions enable`](#buddi-missions-enable): Turn a mission back on.
 - [`buddi missions disable`](#buddi-missions-disable): Turn a mission off. Its schedule is kept.
 - [`buddi reminders`](#buddi-reminders): List the one-off reminders the agents have set, soonest first.
@@ -732,9 +733,30 @@ buddi missions add-friday-recap
 - `2`: The command was not typed right.
 - `3`: The database is not reachable, or not configured.
 
+### buddi missions run
+
+Run a mission now, like Run now on the dashboard: the service runs it as a scheduled run and its report goes where your notifications go. Refused while one is queued or running, or while the mission is off.
+
+```sh
+buddi missions run <id>
+```
+
+**Example**
+
+```sh
+buddi missions run recap
+```
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: No such mission, it is off or paused, or a run is already queued or running; the reason is printed.
+- `2`: The command was not typed right.
+- `3`: The database is not reachable, or not configured.
+
 ### buddi missions run-now
 
-Queue a run of a mission for now, or run it here with --inline.
+The same as buddi missions run, or run it in this terminal with --inline.
 
 ```sh
 buddi missions run-now <id> [--inline]

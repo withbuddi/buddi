@@ -365,7 +365,11 @@ head, opens the catalogue. The index has five tabs:
 
 - **Team**: every agent with its face and whether it can run, a **Talk**
   button, and the choice of default agent (the "front desk").
-- **Missions**: what the team runs on a schedule.
+- **Missions**: what the team runs on a schedule. Each row has **More**, its
+  on/off switch and, on the right, **Run now** (only while it is on): the run
+  starts at once, the row says "Running…" until it is done, then its last-run
+  line says reported, stayed silent or failed, as for a scheduled run
+  ([agents.md](agents.md#run-now)).
 - **Offers**: next steps the agents have suggested, and agents plugins need.
 - **Reminders**: what the agents have put on the clock.
 - **Skills**: the short texts agents follow (below).

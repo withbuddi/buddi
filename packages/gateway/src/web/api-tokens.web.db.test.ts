@@ -13,6 +13,7 @@ import {
   ensureOwner,
   migrate,
   ToolRegistry,
+  upsertMission,
   type AgentCatalog,
   type CoreToolContext,
 } from '@buddi/core';
@@ -176,6 +177,14 @@ suite('owner API tokens', () => {
     expect((await listApiTokens(pool))[0]?.lastUsedAt).not.toBeNull();
     // Not a route: the same 404 a session gets.
     expect((await call('/api/nothing-here')).status).toBe(404);
+  });
+
+  it('may run a mission now, the way a session does', async () => {
+    const { token } = await createApiToken(pool, { name: 'cron', via: 'cli' });
+    await upsertMission(pool, { id: 'token-run-now', name: 'Brief', agentId: 'scout', prompt: 'p' });
+    const res = await script(base, token)('/api/missions/token-run-now/run', { method: 'POST', body: '{}' });
+    expect(res.status).toBe(202);
+    expect(((await res.json()) as { occurrence: { manual: boolean } }).occurrence.manual).toBe(true);
   });
 
   it('never decides an approval, grants, installs, opens access or reads a secret — and may say no', async () => {

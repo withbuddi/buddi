@@ -351,6 +351,7 @@ import {
   undismissJobsFromWeb,
   setMissionEnabledFromWeb,
   setMissionChromeFromWeb,
+  runMissionNowFromWeb,
   keepMissionFromWeb,
   answerStillUsefulFromWeb,
   setPausedFromWeb,
@@ -3638,6 +3639,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         ),
       );
     }
+
+    const missionRun = /^\/api\/missions\/([^/]+)\/run$/.exec(path);
+    if (missionRun) return finish(res, await runMissionNowFromWeb(writeDeps, decodeURIComponent(missionRun[1] as string)));
 
     const missionBrowser = /^\/api\/missions\/([^/]+)\/browser$/.exec(path);
     if (missionBrowser) {

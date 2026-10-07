@@ -745,6 +745,11 @@ in a row (`quiet_runs`, reset by any delivered report) raise one Needs-you
 notification, "Still useful? <name>" with the action "Keep or stop it?",
 linking to Missions, where the card offers **Stop** and **Keep** (`POST
 /api/missions/:id/keep` resets the count and lets the question come again).
+A Run now occurrence (`POST /api/missions/:id/run`, `buddi missions run`) is
+written `claimed` at schedule revision 0 with the payload `{ manual: true }`,
+under the mission's row lock, and queued as the same `mission-run` job; it is
+refused while another occurrence of the mission is pending or claimed, and
+counts toward `quiet_runs` like a scheduled one.
 
 Goals, a target with a clock over a plugin's metric, are in [goals.md](goals.md).
 

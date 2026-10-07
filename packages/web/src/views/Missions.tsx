@@ -5,18 +5,49 @@
  * Changing the misfire policy writes a *new schedule revision* — occurrences
  * already materialized keep their provenance, which is why the dashboard never
  * offers to edit one in place.
+ *
+ * Run now starts one occurrence at once, run like a scheduled one (its report
+ * or silence, through the owner's notifications). While one is queued or
+ * running the row says "Running…" and the page looks again every few seconds;
+ * then the row's last-run line says how it went.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type MissionRow } from '../api';
 import { fmtRelative, fmtTime, truncate } from '../format';
 import { Button, Card, Code, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Section, Spacer, Stack, StatePill, Switch, Table, Toolbar, useAsync, EmptyState } from '../ui';
 
 const POLICIES = ['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline'] as const;
 
+/** How often the page looks again while a run is queued or going. */
+const RUNNING_POLL_MS = 3_000;
+
+/** An occurrence is queued or running: Run now waits for it. */
+export function missionBusy(mission: MissionRow): boolean {
+  const latest = mission.occurrences[0];
+  return latest?.state === 'pending' || latest?.state === 'claimed';
+}
+
+/** The row's last-run line, the same for a scheduled run and a Run now: running, failed, reported or silent. */
+export function lastRunLine(mission: MissionRow): string {
+  if (missionBusy(mission)) return 'Running…';
+  const latest = mission.occurrences[0];
+  if (latest?.state === 'failed') {
+    return `Last run failed${latest.finishedAt ? ` ${fmtRelative(latest.finishedAt)}` : ''}${latest.error ? ` — ${truncate(latest.error, 120)}` : ''}`;
+  }
+  const told = mission.lastNotification;
+  if (!told) return 'Last run: none';
+  return `Last run ${told.kind === 'mission.delivered' ? 'reported' : 'stayed silent'} ${fmtRelative(told.at)}${told.reason ? ` — ${told.reason}` : ''}`;
+}
+
 export function Missions({ timezone, embedded, agentId }: { timezone: string; embedded?: boolean; agentId?: string }): JSX.Element {
-  const { data, error, reload } = useAsync(() => api.missions(), [], 30_000);
+  // Polled faster while a run is going, so "Running…" turns into its result without a reload.
+  const [starting, setStarting] = useState<ReadonlySet<string>>(() => new Set());
+  const [busy, setBusy] = useState(false);
+  const { data, error, reload } = useAsync(() => api.missions(), [], busy || starting.size > 0 ? RUNNING_POLL_MS : 30_000);
   const rows = (data?.missions ?? []).filter((m) => !agentId || m.agentId === agentId);
   const [failure, setFailure] = useState<string | null>(null);
+  const anyBusy = rows.some(missionBusy);
+  useEffect(() => setBusy(anyBusy), [anyBusy]);
 
   const run = async (work: Promise<unknown>): Promise<void> => {
     setFailure(null);
@@ -28,6 +59,16 @@ export function Missions({ timezone, embedded, agentId }: { timezone: string; em
     }
   };
 
+  const runNow = async (id: string): Promise<void> => {
+    setStarting((s) => new Set(s).add(id));
+    await run(api.runMission(id));
+    setStarting((s) => {
+      const next = new Set(s);
+      next.delete(id);
+      return next;
+    });
+  };
+
   return (
     <PageFrame embedded={embedded} title="Missions" lede="Standing schedules. A disabled mission materializes nothing.">
       <ErrorBanner message={error ?? failure} />
@@ -36,7 +77,7 @@ export function Missions({ timezone, embedded, agentId }: { timezone: string; em
       ) : (
         <Stack>
           {rows.map((mission) => (
-            <Mission key={mission.id} mission={mission} timezone={timezone} onRun={run} />
+            <Mission key={mission.id} mission={mission} timezone={timezone} onRun={run} starting={starting.has(mission.id)} onRunNow={() => void runNow(mission.id)} />
           ))}
         </Stack>
       )}
@@ -48,12 +89,20 @@ function Mission({
   mission,
   timezone,
   onRun,
+  starting,
+  onRunNow,
 }: {
   mission: MissionRow;
   timezone: string;
   onRun: (work: Promise<unknown>) => void;
+  /** Run now was pressed and the gateway has not answered yet. */
+  starting: boolean;
+  onRunNow: () => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  // Only a mission that is on can run now; an off one shows Enable instead.
+  const runnable = mission.enabled && !mission.pausedReason;
+  const running = starting || missionBusy(mission);
   return (
     <Card
       tone={mission.enabled && !mission.pausedReason ? 'good' : 'muted'}
@@ -72,12 +121,17 @@ function Mission({
       }
       actions={
         <>
-          <Button size="sm" onClick={() => onRun(api.setMissionEnabled(mission.id, !mission.enabled))}>
-            {mission.enabled ? 'Disable' : 'Enable'}
-          </Button>
           <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
             {open ? 'Less' : 'More'}
           </Button>
+          <Button size="sm" onClick={() => onRun(api.setMissionEnabled(mission.id, !mission.enabled))}>
+            {mission.enabled ? 'Disable' : 'Enable'}
+          </Button>
+          {runnable ? (
+            <Button size="sm" variant="accent" disabled={running} onClick={onRunNow}>
+              Run now
+            </Button>
+          ) : null}
         </>
       }
     >
@@ -137,12 +191,9 @@ function Mission({
           'no schedule — enqueued by hand or by a sentinel'
         )}
         <br />
-        Last notification:{' '}
-        {mission.lastNotification
-          ? `${mission.lastNotification.kind === 'mission.delivered' ? 'delivered' : 'silent'} ${fmtRelative(
-              mission.lastNotification.at,
-            )}${mission.lastNotification.reason ? ` — ${mission.lastNotification.reason}` : ''}`
-          : 'none'}
+        <span role="status" className={!running && mission.occurrences[0]?.state === 'failed' ? 'critical' : undefined}>
+          {running ? 'Running…' : lastRunLine(mission)}
+        </span>
       </p>
 
       {open ? (
@@ -189,7 +240,9 @@ function Mission({
                   <tbody>
                     {mission.occurrences.map((o) => (
                       <tr key={o.id}>
-                        <td className="nowrap">{fmtTime(o.scheduledAt, timezone)}</td>
+                        <td className="nowrap">
+                          {fmtTime(o.scheduledAt, timezone)} {o.manual ? <Pill>run now</Pill> : null}
+                        </td>
                         <td>
                           <StatePill state={o.state} />
                         </td>

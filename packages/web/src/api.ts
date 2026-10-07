@@ -563,6 +563,8 @@ export interface MissionRow {
     finishedAt: string | null;
     error: string | null;
     runConversationId: string | null;
+    /** Started by Run now rather than the schedule or a watcher. */
+    manual?: true;
   }>;
   lastNotification: { kind: string; at: string; reason?: string; chars?: number } | null;
   /** An agent's watch: when it is done, in the agent's words. */
@@ -3244,6 +3246,9 @@ export const api = {
   /** For a mission that browses: your Chrome (`true`) or buddi's own browser. */
   setMissionChrome: (id: string, chrome: boolean) =>
     post<{ id: string; browser: 'own' | 'owner' }>(`/missions/${encodeURIComponent(id)}/browser`, { chrome }),
+  /** Run now: one occurrence, run like a scheduled one. 409 while one is queued or running, or while it is off. */
+  runMission: (id: string) =>
+    post<{ job: string; occurrence: { id: string; scheduledAt: string; state: string; manual: true } }>(`/missions/${encodeURIComponent(id)}/run`, {}),
   keepMission: (id: string) => post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/keep`, {}),
   /** Keep or Stop on "Still useful?": the first answer from any surface decides. */
   answerStillUseful: (id: string, answer: 'keep' | 'stop') =>

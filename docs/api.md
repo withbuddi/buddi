@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-337 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+338 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2197,6 +2197,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | --- | --- | --- | --- |
 | GET | `/api/missions` | Every mission, its schedule, next run and recent occurrences. | yes |
 | POST | `/api/missions/:id/enabled` | Switch a mission on or off. | yes |
+| POST | `/api/missions/:id/run` | Run now: one occurrence of the mission, queued at once and run like a scheduled one (its context, its report or silence, the owner’s notifications). It is listed with the mission’s occurrences as `manual`, and a silent one counts toward “Still useful?” like any run. | yes |
 | POST | `/api/missions/:id/browser` | For a mission that browses: let it use your signed-in Chrome while you are away (`chrome: true`), or keep it in buddi’s own browser. | no |
 | POST | `/api/missions/:id/keep` | Keep an agent’s quiet watch after “Still useful?”: its count of silent runs starts again. | yes |
 | POST | `/api/missions/:id/still-useful` | Answer “Still useful?” with Keep or Stop. The first answer from any surface decides; a later one changes nothing and says what was decided. | yes |
@@ -2243,6 +2244,19 @@ Switch a mission on or off.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"enabled":true}' "$BUDDI_URL/api/missions/<id>/enabled"
+```
+
+#### `POST /api/missions/:id/run`
+
+Run now: one occurrence of the mission, queued at once and run like a scheduled one (its context, its report or silence, the owner’s notifications). It is listed with the mission’s occurrences as `manual`, and a silent one counts toward “Still useful?” like any run.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `202 { job: string, occurrence: { id, scheduledAt, state: 'claimed', manual: true } }`
+- **Errors:** 404; 409 (one is already queued or running; the mission is off, ended or paused: switch it on first; buddi is paused)
+- **Since:** 0.1.0-pre.51
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/missions/<id>/run"
 ```
 
 #### `POST /api/missions/:id/browser`

@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Run now on a mission: on its row in Missions, `buddi missions run <id>` or `POST /api/missions/:id/run`. It runs at once exactly as the schedule would, report and notifications included, says "Running…" until done, and counts like any run.
+
 ### Fixed
 
 - Approving a schedule an agent proposed without an end date works again; it was refused every time with "the effect changed since its preview". Such a watch now ends with the 30th day in the owner's zone, and every approval card is described at the same instant it is recorded.

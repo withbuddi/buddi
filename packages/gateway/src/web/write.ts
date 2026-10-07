@@ -62,6 +62,7 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { toApprovalView, toJobView, type ApprovalView, type JobView } from './read.js';
+import { runMissionNow } from '../missions/run-now.js';
 
 /** The surface name recorded on every decision made here. */
 export const WEB_SURFACE = 'web';
@@ -229,6 +230,30 @@ export async function setMissionEnabledFromWeb(
   const mission = await setMissionEnabled(deps.pool, missionId, enabled);
   if (!mission) return fail(404, `no such mission: ${missionId}`);
   return { ok: true, status: 200, body: { id: mission.id, enabled: mission.enabled } };
+}
+
+/**
+ * Run now: one occurrence of the mission, queued at once and run the way a
+ * scheduled one is (missions/run-now.ts). 202 with the job and the
+ * occurrence; 409 while one is queued or running, or when the mission is off.
+ */
+export async function runMissionNowFromWeb(
+  deps: WriteDeps,
+  missionId: string,
+): Promise<WriteResult<{ job: string; occurrence: { id: string; scheduledAt: string; state: string; manual: true } }>> {
+  const result = await runMissionNow(deps.pool, missionId, deps.now());
+  if (!result.ok) {
+    return fail(result.status, result.error, result.occurrence ? { occurrence: result.occurrence.id, state: result.occurrence.state } : undefined);
+  }
+  deps.log?.(`mission ${result.mission.id}: run now — occurrence ${result.occurrence.id} queued as job ${result.job.id}`);
+  return {
+    ok: true,
+    status: 202,
+    body: {
+      job: result.job.id,
+      occurrence: { id: result.occurrence.id, scheduledAt: result.occurrence.scheduledAt.toISOString(), state: result.occurrence.state, manual: true },
+    },
+  };
 }
 
 /**

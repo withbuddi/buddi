@@ -73,6 +73,12 @@ describe('parseMissionsArgs', () => {
     });
   });
 
+  it('reads run with a mission id, and refuses --inline on it', () => {
+    expect(parseMissionsArgs(['run', 'morning-brief'])).toEqual({ command: 'run', missionId: 'morning-brief', inline: false });
+    expect(() => parseMissionsArgs(['run'])).toThrow(/needs a mission id/);
+    expect(() => parseMissionsArgs(['run', 'x', '--inline'])).toThrow(/only applies to run-now/);
+  });
+
   it('reads --inline', () => {
     expect(parseMissionsArgs(['run-now', 'friday-recap', '--inline'])).toMatchObject({
       inline: true,

@@ -78,6 +78,7 @@ import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
 import { relinkPluginsOnLoad } from './plugins/load.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler, OFFER_HINT_PREFIX } from './missions/agent-run.js';
+import { MISSION_JOB_KIND, queueOccurrence } from './missions/run-now.js';
 import {
   composePrepare,
   createMissionExecutor,
@@ -180,8 +181,7 @@ export const PARKED_TICK_MS = 60_000;
 /** How often held and shown notifications are looked at: escalations, quiet hours, the end of the day. */
 export const NOTIFICATIONS_TICK_MS = 60_000;
 
-/** The scheduler's kind: run one occurrence of a scheduled mission. */
-export const MISSION_JOB_KIND = 'mission-run';
+export { MISSION_JOB_KIND, queueOccurrence };
 
 /** Every kind this process claims. A source's run is a job like any other. */
 export const JOB_KINDS = [MISSION_JOB_KIND, AGENT_RUN_JOB_KIND] as const;
@@ -315,30 +315,6 @@ export function formatMissionLine(line: MissionLine): string {
       ? 'next (never)'
       : 'next (disabled)';
   return `  ${mission.id} (${mission.agentId})${state} — ${line.cron} ${line.timezone} — ${next}`;
-}
-
-/**
- * Hand one due occurrence to the queue.
- *
- * The dedup key *is* the occurrence id, which is what makes the handoff safe to
- * repeat: a process that dies between claiming and running leaves the claim to
- * the stale sweep, the occurrence is claimed again, and this enqueue returns the
- * job that already exists rather than running the mission twice.
- */
-export async function queueOccurrence(
-  pool: Pool,
-  occurrence: Occurrence,
-  mission: Mission,
-): Promise<Job> {
-  const payload: MissionJobPayload = {
-    occurrenceId: occurrence.id,
-    missionId: mission.id,
-  };
-  return enqueue(pool, {
-    kind: MISSION_JOB_KIND,
-    payload,
-    dedupKey: occurrence.id,
-  });
 }
 
 /**

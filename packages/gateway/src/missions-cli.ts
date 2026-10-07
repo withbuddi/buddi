@@ -4,8 +4,9 @@
  *
  * Registration is idempotent: `add-recap` upserts the mission and points
  * it at a fresh schedule revision, so running it twice leaves one mission and
- * one active schedule. `run-now` writes a pending occurrence and lets the
- * scheduler claim it in the normal way; `--inline` runs it here instead, prints
+ * one active schedule. `run` (and `run-now`) is the dashboard's Run now: one
+ * occurrence queued as the scheduler's own job, refused while one is queued
+ * or running or while the mission is off; `run-now --inline` runs it here instead, prints
  * the delivered text, and — unlike a scheduled run — reports an unpaired owner
  * chat as a skipped delivery rather than a failure.
  */
@@ -37,6 +38,7 @@ import {
   type RegistrationOutcome,
 } from './missions/defaults.js';
 import { createMissionExecutor } from './missions/execute.js';
+import { runMissionNow } from './missions/run-now.js';
 import { missionOwnerAgent } from './missions/reminders.js';
 import { createDigestPrepare, recapMissionId } from './missions/recap.js';
 import { ownerDeliver } from './owner-notify.js';
@@ -49,7 +51,8 @@ const USAGE = `buddi missions — scheduled missions
   buddi missions add-defaults             register every mission the installed plugins suggest
   buddi missions add-recap                register (or refresh) the recap mission
   buddi missions add-friday-recap         the same, under its older name
-  buddi missions run-now <id>             queue an occurrence for now
+  buddi missions run <id>                 run it now, like the dashboard's Run now
+  buddi missions run-now <id>             the same as run
   buddi missions run-now <id> --inline    run it here and print the text
   buddi missions enable <id>
   buddi missions disable <id>
@@ -61,6 +64,7 @@ export type MissionsCommand =
   | 'add-defaults'
   | 'add-recap'
   | 'add-friday-recap'
+  | 'run'
   | 'run-now'
   | 'enable'
   | 'disable'
@@ -85,6 +89,7 @@ export function parseMissionsArgs(argv: string[]): ParsedMissionsArgs {
     'add-defaults',
     'add-recap',
     'add-friday-recap',
+    'run',
     'run-now',
     'enable',
     'disable',
@@ -108,7 +113,7 @@ export function parseMissionsArgs(argv: string[]): ParsedMissionsArgs {
     parsed.missionId = arg;
   }
   if (
-    (command === 'run-now' || command === 'enable' || command === 'disable') &&
+    (command === 'run' || command === 'run-now' || command === 'enable' || command === 'disable') &&
     parsed.missionId === undefined
   ) {
     throw new Error(`buddi missions ${command} needs a mission id`);
@@ -384,7 +389,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       return;
     }
 
-    // run-now
+    if (!args.inline) {
+      // `run` and `run-now`: the dashboard's Run now, queued for the running service.
+      const result = await runMissionNow(pool, missionId, now());
+      if (!result.ok) {
+        console.error(result.status === 404 ? `no such mission "${missionId}" (buddi missions list)` : result.error);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(
+        `${result.mission.id}: running now — occurrence ${result.occurrence.id}, job ${result.job.id}. ` +
+          'The service runs it like a scheduled run; its report arrives where your notifications go.',
+      );
+      return;
+    }
+
+    // run-now --inline
     const mission = await getMission(pool, missionId);
     if (!mission) {
       console.error(`no such mission "${missionId}" (buddi missions list)`);
@@ -393,14 +413,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
     const spec = await getActiveSchedule(pool, mission.id);
     const revision = spec?.revision ?? 0;
-
-    if (!args.inline) {
-      const occurrence = await insertOccurrence(pool, mission.id, revision, now(), 'pending');
-      console.log(
-        `queued occurrence ${occurrence.id} for ${mission.id} at ${occurrence.scheduledAt.toISOString()} — the scheduler will pick it up (pnpm serve)`,
-      );
-      return;
-    }
 
     if (process.env.TELEGRAM_BOT_TOKEN?.trim()) registerChannel(createTelegramChannel({ pool, env: process.env }));
     const localChannel = createLocalNotificationChannel();

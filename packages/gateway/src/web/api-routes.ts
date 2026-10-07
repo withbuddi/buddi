@@ -663,6 +663,12 @@ export const API_ROUTES: readonly ApiRoute[] = [
   /* ---------------- missions, jobs, reminders, watchers ---------------- */
   { method: 'GET', path: '/api/missions', area: 'work', summary: 'Every mission, its schedule, next run and recent occurrences.', answer: '{ missions: MissionView[] }' },
   { method: 'POST', path: '/api/missions/:id/enabled', area: 'work', summary: 'Switch a mission on or off.', body: '{ enabled: boolean }', errors: '404' },
+  {
+    method: 'POST', path: '/api/missions/:id/run', area: 'work',
+    summary: 'Run now: one occurrence of the mission, queued at once and run like a scheduled one (its context, its report or silence, the owner’s notifications). It is listed with the mission’s occurrences as `manual`, and a silent one counts toward “Still useful?” like any run.',
+    answer: "202 { job: string, occurrence: { id, scheduledAt, state: 'claimed', manual: true } }",
+    errors: '404; 409 (one is already queued or running; the mission is off, ended or paused: switch it on first; buddi is paused)',
+  },
   { method: 'POST', path: '/api/missions/:id/browser', area: 'work', token: 'grants', summary: 'For a mission that browses: let it use your signed-in Chrome while you are away (`chrome: true`), or keep it in buddi’s own browser.', body: '{ chrome: boolean }', answer: "{ id, browser: 'own' | 'owner' }", errors: '400; 404; 409 (it opens no page)' },
   { method: 'POST', path: '/api/missions/:id/keep', area: 'work', summary: 'Keep an agent’s quiet watch after “Still useful?”: its count of silent runs starts again.', answer: '{ id, enabled }', errors: '404' },
   { method: 'POST', path: '/api/missions/:id/still-useful', area: 'work', summary: 'Answer “Still useful?” with Keep or Stop. The first answer from any surface decides; a later one changes nothing and says what was decided.', body: "{ answer: 'keep' | 'stop' }", answer: '{ id, enabled, outcome }', errors: '400; 404' },
@@ -1317,6 +1323,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'POST /api/missions/:id/run': '0.1.0-pre.51',
   'GET /api/reports/audio': '0.1.0-pre.49',
   'GET /api/runtimes': '0.1.0-pre.48',
   'DELETE /api/runtimes/onnx': '0.1.0-pre.48',

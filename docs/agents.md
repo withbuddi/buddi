@@ -238,6 +238,21 @@ versions and is not proposed again for 90 days, anything else goes to the
 trash folder beside your agents. `buddi skills list` prints the page in the
 terminal; the routes are under `/api/skills` (docs/api.md).
 
+## Run now
+
+A mission (an agent's scheduled run) can also be run on demand: **Run now**
+on its row in Agents → Missions or on the agent's own Missions tab,
+`buddi missions run <id>`, or `POST /api/missions/:id/run`. It starts one
+occurrence at once and runs it exactly as the schedule would: the same job,
+the plugin context it reads first, `mission.report` or `mission.silent`, the
+report through your notifications. While it is queued or running the row says
+"Running…" and Run now waits; then the row's last-run line says reported,
+stayed silent or failed. It is listed with the mission's recent occurrences,
+marked "run now", and counts like any run: a silent one adds to the count
+behind "Still useful?" and a report resets it (you asked, and it still had
+nothing to say). A mission that is off, ended or paused by a disabled plugin
+does not run: switch it on first.
+
 ## The catalogue
 
 A fresh install has two agents: the front desk and Agent Father. Everything

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { api, type MissionRow } from '../api';
+import { api, ApiError, type MissionRow } from '../api';
 import { Missions } from './Missions';
 
 vi.mock('../api', async (importOriginal) => {
@@ -84,5 +84,54 @@ describe('where a mission browses', () => {
     expect(pnc).not.toBeChecked();
     fireEvent.click(pnc);
     await waitFor(() => expect(set).toHaveBeenCalledWith('agent:cfo:pnc-pull', true));
+  });
+});
+
+describe('Run now', () => {
+  afterEach(() => cleanup());
+  const occurrence = (state: string, extra: Partial<MissionRow['occurrences'][number]> = {}): MissionRow['occurrences'][number] => ({
+    id: `o-${state}`, scheduledAt: '2026-10-07T09:00:00Z', state, finishedAt: state === 'claimed' || state === 'pending' ? null : '2026-10-07T09:01:00Z', error: null, runConversationId: null, ...extra,
+  });
+
+  it('runs a mission on the row, then says "Running…" with the button disabled until the run is done', async () => {
+    const brief = { ...mission('brief', 'UTC', false), name: 'Morning brief' };
+    vi.mocked(api.missions)
+      .mockResolvedValueOnce({ missions: [brief] })
+      .mockResolvedValue({ missions: [{ ...brief, occurrences: [occurrence('claimed', { manual: true })] }] });
+    const runMission = vi.spyOn(api, 'runMission').mockResolvedValue({ job: 'j1', occurrence: { id: 'o1', scheduledAt: '2026-10-07T09:00:00Z', state: 'claimed', manual: true } });
+    render(<Missions timezone="UTC" />);
+    const button = await screen.findByRole('button', { name: 'Run now' });
+    expect(button).toBeEnabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Last run: none');
+    fireEvent.click(button);
+    await waitFor(() => expect(runMission).toHaveBeenCalledWith('brief'));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Running…'));
+    expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  });
+
+  it('shows the result the way a scheduled run does: reported, stayed silent, failed', async () => {
+    vi.mocked(api.missions).mockResolvedValue({ missions: [
+      { ...mission('a', 'UTC', false), name: 'A', occurrences: [occurrence('succeeded', { manual: true })], lastNotification: { kind: 'mission.delivered', at: '2026-10-07T09:01:00Z', chars: 40 } },
+      { ...mission('b', 'UTC', false), name: 'B', occurrences: [occurrence('succeeded')], lastNotification: { kind: 'mission.silent', at: '2026-10-07T09:01:00Z', reason: 'nothing new' } },
+      { ...mission('c', 'UTC', false), name: 'C', occurrences: [occurrence('failed', { error: 'the model refused' })], lastNotification: null },
+    ] });
+    render(<Missions timezone="UTC" />);
+    await screen.findByText(/Last run reported/);
+    expect(screen.getByText(/Last run stayed silent .* — nothing new/)).toBeInTheDocument();
+    expect(screen.getByText(/Last run failed .* — the model refused/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Run now' }).every((b) => !b.hasAttribute('disabled'))).toBe(true);
+  });
+
+  it('offers no Run now on a mission that is off, and says why a refused run did not start', async () => {
+    vi.mocked(api.missions).mockResolvedValue({ missions: [
+      { ...mission('off', 'UTC', false), name: 'Off', enabled: false },
+      { ...mission('on', 'UTC', false), name: 'On' },
+    ] });
+    vi.spyOn(api, 'runMission').mockRejectedValue(new ApiError(409, 'On is already running.'));
+    render(<Missions timezone="UTC" />);
+    expect(await screen.findAllByRole('button', { name: 'Run now' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Enable' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    expect(await screen.findByText('On is already running.')).toBeInTheDocument();
   });
 });

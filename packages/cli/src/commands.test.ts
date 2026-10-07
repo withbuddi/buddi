@@ -108,7 +108,7 @@ const PARSED: string[][] = [
   ['agents', 'models'],
   ['agents', 'migrate'],
   ...['list', 'add-defaults', 'add-recap', 'add-friday-recap'].map((a) => ['missions', a]),
-  ...['run-now', 'enable', 'disable'].map((a) => ['missions', a, 'x']),
+  ...['run', 'run-now', 'enable', 'disable'].map((a) => ['missions', a, 'x']),
   ['reminders'],
   ['reminders', 'cancel', 'x'],
   ...['status', 'stop', 'resume'].map((a) => ['nudges', a]),
