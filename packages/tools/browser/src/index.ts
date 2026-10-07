@@ -23,7 +23,8 @@ A file the page downloads (an export, a statement) is saved into the owner's Fil
 /** The two owner-secret tools' inputs. The observation is the same staleness discipline browser.act runs on. */
 const secretFillInput = z.object({
   name: z.string().min(1).max(200).describe("The owner secret's name, as saved in Settings → Keys and secrets."),
-  ref: z.string().min(1).max(40).describe('A ref from the latest observation.targets naming the field to fill.'),
+  ref: z.string().min(1).max(40).optional().describe('A ref from the latest observation.targets naming the field to fill.'),
+  label: z.string().min(1).max(80).optional().describe('Or the field\'s label as the latest page shows it ("Password"): read against the latest page, so it survives refs that changed. Used before the ref when both are given.'),
   observation: z.string().min(1).max(80).optional().describe('Optional: the observation.id the ref came from; the latest page by default.'),
 }).strict();
 const secretTypeInput = z.object({
@@ -93,7 +94,7 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
           return secretsForAgent(await secrets.list(), usernames);
         } },
       { name: 'secret.fill', tier: 'auto', sequential: true, input: secretFillInput,
-        description: `Fill one field with the owner's own secret, by name, without ever seeing the value. Input { name, ref }: a ref from the latest page (observation optional); works on web pages, in buddi's own browser and in the owner's Chrome. The backend reads which page the field really sits on and the owner's binding must name that origin, or a wildcard over it like https://*.wikimedia.org — a look-alike site is refused before anything is asked. A password field takes only a secret bound to the page; a visible field (a username) takes one too when the owner bound it to that page, and otherwise fills as form data, which asks the owner every time; a TOTP secret's current code fills any field. The result is {filled:true} — the value never appears anywhere — or {pending:true,actionId} when the owner has a decision card: tell the owner and wait. The result carries the page after the fill. Nothing saved for this site: call secret.request, never ask the owner in chat.`,
+        description: `Fill one field with the owner's own secret, by name, without ever seeing the value. Input { name, ref } or { name, label }: a ref from the latest page (observation optional), or the field's label on it; works on web pages, in buddi's own browser and in the owner's Chrome. The backend reads which page the field really sits on and the owner's binding must name that origin, or a wildcard over it like https://*.wikimedia.org — a look-alike site is refused before anything is asked. A password field takes only a secret bound to the page; a visible field (a username) takes one too when the owner bound it to that page, and otherwise fills as form data, which asks the owner every time; a TOTP secret's current code fills any field. The result is {filled:true} — the value never appears anywhere — or {pending:true,actionId} when the owner has a decision card: tell the owner and wait. The result carries the page after the fill. Nothing saved for this site: call secret.request, never ask the owner in chat. A field that refuses (a radio, hidden, gone): nothing was entered — observe once and fill again by label; ask the owner only if that second try fails.`,
         waitsForOwner: (output: unknown) => needsOwner(output), ownBudget: true,
         execute: (input: SecretFillInput, ctx) => service().secretFill(input, ctx) },
       { name: 'secret.type', tier: 'auto', sequential: true, input: secretTypeInput,
@@ -129,7 +130,7 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
 
 export const manifest = createBrowserManifest();
 export default manifest;
-export { BrowserService, browserStoppedMessage, modeOf, RETRY_DELAYS_MS, MAX_TARGETING_FAILURES, DEFAULT_MAX_STEPS, DEFAULT_LIFETIME_MS, PARK_MS } from './service.js';
+export { BrowserService, fieldByLabel, browserStoppedMessage, modeOf, RETRY_DELAYS_MS, MAX_TARGETING_FAILURES, DEFAULT_MAX_STEPS, DEFAULT_LIFETIME_MS, PARK_MS } from './service.js';
 export { detectBrowser, needsHeadless, installBrowser, browserLine, playwrightCli, installDepsCommand, missingLibrariesMessage, noSandboxMessage, probeLaunch, InstallProgressReader, MISSING_LIBRARIES_SENTENCE, NO_SANDBOX_SENTENCE, SANDBOX_COMMAND, NO_BROWSER_ACT, NO_BROWSER_STATUS, HEADLESS_NOTE } from './availability.js';
 export type { BrowserAvailability, BrowserEngine, DetectDeps, InstallOutcome, InstallProgress, LaunchCheck, ProbeDeps } from './availability.js';
 export type { BrowserEngineStatus, BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode, BrowserTouch, BrowserGiveBack, BrowserCapture, RouteStatus, CardResult } from './service.js';
@@ -154,5 +155,5 @@ export { PlaywrightDriver } from './driver.js';
 export { HostController } from './controller.js';
 export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED, DOWNLOAD_WINDOW_MS } from './extension.js';
 export type { ExtensionBridge, ExtensionDownload, ExtensionCommand, ExtensionCommandName, ExtensionEvent, ExtensionLogin, ExtensionLoginFacts, ExtensionResult } from './extension.js';
-export { commandSchema, UNTRUSTED, NO_SAVED_SIGN_IN, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, BrowserOpenedError, HAND_QUALITY, HAND_QUALITY_LOW, HAND_QUALITY_SHARP, handLevel, MAX_HAND_COPY, LOGIN_GONE, LOGIN_GRACE_MS, LOGIN_NOT_KEPT } from './types.js';
+export { commandSchema, UNTRUSTED, NO_SAVED_SIGN_IN, FILL_RETRY, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, BrowserOpenedError, HAND_QUALITY, HAND_QUALITY_LOW, HAND_QUALITY_SHARP, handLevel, MAX_HAND_COPY, LOGIN_GONE, LOGIN_GRACE_MS, LOGIN_NOT_KEPT } from './types.js';
 export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandLevel, HandQuality, Observation, ObservedTarget, SeenLoginReport, LoginAck, LoginCheck, LoginSeenListener } from './types.js';

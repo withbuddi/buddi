@@ -48,7 +48,7 @@ suite('an agent\'s sign-in card on the dashboard (postgres)', () => {
   const vault = createMemoryVault();
   const registry = new ToolRegistry();
   /** What the stand-in `secret.fill` was handed: whether a value arrived, never the value. */
-  const fills: Array<{ name: string; ref: string; delivered: boolean; pending?: string }> = [];
+  const fills: Array<{ name: string; ref?: string; label?: string; delivered: boolean; pending?: string }> = [];
   const ctx = { ownerId: 'owner', timezone: 'UTC' } as Omit<CoreToolContext, 'db'>;
 
   /**
@@ -61,8 +61,8 @@ suite('an agent\'s sign-in card on the dashboard (postgres)', () => {
     destinations: [fieldDestination],
     tools: [{
       name: 'secret.fill', tier: 'auto', description: 'stand-in',
-      input: z.object({ name: z.string(), ref: z.string() }).strict(),
-      async execute(input: { name: string; ref: string }, toolCtx: CoreToolContext) {
+      input: z.object({ name: z.string(), ref: z.string().optional(), label: z.string().optional() }).strict(),
+      async execute(input: { name: string; ref?: string; label?: string }, toolCtx: CoreToolContext) {
         const outcome = await toolCtx.buddi!.secrets!.use(input.name, 'browser.field', PAGE);
         if ('pending' in outcome) {
           fills.push({ ...input, delivered: false, pending: outcome.pending });
@@ -165,15 +165,18 @@ suite('an agent\'s sign-in card on the dashboard (postgres)', () => {
       [conversationId],
     );
     expect(actions).toEqual([{ tool: 'secrets.use_set', state: 'succeeded' }]);
+    // By the label the page shows (refs move once a fill redraws the page), the ref beside it.
     expect(fills).toEqual([
-      { name: 'Wikipedia username', ref: 'e3', delivered: true },
-      { name: 'Wikipedia password', ref: 'e4', delivered: true },
+      { name: 'Wikipedia username', label: 'Username', ref: 'e3', delivered: true },
+      { name: 'Wikipedia password', label: 'Password', ref: 'e4', delivered: true },
     ]);
 
     expect(carryOn).toHaveBeenCalledTimes(1);
     const turn = (carryOn.mock.calls[0] as unknown as [{ text: string; stamp: string; agentId: string }])[0];
     expect(turn.agentId).toBe('scout');
-    expect(turn.text).toContain('{"saved":["Wikipedia username","Wikipedia password"],"filled":true}');
+    expect(turn.text).toContain('{"saved":["Wikipedia username","Wikipedia password"],"filled":true,"fields":[{"name":"Wikipedia username","label":"Username","ref":"e3","filled":true},{"name":"Wikipedia password","label":"Password","ref":"e4","filled":true}]}');
+    // It goes on to press the sign-in button itself.
+    expect(turn.text).toContain('press its sign-in button');
     expect(turn.text).not.toContain(PASSWORD);
     expect(turn.text).not.toContain(USERNAME);
 

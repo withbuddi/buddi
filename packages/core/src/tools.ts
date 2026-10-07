@@ -50,7 +50,8 @@ export interface AskSignIn {
   /** The page's address, as the backend read it. */
   url: string;
   title?: string;
-  fields: Array<{ label: string; kind: 'username' | 'password' | 'totp' | 'other'; ref?: string }>;
+  /** `name`: the field's label as the page shows it, which `secret.fill` resolves on the latest page when refs moved. */
+  fields: Array<{ label: string; kind: 'username' | 'password' | 'totp' | 'other'; ref?: string; name?: string }>;
 }
 
 export interface ToolContext {

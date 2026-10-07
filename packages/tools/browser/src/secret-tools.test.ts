@@ -239,3 +239,68 @@ describe('the route through the manager', () => {
     await expect(manager.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, other)).rejects.toThrow('Open the page with browser.act navigate');
   });
 });
+/**
+ * Wikipedia's login page, as the agent saw it after a first fill redrew it:
+ * the Appearance sidebar's radios come first in the page, so the refs the
+ * card was built with (e3, e4) now name radios.
+ */
+const WIKI: Observation = {
+  id: 'o2', url: 'https://auth.wikimedia.org/enwiki/wiki/Special:UserLogin', title: 'Log in - Wikipedia', tree: '', tabs: [], capturedAt: new Date().toISOString(),
+  targets: [
+    { ref: 'e3', frame: 0, role: 'radio', name: 'Standard' },
+    { ref: 'e4', frame: 0, role: 'radio', name: 'Wide' },
+    { ref: 'e5', frame: 0, role: 'radio', name: 'Automatic' },
+    { ref: 'e8', frame: 0, role: 'textbox', name: 'Username' },
+    { ref: 'e9', frame: 0, role: 'textbox', name: 'Password' },
+    { ref: 'e20', frame: 0, role: 'button', name: 'Log in' },
+  ],
+};
+
+describe('secret.fill on a page whose refs moved', () => {
+  const wikiDriver = (over: Partial<BrowserDriver> = {}) => driver({
+    observe: vi.fn(async () => WIKI),
+    secretFieldInfo: vi.fn(async (_o: string, ref: string) => ref === 'e9'
+      ? { origin: 'https://auth.wikimedia.org', password: true, name: 'Password', kind: 'password' }
+      : ref === 'e8' ? { origin: 'https://auth.wikimedia.org', password: false, name: 'Username', kind: 'text' }
+      : { origin: 'https://auth.wikimedia.org', password: false, name: 'Wide', kind: 'radio' }),
+    ...over,
+  });
+
+  it('fills by label on the latest page, whatever the stale ref says', async () => {
+    const { service, driver: fake, secrets } = await setup({ driver: wikiDriver() });
+    const result = await service.secretFill({ name: 'PNC password', label: 'Password', ref: 'e4' }, ctx(secrets) as never);
+    expect(result).toMatchObject({ filled: true, ref: 'e9' });
+    expect(fake.secretFillField).toHaveBeenCalledWith('o2', 'e9', VALUE, 'https://auth.wikimedia.org');
+  });
+
+  it('refuses a ref that lands on a radio before anything is entered, and names the retry by label', async () => {
+    const { service, driver: fake, secrets, calls } = await setup({ driver: wikiDriver() });
+    const error = await service.secretFill({ name: 'PNC password', ref: 'e4' }, ctx(secrets) as never).catch((e: unknown) => e);
+    const said = JSON.parse((error as Error).message) as { dispatched: boolean; error: string };
+    expect(said.dispatched).toBe(false);
+    expect(said.error).toContain('That ref is a radio ("Wide"), not a text field.');
+    expect(said.error).toContain('Observe the page once and call secret.fill again with { name, label }');
+    expect(said.error).toContain('ask the owner only if that second try fails');
+    expect(fake.secretFillField).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it('turns an element error at fill time into the same retry, never an "I\'m not sure that went through" card', async () => {
+    const { service, secrets } = await setup({ driver: wikiDriver({
+      secretFieldInfo: vi.fn(async () => ({ origin: 'https://auth.wikimedia.org', password: true, name: 'Password' })),
+      secretFillField: vi.fn(async () => { throw new Error('elementHandle.fill: Error: Input of type "radio" cannot be filled'); }),
+    }) });
+    const error = await service.secretFill({ name: 'PNC password', ref: 'e9' }, ctx(secrets) as never).catch((e: unknown) => e);
+    const said = JSON.parse((error as Error).message) as { dispatched: boolean; error: string };
+    expect(said.dispatched).toBe(false);
+    expect(said.error).toContain('cannot be filled');
+    expect(said.error).toContain('fill again with { name, label }');
+    expect(service.status().needsOwner).toBeUndefined();
+    expect(JSON.stringify(said)).not.toContain(VALUE);
+  });
+
+  it('says plainly when no single field has that label', async () => {
+    const { service, secrets } = await setup({ driver: wikiDriver() });
+    await expect(service.secretFill({ name: 'PNC password', label: 'Passcode' }, ctx(secrets) as never)).rejects.toThrow(/No single text field is labelled/);
+  });
+});

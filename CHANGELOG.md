@@ -16,6 +16,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Save and fill no longer types a password into the wrong element: fields are filled by their label on the latest page (Wikipedia's login redraws after the first fill and its refs land on the Appearance radios), a ref that names a radio, checkbox or button is refused before anything is entered, and the agent is told to observe once and fill again by label before asking you; afterwards it presses the form's sign-in button itself.
 - A login wall in buddi's browser now raises the sign-in card (the fields in the card, Save and fill, with Use my Chrome beside it when that route exists) instead of the old card whose "Save a login for next time" sent you to Settings; a code page's card opens the sign-in card in place. A tool call the turn never ran because it stopped on a card first reads "not run" instead of failed.
 - Give it back starts a turn only when an agent was waiting on the page (its card was answered with Take over, the take-over interrupted it, or it tried to act while you held the page). A page taken from an idle conversation is given back with the "Gave the page back" stamp and no model call.
 - Take over and Give it back no longer flash or take the page back by themselves: the Page tab ignores a status still in flight for a page it just gave back or stopped, keeps its buttons asleep until the status after the action has arrived, and keeps showing the last picture the hand drew instead of an empty frame.

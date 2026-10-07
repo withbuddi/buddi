@@ -171,11 +171,12 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
    * is the iframe's origin, not the page the top bar shows — and the password
    * mark is the page's own type attribute, not the agent's guess about either.
    */
-  async secretFieldInfo(observation: string, ref: string): Promise<{ origin: string; password: boolean; name: string }> {
+  async secretFieldInfo(observation: string, ref: string): Promise<{ origin: string; password: boolean; name: string; kind?: string }> {
     const { element, description } = await this.#savedElement(observation, ref);
     const frame = await element.ownerFrame();
     const origin = fieldOrigin(frame?.url());
-    return { origin, password: description.tag === 'input' && description.type === 'password', name: description.name };
+    const kind = description.tag === 'input' ? String(description.type || 'text').toLowerCase() : String(description.tag ?? '').toLowerCase();
+    return { origin, password: description.tag === 'input' && description.type === 'password', name: description.name, ...(kind ? { kind } : {}) };
   }
 
   /**

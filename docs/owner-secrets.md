@@ -73,6 +73,15 @@ and in that one `deliver` call, and nowhere else.
   `browser.field` too when the owner bound the secret as `browser.field` to
   that field's origin, so a username goes in beside its password, and the
   card names the field ("the Username field on https://auth.wikimedia.org").
+  The field may be named by `label` instead of `ref` (the label the latest page
+  shows), which survives a page that renumbered its refs. A ref that lands on
+  anything but a text box (a radio, a checkbox, a button, a hidden field) is
+  refused before anything is entered, and so is an element the driver says
+  cannot take a value; the refusal tells the agent to observe once and fill
+  again by label, and to ask the owner only if that second try fails — never
+  the "I'm not sure that went through" card for a value that never went in.
+  The browser's sign-in card takes only text boxes as fields, and passes a
+  ref only when it is sure of it (one password box, one box naming a user).
   Any other visible field is `browser.form.data`. So a password field never
   takes a form-data-only secret, and a card number bound as form data always
   goes through the every-time destination. A TOTP secret (§4) fills any
@@ -377,8 +386,11 @@ next time and hands you the page." under them. It posts to `POST /api/secrets`
 
 - **Save and fill** saves the set (`secrets.put_set`, all or none), records one
   `secrets.use_set` approval for the set, approved by that press, and fills each
-  field the agent named a ref for through `secret.fill` as that agent, which no
-  longer asks. The agent hears `{ saved, filled: true }`; the thread says
+  field through `secret.fill` as that agent, which no longer asks — by the
+  field's label on the latest page, its ref the fallback, because a page that
+  redraws after the first fill renumbers its refs. The turn the agent gets
+  back names each saved secret, the field's label, its ref and whether it was
+  filled, and tells it to press the form's sign-in button itself. The agent hears `{ saved, filled: true }`; the thread says
   "Filled username and password on wikipedia.org · 10:23", and the Page tab
   shows the form filled with the password masked. A field buddi could not fill
   is the agent's to fill with `secret.fill`, without a card.

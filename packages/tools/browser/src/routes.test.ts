@@ -156,13 +156,36 @@ describe('signInFields', () => {
       { ref: 'e5', frame: 0, role: 'button', name: 'Log in' },
     ];
     expect(signInFields({ targets }, 'sign-in')).toEqual([
-      { label: 'Username', kind: 'username', ref: 'e3' },
-      { label: 'Password', kind: 'password', ref: 'e4' },
+      { label: 'Username', kind: 'username', ref: 'e3', name: 'Enter your username' },
+      { label: 'Password', kind: 'password', ref: 'e4', name: 'Enter your password' },
     ]);
     expect(signInFields({ targets: [{ ref: 'e2', frame: 0, role: 'textbox', name: 'Email address' }] }, 'sign-in')).toEqual([
-      { label: 'Email', kind: 'username', ref: 'e2' },
+      { label: 'Email', kind: 'username', ref: 'e2', name: 'Email address' },
       { label: 'Password', kind: 'password' },
     ]);
+  });
+
+  it('on a page shaped like Wikipedia\'s (the sidebar\'s radios first), takes only the text boxes', () => {
+    const targets = [
+      { ref: 'e3', frame: 0, role: 'radio', name: 'Standard' },
+      { ref: 'e4', frame: 0, role: 'radio', name: 'Wide' },
+      { ref: 'e5', frame: 0, role: 'checkbox', name: 'Keep me logged in (for up to one year)' },
+      { ref: 'e8', frame: 0, role: 'textbox', name: 'Username' },
+      { ref: 'e9', frame: 0, role: 'textbox', name: 'Password' },
+    ];
+    expect(signInFields({ targets }, 'sign-in')).toEqual([
+      { label: 'Username', kind: 'username', ref: 'e8', name: 'Username' },
+      { label: 'Password', kind: 'password', ref: 'e9', name: 'Password' },
+    ]);
+  });
+
+  it('passes no ref it is not sure of: two password boxes, or no box naming a user', () => {
+    const fields = signInFields({ targets: [
+      { ref: 'e1', frame: 0, role: 'textbox', name: 'Choose a password' },
+      { ref: 'e2', frame: 0, role: 'textbox', name: 'Confirm password' },
+      { ref: 'e3', frame: 0, role: 'textbox', name: 'Nickname' },
+    ] }, 'sign-in');
+    expect(fields.every((field) => field.ref === undefined)).toBe(true);
   });
 
   it('asks for a username and a password on a page with no boxes yet, and on a code page fills nothing by itself', () => {

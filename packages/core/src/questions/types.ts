@@ -35,6 +35,8 @@ export interface SecretRequestField {
   kind: 'username' | 'password' | 'totp' | 'other';
   /** The page's field the agent saw it in, so Save and fill can fill it at once. */
   ref?: string;
+  /** Its label as the page shows it: filled by label on the latest page, so refs that moved since do not matter. */
+  name?: string;
   /** Set when the label looks like a card number, a CVV, an SSN or a one-time code: shown, and never filled by itself. */
   warning?: string;
 }

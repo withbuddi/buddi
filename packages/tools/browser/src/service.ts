@@ -4,7 +4,7 @@ import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { LoginKeeper } from './logins.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, LoginAck, LoginCheck, Observation, SeenLoginReport } from './types.js';
-import { LOGIN_GONE, LOGIN_GRACE_MS, APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, NO_SAVED_SIGN_IN, UNTRUSTED, observedLine } from './types.js';
+import { LOGIN_GONE, LOGIN_GRACE_MS, APP_BEHIND, BrowserOpenedError, BrowserPreconditionError, FILL_RETRY, NO_SAVED_SIGN_IN, UNTRUSTED, observedLine } from './types.js';
 import { ownerCard, siteOf, type ChromeLink, type OwnerCard, type CardKind } from './routes.js';
 import type { RouteKind, ControlSettings } from './settings.js';
 import { missionMark, type BrowserTelemetry, type StopCause } from './telemetry.js';
@@ -161,7 +161,25 @@ export interface BrowserHandOffer { supported: boolean; message?: string; hand?:
 /** Trusted lifecycle input, never exposed in an agent tool schema. */
 export interface BrowserRollover { ownerId: string; agentId: string; previousConversationId: string; conversationId: string }
 /** What `secret.fill` asks: the secret's name and the field's ref; the observation is optional, the latest by default. */
-export interface SecretFillInput { name: string; ref: string; observation?: string | undefined }
+/** What `secret.fill` asks: the secret's name and the field, by its ref or by its label on the latest page; the observation is optional, the latest by default. */
+export interface SecretFillInput { name: string; ref?: string | undefined; label?: string | undefined; observation?: string | undefined }
+
+/** Input types a secret may go into: text-like boxes only, never a radio, a checkbox, a button or a hidden field. */
+const FILLABLE = new Set(['text', 'email', 'password', 'tel', 'search', 'url', 'number', 'textarea', 'div', 'span']);
+/** A driver's words for an element that cannot take a value: the wrong kind, gone, hidden or disabled. */
+const ELEMENT_ERROR = /cannot be filled|not an <input>|is not visible|not attached|detached|not editable|not enabled|element is disabled|Element is outside|no longer/i;
+
+/** The text box on this page whose label is `label`: an exact name first, then one that contains it. Undefined when there is none or more than one. */
+export function fieldByLabel(targets: ReadonlyArray<{ ref: string; role: string; name: string }> | undefined, label: string): string | undefined {
+  const boxes = (targets ?? []).filter((target) => ['textbox', 'searchbox', 'spinbutton'].includes(target.role));
+  const want = label.trim().toLowerCase();
+  if (want === '') return undefined;
+  const exact = boxes.filter((box) => box.name.trim().toLowerCase() === want);
+  if (exact.length === 1) return exact[0]!.ref;
+  if (exact.length > 1) return undefined;
+  const near = boxes.filter((box) => box.name.toLowerCase().includes(want));
+  return near.length === 1 ? near[0]!.ref : undefined;
+}
 /** What `secret.type` asks: the secret's name; the focused app is the backend's answer. */
 export interface SecretTypeInput { name: string }
 /** An owner touch: a message or a card tap in a conversation. */
@@ -767,7 +785,15 @@ export class BrowserService {
         throw new BrowserPreconditionError('secret.fill works on web pages (buddi\'s own browser or your Chrome); an app window has no page fields to fill.');
       }
       const observation = input.observation ?? this.#observation?.id ?? '';
-      const facts = await this.driver.secretFieldInfo(observation, input.ref);
+      // A label is read against the latest page, so a page that renumbered its refs after the last fill still finds its field.
+      const byLabel = input.label ? fieldByLabel(this.#observation?.targets, input.label) : undefined;
+      const ref = byLabel ?? input.ref;
+      if (!ref) throw new BrowserPreconditionError(input.label === undefined ? 'Name the field to fill: its ref, or its label on the latest page.' : `No single text field is labelled "${input.label}" on the latest page. Observe again and pass the field's ref, or the label it shows.`);
+      const facts = await this.driver.secretFieldInfo(observation, ref);
+      // A ref that lands on a radio, a checkbox or a button is the wrong field: nothing is entered.
+      if (facts.kind !== undefined && !FILLABLE.has(facts.kind)) {
+        throw new BrowserPreconditionError(`That ref is a ${facts.kind} ("${facts.name}"), not a text field. ${FILL_RETRY}`);
+      }
       const secrets = ctx.buddi?.secrets;
       if (secrets === undefined) throw new Error('This plugin has no secrets area; the owner updates the browser plugin to one that declares it.');
       const secret = (await secrets.list()).find((entry) => entry.name === input.name);
@@ -789,8 +815,16 @@ export class BrowserService {
       if ('refused' in outcome) throw new BrowserPreconditionError(/ is not bound to /.test(outcome.refused) ? `${outcome.refused} ${NO_SAVED_SIGN_IN}` : outcome.refused);
       const value = takeDelivered(outcome.use);
       if (value === undefined) throw new Error('The use delivered nothing to fill with. Ask for the secret again.');
-      await this.driver.secretFillField(observation, input.ref, value, facts.origin);
-      return this.#after(controller, ctx, { filled: true });
+      try {
+        await this.driver.secretFillField(observation, ref, value, facts.origin);
+      } catch (error) {
+        // The element refused before anything went in (wrong kind, hidden, gone): a precondition, not an uncertain input.
+        const said = error instanceof Error ? error.message : String(error);
+        if (error instanceof BrowserPreconditionError) throw error;
+        if (ELEMENT_ERROR.test(said)) throw new BrowserPreconditionError(`The field could not take the value (${said.split('\n')[0]!.slice(0, 160)}). ${FILL_RETRY}`);
+        throw error;
+      }
+      return this.#after(controller, ctx, { filled: true, ref });
     });
   }
 

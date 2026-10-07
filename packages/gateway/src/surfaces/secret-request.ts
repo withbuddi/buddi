@@ -66,8 +66,11 @@ export type SecretRequestInput = z.infer<typeof requestInput>;
 export interface SecretRequestPending { pending: true; message: string }
 
 /** What a decided card hands the agent: names and a flag, never a value. */
+/** One saved secret and where it went: its name, the field's label on the page, and whether buddi filled it. Never a value. */
+export interface SecretRequestFieldOutcome { name: string; label: string; ref?: string; filled: boolean }
+
 export type SecretRequestOutcome =
-  | { saved: string[]; filled: boolean }
+  | { saved: string[]; filled: boolean; fields?: SecretRequestFieldOutcome[] }
   | { declined: 'sign-in-myself' | 'cancelled' };
 
 /**
@@ -283,7 +286,7 @@ export function signInCardFor(signIn: AskSignIn, agentName: string | undefined):
     const what = sensitiveLabel(field.label, field.kind);
     const warning = what ? warningLine(name, what, site) : undefined;
     if (warning) warnings.push(warning);
-    return { label: field.label, kind: field.kind, ...(field.ref ? { ref: field.ref } : {}), ...(warning ? { warning } : {}) };
+    return { label: field.label, kind: field.kind, ...(field.ref ? { ref: field.ref } : {}), ...(field.name ? { name: field.name.slice(0, 80) } : {}), ...(warning ? { warning } : {}) };
   });
   return {
     kind: 'secret.request',
@@ -349,9 +352,11 @@ function outcomeAdvice(outcome: SecretRequestOutcome, filling: boolean): string 
       ? 'The owner is signing in on the page themselves and holds it now. Say in one short line that you will carry on when they give it back, and stop.'
       : 'The owner did not save a sign-in. Do not ask again for it; say what you can do without it, or stop.';
   }
-  if (outcome.filled) return 'The sign-in is filled on the page. Carry on with the task: submit the form and continue.';
+  if (outcome.filled) return 'The sign-in is filled on the page. Observe the page and press its sign-in button (Log in, Sign in, Continue) yourself, then carry on with the task.';
+  const remaining = (outcome.fields ?? []).filter((field) => !field.filled);
+  const rest = remaining.length > 0 ? ` Still to fill: ${remaining.map((field) => `secret.fill { name: "${field.name}", label: "${field.label}" }`).join(', ')}.` : '';
   return filling
-    ? 'Saved, and the owner approved filling them here, but buddi could not fill every field. Fill the rest with secret.fill by these names (no card is asked now), then carry on.'
+    ? `Saved, and the owner approved filling them here, but buddi could not fill every field. Observe the page, fill the rest by label (no card is asked now), then press its sign-in button yourself.${rest}`
     : 'Saved for next time. The owner is signing in on the page themselves and holds it now. Say in one short line that you will carry on when they give it back, and stop.';
 }
 

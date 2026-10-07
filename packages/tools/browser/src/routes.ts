@@ -223,14 +223,18 @@ const USERNAME = /\b(?:user ?name|username|e-?mail|login|log-in|account|phone|id
  */
 export function signInFields(page: Pick<Observation, 'targets'> | undefined, kind: 'sign-in' | 'code'): AskSignIn['fields'] {
   if (kind === 'code') return [{ label: 'Username', kind: 'username' }, { label: 'Password', kind: 'password' }];
-  const boxes = (page?.targets ?? []).filter((target) => ['textbox', 'searchbox', 'spinbutton'].includes(target.role) && target.name.trim() !== '');
-  const password = boxes.find((box) => PASSWORD.test(box.name));
-  const user = boxes.find((box) => box !== password && USERNAME.test(box.name)) ?? boxes.find((box) => box !== password && !/search/i.test(box.name));
+  // Text boxes only: a radio, a checkbox or a button is never a sign-in field, wherever it sits in the page.
+  const boxes = (page?.targets ?? []).filter((target) => ['textbox', 'searchbox'].includes(target.role) && target.name.trim() !== '' && !/search/i.test(target.name));
+  const passwords = boxes.filter((box) => PASSWORD.test(box.name));
+  // One password box, or no ref at all: a sign-up page's "confirm password" is not a guess worth filling.
+  const password = passwords.length === 1 ? passwords[0] : undefined;
+  const users = boxes.filter((box) => !PASSWORD.test(box.name) && USERNAME.test(box.name));
+  const user = users.length === 1 ? users[0] : undefined;
   // The card's words, not the page's placeholder ("Enter your username").
   const userLabel = user && /e-?mail/i.test(user.name) ? 'Email' : user && /phone/i.test(user.name) ? 'Phone' : 'Username';
   return [
-    { label: userLabel, kind: 'username', ...(user ? { ref: user.ref } : {}) },
-    { label: 'Password', kind: 'password', ...(password ? { ref: password.ref } : {}) },
+    { label: userLabel, kind: 'username', ...(user ? { ref: user.ref, name: user.name.trim() } : {}) },
+    { label: 'Password', kind: 'password', ...(password ? { ref: password.ref, name: password.name.trim() } : {}) },
   ];
 }
 

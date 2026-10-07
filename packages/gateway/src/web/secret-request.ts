@@ -40,6 +40,7 @@ import {
   outcomeTurnText,
   requestOrigins,
   secretNameFor,
+  type SecretRequestFieldOutcome,
   type SecretRequestOutcome,
 } from '../surfaces/secret-request.js';
 import { WEB_SURFACE, WEB_WORKER } from './write.js';
@@ -188,12 +189,13 @@ export async function saveSecretSet(deps: SecretRequestRouteDeps, body: unknown)
 
   const { question, card } = request;
   let filled = false;
+  const report: SecretRequestFieldOutcome[] = [];
   if (then === 'fill') {
-    filled = await approveAndFill(deps, { question, card, fields, names: savedNames });
+    filled = await approveAndFill(deps, { question, card, fields, names: savedNames }, report);
   } else {
     await deps.browser?.handOver?.({ conversationId: question.conversationId, agentId: question.agentId }).catch(() => false);
   }
-  const outcome: SecretRequestOutcome = { saved: savedNames, filled };
+  const outcome: SecretRequestOutcome = { saved: savedNames, filled, ...(report.length > 0 ? { fields: report } : {}) };
   await settle(deps.pool, question.id, outcome).catch(() => undefined);
   const stamp = outcomeStamp(outcome, card.site, fields.map((field) => field.label));
   await deps.carryOn?.({
@@ -214,11 +216,12 @@ export async function saveSecretSet(deps: SecretRequestRouteDeps, body: unknown)
 async function approveAndFill(
   deps: SecretRequestRouteDeps,
   input: { question: Question; card: SecretRequestCard; fields: readonly PostedField[]; names: readonly string[] },
+  report: SecretRequestFieldOutcome[] = [],
 ): Promise<boolean> {
   const { question, card } = input;
   const plan = input.fields.map((field, index) => {
     const asked = card.fields.find((candidate) => candidate.label.toLowerCase() === field.label.toLowerCase());
-    return { name: input.names[index]!, label: field.label, ref: asked?.ref, warned: Boolean(asked?.warning) };
+    return { name: input.names[index]!, label: field.label, page: asked?.name ?? asked?.label, ref: asked?.ref, warned: Boolean(asked?.warning) };
   }).filter((item) => !item.warned);
   if (plan.length === 0) return false;
   const bindings = await fieldBindings(deps.pool, plan.map((item) => item.name));
@@ -257,23 +260,30 @@ async function approveAndFill(
     deps.log?.(`secrets: the set's approval did not go through: ${executed.message}`);
     return false;
   }
-  // Approved for the set. A field the agent named no ref for is the agent's to fill, with no card now.
-  const fillable = plan.filter((item) => item.ref);
+  // Approved for the set. Each field is filled by its label on the latest page (refs move once a fill
+  // redraws the page), its ref the fallback; one the agent named neither for is the agent's to fill.
+  const fillable = plan.filter((item) => item.page || item.ref);
+  for (const item of plan) report.push({ name: item.name, label: item.page ?? item.label, ...(item.ref ? { ref: item.ref } : {}), filled: false });
   if (fillable.length === 0) return false;
   let all = fillable.length === plan.length;
   for (const item of fillable) {
-    const result = await deps.registry.invoke('secret.fill', { name: item.name, ref: item.ref }, {
+    const result = await deps.registry.invoke('secret.fill', { name: item.name, ...(item.page ? { label: item.page } : {}), ...(item.ref ? { ref: item.ref } : {}) }, {
       ...deps.ctx,
       agentId: question.agentId,
       conversationId: question.conversationId,
       db: deps.pool,
       now: deps.now,
     } as CoreToolContext);
-    const output = result.ok ? result.output as { filled?: unknown } | null : null;
+    const output = result.ok ? result.output as { filled?: unknown; ref?: unknown } | null : null;
     if (!result.ok || output?.filled !== true) {
       all = false;
       deps.log?.(`secrets: filling "${item.name}" after Save and fill did not go through${result.ok ? '' : `: ${result.message}`}`);
-      break;
+      continue;
+    }
+    const done = report.find((entry) => entry.name === item.name);
+    if (done) {
+      done.filled = true;
+      if (typeof output.ref === 'string') done.ref = output.ref;
     }
   }
   return all;
