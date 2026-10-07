@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.49 — 2026-10-07
+
 ### Added
 
 - Host API 1.33 canvas renderers: `story` draws a plugin's story row (or a list of them) in the plugin's own words, `audio` plays a saved recording, and `query` draws a plugin's own page components against one of its page queries.
