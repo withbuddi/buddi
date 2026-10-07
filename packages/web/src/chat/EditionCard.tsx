@@ -79,6 +79,10 @@ export interface Edition {
   groups: Array<{ topic: string; stories: EditionStory[] }>;
   notes: string[];
   next?: string;
+  /** The closing line, the plugin's own words (1.33); without it only the notes close the card. */
+  foot?: string;
+  /** The page link the plugin filed this digest's report under (1.33): its recording is found from it. */
+  report?: string;
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -171,6 +175,8 @@ export function editionOf(data: unknown): Edition | null {
     groups,
     notes: (Array.isArray(r['notes']) ? r['notes'] : []).filter((n): n is string => typeof n === 'string' && n.trim() !== ''),
     ...(/^\d{1,2}:\d{2}$/.test(next) ? { next } : {}),
+    ...(str(r['foot']).trim() ? { foot: str(r['foot']).trim() } : {}),
+    ...(/^#\/p\/[a-z][a-z0-9_-]{0,63}\//.test(str(r['report'])) ? { report: str(r['report']) } : {}),
   };
 }
 
@@ -193,7 +199,7 @@ function menuItems(actions: EdAction[], onPick: (action: EdAction) => void): Men
 /** What a picked way left in the story's place. */
 interface Gone { text: string; undo?: NonNullable<EdAction['undo']> }
 
-function EdStory({ s }: { s: EditionStory }): JSX.Element {
+function EdStory({ s, plugin }: { s: EditionStory; plugin: string }): JSX.Element {
   const [gone, setGone] = useState<Gone | null>(null);
   const first = s.logos[0] ?? { name: s.outlet || s.title };
   const outlet = s.outlet || first.name;
@@ -202,7 +208,7 @@ function EdStory({ s }: { s: EditionStory }): JSX.Element {
 
   const run = async (action: EdAction): Promise<void> => {
     try {
-      const answer = await api.pageAct(NEWS, { tool: action.tool, args: action.args });
+      const answer = await api.pageAct(plugin, { tool: action.tool, args: action.args });
       setGone(answer.approvalId ? { text: 'Waiting for your approval.' } : { text: action.done, ...(action.undo ? { undo: action.undo } : {}) });
     } catch (error) {
       setGone({ text: error instanceof Error && error.message ? `That did not work: ${error.message}` : 'That did not work.' });
@@ -210,10 +216,10 @@ function EdStory({ s }: { s: EditionStory }): JSX.Element {
   };
   const undo = async (held: NonNullable<Gone['undo']>): Promise<void> => {
     try {
-      await api.pageAct(NEWS, { tool: held.tool, args: held.args });
+      await api.pageAct(plugin, { tool: held.tool, args: held.args });
       setGone(null);
     } catch {
-      setGone({ text: 'Could not take it back. Undo it in News → Sources.' });
+      setGone({ text: 'Could not take it back.' });
     }
   };
 
@@ -251,7 +257,7 @@ function EdStory({ s }: { s: EditionStory }): JSX.Element {
           }
         />
       ) : null}
-      <AssetImage src={first.logo ? assetSrc(NEWS, first.logo) : null} label={first.name} className="pl-logo-md" />
+      <AssetImage src={first.logo ? assetSrc(plugin, first.logo) : null} label={first.name} className="pl-logo-md" />
       <span className="ed-story-text">
         <span className="ed-story-title">
           {s.mark ? <span className="ed-mark" data-kind={s.mark === 'update' ? 'update' : undefined}>{s.mark === 'update' ? 'Update' : 'Opinion'}</span> : null}
@@ -276,7 +282,7 @@ function EdStory({ s }: { s: EditionStory }): JSX.Element {
 /** The waveform's bars: fixed heights, the kit's own shape; a picture of a voice, not of this one. */
 const BARS = Array.from({ length: 64 }, (_, i) => 30 + Math.round(Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.4)) * 70));
 
-/** The edition read aloud, as the kit's pill: play, the waveform filling as it plays, the time. */
+/** A recording, as the kit's pill: play, the waveform filling as it plays, the time, seeking and an MP3 download. */
 export function EditionAudio({ audio }: { audio: NonNullable<ReportView['audio']> }): JSX.Element {
   const { playing, loading, failed, position, duration, toggle, seek, bind } = useAudioPlayer(audio.fileId, audio.mime, true);
   const [downloading, setDownloading] = useState(false);
@@ -284,27 +290,27 @@ export function EditionAudio({ audio }: { audio: NonNullable<ReportView['audio']
   const done = duration ? Math.min(1, position / duration) : 0;
   return <div>
     <div className="ed-audio" data-testid="edition-audio">
-      <button type="button" className="ed-play ui-icon-btn" aria-label={playing ? 'Pause the edition' : 'Listen to the edition'} aria-pressed={playing} disabled={loading} onClick={() => void toggle()}>
+      <button type="button" className="ed-play ui-icon-btn" aria-label={playing ? 'Pause the recording' : 'Play the recording'} aria-pressed={playing} disabled={loading} onClick={() => void toggle()}>
         <Icon name={playing ? 'pause' : 'play'} size={14} />
       </button>
       <span className="ed-seek">
         <span className="ed-wave" aria-hidden="true">{BARS.map((h, i) => <i key={i} style={{ ['--h' as string]: `${h}%` }} data-on={i < Math.round(done * BARS.length) ? 'true' : undefined} />)}</span>
-        <input type="range" aria-label="Edition playback position" aria-valuetext={`${clock(position)} of ${clock(duration)}`} min={0} max={duration ?? 0} step={0.1} value={position} disabled={!duration} onChange={e => seek(Number(e.target.value))} />
+        <input type="range" aria-label="Playback position" aria-valuetext={`${clock(position)} of ${clock(duration)}`} min={0} max={duration ?? 0} step={0.1} value={position} disabled={!duration} onChange={e => seek(Number(e.target.value))} />
       </span>
       <span className="ed-dur" role="status">{failed ? 'Could not play' : loading ? 'Loading…' : `${clock(position)} / ${clock(duration)}`}</span>
-      <button className="ui-icon-btn" type="button" aria-label="Download edition as MP3" title="Download MP3" disabled={downloading} onClick={() => {
+      <button className="ui-icon-btn" type="button" aria-label="Download as MP3" title="Download MP3" disabled={downloading} onClick={() => {
         setDownloading(true); setDownloadError(false);
         void downloadMp3(audio).catch(() => setDownloadError(true)).finally(() => setDownloading(false));
       }}><Icon name="download" size={16} /></button>
       <audio {...bind} />
     </div>
     {downloading ? <p className="muted" role="status">Preparing MP3…</p> : null}
-    {downloadError ? <p role="alert">Could not create MP3. <a href={downloadUrl(audio.fileId)} download={audio.filename ?? 'edition.ogg'}>Download the original audio</a>.</p> : null}
+    {downloadError ? <p role="alert">Could not create MP3. <a href={downloadUrl(audio.fileId)} download={audio.filename ?? `recording.ogg`}>Download the original audio</a>.</p> : null}
   </div>;
 }
 
-/** Audio is attached to the saved report, so every edition surface can find it. */
-export function SavedEditionAudio({ editionId }: { editionId: string }): JSX.Element | null {
+/** The recording filed with a saved report, found by the report's page link; polled while it is still being made. */
+export function ReportAudio({ link }: { link: string }): JSX.Element | null {
   const [audio, setAudio] = useState<ReportView['audio']>(null);
   useEffect(() => {
     let live = true;
@@ -313,24 +319,43 @@ export function SavedEditionAudio({ editionId }: { editionId: string }): JSX.Ele
     let timer: ReturnType<typeof setTimeout> | undefined;
     const read = async (): Promise<void> => {
       try {
-        const result = await api.reportAudio(`#/p/news/stories?edition=${encodeURIComponent(editionId)}`);
+        const result = await api.reportAudio(link);
         if (!live) return;
         setAudio(result.audio);
         if (!result.audio && ++attempts < 24) timer = setTimeout(() => void read(), 5000);
-      } catch { /* The edition text stays readable when its audio is unavailable. */ }
+      } catch { /* The text stays readable when its audio is unavailable. */ }
     };
     void read();
     return () => { live = false; if (timer) clearTimeout(timer); };
-  }, [editionId]);
+  }, [link]);
   return audio ? <EditionAudio key={audio.fileId} audio={audio} /> : null;
 }
 
+/** A saved audio file by id, as the recording pill; nothing when it is gone or is not audio. */
+export function FileAudio({ id }: { id: string }): JSX.Element | null {
+  const [audio, setAudio] = useState<ReportView['audio']>(null);
+  useEffect(() => {
+    let live = true;
+    setAudio(null);
+    api.libraryEntry(id)
+      .then(({ entry }) => { if (live && entry.mime.startsWith('audio/')) setAudio({ fileId: entry.id, mime: entry.mime, filename: entry.filename, sizeBytes: entry.sizeBytes }); })
+      .catch(() => { /* A file that is gone draws nothing. */ });
+    return () => { live = false; };
+  }, [id]);
+  return audio ? <EditionAudio key={audio.fileId} audio={audio} /> : null;
+}
+
+/** A page link of `plugin`'s own (`#/p/<plugin>/…`), the only report a plugin's data may point a player at. */
+export function isOwnPageLink(plugin: string, link: unknown): link is string {
+  return typeof link === 'string' && link.length <= 512 && link.startsWith(`#/p/${plugin}/`)
+    && /^[a-z][a-z0-9-]{0,39}(?:\?[A-Za-z0-9_.~%=&+-]{0,400})?$/.test(link.slice(`#/p/${plugin}/`.length));
+}
+
 /** The card itself, from the query's answer. `audio` sits under the head, as the kit's player does. */
-export function EditionCard({ edition, audio }: { edition: Edition; audio?: ReactNode }): JSX.Element {
-  const foot = [
-    ...edition.notes,
-    `${edition.next ? `Next edition at ${edition.next}. ` : ''}Tell me what to leave out, or mute anything from News.`,
-  ];
+export function EditionCard({ edition, audio, plugin, legacyFoot = false }: { edition: Edition; audio?: ReactNode; plugin: string; legacyFoot?: boolean }): JSX.Element {
+  // A plugin's own closing line (1.33); the chat report's older wording only where it has always been.
+  const closing = edition.foot ?? (legacyFoot ? `${edition.next ? `Next edition at ${edition.next}. ` : ''}Tell me what to leave out, or mute anything from News.` : '');
+  const foot = [...edition.notes, ...(closing ? [closing] : [])];
   return (
     <div className="ed" data-testid="edition-card">
       <div className="ed-head">
@@ -342,10 +367,10 @@ export function EditionCard({ edition, audio }: { edition: Edition; audio?: Reac
       {edition.groups.map((g, i) => (
         <section key={i} className="ed-group">
           {g.topic ? <h4 className="ed-topic">{g.topic}</h4> : null}
-          <ul className="ed-list">{g.stories.map((s, j) => <EdStory key={j} s={s} />)}</ul>
+          <ul className="ed-list">{g.stories.map((s, j) => <EdStory key={j} s={s} plugin={plugin} />)}</ul>
         </section>
       ))}
-      <p className="ed-foot">{foot.join(' ')}</p>
+      {foot.length > 0 ? <p className="ed-foot">{foot.join(' ')}</p> : null}
     </div>
   );
 }
@@ -382,7 +407,7 @@ export function EditionReport({
   return (
     <div className="wb-report ed-report" data-testid="mission-report">
       {card ? (
-        <div className="ed-bubble"><EditionCard edition={edition} audio={audio ? <EditionAudio audio={audio} /> : null} /></div>
+        <div className="ed-bubble"><EditionCard edition={edition} plugin={NEWS} legacyFoot audio={audio ? <EditionAudio audio={audio} /> : null} /></div>
       ) : edition === undefined ? (
         <div className="ed-bubble" aria-busy="true"><div className="ed ed-loading" /></div>
       ) : (
@@ -403,11 +428,20 @@ export function EditionReport({
   );
 }
 
-/** Read the saved recording for single-edition retrievals, including Telegram transcripts. */
-export function retrievedEditionId(output: unknown): string | null {
-  if (!output || typeof output !== 'object') return null;
-  const value = output as { attachAudio?: unknown; editions?: unknown };
-  if (value.attachAudio !== true || !Array.isArray(value.editions) || value.editions.length !== 1) return null;
-  const id: unknown = value.editions[0]?.id;
-  return typeof id === 'string' && /^e_[a-zA-Z0-9_-]+$/.test(id) ? id : null;
+/**
+ * The audio a tool's output lists under `attachments` (host API 1.33): files
+ * by id, and recordings of the tool's own plugin's reports by page link.
+ */
+export function attachedAudio(plugin: string, output: unknown): Array<{ artifact: string } | { report: string }> {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return [];
+  const list = (output as { attachments?: unknown }).attachments;
+  if (!Array.isArray(list)) return [];
+  const out: Array<{ artifact: string } | { report: string }> = [];
+  for (const raw of list.slice(0, 4)) {
+    const item = obj(raw);
+    if (!item || item['kind'] !== 'audio' || Object.keys(item).length !== 2) continue;
+    if (typeof item['artifact'] === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(item['artifact'])) out.push({ artifact: item['artifact'] });
+    else if (isOwnPageLink(plugin, item['report'])) out.push({ report: item['report'] });
+  }
+  return out;
 }

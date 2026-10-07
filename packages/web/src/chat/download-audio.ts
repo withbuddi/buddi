@@ -26,7 +26,7 @@ export async function downloadMp3(audio: { fileId: string; mime: string; filenam
     } finally { await context.close(); }
   }
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = `${(audio.filename ?? 'edition').replace(/\.[^.]+$/, '')}.mp3`;
+  const a = document.createElement('a'); a.href = url; a.download = `${(audio.filename ?? 'recording').replace(/\.[^.]+$/, '')}.mp3`;
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }

@@ -26,7 +26,7 @@ export type RendererName =
   | 'envelope'
   | 'story'
   | 'audio'
-  | 'edition'
+  | 'query'
   | 'structured';
 
 export type ValueRef = { path: string } | { const: string | number | boolean | null };
@@ -211,13 +211,34 @@ export type ViewMap =
   | TerminalMap
   | ImageMap
   | PreviewMap
+  | StoryMap
+  | QueryMap
   | Record<string, never>;
+
+/** `story` (1.33): one StoryRow, or the rows at `rows`. */
+export interface StoryMap {
+  rows?: string;
+}
+
+/** `query` (1.33): one of the plugin's page queries, its params read from the output, drawn as page components. */
+export interface QueryMap {
+  query: string;
+  params?: Record<string, string>;
+  body: unknown[];
+}
+
+/** 1.33: on a messenger, this tool's result leads with its `attachments`. */
+export interface MessengerDelivery {
+  mediaFirst: true;
+  when?: { path: string; equals: string | number | boolean | null };
+}
 
 export interface ViewDescriptor {
   tool: string;
   renderer: RendererName;
   title?: string;
   map: ViewMap;
+  messenger?: MessengerDelivery;
 }
 
 /* ------------------------------------------------------------------ *
@@ -319,6 +340,24 @@ export interface ImageProps {
   caption: string | null;
   /** Set when the caption is folded away under this name. */
   captionLabel?: string | null;
+}
+
+/** `story` (1.33): the plugin whose assets the images are, and one row or a list of rows. */
+export interface StoryProps {
+  plugin: string;
+  /** The whole output: one StoryRow when `rows` is absent. */
+  value: unknown;
+  rows?: unknown[];
+}
+
+/** `query` (1.33): one page query of the tool's plugin, and the page components drawn against its answer. */
+export interface QueryProps {
+  plugin: string;
+  query: string;
+  params: Record<string, string>;
+  body: unknown[];
+  /** The output, for Technical details. */
+  value: unknown;
 }
 
 export interface PreviewProps {

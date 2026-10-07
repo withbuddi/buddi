@@ -55,8 +55,9 @@ describe('the room header menu', { timeout: 180_000 }, () => {
     const acted = await room(GROUP);
     fireEvent.click(screen.getByTestId('chat-menu'));
     const menu = screen.getByRole('menu', { name: 'Money week' });
-    const items = within(menu).getAllByRole('menuitem').map((item) => item.querySelector('.ui-menu-item-text')!.textContent);
-    expect(items).toEqual(['Members', 'Rename…', 'Clear history…', 'Delete group…']);
+    const items = within(menu).getAllByRole('menuitem').map((item) => item.querySelector('.ui-menu-item-text')?.textContent ?? item.getAttribute('aria-label'));
+    // The text-size controls come first, then the group's own items.
+    expect(items).toEqual(['Decrease message text size', 'Increase message text size', 'Reset message text size', 'Members', 'Rename…', 'Clear history…', 'Delete group…']);
     // The old menu listed each agent with "open page"; none of that is here.
     expect(within(menu).queryAllByRole('link')).toHaveLength(0);
     expect(within(menu).queryByText(/open page/i)).toBeNull();

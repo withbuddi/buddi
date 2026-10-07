@@ -1,5 +1,5 @@
 import { StoryImage } from './StoryImage';
-import { EditionCard, editionOf, SavedEditionAudio } from '../chat/EditionCard';
+import { EditionCard, editionOf, ReportAudio, isOwnPageLink } from '../chat/EditionCard';
 import { leaveReference } from '../chat/reference';
 /**
  * One generic page, drawn from a descriptor.
@@ -1191,22 +1191,104 @@ function PieceSection({
   );
 }
 
-function EditionPiece({ component }: { component: Of<'edition'> }): JSX.Element {
+/** A drawer over the page while its parameter is set (1.33); the query is asked only then. */
+function SheetPiece({ component, data }: { component: Of<'sheet'>; data: unknown }): JSX.Element | null {
   const scope = useScope();
-  const query = usePageQuery(component.query, null);
-  const edition = editionOf(query.data);
+  return scope.params[component.param] ? <OpenSheet component={component} data={data} /> : null;
+}
+
+function OpenSheet({ component, data }: { component: Of<'sheet'>; data: unknown }): JSX.Element {
+  const scope = useScope();
+  const query = usePageQuery(component.query, data);
+  const answer = component.query ? query.data : data;
+  const read = component.heading ? readRef(answer, component.heading) : undefined;
+  const title = typeof read === 'string' && read !== '' ? read : component.title;
   return (
-    <Sheet scrollBody title="News edition" onClose={() => {
+    <Sheet scrollBody title={title} onClose={() => {
       scope.setParams({ [component.param]: null });
       const params = new URLSearchParams(scope.params);
       params.delete(component.param);
+      params.delete('item');
       scope.navigate(`${pluginPageRoute(scope.plugin, scope.page, scope.item)}${params.size ? `?${params}` : ''}`);
     }}>
-      {query.loading ? <Notice>Loading the edition…</Notice> : query.error ? <ErrorBanner message={query.error} /> : edition ? (
-        <EditionCard edition={edition} audio={<SavedEditionAudio editionId={edition.id} />} />
-      ) : <Empty title="No saved edition">Anchor hasn’t saved this edition yet. Scheduled editions will appear here once they’re ready.</Empty>}
+      {component.query && query.loading && query.data === undefined ? <Notice>Loading…</Notice> : query.error ? <ErrorBanner message={query.error} /> : (
+        <Stack>
+          {component.body.map((child, index) => <Piece key={index} component={child} data={answer} />)}
+        </Stack>
+      )}
     </Sheet>
   );
+}
+
+/** A saved digest (1.33): the card chat draws for a report, its recording found from the plugin's own report link. */
+function DigestPiece({ component, data }: { component: Of<'digest'>; data: unknown }): JSX.Element | null {
+  const scope = useScope();
+  const digest = editionOf({ edition: readPath(data, component.path) });
+  if (!digest) return component.emptyTitle || component.empty ? <Empty title={component.emptyTitle}>{component.empty}</Empty> : null;
+  const report = digest.report && isOwnPageLink(scope.plugin, digest.report) ? digest.report : null;
+  return <EditionCard edition={digest} plugin={scope.plugin} audio={report ? <ReportAudio link={report} /> : null} />;
+}
+
+/**
+ * Page components outside a page (1.33): the canvas's `query` renderer draws
+ * a plugin's declared body against one of its page queries. The same pieces,
+ * the same scope rules: the plugin's own queries and routes only.
+ */
+export function PluginComponents({
+  plugin,
+  query,
+  params,
+  body,
+  timezone,
+  navigate,
+}: {
+  plugin: string;
+  query: string;
+  params: Record<string, string>;
+  body: Component[];
+  timezone: string;
+  navigate?: (route: string) => void;
+}): JSX.Element {
+  const [pageParams, setPageParams] = useState<Record<string, string>>({});
+  const [version, setVersion] = useState(0);
+  const [amountsShown] = useAmountsShown();
+  usePluginDataChanged(plugin, () => setVersion((n) => n + 1));
+  const scope: PageScope = {
+    plugin,
+    page: '',
+    pages: [],
+    item: null,
+    params: pageParams,
+    setParams: (patch) =>
+      setPageParams((current) => {
+        const next = { ...current };
+        for (const [key, value] of Object.entries(patch)) {
+          if (value === null) delete next[key];
+          else next[key] = value;
+        }
+        return next;
+      }),
+    navigate: navigate ?? ((route) => { window.location.hash = route; }),
+    timezone,
+    version,
+    refresh: () => setVersion((n) => n + 1),
+    sensitive: new Set<string>(),
+    sensitivePaths: NO_PATHS,
+    amountsShown,
+  };
+  const ref: QueryRef = { query, params: Object.fromEntries(Object.entries(params).map(([key, value]) => [key, { const: value }])) };
+  return (
+    <Scope.Provider value={scope}>
+      <ComponentsOver queryRef={ref} body={body} />
+    </Scope.Provider>
+  );
+}
+
+function ComponentsOver({ queryRef, body }: { queryRef: QueryRef; body: Component[] }): JSX.Element {
+  const answer = usePageQuery(queryRef, null);
+  if (answer.error) return <ErrorBanner message={answer.error} />;
+  if (answer.data === undefined) return <Notice>Loading…</Notice>;
+  return <Stack>{body.map((child, index) => <Piece key={index} component={child} data={answer.data} />)}</Stack>;
 }
 
 function Piece({
@@ -1286,8 +1368,10 @@ function Piece({
       return <ButtonPiece component={component} data={data} />;
     case 'menu':
       return <MenuPiece component={component} data={data} />;
-    case 'edition':
-      return scope.params[component.param] ? <EditionPiece component={component} /> : null;
+    case 'sheet':
+      return <SheetPiece component={component} data={data} />;
+    case 'digest':
+      return <DigestPiece component={component} data={data} />;
     case 'approval':
       return <ApprovalPiece component={component} data={data} />;
     case 'artifact':

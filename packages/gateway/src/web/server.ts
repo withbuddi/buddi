@@ -254,6 +254,7 @@ import {
   type Session,
   type SessionScope,
 } from './sessions.js';
+import { reportRecording } from '../report-audio.js';
 import { supervisorCall, isServiceManaged, isSystemdManaged, restartManagedGateway, LAUNCHD_LABEL } from './service.js';
 import {
   backupJobRoute,
@@ -1949,11 +1950,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (path === '/api/reports/audio') {
         const link = q.get('link');
         if (!link || !link.startsWith('#/') || link.length > 2048) return sendJson(res, 400, { error: 'a local report link is required' });
-        const { rows } = await deps.pool.query<{ audio: string }>(
-          `select audio from core.owner_notifications where link = $1 and audio is not null order by created_at desc limit 1`, [link],
-        );
-        const file = rows[0] ? await getArtifact(deps.pool, rows[0].audio) : null;
-        return sendJson(res, 200, { audio: file?.mime.startsWith('audio/') ? { fileId: file.id, mime: file.mime, filename: file.filename, sizeBytes: file.sizeBytes } : null });
+        const file = await reportRecording(deps.pool, link);
+        return sendJson(res, 200, { audio: file ? { fileId: file.id, mime: file.mime, filename: file.filename, sizeBytes: file.sizeBytes } : null });
       }
 
       if (path === '/api/artifacts') {

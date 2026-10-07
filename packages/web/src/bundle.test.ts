@@ -54,6 +54,8 @@ const ALLOWED_LITERALS = [
   'https://dash.cloudflare.com/profile/api-tokens',
   // Where to make a mailbox's app password, from first run's mailbox sheet: links the owner follows, never fetched.
   'https://myaccount.google.com/apppasswords', 'https://support.apple.com/en-us/102654', 'https://www.fastmail.help/hc/en-us/articles/360058752854',
+  // The MP3 encoder's own home page, a string it reports as its URL (lamejs, loaded only for an MP3 download): never fetched.
+  'http://www.mp3dev.org/',
 ];
 
 function externalUrls(text: string): string[] {

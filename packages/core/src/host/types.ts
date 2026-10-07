@@ -313,7 +313,14 @@ export interface NetworkArea {
 
 /** The owner's decisions about this plugin's own tools. */
 export interface ApprovalsArea {
-  /** Live owner settings authorize this tool in this exact executor run; never inherited by delegates. Since 1.33. */
+  /**
+   * Whether the plugin that started this mission run (its `context`) vouches
+   * for one of this plugin's own tools in this exact run, through its
+   * `consent_for_run` export, asked afresh on every call. False outside a
+   * mission run with a context, in a delegated run, for another agent or
+   * conversation, and whenever the export is missing, says anything but
+   * `true` or fails. Since 1.33.
+   */
   configuredForRun?(tool: string): Promise<boolean>;
   /** Throw unless `envelope` is the effect the owner approved on this call. */
   assert(ctx: ToolContext, envelope: unknown): void;

@@ -6,35 +6,31 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
-- News search results show readable article cards with cached story images; Anchor opens the matching story before explaining it, and Telegram includes its available publisher image.
+- Host API 1.33 canvas renderers: `story` draws a plugin's story row (or a list of them) in the plugin's own words, `audio` plays a saved recording, and `query` draws a plugin's own page components against one of its page queries.
+
+- Host API 1.33 `messenger.mediaFirst` on a view and a reserved `attachments` field on a tool's output: Telegram sends the plugin's own cached picture or saved recording first, then the full answer below it. Attachments are checked against the tool's own plugin.
+
+- Host API 1.33 `approvals.configuredForRun` and the `consent_for_run` export: the plugin a mission run was started from may vouch for a tool in that run, on the owner's own settings, rechecked on every call.
+
+- Host API 1.33 `sheet` (a drawer opened by a page parameter) and `digest` (a saved digest card, with its recording) page components, and links that set page parameters.
 
 - Story cards, drawers and canvas show cached publisher feed images with source credits; plugin assets support an aspect-preserving 768px variant.
 
 ### Fixed
 
-- Telegram sends a story photo before its explanation, placing the full linked text in a new message below it.
+- A Telegram answer that Telegram refuses to format is sent again as plain text instead of being lost.
 
-- Ordinary Telegram replies preserve clickable source names, bold labels and lists, just like saved editions.
+- Every Telegram reply now renders light Markdown as safe Telegram HTML: clickable source names, bold labels and lists.
 
-- Retrieved editions keep labeled links and bold topic headings on Telegram; their saved audio also appears in dashboard transcripts, with clearer topic separation.
-
-- Telegram attaches the existing voice recording when Anchor retrieves a saved edition for playback; count and list requests do not send audio.
+- Saved recordings a tool's result lists also play in the dashboard transcript under the tool's row.
 
 - Audio waveforms fill the full seek area in wide canvas cards, keeping visual progress aligned with playback position.
 
 ### Changed
 
-- Retrieved editions on Telegram send their existing recording first, then the full text in a new message so listeners can read along.
-
 - Collapse appended mission material in chat while keeping its original text available for inspection.
 
-- Saved editions include their recording in the drawer; edition players support seeking and local MP3 downloads. Speech and saved-edition canvas results show the content with technical details collapsed.
-
-- Enabling Read aloud for a News edition authorizes Speech for that edition run; other conversations keep their approval rules.
-
-- Latest edition and story edition links open the saved edition in a scrollable drawer, including an empty state when none is saved.
-
-- News story results open as readable canvas stories with attributed excerpts, linked sources, a coverage timeline and collapsed technical details.
+- Recording players support seeking and an MP3 download made in the browser; canvas results keep their technical details collapsed.
 
 - Chat keeps its original text size by default; A−, A+ and Reset in the chat menu adjust message text and tables, remembered in this browser.
 
@@ -42,11 +38,11 @@ What changes in buddi from one release to the next, newest first.
 
 - Inspect unrendered response text blocks from each chat reply; story drawer actions stay visible while long content scrolls.
 
-- Ask Anchor carries a removable story reference into a new conversation, with question buttons that send immediately when clicked and preserve your composer draft. Opening chat sends nothing.
+- A story's Ask button carries a removable story reference into a new conversation, with question buttons that send immediately when clicked and preserve your composer draft. Opening chat sends nothing.
 
 - Dashboard restart supports systemd and launchd; configured supervisor sockets are checked before a restart is offered.
 
-- Attribute story headlines and excerpts to their source publishers, suppress duplicate update text, and label the coverage timeline without claiming who first reported a story.
+- Story rows may label where their headline, summary and update came from (the plugin's own words), and an update that repeats the summary is not drawn twice.
 
 - Host API 1.33 adds compact setup cards to plugin pages.
 

@@ -1,4 +1,3 @@
-import { editionVoiceConsent } from './voice-consent.js';
 /**
  * Mission execution: the bridge between the core scheduler and the runtime.
  *
@@ -64,6 +63,7 @@ import { askInto } from '../surfaces/browser-cards.js';
 import { ASK_TOOL, createAskManifest, type AskSink } from '../surfaces/pending-question.js';
 import { askHeldBack, noteHeldAsk, timedOutRecently } from './ask-cap.js';
 import { DEFAULT_MISSION_WAIT_MS, isCardQuestion, neededYouLine, parkForHandback, parkMissionRun, type ParkedRun } from './parked.js';
+import { runConsent } from './run-consent.js';
 
 /**
  * What an unattended run is told about asking (docs/browser.md, "Any mission
@@ -663,10 +663,8 @@ export function createMissionExecutor(
     // and that is the only way the owner's decision later finds this run.
     const ctx: CoreToolContext = {
       ...deps.ctx,
-      configuredConsent: {
-        agentId, conversationId,
-        allows: (tool) => editionVoiceConsent(registry, mission, deps.ctx, tool),
-      },
+      // The plugin this run was started from may vouch for a tool in it (1.33).
+      ...(mission.context ? { configuredConsent: { agentId, conversationId, allows: (tool: string) => runConsent(deps.registry, mission, deps.ctx, tool) } } : {}),
       ...(control?.jobId ? { jobId: control.jobId } : {}),
       ...(control?.signal ? { signal: control.signal } : {}),
       ...(browses ? { unattendedSession: UNATTENDED_BROWSER_TOOLS, ask: askVia(asked), unattendedChrome: mission.browser === 'owner' } : {}),

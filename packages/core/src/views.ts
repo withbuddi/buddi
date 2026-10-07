@@ -37,7 +37,7 @@ export type RendererName =
   | 'envelope'
   | 'story'
   | 'audio'
-  | 'edition'
+  | 'query'
   | 'structured';
 
 /**
@@ -350,7 +350,42 @@ export type ViewMap =
   | TerminalMap
   | ImageMap
   | PreviewMap
+  | StoryMap
+  | QueryMap
   | Record<string, never>;
+
+/**
+ * `story` (host API 1.33): the output is one `StoryRow` (pages.ts) — title,
+ * attributions, image, summary, sources, timeline — or, with `rows`, a list
+ * of them. Every word drawn is the plugin's own.
+ */
+export interface StoryMap {
+  /** Path to an array of story rows; the output itself is one row when left out. */
+  rows?: string;
+}
+
+/**
+ * `query` (host API 1.33): the canvas asks the descriptor's own plugin one of
+ * its page queries, `params` read out of the output (each a path), and draws
+ * `body` — page components (plugin-pages.md), read-only — against the answer.
+ */
+export interface QueryMap {
+  query: string;
+  params?: Record<string, string>;
+  body: unknown[];
+}
+
+/**
+ * How a messenger delivers this tool's result (host API 1.33). `mediaFirst`:
+ * when the tool is called (and `when` holds against its input), the reply's
+ * streamed text is held back; what the output lists under `attachments` is
+ * sent first and the full text follows as a new message.
+ */
+export interface MessengerDelivery {
+  mediaFirst: true;
+  /** Read against the tool's *input*: only calls where `path` equals the value lead with media. */
+  when?: { path: string; equals: string | number | boolean | null };
+}
 
 /** One tool, one way of drawing it. */
 export interface ViewDescriptor {
@@ -360,6 +395,8 @@ export interface ViewDescriptor {
   /** Heading for the canvas tab and panel. Defaults to the tool name. */
   title?: string;
   map: ViewMap;
+  /** Since host API 1.33. */
+  messenger?: MessengerDelivery;
 }
 
 /* ------------------------------------------------------------------ *
@@ -600,10 +637,33 @@ const emptyMapSchema = z.object({}).strict();
 
 const TOOL_NAME = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 
+const messengerSchema = z
+  .object({
+    mediaFirst: z.literal(true),
+    when: z
+      .object({ path: viewPathSchema, equals: z.union([z.string(), z.number(), z.boolean(), z.null()]) })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 const common = {
   tool: z.string().regex(TOOL_NAME, 'a tool name is `plugin.tool`, lower case'),
   title: z.string().min(1).max(60).optional(),
+  messenger: messengerSchema.optional(),
 };
+
+const storyMapSchema = z.object({ rows: viewPathSchema.optional() }).strict();
+
+const queryMapSchema = z
+  .object({
+    query: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/, 'a page query name is lower_snake_case'),
+    params: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,39}$/, 'a parameter is a name'), viewPathSchema).optional(),
+    // Page components; their shape and every name in them is checked with the
+    // plugin's pages (`parsePageContributions`), which knows the grammar.
+    body: z.array(z.object({ kind: z.string() }).passthrough()).min(1).max(24),
+  })
+  .strict();
 
 /**
  * One descriptor. A discriminated union on `renderer`, so the map is checked
@@ -623,8 +683,8 @@ export const viewDescriptorSchema = z.discriminatedUnion('renderer', [
   z.object({ ...common, renderer: z.literal('preview'), map: previewMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('envelope'), map: emptyMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('audio'), map: emptyMapSchema }).strict(),
-  z.object({ ...common, renderer: z.literal('edition'), map: emptyMapSchema }).strict(),
-  z.object({ ...common, renderer: z.literal('story'), map: emptyMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('query'), map: queryMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('story'), map: storyMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('structured'), map: emptyMapSchema }).strict(),
 ]);
 
@@ -666,4 +726,94 @@ export function parseViewDescriptors(
     }
     return parsed.data as ViewDescriptor;
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Messenger attachments (host API 1.33)
+ * ------------------------------------------------------------------ */
+
+/**
+ * What a tool whose view declares `messenger.mediaFirst` may list under its
+ * output's reserved `attachments` field: an image of its own plugin's assets
+ * (by key), a saved audio file (by artifact id), or the recording filed with
+ * one of its own plugin's saved reports (by the report's page link,
+ * `#/p/<plugin>/…`). Nothing else, and nothing of another plugin.
+ */
+export type MessengerAttachment =
+  | { kind: 'image'; asset: string; caption?: string }
+  | { kind: 'audio'; artifact: string }
+  | { kind: 'audio'; report: string };
+
+/** The most attachments one output may carry; the rest are dropped. */
+export const MESSENGER_ATTACHMENTS_MAX = 4;
+/** Telegram's own cap on a photo caption. */
+export const ATTACHMENT_CAPTION_MAX = 1024;
+
+const ATTACHMENT_ASSET = /^[a-z0-9](?:[a-z0-9._-]{0,94}[a-z0-9])?$/;
+const ATTACHMENT_ARTIFACT = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** A page link of `plugin`'s own: `#/p/<plugin>/<page>` with an optional query string. */
+export function isOwnPageLink(plugin: string, link: unknown): link is string {
+  if (typeof link !== 'string' || link.length > 512) return false;
+  const prefix = `#/p/${plugin}/`;
+  return link.startsWith(prefix) && /^[a-z][a-z0-9-]{0,39}(?:\?[A-Za-z0-9_.~%=&+-]{0,400})?$/.test(link.slice(prefix.length));
+}
+
+/**
+ * The valid attachments of one tool output, for the tool's own `plugin`.
+ * An entry that is not exactly one of the three shapes, names an asset key
+ * that could not be one, or a report link of another plugin, is left out.
+ */
+export function messengerAttachments(plugin: string, output: unknown): MessengerAttachment[] {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return [];
+  const list = (output as { attachments?: unknown }).attachments;
+  if (!Array.isArray(list)) return [];
+  const out: MessengerAttachment[] = [];
+  const seen = new Set<string>();
+  for (const raw of list) {
+    if (out.length >= MESSENGER_ATTACHMENTS_MAX) break;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const entry = raw as Record<string, unknown>;
+    const keys = Object.keys(entry);
+    let next: MessengerAttachment | undefined;
+    if (entry.kind === 'image' && typeof entry.asset === 'string' && ATTACHMENT_ASSET.test(entry.asset) && !entry.asset.includes('..')
+      && keys.every((k) => k === 'kind' || k === 'asset' || k === 'caption')
+      && (entry.caption === undefined || typeof entry.caption === 'string')) {
+      const caption = typeof entry.caption === 'string' ? entry.caption.trim().slice(0, ATTACHMENT_CAPTION_MAX) : '';
+      next = { kind: 'image', asset: entry.asset, ...(caption ? { caption } : {}) };
+    } else if (entry.kind === 'audio' && keys.length === 2 && typeof entry.artifact === 'string' && ATTACHMENT_ARTIFACT.test(entry.artifact)) {
+      next = { kind: 'audio', artifact: entry.artifact };
+    } else if (entry.kind === 'audio' && keys.length === 2 && isOwnPageLink(plugin, entry.report)) {
+      next = { kind: 'audio', report: entry.report };
+    }
+    if (!next) continue;
+    const id = JSON.stringify(['asset' in next ? next.asset : 'artifact' in next ? next.artifact : next.report, next.kind]);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(next);
+  }
+  return out;
+}
+
+/** Whether a call of this tool, with this input, leads with media on a messenger. */
+export function leadsWithMedia(descriptor: Pick<ViewDescriptor, 'messenger'> | undefined, input: unknown): boolean {
+  const messenger = descriptor?.messenger;
+  if (!messenger || messenger.mediaFirst !== true) return false;
+  if (!messenger.when) return true;
+  return readViewPath(input, messenger.when.path) === messenger.when.equals;
+}
+
+function readViewPath(value: unknown, path: string): unknown {
+  if (path === '' || path === '$') return value;
+  let node: unknown = value;
+  for (const part of path.split('.')) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)((?:\[\d+\])*)$/.exec(part);
+    if (!m || node === null || typeof node !== 'object') return undefined;
+    node = (node as Record<string, unknown>)[m[1]!];
+    for (const index of m[2]!.matchAll(/\[(\d+)\]/g)) {
+      if (!Array.isArray(node)) return undefined;
+      node = node[Number(index[1])];
+    }
+  }
+  return node;
 }

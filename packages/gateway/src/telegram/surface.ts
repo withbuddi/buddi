@@ -630,9 +630,9 @@ export interface RunReply {
    * dashboard shows under the answer. Sent after the text.
    */
   artifacts?: readonly string[];
-  /** Existing edition recordings sent before the readable text. */
+  /** Recordings a tool's result leads with (host API 1.33): sent before the text. */
   leadingAudio?: readonly string[];
-  /** A story photo already sent; the answer must follow in a new message. */
+  /** A leading photo already sent (host API 1.33): the answer follows in a new message. */
   leadingPhotoSent?: boolean;
   /** What the turn left on the canvas, if it drew anything. */
   canvas?: CanvasView;
@@ -646,9 +646,9 @@ export interface RunReply {
 type RenderedTurn = RenderedOffers & {
   question?: Question;
   artifacts?: readonly string[];
-  /** Existing edition recordings sent before the readable text. */
+  /** Recordings a tool's result leads with (host API 1.33): sent before the text. */
   leadingAudio?: readonly string[];
-  /** A story photo already sent; the answer must follow in a new message. */
+  /** A leading photo already sent (host API 1.33): the answer follows in a new message. */
   leadingPhotoSent?: boolean;
   canvas?: CanvasView;
   /** The agent whose run spent its step budget: the answer offers Continue. */

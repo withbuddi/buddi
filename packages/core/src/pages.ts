@@ -1196,8 +1196,22 @@ export type Component =
    * the file it just produced.
    */
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
+  /**
+   * A drawer over the page while the page parameter `param` is set (1.33):
+   * opened by any link that sets it (`{ page, params }`), closed by clearing
+   * it. `query` is asked only while it is open, and `body` is drawn against
+   * its answer. Its head is `heading` read from the answer, `title` when that
+   * reads nothing.
+   */
+  | (ComponentCommon & { kind: 'sheet'; title: string; param: string; heading?: ValueRef; query?: QueryRef; body: Component[] })
+  /**
+   * A saved digest at `path` (1.33): a name and time, an optional recording,
+   * a lede, topic groups of stories with their outlets' logos and ⋯ ways out,
+   * and closing notes — the card chat draws for a report. When the value at
+   * `path` is null or absent, `emptyTitle` and `empty` are drawn instead.
+   */
+  | (ComponentCommon & { kind: 'digest'; path: string; emptyTitle?: string })
   /** An approval id in the data; draws the ApprovalCard, choices and all. */
-  | (ComponentCommon & { kind: 'edition'; query: QueryRef; param: string })
   | (ComponentCommon & { kind: 'approval'; path: string })
   /** An artifact id in the data; draws the download link. */
   | (ComponentCommon & { kind: 'artifact'; path: string; label: string })
@@ -1953,7 +1967,25 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
     z
       .object({ ...common, kind: z.literal('menu'), label, tone: z.literal('accent').optional(), items: z.array(menuItemSchema).min(1).max(8) })
       .strict(),
-    z.object({ ...common, kind: z.literal('edition'), query: queryRefSchema, param: z.string().regex(PAGE_ID) }).strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('sheet'),
+        title: label,
+        param: z.string().regex(PAGE_NAME, 'a page parameter is a name'),
+        heading: valueRefSchema.optional(),
+        query: queryRefSchema.optional(),
+        body: z.array(componentSchema).min(1).max(24),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('digest'),
+        path: viewPathSchema,
+        emptyTitle: label.optional(),
+      })
+      .strict(),
     z.object({ ...common, kind: z.literal('approval'), path: viewPathSchema }).strict(),
     z.object({ ...common, kind: z.literal('artifact'), path: viewPathSchema, label }).strict(),
     z
@@ -2539,6 +2571,56 @@ export function parsePageContributions(opts: {
     }
   }
   return { pages, queries, tools: [...named] };
+}
+
+/**
+ * A `query` view's body (host API 1.33) is page components the canvas draws
+ * against one of the plugin's own page queries, so it is checked as a page's
+ * body is: its shape, and that every query and page it names is this
+ * plugin's. It is read-only: a body names no tool (the act route only runs
+ * tools the plugin's pages name), and its query is not a sensitive one, which
+ * the canvas would have no way to mask.
+ */
+export function checkQueryViews(opts: {
+  plugin: string;
+  views?: readonly unknown[];
+  queries?: readonly PageQuery[];
+  pages?: readonly string[];
+}): void {
+  const { plugin } = opts;
+  const queries = new Map((opts.queries ?? []).map((query) => [query.name, query]));
+  const pages = new Set(opts.pages ?? []);
+  for (const raw of opts.views ?? []) {
+    const view = raw as { tool?: unknown; renderer?: unknown; map?: { query?: unknown; body?: unknown } };
+    if (view?.renderer !== 'query') continue;
+    const named = `view ${String(view.tool)}`;
+    const name = String(view.map?.query);
+    const query = queries.get(name);
+    if (!query) {
+      throw new Error(`plugin ${plugin}: ${named} asks query ${name}, which this plugin does not contribute`);
+    }
+    if (query.sensitive !== undefined && query.sensitive !== false) {
+      throw new Error(`plugin ${plugin}: ${named} asks query ${name}, which is sensitive — the canvas cannot mask it`);
+    }
+    checkShape(view.map?.body, plugin, named);
+    const parsed = z.array(componentSchema).min(1).max(24).safeParse(view.map?.body);
+    if (!parsed.success) {
+      const detail = parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
+      throw new Error(`plugin ${plugin}: ${named} has an invalid body — ${detail}`);
+    }
+    for (const ref of collectRefs(parsed.data, 'body')) {
+      if (ref.kind === 'tool') throw new Error(`plugin ${plugin}: ${named}, ${ref.at}: a view's body is read-only and names no tool`);
+      if (ref.kind === 'query' && !queries.has(ref.name)) {
+        throw new Error(`plugin ${plugin}: ${named}, ${ref.at}: no query called ${ref.name}`);
+      }
+      if (ref.kind === 'query' && queries.get(ref.name)!.sensitive) {
+        throw new Error(`plugin ${plugin}: ${named}, ${ref.at}: asks ${ref.name}, which is sensitive — the canvas cannot mask it`);
+      }
+      if (ref.kind === 'page' && !pages.has(ref.name)) {
+        throw new Error(`plugin ${plugin}: ${named}, ${ref.at}: links to ${ref.name}, which is not a page of this plugin`);
+      }
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ *

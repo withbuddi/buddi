@@ -751,9 +751,17 @@ For rendering diagnostics, **View raw response** (the code icon beside Copy unde
 
 The chat header’s ⋯ menu includes A−, A+ and Reset for message text size. The choice is stored in this browser, applies across conversations, and scales prose and tables without changing the composer or canvas.
 
-News’s Latest edition opens the latest saved edition in a scrollable drawer. Story edition links and notification links open the specific saved edition. These reads are available even while Do Not Disturb holds the notification.
+A plugin page's link can open a saved digest in a scrollable drawer (a
+`sheet`, [plugin-pages.md](plugin-pages.md)); notification links open the
+exact one, even while Do Not Disturb holds the notification.
 
-Edition audio offers play/pause, keyboard-accessible seeking, elapsed/total time and an MP3 download converted locally in the browser. The original recording remains unchanged; conversion failures offer the original file. Drawer and saved-edition canvas cards look up the recording from the saved report link. Appended mission material is collapsed in chat and remains available verbatim.
+A recording's player offers play and pause, keyboard-accessible seeking,
+elapsed and total time, and an MP3 download converted in the browser; the
+original recording is unchanged, and if conversion fails the original file
+is offered. A digest's drawer and canvas card find its recording from the
+report link the plugin gives. Material a mission's run reads first is folded
+in chat, verbatim inside.
 
-News search results use article cards with publisher, date, excerpt, source link
-and available cached story image. Internal identifiers stay under Technical details.
+Story results on the canvas are article cards in the plugin's own words:
+source, date, excerpt, link and the cached image when there is one, with
+identifiers under Technical details.

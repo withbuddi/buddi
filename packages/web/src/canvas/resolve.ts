@@ -23,6 +23,10 @@ import type {
   KeyValueProps,
   PreviewMap,
   PreviewProps,
+  QueryMap,
+  QueryProps,
+  StoryMap,
+  StoryProps,
   RendererName,
   TableCell,
   TableMap,
@@ -466,6 +470,28 @@ export function humanise(key: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
+/** The plugin a tool belongs to: the part of its name before the dot. */
+function pluginOfTool(tool: string): string {
+  return tool.split('.')[0] ?? '';
+}
+
+/** `story` (1.33): one row, or the rows at `rows`; images and logos are the tool's own plugin's. */
+export function resolveStory(output: unknown, map: StoryMap, tool: string): StoryProps {
+  const plugin = pluginOfTool(tool);
+  if (map.rows !== undefined) return { plugin, rows: asArray(readPath(output, map.rows)), value: output };
+  return { plugin, value: output };
+}
+
+/** `query` (1.33): which of the plugin's queries to ask, with which parameters, and what to draw. */
+export function resolveQuery(output: unknown, map: QueryMap, tool: string): QueryProps {
+  const params: Record<string, string> = {};
+  for (const [name, path] of Object.entries(map.params ?? {})) {
+    const value = readPath(output, path);
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') params[name] = String(value);
+  }
+  return { plugin: pluginOfTool(tool), query: map.query, params, body: Array.isArray(map.body) ? map.body : [], value: output };
+}
+
 /**
  * The whole point: descriptor + output → props the generic renderer can draw.
  * An unknown renderer name, or one that needs no map, falls through to
@@ -488,10 +514,11 @@ export function applyDescriptor(
     case 'tiles':
       return { renderer: 'tiles', props: resolveTiles(output, map as TilesMap, descriptor.tool) };
     case 'audio':
-    case 'edition':
-      return { renderer: descriptor.renderer, props: { value: output } };
+      return { renderer: 'audio', props: { value: output } };
     case 'story':
-      return { renderer: 'story', props: { value: output, plugin: descriptor.tool.split('.')[0] } };
+      return { renderer: 'story', props: resolveStory(output, map as StoryMap, descriptor.tool) };
+    case 'query':
+      return { renderer: 'query', props: resolveQuery(output, map as QueryMap, descriptor.tool) };
     case 'document':
       return { renderer: 'document', props: resolveDocument(output, map as DocumentMap) };
     case 'diff':

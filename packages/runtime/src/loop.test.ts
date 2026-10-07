@@ -609,7 +609,7 @@ describe('runAgent', () => {
     });
     const system = provider.calls[0]?.system ?? '';
     expect(system).toContain('You are answering on Telegram.');
-    expect(system).toContain('Markdown is not rendered here');
+    expect(system).toContain('Markdown is rendered here');
     expect(system).not.toContain('There is a canvas here');
   });
 

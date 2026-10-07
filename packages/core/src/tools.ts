@@ -174,7 +174,11 @@ export interface ToolContext {
  * export this.
  */
 export interface CoreToolContext extends ToolContext {
-  /** Owner-configured consent for this exact run. Executor-issued, never model input. */
+  /**
+   * A mission run's context plugin vouching for a tool (`consent_for_run`,
+   * host API 1.33): the run it is bound to, and the question. Set by the
+   * mission executor only, never from model input.
+   */
   configuredConsent?: { agentId: string; conversationId: string; allows: (tool: string) => Promise<boolean> };
   /** The pool. A plugin's host wraps it as `buddi.db`. */
   db: Pool;

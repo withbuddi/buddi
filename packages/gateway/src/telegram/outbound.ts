@@ -381,10 +381,29 @@ export async function landAnswer(
         continue;
       }
     }
-    const id = await retrying(deps, () => deps.api.sendMessage(chatId, part, send));
+    const id = await retrying(deps, () => deps.api.sendMessage(chatId, part, send)).catch(async (err: unknown) => {
+      // Telegram refused the formatting (400 "can't parse entities"): the
+      // answer still lands, as the same words without tags. A lost answer is
+      // worse than an unformatted one.
+      if (!htmlParts || !(err instanceof TelegramApiError) || err.status !== 400) throw err;
+      deps.log(`telegram: formatted answer refused, sending it as plain text: ${message(err)}`);
+      const { parseMode: _html, ...plain } = send;
+      return retrying(deps, () => deps.api.sendMessage(chatId, htmlToPlainText(part), plain));
+    });
     if (typeof id === 'number') landed.push(id);
   }
   return landed;
+}
+
+/** Telegram HTML back to the words it shows: tags dropped, entities read. */
+export function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<a\s+href="([^"]*)">([\s\S]*?)<\/a>/g, (_m, href: string, label: string) => `${label} (${href.replace(/&quot;/g, '"').replace(/&amp;/g, '&')})`)
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&');
 }
 
 /** Run a Bot API call, waiting out a 429 as often as `FINAL_RETRIES` allows. */

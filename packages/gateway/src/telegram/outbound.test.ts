@@ -489,9 +489,38 @@ describe('the Bot API calls outbound uses', () => {
   });
 });
 
- it('sends an existing Ogg recording as a playable Telegram voice note', async () => {
-  const { api, calls } = fakeApi();
-  await sendRunExtras({ api, log: () => {}, artifacts: store([row('voice', { mime: 'audio/ogg', filename: 'edition.ogg' })]) }, 'c1', { artifacts: ['voice', 'voice'] });
-  expect(calls.filter(call => call.method === 'sendVoice')).toHaveLength(1);
-  expect(calls.some(call => call.method === 'sendDocument')).toBe(false);
+describe('audio and formatted answers', () => {
+  it('sends an existing Ogg recording as a playable Telegram voice note', async () => {
+    const { api, calls } = fakeApi();
+    await sendRunExtras({ api, log: () => {}, artifacts: store([row('voice', { mime: 'audio/ogg', filename: 'report.ogg' })]) }, 'c1', { artifacts: ['voice', 'voice'] });
+    expect(calls.filter((call) => call.method === 'sendVoice')).toHaveLength(1);
+    expect(calls.some((call) => call.method === 'sendDocument')).toBe(false);
+  });
+
+  it('lands an answer Telegram refuses to parse as the same words in plain text, never losing it', async () => {
+    const { api, calls } = fakeApi((method, args) =>
+      method === 'sendMessage' && args[2]?.parseMode === 'HTML' ? new TelegramApiError('sendMessage', 400, "Bad Request: can't parse entities") : undefined);
+    const lines: string[] = [];
+    const landed = await landAnswer({ api, log: (l) => lines.push(l) }, 'c1', undefined, 'x', undefined, ['<b>Hi</b> &amp; <a href="https://example.com/?a=1&amp;b=2">source</a> 2 &lt; 3']);
+    expect(landed).toHaveLength(1);
+    const sends = calls.filter((call) => call.method === 'sendMessage');
+    expect(sends).toHaveLength(2);
+    expect(sends[1]!.args[1]).toBe('Hi & source (https://example.com/?a=1&b=2) 2 < 3');
+    expect(sends[1]!.args[2]?.parseMode).toBeUndefined();
+    expect(lines.some((l) => /plain text/.test(l))).toBe(true);
+  });
+
+  it('falls back from a refused edit to a fresh message, then to plain text', async () => {
+    const { api, calls } = fakeApi((method, args) =>
+      (method === 'editMessageText' || (method === 'sendMessage' && args[2]?.parseMode === 'HTML')) ? new TelegramApiError(method, 400, "Bad Request: can't parse entities") : undefined);
+    const landed = await landAnswer({ api, log: () => {} }, 'c1', 42, 'x', undefined, ['<i>ok</i>']);
+    expect(landed).toHaveLength(1);
+    expect(calls.filter((call) => call.method === 'sendMessage').at(-1)!.args[1]).toBe('ok');
+  });
+
+  it('does not retry other failures as plain text', async () => {
+    const { api, calls } = fakeApi((method) => (method === 'sendMessage' ? new TelegramApiError('sendMessage', 403, 'Forbidden: bot was blocked') : undefined));
+    await expect(landAnswer({ api, log: () => {} }, 'c1', undefined, 'x', undefined, ['<b>x</b>'])).rejects.toThrow(/blocked/);
+    expect(calls.filter((call) => call.method === 'sendMessage')).toHaveLength(1);
+  });
 });
