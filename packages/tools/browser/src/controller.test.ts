@@ -373,6 +373,8 @@ describe('the owner cards, through the existing question card', () => {
     expect(controller.status({ agentId: 'a', conversationId: 'a' }).needsOwner?.kind).toBe('sign-in');
     await expect(controller.touch({ conversationId: 'a', text: 'Take over' })).resolves.toEqual({ answered: 'takeover' });
     expect(controller.status({ agentId: 'a', conversationId: 'a' }).state).toBe('paused');
+    // The card's agent waits on the page: its give-back carries the turn on.
+    expect(controller.status({ agentId: 'a', conversationId: 'a' }).agentWaiting).toBe(true);
     // Use my Chrome, from the own browser.
     const other = await routes({ connected: true, page: LOGIN });
     await other.controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx('b'));
@@ -405,6 +407,28 @@ describe('the owner cards, through the existing question card', () => {
     await controller.control('takeover', id);
     await controller.control('resume', id);
     expect(heard).toHaveLength(1);
+  });
+  it('a give-back says an agent waited only when one did: idle take-over no, an action refused while held yes', async () => {
+    const { controller } = await routes();
+    const heard: Array<{ waiting?: boolean }> = [];
+    controller.onGiveBack((info) => heard.push(info));
+    await controller.execute(navigate('https://a.test/'), ctx('a'));
+    const id = controller.status({ agentId: 'a', conversationId: 'a' }).session!.id;
+    // Taken from an idle agent, given back untouched: nothing waited.
+    await controller.control('takeover', id);
+    expect(controller.status({ sessionId: id }).agentWaiting).toBeUndefined();
+    await controller.control('resume', id);
+    expect(heard.at(-1)?.waiting).toBeUndefined();
+    // The agent tried to act while the owner held the page: it waits, and carries on after.
+    await controller.control('takeover', id);
+    await expect(controller.execute(navigate('https://a.test/next'), ctx('a'))).rejects.toThrow('give it back');
+    expect(controller.status({ sessionId: id }).agentWaiting).toBe(true);
+    await controller.control('resume', id);
+    expect(heard.at(-1)?.waiting).toBe(true);
+    // And the flag goes with the give-back.
+    await controller.control('takeover', id);
+    await controller.control('resume', id);
+    expect(heard.at(-1)?.waiting).toBeUndefined();
   });
   it('take-over: one page in the owner\'s hands at a time', async () => {
     const { controller } = await routes();

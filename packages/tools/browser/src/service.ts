@@ -121,6 +121,12 @@ export interface BrowserStatus {
    * bar in the tab offers the same. Absent: a take-over streams frames as before.
    */
   held?: BrowserHeld;
+  /**
+   * While paused: an agent waits on this page (the take-over interrupted it or
+   * answered its card, or it tried to act while the owner held it). Give it
+   * back carries its turn on only then; an idle conversation is just stamped.
+   */
+  agentWaiting?: boolean;
   /** Owner dashboard only; agent tools receive just their conversation. */
   sessions?: BrowserStatus[];
   /** The agents' own browser on this machine: what launches, and how. */
@@ -161,7 +167,11 @@ export interface SecretTypeInput { name: string }
 /** An owner touch: a message or a card tap in a conversation. */
 export interface BrowserTouch { conversationId: string; agentId?: string; text?: string }
 /** The owner gave back a page they held: whose it was. */
-export interface BrowserGiveBack { sessionId: string; agentId: string; conversationId: string }
+export interface BrowserGiveBack {
+  sessionId: string; agentId: string; conversationId: string;
+  /** An agent waited on the page (`BrowserStatus.agentWaiting`): its turn carries on. Absent: nothing was parked on it. */
+  waiting?: boolean;
+}
 export interface BrowserController {
   /** Sign-ins the owner made on a page they held, waiting for their word or already kept (docs/browser.md, "Saving a sign-in"). */
   readonly logins?: LoginKeeper;
@@ -244,6 +254,12 @@ export class BrowserService {
   #handless = false;
   /** The owner holds the page in place (their Chrome brought it forward): no frames, no hand. */
   #held = false;
+  /**
+   * An agent waits on the page the owner holds: the take-over interrupted an
+   * action or answered a card, or an action was refused while it was held.
+   * Only then does Give it back start a turn (`agentWaiting`).
+   */
+  #agentWaits = false;
   /** The page the owner last held in place, and until when a Save they tapped there still counts (the driver's grace). */
   #lastHeld?: { id: string; until: number };
   /** Who waits for the action in flight to settle (a Give it back pressed while it stops). */
@@ -307,6 +323,7 @@ export class BrowserService {
       ...(this.#observation ? { page: page as Omit<Observation, 'tree' | 'targets'> } : {}),
       ...(this.#card ? { needsOwner: this.#card } : {}),
       ...(this.#state === 'paused' && this.#held && this.driver.holdsInPlace ? { held: { by: 'owner' as const, where: this.driver.holdsInPlace } } : {}),
+      ...(this.#state === 'paused' && this.#agentWaits ? { agentWaiting: true } : {}),
       lastAction: this.#lastAction, message: this.#message, hasScreenshot: !!this.#picture };
   }
 
@@ -373,6 +390,9 @@ export class BrowserService {
    * actions, an hour) and a waiting card is cleared. Returns the card it
    * cleared, so the caller can act on the answer (take over, use Chrome).
    */
+  /** The take-over answered this page's card: the agent that raised it waits on the page. */
+  agentWaits(): void { if (this.#state === 'paused') this.#agentWaits = true; }
+
   renew(): OwnerCard | undefined {
     const card = this.#card;
     this.#card = undefined;
@@ -437,6 +457,7 @@ export class BrowserService {
       return { closed: true, notice: UNTRUSTED };
     }
     if (this.#state === 'paused') {
+      this.#agentWaits = true;
       throw new Error('The owner has this page in their hands. Wait for them to give it back; you continue when they do.');
     }
     // Parked on a card: nothing is done until the owner answers it.
@@ -671,7 +692,7 @@ export class BrowserService {
       if (this.#session && (this.#session.ownerId !== ctx.buddi!.owner.id || this.#session.agentId !== ctx.agentId || this.#session.conversationId !== ctx.conversationId)) {
         throw new Error('Another conversation owns this page.');
       }
-      if (this.#state === 'paused') throw new Error('The owner has this page in their hands. Wait for them to give it back.');
+      if (this.#state === 'paused') { this.#agentWaits = true; throw new Error('The owner has this page in their hands. Wait for them to give it back.'); }
       if (!this.#session) throw new Error('Open the page with browser.act navigate before using a secret here.');
       this.#open(ctx.ownerRequest, ctx);
       if (this.#card) return this.#cardResult(this.#card, false);
@@ -817,6 +838,7 @@ export class BrowserService {
     }
     if (this.#observation?.url) this.#lastUrl = this.#observation.url;
     this.#handless = false;
+    this.#agentWaits = false;
     if (this.#held) { this.#markHeldEnd(); this.#held = false; this.driver.resume?.(); }
     this.#state = state;
     this.#controller?.abort(new Error(`Browser ${state}. An in-flight submission may have completed; inspect before retrying.`));
@@ -866,6 +888,9 @@ export class BrowserService {
       if (action === 'stop') {
         await this.#release('stopped');
       } else if (action === 'takeover') {
+        // The agent waits on this page when it was mid-action or parked on a card; a page taken from an idle agent does not.
+        if (this.#state !== 'paused') this.#agentWaits = this.#busy || !!this.#card;
+        else if (this.#busy || this.#card) this.#agentWaits = true;
         this.#state = 'paused';
         this.#message = undefined;
         this.#card = undefined;
@@ -894,6 +919,7 @@ export class BrowserService {
         this.driver.resume?.();
         this.#handless = false;
         this.#held = false;
+        this.#agentWaits = false;
         this.#observation = undefined;
         this.#picture = undefined;
         // The owner acted: a fresh budget, and the agent's next action returns the page as the owner left it.

@@ -1406,7 +1406,7 @@ suite('the dashboard chat API', () => {
     });
 
     it('Take over on a browser card holds the turn; Give it back carries the conversation on', async () => {
-      let giveBack: ((info: { sessionId: string; agentId: string; conversationId: string }) => void) | undefined;
+      let giveBack: ((info: { sessionId: string; agentId: string; conversationId: string; waiting?: boolean }) => void) | undefined;
       const touched: string[] = [];
       const browser = {
         enable: async () => {}, shutdown: async () => {}, screenshot: () => undefined, execute: async () => ({}), secretFill: async () => ({}), secretType: async () => ({}),
@@ -1433,10 +1433,42 @@ suite('the dashboard chat API', () => {
         expect(touched).toContain('Take over');
 
         provider.script = [say('You handled the page; I carry on.')];
-        giveBack!({ sessionId: 's1', agentId: AGENT_ID, conversationId });
+        giveBack!({ sessionId: 's1', agentId: AGENT_ID, conversationId, waiting: true });
         await settled(conversationId, 2);
         expect(provider.seen.length).toBe(calls + 1);
         expect(JSON.stringify(provider.seen.at(-1)!.messages)).toContain('I handled the page myself and gave it back.');
+      } finally {
+        await own.chat?.drain();
+        await own.close();
+      }
+    });
+
+    it('Give it back with nothing parked stamps the thread and starts no turn', async () => {
+      let giveBack: ((info: { sessionId: string; agentId: string; conversationId: string; waiting?: boolean }) => void) | undefined;
+      const browser = {
+        enable: async () => {}, shutdown: async () => {}, screenshot: () => undefined, execute: async () => ({}), secretFill: async () => ({}), secretType: async () => ({}),
+        control: async () => ({ state: 'idle' as const, enabled: true, busy: false, hasScreenshot: false }),
+        status: () => ({ state: 'idle' as const, enabled: true, busy: false, hasScreenshot: false }),
+        touch: async () => ({}),
+        onGiveBack: (listener: typeof giveBack) => { giveBack = listener; return () => { giveBack = undefined; }; },
+      };
+      const own = await startServer({ browser: browser as never });
+      try {
+        const client = new Client(`http://127.0.0.1:${own.port}`);
+        expect((await client.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`)).status).toBe(302);
+        provider.script = [say('Looking.')];
+        const { conversationId } = (await (await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'check my orders' })).json()) as any;
+        await settled(conversationId);
+        const calls = provider.seen.length;
+        // A Canvas take-over while the agent was idle: no card, no refused action.
+        giveBack!({ sessionId: 's1', agentId: AGENT_ID, conversationId });
+        const stamped = async (): Promise<boolean> => (await pool.query(`select 1 from core.messages where conversation_id = $1::uuid and speaker = 'offer:Gave the page back'`, [conversationId])).rows.length > 0;
+        for (let i = 0; i < 200 && !(await stamped()); i += 1) await new Promise((r) => setTimeout(r, 25));
+        await own.chat?.drain();
+        expect(provider.seen.length).toBe(calls);
+        const { rows } = await pool.query(`select role, speaker, content from core.messages where conversation_id = $1::uuid order by created_at asc, id asc`, [conversationId]);
+        expect(rows.at(-1)).toMatchObject({ role: 'user', speaker: 'offer:Gave the page back' });
+        expect(JSON.stringify(rows.at(-1).content)).not.toContain('carry on');
       } finally {
         await own.chat?.drain();
         await own.close();

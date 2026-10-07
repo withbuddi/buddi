@@ -831,7 +831,7 @@ export class HostController implements BrowserController {
         const answer = cardAnswer(card, text);
         if (answer === 'takeover') {
           const id = child.status().session?.id;
-          if (id) { await this.control('takeover', id).catch(() => undefined); answered = 'takeover'; }
+          if (id) { await this.control('takeover', id).catch(() => undefined); child.agentWaits(); answered = 'takeover'; }
         } else if (answer === 'chrome') {
           this.#pins.set(input.conversationId, 'chrome'); this.#later(this.#savePins());
           const session = child.status().session;
@@ -897,7 +897,7 @@ export class HostController implements BrowserController {
     await found.manager.control(action, sessionId);
     // Given back: the run that waited on the owner carries on (a parked mission, a held conversation).
     if (action === 'resume' && before.state === 'paused' && before.session) {
-      const info: BrowserGiveBack = { sessionId, agentId: before.session.agentId, conversationId: before.session.conversationId };
+      const info: BrowserGiveBack = { sessionId, agentId: before.session.agentId, conversationId: before.session.conversationId, ...(before.agentWaiting ? { waiting: true } : {}) };
       for (const listener of this.#giveBack) { try { listener(info); } catch { /* a listener never fails the give-back */ } }
     }
     // The page asked about, not whichever page changed last.

@@ -837,7 +837,9 @@ export function createWebApp(deps: WebServerDeps): Server {
   const offGiveBack = (deps.browser ?? browserHost(deps.env ?? process.env)).onGiveBack?.((info) => {
     void (async () => {
       if (await resumeParkedForPage(deps.pool, info.conversationId, deps.now())) return;
-      await chat?.continueAfterGiveBack({ conversationId: info.conversationId, agentId: info.agentId });
+      // Only a turn that waited on the page carries on; a page taken from an idle agent is stamped, with no model call.
+      if (info.waiting) await chat?.continueAfterGiveBack({ conversationId: info.conversationId, agentId: info.agentId });
+      else await chat?.stampGiveBack({ conversationId: info.conversationId });
     })().catch((err: unknown) => log(`browser: carrying on after the page was given back failed: ${err instanceof Error ? err.message : String(err)}`));
   });
   /*

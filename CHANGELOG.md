@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- Give it back starts a turn only when an agent was waiting on the page (its card was answered with Take over, the take-over interrupted it, or it tried to act while you held the page). A page taken from an idle conversation is given back with the "Gave the page back" stamp and no model call.
+
 ## 0.1.0-pre.51 — 2026-10-07
 
 ### Added

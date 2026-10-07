@@ -150,6 +150,8 @@ export const PARKED_RUN_ID = 'mission';
 export const GIVE_BACK_TURN = 'I handled the page myself and gave it back. Say "You handled the page; I carry on." in one line, then carry on with the task from the page as I left it.';
 /** How that turn is stamped in the thread. */
 export const GIVE_BACK_LABEL = 'Gave the page back';
+/** What the next turn reads when the owner gave back a page nothing waited on: context, not a request. */
+export const GIVE_BACK_NOTE = 'I took the page myself for a moment and gave it back. Nothing to do about it; the page may have changed.';
 import { type ArtifactStore } from '../telegram/attachments.js';
 import { LiveTurns } from './live.js';
 import { pictureUrl } from '../agents/avatars.js';
@@ -1633,6 +1635,29 @@ export class WebChat {
       await this.#run({ agent, conversationId, runId, text: GIVE_BACK_TURN, files: [], offer: { id: 'browser-give-back', label: GIVE_BACK_LABEL } });
     });
     return runId;
+  }
+
+  /**
+   * The owner gave back a page nothing waited on (a Canvas take-over while the
+   * agent was idle): the thread is stamped "Gave the page back" and no turn
+   * starts. The stamp is a user row the next turn reads as context. Not while
+   * a run is live (a row there would land between a tool call and its result),
+   * nor for a conversation another surface or a group owns. True when stamped.
+   */
+  async stampGiveBack(input: { conversationId: string }): Promise<boolean> {
+    const { conversationId } = input;
+    if (this.#running.has(conversationId)) return false;
+    const elsewhere = await this.#deps.pool.query(`select 1 from core.surface_conversations where conversation_id = $1::uuid limit 1`, [conversationId])
+      .then((result) => (result.rowCount ?? result.rows.length) > 0, () => true);
+    if (elsewhere) return false;
+    if (await conversationGroup(this.#deps.pool, conversationId).catch(() => null)) return false;
+    const inserted = await this.#deps.pool.query(
+      'insert into core.messages (conversation_id, role, content, speaker) select $1::uuid, $2, $3::jsonb, $4 where exists (select 1 from core.conversations where id = $1::uuid)',
+      [conversationId, 'user', JSON.stringify([{ type: 'text', text: GIVE_BACK_NOTE }]), offerTurnSpeaker(GIVE_BACK_LABEL)],
+    );
+    if ((inserted.rowCount ?? 0) === 0) return false;
+    await this.#event(conversationId, 'chat.message.appended', { role: 'user', runId: null });
+    return true;
   }
 
   /** Wait for every queued run to finish. Used by tests and by shutdown. */
