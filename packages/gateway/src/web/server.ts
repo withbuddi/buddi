@@ -128,7 +128,7 @@ import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
-import { createVault, saveArtifactReporting } from '@buddi/core';
+import { createVault, saveArtifactReporting, recordArtifactUse } from '@buddi/core';
 import { captureFilename } from './browser-capture.js';
 import { beginOnboarding, completeOnboarding, getOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
@@ -3308,6 +3308,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         bytes: shot.png, mime: 'image/png', filename, caption: shot.url ? `Captured from ${shot.url}` : 'Captured in the browser',
         source: { surface: 'browser', chatId: null, messageId: null }, createdBy: deps.ctx.ownerId, conversationId: shot.conversationId,
       }, deps.env ?? process.env);
+      // Owner-made with no use recorded is "an upload nobody sent yet" to the
+      // library, which hides it; a capture is a file of this conversation.
+      if (shot.conversationId) await recordArtifactUse(deps.pool, { artifactId: row.id, conversationId: shot.conversationId, kind: 'produced', at: deps.now() });
       return sendJson(res, 200, { artifactId: row.id, name: row.filename ?? filename, mime: row.mime });
     }
     const control = /^\/api\/browser\/(stop|takeover|resume|release)$/.exec(path);

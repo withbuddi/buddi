@@ -384,6 +384,9 @@ describe('browser dashboard endpoints', () => {
       const insert = queries.find((q) => /insert into core\.artifacts/.test(q.text))!;
       expect(insert.params.slice(1, 3)).toEqual(['image/png', 'Your orders 2026-10-07 12.32.png']);
       expect(insert.params).toContain('owner');
+      // The library hides an owner-made file with no use; the capture is a file of its conversation.
+      const use = queries.find((q) => /insert into core\.artifact_uses/.test(q.text))!;
+      expect(use.params.slice(0, 3)).toEqual(['11111111-2222-4333-8444-555555555555', '99999999-2222-4333-8444-555555555555', 'produced']);
       const gone = await fetch(`${origin}/api/browser/capture`, { method: 'POST', headers, body: JSON.stringify({ sessionId: 'old' }) });
       expect(gone.status).toBe(409);
       expect(await gone.json()).toEqual({ error: 'That page changed. Refresh before capturing it.' });
