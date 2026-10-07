@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_PASTE, RemoteHand, modifiersOf, pagePoint, pastedText, readFrame, type HandSocket } from './RemoteHand';
+import { MAX_PASTE, RemoteHand, WheelCoalescer, modifiersOf, pagePoint, paintWhileScrolling, pastedText, readFrame, wheelPixels, type HandSocket } from './RemoteHand';
 
 const metadata = { deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0 };
 
@@ -76,6 +76,83 @@ function panel(socket: HandSocket, onGiveBack = vi.fn()) {
   return onGiveBack;
 }
 
+describe('scrolling without the shake', () => {
+  it('sums the wheel deltas of one animation frame into one message', () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const frames: Array<() => void> = [];
+    const wheels = new WheelCoalescer((input) => sent.push(input), (run) => frames.push(run), () => { frames.length = 0; });
+    wheels.add({ x: 10, y: 20 }, 0, 4);
+    wheels.add({ x: 10, y: 21 }, 1, 6.4);
+    wheels.add({ x: 11, y: 22 }, 0, 10);
+    expect(sent).toEqual([]);
+    expect(frames).toHaveLength(1);
+    frames.shift()!();
+    expect(sent).toEqual([{ kind: 'wheel', x: 11, y: 22, deltaX: 1, deltaY: 20 }]);
+    // The next frame starts from nothing; a frame with nothing summed sends nothing.
+    wheels.add({ x: 11, y: 22 }, 0, -3);
+    frames.shift()!();
+    expect(sent.at(-1)).toMatchObject({ deltaX: 0, deltaY: -3 });
+    wheels.flush();
+    expect(sent).toHaveLength(2);
+    // Bounded the way the gateway bounds it.
+    wheels.add({ x: 0, y: 0 }, 0, 50_000);
+    wheels.flush();
+    expect(sent.at(-1)).toMatchObject({ deltaY: 10_000 });
+  });
+
+  it('reads lines and pages as pixels', () => {
+    expect(wheelPixels({ deltaX: 0, deltaY: 3, deltaMode: 1 })).toEqual({ dx: 0, dy: 48 });
+    expect(wheelPixels({ deltaX: 0, deltaY: 1, deltaMode: 2 }, 600)).toEqual({ dx: 0, dy: 600 });
+    expect(wheelPixels({ deltaX: 2, deltaY: 5 })).toEqual({ dx: 2, dy: 5 });
+  });
+
+  it('holds back a frame that only scrolls the page against the gesture, and draws everything else', () => {
+    const shown = { ...metadata, scrollOffsetY: 300 };
+    const down = { dx: 0, dy: 40 };
+    // With the finger: drawn.
+    expect(paintWhileScrolling(shown, { ...shown, scrollOffsetY: 340 }, down)).toBe(true);
+    // Against it, scroll alone: the host catching up on an older wheel. Held.
+    expect(paintWhileScrolling(shown, { ...shown, scrollOffsetY: 280 }, down)).toBe(false);
+    // Anything more than the scroll changed: drawn.
+    expect(paintWhileScrolling(shown, { ...shown, scrollOffsetY: 280, url: 'https://example.com/next' }, down)).toBe(true);
+    // No gesture going: everything is drawn.
+    expect(paintWhileScrolling(shown, { ...shown, scrollOffsetY: 280 }, null)).toBe(true);
+  });
+
+  it('sends a scroll waiting for its frame before a click, so the click lands on the scrolled page', async () => {
+    vi.stubGlobal('requestAnimationFrame', () => 1);
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+    const wire = fakeSocket();
+    panel(wire.socket);
+    wire.open();
+    wire.say({ type: 'driving', sessionId: 's1' });
+    wire.picture('jpeg-bytes');
+    const picture = await screen.findByLabelText('The host browser, live');
+    picture.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 400 } as DOMRect);
+    fireEvent.wheel(picture, { clientX: 10, clientY: 10, deltaY: 30 });
+    fireEvent.wheel(picture, { clientX: 10, clientY: 10, deltaY: 30 });
+    fireEvent.wheel(picture, { clientX: 10, clientY: 10, deltaY: 30 });
+    // The frame never came (a frozen requestAnimationFrame): nothing yet.
+    expect(wire.inputs()).toEqual([]);
+    fireEvent.mouseDown(picture, { clientX: 20, clientY: 20, button: 0, detail: 1 });
+    expect(wire.inputs()).toMatchObject([
+      { kind: 'wheel', x: 20, y: 20, deltaY: 90 },
+      { kind: 'mouse', type: 'mousePressed', x: 40, y: 40 },
+    ]);
+  });
+
+  it('keeps the dashboard from scrolling under the picture', async () => {
+    const wire = fakeSocket();
+    panel(wire.socket);
+    wire.open();
+    wire.picture('jpeg-bytes');
+    const picture = await screen.findByLabelText('The host browser, live');
+    const event = new WheelEvent('wheel', { deltaY: 40, cancelable: true, bubbles: true });
+    picture.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+});
+
 describe('driving the host browser', () => {
   it('says hello with the CSRF token and shows the first frame', async () => {
     const wire = fakeSocket();
@@ -129,7 +206,8 @@ describe('driving the host browser', () => {
     ]);
 
     fireEvent.wheel(picture, { clientX: 0, clientY: 0, deltaX: 0, deltaY: 120 });
-    expect(wire.inputs().at(-1)).toMatchObject({ kind: 'wheel', deltaY: 120 });
+    // On the next animation frame, not at once.
+    await waitFor(() => expect(wire.inputs().at(-1)).toMatchObject({ kind: 'wheel', deltaY: 120 }));
 
     // A printable key is a typed character and only that: the key itself types
     // it at the far end, so sending both is how "ame" came back "aammee".

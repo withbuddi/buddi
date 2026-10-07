@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 
 - Give it back starts a turn only when an agent was waiting on the page (its card was answered with Take over, the take-over interrupted it, or it tried to act while you held the page). A page taken from an idle conversation is given back with the "Gave the page back" stamp and no model call.
 - Take over and Give it back no longer flash or take the page back by themselves: the Page tab ignores a status still in flight for a page it just gave back or stopped, keeps its buttons asleep until the status after the action has arrived, and keeps showing the last picture the hand drew instead of an empty frame.
+- Scrolling a page you hold no longer shakes: the wheel goes to the host once per animation frame with its deltas summed, frames are drawn in the order they came (an older one finishing its decode late is dropped), a frame that only scrolls back against your gesture waits until the gesture ends, and the dashboard no longer scrolls under the picture.
 
 ## 0.1.0-pre.51 — 2026-10-07
 

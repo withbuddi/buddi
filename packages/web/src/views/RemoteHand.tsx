@@ -98,6 +98,82 @@ const BUTTONS = ['left', 'middle', 'right'] as const;
  */
 const MOVE_MS = 33;
 
+/**
+ * How long after the last wheel event a scroll gesture still counts as going.
+ * A trackpad fires one every frame or so while a finger moves; a gap this long
+ * is the finger lifted.
+ */
+export const WHEEL_SETTLE_MS = 150;
+/** The gateway's bound on one wheel delta. */
+const MAX_WHEEL_DELTA = 10_000;
+
+/** A wheel event's deltas in CSS pixels, whatever unit the browser reported them in. */
+export function wheelPixels(event: { deltaX: number; deltaY: number; deltaMode?: number }, pageHeight = 800): { dx: number; dy: number } {
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? pageHeight : 1;
+  return { dx: event.deltaX * unit, dy: event.deltaY * unit };
+}
+
+/**
+ * Wheel deltas, summed until the next animation frame and sent as one.
+ *
+ * A trackpad fires a wheel event per pixel of finger travel, faster than the
+ * host paints and far faster than a picture comes back. Sent one by one they
+ * queue at the host, each a mouse move and a wheel, and the frames that come
+ * back are a step behind the finger and a step behind each other: the picture
+ * bounces. One message per frame, the deltas summed, is the same scroll in a
+ * fraction of the events.
+ */
+export class WheelCoalescer {
+  #dx = 0;
+  #dy = 0;
+  #x = 0;
+  #y = 0;
+  #scheduled: number | undefined;
+  constructor(
+    private readonly sendWheel: (input: { kind: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }) => void,
+    private readonly schedule: (run: () => void) => number = (run) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : setTimeout(run, 16) as unknown as number),
+    private readonly cancel: (handle: number) => void = (handle) => { if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(handle); else clearTimeout(handle); },
+  ) {}
+  /** One wheel event, at a page point. */
+  add(at: { x: number; y: number }, dx: number, dy: number): void {
+    this.#dx += dx; this.#dy += dy; this.#x = at.x; this.#y = at.y;
+    if (this.#scheduled === undefined) this.#scheduled = this.schedule(() => { this.#scheduled = undefined; this.flush(); });
+  }
+  /** Send what is summed now: on the frame, or before a click that must land after the scroll. */
+  flush(): void {
+    if (this.#scheduled !== undefined) { this.cancel(this.#scheduled); this.#scheduled = undefined; }
+    const clamp = (value: number): number => Math.max(-MAX_WHEEL_DELTA, Math.min(MAX_WHEEL_DELTA, Math.round(value)));
+    const deltaX = clamp(this.#dx), deltaY = clamp(this.#dy);
+    this.#dx = 0; this.#dy = 0;
+    if (deltaX === 0 && deltaY === 0) return;
+    this.sendWheel({ kind: 'wheel', x: this.#x, y: this.#y, deltaX, deltaY });
+  }
+  /** Drop what is pending, when the socket goes. */
+  reset(): void {
+    if (this.#scheduled !== undefined) this.cancel(this.#scheduled);
+    this.#scheduled = undefined; this.#dx = 0; this.#dy = 0;
+  }
+}
+
+/**
+ * Should this frame be drawn while the owner is scrolling?
+ *
+ * A frame that differs from the one on screen only by where the page is
+ * scrolled to, and moves it *against* the way the owner is scrolling, is the
+ * host catching up on an older wheel: drawing it is the bounce. It is held,
+ * and the newest frame is drawn once the gesture ends. A frame that moves with
+ * the gesture is drawn (the picture follows the finger), and anything that
+ * changed more than the scroll always is.
+ */
+export function paintWhileScrolling(shown: HandFrameMetadata | null, next: HandFrameMetadata, gesture: { dx: number; dy: number } | null): boolean {
+  if (!gesture || !shown || !sameFrameShape(shown, next)) return true;
+  const movedX = next.scrollOffsetX - shown.scrollOffsetX;
+  const movedY = next.scrollOffsetY - shown.scrollOffsetY;
+  if (movedX === 0 && movedY === 0) return true;
+  const against = (moved: number, way: number): boolean => moved !== 0 && way !== 0 && Math.sign(moved) !== Math.sign(way);
+  return !against(movedX, gesture.dx) && !against(movedY, gesture.dy);
+}
+
 /** Has anything a click depends on moved? */
 function sameFrameShape(a: HandFrameMetadata, b: HandFrameMetadata): boolean {
   return a.deviceWidth === b.deviceWidth && a.deviceHeight === b.deviceHeight
@@ -196,6 +272,49 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
     if (typingProp) keyboard.current?.focus?.(); else keyboard.current?.blur?.();
   }, [typingProp]);
 
+  /** Wheel deltas waiting for the next animation frame. */
+  const wheels = useRef<WheelCoalescer | null>(null);
+  /** The scroll gesture in progress: its direction, and when its last wheel was. */
+  const gesture = useRef<{ dx: number; dy: number; at: number } | null>(null);
+  /** The frame on screen, the newest one held back while scrolling, and the order they came in. */
+  const screenState = useRef<{ arrived: number; drawn: number; shown: HandFrameMetadata | null; held?: { metadata: HandFrameMetadata; jpeg: Blob; seq: number }; timer?: ReturnType<typeof setTimeout> }>({ arrived: 0, drawn: 0, shown: null });
+
+  /**
+   * Decode and draw one frame, in the order frames came. Decoding is off the
+   * main thread and its promises do not resolve in order: an older frame
+   * finishing after a newer one is a picture that jumps back, so a frame older
+   * than the one on screen is dropped. While the owner scrolls, a frame that
+   * would move the page against the gesture is held (`paintWhileScrolling`)
+   * and the newest held one is drawn when the gesture ends.
+   */
+  const paint = (picked: { metadata: HandFrameMetadata; jpeg: Blob }, known?: number): void => {
+    const state = screenState.current;
+    const seq = known ?? ++state.arrived;
+    const going = gesture.current && Date.now() - gesture.current.at < WHEEL_SETTLE_MS ? gesture.current : null;
+    if (known === undefined && !paintWhileScrolling(state.shown, picked.metadata, going)) {
+      state.held = { ...picked, seq };
+      clearTimeout(state.timer);
+      state.timer = setTimeout(() => {
+        const held = screenState.current.held;
+        screenState.current.held = undefined;
+        if (held) paint(held, held.seq);
+      }, WHEEL_SETTLE_MS);
+      return;
+    }
+    if (known === undefined && state.held && state.held.seq < seq) state.held = undefined;
+    if (typeof createImageBitmap !== 'function') return;
+    void createImageBitmap(picked.jpeg).then((bitmap) => {
+      const canvas = picture.current;
+      const now = screenState.current;
+      if (!canvas || seq <= now.drawn) { bitmap.close?.(); return; }
+      now.drawn = seq;
+      now.shown = picked.metadata;
+      if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
+      canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+      bitmap.close?.();
+    }).catch(() => { /* a frame that will not decode is a frame not drawn */ });
+  };
+
   useEffect(() => {
     const open = connect ?? ((url: string) => new WebSocket(url) as unknown as HandSocket);
     let live = true;
@@ -214,17 +333,7 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
         // panel re-rendered for it.
         setMetadata((current) => (current && sameFrameShape(current, picked.metadata) ? current : picked.metadata));
         setPainted(true);
-        // Decoded off the main thread and drawn once, with nothing left over:
-        // no object URL to revoke, and a frame that arrives while an older one
-        // is still decoding simply overwrites it on the canvas.
-        if (typeof createImageBitmap !== 'function') return;
-        void createImageBitmap(picked.jpeg).then((bitmap) => {
-          const canvas = picture.current;
-          if (!live || !canvas) { bitmap.close?.(); return; }
-          if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
-          canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
-          bitmap.close?.();
-        }).catch(() => { /* a frame that will not decode is a frame not drawn */ });
+        paint(picked);
         return;
       }
       const message = JSON.parse(event.data) as { type?: string; error?: string; id?: unknown; site?: unknown; username?: unknown; update?: unknown };
@@ -243,6 +352,9 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
     return () => {
       live = false;
       socket.current = null;
+      wheels.current?.reset();
+      clearTimeout(screenState.current.timer);
+      screenState.current.held = undefined;
       try { ws.close(); } catch { /* already gone */ }
     };
   }, [sessionId, csrf, attempt, connect]);
@@ -259,6 +371,8 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
     try { ws.send(JSON.stringify({ type: 'input', input })); } catch { /* the close handler says so */ }
   }, []);
 
+  if (!wheels.current) wheels.current = new WheelCoalescer((input) => send(input));
+
   useImperativeHandle(handle, () => ({
     nav: (action: HandNav, url?: string): boolean => {
       if (!socket.current) return false;
@@ -267,7 +381,8 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
     },
     snapshot: (): string | null => {
       const canvas = picture.current;
-      if (!canvas || !canvas.width || !canvas.height) return null;
+      // Only a picture that was really drawn: an empty canvas is not one worth keeping.
+      if (!canvas || screenState.current.drawn === 0 || !canvas.width || !canvas.height) return null;
       try {
         const url = canvas.toDataURL('image/jpeg', 0.85);
         return typeof url === 'string' && url.startsWith('data:image/') ? url : null;
@@ -327,15 +442,33 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
       clickCount: type === 'mouseMoved' ? 0 : Math.min(3, Math.max(1, event.detail || 1)), modifiers: modifiersOf(event) };
     if (type === 'mouseMoved') { move(input); return; }
     flushMove();
+    // A click after a scroll lands on the page as scrolled.
+    wheels.current?.flush();
     send(input);
   };
 
-  const wheel = (event: React.WheelEvent<HTMLCanvasElement>): void => {
-    const at = point(event);
-    if (!at) return;
-    flushMove();
-    send({ kind: 'wheel', x: at.x, y: at.y, deltaX: Math.round(event.deltaX), deltaY: Math.round(event.deltaY) });
-  };
+  /*
+   * The wheel, on a listener of its own: React's is passive, and a wheel the
+   * dashboard also takes scrolls the column under the picture, which is a
+   * second thing moving under the owner's finger.
+   */
+  const latestPoint = useRef(point);
+  latestPoint.current = point;
+  useEffect(() => {
+    const canvas = picture.current;
+    if (!painted || !canvas) return undefined;
+    const onWheel = (event: WheelEvent): void => {
+      event.preventDefault();
+      const at = latestPoint.current(event);
+      if (!at) return;
+      flushMove();
+      const { dx, dy } = wheelPixels(event, canvas.getBoundingClientRect?.().height || 800);
+      gesture.current = { dx: dx || gesture.current?.dx || 0, dy: dy || gesture.current?.dy || 0, at: Date.now() };
+      wheels.current?.add(at, dx, dy);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [painted]);
 
   /**
    * A character, or a key — never both.
@@ -431,7 +564,6 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
             onMouseDown={pointer('mousePressed')}
             onMouseUp={pointer('mouseReleased')}
             onMouseMove={pointer('mouseMoved')}
-            onWheel={wheel}
             onKeyDown={keyDown}
             onKeyUp={keyUp}
             onPaste={paste}
