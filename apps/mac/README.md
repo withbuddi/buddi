@@ -105,7 +105,7 @@ The "Developer ID Application" certificate must be in the keychain for `release`
 buddi.app/Contents/
   MacOS/buddi                        the Swift supervisor (menu-bar item)
   Frameworks/Sparkle.framework       updates of the app itself
-  Resources/runtime/node             Node 22 LTS, universal (lipo of the arm64 and x64 builds)
+  Resources/runtime/node             Node at NODE_VERSION, universal (lipo of the arm64 and x64 builds)
   Resources/runtime/npm, npx, lib/   npm beside node: plugin installs use it
   Resources/buddi/current            -> buddi-<version>/
   Resources/buddi/buddi-<version>/   the npm tarball, unpacked; its dependencies come
@@ -292,4 +292,6 @@ finishes the same way (`App/Uninstall.swift`).
 - A richer status line (agents, last update).
 - A real app icon (today it's the web `apple-touch-icon` scaled up, as a placeholder).
 - A release of buddi that needs a newer Node than the bundled one waits for an app
-  update; the upgrade does not check `engines.node` yet.
+  update. The release gate refuses one whose `engines.node` excludes `NODE_VERSION`
+  (`scripts/release/runtime-gate.mjs`), but the in-app upgrade itself does not check
+  `engines.node` yet.

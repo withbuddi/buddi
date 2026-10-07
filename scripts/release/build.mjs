@@ -116,7 +116,9 @@ const manifest = {
   homepage: 'https://withbuddi.com',
   bugs: 'https://github.com/withbuddi/buddi/issues',
   ...(hasLicense ? { license: 'Apache-2.0' } : {}),
-  engines: { node: '>=22' }, bin: { buddi: LAUNCHER },
+  // engines.node from the root package.json: the release gate checks it against the Node
+  // buddi.app ships (scripts/release/runtime-gate.mjs).
+  engines: { node: product.engines.node }, bin: { buddi: LAUNCHER },
   ...(notes === undefined ? {} : { buddi: { notes } }),
   files: ['packages', 'examples', 'extension'], dependencies,
   bundledDependencies: Object.keys(dependencies),

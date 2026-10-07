@@ -8,6 +8,10 @@ What changes in buddi from one release to the next, newest first.
 
 - Run now on a mission: on its row in Missions, `buddi missions run <id>` or `POST /api/missions/:id/run`. It runs at once exactly as the schedule would, report and notifications included, says "Running…" until done, and counts like any run.
 
+### Changed
+
+- buddi.app's Node is pinned to one exact version (22.23.3) instead of the newest 22.x at build time, and a release is not tagged when buddi would need a newer Node than the app ships or the app would ship without npm.
+
 ### Fixed
 
 - Approving a schedule an agent proposed without an end date works again; it was refused every time with "the effect changed since its preview". Such a watch now ends with the 30th day in the owner's zone, and every approval card is described at the same instant it is recorded.

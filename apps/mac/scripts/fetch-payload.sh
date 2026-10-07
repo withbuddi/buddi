@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fetches what buddi.app carries inside Contents/Resources, into apps/mac/Payload:
 #
-#   Payload/runtime/node                     Node LTS, one universal (arm64 + x64) binary
+#   Payload/runtime/node                     Node at the version in NODE_VERSION, one universal
+#                                            (arm64 + x64) binary
 #   Payload/runtime/npm, npx, lib/node_modules/npm
 #                                            npm beside node: plugin installs use it
 #   Payload/buddi/buddi-<version>/           the @withbuddi/buddi tarball npm serves, unpacked,
@@ -12,14 +13,18 @@
 # every npm tarball against the sha512 integrity in its packument, and buddi's own
 # against the signed provenance its release workflow published (from npmjs.com).
 #
-# Usage: scripts/fetch-payload.sh <buddi-version> [node-major]
+# Usage: scripts/fetch-payload.sh <buddi-version>
+#
+# Node is pinned to one exact version (apps/mac/NODE_VERSION): an installed app runs
+# every later buddi release on it, so the release gate checks buddi's engines.node
+# against the pin (scripts/release/runtime-gate.mjs). Raising it ships a new app shell
+# (SHELL_VERSION) before any buddi that needs it (docs/release.md).
 set -euo pipefail
 
-VERSION="${1:?usage: fetch-payload.sh <buddi-version> [node-major]}"
-NODE_MAJOR="${2:-22}"
-REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
-
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="${1:?usage: fetch-payload.sh <buddi-version>}"
+NODE_VERSION="v$(tr -d '[:space:]' < "$HERE/NODE_VERSION")"
+REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
 PAYLOAD="$HERE/Payload"
 CACHE="$HERE/build/downloads"
 mkdir -p "$CACHE" "$PAYLOAD"
@@ -52,11 +57,12 @@ npm_tarball() { # <name> <version> -> path of the verified .tgz
 }
 
 # ---------------------------------------------------------------- Node runtime
-say "Node $NODE_MAJOR LTS (universal)"
-SUMS="$CACHE/node-v$NODE_MAJOR-SHASUMS256.txt"
-curl -fsSL "https://nodejs.org/dist/latest-v$NODE_MAJOR.x/SHASUMS256.txt" -o "$SUMS"
-NODE_VERSION="$(sed -n 's/.*node-\(v[0-9.]*\)-darwin-arm64\.tar\.gz$/\1/p' "$SUMS")"
-[ -n "$NODE_VERSION" ] || die "no darwin build listed for Node $NODE_MAJOR"
+echo "$NODE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || die "NODE_VERSION must name one exact Node version like 22.23.3, not \"${NODE_VERSION#v}\""
+say "Node $NODE_VERSION (universal)"
+SUMS="$CACHE/node-$NODE_VERSION-SHASUMS256.txt"
+[ -s "$SUMS" ] || curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/SHASUMS256.txt" -o "$SUMS" \
+  || die "nodejs.org has no Node $NODE_VERSION"
+grep -q "node-$NODE_VERSION-darwin-arm64\.tar\.gz$" "$SUMS" || die "no darwin build listed for Node $NODE_VERSION"
 for arch in arm64 x64; do
   name="node-$NODE_VERSION-darwin-$arch.tar.gz"
   [ -s "$CACHE/$name" ] || curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/$name" -o "$CACHE/$name"

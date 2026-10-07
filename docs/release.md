@@ -70,6 +70,24 @@ A tag pushed with the workflow's own token starts no workflow; a dispatch does.
 `release.yml` will tag is gated by both: twice on that one commit, so that
 main's own CI never skips a push.
 
+## The Node buddi.app ships
+
+buddi.app carries one Node, pinned in `apps/mac/NODE_VERSION`, with npm beside
+it, and an installed app runs every later buddi release on that Node: the
+in-app updater installs new tarballs from npm, while a new Node arrives only
+with a new app shell through Sparkle. So a buddi that needs a newer Node ships
+a new DMG first: raise `NODE_VERSION` and bump `apps/mac/SHELL_VERSION` in a
+release, let installed apps take that shell, and only then raise
+`engines.node`. The `runtime` job of the push run
+(`scripts/release/runtime-gate.mjs`) refuses to tag when any `engines.node`
+(the root `package.json`, which the published manifest copies, or a package's)
+excludes the pinned version, or when the app's recipe
+(`apps/mac/scripts/fetch-payload.sh`) would ship node without npm; `mac-app`
+then runs the signed app's own `runtime/node --version` and
+`runtime/npm --version` and checks them against the pin. The updater does not
+yet check `engines.node` itself, so the order is what keeps an installed app
+from updating to a buddi it cannot start.
+
 ## The rule (plan.mjs)
 
 A push tags a release when all of these hold:

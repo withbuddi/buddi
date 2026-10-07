@@ -22,8 +22,8 @@ DMG_PATH = $(DERIVED_DATA)/buddi-$(APP_VERSION).dmg
 # The buddi release the app carries: the npm version, `latest` by default.
 # make fetch VERSION=0.1.0-pre.38
 VERSION ?= $(shell npm view @withbuddi/buddi version 2>/dev/null)
-# The Node line buddi is tested on (CI's node-version).
-NODE_MAJOR := 22
+# The Node the app carries is pinned in NODE_VERSION (read by fetch-payload.sh;
+# the release gate checks buddi's engines.node against it).
 
 # Signing follows the environment, like Shotcrisp's CI: with DEVELOPMENT_TEAM set,
 # Developer ID; without it, Debug signs to run locally (ad-hoc, see project.yml).
@@ -44,13 +44,13 @@ generate: ## Regenerate buddi.xcodeproj from project.yml
 resolve: generate ## Resolve Swift package dependencies
 	xcodebuild -resolvePackageDependencies -project $(PROJECT) -scheme $(SCHEME)
 
-# Node (universal, checked against SHASUMS256.txt) and the @withbuddi/buddi
+# Node at NODE_VERSION (universal, checked against SHASUMS256.txt) and the @withbuddi/buddi
 # tarball with both embedded-Postgres architectures (checked against the npm
 # integrity in each packument) into Payload/. The build copies Payload/ into
 # Contents/Resources. See scripts/fetch-payload.sh.
-fetch: ## Download Node LTS and the buddi release (VERSION=x.y.z) into Payload/
+fetch: ## Download the pinned Node and the buddi release (VERSION=x.y.z) into Payload/
 	@test -n "$(VERSION)" || { echo "fetch: name a version: make fetch VERSION=0.1.0-pre.38"; exit 1; }
-	scripts/fetch-payload.sh "$(VERSION)" "$(NODE_MAJOR)"
+	scripts/fetch-payload.sh "$(VERSION)"
 
 # CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO strips the auto-injected get-task-allow
 # debug entitlement, as in Shotcrisp: debug builds behave like release ones.

@@ -96,8 +96,24 @@ jobs:
     if: needs.plan.outputs.action == 'tag'
     uses: ./.github/workflows/gate.yml
 
+  # buddi.app runs every later buddi on the Node it shipped with
+  # (apps/mac/NODE_VERSION): a release whose engines.node excludes it, or an
+  # app recipe without npm beside node, is not tagged (docs/release.md).
+  runtime:
+    needs: [plan]
+    if: needs.plan.outputs.action == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.plan.outputs.sha }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: buddi runs on the Node buddi.app ships
+        run: node scripts/release/runtime-gate.mjs
+
   tag:
-    needs: [plan, gate]
+    needs: [plan, gate, runtime]
     if: needs.plan.outputs.action == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -426,6 +442,20 @@ jobs:
           plist=build/Build/Products/Release/buddi.app/Contents/Info.plist
           test "$(plutil -extract CFBundleShortVersionString raw "$plist")" = "$VERSION"
           test "$(plutil -extract CFBundleVersion raw "$plist")" = "${{ steps.v.outputs.bundle }}"
+
+      # The runtime the signed app carries answers, at the pinned version, with
+      # npm beside it (plugin installs run that npm). npm's shebang is
+      # `env node`, so the bundled runtime goes first on PATH.
+      - name: The bundled Node and npm answer
+        run: |
+          rt=build/Build/Products/Release/buddi.app/Contents/Resources/runtime
+          pinned="v$(tr -d '[:space:]' < NODE_VERSION)"
+          node_v=$("$rt/node" --version) || { echo "::error::The bundled node does not run"; exit 1; }
+          [ "$node_v" = "$pinned" ] || { echo "::error::The app bundles Node $node_v, NODE_VERSION pins $pinned"; exit 1; }
+          [ "$(tr -d '[:space:]' < "$rt/VERSION")" = "$pinned" ] || { echo "::error::runtime/VERSION says $(cat "$rt/VERSION"), NODE_VERSION pins $pinned"; exit 1; }
+          npm_v=$(PATH="$PWD/$rt:$PATH" "$rt/npm" --version) || { echo "::error::The app ships no working npm beside node"; exit 1; }
+          echo "$npm_v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::runtime/npm --version answered \"$npm_v\""; exit 1; }
+          echo "buddi.app runtime: node $node_v, npm $npm_v"
 
       - name: Notarized DMG
         env:
