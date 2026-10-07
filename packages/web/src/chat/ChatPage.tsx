@@ -569,6 +569,8 @@ export function ChatPage({
   const browserCard = browserCardOf(conversation?.question);
   /* An agent's `secret.request`: its own card, with the composer still under it as the kit draws it. */
   const signInCard = secretRequestOf(conversation?.question);
+  /* A set's fill approval in the dock: the composer stays under it, as the kit draws the "saved" card. */
+  const [secretSetShown, setSecretSetShown] = useState(false);
   const pausedTab = liveBrowser ? null : pausedBrowser(browserStatus, conversationId ?? null, browserCard?.kind === 'paused');
   const browserTab = liveBrowser ?? pausedTab ?? keptBrowserTab;
   /*
@@ -1556,6 +1558,8 @@ export function ChatPage({
             onSay={(text) => send(text, [])}
             onOpenFull={(toolUseId) => { setActiveTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
             phone={narrow}
+            onSecretSet={setSecretSetShown}
+            {...(ownStatus?.page?.title ? { pageTitle: ownStatus.page.title } : {})}
             onSignInMyself={() => {
               const sessionId = ownStatus?.session?.id;
               if (sessionId) void api.browserControl('takeover', sessionId).catch(() => undefined).finally(browser.reload);
@@ -1568,7 +1572,7 @@ export function ChatPage({
            * its place: the half-written line and its files are exactly where
            * the owner left them when it comes back.
            */
-          <div hidden={docked.length > 0 || (Boolean(conversation?.question) && !signInCard)} data-testid="composer-slot">
+          <div hidden={(docked.length > 0 && !secretSetShown) || (Boolean(conversation?.question) && !signInCard)} data-testid="composer-slot">
           {!group && reference ? <section className="wb-chat-reference" aria-label="Story reference">
             <div className="wb-chat-reference-head">
               <div><small>Asking about</small><p><strong>{reference.title}</strong></p></div>

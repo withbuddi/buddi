@@ -309,6 +309,12 @@ function SecretRequestSheet({ card, typed, setTyped, phone, container, page, loc
   );
 }
 
+/** "Log in · Wikipedia" → "Log in " (with its space), for "the Log in page"; nothing when there is no title. */
+function pageWord(title: string | undefined): string {
+  const first = (title ?? '').split(/\s[·|–—-]\s/)[0]?.trim() ?? '';
+  return first && first.length <= 40 ? `${first} ` : '';
+}
+
 /** The set a `secrets.use_set` approval names: its site and each secret with the field it goes into. */
 export function secretSetOf(action: ApprovalRow | null): { site: string; items: Array<{ secret: string; field?: string }> } | null {
   if (!action || action.tool !== 'secrets.use_set') return null;
@@ -324,9 +330,11 @@ export function secretSetOf(action: ApprovalRow | null): { site: string; items: 
  * The saved card: an agent asked to fill a set saved together, the first time
  * on its site — one approval for the set, in the approval card's shape.
  */
-export function SecretSetDock({ set, agentName, phone, busy, error, onFill, onSelf }: {
+export function SecretSetDock({ set, agentName, pageTitle, phone, busy, error, onFill, onSelf }: {
   set: NonNullable<ReturnType<typeof secretSetOf>>;
   agentName: string;
+  /** The page's title ("Log in · Wikipedia"): the card says "the Log in page". */
+  pageTitle?: string;
   phone: boolean;
   busy: 'approve' | 'reject' | null;
   error: string | null;
@@ -345,7 +353,7 @@ export function SecretSetDock({ set, agentName, phone, busy, error, onFill, onSe
             <li key={item.secret}><Icon name="key" size={14} /><span className="ss-set-name">{item.secret}</span>{item.field ? <span className="ss-set-into">into {item.field}</span> : null}</li>
           ))}
         </ul>
-        <div className="wb-dock-where">On {set.site}, the page {agentName} has open. {agentName} never sees them; buddi types them in.</div>
+        <div className="wb-dock-where">On {set.site}, the {pageWord(pageTitle)}page {agentName} has open. {agentName} never sees them; buddi types them in.</div>
         <ErrorBanner message={error} />
       </div>
       <div className="wb-dock-section">

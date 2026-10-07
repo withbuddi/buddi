@@ -71,7 +71,13 @@ export function ApprovalDock({
   onOpenFull,
   phone,
   onSignInMyself,
+  pageTitle,
+  onSecretSet,
 }: {
+  /** The title of the page the agent has open, for a set's card ("the Log in page"). */
+  pageTitle?: string | undefined;
+  /** A set's card is up (true) or gone (false): the composer stays under it, as the kit draws it. */
+  onSecretSet?: (shown: boolean) => void;
   /** Pending, oldest first. */
   approvals: readonly DockedApproval[];
   /** Drawn at phone width: a set's card stacks its actions. */
@@ -113,6 +119,8 @@ export function ApprovalDock({
       onOpenFull={() => onOpenFull(current.toolUseId)}
       phone={phone === true}
       {...(onSignInMyself ? { onSignInMyself } : {})}
+      {...(pageTitle ? { pageTitle } : {})}
+      {...(onSecretSet ? { onSecretSet } : {})}
     />
   );
 }
@@ -128,9 +136,13 @@ function DockCard({
   onOpenFull,
   phone = false,
   onSignInMyself,
+  pageTitle,
+  onSecretSet,
 }: {
   phone?: boolean;
   onSignInMyself?: () => void;
+  pageTitle?: string;
+  onSecretSet?: (shown: boolean) => void;
   item: DockedApproval;
   count: number;
   timezone: string;
@@ -175,6 +187,12 @@ function DockCard({
   }, [lapsed]);
 
   const { values, controls } = useOwnerChoices(action?.choices);
+  const isSet = secretSetOf(action) !== null;
+  useEffect(() => {
+    onSecretSet?.(isSet);
+    return () => onSecretSet?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSet]);
 
   const decide = (decision: 'approve' | 'reject', scope?: Scope): void => {
     const said = instead.trim();
@@ -208,6 +226,7 @@ function DockCard({
       <SecretSetDock
         set={secretSet}
         agentName={name}
+        {...(pageTitle ? { pageTitle } : {})}
         phone={phone}
         busy={busy}
         error={error}
