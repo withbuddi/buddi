@@ -166,6 +166,8 @@ export type HandNav = 'back' | 'forward' | 'reload' | 'navigate';
 export interface RemoteHandHandle {
   /** Back, forward, reload, or an address; false when there is no socket to send it on. */
   nav(action: HandNav, url?: string): boolean;
+  /** The last picture drawn, as an image URL, for the Page tab to keep showing after Give it back. */
+  snapshot(): string | null;
 }
 
 type Phase = 'connecting' | 'driving' | 'lost' | 'refused';
@@ -262,6 +264,14 @@ export const RemoteHand = forwardRef<RemoteHandHandle, RemoteHandProps>(function
       if (!socket.current) return false;
       send({ kind: 'nav', action, ...(action === 'navigate' && url ? { url } : {}) });
       return true;
+    },
+    snapshot: (): string | null => {
+      const canvas = picture.current;
+      if (!canvas || !canvas.width || !canvas.height) return null;
+      try {
+        const url = canvas.toDataURL('image/jpeg', 0.85);
+        return typeof url === 'string' && url.startsWith('data:image/') ? url : null;
+      } catch { return null; }
     },
   }), [send]);
 

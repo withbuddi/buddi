@@ -18,7 +18,7 @@ export function useAsync<T>(
   load: () => Promise<T>,
   deps: unknown[],
   pollMs?: number,
-): { data: T | undefined; error: string | null; reload: () => void; loading: boolean } {
+): { data: T | undefined; error: string | null; reload: () => Promise<void>; loading: boolean } {
   const [data, setData] = useState<T | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,6 +27,10 @@ export function useAsync<T>(
   const [failures, setFailures] = useState(0);
   const latest = useRef(load);
   latest.current = load;
+  /** Whoever asked for a reload, told when the next load lands (a newer one counts too). */
+  const waiters = useRef<Array<() => void>>([]);
+  const settle = (): void => { for (const resolve of waiters.current.splice(0)) resolve(); };
+  useEffect(() => settle, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +48,7 @@ export function useAsync<T>(
         setFailures((n) => n + 1);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setLoading(false); settle(); }
       });
     return () => {
       cancelled = true;
@@ -61,5 +65,5 @@ export function useAsync<T>(
 
   // A reload the caller asked for is a fresh start: it clears the backoff, so
   // a button the owner presses is never quietly ignored.
-  return { data, error, loading, reload: () => { setFailures(0); setTick((n) => n + 1); } };
+  return { data, error, loading, reload: () => new Promise<void>((resolve) => { waiters.current.push(resolve); setFailures(0); setTick((n) => n + 1); }) };
 }

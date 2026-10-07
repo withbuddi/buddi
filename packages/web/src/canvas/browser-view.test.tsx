@@ -279,6 +279,62 @@ describe('the Page tab', () => {
     expect(vi.mocked(api.browserControl).mock.calls.filter(([action]) => action === 'takeover')).toHaveLength(1);
   });
 
+  it('Give it back: a stale poll that still says paused neither takes the page again nor says it is yours', async () => {
+    device('desktop');
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const held = heldBy();
+    let resumed: (value: BrowserStatus) => void = () => {};
+    vi.mocked(api.browserControl).mockImplementation(async (action) => {
+      if (action === 'takeover') return { ...held, hand: true };
+      return new Promise<BrowserStatus>((resolve) => { resumed = resolve; });
+    });
+    const reload = vi.fn();
+    const view = render(<BrowserView status={held} error={null} reload={reload} live agentName="Home Manager" />);
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('takeover', 's1'));
+    FakeSocket.all[0]!.drive();
+    await screen.findByTestId('hand-picture');
+    fireEvent.click(screen.getByRole('button', { name: 'Give it back' }));
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume', 's1'));
+    // A poll that left before the server let go: still paused.
+    view.rerender(<BrowserView status={{ ...held }} error={null} reload={reload} live agentName="Home Manager" />);
+    expect(screen.queryByText(/^You have the page/)).toBeNull();
+    expect(screen.queryByTestId('remote-hand')).toBeNull();
+    await act(async () => { resumed(status); });
+    // And one more stale one after the answer: the given-back page stays given back.
+    view.rerender(<BrowserView status={{ ...held }} error={null} reload={reload} live agentName="Home Manager" />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByText(/^You have the page/)).toBeNull();
+    // The server's word: the agent holds it.
+    view.rerender(<BrowserView status={status} error={null} reload={reload} live agentName="Home Manager" />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(vi.mocked(api.browserControl).mock.calls.filter(([action]) => action === 'takeover')).toHaveLength(1);
+    expect(reload).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Take over' })).toBeEnabled();
+  });
+
+  it('Take over: buttons stay asleep until the status after it arrives, and a poll mid-request asks for nothing more', async () => {
+    device('desktop');
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const paused: BrowserStatus = { ...status, state: 'paused' };
+    let granted: (value: BrowserStatus) => void = () => {};
+    let reloaded: () => void = () => {};
+    const reload = (): Promise<void> => new Promise<void>((resolve) => { reloaded = resolve; });
+    vi.mocked(api.browserControl).mockImplementation(async () => new Promise<BrowserStatus>((resolve) => { granted = resolve; }));
+    const view = render(<BrowserView status={status} error={null} reload={reload} live agentName="Home Manager" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
+    // The server paused the page before it answered, and a poll saw that.
+    view.rerender(<BrowserView status={paused} error={null} reload={reload} live agentName="Home Manager" />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await act(async () => { granted({ ...paused, hand: true }); });
+    // Answered, but the status after it has not come: still busy, the hand already showing.
+    expect(screen.getByRole('button', { name: 'Give it back' })).toBeDisabled();
+    expect(screen.getByTestId('remote-hand')).toBeInTheDocument();
+    view.rerender(<BrowserView status={{ ...paused }} error={null} reload={reload} live agentName="Home Manager" />);
+    await act(async () => { reloaded(); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Give it back' })).toBeEnabled());
+    expect(vi.mocked(api.browserControl).mock.calls.filter(([action]) => action === 'takeover')).toHaveLength(1);
+  });
+
   it('a page held in your Chrome: it is in front there, so no hand is asked for and no frame waited on; Give it back resumes', async () => {
     device('desktop');
     vi.stubGlobal('WebSocket', FakeSocket);

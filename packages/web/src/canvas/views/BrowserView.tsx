@@ -61,6 +61,8 @@ export const TOUCH_QUERY = '(hover: none) and (pointer: coarse)';
 /** The Canvas overflow's "full page view" asks the Page tab to enlarge with this. */
 export const BROWSER_ENLARGE_EVENT = 'buddi:browser-enlarge';
 
+/** How long an action waits for the status after it before the buttons wake anyway. */
+export const SETTLE_MS = 4_000;
 /** How long a window button's load shows as in progress when no frame says it landed. */
 const NAV_SPIN_MS = 8_000;
 /** The scheme a bare host gets. */
@@ -95,7 +97,8 @@ function addressParts(url: string | undefined): { host: string; rest: string; se
 export interface BrowserViewProps {
   status: BrowserStatus | undefined;
   error: string | null;
-  reload: () => void;
+  /** Ask for the status again; a promise settles when that status has arrived. */
+  reload: () => void | Promise<unknown>;
   /** Is the page still open? */
   live: boolean;
   /** Who is looking, for the lines that name it. */
@@ -191,11 +194,27 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   /** The page asked for its hand already, so a reload asks once and never loops. */
   const asked = useRef<string | null>(null);
   const session = shown?.session;
-  const act = async (action: () => Promise<void>) => {
+  /*
+   * An action is over when the page has the server's word on it, not when the
+   * request returned: `busy` holds until the status asked for afterwards has
+   * arrived (or a few seconds, if nothing changes). A status poll that left
+   * before the server acted would otherwise read as the server's answer: a
+   * page still paused after Give it back, which the reattach below took for a
+   * page to drive again.
+   */
+  const act = async (action: () => Promise<void>, undo?: () => void) => {
     setBusy(true); setFailure(null);
-    try { await action(); } catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
-    finally { setBusy(false); reload(); }
+    try { await action(); } catch (err) { undo?.(); setFailure(err instanceof Error ? err.message : String(err)); }
+    // The reload's answer, at most a few seconds of it: a reload that never settles must not leave the buttons asleep.
+    try { await Promise.race([Promise.resolve(reload()), new Promise((resolve) => { window.setTimeout(resolve, SETTLE_MS); })]); } catch { /* the poll says so */ }
+    setBusy(false);
   };
+  /**
+   * The page this tab just gave back or stopped. Until the server says the
+   * agent holds it again, it is not the owner's here, whatever a status still
+   * in flight says: no "You have the page", and no reattach to it.
+   */
+  const [released, setReleased] = useState<string | null>(null);
   const takeOver = () => void act(async () => {
     setNote(null); setOffline(false);
     const wanted = session?.id;
@@ -208,8 +227,16 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
     else if (next.handReason === 'browser-offline') setOffline(true);
     else setNote(next.handMessage ?? null);
   });
-  const giveBack = () => void act(async () => { setDriving(null); setTyping(false); await api.browserControl('resume', session?.id); });
-  const stopPage = () => void act(async () => { setDriving(null); await api.browserControl('stop', session?.id); });
+  /** The last picture the hand drew, shown until the next observation has one of its own. */
+  const [lastHand, setLastHand] = useState<string | null>(null);
+  const letGo = (): void => {
+    const id = session?.id ?? null;
+    const snapshot = handRef.current?.snapshot() ?? null;
+    if (snapshot) setLastHand(snapshot);
+    setReleased(id); setDriving(null); setTyping(false);
+  };
+  const giveBack = () => void act(async () => { letGo(); await api.browserControl('resume', session?.id); }, () => setReleased(null));
+  const stopPage = () => void act(async () => { letGo(); await api.browserControl('stop', session?.id); }, () => setReleased(null));
   const ownBrowser = () => void act(async () => {
     if (!session) return;
     // This conversation, pinned to buddi's own browser; the agent opens the page there next.
@@ -219,10 +246,17 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
     setNote('This conversation uses buddi’s browser now. Send the agent a message and it opens the page there.');
   });
   // The owner holds this page when the server says it is paused, however it got there.
-  const owned = live && !!status?.session && status.state === 'paused';
+  const owned = live && !!status?.session && status.state === 'paused' && status.session.id !== released;
+  // The server's word that the page is not the owner's any more: what was given back is forgotten.
+  useEffect(() => {
+    if (!released || busy) return;
+    if (!live || status?.session?.id !== released || status.state !== 'paused') setReleased(null);
+  }, [released, busy, status, live]);
   /** The owner holds a page in their own Chrome: it is in front there, so no hand is asked for and no frame waited on. */
   const inChrome = owned && status?.held?.where === 'chrome';
-  const hand = owned && !inChrome && driving && status?.session?.id === driving ? driving : null;
+  // While the take-over's own answer is settling the hand shows at once, rather than after the next poll.
+  const hand = !inChrome && driving && status?.session?.id === driving && (owned || busy) && status.session.id !== released ? driving : null;
+  useEffect(() => { if (hand) setLastHand(null); }, [hand]);
   /*
    * Reattach after a reload. The hand is this tab's socket, and a reload loses
    * it while the server still says the page is the owner's: the picture shows
@@ -236,7 +270,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
     if (!ownedId || driving === ownedId || touch || busy || status?.route === 'apps' || inChrome) return;
     if (asked.current === ownedId) return;
     takeOver();
-  }, [ownedId, driving, touch]);
+  }, [ownedId, driving, touch, busy]);
   useEffect(() => { if (!owned) asked.current = null; }, [owned]);
 
   /* ---- the window ---- */
@@ -269,7 +303,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   };
 
   /* ---- what the header says ---- */
-  const taking = owned;
+  const taking = owned || !!hand;
   const waiting = live && !!shown?.needsOwner;
   const done = !live && !paused;
   const site = siteOfUrl(shown?.page?.url) ?? (shown?.page?.appId ? appWord(shown.page.appId) : 'the page');
@@ -280,7 +314,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
     : taking ? `You have the page · ${where}`
     : done ? `${agentName} looked at ${site} · done${closedAt ? ` at ${fmtClock(new Date(closedAt), zone)}` : ''}`
     : shown ? lookingLine(shown) : 'Opening the page…';
-  const src = live ? (shown ? screenshotUrl(shown, tick) : null) : frame;
+  const src = live ? (shown ? screenshotUrl(shown, tick) : null) ?? lastHand : frame ?? lastHand;
   const app = shown?.route === 'apps';
   const address = hand ? location ?? shown?.page?.url : shown?.page?.url;
   const loading = live && (navigating || (!taking && !!status?.busy));

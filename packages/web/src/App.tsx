@@ -394,7 +394,7 @@ export function App(): JSX.Element {
   const reloadFocus = useRef(focusRead.reload);
   reloadFocus.current = focusRead.reload;
   useEffect(() => {
-    const reload = (): void => reloadFocus.current();
+    const reload = (): void => { void reloadFocus.current(); };
     window.addEventListener(STATUS_CHANGED, reload);
     return () => window.removeEventListener(STATUS_CHANGED, reload);
   }, []);

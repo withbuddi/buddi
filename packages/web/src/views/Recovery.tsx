@@ -40,7 +40,7 @@ export function useRecovery(): { data: RecoveryView | undefined; reload: () => v
   const latest = useRef(reload);
   latest.current = reload;
   useEffect(() => {
-    const again = (): void => latest.current();
+    const again = (): void => { void latest.current(); };
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') again();
     };
