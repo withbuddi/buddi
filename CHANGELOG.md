@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.52 — 2026-10-08
+
 ### Added
 
 - Secrets in the sign-in flow, in place: an agent on a sign-in form with nothing saved for the site calls `secret.request` and a card in the chat asks for the fields it saw (username, password), with the site as a chip. Save and fill saves them for that site and fills the form at once, one approval for the set; Save only saves and hands you the page; I'll sign in myself hands it over; More options opens a sheet beside the page with a code field and more fields. The agent hears only the names saved and whether the form was filled. The thread says "Filled username and password on wikipedia.org", and Keys and secrets links each saved secret back to its conversation. On Telegram the card says to open the dashboard, with Decline. `POST /api/secrets` saves a set for one site in one call; `POST /api/secrets/request/decline`.
