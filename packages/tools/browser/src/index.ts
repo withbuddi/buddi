@@ -118,8 +118,9 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
           const status = service().status({ agentId: ctx.agentId, conversationId: ctx.conversationId });
           if (!id || id !== status.page?.id) return undefined;
           const bytes = service().screenshot(status.session?.id);
-          // The extension captures PNG through the debugger; the other two encode JPEG.
-          return bytes ? { mime: status.route === 'chrome' ? 'image/png' : 'image/jpeg', data: bytes.toString('base64') } : undefined;
+          // Named from the bytes, never the route: the extension's live frame is a
+          // JPEG while its capture is a PNG, and a provider refuses a wrong label.
+          return bytes ? { mime: imageMime(bytes), data: bytes.toString('base64') } : undefined;
         },
       },
     ],
@@ -157,3 +158,11 @@ export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED, DOWN
 export type { ExtensionBridge, ExtensionDownload, ExtensionCommand, ExtensionCommandName, ExtensionEvent, ExtensionLogin, ExtensionLoginFacts, ExtensionResult } from './extension.js';
 export { commandSchema, UNTRUSTED, NO_SAVED_SIGN_IN, FILL_RETRY, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, BrowserOpenedError, HAND_QUALITY, HAND_QUALITY_LOW, HAND_QUALITY_SHARP, handLevel, MAX_HAND_COPY, LOGIN_GONE, LOGIN_GRACE_MS, LOGIN_NOT_KEPT } from './types.js';
 export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandLevel, HandQuality, Observation, ObservedTarget, SeenLoginReport, LoginAck, LoginCheck, LoginSeenListener } from './types.js';
+
+/** The picture's type from its first bytes (PNG, JPEG, WebP, GIF); JPEG when unsure. */
+export function imageMime(bytes: Buffer): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  if (bytes.length >= 6 && bytes.toString('ascii', 0, 3) === 'GIF') return 'image/gif';
+  return 'image/jpeg';
+}
