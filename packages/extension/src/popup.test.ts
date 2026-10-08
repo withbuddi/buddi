@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PairingView } from './background.js';
-import { APP_WAIT_MS, COPIED_FOR, SETTINGS_HASH, appSettingsLink, dashboardUrl, openSettings, render, rowView, settingsWebUrl, summary, triesApp, wireCopy, workingLine, type PopupModel } from './popup.js';
+import { APP_WAIT_MS, COPIED_FOR, REDRAW_MS, SETTINGS_HASH, throttle, appSettingsLink, dashboardUrl, openSettings, render, rowView, settingsWebUrl, summary, triesApp, wireCopy, workingLine, type PopupModel } from './popup.js';
 import type { ClientState } from './protocol.js';
 
 let written: string[] = [];
@@ -172,7 +172,7 @@ describe('the buddis in the popup, one row each', () => {
   it('reads one state per row, never two', () => {
     expect(rowView(buddi({ state: state({ connection: 'pairing', code: null }) }))).toBe('connecting');
     expect(rowView(buddi({ enabled: false, state: state({ connection: 'paired' }) }))).toBe('off');
-    expect(summary([buddi({ state: state({ connection: 'pairing', code: '1' }) })])).toEqual({ word: 'Pairing', tone: 'waiting' });
+    expect(summary([buddi({ state: state({ connection: 'pairing', code: '1' }) })])).toEqual({ word: 'Needs pairing', tone: 'waiting' });
     expect(workingLine(0)).toBe('Nothing open right now.');
     expect(dashboardUrl('http://127.0.0.1:4317', SETTINGS_HASH)).toBe('http://127.0.0.1:4317/#/settings/computer');
   });
@@ -233,5 +233,31 @@ describe('Open buddi settings: buddi.app first, the dashboard otherwise', () => 
       expect(url.search).toBe('');
       expect(url.hash).toBe('#/settings/computer?code=482913');
     }
+  });
+});
+
+describe('no flicker', () => {
+  it('redraws at most once a second, the last of a burst at the end of its window', () => {
+    let now = 0;
+    const later: Array<() => void> = [];
+    const run = vi.fn();
+    const pushed = throttle(run, REDRAW_MS, { now: () => now, later: (fn) => later.push(fn) });
+    pushed();
+    expect(run).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 20; i++) { now += 50; pushed(); }
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(later).toHaveLength(1);
+    now = 1_000;
+    later.shift()!();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('says quietly when a buddi is older and has no live view', () => {
+    document.documentElement.innerHTML = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'static', 'popup.html'), 'utf8').replace(/^<!doctype html>/i, '');
+    render({ adding: false, asked: null, refused: null, pairings: [{ id: 'a', origin: 'http://127.0.0.1:4317', name: '127.0.0.1:4317', colour: 'blue', enabled: true, tabs: 0,
+      state: { connection: 'paired', code: null, installation: null, error: null, older: true } }] }, document);
+    expect(document.querySelector('.buddi-working')!.textContent).toBe('Nothing open right now · older buddi: live view off');
+    // Named by its address: the address shows once.
+    expect((document.querySelector('.buddi-address') as HTMLElement).hidden).toBe(true);
   });
 });

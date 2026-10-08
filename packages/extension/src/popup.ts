@@ -39,7 +39,7 @@ const PILL: Record<RowView, { word: string; tone: string }> = {
   off: { word: 'Off', tone: 'idle' },
   address: { word: 'Not connected', tone: 'idle' },
   connecting: { word: 'Connecting…', tone: 'waiting' },
-  pairing: { word: 'Pairing', tone: 'waiting' },
+  pairing: { word: 'Needs pairing', tone: 'waiting' },
   paired: { word: 'Connected', tone: 'good' },
 };
 
@@ -158,7 +158,7 @@ function drawRow(row: HTMLElement, entry: PairingView): void {
   part(row, 'buddi-asking').hidden = view !== 'connecting';
   const working = part(row, 'buddi-working');
   working.hidden = view !== 'paired';
-  working.textContent = view === 'paired' ? workingLine(entry.tabs) : '';
+  working.textContent = view === 'paired' ? (entry.state.older ? `${workingLine(entry.tabs).replace(/\.$/, '')} · older buddi: live view off` : workingLine(entry.tabs)) : '';
   const error = part(row, 'buddi-error');
   error.hidden = !failure;
   error.textContent = failure ?? '';
@@ -288,6 +288,25 @@ export async function wireDownloads(doc: Document, permissions: PopupChrome['per
   });
 }
 
+/** The least time between two redraws of the list. */
+export const REDRAW_MS = 1_000;
+
+/**
+ * At most one call per `ms`: the first at once, the last of a burst at the end
+ * of its window, nothing in between.
+ */
+export function throttle(run: () => void, ms: number, clock: { now(): number; later(fn: () => void, ms: number): unknown } = { now: () => Date.now(), later: (fn, wait) => setTimeout(fn, wait) }): () => void {
+  let last = -Infinity;
+  let waiting = false;
+  return () => {
+    const now = clock.now();
+    if (now - last >= ms && !waiting) { last = now; run(); return; }
+    if (waiting) return;
+    waiting = true;
+    clock.later(() => { waiting = false; last = clock.now(); run(); }, Math.max(0, ms - (now - last)));
+  };
+}
+
 async function ask<T>(message: unknown): Promise<T | undefined> {
   try { return await chrome.runtime.sendMessage(message) as T; } catch { return undefined; }
 }
@@ -313,13 +332,16 @@ async function main(): Promise<void> {
     if (model.asked && !model.adding && document.activeElement !== field) field.value = model.asked;
   };
   const refresh = async () => { take(await ask<ListAnswer>({ type: 'buddi-get-state' })); draw(); };
+  // The worker says every change; the popup redraws at most once a second, so a buddi that keeps
+  // coming and going cannot make it flicker.
+  const pushed = throttle(() => { void refresh(); }, REDRAW_MS);
   await refresh();
   // A dashboard asked to be added: Add a buddi opens on its address, for the owner to accept.
   if (model.asked) model.adding = true;
   draw();
 
   chrome.runtime.onMessage.addListener((message) => {
-    if ((message as { type?: string } | null)?.type === 'buddi-state') void refresh();
+    if ((message as { type?: string } | null)?.type === 'buddi-state') pushed();
   });
 
   /*
@@ -328,7 +350,7 @@ async function main(): Promise<void> {
    * socket went is a code buddi no longer waits for; asking also wakes the
    * worker, which reconnects and shows a fresh one.
    */
-  setInterval(() => { void refresh(); }, 3000);
+  setInterval(() => { pushed(); }, 3000);
 
   const list = byId(document, 'buddis');
   list.addEventListener('change', (event) => {

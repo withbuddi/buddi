@@ -56,13 +56,21 @@ address, how it stands, and a switch. Each row is in one of four states, never
 two at once:
 
 1. **Not connected**: after a failure, the worker's sentence in red and **Try
-   again**.
+   again**. *buddi did not answer at this address* only when nothing answered
+   on that port. A buddi that answered and turned this browser away says why
+   (*paired with another copy of the extension*: choose Pair again in its
+   Settings) and is not knocked on again until you press Try again. A token
+   the buddi no longer takes is dropped and the row asks it for a new code.
+   Retries wait 1, 2, 5, 10, 20, then 30 seconds; only pairing starts them
+   over, and the popup redraws at most once a second.
 2. **Connecting**: "Asking this buddi for a code…".
-3. **Pairing**: that buddi's six-digit code, large, with **Copy**, the line
+3. **Needs pairing**: that buddi's six-digit code, large, with **Copy**, the line
    saying where to type it, and **Open buddi settings** (Browser & apps: in
    buddi.app when it is installed and this is the buddi on 4317, else in a new
    tab).
-4. **Connected**: how many tabs it is working in, and **Open buddi**.
+4. **Connected**: how many tabs it is working in, and **Open buddi**. A buddi
+   from before the live picture connects as before and says *older buddi: live
+   view off*.
 
 Switched off, a row says **Off** and nothing else happens for that buddi in this
 browser: no socket, no tabs. **Remove** forgets it here (its address and its

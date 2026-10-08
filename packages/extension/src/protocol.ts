@@ -148,6 +148,14 @@ export interface ClientState {
   name?: string | null;
   /** What the gateway said it understands on this socket (`frames.binary`). */
   features?: string[];
+  /**
+   * The buddi answered and turned this browser away (paired with another copy
+   * of the extension, say): nothing is retried until the owner presses Try
+   * again. `error` says why and what to do.
+   */
+  refused?: boolean;
+  /** A buddi from before the live picture: it works, without the live view. */
+  older?: boolean;
 }
 
 export interface ProtocolOptions {
@@ -171,6 +179,8 @@ export interface ProtocolOptions {
 const TOKEN_KEY = 'token';
 
 const BAD_PROOF = 'That buddi could not prove it is the one this browser was paired with.';
+/** What `disconnect` is told when the token this browser held is no use there: drop it and ask for a code. */
+export const PAIR_AGAIN = 'pair-again';
 
 const encoder = new TextEncoder();
 const hex = (buffer: ArrayBuffer): string => Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -237,16 +247,22 @@ export class Protocol {
     const stored = await this.#token();
     this.#nonce = nonce();
     this.#authenticated = false;
-    this.#set({ connection: 'connecting', code: null, error: null, features: [] });
+    this.#set({ connection: 'connecting', code: null, error: null, features: [], refused: false });
     this.#options.send({ type: 'hello', extension: this.#options.version, nonce: this.#nonce, paired: stored !== null, features: [...EXTENSION_FEATURES] });
   }
 
-  closed(reason?: string): void {
+  closed(reason?: string, options: { refused?: boolean } = {}): void {
     this.#authenticated = false;
     for (const cancel of this.#running.values()) cancel.cancel();
     this.#running.clear();
     this.#options.onReset?.();
-    this.#set({ connection: 'offline', code: null, error: reason ?? null });
+    this.#set({ connection: 'offline', code: null, error: reason ?? null, refused: options.refused === true });
+  }
+
+  /** The token this browser held is no use at that buddi: forget it, so the next hello asks for a code. */
+  async dropToken(): Promise<void> {
+    if (this.#options.tokens) await this.#options.tokens.clear();
+    else await this.#options.chrome?.storage.local.remove([TOKEN_KEY]);
   }
 
   async #token(): Promise<string | null> {
@@ -267,7 +283,9 @@ export class Protocol {
     const name = message['name'];
     if (typeof name === 'string' && name.trim() !== '') patch.name = name.trim().slice(0, 60);
     const features = message['features'];
-    if (Array.isArray(features)) patch.features = features.filter((item): item is string => typeof item === 'string' && item.length <= 40).slice(0, 20);
+    patch.features = Array.isArray(features) ? features.filter((item): item is string => typeof item === 'string' && item.length <= 40).slice(0, 20) : [];
+    // A buddi that names no features is from before the live picture (and before binary frames).
+    patch.older = !patch.features.includes('frames.binary');
     return patch;
   }
 
@@ -357,8 +375,11 @@ export class Protocol {
     const expected = await proofFor(await sha256Hex(token), this.#nonce);
     if (!sameProof(expected, claimed)) {
       this.#authenticated = false;
+      // Not this browser's buddi any more (it forgot this pairing, or paired again): the token is no use
+      // there. Drop it and start over, which asks that buddi for a code instead of knocking forever.
+      await this.dropToken();
       this.#set({ connection: 'offline', code: null, error: BAD_PROOF });
-      this.#options.disconnect?.(BAD_PROOF);
+      this.#options.disconnect?.(PAIR_AGAIN);
       return;
     }
     const installation = message['installation'];

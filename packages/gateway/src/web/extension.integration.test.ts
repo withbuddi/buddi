@@ -27,7 +27,7 @@
  */
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,6 +73,10 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
   let profile: string;
   let skip = '';
   let booked = '';
+  /** What the endpoint logged: how many sockets came and went, never a token. */
+  const lines: string[] = [];
+  /** The same Chrome, with the same profile, started again. */
+  let relaunch: () => Promise<BrowserContext>;
 
   beforeAll(async () => {
     const launcher = await chromium();
@@ -95,7 +99,7 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
 
     gateway = createServer((_req, res) => { res.writeHead(404); res.end(); });
     await new Promise<void>((resolve) => gateway.listen(0, '127.0.0.1', resolve));
-    endpoint = new ExtensionEndpoint({ env: { ...process.env, BUDDI_DATA_DIR: dataHome, BUDDI_EXTENSION_DIR: extensionDist } });
+    endpoint = new ExtensionEndpoint({ env: { ...process.env, BUDDI_DATA_DIR: dataHome, BUDDI_EXTENSION_DIR: extensionDist }, log: (line) => { lines.push(line); } });
     endpoint.attach(gateway);
 
     const rules = [
@@ -103,13 +107,14 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
       `MAP 127.0.0.1:${EXTENSION_DEFAULT_PORT} 127.0.0.1:${(gateway.address() as AddressInfo).port}`,
     ].join(', ');
     try {
-      context = await launcher.launchPersistentContext(profile, {
+      relaunch = () => launcher.launchPersistentContext(profile, {
         // The `chromium` channel is Chrome's new headless mode. The old one
         // loads no extensions at all, so this is not a preference.
         channel: 'chromium',
         headless: true,
         args: [`--disable-extensions-except=${extensionDist}`, `--load-extension=${extensionDist}`, `--host-rules=${rules}`],
       });
+      context = await relaunch();
     } catch (error) {
       skip = `Chromium could not be launched: ${error instanceof Error ? error.message : String(error)}`;
       return;
@@ -421,4 +426,77 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     await driver.close();
   }, 3 * MINUTE);
 
+
+  /*
+   * The owner's upgrade, in place: an extension from before several buddis
+   * (one `gateway` and one `token` in storage) is replaced by this build. It
+   * must come back connected with the token it had, without a new code, and
+   * stay connected: one socket, not a pair of them replacing each other.
+   */
+  it('keeps the old single pairing across an upgrade in place, connected, with no re-pairing and no reconnect loop', async function () {
+    if (skip) { console.log(`skipped: ${skip}`); return; }
+    const extensionId = new URL(worker.url()).host;
+    endpoint.close();
+    // The storage layout of the extension before several buddis, holding this pairing's own token.
+    await worker.evaluate(async () => {
+      const api = (globalThis as any).chrome;
+      const { pairings } = await api.storage.local.get(['pairings']);
+      await api.storage.local.clear();
+      await api.storage.local.set({ gateway: 'http://127.0.0.1:4317', token: pairings[0].token });
+    });
+    const before = (await endpoint.view()).pairedAt;
+    // Chrome reloading the extension is what an update does: the worker starts again with `onInstalled`.
+    // Chrome quits and starts again on that storage: the worker starts from nothing, as after an update.
+    await context!.close();
+    context = await relaunch();
+    worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker', { timeout: MINUTE });
+    await vi.waitFor(() => expect(endpoint.connected()).toBe(true), { timeout: MINUTE, interval: 100 });
+    const reconnects = () => lines.filter((line) => line.includes('reconnected') || line.includes('socket accepted')).length;
+    const settled = reconnects();
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    // Still the same pairing, still connected, and nobody knocked again.
+    expect(endpoint.connected()).toBe(true);
+    expect((await endpoint.view()).pairedAt).toBe(before);
+    expect(reconnects()).toBe(settled);
+    expect((await endpoint.view()).pending).toBe(false);
+    // The popup says so.
+    const popup = await context!.newPage();
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await expect.poll(async () => popup.locator('#buddis .buddi-pill').allTextContents(), { timeout: 10_000 }).toEqual(['Connected']);
+    await popup.close();
+  }, 3 * MINUTE);
+
+  /*
+   * The owner's second buddi, already paired with another copy of the
+   * extension (the store one): it answers, and turns this browser away. The
+   * row says so and what to do, and nothing knocks on it again by itself.
+   */
+  it('a second buddi paired with another copy of the extension: says why, and no reconnect loop', async function () {
+    if (skip) { console.log(`skipped: ${skip}`); return; }
+    const otherHome = await mkdtemp(path.join(tmpdir(), 'buddi-extension-other-'));
+    await writeFile(path.join(otherHome, 'extension.json'), JSON.stringify({ tokenHash: 'f'.repeat(64), pairedAt: '2026-10-01T00:00:00Z', extension: '0.1.0.42', lastSeenAt: '', extensionId: 'p'.repeat(32) }));
+    const otherLines: string[] = [];
+    const otherServer = createServer((_req, res) => { res.writeHead(404); res.end(); });
+    await new Promise<void>((resolve) => otherServer.listen(0, '127.0.0.1', resolve));
+    const other = new ExtensionEndpoint({ env: { ...process.env, BUDDI_DATA_DIR: otherHome }, log: (line) => { otherLines.push(line); } });
+    other.attach(otherServer);
+    try {
+      const address = `http://127.0.0.1:${(otherServer.address() as AddressInfo).port}`;
+      const extensionId = new URL(worker.url()).host;
+      const popup = await context!.newPage();
+      await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+      await popup.evaluate((gateway) => (globalThis as any).chrome.runtime.sendMessage({ type: 'buddi-add', gateway }), address);
+      const row = popup.locator('#buddis .buddi').nth(1);
+      await expect.poll(async () => row.locator('.buddi-error').textContent(), { timeout: 20_000 }).toMatch(/paired with another copy of the extension/);
+      expect(await row.locator('.buddi-retry').isVisible()).toBe(true);
+      const knocks = otherLines.filter((line) => line.includes('socket accepted')).length;
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      expect(otherLines.filter((line) => line.includes('socket accepted')).length).toBe(knocks);
+      await popup.close();
+    } finally {
+      other.shutdown();
+      await new Promise<void>((resolve) => otherServer.close(() => resolve()));
+      await rm(otherHome, { recursive: true, force: true });
+    }
+  }, 3 * MINUTE);
 });

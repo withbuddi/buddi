@@ -23,9 +23,36 @@ import { AgentDownloads, type DownloadsApi } from './downloads.js';
 import type { WorkerChrome } from './chrome.js';
 import { BINARY_FRAMES, base64Bytes, packFrame } from './frames.js';
 import type { Colour, GroupRegistry, PairingStore } from './pairings.js';
-import { Protocol, type ClientState, type FrameMessage } from './protocol.js';
+import { PAIR_AGAIN, Protocol, type ClientState, type FrameMessage } from './protocol.js';
 
-const MAX_BACKOFF = 30_000;
+/** The waits between tries at a buddi that is not answering, and then every thirty seconds. */
+export const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 20_000, 30_000] as const;
+/** The least time between two fresh starts after a token turned out to be no use, so a confused buddi cannot spin us. */
+const REPAIR_GAP_MS = 30_000;
+
+/** What the popup says when nothing answered on that port at all. */
+export const NO_ANSWER = 'buddi did not answer at this address. Is it running?';
+/** The buddi answered and is paired with another copy of this extension. */
+export const OTHER_BROWSER = 'This buddi is paired with another copy of the extension (the Chrome Web Store one, or another unpacked one). In its Settings → Browser & apps choose Pair again, then press Try again here.';
+/** The buddi answered but turned the connection away before any handshake. */
+export const TURNED_AWAY = 'buddi is running at this address but turned this browser away. Update buddi, then press Try again.';
+
+/**
+ * What a socket that opened and then closed means, from the gateway's own
+ * close reason. `refused`: stop and say why until the owner presses Try
+ * again. `repair`: the token is no use there, so drop it and ask for a code.
+ * `retry`: try again after the usual wait.
+ */
+export function readClose(code: number, reason: string): { kind: 'refused' | 'repair' | 'retry'; message: string } {
+  const said = reason.trim();
+  if (/paired with another browser/i.test(said)) return { kind: 'refused', message: OTHER_BROWSER };
+  if (/token is not this buddi/i.test(said)) return { kind: 'repair', message: 'This buddi no longer knows this browser. Asking it for a new code.' };
+  if (/forgot its browser/i.test(said)) return { kind: 'repair', message: 'This buddi forgot this browser. Asking it for a new code.' };
+  if (code === 1008 && !/too many pairing requests|one hello per connection/i.test(said)) {
+    return { kind: 'refused', message: said ? `This buddi turned this browser away: ${said}. Press Try again.` : TURNED_AWAY };
+  }
+  return { kind: 'retry', message: said ? `buddi closed the connection (${said}). Trying again shortly.` : 'buddi closed the connection. Trying again shortly.' };
+}
 /** How long a knock waits for buddi before the socket is left alone this round. */
 const KNOCK_MS = 3000;
 /** Three missed pings and the gateway is gone; reconnecting is cheap. */
@@ -112,6 +139,11 @@ export class Link {
   #incoming: Promise<void> = Promise.resolve();
   /** Switched off or removed: no reconnects, nothing sent. */
   #disposed = false;
+  /** Turned away by the buddi: no reconnects until the owner presses Try again (or pairs again). */
+  #halted = false;
+  /** Why this side closed the socket, when it did. */
+  #closing: string | undefined;
+  #lastRepair = -Infinity;
 
   constructor(options: LinkOptions) {
     this.#options = options;
@@ -140,12 +172,14 @@ export class Link {
       onReset: () => this.commands.reset(),
       onLoginAck: (id, answer) => this.commands.logins.ack(id, answer),
       onState: (state) => {
+        // Paired is the one sign the buddi is really there: only then does the wait start again from a second.
+        if (state.connection === 'paired') this.#attempt = 0;
         const named = state.name && state.name !== this.#last.name ? state.name : null;
         this.#last = state;
         if (named) { this.#options.onName?.(this.id, named); safely(() => this.commands.retitle()); }
         this.#options.onState?.(this.id, state);
       },
-      disconnect: () => this.#socket?.close(),
+      disconnect: (reason) => { this.#closing = reason; this.#socket?.close(); },
     });
   }
 
@@ -207,7 +241,7 @@ export class Link {
 
   /** Connect now, unless a socket is already open or opening. */
   async connect(): Promise<void> {
-    if (this.#disposed) return;
+    if (this.#disposed || this.#halted) return;
     const Socket = this.#WebSocket;
     const socket = this.#socket;
     if (socket && (socket.readyState === Socket.OPEN || socket.readyState === Socket.CONNECTING)) return;
@@ -229,16 +263,19 @@ export class Link {
      */
     if (this.#attempt > 0 && !(await answering(url))) {
       if (this.#disposed) return;
-      this.protocol.closed('buddi did not answer at this address. Is it running?');
+      this.protocol.closed(NO_ANSWER);
       this.#schedule();
       return;
     }
     if (this.#disposed) return;
+    let opened = false;
+    this.#closing = undefined;
     const opening = new Socket(url);
     opening.binaryType = 'arraybuffer';
     this.#socket = opening;
     opening.addEventListener('open', () => {
-      this.#attempt = 0; this.#quiet(); this.#flush(opening);
+      // Not a reason to forget the backoff: a buddi that opens and then turns us away must not be knocked on every second.
+      opened = true; this.#quiet(); this.#flush(opening);
       if (this.#keepalive) clearInterval(this.#keepalive);
       this.#keepalive = setInterval(() => { if (this.#socket === opening) this.send({ type: 'keepalive' }); }, KEEPALIVE_MS);
       safely(() => this.protocol.open());
@@ -255,17 +292,64 @@ export class Link {
     // A socket that errors before it opens takes everything queued for it with
     // it: the gateway never heard the hello those frames belonged to.
     opening.addEventListener('error', () => { if (this.#socket === opening) this.#pending = []; });
-    opening.addEventListener('close', () => {
-      if (this.#socket === opening) { this.#socket = undefined; this.#pending = []; if (this.#keepalive) { clearInterval(this.#keepalive); this.#keepalive = undefined; } }
+    opening.addEventListener('close', (event) => {
+      if (this.#socket !== opening) return;
+      this.#socket = undefined; this.#pending = [];
+      if (this.#keepalive) { clearInterval(this.#keepalive); this.#keepalive = undefined; }
       if (this.#silence) { clearTimeout(this.#silence); this.#silence = undefined; }
       if (this.#disposed) return;
-      this.protocol.closed('buddi did not answer at this address. Is it running?');
-      this.#schedule();
+      const closing = this.#closing;
+      this.#closing = undefined;
+      const { code = 1005, reason = '' } = (event ?? {}) as { code?: number; reason?: string };
+      safely(() => this.#closed(opened, closing, code, reason));
     });
+  }
+
+  /**
+   * What a closed socket means, said once, and what happens next. A socket
+   * that never opened is a buddi that did not answer, unless something on
+   * that port did answer the knock and turned the socket away. One that
+   * opened was answered: the buddi's own close reason decides.
+   */
+  async #closed(opened: boolean, closing: string | undefined, code: number, reason: string): Promise<void> {
+    // A newer socket is already up (Try again, a re-pair): this one's ending is old news.
+    if (this.#socket) return;
+    if (closing === PAIR_AGAIN) { await this.#repair('That buddi does not know this browser any more. Asking it for a new code.'); return; }
+    if (!opened) {
+      const knocked = await answering(socketUrl(this.origin)).catch(() => false);
+      if (this.#disposed || this.#socket) return;
+      if (knocked) { this.#halt(TURNED_AWAY); return; }
+      this.protocol.closed(NO_ANSWER);
+      this.#schedule();
+      return;
+    }
+    const read = readClose(code, reason);
+    if (read.kind === 'refused') { this.#halt(read.message); return; }
+    if (read.kind === 'repair') { await this.protocol.dropToken().catch(() => undefined); await this.#repair(read.message); return; }
+    this.protocol.closed(read.message);
+    this.#schedule();
+  }
+
+  /** Stop knocking and say why, until the owner presses Try again. */
+  #halt(message: string): void {
+    this.#halted = true;
+    if (this.#timer) { clearTimeout(this.#timer); this.#timer = undefined; }
+    this.protocol.closed(message, { refused: true });
+  }
+
+  /** Start over at once with no token, which asks the buddi for a code; at most once in a while. */
+  async #repair(message: string): Promise<void> {
+    const now = Date.now();
+    this.protocol.closed(message);
+    if (now - this.#lastRepair < REPAIR_GAP_MS) { this.#schedule(); return; }
+    this.#lastRepair = now;
+    this.#attempt = 0;
+    await this.connect();
   }
 
   /** The owner pressed Connect or Try again: start over at once. */
   async retry(): Promise<void> {
+    this.#halted = false;
     this.#attempt = 0;
     this.#socket?.close();
     await this.connect();
@@ -292,8 +376,8 @@ export class Link {
   }
 
   #schedule(): void {
-    if (this.#timer || this.#disposed) return;
-    const wait = Math.min(MAX_BACKOFF, 1000 * 2 ** Math.min(this.#attempt, 5));
+    if (this.#timer || this.#disposed || this.#halted) return;
+    const wait = BACKOFF_MS[Math.min(this.#attempt, BACKOFF_MS.length - 1)]!;
     this.#attempt += 1;
     this.#timer = setTimeout(() => { this.#timer = undefined; safely(() => this.connect()); }, wait);
   }

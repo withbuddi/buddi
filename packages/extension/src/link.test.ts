@@ -10,7 +10,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkerChrome } from './chrome.js';
 import { unpackFrame } from './frames.js';
-import { KEEPALIVE_MS, Link } from './link.js';
+import { BACKOFF_MS, KEEPALIVE_MS, Link, NO_ANSWER, OTHER_BROWSER, TURNED_AWAY, readClose } from './link.js';
+import { proofFor } from './protocol.js';
 import { GroupRegistry, PairingStore } from './pairings.js';
 
 class FakeSocket {
@@ -48,6 +49,12 @@ class FakeSocket {
     if (this.readyState === FakeSocket.CLOSED) return;
     this.readyState = FakeSocket.CLOSED;
     this.#emit('close');
+  }
+  /** The gateway closing it, with its code and reason, the way a browser reports it. */
+  closedBy(code: number, reason: string): void {
+    if (this.readyState === FakeSocket.CLOSED) return;
+    this.readyState = FakeSocket.CLOSED;
+    this.#emit('close', { code, reason });
   }
 
   /* ---- the test's hand on the wire ---- */
@@ -304,5 +311,114 @@ describe('screencast frames on the wire', () => {
     expect(read.header).toEqual({ session: 's1', deviceWidth: 800, deviceHeight: 600, url: 'https://example.test/' });
     expect(new TextDecoder().decode(read.jpeg)).toBe('jpeg-bytes');
     expect(link.state().name).toBe('buddi');
+  });
+});
+
+describe('a buddi that answers and turns this browser away', () => {
+  const sha = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), (b) => b.toString(16).padStart(2, '0')).join('');
+  const nonceOf = (socket: FakeSocket) => String((JSON.parse(socket.sent.find((text) => typeof text === 'string' && text.includes('"hello"')) as string) as { nonce: string }).nonce);
+
+  it('paired with another copy of the extension: says so, and knocks no more until Try again', async () => {
+    const link = await load();
+    const socket = FakeSocket.live[0]!;
+    socket.opened();
+    await settle();
+    socket.closedBy(1008, 'this buddi is paired with another browser');
+    await settle();
+    expect(link.state()).toMatchObject({ connection: 'offline', refused: true, error: OTHER_BROWSER });
+    await vi.advanceTimersByTimeAsync(120_000);
+    await link.connect();
+    await settle();
+    // No reconnect loop: one socket, however long it waits, and however often the alarm wakes it.
+    expect(FakeSocket.live).toHaveLength(1);
+    await link.retry();
+    await settle();
+    expect(FakeSocket.live).toHaveLength(2);
+    FakeSocket.live[1]!.opened();
+    await settle();
+    expect(link.state().refused).toBe(false);
+  });
+
+  it('a token the buddi no longer takes: dropped, and the next hello asks for a code at once', async () => {
+    store.set('pairings', [{ id: 'first', origin: 'http://127.0.0.1:4317', token: 'stale', name: '', colour: 'blue', enabled: true }]);
+    const link = await load();
+    const socket = FakeSocket.live[0]!;
+    socket.opened();
+    await settle();
+    expect(JSON.parse(socket.sent.at(-1) as string)).toMatchObject({ type: 'hello', paired: true });
+    socket.closedBy(1008, 'that token is not this buddi’s');
+    await settle();
+    expect((store.get('pairings') as Array<{ token?: string }>)[0]!.token).toBeUndefined();
+    const again = FakeSocket.live[1]!;
+    expect(again).toBeDefined();
+    again.opened();
+    await settle();
+    expect(JSON.parse(again.sent.at(-1) as string)).toMatchObject({ type: 'hello', paired: false });
+    void link;
+  });
+
+  it('a buddi that cannot prove the pairing: the token goes, and it starts over for a code, once', async () => {
+    store.set('pairings', [{ id: 'first', origin: 'http://127.0.0.1:4317', token: 'kept', name: '', colour: 'blue', enabled: true }]);
+    await load();
+    const socket = FakeSocket.live[0]!;
+    socket.opened();
+    await settle();
+    socket.hear({ type: 'challenge', proof: await proofFor(await sha('not-kept'), nonceOf(socket)) });
+    await vi.waitFor(() => expect((store.get('pairings') as Array<{ token?: string }>)[0]!.token).toBeUndefined());
+    await vi.waitFor(() => expect(FakeSocket.live).toHaveLength(2));
+    FakeSocket.live[1]!.opened();
+    await settle();
+    expect(JSON.parse(FakeSocket.live[1]!.sent.at(-1) as string)).toMatchObject({ type: 'hello', paired: false });
+  });
+
+  it('backs off 1, 2, 5, 10 seconds from a buddi that opens and closes again, and only pairing starts it over', async () => {
+    await load();
+    const waits: number[] = [];
+    for (let round = 0; round < 4; round++) {
+      const socket = FakeSocket.live.at(-1)!;
+      socket.opened();
+      await settle();
+      socket.closedBy(1000, 'pairing timed out');
+      await settle();
+      const before = FakeSocket.live.length;
+      let waited = 0;
+      while (FakeSocket.live.length === before && waited < 60_000) { await vi.advanceTimersByTimeAsync(100); await settle(); waited += 100; }
+      waits.push(Math.round(waited / 1000) * 1000);
+    }
+    expect(waits).toEqual(BACKOFF_MS.slice(0, 4));
+  });
+
+  it('a port where nothing answers is "did not answer"; one that answers the knock and drops the socket is turned away', async () => {
+    const link = await load();
+    knockAnswers = false;
+    FakeSocket.live[0]!.close();
+    await settle();
+    expect(link.state().error).toBe(NO_ANSWER);
+    expect(link.state().refused).toBeFalsy();
+    await link.retry();
+    await settle();
+    knockAnswers = true;
+    FakeSocket.live.at(-1)!.close();
+    await settle();
+    expect(link.state()).toMatchObject({ error: TURNED_AWAY, refused: true });
+  });
+
+  it('an older buddi (no features in its handshake) connects and is marked older', async () => {
+    const link = await load();
+    const socket = FakeSocket.live[0]!;
+    socket.opened();
+    await settle();
+    socket.hear({ type: 'paired', token: 't', installation: '127.0.0.1:4317' });
+    await settle();
+    expect(link.state()).toMatchObject({ connection: 'paired', older: true });
+  });
+
+  it('reads the gateway’s close reasons', () => {
+    expect(readClose(1008, 'this buddi is paired with another browser').kind).toBe('refused');
+    expect(readClose(1008, 'that token is not this buddi’s').kind).toBe('repair');
+    expect(readClose(1000, 'this buddi forgot its browser').kind).toBe('repair');
+    expect(readClose(1008, 'too many pairing requests; try again in a moment').kind).toBe('retry');
+    expect(readClose(1000, 'replaced by a newer connection').kind).toBe('retry');
+    expect(readClose(1006, '').kind).toBe('retry');
   });
 });
