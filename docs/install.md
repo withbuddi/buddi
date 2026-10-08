@@ -20,6 +20,14 @@ install (§1.1); there is no Windows installer yet.
 
 ## 1. Install
 
+**What it needs.** macOS 14 or newer, Apple silicon or Intel. About 3.5 GB of
+disk: the app (0.7 GB), the current and previous release (0.35 GB each), the
+database, and the headless Chromium agents browse with (1.7 GB, fetched on
+first use); local models add 130 to 250 MB each, a local LLM through Ollama
+3 to 10 GB. 8 GB of memory is enough; 16 GB when local models are on. The
+internet is needed for the AI you chose and for updates; everything else runs
+offline.
+
 ```
 npm install -g @withbuddi/buddi
 buddi
