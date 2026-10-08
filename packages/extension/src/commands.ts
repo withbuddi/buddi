@@ -21,6 +21,7 @@ import { Cancellation, CancelledError, OpenedError, PreconditionError, type Comm
 import type { CollectedElement } from './tree.js';
 import { heldLoginRequest, hideBar, hideHeldBar, readBar, showBar, showHeldBar, waitForOwner, watchHeldLogins, type BarChoice, type HeldLoginFacts, type LoginFrame, type OwnerEventMessage } from './bar.js';
 import { HeldLogins } from './held-logins.js';
+import type { Colour, GroupRegistry } from './pairings.js';
 
 interface Session {
   groupId: number;
@@ -61,6 +62,7 @@ interface FieldRead {
   origin?: string; password?: boolean; name?: string;
 }
 
+/** A group's title when the buddi it belongs to has not said its name. */
 const GROUP_TITLE = 'buddi';
 /** The window picked for the tab would not take one; a new window, in the background, did. */
 export const NEW_WINDOW_NOTE = "Your Chrome couldn't open a tab in that window; opened a new window instead.";
@@ -78,6 +80,15 @@ const SETTLE_STEP_MS = 50;
 const OBSERVE_RETRY_MS = [500, 1_000, 2_000];
 /** At most ten frames a second leave this browser, whatever Chrome paints. */
 const MIN_FRAME_MS = 100;
+/**
+ * The Canvas's picture while an agent drives: two a second is plenty for a
+ * picture the dashboard asks for every two seconds, and it keeps the socket
+ * quiet. The owner's own hand gets the full ten.
+ */
+export const WATCH_FRAME_MS = 500;
+const MAX_FRAME_MS = 2_000;
+/** A selection copied to the owner's clipboard is as long as a paste may be. */
+const MAX_COPY = 4_000;
 /** The screencast's own bounds; the gateway asks within them and gets clamped if it does not. */
 const MAX_CAST_SIDE = 4096;
 /** A page coordinate no real viewport reaches, past which the input is not a coordinate. */
@@ -91,10 +102,23 @@ const NO_CAST = 'No screencast is running for this conversation, so there is not
 
 interface ScreencastFrame { data: string; metadata: Record<string, number>; sessionId: string | number }
 
-/** One live screencast: the tab it watches, and the frame it is holding back. */
+/**
+ * One live screencast: the tab it watches, and the frame it is holding back.
+ *
+ * `watch` is the Canvas's picture while the agent drives: it follows the
+ * session's active tab and takes no input. `hand` is the owner's take-over:
+ * pinned to the tab it started on, and the only kind input reaches.
+ */
 interface Screencast {
   session: string;
   tabId: number;
+  mode: 'watch' | 'hand';
+  /** The least time between two frames that leave, in milliseconds. */
+  interval: number;
+  /** What Chrome was asked for, so a watch asked again with the same bounds is left running. */
+  params: { quality: number; maxWidth: number; maxHeight: number; everyNthFrame: number };
+  /** Where the tab is now, kept from `tabs.onUpdated` rather than asked per frame. */
+  url?: string;
   lastSentAt: number;
   pending?: ScreencastFrame;
   timer?: ReturnType<typeof setTimeout>;
@@ -300,8 +324,19 @@ export class BrowserCommands implements Executor {
   #castsByTab = new Map<number, Screencast>();
   #ownerWaitMs: number | undefined;
 
-  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; onLogin?: (frame: LoginFrame) => void; now?: () => number; wait?: (ms: number) => Promise<void>; ownerWaitMs?: number; downloads?: AgentDownloads } = {}) {
+  /** Which buddi these commands belong to, and the registry that says whose each group is. */
+  #instance: string;
+  #groups: GroupRegistry | undefined;
+  #groupTitle: () => string;
+  #groupColour: () => Colour | undefined;
+
+  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; onEvent?: (event: OwnerEventMessage) => void; onLogin?: (frame: LoginFrame) => void; now?: () => number; wait?: (ms: number) => Promise<void>; ownerWaitMs?: number; downloads?: AgentDownloads;
+    instance?: string; groups?: GroupRegistry; groupTitle?: () => string; groupColour?: () => Colour | undefined } = {}) {
     this.#chrome = chrome;
+    this.#instance = options.instance ?? 'buddi';
+    this.#groups = options.groups;
+    this.#groupTitle = options.groupTitle ?? (() => GROUP_TITLE);
+    this.#groupColour = options.groupColour ?? (() => undefined);
     this.downloads = options.downloads;
     this.logins = new HeldLogins(options.onLogin ?? (() => undefined));
     chrome.tabs.onRemoved?.addListener((tabId) => this.logins.clearTab(tabId));
@@ -316,12 +351,21 @@ export class BrowserCommands implements Executor {
     chrome.debugger.onDetach.addListener((source) => {
       const tabId = source.tabId;
       if (tabId === undefined) return;
+      if (!this.#attached.has(tabId) && !this.#castsByTab.has(tabId)) return;
       this.#attached.delete(tabId);
       const cast = this.#castsByTab.get(tabId);
-      if (cast) this.#forgetCast(cast);
+      if (cast) {
+        this.#forgetCast(cast);
+        // The picture this buddi was painting is gone (the tab closed, or the
+        // owner pressed Cancel on Chrome's debugging bar): say so, so the
+        // Canvas stops showing a page that no longer moves.
+        this.#onEvent({ type: 'event', name: 'castended', session: cast.session });
+      }
     });
     // A held tab that loads a new page (the owner signing in) keeps its bar.
-    chrome.tabs.onUpdated?.addListener((tabId, change) => {
+    chrome.tabs.onUpdated?.addListener((tabId, change, tab) => {
+      const cast = this.#castsByTab.get(tabId);
+      if (cast && tab?.url) cast.url = tab.url;
       if (change.status !== 'complete' || ![...this.#held.values()].includes(tabId)) return;
       const session = [...this.#held].find(([, held]) => held === tabId)?.[0];
       if (session) void this.#drawHeld(tabId, session);
@@ -332,6 +376,28 @@ export class BrowserCommands implements Executor {
 
   /** Downloads an agent's command starts, noticed while it runs (and a few seconds after). */
   readonly downloads: AgentDownloads | undefined;
+
+  /** How many tabs this buddi is working in right now, for the popup. */
+  async tabCount(): Promise<number> {
+    let count = 0;
+    for (const session of this.#sessions.values()) {
+      for (const tabId of session.tabs.values()) {
+        const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
+        if (tab && !this.#taken(session, tab)) count += 1;
+      }
+    }
+    return count;
+  }
+
+  /** A buddi's name changed (its handshake said one): its groups take it. */
+  async retitle(): Promise<void> {
+    const title = this.#groupTitle();
+    const color = this.#groupColour();
+    for (const session of this.#sessions.values()) {
+      if (session.groupId < 0) continue;
+      await this.#chrome.tabGroups.update(session.groupId, { title, ...(color ? { color } : {}) }).catch(() => undefined);
+    }
+  }
 
   /** The addresses of a session's tabs, for telling its downloads from the owner's. */
   async #tabUrls(name: string): Promise<string[]> {
@@ -374,6 +440,8 @@ export class BrowserCommands implements Executor {
       case 'input': return this.#input(command, cancel);
       case 'hold': return this.#hold(command, cancel);
       case 'unhold': return this.#unhold(command.session);
+      case 'capture': return this.#capture(command.session, cancel);
+      case 'copy': return this.#copy(command.session);
       case 'close': return this.#close(command, cancel);
       default: throw new PreconditionError(`This browser cannot run ${command.name}.`);
     }
@@ -518,6 +586,8 @@ export class BrowserCommands implements Executor {
   /** The owner dragged this tab out of the session's group. A tab that never made it into the group cannot have been. */
   #taken(session: Session, tab: TabInfo): boolean {
     if (tab.id !== undefined && session.ungrouped.has(tab.id)) return false;
+    // Another buddi's group is never this one's, whatever this session remembers.
+    if (this.#groups && !this.#groups.allows(tab.groupId, this.#instance)) return true;
     return session.groupId >= 0 && tab.groupId !== session.groupId;
   }
 
@@ -636,9 +706,12 @@ export class BrowserCommands implements Executor {
         const groupId = await this.#chrome.tabs.group(session.groupId >= 0
           ? { tabIds: [tabId], groupId: session.groupId }
           : { tabIds: [tabId] });
+        this.#groups?.claim(groupId, this.#instance);
         if (session.groupId !== groupId) {
           session.groupId = groupId;
-          await this.#chrome.tabGroups.update(groupId, { title: GROUP_TITLE, collapsed: false }).catch(() => undefined);
+          // Named after the buddi it belongs to, in that buddi's colour, so two buddis' tabs never look alike.
+          const color = this.#groupColour();
+          await this.#chrome.tabGroups.update(groupId, { title: this.#groupTitle(), collapsed: false, ...(color ? { color } : {}) }).catch(() => undefined);
         }
       } catch {
         // "Grouping is not supported by tabs in this window": the tab is open
@@ -727,6 +800,7 @@ export class BrowserCommands implements Executor {
     this.#refs.delete(command.session);
     cancel.check();
     const note = await this.#reuseOrOpen(session, url, cancel);
+    await this.#followWatch(command.session);
     // A note rides the observation passthrough, the one field the gateway relays untouched.
     return note ? { observation: { note } as unknown as Observation } : {};
   }
@@ -739,12 +813,15 @@ export class BrowserCommands implements Executor {
       throw error instanceof PreconditionError ? error : new PreconditionError('No such tab in this conversation.');
     });
     session.active = wanted;
+    await this.#followWatch(command.session);
     return {};
   }
 
   /** Closes this session's own tabs, and only the ones still in its group. */
   async #close(command: Command, cancel: Cancellation): Promise<CommandResult> {
     this.#inView.delete(command.session);
+    // The picture goes before the tabs do, so Chrome's debugging bar never outlives the work.
+    await this.#stopScreencast(command.session).catch(() => undefined);
     const session = this.#sessions.get(command.session);
     if (!session) return {};
     const ids: number[] = [];
@@ -982,37 +1059,58 @@ export class BrowserCommands implements Executor {
     }
   }
 
-  /* ---- the owner's own hand: a screencast out, input in ---- */
+  /* ---- the picture out, and the owner's own hand in ---- */
 
   /**
-   * Start painting this session's tab to the dashboard.
+   * Start painting this session's tab to buddi.
    *
-   * The debugger is claimed for the screencast's whole life rather than per
-   * frame: frames arrive as events, not as answers, and a detach between them
-   * would end the stream. Starting twice on the same session restarts it,
-   * which is what a reconnecting dashboard does.
+   * Two kinds, one per session at a time. `watch: true` is the Canvas's
+   * picture while the agent works: it follows the session's active tab, sends
+   * at most two frames a second, takes no input, and asking for it again with
+   * the same bounds on the same tab changes nothing. Without it, this is the
+   * owner's take-over: pinned to the tab it starts on, ten frames a second,
+   * and the only cast input reaches. Starting either replaces whatever cast
+   * the session had, which is also what a re-tune and a reconnecting
+   * dashboard do.
+   *
+   * The debugger is claimed for the cast's whole life rather than per frame:
+   * frames arrive as events, not as answers, and a detach between them would
+   * end the stream. And focus is emulated on the tab first: a tab in the
+   * background, or in a window that is minimised or behind another, is
+   * "hidden" to Chrome, and a hidden page paints nothing at all for a
+   * screencast. With focus emulated the page renders as if it were in front
+   * (it is told it is visible), and stays where it is.
    */
   async #startScreencast(command: Command, cancel: Cancellation): Promise<CommandResult> {
     const session = await this.#session(command.session);
     const tab = await this.#ownTab(session, this.#activeKey(session));
     this.#liveUrl(tab);
     const tabId = tab.id!;
+    const mode = command.args['watch'] === true ? 'watch' : 'hand';
+    const params = {
+      // Smaller and cheaper than a screenshot on purpose: this is a picture
+      // for a phone on someone else's network, not evidence for a model.
+      quality: Math.min(90, Math.max(20, Math.trunc(num(command.args['quality']) ?? 50))),
+      maxWidth: side(command.args['maxWidth'], 960),
+      maxHeight: side(command.args['maxHeight'], 600),
+      everyNthFrame: Math.min(10, Math.max(1, Math.trunc(num(command.args['everyNthFrame']) ?? 1))),
+    };
+    const interval = Math.min(MAX_FRAME_MS, Math.max(MIN_FRAME_MS, Math.trunc(num(command.args['interval']) ?? (mode === 'watch' ? WATCH_FRAME_MS : MIN_FRAME_MS))));
+    const running = this.#casts.get(command.session);
+    if (running && !running.stopped && mode === 'watch' && running.mode === 'watch' && running.tabId === tabId
+      && running.interval === interval && JSON.stringify(running.params) === JSON.stringify(params)) return {};
     cancel.check();
-    await this.#stopScreencast(command.session);
+    // Claimed before the old cast lets go of it, so a cast replaced on the same
+    // tab (the owner taking over from the watching picture, a re-tune) never
+    // detaches in between and Chrome's debugging bar does not flicker.
     await this.#claimDebugger(tabId);
-    const cast: Screencast = { session: command.session, tabId, lastSentAt: 0, stopped: false };
+    await this.#stopScreencast(command.session);
+    const cast: Screencast = { session: command.session, tabId, mode, interval, params, url: tab.url, lastSentAt: 0, stopped: false };
     this.#casts.set(command.session, cast);
     this.#castsByTab.set(tabId, cast);
     try {
-      await this.#send(tabId, 'Page.startScreencast', {
-        format: 'jpeg',
-        // Smaller and cheaper than a screenshot on purpose: this is a picture
-        // for a phone on someone else's network, not evidence for a model.
-        quality: Math.min(90, Math.max(20, Math.trunc(num(command.args['quality']) ?? 50))),
-        maxWidth: side(command.args['maxWidth'], 960),
-        maxHeight: side(command.args['maxHeight'], 600),
-        everyNthFrame: Math.min(10, Math.max(1, Math.trunc(num(command.args['everyNthFrame']) ?? 1))),
-      });
+      await this.#send(tabId, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined);
+      await this.#send(tabId, 'Page.startScreencast', { format: 'jpeg', ...params });
       // A cancel that landed while the screencast was starting has already
       // given up on the answer, so leaving the stream running would paint at
       // nobody.
@@ -1024,12 +1122,29 @@ export class BrowserCommands implements Executor {
     return {};
   }
 
+  /**
+   * The agent moved to another tab, or opened one: a watching picture moves
+   * with it. The owner's own take-over never moves; that is their tab.
+   */
+  async #followWatch(sessionName: string): Promise<void> {
+    const cast = this.#casts.get(sessionName);
+    if (!cast || cast.mode !== 'watch') return;
+    const session = this.#sessions.get(sessionName);
+    const key = session?.active;
+    const tabId = key ? session?.tabs.get(key) : undefined;
+    if (tabId === undefined || tabId === cast.tabId) return;
+    const { params, interval } = cast;
+    await this.#startScreencast({ id: 'follow', name: 'screencast.start', session: sessionName, args: { ...params, interval, watch: true } }, new Cancellation())
+      .catch(() => undefined);
+  }
+
   /** Idempotent: a stop for a session with no screencast is an answer, not a failure. */
   async #stopScreencast(session: string): Promise<void> {
     const cast = this.#casts.get(session);
     if (!cast) return;
     this.#forgetCast(cast);
     await this.#send(cast.tabId, 'Page.stopScreencast').catch(() => undefined);
+    await this.#send(cast.tabId, 'Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
     await this.#releaseDebugger(cast.tabId);
   }
 
@@ -1054,7 +1169,8 @@ export class BrowserCommands implements Executor {
   }
 
   /**
-   * One painted frame, acked at once and sent at most ten times a second.
+   * One painted frame, acked at once and sent at most once per interval (ten
+   * a second for the owner's hand, two for the Canvas's picture).
    *
    * The ack comes first, always, and before the throttle rather than after it.
    * Chrome paints nothing more until the frame it sent is acknowledged, so a
@@ -1069,7 +1185,7 @@ export class BrowserCommands implements Executor {
    */
   #offer(cast: Screencast, frame: ScreencastFrame): void {
     this.#ack(cast, frame.sessionId);
-    const wait = cast.lastSentAt + MIN_FRAME_MS - this.#now();
+    const wait = cast.lastSentAt + cast.interval - this.#now();
     if (wait <= 0) { this.#emit(cast, frame); return; }
     cast.pending = frame;
     if (cast.timer) return;
@@ -1083,7 +1199,8 @@ export class BrowserCommands implements Executor {
 
   #emit(cast: Screencast, frame: ScreencastFrame): void {
     cast.lastSentAt = this.#now();
-    this.#onFrame({ type: 'frame', session: cast.session, data: frame.data, metadata: frame.metadata, sessionId: frame.sessionId });
+    const url = cast.url && /^https?:/i.test(cast.url) ? cast.url.slice(0, 2048) : undefined;
+    this.#onFrame({ type: 'frame', session: cast.session, data: frame.data, metadata: frame.metadata, sessionId: frame.sessionId, ...(url ? { url } : {}) });
   }
 
   #ack(cast: Screencast, sessionId: string | number): void {
@@ -1093,19 +1210,26 @@ export class BrowserCommands implements Executor {
   /**
    * A pointer or a key from the owner's hand.
    *
-   * Only while a screencast is running for that session: input with nothing
-   * painting it is an agent reaching for coordinates, which this backend does
-   * not do. The tab is the screencast's, not the session's active one, so a
-   * click cannot land somewhere the owner is not looking at.
+   * Only while the owner's own screencast is running for that session: input
+   * with nothing painting it is an agent reaching for coordinates, which this
+   * backend does not do, and the Canvas's watching picture is not a hand. The
+   * tab is the screencast's, not the session's active one, so a click cannot
+   * land somewhere the owner is not looking at.
    */
   async #input(command: Command, cancel: Cancellation): Promise<CommandResult> {
     const cast = this.#casts.get(command.session);
-    if (!cast) throw new PreconditionError(NO_CAST);
+    if (!cast || cast.mode !== 'hand') throw new PreconditionError(NO_CAST);
     const session = await this.#session(command.session);
     const tab = await this.#chrome.tabs.get(cast.tabId).catch(() => undefined);
     if (!tab) { await this.#stopScreencast(command.session); throw new PreconditionError('That tab is gone. Observe again to continue in a new one.'); }
     if (this.#taken(session, tab)) { await this.#stopScreencast(command.session); throw new PreconditionError(TAKEN); }
     await this.#background(tab, command);
+    if (str(command.args, 'kind') === 'nav') {
+      cancel.check();
+      cancel.dispatch();
+      await this.#nav(cast.tabId, command.args);
+      return {};
+    }
     const event = inputEvent(command.args);
     cancel.check();
     cancel.dispatch();
@@ -1114,6 +1238,80 @@ export class BrowserCommands implements Executor {
     // typing into, so nothing here refreshes it; `resume` is what makes the
     // agent look again.
     return {};
+  }
+
+  /**
+   * The window's own buttons while the owner holds the page from the
+   * dashboard: back, forward, reload, or an address they typed (http and
+   * https only; buddi checked it against the allowed sites before it came).
+   */
+  async #nav(tabId: number, args: Record<string, unknown>): Promise<void> {
+    const action = str(args, 'action');
+    if (action === 'reload') { await this.#send(tabId, 'Page.reload', {}); return; }
+    if (action === 'back' || action === 'forward') {
+      const history = await this.#send(tabId, 'Page.getNavigationHistory') as { currentIndex?: number; entries?: Array<{ id: number }> } | undefined;
+      const index = (history?.currentIndex ?? 0) + (action === 'back' ? -1 : 1);
+      const entry = history?.entries?.[index];
+      if (!entry) return; // Nothing that way: the button does what Chrome's would, nothing.
+      await this.#send(tabId, 'Page.navigateToHistoryEntry', { entryId: entry.id });
+      return;
+    }
+    if (action === 'navigate') {
+      const url = checkUrl(str(args, 'url') ?? '');
+      await this.#send(tabId, 'Page.navigate', { url });
+      return;
+    }
+    throw new PreconditionError('That is not a button this window has.');
+  }
+
+  /**
+   * The owner's Cmd/Ctrl+C on the page they hold: the page's selection, or
+   * the selected part of the focused field, read with `Runtime.evaluate` in
+   * the page's own world. A password field is never read; its selection is
+   * nothing. The text goes back to buddi as the answer and is kept by nothing.
+   */
+  async #copy(session: string): Promise<CommandResult> {
+    const cast = this.#casts.get(session);
+    if (!cast || cast.mode !== 'hand') throw new PreconditionError(NO_CAST);
+    const answer = await this.#send(cast.tabId, 'Runtime.evaluate', { expression: SELECTION_SOURCE, returnByValue: true }).catch(() => undefined) as { result?: { value?: unknown } } | undefined;
+    const value = answer?.result?.value;
+    const text = typeof value === 'string' ? value.slice(0, MAX_COPY) : '';
+    // The text rides the observation passthrough, the one field the gateway relays untouched.
+    return { observation: { copied: text } as unknown as Observation };
+  }
+
+  /**
+   * Capture, for the owner's Files: the tab's viewport as a PNG, at its own
+   * size, with every password field painted over first and uncovered after.
+   * Whoever holds the page; not one of the agent's steps, and nothing about it
+   * is evidence.
+   */
+  async #capture(sessionName: string, cancel: Cancellation): Promise<CommandResult> {
+    const session = await this.#session(sessionName);
+    const cast = this.#casts.get(sessionName);
+    const tabId = cast?.tabId ?? (await this.#ownTab(session, this.#activeKey(session))).id!;
+    const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
+    if (!tab) throw new PreconditionError('That tab is gone.');
+    this.#liveUrl(tab);
+    cancel.check();
+    await this.#chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: maskPasswords, args: [true] }).catch(() => undefined);
+    try {
+      const png = await this.#withDebugger(tabId, async (send) => {
+        // A tab in the background paints only with focus emulated, as for the screencast.
+        await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined);
+        try {
+          const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }) as { data?: string } | undefined;
+          return shot?.data ?? null;
+        } finally {
+          if (!this.#castsByTab.has(tabId)) await send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
+        }
+      });
+      if (!png) throw new Error('Chrome did not hand over a picture of that tab.');
+      // The page's title and address name the file; they ride the observation passthrough.
+      return { screenshot: png, observation: { url: tab.url ?? '', title: tab.title ?? '' } as unknown as Observation };
+    } finally {
+      await this.#chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: maskPasswords, args: [false] }).catch(() => undefined);
+    }
   }
 
   async #click(command: Command, cancel: Cancellation): Promise<CommandResult> {
@@ -1282,7 +1480,34 @@ export class BrowserCommands implements Executor {
   }
 }
 
+/**
+ * What `copy` evaluates in the page: the selection, or the selected part of
+ * the focused field, never a password field. A string, because
+ * `Runtime.evaluate` takes one; it closes over nothing.
+ */
+export const SELECTION_SOURCE = `(() => {
+  const active = document.activeElement;
+  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+    if (active.tagName === 'INPUT' && String(active.type).toLowerCase() === 'password') return '';
+    const start = active.selectionStart, end = active.selectionEnd;
+    if (typeof start === 'number' && typeof end === 'number' && end > start) return String(active.value).slice(start, end).slice(0, ${MAX_COPY});
+  }
+  const selection = window.getSelection();
+  return selection ? String(selection).slice(0, ${MAX_COPY}) : '';
+})()`;
+
 /* ---- the functions below run in the page, never in the worker ---- */
+
+/** Paint over every password field for a capture (true), and take the paint off again (false). */
+function maskPasswords(on: boolean): void {
+  const id = 'buddi-capture-mask';
+  document.getElementById(id)?.remove();
+  if (!on) return;
+  const style = document.createElement('style');
+  style.id = id;
+  style.textContent = 'input[type=password]{background:#c3d0e3 !important;color:transparent !important;-webkit-text-fill-color:transparent !important;text-shadow:none !important;caret-color:transparent !important;}';
+  (document.head ?? document.documentElement).appendChild(style);
+}
 
 /*
  * `chrome.scripting.executeScript` serializes these, so they may not close over

@@ -1,24 +1,22 @@
 /*
- * The service worker: one socket to one buddi, for as long as Chrome runs.
+ * The service worker: one link (link.ts) per buddi the owner has switched on,
+ * for as long as Chrome runs.
  *
- * A Manifest V3 worker is killed when it goes idle, but WebSocket traffic
- * counts as activity, so the gateway's 20-second ping is what keeps this alive
- * as well as what proves the link. When the worker is killed anyway (Chrome
- * restarts, the machine sleeps), `onStartup` and the popup both bring it back,
- * and the reconnect loop backs off to at most 30 seconds so a buddi that is
- * simply not running costs nothing.
- *
- * Tabs are deliberately not cleaned up when the socket drops. They are the
- * owner's browser, and an agent losing its connection is not a reason for the
- * window to change under their hands.
+ * The list lives in `chrome.storage.local` (pairings.ts); this file keeps the
+ * links in step with it, answers the popup, routes a message from a tab to the
+ * one buddi whose tab it is, and answers the dashboard's one question.
  */
 
-import { BrowserCommands } from './commands.js';
-import { AgentDownloads, DOWNLOADS_PERMISSION, type DownloadsApi } from './downloads.js';
+import { DOWNLOADS_PERMISSION, type DownloadsApi } from './downloads.js';
 import { GIVE_BACK_MESSAGE, LOGIN_MESSAGE, LOGIN_PENDING_MESSAGE, LOGIN_SEEN_MESSAGE } from './bar.js';
 import type { WorkerChrome } from './chrome.js';
 import { handleExternal, type ExtensionStatus } from './external.js';
-import { Protocol, type ClientState } from './protocol.js';
+import { Link, safely } from './link.js';
+import { DEFAULT_GATEWAY, GroupRegistry, PairingStore, displayName, sameBuddi, type Colour, type Pairing } from './pairings.js';
+import type { ClientState } from './protocol.js';
+
+export { DEFAULT_GATEWAY };
+export { KEEPALIVE_MS, socketUrl } from './link.js';
 
 declare const chrome: WorkerChrome & {
   /** Present only once the owner granted the optional permission. */
@@ -37,220 +35,107 @@ declare const chrome: WorkerChrome & {
   };
 };
 
-export const DEFAULT_GATEWAY = 'http://127.0.0.1:4317';
-const GATEWAY_KEY = 'gateway';
-const MAX_BACKOFF = 30_000;
-/** How long a knock waits for buddi before the socket is left alone this round. */
-const KNOCK_MS = 3000;
-/** Three missed pings and the gateway is gone; reconnecting is cheap. */
-const SILENCE = 70_000;
-/**
- * Chrome stops a Manifest V3 worker after thirty seconds without an event,
- * an open WebSocket or not; only traffic on the socket counts as one. The
- * gateway pings a paired socket every twenty seconds, but a socket waiting for
- * its code heard nothing from an older gateway, and the worker died half a
- * minute into pairing with the code still on the popup. So the worker speaks
- * first, every twenty seconds, whatever state the socket is in. The gateway
- * ignores the frame.
- */
-export const KEEPALIVE_MS = 20_000;
+/** One buddi as the popup draws it. */
+export interface PairingView {
+  id: string;
+  origin: string;
+  /** Its own name, or its address while it said none. */
+  name: string;
+  colour: Colour;
+  enabled: boolean;
+  state: ClientState;
+  /** Tabs it is working in, while connected. */
+  tabs: number | null;
+}
 
-/** Loopback only. This extension talks to a buddi on this machine, never to a host on the internet. */
-export function socketUrl(address: string): string {
-  const parsed = new URL(address);
-  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsed.hostname)) throw new Error('A buddi address has to be on this machine.');
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('A buddi address starts with http.');
-  return `${parsed.protocol === 'https:' ? 'wss' : 'ws'}://${parsed.host}/api/extension/socket`;
+const store = new PairingStore(chrome.storage.local);
+const groups = new GroupRegistry();
+const links = new Map<string, Link>();
+/** The entries as last read, so a group's title and colour are known without a storage read. */
+let entries: Pairing[] = [];
+/** A loopback dashboard this browser has no pairing for asked about itself: the popup offers its address. */
+let asked: string | null = null;
+
+const version = chrome.runtime.getManifest().version;
+
+function entryOf(id: string): Pairing | undefined { return entries.find((entry) => entry.id === id); }
+
+function pushState(): void {
+  // The popup may not be open; nobody is listening then, and that is fine.
+  safely(() => chrome.runtime.sendMessage({ type: 'buddi-state' }).catch(() => undefined));
+}
+
+function linkFor(entry: Pairing): Link {
+  const link = new Link({
+    chrome, id: entry.id, origin: entry.origin, store, groups, version,
+    title: () => { const current = entryOf(entry.id); return current ? displayName(current, entries) : 'buddi'; },
+    colour: () => entryOf(entry.id)?.colour,
+    onState: () => pushState(),
+    onName: (id, name) => safely(async () => { await store.update(id, { name }); entries = await store.list(); pushState(); }),
+  });
+  if (chrome.downloads) link.attachDownloads(chrome.downloads);
+  return link;
 }
 
 /**
- * Nothing that escapes a promise may reach Chrome as an unhandled rejection:
- * the worker logs one line and carries on, because a background task that
- * failed is not a reason to lose the socket.
+ * Bring the links in step with the list: a link for every buddi switched on,
+ * none for one switched off or removed. Connecting is idempotent, so this is
+ * also what the alarm and a wake-up call.
  */
-const LOST = 'buddi: a background task did not finish.';
-function safely(work: () => unknown): void {
-  try {
-    void Promise.resolve(work()).catch(() => console.warn(LOST));
-  } catch { console.warn(LOST); }
-}
-
-let socket: WebSocket | undefined;
-
-/**
- * Frames the handshake cannot do without.
- *
- * A pong or a screencast frame that missed its socket is stale by the time the
- * next one opens, and sending it at a gateway that never asked is worse than
- * dropping it. A `hello`, an `auth` or a `result` is one half of a conversation
- * the other end is waiting on, so it waits for the socket instead.
- */
-const DURABLE = new Set(['hello', 'auth', 'result']);
-/** Text frames waiting for the socket that is still connecting; discarded if it never opens. */
-let pending: string[] = [];
-
-const frameType = (frame: unknown): string =>
-  frame && typeof frame === 'object' ? String((frame as { type?: unknown }).type ?? '') : '';
-
-/**
- * One way out for everything this worker says, so a frame and a result travel
- * the same socket.
- *
- * A socket that is still CONNECTING throws on `send`, and the worker reconnects
- * often enough — an alarm, a pong, a screencast that outlived the last socket —
- * that something always arrives early. So this is the only place that decides:
- * send it, queue it, or let it go.
- */
-export const send = (frame: unknown): void => {
-  const live = socket;
-  const text = JSON.stringify(frame);
-  if (live && live.readyState === WebSocket.OPEN) {
-    try { live.send(text); } catch { /* The socket died between the check and the send. */ }
-    return;
+export async function sync(): Promise<void> {
+  entries = await store.list();
+  for (const [id, link] of links) {
+    const entry = entryOf(id);
+    if (!entry || !entry.enabled || !sameBuddi(entry.origin, link.origin)) {
+      link.dispose();
+      links.delete(id);
+      if (!entry) groups.release(id);
+    }
   }
-  if (live && live.readyState === WebSocket.CONNECTING && DURABLE.has(frameType(frame))) pending.push(text);
-};
-
-/** Everything that waited for this socket, in the order it was said. */
-function flush(open: WebSocket): void {
-  const queued = pending;
-  pending = [];
-  for (const text of queued) {
-    if (open.readyState !== WebSocket.OPEN) return;
-    try { open.send(text); } catch { return; }
+  for (const entry of entries) {
+    if (!entry.enabled) continue;
+    let link = links.get(entry.id);
+    if (!link) { link = linkFor(entry); links.set(entry.id, link); }
+    await link.connect();
   }
 }
 
-// Screencast frames are not answers to anything: they arrive while the owner
-// is driving and go straight out, outside the command/result pairing.
-/*
- * Agents' downloads: watched only once the owner allowed the optional
- * `downloads` permission (the popup's Allow downloads), and only for what an
- * agent's command started (downloads.ts). A finished one goes to buddi as a
- * frame; it is a report, not an answer, so a socket that is not open drops it.
- */
-const downloads = new AgentDownloads({ send });
-const attachDownloads = (): void => { if (chrome.downloads) downloads.attach(chrome.downloads); };
-attachDownloads();
-chrome.permissions?.onAdded?.addListener((added) => { if (added.permissions?.includes(DOWNLOADS_PERMISSION)) attachDownloads(); });
-const commands = new BrowserCommands(chrome, { onFrame: send, onEvent: send, onLogin: send, downloads });
-let attempt = 0;
-let timer: ReturnType<typeof setTimeout> | undefined;
-let silence: ReturnType<typeof setTimeout> | undefined;
-let keepalive: ReturnType<typeof setInterval> | undefined;
-let last: ClientState = { connection: 'offline', code: null, installation: null, error: null };
-/** The tail of the frame queue: every frame waits for the one before it. */
-let incoming: Promise<void> = Promise.resolve();
+/** What the popup draws: every buddi, in the order they were added. */
+export async function views(): Promise<PairingView[]> {
+  entries = await store.list();
+  const out: PairingView[] = [];
+  for (const entry of entries) {
+    const link = links.get(entry.id);
+    const state = link?.state() ?? { connection: 'offline' as const, code: null, installation: null, error: null };
+    out.push({ id: entry.id, origin: entry.origin, name: displayName(entry, entries), colour: entry.colour, enabled: entry.enabled, state,
+      tabs: link && state.connection === 'paired' ? await link.commands.tabCount().catch(() => null) : null });
+  }
+  return out;
+}
 
-const protocol = new Protocol({
-  chrome,
-  version: chrome.runtime.getManifest().version,
-  send,
-  execute: (command, cancel) => commands.run(command, cancel),
-  // The socket ended: sessions and refs go with it. The tabs do not.
-  onReset: () => commands.reset(),
-  onLoginAck: (id, answer) => commands.logins.ack(id, answer),
-  onState: (state) => {
-    last = state;
-    // The popup may not be open; nobody is listening then, and that is fine.
-    safely(() => chrome.runtime.sendMessage({ type: 'buddi-state', state }).catch(() => undefined));
-  },
-  disconnect: () => socket?.close(),
+/** The first link, for the frames and messages that predate several buddis. */
+function firstLink(): Link | undefined { return links.values().next().value; }
+
+chrome.permissions?.onAdded?.addListener((added) => {
+  if (added.permissions?.includes(DOWNLOADS_PERMISSION) && chrome.downloads) for (const link of links.values()) link.attachDownloads(chrome.downloads);
 });
 
-async function gateway(): Promise<string> {
-  const stored = await chrome.storage.local.get([GATEWAY_KEY]);
-  const address = stored[GATEWAY_KEY];
-  return typeof address === 'string' && address ? address : DEFAULT_GATEWAY;
-}
-
-function quiet(): void {
-  if (silence) clearTimeout(silence);
-  silence = setTimeout(() => socket?.close(), SILENCE);
-}
-
-export async function connect(): Promise<void> {
-  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
-  if (timer) { clearTimeout(timer); timer = undefined; }
-  // The last socket is gone. A screencast it left running would paint frames at
-  // a socket that never asked for them, and whatever it queued was for a
-  // conversation that ended, so both stop here rather than on the new socket.
-  socket = undefined;
-  pending = [];
-  commands.reset();
-  let url: string;
-  try { url = socketUrl(await gateway()); }
-  catch (error) { protocol.closed(error instanceof Error ? error.message : String(error)); return; }
-  /*
-   * On a reconnect, knock first. A refused WebSocket is logged by Chrome as
-   * an extension error every time, and a buddi that is restarting or off
-   * would fill that page with them; a refused fetch is not logged. The first
-   * connect (and the owner's Connect click) still opens the socket at once.
-   */
-  if (attempt > 0 && !(await answering(url))) {
-    protocol.closed('buddi did not answer at this address. Is it running?');
-    schedule();
-    return;
-  }
-  const opening = new WebSocket(url);
-  socket = opening;
-  opening.addEventListener('open', () => {
-    attempt = 0; quiet(); flush(opening);
-    if (keepalive) clearInterval(keepalive);
-    keepalive = setInterval(() => { if (socket === opening) send({ type: 'keepalive' }); }, KEEPALIVE_MS);
-    safely(() => protocol.open());
-  });
-  // One frame at a time, in the order they arrived. A WebSocket delivers them
-  // in order and the protocol is written as if they were handled that way: a
-  // command that follows `paired` must not overtake it, and two commands must
-  // not interleave their dispatches in the owner's browser.
-  opening.addEventListener('message', (event) => {
-    quiet();
-    const text = String(event.data);
-    incoming = incoming.then(() => protocol.receive(text)).catch(() => { console.warn(LOST); });
-  });
-  // A socket that errors before it opens takes everything queued for it with
-  // it: the gateway never heard the hello those frames belonged to.
-  opening.addEventListener('error', () => { if (socket === opening) pending = []; });
-  opening.addEventListener('close', () => {
-    if (socket === opening) { socket = undefined; pending = []; if (keepalive) { clearInterval(keepalive); keepalive = undefined; } }
-    if (silence) { clearTimeout(silence); silence = undefined; }
-    protocol.closed('buddi did not answer at this address. Is it running?');
-    schedule();
-  });
-}
-
-/** Does anything answer on buddi's HTTP side? Any status counts; only no answer at all is a no. */
-async function answering(socket: string): Promise<boolean> {
-  let http: URL;
-  try {
-    http = new URL(socket);
-    http.protocol = http.protocol === 'wss:' ? 'https:' : 'http:';
-    http.pathname = '/api/version';
-    http.search = '';
-  } catch { return false; }
-  try {
-    await fetch(http.toString(), { method: 'GET', cache: 'no-store', signal: AbortSignal.timeout(KNOCK_MS) });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function schedule(): void {
-  if (timer) return;
-  const wait = Math.min(MAX_BACKOFF, 1000 * 2 ** Math.min(attempt, 5));
-  attempt += 1;
-  timer = setTimeout(() => { timer = undefined; safely(() => connect()); }, wait);
+/** Which link holds this session: the one whose tab the owner holds, else any that knows it. */
+function holders(session: string): Link[] {
+  const holding = [...links.values()].filter((link) => link.commands.heldTab(session) !== undefined);
+  return holding.length > 0 ? holding : [...links.values()];
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  const request = message as { type?: string; gateway?: string; session?: string } | null;
+  const request = message as { type?: string; gateway?: string; session?: string; id?: string; enabled?: boolean } | null;
   if (!request || typeof request.type !== 'string') return;
   // Give it back, from the bar in a tab the owner holds: only for the session holding that very tab.
   if (request.type === GIVE_BACK_MESSAGE) {
     const tabId = (sender as { tab?: { id?: number } } | undefined)?.tab?.id;
-    if (typeof request.session === 'string') safely(() => commands.giveBack(request.session!, tabId).then(() => undefined));
+    const session = request.session;
+    // The buddi holding that tab hears it; a worker restarted since (and so holding nothing) passes it on to
+    // every buddi, and only the one whose session it is resumes anything.
+    if (typeof session === 'string') safely(async () => { for (const link of holders(session)) await link.commands.giveBack(session, tabId); });
     return;
   }
   /*
@@ -258,53 +143,87 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
    * until the owner answers or two minutes pass — the form's navigation takes
    * the page away), a new page asking whether a question still waits, and the
    * answer. Only from the tab that session holds, with the origin Chrome
-   * reported when the pair was seen; Save goes to buddi on this worker's
-   * authenticated socket and the page hears what became of it. Never logged.
+   * reported when the pair was seen; Save goes to the buddi holding that tab,
+   * on its authenticated socket, and the page hears what became of it. Never
+   * logged.
    */
   if (request.type === LOGIN_MESSAGE || request.type === LOGIN_SEEN_MESSAGE || request.type === LOGIN_PENDING_MESSAGE) {
-    const reply = commands.loginMessage(message, sender as { tab?: { id?: number }; url?: string } | undefined);
+    const from = sender as { tab?: { id?: number }; url?: string } | undefined;
+    let reply: Promise<unknown> | undefined;
+    for (const link of links.values()) { reply = link.commands.loginMessage(message, from); if (reply) break; }
     if (!reply) { respond(null); return; }
-    safely(() => reply.then((answer) => respond(answer), () => respond(null)));
+    safely(() => reply!.then((answer) => respond(answer), () => respond(null)));
     return true;
   }
-  if (request.type === 'buddi-get-state') { respond({ state: last }); return; }
-  if (request.type === 'buddi-connect') {
+  if (request.type === 'buddi-get-state') {
+    safely(async () => respond({ pairings: await views(), asked }));
+    return true;
+  }
+  // Add a buddi (or Connect, from a popup older than the list): the entry, then its link, then the list.
+  if (request.type === 'buddi-add' || request.type === 'buddi-connect') {
     safely(async () => {
-      if (request.gateway) {
-        try { socketUrl(request.gateway); } catch (error) { respond({ error: error instanceof Error ? error.message : String(error) }); return; }
-        await chrome.storage.local.set({ [GATEWAY_KEY]: request.gateway });
-      }
-      attempt = 0;
-      socket?.close();
-      await connect();
-      respond({ state: last });
+      let entry: Pairing;
+      const before = new Set(links.keys());
+      try { entry = await store.add(request.gateway?.trim() || DEFAULT_GATEWAY); }
+      catch (error) { respond({ error: error instanceof Error ? error.message : String(error) }); return; }
+      if (asked && sameBuddi(asked, entry.origin)) asked = null;
+      await sync();
+      // A buddi that was already on and is waiting out its backoff: try it now. A new one has just connected.
+      if (before.has(entry.id)) await links.get(entry.id)?.retry();
+      respond({ pairings: await views(), added: entry.id });
     });
     return true;
   }
-  if (request.type === 'buddi-forget') {
-    safely(() => protocol.forget().then(() => respond({ state: last })));
+  if (request.type === 'buddi-enable' && typeof request.id === 'string') {
+    safely(async () => { await store.update(request.id!, { enabled: request.enabled !== false }); await sync(); respond({ pairings: await views() }); });
     return true;
   }
-  if (request.type === 'buddi-gateway') { safely(() => gateway().then((address) => respond({ gateway: address }))); return true; }
+  if (request.type === 'buddi-retry' && typeof request.id === 'string') {
+    safely(async () => { await links.get(request.id!)?.retry(); respond({ pairings: await views() }); });
+    return true;
+  }
+  // Pair this one again from a fresh code: its token goes, the entry stays.
+  if (request.type === 'buddi-forget') {
+    safely(async () => {
+      const link = typeof request.id === 'string' ? links.get(request.id) : firstLink();
+      await link?.forget();
+      respond({ pairings: await views() });
+    });
+    return true;
+  }
+  // Remove it from this browser: its link, its entry and its token go; its tabs stay, they are the owner's.
+  if (request.type === 'buddi-remove' && typeof request.id === 'string') {
+    safely(async () => { await store.remove(request.id!); await sync(); respond({ pairings: await views() }); });
+    return true;
+  }
   return;
 });
 
 /*
- * The dashboard asking whether this browser has the extension in it.
+ * The dashboard asking whether this browser has the extension in it, and how
+ * it stands with that buddi.
  *
  * It cannot find out any other way, and an owner who has to be told to look in
  * the popup for a code the page could have filled in for them is an owner
- * doing the computer's work. `handleExternal` decides; this only hands it the
- * three things it needs and Chrome's own `sender`.
+ * doing the computer's work. `handleExternal` decides; this only hands it what
+ * it needs and Chrome's own `sender`.
  */
 chrome.runtime.onMessageExternal.addListener((message, sender, respond) =>
-  handleExternal(message, { origin: sender.origin, state: () => last, gateway, version: chrome.runtime.getManifest().version }, respond));
+  handleExternal(message, {
+    origin: sender.origin, version,
+    known: async () => {
+      entries = await store.list().catch(() => entries);
+      return entries.map((entry) => ({ origin: entry.origin, name: displayName(entry, entries), enabled: entry.enabled,
+        state: links.get(entry.id)?.state() ?? { connection: 'offline' as const, code: null, installation: null, error: null } }));
+    },
+    unknown: (origin) => { asked = origin; },
+  }, respond));
 
-chrome.runtime.onInstalled.addListener(() => safely(() => connect()));
-chrome.runtime.onStartup.addListener(() => safely(() => connect()));
+chrome.runtime.onInstalled.addListener(() => safely(() => sync()));
+chrome.runtime.onStartup.addListener(() => safely(() => sync()));
 
 /*
- * The backoff timer lives in the worker, and an idle worker is evicted, which
+ * The backoff timers live in the worker, and an idle worker is evicted, which
  * would leave a browser that never reconnects until the owner opened the popup.
  * An alarm outlives the worker: it wakes it up once a minute, and `connect`
  * returns immediately when a socket is already open, so a connected browser
@@ -312,6 +231,6 @@ chrome.runtime.onStartup.addListener(() => safely(() => connect()));
  */
 const RECONNECT_ALARM = 'buddi-reconnect';
 chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === RECONNECT_ALARM) safely(() => connect()); });
+chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === RECONNECT_ALARM) safely(() => sync()); });
 
-safely(() => connect());
+safely(() => sync());

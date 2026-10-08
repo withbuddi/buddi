@@ -6,57 +6,74 @@
     <title>buddi</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
-  <body data-view="address">
+  <body>
     <header class="head">
       <img class="blob" src="blob.png" alt="" width="28" height="28" />
       <span class="wordmark">buddi</span>
       <span class="pill" id="pill" data-tone="idle" role="status">Not connected</span>
     </header>
 
-    <!-- Not connected, and Connecting: the address of the buddi to pair with. -->
-    <section class="view" id="view-address" data-view="address">
+    <!-- Every buddi this browser knows, one row each: its name, its address, how it stands, and its switch. -->
+    <ul class="buddis" id="buddis" aria-label="Your buddis"></ul>
+
+    <!-- Add a buddi: the address of another buddi on this machine. -->
+    <section class="add" id="add" hidden>
       <div class="field-group">
-        <label class="label" for="gateway">Your buddi</label>
+        <label class="label" for="gateway">Address of the buddi to add</label>
         <input class="field" id="gateway" type="url" value="http://127.0.0.1:4317" placeholder="http://127.0.0.1:4317" spellcheck="false" autocomplete="off" />
-        <p class="hint" id="hint">The address of the buddi running on this machine.</p>
+        <p class="hint" id="hint">A buddi running on this machine. Each buddi you add gets its own tab group.</p>
       </div>
       <p class="notice" id="notice" data-tone="critical" role="alert" hidden></p>
-      <p class="quiet" id="asking" hidden>Asking your buddi for a code…</p>
-      <div class="actions" id="address-actions">
+      <div class="actions">
+        <button class="btn" data-variant="ghost" id="add-cancel" type="button">Cancel</button>
         <button class="btn" data-variant="accent" id="connect" type="button">Connect</button>
       </div>
     </section>
 
-    <!-- Pairing: the six digits to type into buddi. -->
-    <section class="view" id="view-pairing" data-view="pairing" hidden>
-      <div class="code-tile">
-        <p class="code" id="code" aria-label="Pairing code"></p>
-        <button class="btn" data-size="sm" id="copy" type="button">Copy</button>
-      </div>
-      <p class="hint">Type it into buddi under Settings → Browser&nbsp;&amp;&nbsp;apps, within five minutes. Open buddi settings may open buddi.app: if Chrome asks, allow it.</p>
-      <div class="actions actions-split">
-        <button class="link" id="not-this" type="button">Not this buddi</button>
-        <button class="btn" id="open-settings" type="button">Open buddi settings</button>
-      </div>
-    </section>
-
-    <!-- Connected: which buddi, and what it is doing here. -->
-    <section class="view" id="view-paired" data-view="paired" hidden>
-      <div class="facts">
-        <p class="fact" id="paired-to"></p>
-        <p class="quiet" id="working">Nothing open right now.</p>
-      </div>
+    <footer class="foot">
       <div class="facts" id="downloads-box" hidden>
         <p class="quiet" id="downloads-note">Let agents hand buddi the files they download in your Chrome, like a bank statement. Only downloads an agent's click starts are read; yours are never touched.</p>
       </div>
       <div class="actions">
-        <button class="btn" id="allow-downloads" type="button" hidden>Allow downloads</button>
-        <button class="btn" id="open-buddi" type="button">Open buddi</button>
+        <button class="btn" data-size="sm" id="allow-downloads" type="button" hidden>Allow downloads</button>
+        <button class="btn" data-size="sm" id="add-open" type="button">Add a buddi</button>
       </div>
-      <footer class="foot">
-        <button class="link" id="forget" type="button">Forget this buddi</button>
-      </footer>
-    </section>
+    </footer>
+
+    <!-- One buddi. Filled with textContent only: names and codes come from a socket. -->
+    <template id="buddi-row">
+      <li class="buddi" data-state="offline">
+        <div class="buddi-head">
+          <span class="swatch" aria-hidden="true"></span>
+          <span class="buddi-who">
+            <span class="buddi-name"></span>
+            <span class="buddi-address"></span>
+          </span>
+          <span class="pill buddi-pill" data-tone="idle"></span>
+          <label class="switch">
+            <input class="buddi-switch" type="checkbox" role="switch" />
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="buddi-body">
+          <div class="code-tile buddi-pairing" hidden>
+            <p class="code" aria-label="Pairing code"></p>
+            <button class="btn buddi-copy" data-size="sm" type="button">Copy</button>
+          </div>
+          <p class="hint buddi-pairing-hint" hidden>Type it into this buddi under Settings → Browser&nbsp;&amp;&nbsp;apps, within five minutes. Open buddi settings may open buddi.app: if Chrome asks, allow it.</p>
+          <p class="quiet buddi-asking" hidden>Asking this buddi for a code…</p>
+          <p class="quiet buddi-working" hidden></p>
+          <p class="notice buddi-error" data-tone="critical" role="alert" hidden></p>
+          <div class="actions">
+            <button class="link buddi-remove" type="button">Remove</button>
+            <span class="actions-gap"></span>
+            <button class="btn buddi-retry" data-size="sm" type="button" hidden>Try again</button>
+            <button class="btn buddi-settings" data-size="sm" type="button" hidden>Open buddi settings</button>
+            <button class="btn buddi-open" data-size="sm" type="button" hidden>Open buddi</button>
+          </div>
+        </div>
+      </li>
+    </template>
 
     <script src="popup.js" type="module"></script>
   </body>

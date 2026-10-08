@@ -1,13 +1,14 @@
 /**
  * @vitest-environment jsdom
  *
- * The popup: copying the code, and the four states it can be in.
+ * The popup: copying a code, and the rows of the buddis it works for.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { APP_WAIT_MS, COPIED_FOR, SETTINGS_HASH, appSettingsLink, countBuddiTabs, dashboardUrl, openSettings, render, settingsWebUrl, triesApp, wireCopy, workingLine, type PopupModel } from './popup.js';
+import type { PairingView } from './background.js';
+import { APP_WAIT_MS, COPIED_FOR, SETTINGS_HASH, appSettingsLink, dashboardUrl, openSettings, render, rowView, settingsWebUrl, summary, triesApp, wireCopy, workingLine, type PopupModel } from './popup.js';
 import type { ClientState } from './protocol.js';
 
 let written: string[] = [];
@@ -58,125 +59,122 @@ describe('copying the pairing code', () => {
 });
 
 /*
- * The four states, drawn into the real popup.html. "Visible" means neither the
+ * The rows, drawn into the real popup.html. "Visible" means neither the
  * element nor anything around it is `hidden`, and the stylesheet makes
  * `[hidden]` win over every display rule, which is what let the old popup show
  * a placeholder code while it was already paired.
  */
-describe('the four states of the popup', () => {
+describe('the buddis in the popup, one row each', () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'static', 'popup.html'), 'utf8');
   const state = (over: Partial<ClientState> = {}): ClientState =>
     ({ connection: 'offline', code: null, installation: null, error: null, ...over });
+  const buddi = (over: Partial<PairingView> = {}): PairingView =>
+    ({ id: 'a', origin: 'http://127.0.0.1:4317', name: 'buddi', colour: 'blue', enabled: true, state: state(), tabs: null, ...over });
   const model = (over: Partial<PopupModel> = {}): PopupModel =>
-    ({ state: state(), gateway: 'http://127.0.0.1:4317', editing: false, tabs: null, refused: null, ...over });
+    ({ pairings: [buddi()], adding: false, asked: null, refused: null, ...over });
   const $ = (id: string) => document.getElementById(id)!;
-  const shown = (id: string) => $(id).closest('[hidden]') === null;
-  const views = () => [...document.querySelectorAll<HTMLElement>('.view')].filter((v) => !v.hidden).map((v) => v.dataset['view']);
+  const rows = () => [...document.querySelectorAll<HTMLElement>('#buddis .buddi')];
+  const shown = (element: Element | null) => !!element && element.closest('[hidden]') === null;
+  const inRow = (row: Element, name: string) => row.querySelector<HTMLElement>(`.${name}`)!;
 
   beforeEach(() => {
     document.documentElement.innerHTML = html.replace(/^<!doctype html>/i, '');
   });
 
   it('hides whatever carries the hidden attribute, whatever else styles it', () => {
-    expect(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'static', 'popup.css'), 'utf8'))
-      .toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/);
+    const css = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'static', 'popup.css'), 'utf8');
+    expect(css).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/);
   });
 
-  it('not connected: the address, prefilled, and Connect', () => {
-    render(model());
-    expect(views()).toEqual(['address']);
+  it('no buddi yet: Add a buddi is open on the default address, with nothing to cancel back to', () => {
+    render(model({ pairings: [] }), document);
+    expect(rows()).toHaveLength(0);
+    expect(shown($('add'))).toBe(true);
     expect(($('gateway') as HTMLInputElement).value).toBe('http://127.0.0.1:4317');
-    expect(($('gateway') as HTMLInputElement).disabled).toBe(false);
+    expect(shown($('add-cancel'))).toBe(false);
+    expect(shown($('add-open'))).toBe(false);
     expect($('pill').textContent).toBe('Not connected');
-    expect($('connect').textContent).toBe('Connect');
-    expect(shown('connect')).toBe(true);
-    expect(shown('notice')).toBe(false);
-    expect(shown('code')).toBe(false);
-    expect(shown('forget')).toBe(false);
   });
 
-  it('not connected after an error: the worker’s sentence, and Try again', () => {
-    render(model({ state: state({ error: 'Not connected to buddi.' }) }));
-    expect(shown('notice')).toBe(true);
-    expect($('notice').textContent).toBe('Not connected to buddi.');
+  it('not connected after an error: the worker’s sentence in that row, and Try again', () => {
+    render(model({ pairings: [buddi({ state: state({ error: 'buddi did not answer at this address. Is it running?' }) })] }), document);
+    const [row] = rows();
+    expect(inRow(row!, 'buddi-error').textContent).toMatch(/did not answer/);
+    expect(shown(inRow(row!, 'buddi-retry'))).toBe(true);
+    expect(inRow(row!, 'buddi-pill').dataset['tone']).toBe('bad');
     expect($('pill').dataset['tone']).toBe('bad');
-    expect($('connect').textContent).toBe('Try again');
-
-    render(model({ refused: 'A buddi address has to be on this machine.' }));
-    expect($('notice').textContent).toBe('A buddi address has to be on this machine.');
-    expect($('connect').textContent).toBe('Try again');
+    expect(shown($('add'))).toBe(false);
   });
 
-  it('connecting: the field is disabled and it says what it is waiting for', () => {
-    render(model({ state: state({ connection: 'connecting' }) }));
-    expect(views()).toEqual(['address']);
-    expect($('pill').textContent).toBe('Connecting…');
-    expect(($('gateway') as HTMLInputElement).disabled).toBe(true);
-    expect(shown('asking')).toBe(true);
-    expect($('asking').textContent).toBe('Asking your buddi for a code…');
-    expect(shown('connect')).toBe(false);
+  it('connecting: says what it waits for, and offers nothing to press but its switch', () => {
+    render(model({ pairings: [buddi({ state: state({ connection: 'connecting' }) })] }), document);
+    const [row] = rows();
+    expect(shown(inRow(row!, 'buddi-asking'))).toBe(true);
+    expect(shown(inRow(row!, 'buddi-retry'))).toBe(false);
+    expect(inRow(row!, 'buddi-pill').textContent).toBe('Connecting…');
   });
 
-  it('pairing: the code, grouped, with Copy and the way to the settings page', () => {
-    render(model({ state: state({ connection: 'pairing', code: '482913' }) }));
-    expect(views()).toEqual(['pairing']);
-    expect($('code').textContent).toBe('482 913');
-    expect(shown('copy')).toBe(true);
-    expect(shown('open-settings')).toBe(true);
-    expect(shown('gateway')).toBe(false);
-    expect(document.body.textContent).toMatch(/Settings → Browser\u00a0&\u00a0apps, within five minutes/);
-    expect(dashboardUrl('http://127.0.0.1:4317', SETTINGS_HASH)).toBe('http://127.0.0.1:4317/#/settings/computer');
+  it('pairing: that buddi’s code, grouped, with Copy and the way to its settings', () => {
+    render(model({ pairings: [buddi({ state: state({ connection: 'pairing', code: '482913' }) })] }), document);
+    const [row] = rows();
+    expect(inRow(row!, 'code').textContent).toBe('482 913');
+    expect(shown(inRow(row!, 'buddi-pairing'))).toBe(true);
+    expect(shown(inRow(row!, 'buddi-settings'))).toBe(true);
+    expect(shown(inRow(row!, 'buddi-open'))).toBe(false);
   });
 
-  it('pairing, then "Not this buddi": back to the address, the code gone', () => {
-    render(model({ state: state({ connection: 'pairing', code: '482 913' }), editing: true }));
-    expect(views()).toEqual(['address']);
-    expect($('code').textContent).toBe('');
-    expect(($('gateway') as HTMLInputElement).disabled).toBe(false);
+  it('two buddis: each its own row, name, address, colour and state; the head counts the connected ones', () => {
+    render(model({ pairings: [
+      buddi({ id: 'a', name: 'buddi', state: state({ connection: 'paired', installation: '127.0.0.1:4317' }), tabs: 2 }),
+      buddi({ id: 'b', origin: 'http://127.0.0.1:4327', name: 'buddi-dev', colour: 'purple', state: state({ connection: 'paired' }), tabs: 1 }),
+    ] }), document);
+    const [first, second] = rows();
+    expect(inRow(first!, 'buddi-name').textContent).toBe('buddi');
+    expect(inRow(second!, 'buddi-name').textContent).toBe('buddi-dev');
+    expect(inRow(second!, 'buddi-address').textContent).toBe('127.0.0.1:4327');
+    expect(second!.dataset['colour']).toBe('purple');
+    expect(inRow(first!, 'buddi-working').textContent).toBe('Working in 2 tabs');
+    expect(inRow(second!, 'buddi-working').textContent).toBe('Working in 1 tab');
+    expect(shown(inRow(first!, 'code'))).toBe(false);
+    expect($('pill').textContent).toBe('2 connected');
+    expect(shown($('add-open'))).toBe(true);
   });
 
-  it('connected: which buddi and what it is doing, and no code shown', () => {
-    render(model({ state: state({ connection: 'pairing', code: '482 913' }) }));
-    render(model({ state: state({ connection: 'paired', installation: '127.0.0.1:4317' }), tabs: 3 }));
-    expect(views()).toEqual(['paired']);
-    expect($('pill').textContent).toBe('Connected');
-    expect($('pill').dataset['tone']).toBe('good');
-    expect($('paired-to').textContent).toBe('Your buddi at 127.0.0.1:4317');
-    expect($('working').textContent).toBe('Working in 3 tabs');
-    expect(shown('open-buddi')).toBe(true);
-    expect(shown('forget')).toBe(true);
-    // No code, no placeholder, no Connect.
-    expect(shown('code')).toBe(false);
-    expect($('code').textContent).toBe('');
-    expect(document.body.textContent).not.toMatch(/\d{3} \d{3}/);
-    expect(shown('connect')).toBe(false);
-    expect(shown('gateway')).toBe(false);
+  it('switched off: the switch is off, the row says Off, and no code, error or button shows', () => {
+    render(model({ pairings: [buddi({ enabled: false, state: state({ error: 'stale' }) })] }), document);
+    const [row] = rows();
+    expect((row!.querySelector('.buddi-switch') as HTMLInputElement).checked).toBe(false);
+    expect(inRow(row!, 'buddi-pill').textContent).toBe('Off');
+    for (const part of ['buddi-error', 'buddi-retry', 'buddi-pairing', 'buddi-open', 'buddi-settings']) expect(shown(inRow(row!, part)), part).toBe(false);
+    // Remove is always there: it is how a buddi leaves this browser.
+    expect(shown(inRow(row!, 'buddi-remove'))).toBe(true);
   });
 
-  it('connected with nothing open, and named by its address when the buddi gave no name', () => {
-    render(model({ state: state({ connection: 'paired' }), gateway: 'http://localhost:4400', tabs: 0 }));
-    expect($('paired-to').textContent).toBe('Your buddi at localhost:4400');
-    expect($('working').textContent).toBe('Nothing open right now.');
-    expect(workingLine(1)).toBe('Working in 1 tab');
-    expect(workingLine(null)).toBe('Nothing open right now.');
+  it('keeps a row by its id across redraws, and drops the row of a buddi that went', () => {
+    render(model({ pairings: [buddi({ id: 'a' }), buddi({ id: 'b', origin: 'http://127.0.0.1:4327' })] }), document);
+    const kept = rows()[1];
+    render(model({ pairings: [buddi({ id: 'b', origin: 'http://127.0.0.1:4327' })] }), document);
+    expect(rows()).toEqual([kept]);
+  });
+
+  it('offers the address of a dashboard that asked to be added', () => {
+    render(model({ adding: true, asked: 'http://127.0.0.1:4327' }), document);
+    expect(shown($('add'))).toBe(true);
+    expect($('hint').textContent).toMatch(/127\.0\.0\.1:4327 asked to be added/);
   });
 
   it('writes what the gateway sends as text, never as markup', () => {
-    render(model({ state: state({ connection: 'paired', installation: '<img src=x onerror=alert(1)>' }) }));
-    expect($('paired-to').querySelector('img')).toBeNull();
-    expect($('paired-to').textContent).toContain('<img');
+    render(model({ pairings: [buddi({ name: '<img src=x onerror=alert(1)>', state: state({ connection: 'pairing', code: '<b>1</b>' }) })] }), document);
+    expect(document.querySelector('#buddis img, #buddis b')).toBeNull();
+    expect(inRow(rows()[0]!, 'buddi-name').textContent).toBe('<img src=x onerror=alert(1)>');
   });
 
-  it('counts the tabs in the buddi group, in every window', async () => {
-    const api = {
-      tabGroups: { query: vi.fn(async () => [{ id: 7, title: 'buddi' }]) },
-      tabs: { create: vi.fn(), query: vi.fn(async () => [{ groupId: 7 }, { groupId: 7 }, { groupId: -1 }, {}]) },
-    };
-    expect(await countBuddiTabs(api)).toBe(2);
-    api.tabGroups.query.mockResolvedValueOnce([]);
-    expect(await countBuddiTabs(api)).toBe(0);
-    api.tabGroups.query.mockRejectedValueOnce(new Error('no'));
-    expect(await countBuddiTabs(api)).toBeNull();
+  it('reads one state per row, never two', () => {
+    expect(rowView(buddi({ state: state({ connection: 'pairing', code: null }) }))).toBe('connecting');
+    expect(rowView(buddi({ enabled: false, state: state({ connection: 'paired' }) }))).toBe('off');
+    expect(summary([buddi({ state: state({ connection: 'pairing', code: '1' }) })])).toEqual({ word: 'Pairing', tone: 'waiting' });
+    expect(workingLine(0)).toBe('Nothing open right now.');
+    expect(dashboardUrl('http://127.0.0.1:4317', SETTINGS_HASH)).toBe('http://127.0.0.1:4317/#/settings/computer');
   });
 });
 

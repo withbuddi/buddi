@@ -1,7 +1,7 @@
 ---
 title: "The browser: one page, three routes"
 status: reference
-updated: 2026-10-03
+updated: 2026-10-07
 ---
 
 # The browser: one page, three routes
@@ -19,7 +19,7 @@ permissions, not a choice.
 | Route | When | Where it shows |
 | --- | --- | --- |
 | **Their own browser** (Playwright, buddi's profile) | Every page by default | The Canvas only: it runs headless, in the background |
-| **Your Chrome** (the buddi extension) | A site that needs your sign-in, when allowed and connected; or the agent reads the task as yours (`prefer: "yours"`: your cart, your orders) | Background tabs in the **buddi** tab group; the Canvas |
+| **Your Chrome** (the buddi extension) | A site that needs your sign-in, when allowed and connected; or the agent reads the task as yours (`prefer: "yours"`: your cart, your orders) | Background tabs in a tab group named after the buddi (**buddi**, **buddi-dev**); the Canvas, live |
 | **Your apps** (only with the [Computer plugin](https://github.com/withbuddi/buddi-plugins/tree/main/computer), macOS) | App jobs only ("open Numbers") | The app window; the Canvas |
 
 **The choice**, in order: an app job goes to your apps; a pin (below) narrows
@@ -69,15 +69,20 @@ seconds shows a thin bar in the tab: *buddi is working here · Take over · Let
 it continue*. **Let it continue** lets the agent act in view, in that tab;
 **Take over** is the Canvas button. Taking over is the only foreground moment.
 
-**Taking over a page in your Chrome** brings it forward where it is: the tab
-becomes the active one and its window comes to the front (a background tab
-cannot be captured, so there is no picture to stream). The take-over's status
-carries `held: { by: 'owner', where: 'chrome' }` and no hand; the bar in the
-tab says *buddi is waiting · Give it back*. **Give it back** there, or in the
-Canvas (`resume`), takes the bar down and lets the agent carry on in that tab
-although you are looking at it. Since the extension from 0.1.0-pre.39 (`hold`, `unhold`,
-and the `giveback` event); an older extension leaves the page paused and the
-status message says where it is.
+**Taking over a page in your Chrome** is the remote hand, as in buddi's own
+browser: the Canvas shows the tab live and your clicks and keys go into it,
+from wherever you are (see "The remote hand" below). The extension paints the
+background tab with focus emulated, so it does not have to come to the front.
+**Bring the tab to the front** in the take-over bar is the secondary action for
+when you are at the computer (`POST /api/browser/front`): the tab becomes the
+active one and its window comes to the front, the hand on the dashboard ends,
+the status carries `held: { by: 'owner', where: 'chrome' }`, and the bar in
+the tab says *buddi is waiting · Give it back*. **Give it back** there, or in
+the Canvas (`resume`), takes the bar down and lets the agent carry on in that
+tab although you are looking at it. Take over pressed in the tab's own bar
+(you are at the computer, looking at it) brings it to the front at once. An
+extension from before the live picture (it does not say `live` in its hello)
+is held in place on every take-over, as before.
 
 ## When you are asked: four cards
 
@@ -311,7 +316,9 @@ where health is red; no radio buttons.
   shows in that same browser and pairs by itself; from another browser you type
   the six digits once. Paired: a switch, *connected* or *Chrome closed*. When
   the extension in this browser has forgotten a pairing buddi still holds:
-  *Chrome forgot the pairing* with **Pair again**. ⋯ has Pair again, Install
+  *Chrome forgot the pairing* with **Pair again**. One extension can work for several
+  buddis: the line then says *paired with this buddi and 1 other*, and a buddi
+  switched off in the extension's popup reads *off in Chrome*. ⋯ has Pair again, Install
   unpacked… (a developer build) and Forget this Chrome… (asks once more).
 - **Your apps** — only with the Computer plugin: its health and fix (*Allow
   in macOS* opens the plugin's page), a switch, and **Settings ›** to the
@@ -349,8 +356,10 @@ a full-resolution PNG of the page's viewport, taken by the host browser itself
 Files as yours under the page's title and the time (*Your orders 2026-10-07
 14.32.png*) and filed with the conversation. *Saved to Files as …* with **Open
 in Files** follows. It is not one of the agent's steps and spends nothing of
-its evidence. `POST /api/browser/capture { sessionId }`; an app window, a page
-in your Chrome and a page that has closed answer 409 with the reason. An Enlarge button (and ⋯ → full
+its evidence. `POST /api/browser/capture { sessionId }`; in your Chrome the extension
+takes it with `Page.captureScreenshot`, password fields painted over first. An
+app window, a page that has closed and an extension from before the live
+picture answer 409 with the reason. An Enlarge button (and ⋯ → full
 page view) opens the same window over the whole dashboard; Esc brings it back.
 After a dashboard reload with a page in your hands, a desktop reattaches the
 hand by itself. No step list, counter, mode or observation time. While a Stop holds, a conversation that asked for a page
@@ -558,8 +567,14 @@ Setup, in the owner's words:
    always there until a Chrome is paired (that is how you pair from the
    buddi.app window). The extension and buddi keep the socket busy while the
    code waits, so the code stays good for its five minutes. Once
-   paired, the popup shows only which buddi it is connected to, how many tabs
-   it is working in, and **Forget this buddi**.
+   paired, that buddi's row in the popup shows how many tabs it is working
+   in, **Open buddi**, its switch and **Remove**.
+4. **Another buddi on this machine** (a checkout beside the release, say):
+   **Add a buddi** in the popup with its address, then the same code in that
+   buddi's Settings. Each buddi is its own row with its own pairing, tab
+   groups (named after it, in its colour) and switch; a tab belongs to exactly
+   one of them. An extension from before kept its one pairing as the first
+   row, switched on.
 
 The settings page finds the extension itself. Its manifest pins a public key,
 so its id is the same on every machine, and it accepts one message —
@@ -573,9 +588,13 @@ running buddi's, the page says so in one line and carries on. A Chrome Web
 Store install has its own id, `pbfpjefkiijjgefblpnlnlpmeaddfbah` (the store
 build carries no key); the page asks both ids, and the gateway pairs either. Each release attaches the store upload,
 `buddi-extension-<version>.zip`. It passes on the code while the extension is showing one,
-says so when the browser is already paired, and, when the extension is aimed at
-a different address than the dashboard is served from, says which and asks for
-it to be changed in the popup. The answer carries no token.
+says so when the browser is already paired, and answers for the buddi that asks
+(matched by the page's origin) with the list of every buddi it works for. The
+row then reads *paired with this buddi and 1 other*, *off in Chrome* when this
+buddi is switched off in the popup, and, when the extension has no pairing for
+this buddi, asks for **Add a buddi** in the popup, which offers this address.
+Only an extension from before several buddis is told to change its one address.
+The answer carries no token, and never another buddi's code.
 
 The extension keeps a token in `chrome.storage.local` and reconnects with it
 from then on. Buddi stores only a SHA-256 of that token, in
@@ -607,7 +626,8 @@ fails with a sentence rather than hanging, and the browser is told to abandon
 it. Nothing else is sent until it confirms it has, or ten seconds pass, so the
 next command never lands on a page nobody has seen.
 
-Tabs open in the background, in a tab group named **buddi**, one group per
+Tabs open in the background, in a tab group named after the buddi (its data
+folder's name: **buddi**, **buddi-dev**), in that buddi's colour, one group per
 conversation. `close` removes that group's tabs; a dropped socket leaves them
 open, because by then they are yours, and buddi forgets which tabs and refs were
 whose. Those tabs stay yours in the other direction too: drag one out of the
@@ -827,9 +847,14 @@ takes the same item. A browser without `ClipboardItem` writes the text once it
 arrives. Nothing selected leaves your clipboard as it was. The copied text is
 never logged.
 
-A page in your Chrome is not streamed: Take over brings its tab to the front
-of your Chrome instead (see "Work in view" above), and the status says so with
-`held`.
+A page in your Chrome is streamed the same way, through the extension (below):
+Take over asks for the hand exactly as for buddi's own browser, the bar reads
+*You have the page · in your Chrome*, and **Bring the tab to the front** sits
+before **Give it back** for when you are at the computer. Give it back follows
+the same rule (a turn only when an agent waited). The picture's level, Capture
+and copy and paste all work there; back, forward, reload and a typed address go
+through the extension's debugger, a typed address through the same
+allowed-sites check.
 
 **With no browser connected.** In "Your browser" mode with the extension
 offline (Chrome closed on the host), Take over still pauses the agent but there
@@ -943,7 +968,16 @@ leaves nothing to paint — the tab really did close — the Page tab says so at
 once instead of offering a live view that never draws its first frame.
 
 In "Your browser" the frames are Chrome's own `Page.startScreencast` through
-the extension's debugger, acked the moment they arrive — before the throttle,
+the extension's debugger, on the agent's tab with focus emulated
+(`Emulation.setFocusEmulationEnabled`: a background tab, or one in a minimised
+or covered window, is hidden to Chrome and paints nothing otherwise). While the
+agent works it paints two frames a second for the Page tab (the newest frame is
+what `/api/browser/screenshot` serves for that page); Take over restarts it on
+the same tab at the hand's quality, and giving it back returns it to watching.
+Each frame reaches buddi as one binary message in the layout above, with the
+session in the header (`frames.binary`, announced by the gateway in its
+handshake; an older gateway gets the JSON frame). Frames are acked the moment
+they arrive — before the throttle,
 because Chrome paints nothing more until a frame is acknowledged — and
 throttled to ten a second,
 and the input is `Input.dispatchMouseEvent`/`dispatchKeyEvent` on the session's
@@ -972,7 +1006,8 @@ agents to make conflicting changes to the same account at once. Popups inherit
 their opener's conversation; agents cannot enumerate or select another
 conversation's tabs. Unknown manual tabs are not automatically assigned.
 
-Snapshots update after agent actions, not as a live video feed. They show the
+In buddi's own browser, snapshots update after agent actions, not as a live
+video feed; in your Chrome the Page tab shows the live picture. They show the
 capture time, and password inputs are masked. The page text and latest screenshot
 are sent to the agent's configured model provider. Screenshot bytes are
 ephemeral, not base64 saved in the conversation database. Form tool arguments,

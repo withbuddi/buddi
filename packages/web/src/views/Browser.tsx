@@ -117,7 +117,7 @@ export function appsProvided(route: BrowserRouteStatus | undefined): boolean {
 
 /* ---------------- the page ---------------- */
 
-type ChromeState = 'none' | 'pair' | 'broken' | 'notrunning' | 'connected';
+type ChromeState = 'none' | 'pair' | 'broken' | 'notrunning' | 'off' | 'connected';
 
 /**
  * Which of the kit's Chrome states this is. `broken` is a pairing this buddi
@@ -129,8 +129,29 @@ export function chromeState(ext: ExtensionState | undefined, probe: ExtensionPro
   if (ext.pending) return 'pair';
   if (!ext.pairedAt) return probe && probe.state !== 'paired' ? 'pair' : 'none';
   if (ext.connected) return 'connected';
-  if (probe && probe.state !== 'paired' && sameGateway(probe.gateway)) return 'broken';
+  // Switched off for this buddi in the extension's popup: not forgotten, and not closed either.
+  if (probe?.pairings?.some((entry) => sameGateway(entry.origin) && entry.enabled === false)) return 'off';
+  if (probe && probe.state !== 'paired' && (sameGateway(probe.gateway) || knowsSeveral(probe))) return 'broken';
   return 'notrunning';
+}
+
+/** An extension that can pair with several buddis answers for the asking one, and lists them all. */
+function knowsSeveral(probe: ExtensionProbe): boolean { return Array.isArray(probe.pairings); }
+
+/**
+ * How many other buddis the extension in this browser works for, besides
+ * this one: "paired with this buddi and 1 other". Zero for an extension from
+ * before several, which knows one.
+ */
+export function otherBuddis(probe: ExtensionProbe | null): number {
+  if (!probe?.pairings) return 0;
+  return probe.pairings.filter((entry) => !sameGateway(entry.origin)).length;
+}
+
+/** "this buddi and 1 other", "this buddi and 2 others", or nothing when it is the only one. */
+export function othersWords(count: number): string | null {
+  if (count <= 0) return null;
+  return `paired with this buddi and ${count} other${count === 1 ? '' : 's'}`;
 }
 
 function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserStatus; macOS: boolean; reload: () => void; timezone?: string; go: (route: string) => void }): JSX.Element {
@@ -419,11 +440,15 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
     side = <>{target === 'chromium' ? <ButtonLink size="sm" variant="accent" href={STORE_URL} target="_blank" rel="noopener noreferrer">Add to Chrome <span aria-hidden="true">↗</span></ButtonLink> : null}{more}</>;
   } else if (state === 'pair') {
     const found = probe ? `Extension ${probe.version} found in Chrome` : 'The buddi extension asks to pair';
+    // An extension that already works for another buddi adds this one from its popup's Add a buddi, which offers this address.
+    const press = probe && knowsSeveral(probe) && (probe.pairings ?? []).length > 0 && !probe.pairings!.some((entry) => sameGateway(entry.origin))
+      ? 'Open the extension and press Add a buddi: it offers this buddi’s address, then shows a code, and this page pairs with it.'
+      : 'Open the extension and press Connect: it shows a code, and this page pairs with it.';
     sub = offered ? (
       <Lines line={found} status="Pairing with the code the extension shows. This finishes by itself."><span className="br-code mono" aria-label="Pairing code">{offered.replace(/^(\d{3})(\d{3})$/, '$1 · $2')}</span></Lines>
     ) : ext.data?.pending ? (
       <Lines line={found} status="Type the six digits the extension shows.">{codeField}</Lines>
-    ) : <Lines line={found} status="Open the extension and press Connect: it shows a code, and this page pairs with it.">{enterCode}</Lines>;
+    ) : <Lines line={found} status={press}>{enterCode}</Lines>;
     side = more;
   } else if (state === 'broken') {
     sub = <Lines line="Used only for sites that need your sign-in" tone="critical" status="Chrome forgot the pairing, so agents use their own browser instead." />;
@@ -431,11 +456,12 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   } else {
     const line = !settings.yourChrome ? 'Off. Sites that need a sign-in use your saved logins, or ask you.'
       : state === 'notrunning' ? `Used only for sites that need your sign-in · Chrome isn’t open on ${thisMachine}; agents wait or use their own browser`
-      : 'Used only for sites that need your sign-in · background tabs in a buddi group';
+      : state === 'off' ? 'Switched off for this buddi in the buddi extension · turn it on in its popup; until then agents use their own browser'
+      : `Used only for sites that need your sign-in · background tabs in a buddi group${othersWords(otherBuddis(probe)) ? ` · ${othersWords(otherBuddis(probe))}` : ''}`;
     sub = sitesLine && settings.yourChrome ? <Lines line={line} status={sitesLine} /> : line;
     side = (
       <>
-        {settings.yourChrome ? (state === 'notrunning' ? <Pill>Chrome closed</Pill> : <Pill tone="good" dot>connected</Pill>) : null}
+        {settings.yourChrome ? (state === 'notrunning' ? <Pill>Chrome closed</Pill> : state === 'off' ? <Pill>off in Chrome</Pill> : <Pill tone="good" dot>connected</Pill>) : null}
         <Switch checked={settings.yourChrome} label="Let agents use your Chrome" disabled={disabled} onChange={(on) => save({ yourChrome: on })} />
         {more}
       </>
@@ -443,10 +469,11 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   }
   const outdated = probe && ext.data?.extensionMinimum && olderExtension(probe.version, ext.data.extensionMinimum)
     ? `This extension is ${probe.version}; this buddi needs ${ext.data.extensionMinimum} or later. Update it from chrome://extensions or the store.` : null;
-  const elsewhere = probe && !sameGateway(probe.gateway) ? `The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in its popup.` : null;
+  // An extension from before several buddis points at one address; one that pairs with several never needs re-pointing.
+  const elsewhere = probe && !knowsSeveral(probe) && !sameGateway(probe.gateway) ? `The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in its popup.` : null;
   // The dashboard moved port since the pairing: the extension looks in the old place until it is paired again.
   const moved = ext.data?.portMoved && state !== 'pair'
-    ? `Port ${ext.data.portMoved.from} was taken by another program, so buddi now listens on ${ext.data.portMoved.to}. Pair the extension again: in its popup set the address to http://127.0.0.1:${ext.data.portMoved.to} and press Connect.` : null;
+    ? `Port ${ext.data.portMoved.from} was taken by another program, so buddi now listens on ${ext.data.portMoved.to}. Pair the extension again: in its popup press Add a buddi with http://127.0.0.1:${ext.data.portMoved.to}.` : null;
   if (moved && state !== 'broken' && state !== 'none') {
     side = <><Button size="sm" variant="accent" disabled={disabled} onClick={() => void act(() => api.forgetExtension())}>Pair again</Button>{more}</>;
   }
@@ -640,7 +667,10 @@ export interface ExtensionProbe {
   version: string;
   state: 'disconnected' | 'pairing' | 'paired';
   code?: string;
+  /** The asking buddi's address when the extension knows it, else the one it knows first. */
   gateway: string;
+  /** Every buddi the extension works for; absent from an extension that pairs with one. */
+  pairings?: Array<{ origin: string; name: string; state: 'disconnected' | 'pairing' | 'paired'; enabled?: boolean }>;
 }
 
 declare const chrome: { runtime?: { sendMessage?: (id: string, message: unknown) => Promise<unknown> } } | undefined;

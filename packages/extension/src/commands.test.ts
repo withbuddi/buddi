@@ -4,7 +4,8 @@
  * command lands on and what it refuses.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BrowserCommands, NEW_WINDOW_NOTE, NO_WINDOW_NOTE } from './commands.js';
+import { BrowserCommands, NEW_WINDOW_NOTE, NO_WINDOW_NOTE, SELECTION_SOURCE, WATCH_FRAME_MS } from './commands.js';
+import { GroupRegistry } from './pairings.js';
 import { AgentDownloads, type DownloadFrame } from './downloads.js';
 import type { WorkerChrome } from './chrome.js';
 import { Cancellation, CancelledError, OpenedError, PreconditionError, type Command, type FrameMessage } from './protocol.js';
@@ -59,6 +60,8 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
   const focuses: string[] = [];
   /** Who hears a tab close. */
   const closers: Array<(tabId: number) => void> = [];
+  /** Every title and colour a group was given. */
+  const groupUpdates: Array<Record<string, unknown>> = [];
   let nextTabId = 100;
   const chrome = {
     storage: { local: { async get() { return {}; }, async set() {}, async remove() {} } },
@@ -87,7 +90,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
         return 7;
       },
     },
-    tabGroups: { async update() { return {}; }, async get() { return {}; } },
+    tabGroups: { async update(groupId: number, properties: Record<string, unknown>) { groupUpdates.push({ groupId, ...properties }); return {}; }, async get() { return {}; } },
     windows: {
       async get(id: number) { const found = windows.get(id); if (!found) throw new Error('no such window'); return found; },
       async getLastFocused() { const found = normalWindows().find((window) => window.focused) ?? normalWindows()[0]; if (!found) throw new Error('No last-focused window'); return found; },
@@ -113,6 +116,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
         if (injection.func?.name === 'watchHeldLogins') { bar.watched.push((injection as { args?: unknown[] }).args ?? []); return [{ frameId: 0, result: undefined }]; }
         if (injection.func?.name === 'showHeldBar' || injection.func?.name === 'hideHeldBar') { bar.calls.push(injection.func.name); return [{ frameId: 0, result: undefined }]; }
         if (injection.func?.name === 'showBar' || injection.func?.name === 'hideBar') { bar.calls.push(injection.func.name); return [{ frameId: 0, result: undefined }]; }
+        if (injection.func?.name === 'maskPasswords') { bar.calls.push(`mask ${String((injection as { args?: unknown[] }).args?.[0])}`); return [{ frameId: 0, result: undefined }]; }
         if (injection.func?.name === 'readBar') { const choice = bar.choice; bar.choice = undefined; return [{ frameId: 0, result: choice }]; }
         if (injection.func?.name === 'readObservation' && page.answers.length > 0) return page.answers.shift()!;
         if (injection.target.frameIds) {
@@ -136,7 +140,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     alarms: { create() {}, onAlarm: { addListener() {} } },
     runtime: { getManifest: () => ({ version: '0.1.0' }), onMessage: { addListener() {} }, async sendMessage() { return undefined; } },
   } as unknown as WorkerChrome;
-  return { chrome, closers, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar, creates, windowCreates, focuses };
+  return { chrome, closers, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page, bar, creates, windowCreates, focuses, groupUpdates };
 }
 
 const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
@@ -615,7 +619,7 @@ describe('the screencast', () => {
     const { frames, paint, sent } = await casting();
     paint(1);
     await Promise.resolve();
-    expect(frames).toEqual([{ type: 'frame', session: 's1', data: 'frame-1', sessionId: 1,
+    expect(frames).toEqual([{ type: 'frame', session: 's1', data: 'frame-1', sessionId: 1, url: 'https://example.test/',
       metadata: { deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 40 } }]);
     expect(sent.filter((call) => call.method === 'Page.screencastFrameAck').map((call) => call.params)).toEqual([{ sessionId: 1 }]);
   });
@@ -986,5 +990,134 @@ describe('downloads an agent’s click starts', () => {
     changed.forEach((fn) => fn({ id: 2, state: { current: 'complete' } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(sent).toHaveLength(1);
+  });
+});
+
+/*
+ * The Canvas's live picture and the owner's remote hand on a tab of the
+ * owner's Chrome: the debugger calls they turn into, with Chrome's side faked.
+ */
+describe('the live picture of a background tab', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const painted = (n: number) => ({ data: `frame-${n}`, sessionId: n, metadata: { deviceWidth: 800, deviceHeight: 600 } });
+
+  it('emulates focus before it starts, so a hidden tab paints, and sends two frames a second while watching', async () => {
+    const frames: FrameMessage[] = [];
+    let clock = 1_000;
+    const fake = await opened(undefined, { onFrame: (f) => frames.push(f), now: () => clock });
+    await fake.commands.run(command('screencast.start', { watch: true, maxWidth: 960, maxHeight: 600, quality: 50 }));
+    const methods = fake.sent.map((call) => call.method);
+    expect(methods.indexOf('Emulation.setFocusEmulationEnabled')).toBeLessThan(methods.indexOf('Page.startScreencast'));
+    expect(fake.sent.find((call) => call.method === 'Emulation.setFocusEmulationEnabled')!.params).toEqual({ enabled: true });
+    const tabId = [...fake.tabs.keys()][0]!;
+    for (const listener of fake.events) listener({ tabId }, 'Page.screencastFrame', painted(1));
+    clock += 100;
+    for (const listener of fake.events) listener({ tabId }, 'Page.screencastFrame', painted(2));
+    expect(frames.map((f) => f.data)).toEqual(['frame-1']);
+    clock += WATCH_FRAME_MS;
+    await vi.advanceTimersByTimeAsync(WATCH_FRAME_MS);
+    expect(frames.map((f) => f.data)).toEqual(['frame-1', 'frame-2']);
+  });
+
+  it('asked again with the same bounds on the same tab, changes nothing; the owner’s hand replaces it', async () => {
+    const fake = await opened();
+    await fake.commands.run(command('screencast.start', { watch: true }));
+    await fake.commands.run(command('screencast.start', { watch: true }));
+    expect(fake.sent.filter((call) => call.method === 'Page.startScreencast')).toHaveLength(1);
+    await fake.commands.run(command('screencast.start', { maxWidth: 1440, maxHeight: 900, quality: 70 }));
+    expect(fake.sent.filter((call) => call.method === 'Page.startScreencast')).toHaveLength(2);
+    expect(fake.sent.filter((call) => call.method === 'Page.startScreencast').at(-1)!.params).toMatchObject({ maxWidth: 1440, maxHeight: 900, quality: 70 });
+    // One debugger attach for the whole of it.
+    expect(fake.attachments).toHaveLength(1);
+  });
+
+  it('takes no input while it only watches', async () => {
+    const fake = await opened();
+    await fake.commands.run(command('screencast.start', { watch: true }));
+    await expect(fake.commands.run(command('input', { kind: 'mouse', type: 'mousePressed', x: 1, y: 1 }, true))).rejects.toThrow(/No screencast is running/);
+    expect(fake.sent.some((call) => call.method === 'Input.dispatchMouseEvent')).toBe(false);
+  });
+
+  it('says the picture ended when Chrome takes the debugger away, and stops it when the session closes', async () => {
+    const events: OwnerEventMessage[] = [];
+    const fake = await opened(undefined, { onEvent: (event) => events.push(event) });
+    await fake.commands.run(command('screencast.start', { watch: true }));
+    for (const listener of fake.detaches) listener({ tabId: [...fake.tabs.keys()][0]! }, 'canceled_by_user');
+    expect(events).toEqual([{ type: 'event', name: 'castended', session: 's1' }]);
+    await fake.commands.run(command('screencast.start', { watch: true }));
+    await fake.commands.run(command('close'));
+    expect(fake.sent.at(-1)!.method === 'Emulation.setFocusEmulationEnabled' || fake.sent.some((call) => call.method === 'Page.stopScreencast')).toBe(true);
+    expect(fake.dispatched).toContain('detach');
+  });
+});
+
+describe('the owner’s hand on a tab of their Chrome', () => {
+  async function holding() {
+    const fake = await opened();
+    await fake.commands.run(command('screencast.start'));
+    return fake;
+  }
+
+  it('maps the window buttons onto the debugger: history, reload, an address', async () => {
+    const fake = await holding();
+    fake.chrome.debugger.sendCommand = async (_target: unknown, method: string, params?: unknown) => {
+      fake.sent.push({ method, params });
+      if (method === 'Page.getNavigationHistory') return { currentIndex: 1, entries: [{ id: 10 }, { id: 11 }, { id: 12 }] };
+      return {};
+    };
+    await fake.commands.run(command('input', { kind: 'nav', action: 'back' }, true));
+    await fake.commands.run(command('input', { kind: 'nav', action: 'forward' }, true));
+    await fake.commands.run(command('input', { kind: 'nav', action: 'reload' }, true));
+    await fake.commands.run(command('input', { kind: 'nav', action: 'navigate', url: 'https://example.test/orders' }, true));
+    expect(fake.sent.filter((call) => call.method !== 'Page.getNavigationHistory').slice(-4)).toEqual([
+      { method: 'Page.navigateToHistoryEntry', params: { entryId: 10 } },
+      { method: 'Page.navigateToHistoryEntry', params: { entryId: 12 } },
+      { method: 'Page.reload', params: {} },
+      { method: 'Page.navigate', params: { url: 'https://example.test/orders' } },
+    ]);
+    await expect(fake.commands.run(command('input', { kind: 'nav', action: 'navigate', url: 'file:///etc/passwd' }, true))).rejects.toBeInstanceOf(PreconditionError);
+  });
+
+  it('copies the selection through Runtime.evaluate, bounded, and nothing while no hand is on the page', async () => {
+    const fake = await holding();
+    fake.chrome.debugger.sendCommand = async (_target: unknown, method: string, params?: unknown) => {
+      fake.sent.push({ method, params });
+      return method === 'Runtime.evaluate' ? { result: { value: 'x'.repeat(5_000) } } : {};
+    };
+    const { observation } = await fake.commands.run(command('copy', {}, true));
+    expect((observation as unknown as { copied: string }).copied).toHaveLength(4_000);
+    expect(fake.sent.at(-1)).toEqual({ method: 'Runtime.evaluate', params: { expression: SELECTION_SOURCE, returnByValue: true } });
+    // The page side never reads a password field.
+    expect(SELECTION_SOURCE).toContain("'password'");
+    await fake.commands.run(command('screencast.stop'));
+    await expect(fake.commands.run(command('copy', {}, true))).rejects.toThrow(/No screencast is running/);
+  });
+
+  it('captures a PNG with the password fields painted over first and uncovered after', async () => {
+    const fake = await opened();
+    const result = await fake.commands.run(command('capture', {}, true));
+    expect(result.screenshot).toBe('iVBORw0KGgo=');
+    expect(result.observation).toMatchObject({ url: 'https://example.test/', title: 'Example' });
+    expect(fake.bar.calls).toEqual(['mask true', 'mask false']);
+    expect(fake.sent.find((call) => call.method === 'Page.captureScreenshot')!.params).toEqual({ format: 'png', captureBeyondViewport: false });
+    expect(fake.dispatched).toContain('detach');
+  });
+});
+
+describe('several buddis in one Chrome', () => {
+  it('names and colours a buddi’s groups after it, and keeps out of another buddi’s group', async () => {
+    const groups = new GroupRegistry();
+    const fake = fakeChrome();
+    const release = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value', instance: 'release', groups, groupTitle: () => 'buddi', groupColour: () => 'blue' });
+    await release.run(command('navigate', { url: 'https://example.test/' }));
+    expect(fake.groupUpdates[0]).toMatchObject({ groupId: 7, title: 'buddi', color: 'blue' });
+    expect(groups.ownerOf(7)).toBe('release');
+    expect(await release.tabCount()).toBe(1);
+
+    // Another buddi in the same Chrome: the release's group is not its to act in, and none of its tabs are counted.
+    const dev = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value', instance: 'dev', groups, groupTitle: () => 'buddi-dev', groupColour: () => 'purple' });
+    expect(groups.allows([...fake.tabs.values()][0]!.groupId, 'dev')).toBe(false);
+    expect(await dev.tabCount()).toBe(0);
   });
 });

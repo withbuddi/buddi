@@ -237,6 +237,14 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
     setReleased(id); setDriving(null); setTyping(false);
   };
   const giveBack = () => void act(async () => { letGo(); await api.browserControl('resume', session?.id); }, () => setReleased(null));
+  /** For an owner at the machine: the tab comes to the front of their Chrome, and the hand here ends. */
+  const toFront = () => void act(async () => {
+    if (!session) return;
+    const snapshot = handRef.current?.snapshot() ?? null;
+    if (snapshot) setLastHand(snapshot);
+    setDriving(null); setTyping(false);
+    await api.browserFront(session.id);
+  });
   const stopPage = () => void act(async () => { letGo(); await api.browserControl('stop', session?.id); }, () => setReleased(null));
   const ownBrowser = () => void act(async () => {
     if (!session) return;
@@ -323,11 +331,12 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   const waiting = live && !!shown?.needsOwner;
   const done = !live && !paused;
   const site = siteOfUrl(shown?.page?.url) ?? (shown?.page?.appId ? appWord(shown.page.appId) : 'the page');
-  const where = shown?.route === 'chrome' ? 'in your Chrome · background tab' : shown?.route === 'apps' ? `in ${site}` : 'in buddi’s browser';
+  const chromeRoute = shown?.route === 'chrome';
+  const where = chromeRoute ? 'in your Chrome · background tab' : shown?.route === 'apps' ? `in ${site}` : 'in buddi’s browser';
   const title = paused ? 'Browsing is paused' : shown?.page?.title || site;
   const line = paused ? `By you at ${fmtClock(new Date(paused.at), zone)} · ${paused.until ? `until ${fmtClock(new Date(paused.until), zone)}` : 'until you resume it'}`
     : inChrome ? 'You have the page · in your Chrome · it’s in front'
-    : taking ? `You have the page · ${where}`
+    : taking ? `You have the page · ${chromeRoute ? 'in your Chrome' : where}`
     : done ? `${agentName} looked at ${site} · done${closedAt ? ` at ${fmtClock(new Date(closedAt), zone)}` : ''}`
     : shown ? lookingLine(shown) : 'Opening the page…';
   const src = live ? (shown ? screenshotUrl(shown, tick) : null) ?? lastHand : frame ?? lastHand;
@@ -355,6 +364,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
           <Toolbar align="end">
             {inChrome ? null : hand ? (touch ? <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Type into the page</Button> : null)
               : <Button size="sm" variant="ghost" disabled={busy} onClick={takeOver}>Drive it here</Button>}
+            {chromeRoute && !inChrome ? <Button size="sm" variant="ghost" disabled={busy} title="For when you are at the computer: the tab comes to the front of your Chrome" onClick={toFront}>Bring the tab to the front</Button> : null}
             <Button size="sm" variant="accent" disabled={busy} onClick={giveBack}>Give it back</Button>
             {enlarge}
           </Toolbar>

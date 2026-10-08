@@ -152,6 +152,42 @@ describe('the page and its lifecycle', () => {
     await expect(service.execute(click('o1'), ctx)).resolves.toMatchObject({ completed: true });
     expect(driver.close).not.toHaveBeenCalled();
   });
+  it('your Chrome, live: the Page tab shows the newest frame, Take over offers the hand, and Bring the tab to the front holds it there', async () => {
+    const driver = fake();
+    let live: Buffer | undefined = Buffer.from('live-frame');
+    driver.livePicture = () => live;
+    driver.supportsHand = true;
+    driver.hand = { start: vi.fn(async () => {}), input: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+    driver.takeover = vi.fn(async () => {});
+    driver.bringToFront = vi.fn(async () => {});
+    driver.resume = vi.fn();
+    const service = new BrowserService(driver, { route: 'chrome' });
+    services.push(service);
+    await service.enable();
+    // Nothing open: no picture, live or not.
+    expect(service.screenshot()).toBeUndefined();
+    await service.execute(navigate, contexts());
+    expect(service.status().hasScreenshot).toBe(true);
+    expect(service.screenshot()?.toString()).toBe('live-frame');
+    live = undefined;
+    // The picture stopped (the owner cancelled Chrome's bar): back to the observation's.
+    expect(service.screenshot()?.toString()).toBe('image');
+
+    await expect(service.front()).rejects.toThrow('Take over first');
+    await service.control('takeover');
+    expect(driver.bringToFront).not.toHaveBeenCalled();
+    expect(service.status().held).toBeUndefined();
+    expect(service.hand().hand).toBe(driver.hand);
+
+    await expect(service.front()).resolves.toMatchObject({ state: 'paused', held: { by: 'owner', where: 'chrome' } });
+    expect(driver.bringToFront).toHaveBeenCalledOnce();
+    expect(service.hand()).toMatchObject({ supported: false, message: 'The page is in front of you in your Chrome.' });
+    // Asked twice, held once.
+    await service.front();
+    expect(driver.bringToFront).toHaveBeenCalledOnce();
+    await expect(service.control('resume')).resolves.toMatchObject({ state: 'running' });
+    expect(service.status().held).toBeUndefined();
+  });
   it('the bar\'s Take over in the page asks the controller, which decides', async () => {
     const driver = fake();
     let pressed: () => void = () => {};

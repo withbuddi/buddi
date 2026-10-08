@@ -47,10 +47,88 @@ describe('the extension driver’s hand', () => {
     expect(sent[1]).toMatchObject({ name: 'input', owner: true, args: { kind: 'mouse', type: 'mousePressed', x: 40, y: 12 } });
 
     await driver.hand.stop();
+    // An extension from before the live picture has nothing to go back to: the screencast stops.
     expect(sent[2]).toMatchObject({ name: 'screencast.stop' });
-    expect(listening()).toBe(false);
     push({ jpeg: Buffer.from('too-late'), metadata });
     expect(frames).toHaveLength(1);
+    // The subscription is the driver's, for its life; closing the page lets it go.
+    expect(listening()).toBe(true);
+    await driver.close();
+    expect(listening()).toBe(false);
+  });
+});
+
+/*
+ * A live extension (it says `live` in its hello): the Canvas's picture is
+ * painted while the agent works, Take over is the remote hand, and Bring the
+ * tab to the front is its own action.
+ */
+describe('the extension driver with a live extension', () => {
+  function live(answers: Partial<Record<string, Record<string, unknown>>> = {}) {
+    const made = bridge();
+    made.fake.supports = (feature) => feature === 'live';
+    made.fake.send = async (command) => { made.sent.push(command); return answers[command.name] ?? {}; };
+    return made;
+  }
+
+  it('paints the page for the Canvas once a navigation opened it, and the newest frame is the Page tab’s picture', async () => {
+    const { fake, sent, push } = live();
+    const driver = new ExtensionDriver(fake);
+    expect(driver.livePicture()).toBeUndefined();
+    await driver.perform({ action: 'navigate', url: 'https://example.com/' } as never);
+    expect(sent.map((command) => command.name)).toEqual(['navigate', 'screencast.start']);
+    expect(sent[1]!.args).toMatchObject({ watch: true, interval: 500, maxWidth: 960, maxHeight: 600 });
+    push({ jpeg: Buffer.from('first'), metadata });
+    push({ jpeg: Buffer.from('newest'), metadata });
+    expect(driver.livePicture()?.toString()).toBe('newest');
+    // Take over holds nothing in place: no `hold`, the hand is theirs from wherever they are.
+    await driver.takeover();
+    expect(driver.holdsInPlace).toBeUndefined();
+    expect(sent.some((command) => command.name === 'hold')).toBe(false);
+  });
+
+  it('starts the hand on the last picture, and goes back to watching when the owner gives it back', async () => {
+    const { fake, sent, push } = live();
+    const driver = new ExtensionDriver(fake);
+    await driver.perform({ action: 'navigate', url: 'https://example.com/' } as never);
+    push({ jpeg: Buffer.from('canvas'), metadata });
+    const frames: string[] = [];
+    await driver.hand.start((frame) => frames.push(frame.jpeg.toString()));
+    expect(frames).toEqual(['canvas']);
+    expect(sent.at(-1)).toMatchObject({ name: 'screencast.start', args: { maxWidth: 960 } });
+    expect(sent.at(-1)!.args['watch']).toBeUndefined();
+    push({ jpeg: Buffer.from('hand'), metadata });
+    expect(frames).toEqual(['canvas', 'hand']);
+    await driver.hand.stop();
+    expect(sent.at(-1)).toMatchObject({ name: 'screencast.start', args: { watch: true } });
+    push({ jpeg: Buffer.from('after'), metadata });
+    expect(frames).toEqual(['canvas', 'hand']);
+  });
+
+  it('sends the window’s buttons down as input, an address only through the allowed-sites check', async () => {
+    const { fake, sent } = live();
+    const driver = new ExtensionDriver(fake, ['example.com']);
+    await driver.hand.input({ kind: 'nav', action: 'back' });
+    expect(sent.at(-1)).toMatchObject({ name: 'input', owner: true, args: { kind: 'nav', action: 'back' } });
+    await driver.hand.input({ kind: 'nav', action: 'navigate', url: 'https://example.com/orders' });
+    expect(sent.at(-1)).toMatchObject({ args: { kind: 'nav', action: 'navigate', url: 'https://example.com/orders' } });
+    await expect(driver.hand.input({ kind: 'nav', action: 'navigate', url: 'https://elsewhere.test/' })).rejects.toThrow(/outside the configured browser hosts/);
+  });
+
+  it('copies the selection, and captures a PNG with the page’s title and address', async () => {
+    const { fake, sent } = live({ copy: { observation: { copied: 'order 1234' } }, capture: { screenshot: Buffer.from('png').toString('base64'), observation: { url: 'https://example.com/o', title: 'Your orders' } } });
+    const driver = new ExtensionDriver(fake);
+    expect(await driver.hand.copy!()).toBe('order 1234');
+    const shot = await driver.capture();
+    expect(shot).toEqual({ png: Buffer.from('png'), title: 'Your orders', url: 'https://example.com/o' });
+    expect(sent.find((command) => command.name === 'capture')).toMatchObject({ owner: true });
+  });
+
+  it('brings the tab to the front only when asked, and then holds it there', async () => {
+    const { fake, sent } = live();
+    const driver = new ExtensionDriver(fake);
+    await driver.bringToFront();
+    expect(sent.at(-1)).toMatchObject({ name: 'hold', owner: true });
   });
 });
 

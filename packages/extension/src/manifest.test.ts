@@ -46,7 +46,7 @@ describe('the built extension', () => {
     // Agents' downloads: asked for from the popup when the owner wants them, never at install.
     expect(manifest['optional_permissions']).toEqual(['downloads']);
     expect(manifest['host_permissions']).toEqual(['http://*/*', 'https://*/*']);
-    expect(String(manifest['description'])).toMatch(/sites it opens are the ones you ask/);
+    expect(String(manifest['description'])).toMatch(/opening only the sites you ask them for/);
     // The store refuses a manifest description longer than 132 characters.
     expect(String(manifest['description']).length).toBeLessThanOrEqual(132);
   });

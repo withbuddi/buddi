@@ -135,7 +135,10 @@ export class HostController implements BrowserController {
     // Read at launch, so Show the window applies to the next launch without a restart.
     Object.defineProperty(hostOptions, 'headless', { enumerable: true, get: () => self.#headless });
     this.#host = new PlaywrightHost(hostOptions);
-    const base: BrowserServiceOptions = { ...options.service, telemetry: this.telemetry, requestTakeover: (sessionId) => { void this.control('takeover', sessionId).catch(() => undefined); },
+    const base: BrowserServiceOptions = { ...options.service, telemetry: this.telemetry, requestTakeover: (sessionId) => {
+        // Take over pressed in the tab itself: the owner is at the machine, looking at it, so it stays in front of them.
+        void this.control('takeover', sessionId).then(() => this.front(sessionId)).catch(() => undefined);
+      },
       requestResume: (sessionId) => { void this.control('resume', sessionId).catch(() => undefined); },
       loginSeen: (sessionId, login) => this.#loginSeen(sessionId, login), downloads: this.downloads };
     this.#ownOptions = { ...base, route: 'own', maxSessions: options.limits?.own ?? this.#settings.maxOwnPages, closeHost: () => this.#host.close(),
@@ -926,6 +929,15 @@ export class HostController implements BrowserController {
       for (const listener of this.#giveBack) { try { listener(info); } catch { /* a listener never fails the give-back */ } }
     }
     // The page asked about, not whichever page changed last.
+    return this.status({ sessionId });
+  }
+
+  /** Bring a page the owner holds to the front of their own Chrome. */
+  async front(sessionId: string): Promise<BrowserStatus> {
+    if (!this.#enabled) throw new Error('The host browser service is unavailable.');
+    const child = this.#pageOf({ sessionId })?.manager.child({ sessionId });
+    if (!child) throw new Error('That page changed. Refresh before controlling it.');
+    await child.front();
     return this.status({ sessionId });
   }
 

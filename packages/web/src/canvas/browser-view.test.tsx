@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserStatus } from '../api';
 import { addressFrom, BrowserMenu, BrowserView, BROWSER_POLL_MS, MAX_SCREENSHOT_FAILURES, TOUCH_QUERY } from './views/BrowserView';
 
-vi.mock('../api', async (original) => ({ ...(await original<typeof import('../api')>()), csrfToken: () => 'c', api: { session: vi.fn(async () => ({ platform: 'darwin' })), browserControl: vi.fn(), browserPin: vi.fn(), browserSettings: vi.fn(async () => ({})), browserCapture: vi.fn() } }));
+vi.mock('../api', async (original) => ({ ...(await original<typeof import('../api')>()), csrfToken: () => 'c', api: { session: vi.fn(async () => ({ platform: 'darwin' })), browserControl: vi.fn(), browserPin: vi.fn(), browserSettings: vi.fn(async () => ({})), browserCapture: vi.fn(), browserFront: vi.fn() } }));
 import { browserSteps, stepFor, BROWSER_TOOLS } from '../chat/browser';
 import { inspectToolCall, renderablesFrom } from './renderables';
 import type { ChatMessage } from '../chat/types';
@@ -362,6 +362,52 @@ describe('the Page tab', () => {
     render(<BrowserView status={status} error={null} reload={() => {}} live agentName="Home Manager" />);
     fireEvent.click(screen.getByRole('button', { name: 'Capture the page to Files' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('That page changed. Refresh before capturing it.');
+  });
+
+  it('your Chrome, live: Take over asks for the hand, the bar says in your Chrome, and Bring the tab to the front is the secondary way', async () => {
+    device('desktop');
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const chrome: BrowserStatus = { ...status, route: 'chrome', page: { ...status.page!, url: 'https://www.amazon.com/cart', title: 'Your cart' } };
+    let state: BrowserStatus = chrome;
+    vi.mocked(api.browserControl).mockImplementation(async (action) => {
+      if (action === 'takeover') { state = { ...chrome, state: 'paused' }; return { ...state, hand: true }; }
+      state = chrome; return chrome;
+    });
+    vi.mocked(api.browserFront).mockImplementation(async () => { state = { ...chrome, state: 'paused', held: { by: 'owner', where: 'chrome' } }; return state; });
+    const view = render(<BrowserView status={state} error={null} reload={() => view.rerender(<BrowserView status={state} error={null} reload={() => {}} live agentName="Home Manager" />)} live agentName="Home Manager" />);
+    expect(screen.getByText('Looking at amazon.com · in your Chrome · background tab')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('takeover', 's1'));
+    view.rerender(<BrowserView status={state} error={null} reload={() => {}} live agentName="Home Manager" />);
+    // The remote hand, in the same frame as buddi's own browser, and a socket asked for it.
+    expect(await screen.findByText('You have the page · in your Chrome')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-hand')).toBeInTheDocument();
+    expect(FakeSocket.all.length).toBeGreaterThan(0);
+    FakeSocket.all[0]!.drive('https://www.amazon.com/cart', 'sharp');
+    expect(await screen.findByTestId('hand-level')).toHaveTextContent('sharp');
+    // Give it back stays the accent, on the right; Bring the tab to the front sits before it, quietly.
+    const front = screen.getByRole('button', { name: 'Bring the tab to the front' });
+    const giveBack = screen.getByRole('button', { name: 'Give it back' });
+    expect(front.compareDocumentPosition(giveBack) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(front).not.toHaveAttribute('data-variant', 'accent');
+    // Capture works on this route too.
+    expect(screen.getByRole('button', { name: 'Capture the page to Files' })).toBeEnabled();
+    fireEvent.click(front);
+    await waitFor(() => expect(api.browserFront).toHaveBeenCalledWith('s1'));
+    view.rerender(<BrowserView status={state} error={null} reload={() => {}} live agentName="Home Manager" />);
+    expect(await screen.findByText('You have the page · in your Chrome · it’s in front')).toBeInTheDocument();
+    expect(screen.queryByTestId('remote-hand')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Bring the tab to the front' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Give it back' }));
+    await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('resume', 's1'));
+  });
+
+  it('Capture on a page in your Chrome saves it to Files like the own browser', async () => {
+    vi.mocked(api.browserCapture).mockResolvedValue({ artifactId: 'art-7', name: 'Your cart 2026-10-07 14.32.png', mime: 'image/png' });
+    render(<BrowserView status={{ ...status, route: 'chrome' }} error={null} reload={() => {}} live agentName="Home Manager" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Capture the page to Files' }));
+    await waitFor(() => expect(api.browserCapture).toHaveBeenCalledWith('s1'));
+    expect(await screen.findByText('Saved to Files as Your cart 2026-10-07 14.32.png.')).toBeInTheDocument();
   });
 
   it('a page held in your Chrome: it is in front there, so no hand is asked for and no frame waited on; Give it back resumes', async () => {

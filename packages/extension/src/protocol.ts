@@ -10,6 +10,7 @@
  */
 
 import type { ChromeLike } from './chrome.js';
+import type { TokenStore } from './pairings.js';
 
 export interface ObservedTarget {
   ref: string;
@@ -35,15 +36,23 @@ export interface Observation {
 export const COMMAND_NAMES = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'fieldInfo', 'secretFill'] as const;
 /**
  * `screencast.start`/`screencast.stop` and `input` are the owner's own hand on
- * the page, and `hold`/`unhold` the owner taking it where it is (the tab
- * brought to the front, a bar saying buddi waits), rather than anything a
- * model may ask for, which is why they are not
+ * the page (and the Canvas's live picture), `copy` their Cmd/Ctrl+C on it,
+ * `capture` the Canvas's Capture, and `hold`/`unhold` the owner taking it
+ * where it is (the tab brought to the front, a bar saying buddi waits),
+ * rather than anything a model may ask for, which is why they are not
  * in `COMMAND_NAMES`: that list is what an agent's tool can name. `fieldInfo`
  * and `secretFill` are on it because the owner's-secret tools reach them
  * exactly the way `browser.act` reaches the rest — the driver sends them, and
  * the owner's approval card, not this list, is what stands behind them.
  */
-export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input', 'hold', 'unhold'] as const;
+export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input', 'hold', 'unhold', 'capture', 'copy'] as const;
+/**
+ * What this extension says it can do in its hello, so a gateway sends only
+ * what it understands. `live`: the Canvas's watching picture (`screencast.start`
+ * with `watch`, painted even in a background tab), the remote hand on this
+ * browser's tabs, `capture`, `copy` and the window's own buttons as input.
+ */
+export const EXTENSION_FEATURES = ['live'] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number] | (typeof HAND_COMMANDS)[number] | 'screenshot';
 
 /** What `fieldInfo` answers about the field a secret is aimed at. Never a value. */
@@ -72,6 +81,8 @@ export interface FrameMessage {
   metadata: Record<string, number>;
   /** Chrome's own frame id, passed through as it came, because the ack has to match it. */
   sessionId: string | number;
+  /** Where the tab is, for the dashboard's address bar. */
+  url?: string;
 }
 
 export interface CommandResult {
@@ -133,10 +144,17 @@ export interface ClientState {
   code: string | null;
   installation: string | null;
   error: string | null;
+  /** What the buddi calls itself, from its handshake (`buddi`, `buddi-dev`). */
+  name?: string | null;
+  /** What the gateway said it understands on this socket (`frames.binary`). */
+  features?: string[];
 }
 
 export interface ProtocolOptions {
-  chrome: Pick<ChromeLike, 'storage'>;
+  /** Where the token lives when no `tokens` store is given: the single pairing's old key. */
+  chrome?: Pick<ChromeLike, 'storage'>;
+  /** This link's own token, in the list of pairings (pairings.ts). */
+  tokens?: TokenStore;
   version: string;
   send(frame: unknown): void;
   execute(command: Command, cancel: Cancellation): Promise<CommandResult>;
@@ -219,8 +237,8 @@ export class Protocol {
     const stored = await this.#token();
     this.#nonce = nonce();
     this.#authenticated = false;
-    this.#set({ connection: 'connecting', code: null, error: null });
-    this.#options.send({ type: 'hello', extension: this.#options.version, nonce: this.#nonce, paired: stored !== null });
+    this.#set({ connection: 'connecting', code: null, error: null, features: [] });
+    this.#options.send({ type: 'hello', extension: this.#options.version, nonce: this.#nonce, paired: stored !== null, features: [...EXTENSION_FEATURES] });
   }
 
   closed(reason?: string): void {
@@ -232,14 +250,31 @@ export class Protocol {
   }
 
   async #token(): Promise<string | null> {
-    const stored = await this.#options.chrome.storage.local.get([TOKEN_KEY]);
+    if (this.#options.tokens) return this.#options.tokens.read();
+    const stored = await this.#options.chrome?.storage.local.get([TOKEN_KEY]) ?? {};
     const token = stored[TOKEN_KEY];
     return typeof token === 'string' && token.length > 0 ? token : null;
   }
 
+  async #keep(token: string): Promise<void> {
+    if (this.#options.tokens) { await this.#options.tokens.write(token); return; }
+    await this.#options.chrome?.storage.local.set({ [TOKEN_KEY]: token });
+  }
+
+  /** What a handshake frame says about the buddi: its name and what it reads. */
+  #about(message: Record<string, unknown>): Partial<ClientState> {
+    const patch: Partial<ClientState> = {};
+    const name = message['name'];
+    if (typeof name === 'string' && name.trim() !== '') patch.name = name.trim().slice(0, 60);
+    const features = message['features'];
+    if (Array.isArray(features)) patch.features = features.filter((item): item is string => typeof item === 'string' && item.length <= 40).slice(0, 20);
+    return patch;
+  }
+
   /** Drops the token and asks for a new socket, which starts the pairing dance again. */
   async forget(): Promise<void> {
-    await this.#options.chrome.storage.local.remove([TOKEN_KEY]);
+    if (this.#options.tokens) await this.#options.tokens.clear();
+    else await this.#options.chrome?.storage.local.remove([TOKEN_KEY]);
     this.#authenticated = false;
     this.#set({ connection: 'offline', code: null, installation: null, error: null });
     this.#options.disconnect?.('The owner forgot this buddi.');
@@ -273,10 +308,10 @@ export class Protocol {
         // while a disk write finishes would be a lie about who we are talking to.
         this.#authenticated = true;
         const installation = message['installation'];
-        this.#set({ connection: 'paired', code: null, error: null,
+        this.#set({ connection: 'paired', code: null, error: null, ...this.#about(message),
           installation: typeof installation === 'string' ? installation : this.#state.installation });
         const token = message['token'];
-        if (typeof token === 'string' && token.length > 0) await this.#options.chrome.storage.local.set({ [TOKEN_KEY]: token });
+        if (typeof token === 'string' && token.length > 0) await this.#keep(token);
         return;
       }
       case 'rehello':
@@ -327,7 +362,7 @@ export class Protocol {
       return;
     }
     const installation = message['installation'];
-    if (typeof installation === 'string') this.#set({ installation });
+    this.#set({ ...this.#about(message), ...(typeof installation === 'string' ? { installation } : {}) });
     this.#options.send({ type: 'auth', token });
   }
 

@@ -4,7 +4,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserRouteStatus, type BrowserStatus } from '../api';
 import { pluginSettingsRoute } from '../routes';
-import { appsProvided, appWord, Browser, chromeState, clearWarning, downloadsLine, installTarget, lookingLine, olderExtension, pairWithCode, SANDBOX_COMMAND, SELF_PAIRED_WINDOW_MS, STORE_URL } from './Browser';
+import { appsProvided, appWord, Browser, chromeState, clearWarning, downloadsLine, installTarget, lookingLine, olderExtension, otherBuddis, othersWords, pairWithCode, SANDBOX_COMMAND, SELF_PAIRED_WINDOW_MS, STORE_URL } from './Browser';
 
 vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), browserPin: vi.fn(), browserCheck: vi.fn(), browserInstall: vi.fn(), browserDownloads: vi.fn(), clearBrowserDownloads: vi.fn(), fileBrowserDownload: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn(), agents: vi.fn(), setAgentEngine: vi.fn() }, ApiError: class extends Error {} }));
 
@@ -263,6 +263,35 @@ describe('your Chrome: Add to Chrome, the code, Pair again', () => {
     render(<Browser />);
     expect(await screen.findByText(/This extension is 0\.1\.0\.20; this buddi needs 0\.1\.0\.24 or later/)).toBeInTheDocument();
     expect(screen.getByText(/The extension is pointed at http:\/\/127\.0\.0\.1:4317/)).toBeInTheDocument();
+  });
+  it('one extension for several buddis: says this buddi and how many others, and never asks to re-point it', async () => {
+    answers({ installed: true, version: '0.1.0.49', state: 'paired', gateway: window.location.origin, pairings: [
+      { origin: window.location.origin, name: 'buddi-dev', state: 'paired', enabled: true },
+      { origin: 'http://127.0.0.1:4317', name: 'buddi', state: 'paired', enabled: true },
+    ] });
+    render(<Browser />);
+    expect(await screen.findByText(/paired with this buddi and 1 other/)).toBeInTheDocument();
+    expect(screen.queryByText(/The extension is pointed at/)).toBeNull();
+  });
+  it('one extension for several buddis: this buddi switched off in its popup reads as off, not as forgotten', async () => {
+    vi.mocked(api.extension).mockResolvedValue({ ...paired, connected: false });
+    answers({ installed: true, version: '0.1.0.49', state: 'disconnected', gateway: window.location.origin, pairings: [
+      { origin: window.location.origin, name: 'buddi-dev', state: 'disconnected', enabled: false },
+    ] });
+    render(<Browser />);
+    expect(await screen.findByText(/Switched off for this buddi in the buddi extension/)).toBeInTheDocument();
+    expect(screen.queryByText(/Chrome forgot the pairing/)).toBeNull();
+  });
+  it('counts the other buddis an extension works for', () => {
+    const here = window.location.origin;
+    expect(otherBuddis(null)).toBe(0);
+    expect(otherBuddis({ installed: true, version: '1', state: 'paired', gateway: here })).toBe(0);
+    expect(otherBuddis({ installed: true, version: '1', state: 'paired', gateway: here, pairings: [{ origin: here, name: 'a', state: 'paired' }, { origin: 'http://127.0.0.1:1', name: 'b', state: 'paired' }, { origin: 'http://127.0.0.1:2', name: 'c', state: 'disconnected' }] })).toBe(2);
+    expect(othersWords(0)).toBeNull();
+    expect(othersWords(1)).toBe('paired with this buddi and 1 other');
+    expect(othersWords(2)).toBe('paired with this buddi and 2 others');
+    // An extension that knows several, with no pairing for this buddi, is a pairing Chrome forgot.
+    expect(chromeState({ connected: false, pending: false, path: '', pairedAt: 'x' }, { installed: true, version: '1', state: 'disconnected', gateway: 'http://127.0.0.1:1', pairings: [{ origin: 'http://127.0.0.1:1', name: 'b', state: 'paired' }] })).toBe('broken');
   });
   it('forgets this Chrome only after a second word', async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });

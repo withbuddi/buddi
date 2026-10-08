@@ -221,6 +221,8 @@ export interface BrowserController {
   missionWaitMs?(): number;
   /** Capture: a full-resolution PNG of one page as it is now, for the owner's Files. */
   capture?(sessionId: string): Promise<BrowserCapture>;
+  /** Bring a page the owner holds to the front of their own Chrome (your Chrome only). */
+  front?(sessionId: string): Promise<BrowserStatus>;
   /** Hear every give-back of a page the owner held (Give it back, `/browser resume`). Returns the unsubscribe. */
   onGiveBack?(listener: (info: BrowserGiveBack) => void): () => void;
   /** What the agents' downloads area holds (Settings → Browser). */
@@ -346,12 +348,38 @@ export class BrowserService {
       ...(session ? { session: { ...session, route: this.#route } as NonNullable<BrowserStatus['session']>, route: this.#route, mode: modeOf(this.#route) } : {}),
       ...(this.#observation ? { page: page as Omit<Observation, 'tree' | 'targets'> } : {}),
       ...(this.#card ? { needsOwner: this.#card } : {}),
-      ...(this.#state === 'paused' && this.#held && this.driver.holdsInPlace ? { held: { by: 'owner' as const, where: this.driver.holdsInPlace } } : {}),
+      ...(this.#state === 'paused' && this.#held ? { held: { by: 'owner' as const, where: this.driver.holdsInPlace ?? 'chrome' } } : {}),
       ...(this.#state === 'paused' && this.#agentWaits ? { agentWaiting: true } : {}),
-      lastAction: this.#lastAction, message: this.#message, hasScreenshot: !!this.#picture };
+      lastAction: this.#lastAction, message: this.#message, hasScreenshot: !!this.#picture || (!!this.#session && !!this.driver.livePicture?.()) };
   }
 
-  screenshot(_sessionId?: string): Buffer | undefined { return this.#picture; }
+  /** The page as it is now: the live picture where the route paints one (your Chrome), else the last observation's. */
+  screenshot(_sessionId?: string): Buffer | undefined { return (this.#session ? this.driver.livePicture?.() : undefined) ?? this.#picture; }
+
+  /**
+   * Bring the tab to the front, for an owner at the machine: only for a page
+   * already in their hands, and only on a route that can (your Chrome). The
+   * remote hand ends there; the page is in front of them instead.
+   */
+  front(): Promise<BrowserStatus> {
+    const run = async () => {
+      if (!this.#session || this.#state !== 'paused') throw new BrowserPreconditionError('Take over first, then bring the tab to the front.');
+      if (!this.driver.bringToFront) throw new BrowserPreconditionError('This page has no tab to bring to the front.');
+      if (this.#held) return this.status();
+      try {
+        await this.driver.bringToFront();
+        this.#held = true;
+        this.#message = 'The page is in front of you in your Chrome. Give it back when you are done.';
+      } catch (error) {
+        const why = error instanceof Error ? error.message.replace(/\.$/, '') : String(error);
+        throw new BrowserPreconditionError(`Your Chrome couldn't bring the page forward (${why}).`);
+      }
+      return this.status();
+    };
+    const next = this.#controlTail.then(run, run);
+    this.#controlTail = next.catch(() => {});
+    return next;
+  }
   /** The card this page waits on, if any. */
   get card(): OwnerCard | undefined { return this.#card; }
   /** Where this page is, or was. */
@@ -907,7 +935,9 @@ export class BrowserService {
   }
 
   /**
-   * Take over a page in the owner's own Chrome: no stream, the tab itself.
+   * Take over a page in the owner's own Chrome, held in place: an extension
+   * from before the live picture, whose background tab never painted. No
+   * stream, the tab itself.
    * An action in flight is abandoned first (the tab is kept), then the tab is
    * brought to the front of their Chrome with its bar saying buddi waits.
    * When Chrome cannot do that (closed, an extension too old to know how),

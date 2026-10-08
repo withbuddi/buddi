@@ -107,6 +107,22 @@
 
   --focus-ring: #2b6fe6;
 
+  /* Chrome's own tab-group colours, so a buddi's swatch matches its group. */
+  --group-grey: #5f6368;
+  --group-blue: #1a73e8;
+  --group-red: #d93025;
+  --group-yellow: #f9ab00;
+  --group-green: #188038;
+  --group-pink: #d01884;
+  --group-purple: #a142f4;
+  --group-cyan: #007b83;
+  --group-orange: #fa903e;
+
+  --swatch: 10px;
+  --switch-w: 30px;
+  --switch-h: 18px;
+  --switch-knob: 14px;
+
   color-scheme: light;
 }
 
@@ -211,7 +227,8 @@ p { margin: 0; }
 @keyframes view-in { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .view { animation: none; }
+  .view, .buddi, .add { animation: none; }
+  .switch-track, .switch-track::after { transition: none; }
   .btn { transition: none; }
 }
 
@@ -312,7 +329,78 @@ p { margin: 0; }
 .fact { font-size: var(--text-base); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 
 .foot {
-  margin: 0 calc(var(--space-4) * -1) calc(var(--space-4) * -1);
-  padding: var(--space-2) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--line);
+}
+
+.btn[data-variant='ghost'] { border-color: transparent; background: none; }
+
+/* ---- the buddis: one row each, a hairline between them ---- */
+
+.buddis { margin: 0; padding: 0; list-style: none; }
+.buddi {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  animation: view-in var(--dur-view) var(--ease);
+}
+.buddi + .buddi { border-top: 1px solid var(--line); }
+.buddi[data-enabled='false'] .buddi-who { opacity: 0.55; }
+
+.buddi-head { display: flex; align-items: center; gap: var(--space-2); }
+.buddi-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.buddi-name { font-size: var(--text-base); font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buddi-address { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buddi-pill { margin-left: 0; }
+.buddi-body { display: flex; flex-direction: column; gap: var(--space-2); }
+.buddi-body:empty { display: none; }
+.actions-gap { flex: 1; }
+
+.swatch { width: var(--swatch); height: var(--swatch); flex: none; border-radius: 50%; background: var(--group-grey); }
+.buddi[data-colour='blue'] .swatch { background: var(--group-blue); }
+.buddi[data-colour='red'] .swatch { background: var(--group-red); }
+.buddi[data-colour='yellow'] .swatch { background: var(--group-yellow); }
+.buddi[data-colour='green'] .swatch { background: var(--group-green); }
+.buddi[data-colour='pink'] .swatch { background: var(--group-pink); }
+.buddi[data-colour='purple'] .swatch { background: var(--group-purple); }
+.buddi[data-colour='cyan'] .swatch { background: var(--group-cyan); }
+.buddi[data-colour='orange'] .swatch { background: var(--group-orange); }
+
+/* The switch: a checkbox underneath, so the keyboard and a screen reader get one for free. */
+.switch { position: relative; display: inline-flex; flex: none; cursor: pointer; }
+.switch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.switch-track {
+  position: relative;
+  width: var(--switch-w);
+  height: var(--switch-h);
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+  transition: background-color var(--dur-fast) ease;
+}
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: calc((var(--switch-h) - var(--switch-knob)) / 2);
+  left: calc((var(--switch-h) - var(--switch-knob)) / 2);
+  width: var(--switch-knob);
+  height: var(--switch-knob);
+  border-radius: 50%;
+  background: var(--surface);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.switch input:checked + .switch-track { background: var(--accent); }
+.switch input:checked + .switch-track::after { transform: translateX(calc(var(--switch-w) - var(--switch-h))); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+.add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line);
+  animation: view-in var(--dur-view) var(--ease);
 }

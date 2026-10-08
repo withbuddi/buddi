@@ -3,21 +3,23 @@ import { z } from 'zod';
 import { checkUrl } from '@buddi/core/plugin';
 import { fieldOrigin } from './secrets.js';
 import type { PendingDownload } from './downloads.js';
-import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type LoginAck, type LoginCheck, type LoginSeenListener, LOGIN_GONE, LOGIN_GRACE_MS } from './types.js';
+import { BrowserPreconditionError, HAND_QUALITY, MAX_HAND_COPY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type LoginAck, type LoginCheck, type LoginSeenListener, LOGIN_GONE, LOGIN_GRACE_MS } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */
 export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot', 'fieldInfo', 'secretFill'] as const;
 /**
  * The take-over's own, kept out of the list above: the screencast pair and
- * `input` for the remote hand, `hold`/`unhold` for a take-over in place (the
- * tab brought to the front of the owner's Chrome, its bar saying buddi waits).
+ * `input` for the remote hand and the Canvas's live picture, `copy` for the
+ * owner's Cmd/Ctrl+C on it, `capture` for the Canvas's Capture, and
+ * `hold`/`unhold` for Bring the tab to the front (the tab brought forward in
+ * the owner's Chrome, its bar saying buddi waits).
  *
  * Nothing an agent can name reaches them: they exist for the owner's hand, and
  * the extension keeps the same split on its side. `fieldInfo` and `secretFill`
  * are the owner's-secret pair — `secret.fill` rides them the way `browser.act`
  * rides the rest — and only the driver sends them.
  */
-export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input', 'hold', 'unhold'] as const;
+export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input', 'hold', 'unhold', 'capture', 'copy'] as const;
 export type ExtensionCommandName = (typeof EXTENSION_COMMANDS)[number] | (typeof HAND_COMMANDS)[number];
 
 export interface ExtensionCommand {
@@ -76,6 +78,13 @@ export interface ExtensionBridge {
   /** A pairing record exists, whether or not Chrome is connected right now. */
   paired?(): boolean;
   /**
+   * What the connected extension said it can do in its hello. `live`: the
+   * Canvas's watching picture, painted in a background tab, the remote hand,
+   * `capture`, `copy` and the window's buttons. An extension from before
+   * says nothing, and a take-over brings its tab to the front instead.
+   */
+  supports?(feature: string): boolean;
+  /**
    * What the owner did in the page itself, for one session: `takeover` from the
    * in-tab bar's Take over. Returns the unsubscribe. Since extension protocol
    * "bar" (docs/browser.md, "Work in view").
@@ -115,7 +124,10 @@ export { LOGIN_GRACE_MS, LOGIN_GONE };
  * the working bar, `giveback` from the bar a held tab shows (extension
  * from 0.1.0-pre.39).
  */
-export type ExtensionEvent = 'takeover' | 'giveback';
+export type ExtensionEvent = 'takeover' | 'giveback' | 'castended';
+
+/** How the Canvas's picture is painted while an agent works: the hand's normal size, two frames a second. */
+export const WATCH_QUALITY = { ...HAND_QUALITY, interval: 500 } as const;
 
 export const NOT_CONNECTED = 'Your browser is not connected. Open the buddi extension in Chrome and press Connect.';
 
@@ -178,14 +190,56 @@ export class ExtensionDriver implements BrowserDriver {
     this.#events = this.bridge.events?.(this.session, (event) => {
       if (event === 'takeover') this.#onTakeover?.();
       else if (event === 'giveback') this.#onGiveBack?.();
+      // Chrome took the picture away (the tab closed, or the owner pressed Cancel on its debugging bar).
+      else if (event === 'castended') { this.#latest = undefined; this.#watching = false; }
     });
   }
   /** The in-tab bar's Take over: the service treats it as the Canvas button. */
   onOwnerTakeover(listener: () => void): void { this.#onTakeover = listener; this.#listen(); }
   /** The held tab's Give it back: the service treats it as the Canvas's. */
   onOwnerGiveBack(listener: () => void): void { this.#onGiveBack = listener; this.#listen(); }
-  /** Take-over brings the tab forward in the owner's Chrome; nothing is streamed. */
-  readonly holdsInPlace = 'chrome' as const;
+  /** Does the connected extension paint its tabs live (focus emulated) and take the remote hand? */
+  #live(): boolean { return this.bridge.supports?.('live') === true; }
+  /**
+   * Only an extension from before the live picture holds the page in place on
+   * Take over: its background tab never painted, so its tab came to the front
+   * instead. A live one is taken over like buddi's own browser, from wherever
+   * the owner is, and Bring the tab to the front is its own action.
+   */
+  get holdsInPlace(): 'chrome' | undefined { return this.#live() ? undefined : 'chrome'; }
+
+  /*
+   * The Canvas's picture. One subscription for the driver's life: every frame
+   * the extension paints for this session lands here, the newest is kept for
+   * the Page tab (`livePicture`), and while the owner holds the page the same
+   * frames go to their hand.
+   */
+  #latest?: HandFrame;
+  #watching = false;
+  #handFrames?: (frame: HandFrame) => void;
+  #subscribed?: () => void;
+  #subscribe(): void {
+    if (this.#subscribed || !this.bridge.frames) return;
+    this.#subscribed = this.bridge.frames(this.session, (frame) => {
+      this.#latest = frame;
+      this.#handFrames?.(frame);
+    });
+  }
+  /** The newest frame of the page as it is now, while the extension paints it. Never evidence. */
+  livePicture(): Buffer | undefined { return this.#watching || this.#handFrames ? this.#latest?.jpeg : undefined; }
+  /**
+   * Ask the extension to paint this session's tab for the Canvas. Idempotent
+   * on its side; it follows the agent to a new tab by itself. A failure is a
+   * picture missing, never a failed action.
+   */
+  async #watch(): Promise<void> {
+    if (!this.#live() || this.#handFrames || !this.bridge.connected()) return;
+    this.#subscribe();
+    try {
+      await this.bridge.send({ name: 'screencast.start', session: this.session, args: { ...WATCH_QUALITY, everyNthFrame: 1, watch: true } });
+      this.#watching = true;
+    } catch { this.#watching = false; }
+  }
 
   /** Whether the owner holds this session's tab, and until when a Save tapped there still counts after they gave it back. */
   #held = false;
@@ -253,11 +307,13 @@ export class ExtensionDriver implements BrowserDriver {
       // The extension's one line about where the page opened, on the observation passthrough.
       const note = (result.observation as { note?: unknown } | null | undefined)?.note;
       if (typeof note === 'string' && note.trim() !== '') this.#note = note.trim().slice(0, 300);
+      await this.#watch();
       return;
     }
     if (command.action === 'tab') {
       this.#invalidate();
       await this.#send('tab', { tabId: command.tabId });
+      await this.#watch();
       return;
     }
     if (!this.#observation || command.observation !== this.#observation.id) throw new BrowserPreconditionError('Stale page observation. Use the latest observation.id and target ref.');
@@ -331,17 +387,44 @@ export class ExtensionDriver implements BrowserDriver {
   }
 
   /**
-   * The owner takes the page where it is: the session's tab becomes the
-   * active one and its window comes forward, with the bar saying buddi waits
-   * and offering Give it back. The agent's evidence is dropped.
+   * The owner takes the page. The agent's evidence is dropped; with a live
+   * extension that is all, and the remote hand is theirs from wherever they
+   * are. An extension from before brings the tab to the front instead.
    */
   async takeover(): Promise<void> {
+    this.#invalidate();
+    if (!this.#live()) await this.bringToFront();
+  }
+  /**
+   * Bring the tab to the front, for an owner at this machine: the session's
+   * tab becomes the active one and its window comes forward, with the bar
+   * saying buddi waits and offering Give it back (and the save-a-login
+   * question for a sign-in made there).
+   */
+  async bringToFront(): Promise<void> {
     this.#invalidate();
     if (!this.bridge.connected()) throw new Error(NOT_CONNECTED);
     // What the tab needs to ask about a sign-in: the sites never to ask about, the logins already kept.
     const logins = this.options.logins?.();
     await this.bridge.send({ name: 'hold', session: this.session, args: logins ? { logins } : {}, owner: true });
     this.#held = true;
+  }
+
+  /**
+   * Capture, for the owner's Files: the tab's viewport as a PNG, password
+   * fields painted over, with its title and address. Whoever holds the page;
+   * nothing of the agent's evidence is spent.
+   */
+  async capture(): Promise<{ png: Buffer; title: string; url: string }> {
+    if (!this.#live()) throw new BrowserPreconditionError('Update the buddi extension in Chrome to capture a page there.');
+    if (!this.bridge.connected()) throw new BrowserPreconditionError(NOT_CONNECTED);
+    const result = await this.bridge.send({ name: 'capture', session: this.session, args: {}, owner: true });
+    const png = typeof result.screenshot === 'string' && result.screenshot !== '' ? Buffer.from(result.screenshot, 'base64') : undefined;
+    if (!png) throw new BrowserPreconditionError('Your Chrome did not hand over a picture of that page.');
+    const page = (result.observation ?? {}) as { url?: unknown; title?: unknown };
+    const url = typeof page.url === 'string' ? page.url.slice(0, 4096) : '';
+    this.#checkHost(url);
+    return { png, title: typeof page.title === 'string' ? page.title.slice(0, 1000) : '', url };
   }
   /**
    * The owner took over mid-action: the command is abandoned, the tab is not.
@@ -378,13 +461,15 @@ export class ExtensionDriver implements BrowserDriver {
   readonly supportsHand = true;
   /** No socket to the owner's Chrome is no screencast out of it. */
   handReady(): boolean { return this.bridge.connected(); }
-  #frames?: () => void;
   readonly hand: BrowserHand = {
     start: async (onFrame: (frame: HandFrame) => void, quality: HandQuality = HAND_QUALITY) => {
-      this.#frames?.();
-      this.#frames = this.bridge.frames?.(this.session, onFrame);
+      this.#subscribe();
+      this.#handFrames = onFrame;
       this.#invalidate();
-      await this.#send('screencast.start', { ...quality, everyNthFrame: 1 });
+      // The last picture the Canvas had is the hand's first, so the owner never looks at an empty frame.
+      if (this.#latest) onFrame(this.#latest);
+      try { await this.#send('screencast.start', { ...quality, everyNthFrame: 1 }); }
+      catch (error) { this.#handFrames = undefined; throw error; }
     },
     /**
      * A smaller picture, without dropping the subscription.
@@ -394,19 +479,42 @@ export class ExtensionDriver implements BrowserDriver {
      * listener because that listener belongs to the session, not to the cast.
      */
     tune: async (quality: HandQuality) => {
-      if (!this.#frames || !this.bridge.connected()) return;
+      if (!this.#handFrames || !this.bridge.connected()) return;
       await this.#send('screencast.start', { ...quality, everyNthFrame: 1 }).catch(() => undefined);
     },
     input: async (event: HandInput) => {
-      // Back, forward and an address are Chrome's own buttons, right there in the owner's window.
-      if (event.kind === 'nav') throw new BrowserPreconditionError('Use Chrome’s own buttons for that page.');
       if (event.kind === 'copy') return;
+      if (event.kind === 'nav') {
+        // An extension from before has no window buttons; Chrome's own are right there in the owner's window.
+        if (!this.#live()) throw new BrowserPreconditionError('Use Chrome’s own buttons for that page.');
+        // A typed address goes through the same check an agent's navigate does.
+        if (event.action === 'navigate') {
+          const checked = checkUrl(event.url ?? '').url;
+          if (this.allowedHosts?.length && !this.allowedHosts.includes(checked.hostname)) throw new BrowserPreconditionError('This website is outside the configured browser hosts.');
+          await this.#send('input', { kind: 'nav', action: 'navigate', url: checked.href }, true);
+          return;
+        }
+        await this.#send('input', { kind: 'nav', action: event.action }, true);
+        return;
+      }
       await this.#send('input', event as unknown as Record<string, unknown>, true);
     },
+    /** The owner's Cmd/Ctrl+C: the selection in the tab they hold, never a password field. */
+    copy: async () => {
+      if (!this.#live() || !this.bridge.connected()) return '';
+      const result = await this.bridge.send({ name: 'copy', session: this.session, args: {}, owner: true }).catch(() => undefined);
+      const copied = (result?.observation as { copied?: unknown } | null | undefined)?.copied;
+      return typeof copied === 'string' ? copied.slice(0, MAX_HAND_COPY) : '';
+    },
+    /** The owner gave it back: the picture goes back to watching for the Canvas, or stops. */
     stop: async () => {
-      this.#frames?.();
-      this.#frames = undefined;
+      this.#handFrames = undefined;
       if (!this.bridge.connected()) return;
+      if (this.#live()) {
+        this.#watching = false;
+        await this.#watch();
+        if (this.#watching) return;
+      }
       await this.#send('screencast.stop').catch(() => undefined);
     },
   };
@@ -416,8 +524,11 @@ export class ExtensionDriver implements BrowserDriver {
     this.#downloadsOff?.();
     this.#downloadsOff = undefined;
     // The listener lives as long as the driver: a page re-opened in the same session keeps its bar.
-    this.#frames?.();
-    this.#frames = undefined;
+    this.#subscribed?.();
+    this.#subscribed = undefined;
+    this.#handFrames = undefined;
+    this.#latest = undefined;
+    this.#watching = false;
     // A closed socket has already forgotten the session; nothing to close.
     if (!this.bridge.connected()) return;
     await this.bridge.send({ name: 'close', session: this.session, args: {} }).catch(() => undefined);

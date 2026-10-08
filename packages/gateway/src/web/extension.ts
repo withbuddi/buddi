@@ -54,6 +54,14 @@ const COMMAND_TIMEOUT_MS = 60_000;
 /** A hello that never arrives is a socket that never becomes anything. */
 const HELLO_TIMEOUT_MS = 15_000;
 const MAX_FRAME_BYTES = 32 * 1024 * 1024;
+/**
+ * What this gateway tells the extension it reads on the socket, in the
+ * challenge and in `paired`. `frames.binary`: a screencast frame as one binary
+ * message (`readExtensionFrame`), the picture as bytes rather than base64.
+ */
+export const GATEWAY_FEATURES = ['frames.binary'] as const;
+/** What the extension may claim it can do in its hello; anything else is not believed. */
+const KNOWN_EXTENSION_FEATURES = new Set(['live']);
 
 /** What `<data>/extension.json` holds. Never the token itself. */
 export interface ExtensionRecord {
@@ -104,6 +112,13 @@ export interface ExtensionView {
    * place until it is paired again with the new address.
    */
   portMoved?: { from: number; to: number };
+  /**
+   * What this buddi is called in the extension's popup and on its tab groups.
+   * One extension can work for several buddis; this is this one's pairing.
+   */
+  name: string;
+  /** The connected extension paints its tabs live and takes the remote hand (it said `live`). */
+  live: boolean;
 }
 
 /** `installation.json`'s moved web port, when it moved after `pairedAt`. */
@@ -236,6 +251,9 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #greeted = new WeakSet<WebSocket>();
   /** When each extension id last got a new pairing code (`PAIR_THROTTLE_MS`). */
   #lastPair = new Map<string, number>();
+  /** What each socket's hello said it can do; the adopted socket's is `#features`. */
+  #said = new WeakMap<WebSocket, Set<string>>();
+  #features = new Set<string>();
   /** The three intervals are options so a test does not have to wait a minute. */
   constructor(readonly options: { env?: NodeJS.ProcessEnv; now?: () => number; log?: (line: string) => void;
     pingMs?: number; commandTimeoutMs?: number; helloTimeoutMs?: number; authTimeoutMs?: number; cancelGraceMs?: number; pairThrottleMs?: number } = {}) {
@@ -305,7 +323,9 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #accept(ws: WebSocket, extensionId: string): void {
     const hello = setTimeout(() => { if (this.#socket !== ws && this.#pair?.socket !== ws && this.#challenge?.socket !== ws) ws.close(1002, 'no hello'); }, this.options.helloTimeoutMs ?? HELLO_TIMEOUT_MS);
     hello.unref?.();
-    ws.on('message', (data) => {
+    ws.on('message', (data, isBinary) => {
+      // A screencast frame, as bytes: only from the paired socket, never parsed as JSON.
+      if (isBinary) { this.#binaryFrame(ws, data); return; }
       let frame: Record<string, unknown>;
       try { frame = JSON.parse(String(data)) as Record<string, unknown>; }
       catch { ws.close(1003, 'not json'); return; }
@@ -400,7 +420,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
    * kept nowhere. Only from the paired socket, only a known event name.
    */
   #event(ws: WebSocket, frame: Record<string, unknown>): void {
-    if (ws !== this.#socket || (frame.name !== 'takeover' && frame.name !== 'giveback') || typeof frame.session !== 'string') return;
+    if (ws !== this.#socket || (frame.name !== 'takeover' && frame.name !== 'giveback' && frame.name !== 'castended') || typeof frame.session !== 'string') return;
     const event: ExtensionEvent = frame.name;
     for (const listener of this.#events.get(frame.session) ?? []) {
       try { listener(event); } catch { /* a listener never breaks the socket */ }
@@ -424,7 +444,21 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const raw = (frame.metadata ?? {}) as Record<string, unknown>;
     const number = (key: string): number => { const value = raw[key]; return typeof value === 'number' && Number.isFinite(value) ? value : 0; };
     onFrame({ jpeg: Buffer.from(data, 'base64'), metadata: { deviceWidth: number('deviceWidth'), deviceHeight: number('deviceHeight'),
-      pageScaleFactor: number('pageScaleFactor') || 1, offsetTop: number('offsetTop'), scrollOffsetX: number('scrollOffsetX'), scrollOffsetY: number('scrollOffsetY') } });
+      pageScaleFactor: number('pageScaleFactor') || 1, offsetTop: number('offsetTop'), scrollOffsetX: number('scrollOffsetX'), scrollOffsetY: number('scrollOffsetY'),
+      ...pageUrl(frame.url) } });
+  }
+
+  /**
+   * The same frame as one binary message: the extension packs it the way the
+   * dashboard reads it (`readExtensionFrame`), with the session in the header.
+   * Handed to that session's listener and kept nowhere.
+   */
+  #binaryFrame(ws: WebSocket, data: unknown): void {
+    if (ws !== this.#socket || !this.#live) return;
+    const bytes = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data as Buffer[]) : Buffer.from(data as ArrayBuffer);
+    const read = readExtensionFrame(bytes);
+    if (!read) return;
+    this.#frames.get(read.session)?.(read.frame);
   }
 
   #clearPair(): void {
@@ -450,6 +484,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
   async #hello(ws: WebSocket, frame: Record<string, unknown>, extensionId: string): Promise<void> {
     const version = typeof frame.extension === 'string' ? frame.extension.slice(0, 40) : '';
     const nonce = typeof frame.nonce === 'string' ? frame.nonce.slice(0, 128) : '';
+    this.#said.set(ws, new Set(Array.isArray(frame.features) ? frame.features.filter((item): item is string => typeof item === 'string' && KNOWN_EXTENSION_FEATURES.has(item)) : []));
     const record = await this.#read();
     // One browser per buddi: a different unpacked copy is a different browser,
     // and it pairs only after the owner has forgotten this one.
@@ -471,7 +506,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
       timer.unref?.();
       this.#challenge = { socket: ws, nonce, extension: version, extensionId, timer };
       this.#log(`extension: hello from ${extensionId} (${version || 'no version'}), paired: proof sent`);
-      ws.send(JSON.stringify({ type: 'challenge', proof: pairingProof(record.tokenHash, nonce), installation: this.#installation() }));
+      ws.send(JSON.stringify({ type: 'challenge', proof: pairingProof(record.tokenHash, nonce), installation: this.#installation(), name: this.#name(), features: [...GATEWAY_FEATURES] }));
       return;
     }
     // No pairing, or one this buddi has forgotten: ask for the owner instead.
@@ -527,7 +562,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#clearChallenge();
     this.#adopt(ws, { ...record, extension: challenge.extension || record.extension, extensionId,
       lastSeenAt: new Date(this.#now()).toISOString() });
-    await this.#announce(ws, { type: 'paired', installation: this.#installation() });
+    await this.#announce(ws, { type: 'paired', installation: this.#installation(), name: this.#name(), features: [...GATEWAY_FEATURES] });
     this.#log(`extension: ${extensionId} reconnected`);
     await this.#write(this.#record!);
   }
@@ -585,6 +620,16 @@ export class ExtensionEndpoint implements ExtensionBridge {
     return address?.port ? `127.0.0.1:${address.port}` : 'buddi';
   }
 
+  /**
+   * What this buddi calls itself in the extension's popup and on its tab
+   * groups: the data folder's own name (`buddi` for the release, `buddi-dev`
+   * for a checkout), or `buddi`.
+   */
+  #name(): string { return instanceName(this.#env()); }
+
+  /** Did the connected extension say, in its hello, that it can do this? */
+  supports(feature: string): boolean { return this.connected() && this.#features.has(feature); }
+
   #adopt(ws: WebSocket, record: ExtensionRecord): void {
     if (this.#socket && this.#socket !== ws) {
       const previous = this.#socket;
@@ -593,6 +638,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     }
     this.#socket = ws;
     this.#live = false;
+    this.#features = this.#said.get(ws) ?? new Set();
     this.#record = record;
     this.#loaded = true;
     this.#clearPair();
@@ -698,6 +744,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const pending = !!this.#pair && this.#pair.expiresAt > this.#now();
     this.#buddiVersion ??= currentVersion(this.#env()).then((version) => version.split(' ')[0] || version);
     return { connected: this.connected(), pending, path: await extensionDir(this.#env()), checkout: await runsFromCheckout(this.#env()), buddi: await this.#buddiVersion, extensionMinimum: MIN_EXTENSION_VERSION,
+      name: this.#name(), live: this.supports('live'),
       ...(record ? { pairedAt: record.pairedAt, extension: record.extension, lastSeenAt: record.lastSeenAt } : {}),
       ...((): { portMoved?: { from: number; to: number } } => {
         const moved = portMovedSincePairing(this.#env(), record?.pairedAt);
@@ -733,7 +780,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const now = new Date(this.#now()).toISOString();
     this.#adopt(pending.socket, { tokenHash: hashToken(token), pairedAt: now, extension: pending.extension, extensionId: pending.extensionId, lastSeenAt: now });
     await this.#write(this.#record!);
-    await this.#announce(pending.socket, { type: 'paired', token, installation: this.#installation() });
+    await this.#announce(pending.socket, { type: 'paired', token, installation: this.#installation(), name: this.#name(), features: [...GATEWAY_FEATURES] });
     this.#log(`extension: paired with ${pending.extensionId}`);
     return { status: 200, body: await this.view() as unknown as Record<string, unknown> };
   }
@@ -845,6 +892,40 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#wss.close();
     this.#server = undefined;
   }
+}
+
+/** A frame's address, when it is a web one; nothing else is believed. */
+function pageUrl(value: unknown): { url?: string } {
+  return typeof value === 'string' && value.length <= 4096 && /^https?:\/\//i.test(value) ? { url: value } : {};
+}
+
+/**
+ * What a buddi is called in the extension: its data folder's name when that
+ * reads like one (`buddi`, `buddi-dev`), else `buddi`.
+ */
+export function instanceName(env: NodeJS.ProcessEnv = process.env): string {
+  const base = path.basename(dataDir(env));
+  return /^buddi[\w.-]{0,40}$/i.test(base) ? base : 'buddi';
+}
+
+/**
+ * One binary frame from the extension: a version byte (1), the header's
+ * length in two big-endian bytes, the header as JSON (`session` and the six
+ * numbers, and the tab's address), then the JPEG. The same layout as
+ * `packFrame` and the dashboard's `readFrame`. Anything else is nothing.
+ */
+export function readExtensionFrame(bytes: Buffer): { session: string; frame: HandFrame } | undefined {
+  if (bytes.length < 4 || bytes[0] !== 1) return undefined;
+  const length = bytes.readUInt16BE(1);
+  if (length === 0 || length > 8192 || 3 + length >= bytes.length) return undefined;
+  let header: Record<string, unknown>;
+  try { header = JSON.parse(bytes.subarray(3, 3 + length).toString('utf8')) as Record<string, unknown>; }
+  catch { return undefined; }
+  if (!header || typeof header !== 'object' || typeof header.session !== 'string' || header.session === '' || header.session.length > 80) return undefined;
+  const number = (key: string): number => { const value = header[key]; return typeof value === 'number' && Number.isFinite(value) ? value : 0; };
+  return { session: header.session, frame: { jpeg: bytes.subarray(3 + length), metadata: { deviceWidth: number('deviceWidth'), deviceHeight: number('deviceHeight'),
+    pageScaleFactor: number('pageScaleFactor') || 1, offsetTop: number('offsetTop'), scrollOffsetX: number('scrollOffsetX'), scrollOffsetY: number('scrollOffsetY'),
+    ...pageUrl(header.url) } } };
 }
 
 /** The longest user name and password a login frame may carry; a form field, never a file. */

@@ -2689,6 +2689,8 @@ export const api = {
   browserSettings: (settings: Partial<ControlSettings> & { forgetSignInSite?: string }) => post<BrowserStatus>('/browser/settings', settings),
   /** Capture: a full-resolution PNG of the page, saved to Files. */
   browserCapture: (sessionId: string) => post<{ artifactId: string; name: string; mime: string }>('/browser/capture', { sessionId }),
+  /** Bring the tab to the front: a page the owner holds in their Chrome, for when they are at the machine. */
+  browserFront: (sessionId: string) => post<BrowserStatus>('/browser/front', { sessionId }),
   browserPin: (conversationId: string, route: 'auto' | BrowserRoute) => post<BrowserStatus>('/browser/pin', { conversationId, route }),
   /** "Save this login?" answered: the question's id and the owner's word. The password never leaves the host. */
   browserLogin: (id: string, decision: LoginDecision) => post<LoginAnswer>('/browser/login', { id, decision }),
@@ -3395,6 +3397,10 @@ export interface ExtensionState {
   portMoved?: { from: number; to: number };
   /** buddi runs from a source checkout, where "Install unpacked" is worth offering. Optional: an older gateway does not send it. */
   checkout?: boolean;
+  /** What this buddi is called in the extension's popup and on its tab groups (`buddi`, `buddi-dev`). Optional: an older gateway does not send it. */
+  name?: string;
+  /** The connected extension paints its tabs live and takes the remote hand. Optional: an older gateway does not send it. */
+  live?: boolean;
 }
 export interface BrowserStatus {
   mode?: BrowserMode;
@@ -3424,8 +3430,9 @@ export interface BrowserStatus {
   handReason?: 'browser-offline';
   /**
    * The owner holds the page where it is: a page in their Chrome was brought
-   * to the front there, so no frame comes. Draw "it's in your Chrome" with
-   * Give it back (`resume`), not a picture. Absent: take-over streams as before.
+   * to the front there (Bring the tab to the front, or an extension from
+   * before the live picture), so no frame comes. Draw "it's in your Chrome"
+   * with Give it back (`resume`), not a picture. Absent: take-over streams.
    */
   held?: { by: 'owner'; where: 'chrome' };
   /** The owner's Chrome and this buddi: not paired, paired but closed, or connected. Optional: an older gateway does not send it. */

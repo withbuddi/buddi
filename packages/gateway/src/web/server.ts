@@ -3319,6 +3319,22 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (shot.conversationId) await recordArtifactUse(deps.pool, { artifactId: row.id, conversationId: shot.conversationId, kind: 'produced', at: deps.now() });
       return sendJson(res, 200, { artifactId: row.id, name: row.filename ?? filename, mime: row.mime });
     }
+    /*
+     * Bring the tab to the front: a page in the owner's Chrome that they hold,
+     * for when they are at the machine. The remote hand ends first; the page
+     * is in front of them instead.
+     */
+    if (path === '/api/browser/front') {
+      const body = await readJsonBody(req) as { sessionId?: unknown } | null;
+      if (typeof body?.sessionId !== 'string' || body.sessionId.length > 200) return sendJson(res, 400, { error: 'Name the page to bring forward: { sessionId }.' });
+      if (!browser.front) return sendJson(res, 409, { error: 'This host has no tab to bring to the front.' });
+      try {
+        await hand.close(body.sessionId, 'The tab is in front of you in Chrome.');
+        return sendJson(res, 200, { ...await browser.front(body.sessionId), hand: false });
+      } catch (error) {
+        return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     const control = /^\/api\/browser\/(stop|takeover|resume|release)$/.exec(path);
     if (control) {
       const body = await readJsonBody(req) as { sessionId?: unknown; forever?: unknown } | null;

@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-341 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+342 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -3992,6 +3992,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | GET | `/api/browser/telemetry` | Browser stops by cause, cards and routes over the last days. | yes |
 | POST | `/api/browser/capture` | Capture: a full-resolution PNG of one page as it is now, whoever holds it, saved to Files under its title and the time. | yes |
 | POST | `/api/browser/stop` | Stop one page, or with no session stop agents' browsing (expires after the set time unless forever). | yes |
+| POST | `/api/browser/front` | Bring a page the owner holds in their Chrome to the front there, for an owner at the machine; the remote hand ends. | yes |
 | POST | `/api/browser/takeover` | Take over the screen from the agent. | yes |
 | POST | `/api/browser/resume` | Give the screen back to the agent. | yes |
 | POST | `/api/browser/release` | Release the session. | yes |
@@ -4215,6 +4216,20 @@ Stop one page, or with no session stop agents' browsing (expires after the set t
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/browser/stop"
 ```
 
+#### `POST /api/browser/front`
+
+Bring a page the owner holds in their Chrome to the front there, for an owner at the machine; the remote hand ends.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ sessionId: string }`
+- **Answer:** `the status, with held: { by: "owner", where: "chrome" } and hand: false`
+- **Errors:** 400; 409 not taken over, or not a page in your Chrome
+- **Since:** 0.1.0-pre.52
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"sessionId":"…"}' "$BUDDI_URL/api/browser/front"
+```
+
 #### `POST /api/browser/takeover`
 
 Take over the screen from the agent.
@@ -4282,7 +4297,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 The browser extension: paired or not, connected or not.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ connected: boolean, pending: boolean, path: string, checkout: boolean, buddi: string, extensionMinimum: string, pairedAt?: string, extension?: string, lastSeenAt?: string, portMoved?: { from: number, to: number } }`
+- **Answer:** `{ connected: boolean, pending: boolean, path: string, checkout: boolean, buddi: string, extensionMinimum: string, name: string, live: boolean, pairedAt?: string, extension?: string, lastSeenAt?: string, portMoved?: { from: number, to: number } }`
 - **Since:** 0.1.0-pre.15
 
 ```sh

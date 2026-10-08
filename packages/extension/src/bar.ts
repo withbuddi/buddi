@@ -179,7 +179,7 @@ export function hideHeldBar(): void {
 }
 
 /** The frame the worker sends the gateway when the owner pressed Take over in the working bar, or Give it back in the held one. */
-export interface OwnerEventMessage { type: 'event'; name: 'takeover' | 'giveback'; session: string }
+export interface OwnerEventMessage { type: 'event'; name: 'takeover' | 'giveback' | 'castended'; session: string }
 
 /** What the worker sends the gateway when the owner answers the save prompt: the password only with Save. */
 export const LOGIN_MESSAGE = 'buddi-login';

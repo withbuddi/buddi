@@ -1,54 +1,68 @@
 /*
- * The popup: where the owner points this browser at their buddi, reads the
- * pairing code, and sees what it is connected to.
+ * The popup: the buddis this browser works for, one row each, and Add a buddi.
  *
  * It holds no connection of its own. Everything it shows comes from the
  * service worker, which is the only thing that speaks to a buddi.
  *
- * One of four states is on screen, never two:
+ * Each row is one of four states, never two at once:
  *
- *   Not connected  the address and Connect (Try again after an error)
- *   Connecting     the address, disabled, while the buddi mints a code
- *   Pairing        the six digits, Copy, and a way to the settings page
- *   Connected      which buddi, what it is doing here, and Forget
+ *   Not connected  the address, and Try again after an error
+ *   Connecting     "Asking this buddi for a code…"
+ *   Pairing        the six digits, Copy, and a way to that buddi's settings
+ *   Connected      how many tabs it is working in, and Open buddi
  *
- * `render` is the whole decision and takes a plain model, so the test drives
- * it against the real `popup.html` with no Chrome in the room.
+ * plus its switch (off: no socket, nothing done in this browser for it) and
+ * Remove. `render` is the whole decision and takes a plain model, so the test
+ * drives it against the real `popup.html` with no Chrome in the room.
  */
 
+import type { PairingView } from './background.js';
 import { DOWNLOADS_PERMISSION } from './downloads.js';
-import type { ClientState } from './protocol.js';
 
-/** What the popup draws from: the worker's state and the little it keeps itself. */
+/** What the popup draws from: the worker's list and the little it keeps itself. */
 export interface PopupModel {
-  state: ClientState;
-  /** The address the worker is pointed at. */
-  gateway: string;
-  /** "Not this buddi" was pressed: show the address even while a code is up. */
-  editing: boolean;
-  /** Tabs in the `buddi` group, when they could be counted. */
-  tabs: number | null;
+  pairings: PairingView[];
+  /** Add a buddi is open. */
+  adding: boolean;
+  /** A dashboard on this machine asked about itself and this browser has no pairing for it: offered in Add a buddi. */
+  asked: string | null;
   /** The worker refused the address itself (not on this machine, not http). */
   refused: string | null;
 }
 
-export type View = 'address' | 'pairing' | 'paired';
+export type RowView = 'off' | 'address' | 'connecting' | 'pairing' | 'paired';
 
 /** Where the dashboard keeps Settings → Browser & apps (route id `computer`, `packages/web/src/routes.ts`). */
 export const SETTINGS_HASH = '#/settings/computer';
 
-const PILL: Record<ClientState['connection'], { word: string; tone: string }> = {
-  offline: { word: 'Not connected', tone: 'idle' },
+const PILL: Record<RowView, { word: string; tone: string }> = {
+  off: { word: 'Off', tone: 'idle' },
+  address: { word: 'Not connected', tone: 'idle' },
   connecting: { word: 'Connecting…', tone: 'waiting' },
   pairing: { word: 'Pairing', tone: 'waiting' },
   paired: { word: 'Connected', tone: 'good' },
 };
 
-export function viewOf(model: Pick<PopupModel, 'state' | 'editing'>): View {
-  const { connection, code } = model.state;
+/** Which state one row is in. */
+export function rowView(entry: Pick<PairingView, 'enabled' | 'state'>): RowView {
+  if (!entry.enabled) return 'off';
+  const { connection, code } = entry.state;
   if (connection === 'paired') return 'paired';
-  if (connection === 'pairing' && code && !model.editing) return 'pairing';
+  if (connection === 'pairing' && code) return 'pairing';
+  if (connection === 'connecting' || connection === 'pairing') return 'connecting';
   return 'address';
+}
+
+/** The one word in the head: the best any buddi is doing. */
+export function summary(pairings: readonly PairingView[]): { word: string; tone: string } {
+  const views = pairings.map(rowView);
+  const connected = views.filter((view) => view === 'paired').length;
+  if (connected > 1) return { word: `${connected} connected`, tone: 'good' };
+  if (connected === 1) return PILL.paired;
+  if (views.includes('pairing')) return PILL.pairing;
+  if (views.includes('connecting')) return PILL.connecting;
+  const failed = pairings.some((entry) => entry.enabled && entry.state.connection === 'offline' && entry.state.error);
+  return { word: 'Not connected', tone: failed ? 'bad' : 'idle' };
 }
 
 /** `http://127.0.0.1:4317/`, or null for an address that is not one. */
@@ -78,43 +92,81 @@ export function workingLine(tabs: number | null): string {
 
 const byId = <T extends HTMLElement>(doc: Document, id: string): T => doc.getElementById(id) as T;
 
+const part = <T extends HTMLElement>(row: Element, name: string): T => row.querySelector(`.${name}`) as T;
+
 /**
- * Draws the model. `textContent` only: the code and the installation name come
- * from the gateway over a socket, and this page never builds markup out of
- * anything it was sent.
+ * Draws the model. `textContent` only: the codes and the names come from the
+ * buddis over sockets, and this page never builds markup out of anything it
+ * was sent.
  */
 export function render(model: PopupModel, doc: Document = document): void {
-  const { state } = model;
-  const view = viewOf(model);
   const pill = byId(doc, 'pill');
-  const { word, tone } = PILL[state.connection] ?? PILL.offline;
-  const failure = model.refused ?? (state.connection === 'offline' ? state.error : null);
+  const { word, tone } = summary(model.pairings);
   pill.textContent = word;
-  pill.dataset['tone'] = failure ? 'bad' : tone;
+  pill.dataset['tone'] = tone;
 
-  // The newly shown view fades in (the CSS animation runs on `hidden` → shown);
-  // the others go at once.
-  for (const section of doc.querySelectorAll<HTMLElement>('.view')) section.hidden = section.dataset['view'] !== view;
-  doc.body.dataset['view'] = view;
+  const list = byId(doc, 'buddis');
+  const template = byId<HTMLTemplateElement>(doc, 'buddi-row');
+  // Rows are kept by id, so a redraw every few seconds does not steal the focus from a switch.
+  const existing = new Map([...list.querySelectorAll<HTMLElement>('.buddi')].map((row) => [row.dataset['id'] ?? '', row]));
+  const wanted = new Set(model.pairings.map((entry) => entry.id));
+  for (const [id, row] of existing) if (!wanted.has(id)) row.remove();
+  for (const entry of model.pairings) {
+    let row = existing.get(entry.id);
+    if (!row) {
+      row = (template.content.firstElementChild as HTMLElement).cloneNode(true) as HTMLElement;
+      row.dataset['id'] = entry.id;
+    }
+    list.appendChild(row);
+    drawRow(row, entry);
+  }
+  list.hidden = model.pairings.length === 0;
 
-  // Not connected / Connecting.
-  const connecting = view === 'address' && state.connection === 'connecting' && !model.editing;
-  const field = byId<HTMLInputElement>(doc, 'gateway');
-  field.disabled = connecting;
+  // Add a buddi: open when asked for, and always when there is no buddi at all.
+  const adding = model.adding || model.pairings.length === 0;
+  byId(doc, 'add').hidden = !adding;
+  byId(doc, 'add-open').hidden = adding;
+  byId(doc, 'add-cancel').hidden = model.pairings.length === 0;
   const notice = byId(doc, 'notice');
-  notice.hidden = !failure || connecting;
-  notice.textContent = failure ?? '';
-  byId(doc, 'asking').hidden = !connecting;
-  byId(doc, 'address-actions').hidden = connecting;
-  byId(doc, 'connect').textContent = failure ? 'Try again' : 'Connect';
-
-  // Pairing. Nothing is left in the code's place when there is no code to show.
-  byId(doc, 'code').textContent = view === 'pairing' ? groupCode(state.code ?? '') : '';
-
-  // Connected.
-  byId(doc, 'paired-to').textContent = view === 'paired' ? `Your buddi at ${state.installation ?? hostOf(model.gateway)}` : '';
-  byId(doc, 'working').textContent = workingLine(model.tabs);
+  notice.hidden = !model.refused;
+  notice.textContent = model.refused ?? '';
+  byId(doc, 'hint').textContent = model.asked
+    ? `The buddi at ${hostOf(model.asked)} asked to be added. Each buddi you add gets its own tab group.`
+    : 'A buddi running on this machine. Each buddi you add gets its own tab group.';
 }
+
+function drawRow(row: HTMLElement, entry: PairingView): void {
+  const view = rowView(entry);
+  row.dataset['state'] = view;
+  row.dataset['enabled'] = entry.enabled ? 'true' : 'false';
+  row.dataset['colour'] = entry.colour;
+  part(row, 'buddi-name').textContent = entry.name;
+  // A buddi named by its address until it says a name of its own: the address once, not twice.
+  const address = part(row, 'buddi-address');
+  address.textContent = hostOf(entry.origin);
+  address.hidden = entry.name === hostOf(entry.origin);
+  const failure = view === 'address' ? entry.state.error : null;
+  const pill = part(row, 'buddi-pill');
+  pill.textContent = PILL[view].word;
+  pill.dataset['tone'] = failure ? 'bad' : PILL[view].tone;
+  const toggle = part<HTMLInputElement>(row, 'buddi-switch');
+  toggle.checked = entry.enabled;
+  toggle.setAttribute('aria-label', `Work for ${entry.name}`);
+  part(row, 'buddi-pairing').hidden = view !== 'pairing';
+  part(row, 'code').textContent = view === 'pairing' ? groupCode(entry.state.code ?? '') : '';
+  part(row, 'buddi-pairing-hint').hidden = view !== 'pairing';
+  part(row, 'buddi-asking').hidden = view !== 'connecting';
+  const working = part(row, 'buddi-working');
+  working.hidden = view !== 'paired';
+  working.textContent = view === 'paired' ? workingLine(entry.tabs) : '';
+  const error = part(row, 'buddi-error');
+  error.hidden = !failure;
+  error.textContent = failure ?? '';
+  part(row, 'buddi-retry').hidden = view !== 'address';
+  part(row, 'buddi-settings').hidden = view !== 'pairing';
+  part(row, 'buddi-open').hidden = view !== 'paired';
+}
+
 
 /** How long "Open buddi settings" waits for buddi.app to take over before opening the dashboard in a tab. */
 export const APP_WAIT_MS = 1500;
@@ -190,16 +242,20 @@ export const COPIED_FOR = 2000;
  * then lied would be worse than one that says nothing, so a refusal leaves the
  * word alone.
  */
+const restores = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>();
+export function copyInto(button: HTMLButtonElement, read: () => string): void {
+  void (async () => {
+    try { await navigator.clipboard.writeText(read()); } catch { return; }
+    button.textContent = 'Copied';
+    const pending = restores.get(button);
+    if (pending) clearTimeout(pending);
+    restores.set(button, setTimeout(() => { button.textContent = 'Copy'; restores.delete(button); }, COPIED_FOR));
+  })();
+}
+
+/** The same, on a button of its own: every click copies. */
 export function wireCopy(button: HTMLButtonElement, read: () => string): void {
-  let restore: ReturnType<typeof setTimeout> | undefined;
-  button.addEventListener('click', () => {
-    void (async () => {
-      try { await navigator.clipboard.writeText(read()); } catch { return; }
-      button.textContent = 'Copied';
-      if (restore) clearTimeout(restore);
-      restore = setTimeout(() => { button.textContent = 'Copy'; restore = undefined; }, COPIED_FOR);
-    })();
-  });
+  button.addEventListener('click', () => copyInto(button, read));
 }
 
 interface PopupChrome {
@@ -207,11 +263,7 @@ interface PopupChrome {
     sendMessage(message: unknown): Promise<unknown>;
     onMessage: { addListener(fn: (message: unknown) => void): void };
   };
-  tabs: {
-    create(properties: { url: string }): Promise<unknown>;
-    query(query: Record<string, unknown>): Promise<Array<{ groupId?: number }>>;
-  };
-  tabGroups: { query(query: { title?: string }): Promise<Array<{ id: number; title?: string }>> };
+  tabs: { create(properties: { url: string }): Promise<unknown> };
   permissions?: {
     contains(permissions: { permissions: string[] }): Promise<boolean>;
     request(permissions: { permissions: string[] }): Promise<boolean>;
@@ -236,45 +288,38 @@ export async function wireDownloads(doc: Document, permissions: PopupChrome['per
   });
 }
 
-/** The tabs in the `buddi` group (the name `commands.ts` gives it), in every window. */
-export async function countBuddiTabs(api: Pick<PopupChrome, 'tabs' | 'tabGroups'>): Promise<number | null> {
-  try {
-    const groups = new Set((await api.tabGroups.query({ title: 'buddi' })).map((group) => group.id));
-    if (groups.size === 0) return 0;
-    return (await api.tabs.query({})).filter((tab) => tab.groupId !== undefined && groups.has(tab.groupId)).length;
-  } catch { return null; }
-}
-
 async function ask<T>(message: unknown): Promise<T | undefined> {
   try { return await chrome.runtime.sendMessage(message) as T; } catch { return undefined; }
 }
 
+interface ListAnswer { pairings?: PairingView[]; asked?: string | null; error?: string; added?: string }
+
+/** The row a click landed in, and its buddi. */
+function rowOf(target: EventTarget | null, model: PopupModel): { row: HTMLElement; entry: PairingView } | null {
+  const row = (target as HTMLElement | null)?.closest?.('.buddi') as HTMLElement | null;
+  const entry = row ? model.pairings.find((candidate) => candidate.id === row.dataset['id']) : undefined;
+  return row && entry ? { row, entry } : null;
+}
+
 async function main(): Promise<void> {
   const field = byId<HTMLInputElement>(document, 'gateway');
-  const model: PopupModel = {
-    state: { connection: 'offline', code: null, installation: null, error: null },
-    gateway: field.value, editing: false, tabs: null, refused: null,
-  };
+  const model: PopupModel = { pairings: [], adding: false, asked: null, refused: null };
   const draw = () => render(model, document);
-  const recount = async () => {
-    if (model.state.connection !== 'paired') return;
-    model.tabs = await countBuddiTabs(chrome);
-    draw();
+  const take = (answer: ListAnswer | undefined) => {
+    if (!answer) return;
+    if (answer.pairings) model.pairings = answer.pairings;
+    if (answer.asked !== undefined) model.asked = answer.asked;
+    // A dashboard asked to be added: its address is what the field offers.
+    if (model.asked && !model.adding && document.activeElement !== field) field.value = model.asked;
   };
-
-  const address = await ask<{ gateway: string }>({ type: 'buddi-gateway' });
-  if (address?.gateway) { model.gateway = address.gateway; field.value = address.gateway; }
-  const current = await ask<{ state: ClientState }>({ type: 'buddi-get-state' });
-  if (current?.state) model.state = current.state;
+  const refresh = async () => { take(await ask<ListAnswer>({ type: 'buddi-get-state' })); draw(); };
+  await refresh();
+  // A dashboard asked to be added: Add a buddi opens on its address, for the owner to accept.
+  if (model.asked) model.adding = true;
   draw();
-  void recount();
 
   chrome.runtime.onMessage.addListener((message) => {
-    const frame = message as { type?: string; state?: ClientState } | null;
-    if (frame?.type !== 'buddi-state' || !frame.state) return;
-    model.state = frame.state;
-    draw();
-    void recount();
+    if ((message as { type?: string } | null)?.type === 'buddi-state') void refresh();
   });
 
   /*
@@ -283,57 +328,56 @@ async function main(): Promise<void> {
    * socket went is a code buddi no longer waits for; asking also wakes the
    * worker, which reconnects and shows a fresh one.
    */
-  setInterval(() => {
-    void ask<{ state: ClientState }>({ type: 'buddi-get-state' }).then((answer) => {
-      if (!answer?.state || JSON.stringify(answer.state) === JSON.stringify(model.state)) return;
-      model.state = answer.state;
-      draw();
-      void recount();
-    });
-  }, 3000);
+  setInterval(() => { void refresh(); }, 3000);
 
-  wireCopy(byId<HTMLButtonElement>(document, 'copy'), () => byId(document, 'code').textContent ?? '');
-
-  byId(document, 'connect').addEventListener('click', async () => {
-    const gateway = field.value.trim();
-    model.refused = null;
-    model.editing = false;
-    const answer = await ask<{ state?: ClientState; error?: string }>({ type: 'buddi-connect', gateway });
-    if (answer?.error) model.refused = answer.error;
-    else model.gateway = gateway || model.gateway;
-    if (answer?.state) model.state = answer.state;
-    draw();
+  const list = byId(document, 'buddis');
+  list.addEventListener('change', (event) => {
+    const hit = rowOf(event.target, model);
+    if (!hit || !(event.target as HTMLElement).classList.contains('buddi-switch')) return;
+    void ask<ListAnswer>({ type: 'buddi-enable', id: hit.entry.id, enabled: (event.target as HTMLInputElement).checked }).then((answer) => { take(answer); draw(); });
   });
-  field.addEventListener('keydown', (event) => { if (event.key === 'Enter') byId(document, 'connect').click(); });
-  byId(document, 'not-this').addEventListener('click', () => {
-    model.editing = true;
+  list.addEventListener('click', (event) => {
+    const hit = rowOf(event.target, model);
+    const button = (event.target as HTMLElement | null)?.closest?.('button') as HTMLButtonElement | null;
+    if (!hit || !button) return;
+    const { entry, row } = hit;
+    if (button.classList.contains('buddi-copy')) { copyInto(button, () => part(row, 'code').textContent ?? ''); return; }
+    if (button.classList.contains('buddi-retry')) { void ask<ListAnswer>({ type: 'buddi-retry', id: entry.id }).then((answer) => { take(answer); draw(); }); return; }
+    if (button.classList.contains('buddi-remove')) { void ask<ListAnswer>({ type: 'buddi-remove', id: entry.id }).then((answer) => { take(answer); draw(); }); return; }
+    if (button.classList.contains('buddi-open')) { const url = dashboardUrl(entry.origin); if (url) void chrome.tabs.create({ url }); return; }
+    if (button.classList.contains('buddi-settings')) {
+      let lost = false;
+      const away = () => { lost = true; };
+      window.addEventListener('blur', away, { once: true });
+      document.addEventListener('visibilitychange', away, { once: true });
+      openSettings({
+        gateway: entry.origin, code: entry.state.connection === 'pairing' ? entry.state.code : null, userAgent: navigator.userAgent,
+        // A link clicked in this page: Chrome hands buddi:// to the app registered for it, or does nothing.
+        launch: (url) => { const link = document.createElement('a'); link.href = url; link.rel = 'noopener'; link.click(); },
+        openTab: (url) => { void chrome.tabs.create({ url }); },
+        focusLost: () => lost || !document.hasFocus(),
+      });
+    }
+  });
+
+  const connect = async () => {
+    model.refused = null;
+    const answer = await ask<ListAnswer>({ type: 'buddi-add', gateway: field.value.trim() });
+    if (answer?.error) model.refused = answer.error;
+    else { model.adding = false; model.asked = null; }
+    take(answer);
+    draw();
+  };
+  byId(document, 'connect').addEventListener('click', () => { void connect(); });
+  field.addEventListener('keydown', (event) => { if (event.key === 'Enter') void connect(); });
+  byId(document, 'add-open').addEventListener('click', () => {
+    model.adding = true; model.refused = null;
     draw();
     field.focus();
     field.select();
   });
-  const open = (hash: string) => {
-    const url = dashboardUrl(model.gateway, hash);
-    if (url) void chrome.tabs.create({ url });
-  };
-  byId(document, 'open-settings').addEventListener('click', () => {
-    let lost = false;
-    const away = () => { lost = true; };
-    window.addEventListener('blur', away, { once: true });
-    document.addEventListener('visibilitychange', away, { once: true });
-    openSettings({
-      gateway: model.gateway, code: model.state.connection === 'pairing' ? model.state.code : null, userAgent: navigator.userAgent,
-      // A link clicked in this page: Chrome hands buddi:// to the app registered for it, or does nothing.
-      launch: (url) => { const link = document.createElement('a'); link.href = url; link.rel = 'noopener'; link.click(); },
-      openTab: (url) => { void chrome.tabs.create({ url }); },
-      focusLost: () => lost || !document.hasFocus(),
-    });
-  });
-  byId(document, 'open-buddi').addEventListener('click', () => open(''));
+  byId(document, 'add-cancel').addEventListener('click', () => { model.adding = false; model.refused = null; draw(); });
   void wireDownloads(document, chrome.permissions);
-  byId(document, 'forget').addEventListener('click', async () => {
-    const answer = await ask<{ state: ClientState }>({ type: 'buddi-forget' });
-    if (answer?.state) { model.state = answer.state; model.tabs = null; draw(); }
-  });
 }
 
 /*

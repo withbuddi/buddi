@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "buddi",
   "version": "0.1.0",
-  "description": "Lets your buddi work in background tabs of this browser. The sites it opens are the ones you ask it for; it opens none on its own.",
+  "description": "Lets the buddis on this computer work in background tabs of this browser, opening only the sites you ask them for.",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwR4JT/OlKKPcZQ33euO9mSv7RrSIWNVanldhT2Uzc9YfzF/X0lg5NfXLc+G/UGFjB8v+uMCbpMhRBZ2SVwDHQH3buv3VEUzuOIDTPHgv99T5lq5imZrDxmIE+EL/fWrsjhcXaIB4e4fn0tJqw6ivJUGmYpG5XhWn65nlLniHfFBKMpZ/y7bVnvfzAgMQUa13qTAVxPTpMRtNl/flQq4Q/vWYm28H7W7OzygDV+/4X2azUrB8yPk67QsipbdDLxiX2GMxjXuKK6iD5CQiytoxTsAqUzB886HbOZsxJfQpRIjrUgBmGjLyaKuz617ZGJW9zS23LmnlL6mkX3+ggca1AQIDAQAB",
   "permissions": ["tabs", "tabGroups", "scripting", "debugger", "storage", "alarms"],

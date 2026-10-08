@@ -264,10 +264,21 @@ export interface BrowserDriver {
   /**
    * Take-over holds the page where it already is instead of streaming it:
    * `takeover()` brings it to the front of the owner's own browser (the tab
-   * activated, its window focused) and `resume()` lets it go. A background
-   * tab cannot be captured, so a screencast of it would never paint.
+   * activated, its window focused) and `resume()` lets it go. Only an
+   * extension from before the live picture: its background tab never painted.
    */
   holdsInPlace?: 'chrome';
+  /**
+   * Bring the page's tab to the front of the owner's own browser, while they
+   * hold it (Bring the tab to the front, for an owner at the machine).
+   */
+  bringToFront?(): Promise<void>;
+  /**
+   * The newest picture of the page as it is now, where the backend paints one
+   * continuously (the owner's Chrome, through the extension's screencast). The
+   * Page tab shows it; it is never evidence for a model.
+   */
+  livePicture?(): Buffer | undefined;
   /** The owner pressed Give it back in the page itself (the bar a held tab shows). Treated as the Canvas's Give it back. */
   onOwnerGiveBack?(listener: () => void): void;
   /**

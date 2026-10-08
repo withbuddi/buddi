@@ -128,7 +128,8 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     await vi.waitFor(async () => expect((await endpoint.view()).pending).toBe(true), { timeout: MINUTE, interval: 200 });
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-    const code = await popup.locator('#code').textContent();
+    // The first row is the buddi the extension knocked on by itself: this test's gateway, mapped onto 4317.
+    const code = await popup.locator('#buddis .buddi .code').first().textContent();
     await popup.close();
     expect(code).toMatch(/^\d{3} \d{3}$/);
 
@@ -190,7 +191,8 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     const ownerTabId = await worker.evaluate(async () => (await (globalThis as any).chrome.tabs.query({ active: true }))[0].id as number);
     const agentTabId = await worker.evaluate(async () => {
       const api = (globalThis as any).chrome;
-      const [group] = await api.tabGroups.query({ title: 'buddi' });
+      // Named after the buddi it belongs to (this test's data folder), and the only buddi in this Chrome.
+      const [group] = await api.tabGroups.query({});
       return (await api.tabs.query({ groupId: group.id }))[0].id as number;
     });
     const activate = (tabId: number) => worker.evaluate(async (id) => {
@@ -265,7 +267,8 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     await act({ action: 'tab', tabId: page.tabs[0]!.id });
     await expect(act({ action: 'tab', tabId: 'tab-not-ours' })).rejects.toThrow(/No such tab/);
     const groups = await worker.evaluate(async () => (await (globalThis as any).chrome.tabGroups.query({})).map((group: { title?: string }) => group.title));
-    expect(groups).toEqual(['buddi']);
+    // One group, named after the buddi it belongs to: its data folder's name here, `buddi` or `buddi-dev` on a real install.
+    expect(groups).toEqual([expect.stringMatching(/^buddi-extension-data-/)]);
 
     // Whatever happened above, the owner's tab is where they left it.
     expect(ownerTab.isClosed()).toBe(false);
@@ -296,6 +299,22 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     await driver.start();
     await act({ action: 'navigate', url: `${FIXTURE_URL}/` });
     let page: Observation = await driver.observe();
+
+    /*
+     * The Canvas's picture, before anyone takes over: the agent's tab is a
+     * background tab (the owner's own tab is the one in front), and a hidden
+     * tab paints nothing for a screencast unless focus is emulated. Frames
+     * arriving here is that working in a real Chrome.
+     */
+    expect(endpoint.supports('live')).toBe(true);
+    await vi.waitFor(() => expect(driver.livePicture()?.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff])), { timeout: 10_000, interval: 100 });
+    const groupTitle = await worker.evaluate(async () => (await (globalThis as any).chrome.tabGroups.query({}))[0]?.title as string | undefined);
+    expect(groupTitle).toMatch(/^buddi-extension-data-/);
+
+    // Capture: a PNG of the tab as it is, whoever holds it.
+    const shot = await driver.capture();
+    expect(shot.png.subarray(1, 4).toString()).toBe('PNG');
+    expect(shot.url).toBe(`${FIXTURE_URL}/`);
 
     // The take-over itself: the agent's evidence is dropped, and the hand the
     // gateway would offer the dashboard is this driver's own.
@@ -340,7 +359,8 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
      */
     const agentTabId = await worker.evaluate(async () => {
       const api = (globalThis as any).chrome;
-      const [group] = await api.tabGroups.query({ title: 'buddi' });
+      // Named after the buddi it belongs to (this test's data folder), and the only buddi in this Chrome.
+      const [group] = await api.tabGroups.query({});
       return (await api.tabs.query({ groupId: group.id }))[0].id as number;
     });
     const ownerTabId = await worker.evaluate(async () => (await (globalThis as any).chrome.tabs.query({ active: true }))[0].id as number);
