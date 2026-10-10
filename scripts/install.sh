@@ -304,6 +304,8 @@ note "$RUN doctor checks the installation; $RUN uninstall removes it (keeping on
 if [ "$STARTED" = "1" ]; then
   echo
   # A fresh five-minute link, last on screen; on a desktop it opens in the browser.
-  "$COMMAND" || true
-  note "A fresh link any time: $RUN"
+  "$COMMAND" > "$TMP/link.log" 2>&1 || true
+  grep -v -e '^Dashboard: ' -e '^The link is good' "$TMP/link.log" || true
+  grep '^Dashboard: ' "$TMP/link.log" || { cat "$TMP/link.log"; true; }
+  note "The link is good for five minutes. A fresh one any time: $RUN"
 fi
