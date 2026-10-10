@@ -838,6 +838,20 @@ async function run(): Promise<void> {
       console.log(outcome.ok ? gateway.browserLine(gateway.detectBrowser()) : `The browser install failed: ${outcome.detail}. Run buddi browser install to try again.`);
     } else if (firstRun || found.engine === 'none') console.log(gateway.browserLine(found));
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
+    /*
+     * On a Linux desktop the link opens in the owner's browser, as `open` does
+     * on a Mac: only from a graphical session (a terminal on the desktop has
+     * DISPLAY or WAYLAND_DISPLAY; an SSH shell has neither, and a browser
+     * popping up on a screen nobody is looking at helps no one).
+     */
+    if (!args.includes('--no-open') && process.platform === 'linux' && (process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) {
+      const opened = await new Promise<boolean>(resolve => {
+        const child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore', env: { ...process.env } });
+        child.once('error', () => resolve(false));
+        child.once('spawn', () => { child.unref(); resolve(true); });
+      });
+      if (opened) console.log('Opened it in your browser.');
+    }
     return;
   }
   if (!wantsHelp && args[0] === 'backup' && (args[1] === 'restore' || args[1] === 'create')) {

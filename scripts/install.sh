@@ -126,10 +126,16 @@ if [ -f "$RELEASES/current/packages/install/dist/launcher.js" ]; then
   OLD_ROOT=$(cd "$RELEASES/current" && pwd -P)
   OLD_VERSION=$(current_version "$OLD_ROOT")
 fi
+# Another buddi on PATH: npm's (`npm install -g @withbuddi/buddi`) is replaced once this one runs; anything else is named.
+NPM_BUDDI=""; NPM_PKG=""
 if command -v buddi >/dev/null 2>&1; then
   other=$(command -v buddi)
   if [ "$other" != "$COMMAND" ] && ! grep -q "buddi-linux-install" "$other" 2>/dev/null; then
-    dim "another buddi is on your PATH at $other (npm's?); this one goes to $COMMAND."
+    real=$(readlink -f "$other" 2>/dev/null || echo "$other")
+    case "$real" in
+      */node_modules/@withbuddi/buddi/*) NPM_BUDDI="$other"; NPM_PKG="${real%%/node_modules/@withbuddi/buddi/*}/node_modules/@withbuddi/buddi" ;;
+      *) dim "another buddi is on your PATH at $other; this one goes to $COMMAND." ;;
+    esac
   fi
 fi
 if [ -z "$OLD_ROOT" ] && [ -f "$DATA/installation.json" ]; then
@@ -238,12 +244,20 @@ roll_back() {
   die "buddi did not start. See: $COMMAND service logs (or $DATA/logs/supervisor.log)"
 }
 
+STARTED=0
 if [ "${BUDDI_NO_START:-}" = "1" ]; then
   say "Installed. Start it with: $COMMAND"
 elif [ "$HAS_SYSTEMD" = "1" ]; then
   say "Starting buddi"
   # `buddi` writes the systemd user unit (once more on an upgrade, to run the new release) and prints the dashboard link.
-  "$COMMAND" --no-open || roll_back
+  # The link it prints is minted again at the end, so it is the last thing on screen and still fresh.
+  if "$COMMAND" --no-open > "$TMP/start.log" 2>&1; then
+    grep -v -e '^Dashboard: ' -e '^The link is good' -e '^Browser for agents' "$TMP/start.log" | sed 's/^/  /' || true
+  else
+    cat "$TMP/start.log" >&2
+    roll_back
+  fi
+  STARTED=1
 else
   say "Installed, but this session has no systemd user manager (a container, or a shell without a login session)."
   note "Start buddi in the background without a service: $COMMAND --no-service"
@@ -260,10 +274,36 @@ for dir in "$RELEASES"/buddi-* "$RELEASES"/.staging-*; do
 done
 rm -rf "$NODE_DIR.old"
 
+# npm's copy would answer `buddi` instead of this one: removed when this account may, else the one line that does.
+if [ -n "$NPM_BUDDI" ]; then
+  if [ -w "$(dirname "$NPM_PKG")" ] && [ -w "$(dirname "$NPM_BUDDI")" ]; then
+    rm -rf "$NPM_PKG" && rm -f "$NPM_BUDDI"
+    note "removed the npm copy of buddi ($NPM_PKG): this install replaces it"
+  else
+    NPM_LINE="The npm copy of buddi is still at $NPM_BUDDI and comes first on your PATH, so \`buddi\` would run that old copy. It is owned by root; remove it with: sudo rm -rf $NPM_PKG $NPM_BUDDI"
+  fi
+fi
+
 echo
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) note "$BIN_DIR is not on your PATH. Add it (e.g. in ~/.profile): export PATH=\"$BIN_DIR:\$PATH\"" ;;
-esac
 [ -z "$LINGER_LINE" ] || note "$LINGER_LINE"
-note "buddi doctor checks the installation; buddi uninstall removes it (keeping one last backup)."
+[ -z "${NPM_LINE:-}" ] || note "$NPM_LINE"
+# Which `buddi` a shell finds now, and what to type until the next login.
+hash -r 2>/dev/null || true
+RUN="buddi"
+if [ "$(command -v buddi 2>/dev/null)" != "$COMMAND" ]; then
+  RUN="$COMMAND"
+  if grep -qs '\.local/bin' "$HOME/.profile" && [ "$BIN_DIR" = "$HOME/.local/bin" ]; then
+    note "From your next login, buddi is on your PATH (~/.profile adds ~/.local/bin once it exists). Until then, in this terminal:"
+  else
+    note "$BIN_DIR is not on your PATH. Add this line to your shell's profile, and run it now in this terminal:"
+  fi
+  note "  export PATH=\"$BIN_DIR:\$PATH\""
+  [ -z "${NPM_LINE:-}" ] || RUN="$COMMAND"
+fi
+note "$RUN doctor checks the installation; $RUN uninstall removes it (keeping one last backup)."
+if [ "$STARTED" = "1" ]; then
+  echo
+  # A fresh five-minute link, last on screen; on a desktop it opens in the browser.
+  "$COMMAND" || true
+  note "A fresh link any time: $RUN"
+fi
