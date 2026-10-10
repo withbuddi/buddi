@@ -1,7 +1,7 @@
 ---
 title: "Install: one command, then the dashboard"
 status: reference
-updated: 2026-10-03
+updated: 2026-10-10
 ---
 
 # Install: one command, then the dashboard
@@ -13,8 +13,9 @@ is where you set buddi up, upgrade it and add plugins. A source checkout is
 for people working on buddi itself (§14). §13 lists what is not there yet.
 
 buddi runs as a background service on your machine and you reach it in the
-browser. On a Mac you can also install it as an app, with nothing else to
-install (§1.1); there is no Windows installer yet.
+browser. On a Mac you can also install it as an app, and on Linux with one
+command, with nothing else to install (§1.1, §1.2); there is no Windows
+installer yet.
 
 ---
 
@@ -98,6 +99,48 @@ app, on the same data. Then `npm rm -g @withbuddi/buddi` removes the command
 line copy whenever you like. Going the other way, quit the app, drag it to the
 Trash, and `npm install -g @withbuddi/buddi && buddi` (the same version or newer) picks the folder up
 again.
+
+### 1.2 Linux, with nothing installed first
+
+```sh
+curl -fsSL https://withbuddi.com/install.sh | sh
+# or, where there is no curl (Ubuntu desktop ships wget):
+wget -qO- https://withbuddi.com/install.sh | sh
+```
+
+The same buddi as the Mac app, for 64-bit Intel/AMD and ARM Linux with glibc
+2.28 or newer and systemd: `scripts/install.sh` downloads
+`buddi-<version>-linux-<x64|arm64>.tar.gz` from the GitHub release, checks its
+sha256, and installs it under your own account, no sudo, no host Node or npm:
+
+| What | Where |
+|---|---|
+| Node and npm, pinned as in buddi.app (`apps/mac/NODE_VERSION`) | `~/.local/share/buddi/node/` |
+| buddi, the npm tarball with its embedded Postgres | `~/.local/share/buddi/releases/buddi-<version>/`, `current` and `previous` link into them |
+| the command (the bundled node, `current`, this data folder) | `~/.local/bin/buddi` |
+| the service, written by `buddi` | `~/.config/systemd/user/com.buddi.install.<id>.service` |
+
+It then turns on lingering (`loginctl enable-linger`) when the system lets a
+user do that without sudo, so buddi runs after you log out and from boot;
+where it does not, it prints the one `sudo loginctl enable-linger <you>` line.
+It starts the service and prints the dashboard link. A shell without a systemd
+user manager (a container) gets the files and `buddi --no-service` instead.
+Options: `BUDDI_VERSION`, `BUDDI_TARBALL=<file>` (offline: the tarball carries
+`install.sh` too), `BUDDI_DATA_DIR`, `BUDDI_BIN_DIR`, `BUDDI_WEB_PORT`,
+`BUDDI_NO_START=1`. It refuses root, musl (Alpine) and anything but x86_64 and
+aarch64, in one line each.
+
+**Updates** go the Mac app's way (§1.1): Settings → System or
+`buddi upgrade` downloads the release into `releases/` with the bundled npm,
+checks integrity, provenance and its Postgres, takes the backup, switches
+`current`, and systemd starts it. Running the installer again also upgrades:
+a backup first, the new release beside the old one, `current` switched, the
+service restarted (and switched back if it does not start). The installer is
+also what brings a newer Node. `buddi doctor` says which Node and npm run.
+
+**From an npm install.** Run the installer: it uses the same data folder and
+service name, rewrites the unit to the bundled runtime and keeps your data.
+Then `sudo npm uninstall -g @withbuddi/buddi` removes the old command.
 
 ---
 
@@ -540,11 +583,13 @@ unpacked). Nothing about it is macOS-only.
   Everything on this page works there. Computer control (agents working in
   your apps) is the Computer plugin, `@withbuddi/plugin-computer`, and is
   macOS-only.
-- **Linux** is in trial, on a Pop!_OS home server. The npm install works: the
-  file vault, the bundled Postgres, and a systemd *user* unit that `buddi`
-  writes the way it writes the LaunchAgent on macOS (it survives logging out
-  only after `loginctl enable-linger`). The agents' own browser and "Your
-  browser" are untested there. Computer control does not work, and says so.
+- **Linux** installs with one command and no host Node (§1.2), tested on
+  Ubuntu 26.04 arm64; the npm install works too. Both use the file vault, the
+  bundled Postgres, and a systemd *user* unit that `buddi` writes the way it
+  writes the LaunchAgent on macOS (it survives logging out only with
+  lingering on, which the installer turns on when it may). The agents' own
+  browser and "Your browser" are untested there. Computer control does not
+  work, and says so.
 - **Windows** is not supported yet. What is aimed for is the core loop, the
   dashboard, the bundled Postgres, Telegram, email, memory and the web plugin.
   Running commands on the host (`host.exec`) is refused on Windows until it is
@@ -638,6 +683,11 @@ wrong folder never becomes a deleted folder. The command exits 1 when something
 it listed could not be removed, such as a locked keychain or a service that
 would not unload, after it has removed the rest. Its last line is the one that
 removes the package: `npm uninstall -g @withbuddi/buddi`.
+
+For the Linux install (§1.2) the data directory holds the bundled Node and
+the releases too, so they go with it (with `--keep-data`, only they go), and
+so do `~/.local/bin/buddi` and the lingering the installer turned on. Nothing
+is left to remove by hand; the last line is the install command, for later.
 
 In a source checkout the same command removes the service and the keychain
 entries, stops the Docker Postgres (`docker compose down`, the volume stays),

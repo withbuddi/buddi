@@ -8,7 +8,11 @@ import type { ReadyContext } from './environment.js';
 import {
   APP_BUNDLE,
   APP_LAYOUT_VAR,
+  LINUX_INSTALL_VAR,
   appLayout,
+  appRuns,
+  currentLauncher,
+  linuxInstall,
   auditVerdict,
   insideAppBundle,
   placeRelease,
@@ -133,6 +137,22 @@ describe('the app layout', () => {
     expect(recoverySentence(entry)).toContain('npm install -g');
     const lines = upgradeDoctorLines({ ...versionView({ check: { enabled: true }, current: '0.1.0-pre.39', history: [entry] }), app: true }, 'upgrade-failed');
     expect(lines.at(-1)).toContain('Advanced → Restart with the Previous Version');
+  });
+
+  test('the Linux install shares the layout, not the app: its own words and its own way back', () => {
+    const releases = '/home/owner/.local/share/buddi/releases';
+    expect(linuxInstall({ [APP_LAYOUT_VAR]: releases, [LINUX_INSTALL_VAR]: '1' })).toBe(true);
+    expect(appRuns({ [APP_LAYOUT_VAR]: releases, [LINUX_INSTALL_VAR]: '1' })).toBe(false);
+    expect(appRuns({ [APP_LAYOUT_VAR]: releases })).toBe(true);
+    // Without the layout the variable means nothing.
+    expect(linuxInstall({ [LINUX_INSTALL_VAR]: '1' })).toBe(false);
+    expect(currentLauncher(releases)).toBe(`${releases}/current/packages/install/dist/launcher.js`);
+    const entry = { from: '0.1.0-pre.52', to: '0.1.0-pre.53', startedAt: '', outcome: 'failed' as const, step: 'migrating', error: 'boom', backup: 'b.tar.gz' };
+    const sentence = recoverySentence(entry, { linux: true });
+    expect(sentence).toContain('curl -fsSL https://withbuddi.com/install.sh | BUDDI_VERSION=0.1.0-pre.52 sh');
+    expect(sentence).toContain('buddi backup restore b.tar.gz');
+    expect(sentence).not.toContain('npm install');
+    expect(upgradeDoctorLines(versionView({ check: { enabled: true }, current: '0.1.0-pre.52', history: [entry] }), 'upgrade-failed', { linux: true }).at(-1)).toBe(sentence);
   });
 });
 
@@ -349,6 +369,16 @@ describe('an upgrade inside buddi.app', () => {
     });
     return { upgrade, stopGateway, startGateway, install, checkPostgres };
   }
+
+  test('the Linux install upgrades the same way, and its view does not claim to be buddi.app', async () => {
+    const { ctx } = await appInstallation();
+    ctx.env[LINUX_INSTALL_VAR] = '1';
+    const s = appService(ctx);
+    expect((await s.upgrade.view()).app).toBeUndefined();
+    const job = await finished(s.upgrade, (s.upgrade.start() as BackupJob).id);
+    expect(job.phase).toBe('restarting');
+    expect(s.install).not.toHaveBeenCalled();
+  });
 
   test('stages outside the bundle, switches current, keeps the bundle as previous, and hands over', async () => {
     const { ctx, releases } = await appInstallation();

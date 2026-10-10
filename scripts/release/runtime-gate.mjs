@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url';
 
 export const PIN_FILE = 'apps/mac/NODE_VERSION';
 export const RECIPE_FILE = 'apps/mac/scripts/fetch-payload.sh';
+/** The Linux install's tarball ships the same pinned runtime (scripts/install.sh unpacks it). */
+export const LINUX_RECIPE_FILE = 'scripts/release/linux-bundle.sh';
 
 /** "v22.23.3" or "22.23.3" -> [22, 23, 3]; anything else throws. */
 export function parseVersion(text) {
@@ -159,6 +161,21 @@ export function readRecipe(root) {
   if (!/ln\s+-s\s+lib\/node_modules\/npm\/bin\/npm-cli\.js\s+"?\$PAYLOAD\/runtime\/npm"?/.test(recipe)) {
     problems.push(`${RECIPE_FILE} no longer links runtime/npm beside node: plugin installs look for npm next to the running node.`);
   }
+  const linuxFile = path.join(root, LINUX_RECIPE_FILE);
+  if (!existsSync(linuxFile)) {
+    problems.push(`${LINUX_RECIPE_FILE} is missing: nothing says how the Linux install's runtime is built.`);
+    return { pin, problems };
+  }
+  const linux = readFileSync(linuxFile, 'utf8').split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
+  if (!/<\s*"?\$ROOT\/apps\/mac\/NODE_VERSION/.test(linux)) {
+    problems.push(`${LINUX_RECIPE_FILE} does not read the pinned version (${PIN_FILE}); the Linux install could ship another Node.`);
+  }
+  if (!/cp\s+-R\s+\S*lib\/node_modules\/npm"?\s+"?\$BUNDLE\/runtime\/lib\/node_modules\/npm/.test(linux)) {
+    problems.push(`${LINUX_RECIPE_FILE} no longer copies npm (lib/node_modules/npm) into the runtime: the Linux install would ship node without npm.`);
+  }
+  if (!/ln\s+-s\s+lib\/node_modules\/npm\/bin\/npm-cli\.js\s+"?\$BUNDLE\/runtime\/npm"?/.test(linux)) {
+    problems.push(`${LINUX_RECIPE_FILE} no longer links runtime/npm beside node: plugin installs look for npm next to the running node.`);
+  }
   return { pin, problems };
 }
 
@@ -168,7 +185,7 @@ export function check(root) {
   const errors = [];
   const { pin, problems } = readRecipe(root);
   errors.push(...problems);
-  if (pin) lines.push(`buddi.app bundles Node ${pin} (${PIN_FILE}), npm beside it (${RECIPE_FILE}).`);
+  if (pin) lines.push(`buddi.app and the Linux install bundle Node ${pin} (${PIN_FILE}), npm beside it (${RECIPE_FILE}, ${LINUX_RECIPE_FILE}).`);
   const engines = readEngines(root);
   if (!engines.some(e => e.source === 'package.json')) {
     errors.push('package.json declares no engines.node: the published manifest takes its engines from it.');

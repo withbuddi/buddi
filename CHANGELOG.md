@@ -4,6 +4,11 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Linux installs with one command and nothing from the host: `curl -fsSL https://withbuddi.com/install.sh | sh` (or `wget -qO-`) downloads `buddi-<version>-linux-<x64|arm64>.tar.gz` from the GitHub release (the Node buddi.app pins with npm beside it, the npm release, its embedded Postgres), checks its sha256, and installs it under `~/.local/share/buddi` with `buddi` in `~/.local/bin`, no sudo: a systemd user unit, lingering turned on when the system allows it (else the one sudo line), the dashboard link at the end. Running it again upgrades with a backup first and goes back if the new release does not start; updates from the dashboard or `buddi upgrade` go into `releases/` as in buddi.app; `buddi uninstall` removes the runtime, the releases, the command and the lingering too, keeping the last backup and its passphrase. An npm install in the same folder moves over with its data. The release workflow builds, smoke-installs and attaches both tarballs.
+- `buddi doctor` says which Node runs buddi and which npm plugin installs use: the bundled runtime (buddi.app, the Linux install) or the machine's own.
+
 ## 0.1.0-pre.52 — 2026-10-08
 
 ### Added

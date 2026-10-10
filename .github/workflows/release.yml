@@ -228,10 +228,11 @@ jobs:
           section=$(node scripts/release/changelog.mjs section "${{ steps.v.outputs.version }}")
           notes="$section
 
-          npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }})."
+          npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }}).
+          Linux: \`curl -fsSL https://withbuddi.com/install.sh | BUDDI_VERSION=${{ steps.v.outputs.version }} sh\` (the linux-x64 and linux-arm64 tarballs below, attached by the linux job)."
           gh release create "v${{ steps.v.outputs.version }}" --verify-tag $pre --title "buddi ${{ steps.v.outputs.version }}" \
             --notes "$notes" \
-            "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install-linux.sh
+            "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install.sh
       - name: Tell withbuddi.com
         # withbuddi.com reads buddi's version from npm at build time
         # (buddi-site's scripts/sync-release.mjs runs in its build), so a rebuild
@@ -291,6 +292,69 @@ jobs:
             printf '%s\n' "$out"
             echo "::warning title=Chrome Web Store upload refused::$(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ') The zip is on the GitHub release; upload it by hand once the store is free."
           fi
+
+  # The self-contained Linux install (docs/install.md): per architecture, the
+  # tarball scripts/install.sh downloads, holding the Node buddi.app pins
+  # (apps/mac/NODE_VERSION) with npm beside it, this version's npm tarball
+  # (integrity and provenance checked, as the Mac app's payload is) and its
+  # embedded Postgres. Each is built and smoke-installed on a runner of its own
+  # architecture before it is attached to the GitHub release, with its .sha256.
+  # Like mac-app it runs after the npm publish, and again on its own for a
+  # version already on npm (Run workflow, publish off).
+  linux:
+    needs: [plan, publish]
+    if: always() && (needs.plan.outputs.mode == 'mac' || needs.publish.result == 'success')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: write   # the release assets
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      # npm names a fresh version minutes before it serves the tarball.
+      - name: Wait for npm to serve the tarball
+        run: |
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$' || { echo "::error::\"$VERSION\" is not a buddi version"; exit 1; }
+          url="https://registry.npmjs.org/@withbuddi/buddi/-/buddi-$VERSION.tgz"
+          for i in $(seq 1 60); do
+            if curl -sfI "$url" >/dev/null; then echo "served after $i check(s)"; exit 0; fi
+            sleep 20
+          done
+          echo "::error::npm did not serve $url within 20 minutes; run this workflow again with version $VERSION"
+          exit 1
+      - name: Build the tarball (integrity and provenance checked)
+        run: scripts/release/linux-bundle.sh "$VERSION" "$ARCH" build/linux
+      # The installer on a clean account: the bundled node and npm, never the
+      # runner's. GitHub's runners have no systemd user session, so buddi is
+      # started without a service, checked, and removed again.
+      - name: Install, start, check, uninstall
+        run: |
+          tgz="$PWD/build/linux/buddi-$VERSION-linux-$ARCH.tar.gz"
+          BUDDI_TARBALL="$tgz" BUDDI_NO_START=1 sh scripts/install.sh
+          buddi="$HOME/.local/bin/buddi"
+          "$buddi" --no-service --no-open
+          "$buddi" doctor > doctor.txt
+          grep -q 'Runtime: Node v.*bundled with the Linux install' doctor.txt || { cat doctor.txt; echo "::error::buddi doctor does not report the bundled runtime"; exit 1; }
+          grep -q '^npm: .* beside it' doctor.txt || { cat doctor.txt; echo "::error::no npm beside the bundled node"; exit 1; }
+          "$buddi" uninstall --yes
+          test ! -e "$HOME/.local/share/buddi" && test ! -e "$buddi" || { echo "::error::uninstall left the installation behind"; exit 1; }
+          ls "$HOME/buddi-backups"
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v$VERSION" >/dev/null || { echo "::error::v$VERSION has no GitHub release to attach to"; exit 1; }
+          gh release upload "v$VERSION" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz.sha256" scripts/install.sh --clobber
 
   # buddi.app, phase 2 of the Mac app (apps/mac/README.md). Skipped with a
   # notice, never failed, while the signing secrets are not in the repository:

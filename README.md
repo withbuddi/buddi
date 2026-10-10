@@ -7,9 +7,10 @@ tools, work on schedules, remember what matters, and ask before doing
 anything consequential. Everything runs on your machine, with your keys.
 
 **Just want to use it?** On a Mac, [download buddi.app](https://withbuddi.com/download/mac)
-(or `brew install withbuddi/tap/buddi`). On Linux, or a Mac from the terminal:
-`npm install -g @withbuddi/buddi && buddi`. This page is for working on buddi
-itself.
+(or `brew install withbuddi/tap/buddi`). On Linux:
+`curl -fsSL https://withbuddi.com/install.sh | sh`, no Node needed. With Node
+22, anywhere: `npm install -g @withbuddi/buddi && buddi`. This page is for
+working on buddi itself.
 
 <p align="center"><a href="https://withbuddi.com">withbuddi.com</a> · <a href="https://withbuddi.com/download/mac">Download for Mac</a> · <a href="https://github.com/withbuddi/homebrew-tap">Homebrew</a> · <a href="https://www.npmjs.com/package/@withbuddi/buddi">npm</a> · <a href="docs/README.md">docs</a> · <a href="https://withbuddi.com/plugins/">plugins</a> · <a href="https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah">Chrome extension</a></p>
 
@@ -109,12 +110,12 @@ same code as the npm package, against a Postgres in Docker.
 
 ```sh
 git clone https://github.com/withbuddi/buddi && cd buddi
-./scripts/install.sh      # checks the tools, then pnpm install, build, link
+./scripts/install-from-source.sh      # checks the tools, then pnpm install, build, link
 buddi init                # the terminal wizard: .env, database, service
 pnpm test
 ```
 
-`./scripts/install.sh` runs `pnpm install`, `pnpm -r build` and
+`./scripts/install-from-source.sh` runs `pnpm install`, `pnpm -r build` and
 `pnpm run link`, which puts a global `buddi` on your PATH pointing at this
 checkout (`pnpm buddi …` from the checkout works without the link, and is
 the unambiguous form on a machine that also has buddi.app or the npm
@@ -231,7 +232,8 @@ Issues and pull requests are welcome at
 - **Releases.** A release commit on main runs the gate; on green CI tags
   `v<version>`, and a run on that tag builds the tarball, publishes
   `@withbuddi/buddi` to npm with provenance, creates the GitHub release (the
-  tarball, the extension zip, the Linux install script), rebuilds
+  tarball, the extension zip, the Linux install script and the linux-x64 and
+  linux-arm64 tarballs), rebuilds
   withbuddi.com, and builds the signed, notarized buddi.app DMG and its
   Sparkle feed. The Homebrew cask follows from the tap's own workflow; the
   Chrome Web Store upload is by hand. The npm page is [scripts/release/npm-readme.md](scripts/release/npm-readme.md),
@@ -242,7 +244,8 @@ Issues and pull requests are welcome at
 buddi is a 0.1 pre-release (`0.1.0-pre.N`, the latest on
 [GitHub releases](https://github.com/withbuddi/buddi/releases)). macOS is the
 reference platform, shipped as buddi.app, the Homebrew cask and the npm
-package; Linux installs from npm and is in trial; Windows is not supported
+package; Linux installs with one command (a tarball with its own Node) or from
+npm; Windows is not supported
 yet. Computer control (the Computer plugin) is macOS-only. Host commands are approved, not sandboxed
 ([docs/host-execution.md](docs/host-execution.md)). Nothing an agent says is
 financial, legal or medical advice.

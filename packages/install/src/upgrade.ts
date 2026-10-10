@@ -58,7 +58,7 @@ import { JobStore } from './backup.js';
 import { createPostgresCheck } from './postgres-check.js';
 import type { PostgresCheck } from './postgres-check.js';
 import type { BackupControl, BackupJob } from './backup.js';
-import { APP_BUNDLE, appLayout, insideAppBundle, placeRelease, pruneReleases, releaseDir, stageRelease, switchCurrent } from './app-layout.js';
+import { APP_BUNDLE, LINUX_INSTALL_LINE, appLayout, appRuns, insideAppBundle, placeRelease, pruneReleases, releaseDir, stageRelease, switchCurrent } from './app-layout.js';
 import type { StagedRelease } from './app-layout.js';
 
 const run = promisify(execFile);
@@ -727,7 +727,7 @@ export interface HandOverResult {
  * owner actually asked for.
  */
 export async function handOver(opts: HandOverOptions): Promise<HandOverResult> {
-  const plan = opts.plan ?? restartPlan({ platform: process.platform, label: launchAgentLabel(opts.ctx.data), serviceUnit: process.env[SERVICE_UNIT_VAR] ?? opts.env[SERVICE_UNIT_VAR], xpcServiceName: process.env.XPC_SERVICE_NAME ?? opts.env.XPC_SERVICE_NAME, appLayout: appLayout(opts.env) !== undefined });
+  const plan = opts.plan ?? restartPlan({ platform: process.platform, label: launchAgentLabel(opts.ctx.data), serviceUnit: process.env[SERVICE_UNIT_VAR] ?? opts.env[SERVICE_UNIT_VAR], xpcServiceName: process.env.XPC_SERVICE_NAME ?? opts.env.XPC_SERVICE_NAME, appLayout: appRuns(opts.env) });
   const log = opts.log ?? ((line: string) => console.error(line));
   if (plan.mode === 'launchd' || plan.mode === 'systemd' || plan.mode === 'app') {
     log(`supervisor: exiting for the upgrade; ${plan.reason}.`);
@@ -801,13 +801,17 @@ export async function statusOnSocket(socket: string, timeoutMs = 2_000): Promise
  * dashboard is not available in that state — the gateway is deliberately not
  * started — so this has to be complete on its own.
  */
-export function recoverySentence(entry: UpgradeHistoryEntry, opts: { app?: boolean } = {}): string {
+export function recoverySentence(entry: UpgradeHistoryEntry, opts: { app?: boolean; linux?: boolean } = {}): string {
   const where = entry.step === 'starting' ? 'while starting' : 'while migrating';
   const head = `Upgrade to ${entry.to} failed ${where}: ${entry.error ?? 'unknown error'}. ` +
     `The backup taken first is ${entry.backup ?? 'not available'}. `;
   if (opts.app === true) {
     // buddi.app keeps the release that ran before; its menu goes back to it.
     return head + `In the buddi menu, choose Advanced → Restart with the Previous Version (${entry.from}), then restore ${entry.backup ?? 'that backup'} in Settings → Backups.`;
+  }
+  if (opts.linux === true) {
+    // The Linux install (scripts/install.sh) installs any version again, with its own Node.
+    return head + `Install ${entry.from} again with \`${LINUX_INSTALL_LINE.replace('| sh', `| BUDDI_VERSION=${entry.from} sh`)}\` and run \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
   }
   return head + `Reinstall with \`npm install -g ${PACKAGE_NAME}@${entry.from}\` and run \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
 }
@@ -890,7 +894,8 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
   /** buddi.app's releases folder, when the app runs this installation. */
   const releases = appLayout(ctx.env);
   const npm: NpmRunner = opts.npm ?? (async (bin, argv, where) => await run(bin, argv, where));
-  const dressed = (view: VersionView): VersionView => releases === undefined ? view : { ...view, app: true };
+  // The Linux install shares the layout, not the app's menu: its view is npm's words.
+  const dressed = (view: VersionView): VersionView => appRuns(ctx.env) ? { ...view, app: true } : view;
   let running: UpgradeJob | undefined;
   /** Has the code under this process already been replaced? See `perform`. */
   let replaced = false;
@@ -1099,7 +1104,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     give: (step: string, error: string, restart: boolean) => Promise<void>,
     startedAt: string, setTo: (to: string) => void, setArchive: (archive: string | undefined) => void,
   ): Promise<void> => {
-    if (ctx.env.BUDDI_UPGRADE_SOURCE?.trim()) return await give('checking', 'buddi.app upgrades from the registry only; BUDDI_UPGRADE_SOURCE is for npm installations.', false);
+    if (ctx.env.BUDDI_UPGRADE_SOURCE?.trim()) return await give('checking', 'This installation upgrades from the registry only; BUDDI_UPGRADE_SOURCE is for npm installations.', false);
     const resolved = await resolveVersion(version);
     if ('error' in resolved) return await give('checking', resolved.error, false);
     const to = resolved.version;
@@ -1315,7 +1320,7 @@ export async function finishUpgrade(ctx: ReadyContext, pending: UpgradeInProgres
 }
 
 /** The `upgrade` row `buddi doctor` prints, in a packaged installation. */
-export function upgradeDoctorLines(view: VersionView, phase: string | undefined): string[] {
+export function upgradeDoctorLines(view: VersionView, phase: string | undefined, opts: { linux?: boolean } = {}): string[] {
   const lines = [`Version: ${view.current}${view.updateAvailable ? ` (${view.latest} is available)` : ''}`];
   lines.push(view.checkedAt === undefined
     ? `Update check: ${view.checkEnabled ? 'on, not run yet' : 'off'}`
@@ -1323,7 +1328,7 @@ export function upgradeDoctorLines(view: VersionView, phase: string | undefined)
   const last = view.history[view.history.length - 1];
   if (last !== undefined) {
     lines.push(`Last upgrade: ${last.from} to ${last.to}, ${last.outcome}${last.step === undefined ? '' : ` at ${last.step}`}`);
-    if (phase === 'upgrade-failed' && last.outcome === 'failed') lines.push(recoverySentence(last, { app: view.app === true }));
+    if (phase === 'upgrade-failed' && last.outcome === 'failed') lines.push(recoverySentence(last, { app: view.app === true, linux: opts.linux === true }));
   }
   return lines;
 }

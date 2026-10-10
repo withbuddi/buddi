@@ -22,7 +22,8 @@ import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
-import { APP_RUNNING_LINE, appLayout, insideAppBundle, runsAppCopy } from './app-layout.js';
+import { APP_LAYOUT_VAR, APP_RUNNING_LINE, LINUX_INSTALL_VAR, appLayout, currentLauncher, insideAppBundle, linuxInstall, runsAppCopy } from './app-layout.js';
+import { runtimeFacts, runtimeLines } from './runtime-info.js';
 import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimRefusesSupervise, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
 
@@ -95,8 +96,18 @@ function runsFromApp(status: SupervisorStatus, ctx: InstallContext): boolean {
   return runsAppCopy(status.installRoot, ctx.data);
 }
 
+/**
+ * Is this the Linux install (scripts/install.sh)? Its `buddi` and its unit say
+ * so; a process they started with a trimmed environment (the uninstall the
+ * dashboard spawns) is told by the layout: on Linux there is no buddi.app, so
+ * a release under `<data>/releases` is the installer's.
+ */
+function isLinuxInstall(ctx: InstallContext): boolean {
+  return linuxInstall(process.env) || (process.platform === 'linux' && isAppInstall(ctx));
+}
+
 function withApp(view: VersionView, ctx: InstallContext): VersionView {
-  return isAppInstall(ctx) ? { ...view, app: true } : view;
+  return isAppInstall(ctx) && !isLinuxInstall(ctx) ? { ...view, app: true } : view;
 }
 
 async function control(ctx: InstallContext, action = 'status'): Promise<SupervisorStatus> {
@@ -206,6 +217,27 @@ async function startSupervisorBriefly(ctx: InstallContext, lockPid: () => number
   }
 }
 
+/** The marker line scripts/install.sh writes into the `buddi` command it puts on PATH. */
+const LINUX_COMMAND_MARKER = '# buddi-linux-install';
+
+/**
+ * What the Linux install put where: `installer.json` (written by
+ * scripts/install.sh) names the command and whether it turned on lingering;
+ * the command is removed only while it still carries the installer's marker.
+ */
+function linuxInstallParts(ctx: InstallContext, home: string): import('./uninstall.js').LinuxInstallParts {
+  let recorded: { command?: unknown; linger?: unknown } = {};
+  try { recorded = JSON.parse(readFileSync(path.join(ctx.data, 'installer.json'), 'utf8')) as typeof recorded; } catch { /* an older install: the defaults */ }
+  const command = typeof recorded.command === 'string' && path.isAbsolute(recorded.command) ? recorded.command : path.join(home, '.local', 'bin', 'buddi');
+  const ours = (() => { try { return readFileSync(command, 'utf8').includes(LINUX_COMMAND_MARKER); } catch { return false; } })();
+  return {
+    runtime: path.join(ctx.data, 'node'),
+    releases: appLayout(process.env) ?? path.join(ctx.data, 'releases'),
+    ...(ours ? { command } : {}),
+    ...(recorded.linger === true ? { linger: true } : {}),
+  };
+}
+
 /**
  * `buddi uninstall`, in a packaged installation. The order and the refusals
  * are in `uninstall.ts`; this wires them to the real machine: the supervisor's
@@ -231,7 +263,9 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
   const stored = await vault?.get('TELEGRAM_BOT_TOKEN').catch(() => null) ?? null;
   const token = stored ?? (ctx.env.TELEGRAM_BOT_TOKEN?.startsWith('<') ? undefined : ctx.env.TELEGRAM_BOT_TOKEN?.trim() || undefined);
   const app = dashboardAppOwnedBy(path.join(root, 'packages/cli/dist/main.js'), home);
+  const linuxParts = isLinuxInstall(ctx) ? linuxInstallParts(ctx, home) : undefined;
   return await uninstallPackaged(options, {
+    ...(linuxParts === undefined ? {} : { linuxInstall: linuxParts }),
     data: ctx.data, home, platform: process.platform, env: ctx.env, uid: process.getuid?.() ?? 501,
     exists: existsSync,
     remove: file => rm(file, { recursive: true, force: true }),
@@ -254,7 +288,7 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
     },
     // Run by buddi.app itself (its uninstall route), the app is already on its way out: nothing to say about it.
     buddiApp: async () => {
-      if (appLayout(process.env) !== undefined) return undefined;
+      if (appLayout(process.env) !== undefined || isLinuxInstall(ctx)) return undefined;
       const status = await control(ctx).catch(() => undefined);
       if (status !== undefined && runsFromApp(status, ctx)) return 'running';
       return isAppInstall(ctx) ? 'installed' : undefined;
@@ -524,9 +558,18 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
     const unit = systemdUnitPath(ctx.data, ctx.env);
     const { buildSystemdUnit } = await import('@buddi/cli');
     await mkdir(path.dirname(unit), { recursive: true });
+    /*
+     * The Linux install runs `<data>/releases/current` with its bundled node,
+     * named through the link rather than resolved: an upgrade switches the
+     * link and systemd's restart runs the new release from the same unit.
+     */
+    const releases = isLinuxInstall(ctx) ? appLayout(process.env) ?? path.join(ctx.data, 'releases') : undefined;
     await writeFile(unit, buildSystemdUnit({
-      label, nodePath: process.execPath, serveEntry: entry, args: ['supervise'],
-      environment: { BUDDI_DATA_DIR: ctx.data, [SERVICE_UNIT_VAR]: label, ...serviceEnvironment() },
+      label, nodePath: process.execPath, serveEntry: releases === undefined ? entry : currentLauncher(releases), args: ['supervise'],
+      environment: {
+        BUDDI_DATA_DIR: ctx.data, [SERVICE_UNIT_VAR]: label, ...serviceEnvironment(),
+        ...(releases === undefined ? {} : { [APP_LAYOUT_VAR]: releases, [LINUX_INSTALL_VAR]: '1', npm_config_cache: path.join(ctx.data, 'cache', 'npm') }),
+      },
       workingDirectory: ctx.data,
       path: [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(':'),
       logFile: path.join(ctx.data, 'logs/supervisor.log'), errorFile: path.join(ctx.data, 'logs/supervisor.log'),
@@ -537,7 +580,10 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(`systemd could not start the service (${detail.trim()}). The unit is at ${unit}. Run buddi --no-service to start it in the foreground instead.`);
     }
-    console.log(`Background service: systemd user unit ${label} (survives logout only after: loginctl enable-linger ${ctx.env.USER ?? '$USER'})`);
+    // Lingering already on (the Linux installer turns it on when it may): nothing to add.
+    const lingering = await exec('loginctl', ['show-user', ctx.env.USER ?? os.userInfo().username, '-p', 'Linger', '--value'], { env: nativeEnvironment(ctx.env) })
+      .then(out => out.stdout.trim() === 'yes', () => false);
+    console.log(`Background service: systemd user unit ${label}${lingering ? '' : ` (survives logout only after: loginctl enable-linger ${ctx.env.USER ?? '$USER'})`}`);
     return;
   }
   if (!temporary && process.platform !== 'darwin') throw new Error('Background installation runs under launchd (macOS) or systemd (Linux). Use buddi --no-service or buddi supervise on this platform.');
@@ -636,7 +682,10 @@ async function run(): Promise<void> {
     // Which buddi answered, and from where: buddi.app's copy, a release it installed, or npm's.
     const invoked = (() => { try { return realpathSync(process.argv[1] ?? entry); } catch { return entry; } })();
     console.log(`This buddi: ${invoked} (Node ${process.execPath})`);
-    console.log(`From: ${insideAppBundle(root) ? `buddi.app (${root.slice(0, root.indexOf('.app/') + 4)})` : root.startsWith(path.join(ctx.data, 'releases') + path.sep) ? `an update buddi.app installed (${root})` : `npm (${root})`}`);
+    const linux = isLinuxInstall(ctx);
+    console.log(`From: ${insideAppBundle(root) ? `buddi.app (${root.slice(0, root.indexOf('.app/') + 4)})` : linux ? `the Linux install (${root})` : root.startsWith(path.join(ctx.data, 'releases') + path.sep) ? `an update buddi.app installed (${root})` : `npm (${root})`}`);
+    // Which Node and which npm: the bundled runtime, or the machine's (roadmap: no dependence on a host Node).
+    for (const line of runtimeLines(await runtimeFacts(), insideAppBundle(process.execPath) ? 'buddi.app' : linux ? 'the Linux install' : 'this installation')) console.log(line);
     for (const line of shimDoctorLines({ home: os.homedir(), exists: existsSync, read: file => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } } })) console.log(line);
     console.log(`Data: ${ctx.data}`);
     // What the vault is and what it protects, said the same way everywhere
@@ -659,7 +708,7 @@ async function run(): Promise<void> {
      * looking at a supervisor that is barely up. The file is the record.
      */
     const state = await readUpgradeState(ctx.data, await installedVersion(root));
-    for (const line of upgradeDoctorLines(withApp(versionView(state), ctx), ctx.state?.phase)) console.log(line);
+    for (const line of upgradeDoctorLines(withApp(versionView(state), ctx), ctx.state?.phase, { linux })) console.log(line);
     console.log(`Logs: ${path.join(ctx.data, 'logs')}`); return;
   }
   if (!wantsHelp && (args[0] === 'version' || args[0] === '--version' || args[0] === '-v')) {
@@ -746,7 +795,7 @@ async function run(): Promise<void> {
     if (!running && viaShim) throw new Error('buddi.app is not running buddi. Open buddi.app, then run buddi again.');
     if (!running) {
       if (!relaunched) {
-        console.log('Starting Buddi. First run provisions a private Postgres cluster.');
+        console.log(firstRun ? 'Starting Buddi. First run provisions a private Postgres cluster.' : 'Starting buddi.');
         await launchService(ctx, args.includes('--no-service'));
       }
       const deadline = Date.now() + 120_000;

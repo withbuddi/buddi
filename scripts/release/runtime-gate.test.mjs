@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test } from 'vitest';
-import { check, parseVersion, PIN_FILE, RECIPE_FILE, satisfies } from './runtime-gate.mjs';
+import { check, LINUX_RECIPE_FILE, parseVersion, PIN_FILE, RECIPE_FILE, satisfies } from './runtime-gate.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const script = fileURLToPath(new URL('./runtime-gate.mjs', import.meta.url));
@@ -54,7 +54,7 @@ describe('check', () => {
   afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
   /** A tree with the real pin and recipe, a root manifest, and one package. */
-  function tree({ root = { engines: { node: '>=22' } }, pkg = {}, pin, recipe } = {}) {
+  function tree({ root = { engines: { node: '>=22' } }, pkg = {}, pin, recipe, linux } = {}) {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'runtime-gate-'));
     dirs.push(dir);
     writeFileSync(path.join(dir, 'package.json'), JSON.stringify(root));
@@ -65,6 +65,9 @@ describe('check', () => {
     else if (pin !== null) writeFileSync(path.join(dir, PIN_FILE), pin);
     const real = readFileSync(path.join(repo, RECIPE_FILE), 'utf8');
     writeFileSync(path.join(dir, RECIPE_FILE), recipe ? recipe(real) : real);
+    mkdirSync(path.join(dir, 'scripts/release'), { recursive: true });
+    const realLinux = readFileSync(path.join(repo, LINUX_RECIPE_FILE), 'utf8');
+    writeFileSync(path.join(dir, LINUX_RECIPE_FILE), linux ? linux(realLinux) : realLinux);
     return dir;
   }
 
@@ -96,6 +99,14 @@ describe('check', () => {
     expect(noCopy.errors.join('\n')).toMatch(/node without npm/);
     const noLink = check(tree({ recipe: s => s.replace(/^ln -s lib\/node_modules\/npm\/bin\/npm-cli\.js.*$/m, '# ln -s lib/node_modules/npm/bin/npm-cli.js "$PAYLOAD/runtime/npm"') }));
     expect(noLink.errors.join('\n')).toMatch(/no longer links runtime\/npm/);
+  });
+
+  test('a Linux recipe that drops npm or ignores the pin fails', () => {
+    const noLink = check(tree({ linux: s => s.replace(/^ln -s lib\/node_modules\/npm\/bin\/npm-cli\.js.*$/m, '') }));
+    expect(noLink.ok).toBe(false);
+    expect(noLink.errors.join(' ')).toContain(LINUX_RECIPE_FILE);
+    const noPin = check(tree({ linux: s => s.replace(/apps\/mac\/NODE_VERSION/g, 'apps/mac/NODE_RELEASE') }));
+    expect(noPin.errors.join(' ')).toContain('does not read the pinned version');
   });
 
   test('a recipe that ignores the pin fails', () => {

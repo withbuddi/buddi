@@ -76,6 +76,34 @@ export function appLayout(env: NodeJS.ProcessEnv): string | undefined {
   return dir !== undefined && dir !== '' && path.isAbsolute(dir) ? path.resolve(dir) : undefined;
 }
 
+/**
+ * The Linux install (`scripts/install.sh`) uses this same layout without an
+ * app around it: `<data>/node/node` is the bundled Node (npm beside it),
+ * `<data>/releases/current` the release that runs, and a systemd user unit
+ * starts `current` again after an upgrade. Its unit and its `buddi` command
+ * set this variable next to `BUDDI_APP_LAYOUT`, so the words and the ways
+ * back are the installer's, not buddi.app's menu.
+ */
+export const LINUX_INSTALL_VAR = 'BUDDI_LINUX_INSTALL';
+
+/** Is this the Linux install's layout (no app, systemd restarts `current`)? */
+export function linuxInstall(env: NodeJS.ProcessEnv): boolean {
+  return appLayout(env) !== undefined && (env[LINUX_INSTALL_VAR] ?? '').trim() === '1';
+}
+
+/** Is buddi.app the one running this installation (the layout, and not the Linux install's)? */
+export function appRuns(env: NodeJS.ProcessEnv): boolean {
+  return appLayout(env) !== undefined && !linuxInstall(env);
+}
+
+/** The line the Linux install is installed and upgraded with (the site serves scripts/install.sh). */
+export const LINUX_INSTALL_LINE = 'curl -fsSL https://withbuddi.com/install.sh | sh';
+
+/** The command the Linux install's own launcher runs: `current`'s, so a unit written once follows every upgrade. */
+export function currentLauncher(releases: string): string {
+  return path.join(releases, 'current', 'packages', 'install', 'dist', 'launcher.js');
+}
+
 /** Does this root sit inside a macOS app bundle? */
 export function insideAppBundle(root: string): boolean {
   return /\.app\/Contents\//.test(root.split(path.sep).join('/') + '/');
@@ -225,7 +253,7 @@ export async function stageRelease(opts: StageOptions): Promise<StagedRelease> {
 
   const meta = await fetchReleaseMeta(registry, version, opts.http, opts.auth);
   if (requireProvenance && meta.attestations === undefined) {
-    throw new Error(`${PACKAGE_NAME}@${version} has no provenance attestation, and buddi.app installs only releases built by withbuddi/buddi's CI.`);
+    throw new Error(`${PACKAGE_NAME}@${version} has no provenance attestation, and buddi installs only releases built by withbuddi/buddi's CI.`);
   }
 
   await mkdir(opts.releases, { recursive: true, mode: 0o700 });
@@ -236,7 +264,7 @@ export async function stageRelease(opts: StageOptions): Promise<StagedRelease> {
   const staging = path.join(releases, `.staging-${version}-${randomBytes(4).toString('hex')}`);
   await mkdir(staging, { recursive: true, mode: 0o700 });
   // npm's own kind of prefix manifest: no name, so it is nobody's project.
-  await writeFile(path.join(staging, 'package.json'), JSON.stringify({ private: true, description: 'A buddi release installed by buddi.app.' }, null, 2) + '\n');
+  await writeFile(path.join(staging, 'package.json'), JSON.stringify({ private: true, description: 'A buddi release installed by buddi itself.' }, null, 2) + '\n');
   try {
     try { await opts.exec(binary, stageArgs(staging, version, registry), { timeout, maxBuffer }); }
     catch (err) { throw fail(`npm install ${PACKAGE_NAME}@${version} failed`, err); }

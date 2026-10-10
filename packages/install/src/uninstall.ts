@@ -125,12 +125,29 @@ export interface PackagedUninstallDeps {
   app?: string;
   /** buddi.app's command line tool shims that run this installation (cli-shim.ts), and how to remove one. */
   shims?: { files: string[]; remove: (file: string) => Promise<void> };
+  /**
+   * The Linux install (scripts/install.sh): its program files live in the data
+   * directory (`node/`, `releases/`), its `buddi` command in ~/.local/bin,
+   * and `installer.json` says whether the installer turned on lingering.
+   */
+  linuxInstall?: LinuxInstallParts;
   sleep: (ms: number) => Promise<void>;
   io: UninstallIo;
 }
 
+export interface LinuxInstallParts {
+  runtime: string;
+  releases: string;
+  /** The `buddi` command the installer wrote, when it is still there and still ours. */
+  command?: string;
+  /** The installer ran `loginctl enable-linger` itself, so this undoes it. */
+  linger?: boolean;
+}
+
 /** What the data directory holds, named for the owner: only what is there. */
 const CONTENTS: Array<[string[], string]> = [
+  [['node'], 'the bundled Node'],
+  [['releases'], 'buddi itself'],
   [['postgres'], 'the database'],
   [['agents', 'skills'], 'agents and skills'],
   [['artifacts'], 'the files library'],
@@ -151,6 +168,9 @@ function tooBroad(data: string, home: string): boolean {
 }
 
 export const PACKAGE_LINE = 'Now remove the package: npm uninstall -g @withbuddi/buddi';
+
+/** The last line for the Linux install: nothing is left to remove by hand. */
+export const LINUX_LAST_LINE = 'buddi is removed. To install it again: curl -fsSL https://withbuddi.com/install.sh | sh';
 
 /** The last line when buddi.app owns the installation: the app is what is left. */
 export const APP_LAST_LINE = 'Now move buddi.app to the Trash.';
@@ -295,6 +315,38 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
     steps.push({ line: `the dashboard app ${app}`, run: () => deps.remove(app) });
   }
 
+  /* The Linux install: the program, its command, and the lingering its installer turned on. */
+  if (deps.linuxInstall) {
+    const linux = deps.linuxInstall;
+    if (options.keepData) {
+      // The data stays for a reinstall; the program does not (the installer brings its own again).
+      const parts = [linux.runtime, linux.releases].filter(file => deps.exists(file));
+      if (parts.length > 0) {
+        steps.push({
+          line: `the program: ${list(parts)}`,
+          run: async () => {
+            if (!stopped) throw new Error('it was left in place because the service did not stop');
+            for (const part of parts) await deps.remove(part);
+          },
+        });
+      }
+    }
+    if (linux.command !== undefined) {
+      const command = linux.command;
+      steps.push({ line: `the buddi command ${command}`, run: () => deps.remove(command) });
+    }
+    if (linux.linger === true) {
+      steps.push({
+        line: 'lingering for this user (the installer turned it on so buddi runs without a login)',
+        bestEffort: true,
+        run: async () => {
+          const out = await deps.exec('loginctl', ['disable-linger']);
+          if (out.code !== 0) throw new Error((out.stderr || out.stdout).trim() || `loginctl answered ${out.code}`);
+        },
+      });
+    }
+  }
+
   /* buddi.app's command line tool: a buddi on PATH that would run nothing once this is gone. */
   if (deps.shims) {
     const shims = deps.shims;
@@ -321,7 +373,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
     heading: `This removes buddi from ${machine}:`,
     steps,
     notes,
-    last: app === 'installed' ? APP_LAST_LINE : PACKAGE_LINE,
+    last: app === 'installed' ? APP_LAST_LINE : deps.linuxInstall ? LINUX_LAST_LINE : PACKAGE_LINE,
     prepare: async () => {
       const lines: string[] = [];
       // The vault that keeps the passphrase goes with the secrets (and with the data directory on Linux).

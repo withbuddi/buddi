@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
-import { APP_LAST_LINE, APP_RUNNING_UNINSTALL, PACKAGE_LINE, parseUninstallArgs, uninstallPackaged } from './uninstall.js';
+import { APP_LAST_LINE, APP_RUNNING_UNINSTALL, LINUX_LAST_LINE, PACKAGE_LINE, parseUninstallArgs, uninstallPackaged } from './uninstall.js';
 import type { ExecResult, PackagedUninstallDeps, UninstallOptions } from './uninstall.js';
 
 const home = '/Users/owner';
@@ -428,5 +428,44 @@ describe('uninstallPackaged: only the installation installation.json names', () 
   it('goes ahead when both match', async () => {
     const m = machine({ state: { version: 1, kind: 'packaged', dataDir: data, vaultService: 'buddi.install.abc' } });
     expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(0);
+  });
+});
+
+describe('uninstallPackaged: the Linux install (scripts/install.sh)', () => {
+  const linux = (extra: string[] = []): Machine => {
+    const m = machine({ platform: 'linux' });
+    for (const file of [`${data}/node`, `${data}/releases`, ...extra]) m.files.add(file);
+    m.deps.linuxInstall = { runtime: `${data}/node`, releases: `${data}/releases`, command: `${home}/.local/bin/buddi`, linger: true };
+    return m;
+  };
+
+  it('removes the data directory with the bundled Node and the releases in it, then the command and the lingering, and ends on the install line', async () => {
+    const m = linux();
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(0);
+    expect(m.out).toContain(`  - the data directory ${data}: the bundled Node, buddi itself, the database, agents and skills, the files library, logs, backups and the fetched Chromium`);
+    expect(m.out).toContain(`  - the buddi command ${home}/.local/bin/buddi`);
+    expect(m.out).toContain('  - lingering for this user (the installer turned it on so buddi runs without a login)');
+    expect(m.removed).toEqual(expect.arrayContaining([data, `${home}/.local/bin/buddi`]));
+    expect(m.exec).toContain('loginctl disable-linger');
+    expect(m.out[m.out.length - 1]).toBe(LINUX_LAST_LINE);
+    // The backup, and the words that open it, left the data directory first.
+    expect(m.moved[0]?.[1]).toBe(`${home}/buddi-backups/buddi-backup-20260926-120000.tar.gz.age`);
+  });
+
+  it('--keep-data keeps the data and its secrets, and removes the program and the command', async () => {
+    const m = linux();
+    expect(await uninstallPackaged({ ...defaults, yes: true, keepData: true }, m.deps)).toBe(0);
+    expect(m.out).toContain(`  - the program: ${data}/node and ${data}/releases`);
+    expect(m.removed).toEqual(expect.arrayContaining([`${data}/node`, `${data}/releases`, `${home}/.local/bin/buddi`]));
+    expect(m.removed).not.toContain(data);
+    expect(m.removed).not.toContain(`${data}/vault.json`);
+  });
+
+  it('leaves the lingering alone when the installer did not turn it on, and a command that is not its own', async () => {
+    const m = linux();
+    m.deps.linuxInstall = { runtime: `${data}/node`, releases: `${data}/releases` };
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
+    expect(m.exec.some(line => line.startsWith('loginctl'))).toBe(false);
+    expect(m.out.some(line => line.includes('the buddi command'))).toBe(false);
   });
 });
