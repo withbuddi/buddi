@@ -136,7 +136,10 @@ export type TaskExec = (command: string, args: string[]) => Promise<unknown>;
 
 /**
  * Register (or replace) the task and start it now. A copy still running from
- * before is ended first: `IgnoreNew` would otherwise swallow the start.
+ * before is ended first: `IgnoreNew` would otherwise swallow the start. The
+ * caller has already stopped its supervisor on the control socket (launcher's
+ * `exitSupervisor`): /End is TerminateProcess, so by then it may only end
+ * what is left of the task, never a running database.
  */
 export async function registerWindowsTask(exec: TaskExec, name: string, xmlFile: string): Promise<void> {
   await exec('schtasks.exe', ['/Create', '/TN', name, '/XML', xmlFile, '/F']);

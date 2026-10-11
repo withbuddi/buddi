@@ -116,6 +116,43 @@ async function control(ctx: InstallContext, action = 'status'): Promise<Supervis
   return await ask<SupervisorStatus>(ctx, action === 'status' ? 'GET' : 'POST', `/${action}`);
 }
 
+/** The pid `supervisor.lock` names, while that process lives. */
+function supervisorLockPid(data: string): number | undefined {
+  let pid: number;
+  try { pid = Number(readFileSync(path.join(data, 'supervisor.lock'), 'utf8').trim()); } catch { return undefined; }
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try { process.kill(pid, 0); return pid; } catch { return undefined; }
+}
+
+/**
+ * Windows: a postmaster still running on this installation's cluster, its
+ * `postmaster.pid` naming a live process. There it can outlive its
+ * supervisor (it is detached), and a folder it holds cannot be removed.
+ * Elsewhere the supervisor's own exit is the answer, as before.
+ */
+function postmasterLeft(data: string): boolean {
+  if (process.platform !== 'win32') return false;
+  let pid: number;
+  try { pid = Number(readFileSync(path.join(data, 'postgres', 'postmaster.pid'), 'utf8').split('\n')[0]!.trim()); } catch { return false; }
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+/**
+ * Windows: stop the supervisor the way a signal does elsewhere. A kill there
+ * is TerminateProcess, which skips the database's shutdown, so it is asked on
+ * its socket and followed until its lock is gone. A refusal (a restore or an
+ * upgrade under way) is thrown, never overridden with a kill.
+ */
+async function exitSupervisor(ctx: InstallContext, timeoutMs = 90_000): Promise<void> {
+  if (supervisorLockPid(ctx.data) === undefined) return;
+  await ask(ctx, 'POST', '/exit');
+  for (let waited = 0; supervisorLockPid(ctx.data) !== undefined; waited += 250) {
+    if (waited >= timeoutMs) throw new Error(`the supervisor (pid ${supervisorLockPid(ctx.data)}) did not stop within ${Math.round(timeoutMs / 1000)} seconds`);
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+}
+
 /** The supervisor's status as the sentence `buddi service status` prints. */
 export function serviceLine(status: SupervisorStatus): string {
   const gateway = status.gateway === 'running'
@@ -204,9 +241,13 @@ async function startSupervisorBriefly(ctx: InstallContext, lockPid: () => number
   process.on('SIGINT', onInterrupt); process.on('SIGTERM', onInterrupt);
   const stop = async (): Promise<void> => {
     process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onInterrupt);
-    if (!exited && child.pid !== undefined) { try { process.kill(child.pid, 'SIGTERM'); } catch { /* gone */ } }
+    if (!exited && child.pid !== undefined) {
+      // Windows: SIGTERM is TerminateProcess, which would skip the database's shutdown.
+      if (process.platform === 'win32') await ask(ctx, 'POST', '/exit').catch(() => { /* gone, or not listening yet: the wait below says */ });
+      else { try { process.kill(child.pid, 'SIGTERM'); } catch { /* gone */ } }
+    }
     const alive = (): boolean => { if (exited || child.pid === undefined) return false; try { process.kill(child.pid, 0); return true; } catch { return false; } };
-    for (let waited = 0; lockPid() !== undefined || alive(); waited += 250) {
+    for (let waited = 0; lockPid() !== undefined || alive() || postmasterLeft(ctx.data); waited += 250) {
       if (waited >= 60_000) throw new Error(`the database started for the last backup did not stop within a minute (supervisor pid ${child.pid})`);
       await new Promise(resolve => setTimeout(resolve, 250));
     }
@@ -253,12 +294,7 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
   const { purgeKeychain, clearTelegramMenu } = await import('@buddi/core/uninstall');
   const { dashboardAppOwnedBy } = await import('@buddi/cli');
   const home = os.homedir();
-  const lockPid = (): number | undefined => {
-    let pid: number;
-    try { pid = Number(readFileSync(path.join(ctx.data, 'supervisor.lock'), 'utf8').trim()); } catch { return undefined; }
-    if (!Number.isInteger(pid) || pid <= 0) return undefined;
-    try { process.kill(pid, 0); return pid; } catch { return undefined; }
-  };
+  const lockPid = (): number | undefined => supervisorLockPid(ctx.data);
   const service = ctx.env.BUDDI_VAULT_SERVICE ?? 'buddi';
   const vault = (() => { try { return core.createVault({ env: ctx.env }); } catch { return undefined; } })();
   const stored = await vault?.get('TELEGRAM_BOT_TOKEN').catch(() => null) ?? null;
@@ -311,12 +347,14 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
       return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as InstallationState : undefined;
     },
     supervisorPid: lockPid,
-    // Windows: a kill is TerminateProcess, which would leave the cluster
-    // running; the supervisor is asked to shut down on its socket instead.
-    signal: (pid, signal) => {
-      if (process.platform === 'win32' && pid === lockPid()) { void ask(ctx, 'POST', '/exit').catch(() => { try { process.kill(pid); } catch { /* gone already */ } }); return; }
+    // Windows: a kill is TerminateProcess, which would skip the database's
+    // shutdown; the supervisor is asked on its socket instead, and a refusal
+    // (a restore or an upgrade under way) stops the uninstall, not the supervisor.
+    signal: async (pid, signal) => {
+      if (process.platform === 'win32' && pid === lockPid()) { await exitSupervisor(ctx); return; }
       try { process.kill(pid, signal); } catch { /* gone already */ }
     },
+    postmasterLeft: () => postmasterLeft(ctx.data),
     ...(core.vaultSelection({ env: ctx.env }) === 'keychain' ? {
       keychain: {
         service,
@@ -613,6 +651,9 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
       // Not the data directory: Windows will not remove a folder a process runs in, and uninstall removes it.
       user, script, workingDirectory: os.homedir(), systemRoot: ctx.env.SystemRoot ?? ctx.env.SYSTEMROOT ?? 'C:\\Windows',
     })), { mode: 0o600 });
+    // A running supervisor stops on its socket first (its database cleanly);
+    // the task's /End below would be TerminateProcess.
+    await exitSupervisor(ctx).catch((error: Error) => { throw new Error(`The running service could not be stopped to restart it: ${error.message}.`); });
     try {
       await registerWindowsTask((cmd, argv) => exec(cmd, argv, { env: nativeEnvironment(ctx.env), windowsHide: true }), windowsTaskName(label), windowsTaskXmlFile(ctx.data));
     } catch (error) {

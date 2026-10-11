@@ -5,7 +5,8 @@
  * line; nothing here throws past `collectStatus`. `buddi doctor` stays the
  * deep check: this is the glance.
  */
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -173,12 +174,14 @@ export async function startedAt(pid: number): Promise<string | undefined> {
 
 /**
  * The supervisor's control socket, beside the data it looks after; on Windows
- * the named pipe @buddi/install's supervisor listens on (the same name).
+ * the named pipe @buddi/install's supervisor listens on, whose random name it
+ * keeps in `supervisor.pipe` in the data directory (no supervisor yet: a name
+ * no one answers).
  */
 export function supervisorSocketPath(dataDir: string, platform: NodeJS.Platform | string = process.platform): string {
   if (platform === 'win32') {
-    const id = createHash('sha256').update(path.win32.resolve(dataDir).toLowerCase()).digest('hex').slice(0, 16);
-    return `\\\\.\\pipe\\buddi-supervisor-${id}`;
+    const name = (() => { try { return readFileSync(path.join(dataDir, 'supervisor.pipe'), 'utf8').trim(); } catch { return ''; } })();
+    return /^buddi-supervisor-[0-9a-f]{32}$/.test(name) ? `\\\\.\\pipe\\${name}` : `\\\\.\\pipe\\buddi-supervisor-none-${randomBytes(16).toString('hex')}`;
   }
   return path.join(dataDir, 'supervisor.sock');
 }

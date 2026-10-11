@@ -54,10 +54,15 @@ export function parseUninstallArgs(args: readonly string[]): UninstallOptions {
   return options;
 }
 
+/** The path rules of the machine being uninstalled, which a test names rather than the one it runs on. */
+function pathsOf(platform: NodeJS.Platform | string): path.PlatformPath {
+  return platform === 'win32' ? path.win32 : path.posix;
+}
+
 /** The passphrase file written when there is no archive to put it beside. */
-export function loosePassphraseFile(dir: string, now: Date): string {
+export function loosePassphraseFile(dir: string, now: Date, platform: NodeJS.Platform | string = process.platform): string {
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
-  return path.join(dir, `buddi-passphrase-${stamp}.txt`);
+  return pathsOf(platform).join(dir, `buddi-passphrase-${stamp}.txt`);
 }
 
 export interface ExecResult {
@@ -101,7 +106,10 @@ export interface PackagedUninstallDeps {
   now?: () => Date;
   /** The pid in `supervisor.lock` while that process is alive. */
   supervisorPid: () => number | undefined;
-  signal: (pid: number, signal: NodeJS.Signals) => void;
+  /** Stop that supervisor. On Windows it asks on the socket, and rejects when the supervisor refuses. */
+  signal: (pid: number, signal: NodeJS.Signals) => void | Promise<void>;
+  /** A database still running on the cluster after its supervisor is gone (Windows, where it can outlive it). */
+  postmasterLeft?: () => boolean;
   /** The macOS keychain vault. Absent where the vault is the file (Linux). */
   keychain?: {
     service: string;
@@ -162,14 +170,14 @@ const CONTENTS: Array<[string[], string]> = [
 ];
 
 /** Where the last backup goes when the data directory is removed: out of it. */
-export function keptBackupsDir(home: string): string {
-  return path.join(home, 'buddi-backups');
+export function keptBackupsDir(home: string, platform: NodeJS.Platform | string = process.platform): string {
+  return pathsOf(platform).join(home, 'buddi-backups');
 }
 
 /** A path that is never a data directory, whatever `BUDDI_DATA_DIR` says. */
-function tooBroad(data: string, home: string): boolean {
-  const resolved = path.resolve(data);
-  return !path.isAbsolute(data) || resolved === path.parse(resolved).root || resolved === path.resolve(home) || path.resolve(home).startsWith(`${resolved}${path.sep}`);
+function tooBroad(data: string, home: string, p: path.PlatformPath): boolean {
+  const resolved = p.resolve(data);
+  return !p.isAbsolute(data) || resolved === p.parse(resolved).root || resolved === p.resolve(home) || p.resolve(home).startsWith(`${resolved}${p.sep}`);
 }
 
 export const PACKAGE_LINE = 'Now remove the package: npm uninstall -g @withbuddi/buddi';
@@ -185,10 +193,11 @@ export const APP_RUNNING_UNINSTALL = 'buddi.app is running this installation. Ch
 
 export async function uninstallPackaged(options: UninstallOptions, deps: PackagedUninstallDeps): Promise<number> {
   const { data, home, io } = deps;
-  const join = (...parts: string[]): string => path.join(data, ...parts);
+  const p = pathsOf(deps.platform);
+  const join = (...parts: string[]): string => p.join(data, ...parts);
   const hasData = deps.exists(data);
   const isInstallation = hasData && (deps.exists(join('installation.json')) || deps.exists(join('postgres')));
-  if (!options.keepData && hasData && (!isInstallation || tooBroad(data, home))) {
+  if (!options.keepData && hasData && (!isInstallation || tooBroad(data, home, p))) {
     io.error(`${data} is not a buddi installation (it has no installation.json and no postgres folder), so nothing was removed. Check BUDDI_DATA_DIR.`);
     return 1;
   }
@@ -237,7 +246,10 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
       if (hasUnit) unloadError = await unloadService(deps, label).then(() => undefined, (error: Error) => error);
       // A supervisor launchd or systemd did not own (`buddi --no-service`) is asked directly.
       const left = deps.supervisorPid();
-      if (left !== undefined && unloadError === undefined) deps.signal(left, 'SIGTERM');
+      if (left !== undefined && unloadError === undefined) {
+        try { await deps.signal(left, 'SIGTERM'); }
+        catch (error) { throw new Error(`the supervisor (pid ${left}) did not agree to stop: ${(error as Error).message.replace(/\.$/, '')}`); }
+      }
       for (let waited = 0; deps.supervisorPid() !== undefined; waited += 250) {
         if (waited >= 60_000) {
           throw unloadError ?? new Error(`the supervisor (pid ${deps.supervisorPid()}) did not stop within a minute`);
@@ -245,6 +257,10 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
         await deps.sleep(250);
       }
       if (unloadError) throw unloadError;
+      for (let waited = 0; deps.postmasterLeft?.() === true; waited += 250) {
+        if (waited >= 60_000) throw new Error(`the database on ${join('postgres')} is still running after its supervisor stopped`);
+        await deps.sleep(250);
+      }
       if (hasUnit) {
         await deps.remove(unit);
         if (deps.platform === 'linux') await deps.exec('systemctl', ['--user', 'daemon-reload']);
@@ -275,6 +291,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
   }
 
   /* The data directory. */
+  let dataRemoved = false;
   if (!options.keepData && hasData) {
     const held = CONTENTS.filter(([names]) => names.some(name => deps.exists(join(name)))).map(([, said]) => said);
     steps.push({
@@ -282,11 +299,20 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
       run: async () => {
         if (!stopped) throw new Error('it was left in place because the service did not stop, and the database may still be running');
         await deps.remove(data);
+        dataRemoved = true;
       },
     });
   }
 
-  /* Secrets. On Linux they are files in the data directory; kept with it by --keep-data. */
+  /*
+   * Secrets. On Linux and Windows they are files in the data directory; kept
+   * with it by --keep-data. Only once the data directory is gone: a data
+   * directory left in place (the service would not stop, a folder was held)
+   * keeps the credentials that open it.
+   */
+  const dataGone = (): void => {
+    if (hasData && !dataRemoved) throw new Error('they were kept because the data directory they open is still there');
+  };
   if (!options.keepData) {
     if (deps.keychain) {
       const keychain = deps.keychain;
@@ -299,6 +325,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
             ? `secrets: the keychain entries under ${keychain.service} (they could not be listed: ${unreadable.replace(/\.$/, '')})`
             : `secrets: ${names.length} keychain ${names.length === 1 ? 'entry' : 'entries'} under ${keychain.service}: ${names.join(', ')}`,
           run: async () => {
+            dataGone();
             if (unreadable !== undefined) throw new Error(unreadable);
             // Again at the time of removal: the last backup may have just made the passphrase entry.
             const now = await keychain.names().catch(() => names);
@@ -311,7 +338,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
       if (files.length > 0) {
         steps.push({
           line: `secrets: the file vault ${join('vault.json')} and its key ${join('vault-key')}`,
-          run: async () => { for (const file of files) if (deps.exists(file)) await deps.remove(file); },
+          run: async () => { dataGone(); for (const file of files) if (deps.exists(file)) await deps.remove(file); },
         });
       }
     }
@@ -381,7 +408,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
   if (backingUp) {
     notes.push(options.keepData
       ? `First it takes one last backup, into ${join('backups')}.`
-      : `First it takes one last backup and moves it to ${keptBackupsDir(home)}, where it stays.`);
+      : `First it takes one last backup and moves it to ${keptBackupsDir(home, deps.platform)}, where it stays.`);
   }
   if (options.keepData && hasData) notes.push(`The data directory ${data} stays as it is, with the secrets that open it, for a reinstall.`);
   if (app === 'installed') notes.push('This installation is buddi.app\'s. buddi.app itself stays until you move it to the Trash.');
@@ -400,7 +427,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
         lines.push(`Your backup passphrase, which opens the backups and is about to leave this ${deps.platform === 'darwin' ? 'Mac' : 'machine'}'s vault: ${phrase}`);
         const files = archives.length > 0 ? archives.map(passphraseFileFor) : loose !== undefined ? [loose] : [];
         for (const file of files) {
-          await deps.writePrivate(file, passphraseFileText(phrase, archives.length > 0 ? path.basename(archives[0] as string) : undefined));
+          await deps.writePrivate(file, passphraseFileText(phrase, archives.length > 0 ? p.basename(archives[0] as string) : undefined));
           lines.push(`It is also in ${file} (only you can read it). Write the six words down, then delete that file.`);
         }
       };
@@ -427,17 +454,17 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
           if (options.keepData) {
             lines.push(`The backup is ${archive}. It stays, with the rest of the data directory.`);
           } else {
-            kept = path.join(keptBackupsDir(home), path.basename(archive));
+            kept = p.join(keptBackupsDir(home, deps.platform), p.basename(archive));
             await deps.move(archive, kept);
-            if (envelope !== archive && deps.exists(envelope)) await deps.move(envelope, path.join(keptBackupsDir(home), path.basename(envelope)));
+            if (envelope !== archive && deps.exists(envelope)) await deps.move(envelope, p.join(keptBackupsDir(home, deps.platform), p.basename(envelope)));
             lines.push(`The backup is ${kept}. It stays: uninstall does not touch that folder.`);
           }
           const copies: string[] = [];
           if (options.copyTo !== undefined) {
-            const copy = path.join(options.copyTo, path.basename(kept));
+            const copy = p.join(options.copyTo, p.basename(kept));
             await deps.copy(kept, copy);
             const keptEnvelope = kept.replace(/\.age$/, '.json');
-            if (keptEnvelope !== kept && deps.exists(keptEnvelope)) await deps.copy(keptEnvelope, path.join(options.copyTo, path.basename(keptEnvelope)));
+            if (keptEnvelope !== kept && deps.exists(keptEnvelope)) await deps.copy(keptEnvelope, p.join(options.copyTo, p.basename(keptEnvelope)));
             copies.push(copy);
             lines.push(`A copy is ${copy}.`);
           }
@@ -449,7 +476,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
           // No last backup, but older ones may be locked with the words the vault is about to lose.
           const phrase = await passphraseBeforeRemoval(deps.passphrase, false);
           if (phrase !== undefined) {
-            await keepPhrase(phrase, [], loosePassphraseFile(options.copyTo ?? keptBackupsDir(home), now()));
+            await keepPhrase(phrase, [], loosePassphraseFile(options.copyTo ?? keptBackupsDir(home, deps.platform), now(), deps.platform));
             lines.push('Pass --i-have-the-passphrase with --no-backup when you already have them.');
           }
         }
@@ -496,7 +523,11 @@ async function unloadService(deps: PackagedUninstallDeps, label: string): Promis
     // Deleting the task leaves a running copy alone: the supervisor is asked
     // to exit next (the caller's `signal`), which stops the cluster with it.
     const out = await deps.exec('schtasks.exe', ['/Delete', '/TN', windowsTaskName(label), '/F']);
-    if (out.code !== 0 && !/cannot find|does not exist/i.test(out.stderr + out.stdout)) {
+    if (out.code === 0) return;
+    // Already gone is what we want. Asked again rather than read from the
+    // message, which is in the system's language: /Query fails for a task that is not there.
+    const query = await deps.exec('schtasks.exe', ['/Query', '/TN', windowsTaskName(label)]);
+    if (query.code === 0) {
       throw new Error(`schtasks /Delete /TN ${windowsTaskName(label)} failed (${out.code}): ${(out.stderr || out.stdout).trim() || 'no detail'}`);
     }
     return;

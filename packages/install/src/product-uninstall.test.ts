@@ -1,13 +1,14 @@
 /** Uninstall from the product, against a fake machine: nothing is moved, written or spawned for real. */
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createProductUninstall, PASSPHRASE_HELD_MS } from './product-uninstall.js';
 import type { ProductUninstallDeps } from './product-uninstall.js';
 
-// Skipped on Windows: macOS and Linux fixtures (POSIX paths).
-const POSIX_ONLY = process.platform === 'win32';
-
-const home = '/Users/owner';
-const data = '/Users/owner/Library/Application Support/buddi';
+// Paths in the running platform's own form: the module joins them with node:path.
+const home = path.resolve('/Users/owner');
+const data = path.join(home, 'Library', 'Application Support', 'buddi');
+const kept = path.join(home, 'buddi-backups');
+const backups = path.join(data, 'backups');
 const NAME = 'buddi-backup-20261004-100000.tar.gz.age';
 
 function machine(over: Partial<ProductUninstallDeps> & { backupFails?: string } = {}) {
@@ -16,12 +17,12 @@ function machine(over: Partial<ProductUninstallDeps> & { backupFails?: string } 
   const spawned: Array<{ args: string[]; log: string }> = [];
   const requests: Array<{ keepData: boolean }> = [];
   let exited = 0;
-  const files = new Set([`${data}/backups/${NAME.replace(/\.age$/, '.json')}`]);
+  const files = new Set([path.join(backups, NAME.replace(/\.age$/, '.json'))]);
   const deps: ProductUninstallDeps = {
     data, home,
-    plan: () => ({ data, keychain: 'buddi.install.abc', backups: `${home}/buddi-backups`, appFinishes: false }),
+    plan: () => ({ data, keychain: 'buddi.install.abc', backups: kept, appFinishes: false }),
     backup: {
-      dir: `${data}/backups`,
+      dir: backups,
       create: () => ({ id: 'b1' }),
       job: () => (over.backupFails
         ? { phase: 'failed', error: over.backupFails, finishedAt: 'now' }
@@ -51,7 +52,7 @@ async function finished(m: ReturnType<typeof machine>, id: string) {
   throw new Error('the job never finished');
 }
 
-describe.skipIf(POSIX_ONLY)('uninstall from the product', () => {
+describe('uninstall from the product', () => {
   it('takes the last backup, moves it and its envelope to ~/buddi-backups, and writes the passphrase file beside it', async () => {
     const m = machine();
     const started = m.uninstall.keepLast();
@@ -59,11 +60,11 @@ describe.skipIf(POSIX_ONLY)('uninstall from the product', () => {
     const job = await finished(m, started.id);
     expect(job.phase).toBe('done');
     expect(m.moved).toEqual([
-      [`${data}/backups/${NAME}`, `${home}/buddi-backups/${NAME}`],
-      [`${data}/backups/buddi-backup-20261004-100000.tar.gz.json`, `${home}/buddi-backups/buddi-backup-20261004-100000.tar.gz.json`],
+      [path.join(backups, `${NAME}`), path.join(kept, `${NAME}`)],
+      [path.join(backups, `buddi-backup-20261004-100000.tar.gz.json`), path.join(kept, `buddi-backup-20261004-100000.tar.gz.json`)],
     ]);
-    expect([...m.written.keys()]).toEqual([`${home}/buddi-backups/${NAME}.passphrase.txt`]);
-    expect(job.report).toEqual({ archive: `${home}/buddi-backups/${NAME}`, passphraseFile: `${home}/buddi-backups/${NAME}.passphrase.txt`, passphrase: 'able acid actor adult afraid agent' });
+    expect([...m.written.keys()]).toEqual([path.join(kept, `${NAME}.passphrase.txt`)]);
+    expect(job.report).toEqual({ archive: path.join(kept, `${NAME}`), passphraseFile: path.join(kept, `${NAME}.passphrase.txt`), passphrase: 'able acid actor adult afraid agent' });
   });
 
   it('removes nothing before the last backup was taken', () => {
@@ -90,7 +91,7 @@ describe.skipIf(POSIX_ONLY)('uninstall from the product', () => {
     expect(m.uninstall.start({ keepData: true })).toEqual({ status: 202 });
     expect(m.spawned).toEqual([{
       args: ['uninstall', '--yes', '--no-backup', '--i-have-the-passphrase', '--keep-data'],
-      log: `${home}/buddi-backups/uninstall-20261004-100000.log`,
+      log: path.join(kept, `uninstall-20261004-100000.log`),
     }]);
     // Twice is once.
     expect(m.uninstall.start({ keepData: true }).status).toBe(409);
@@ -117,7 +118,7 @@ describe.skipIf(POSIX_ONLY)('uninstall from the product', () => {
     if ('status' in one) throw new Error(one.error);
     expect((await finished(a, one.id)).report?.passphrase).toBe(PHRASE);
     a.uninstall.start({ keepData: false });
-    expect(a.uninstall.job(one.id)?.report).toEqual({ archive: `${home}/buddi-backups/${NAME}`, passphraseFile: `${home}/buddi-backups/${NAME}.passphrase.txt` });
+    expect(a.uninstall.job(one.id)?.report).toEqual({ archive: path.join(kept, `${NAME}`), passphraseFile: path.join(kept, `${NAME}.passphrase.txt`) });
     // On a new plan (the dialog cancelled and opened again): the backup still counts.
     const b = machine();
     const two = b.uninstall.keepLast();

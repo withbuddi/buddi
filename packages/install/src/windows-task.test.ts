@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import path from 'node:path';
 import { buildSuperviseScript, buildTaskXml, registerWindowsTask, taskXmlBytes, windowsTaskScript } from './windows-task.js';
-import { supervisorSocket } from './supervisor.js';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { nameSupervisorPipe, supervisorSocket } from './supervisor.js';
 
 describe('the Windows service', () => {
   test('the script sets the environment and appends the supervisor to its log', () => {
@@ -52,11 +54,22 @@ describe('the Windows service', () => {
     ]);
   });
 
-  test('the control socket is a named pipe per data directory', () => {
-    const a = supervisorSocket('C:\\Users\\me\\AppData\\Local\\buddi', 'win32');
-    expect(a).toMatch(/^\\\\\.\\pipe\\buddi-supervisor-[0-9a-f]{16}$/);
-    expect(supervisorSocket('c:\\users\\ME\\AppData\\Local\\buddi', 'win32')).toBe(a);
-    expect(supervisorSocket('C:\\Users\\me\\AppData\\Local\\buddi-dev', 'win32')).not.toBe(a);
+  test('the control socket is a named pipe whose random name the supervisor keeps in the data directory', async () => {
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-pipe-'));
+    // No supervisor has named one yet: a fresh name each time, which nobody answers.
+    const none = supervisorSocket(data, 'win32');
+    expect(none).toMatch(/^\\\\\.\\pipe\\buddi-supervisor-none-[0-9a-f]{32}$/);
+    expect(supervisorSocket(data, 'win32')).not.toBe(none);
+    await nameSupervisorPipe(data, 'win32');
+    const named = supervisorSocket(data, 'win32');
+    expect(named).toMatch(/^\\\\\.\\pipe\\buddi-supervisor-[0-9a-f]{32}$/);
+    expect(supervisorSocket(data, 'win32')).toBe(named);
+    // Each start, a new one.
+    await nameSupervisorPipe(data, 'win32');
+    expect(supervisorSocket(data, 'win32')).not.toBe(named);
+    // Something else in the file is not taken for a name.
+    await writeFile(path.join(data, 'supervisor.pipe'), '..\\other');
+    expect(supervisorSocket(data, 'win32')).toMatch(/buddi-supervisor-none-/);
     expect(supervisorSocket('/data', 'darwin')).toBe(path.join('/data', 'supervisor.sock'));
   });
 });

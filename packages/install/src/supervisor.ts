@@ -14,7 +14,7 @@ import type { ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, openSync, closeSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import { readFile, chmod, unlink, lstat, mkdir, rename, copyFile, rm, writeFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,17 +53,32 @@ export function pendingUpgrade(marker: UpgradeInProgress | undefined): UpgradeIn
   return named ? marker : undefined;
 }
 
+/** Where a Windows supervisor records the name of its pipe, inside the private data directory. */
+export const PIPE_NAME_FILE = 'supervisor.pipe';
+
 /**
  * The control socket of the installation whose data directory this is. On
- * Windows a named pipe instead (Node listens on no other kind of path there),
- * named after the data directory so two installations never share one.
+ * Windows a named pipe instead (Node listens on no other kind of path there).
+ * A pipe's name is in a namespace every account shares, and one created
+ * first by someone else would be answered by them; so the name is random,
+ * made afresh at each supervisor start, and kept where only this account can
+ * read it (`supervisor.pipe` in the data directory, see protectDataDirectory).
+ * No supervisor yet: a name nobody can have made, which no one answers.
  */
 export function supervisorSocket(data: string, platform: NodeJS.Platform | string = process.platform): string {
   if (platform === 'win32') {
-    const id = createHash('sha256').update(path.win32.resolve(data).toLowerCase()).digest('hex').slice(0, 16);
-    return `\\\\.\\pipe\\buddi-supervisor-${id}`;
+    const name = (() => { try { return readFileSync(path.join(data, PIPE_NAME_FILE), 'utf8').trim(); } catch { return ''; } })();
+    return /^buddi-supervisor-[0-9a-f]{32}$/.test(name) ? `\\\\.\\pipe\\${name}` : `\\\\.\\pipe\\buddi-supervisor-none-${randomBytes(16).toString('hex')}`;
   }
   return path.join(data, 'supervisor.sock');
+}
+
+/** A new pipe name for this supervisor (Windows; elsewhere the socket's path is fixed). Called with the lock held. */
+export async function nameSupervisorPipe(data: string, platform: NodeJS.Platform | string = process.platform): Promise<void> {
+  if (platform !== 'win32') return;
+  const file = path.join(data, PIPE_NAME_FILE);
+  await writeFile(`${file}.tmp`, `buddi-supervisor-${randomBytes(16).toString('hex')}\n`, { mode: 0o600 });
+  await rename(`${file}.tmp`, file);
 }
 
 /** The moved-port line for `/status`, for a day after the move. */
@@ -501,8 +516,13 @@ function normalizePassphraseText(input: string): string {
  * can reach the path in that window either way.
  */
 export async function listenOnSocket(server: Server, socket: string): Promise<void> {
-  // A Windows named pipe is no file: nothing to replace, and no mode to set
-  // (a pipe a process creates is its own account's, administrators' and SYSTEM's).
+  // A Windows named pipe is no file: nothing to replace, and no mode to set.
+  // Node offers no access list for it, so it has the default one: full
+  // control for this account, administrators and SYSTEM, read-only for
+  // everyone else — not enough to write a request. Its random name, readable
+  // by this account alone, is what keeps others from finding or squatting it
+  // (supervisorSocket), and libuv creates it as the first instance, so a pipe
+  // of that name someone else made first fails the listen instead of sharing it.
   if (socket.startsWith('\\\\.\\pipe\\')) {
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
@@ -571,6 +591,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   }
   try {
     await initialize(ctx);
+    await nameSupervisorPipe(ctx.data);
     const ready = ctx as ReadyContext;
     /*
      * An upgrade that installed new code and handed over is finished here, by

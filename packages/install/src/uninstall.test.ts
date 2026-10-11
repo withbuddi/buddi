@@ -2,14 +2,16 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
+import { windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
 import { APP_LAST_LINE, APP_RUNNING_UNINSTALL, LINUX_LAST_LINE, PACKAGE_LINE, parseUninstallArgs, uninstallPackaged } from './uninstall.js';
 import type { ExecResult, PackagedUninstallDeps, UninstallOptions } from './uninstall.js';
 
-// Skipped on Windows: macOS and Linux fixtures (launchd, systemd, POSIX paths); Windows was run on a VM.
-const POSIX_ONLY = process.platform === 'win32';
-
-const home = '/Users/owner';
-const data = '/Users/owner/Library/Application Support/buddi-test';
+const HOME = '/Users/owner';
+const DATA = '/Users/owner/Library/Application Support/buddi-test';
+const home = HOME;
+const data = DATA;
+const WIN_HOME = 'C:\\Users\\owner';
+const WIN_DATA = 'C:\\Users\\owner\\AppData\\Local\\buddi-test';
 const label = launchAgentLabel(data);
 const plist = launchAgentPlist(data, home);
 
@@ -47,13 +49,22 @@ function machine(opts: {
   buddiApp?: 'running' | 'installed';
   /** The paired chats cannot be read: the menu is cleared with the token alone. */
   collectFails?: boolean;
+  /** Windows: what `schtasks /Delete` and `schtasks /Query` answer. */
+  schtasks?: { delete: ExecResult; query: ExecResult };
+  /** Windows: the supervisor's answer to /exit, when it refuses. */
+  refuse?: Error;
+  /** Windows: a database left running after its supervisor stopped. */
+  postmasterLeft?: boolean;
 } = {}): Machine {
   const platform = opts.platform ?? 'darwin';
-  const unit = platform === 'darwin' ? plist : systemdUnitPath(data, {}, home);
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const data = platform === 'win32' ? WIN_DATA : DATA;
+  const home = platform === 'win32' ? WIN_HOME : HOME;
+  const unit = platform === 'darwin' ? plist : platform === 'win32' ? windowsTaskScript(data) : systemdUnitPath(data, {}, home);
   const files = new Set(opts.files ?? [
-    data, unit, `${data}/installation.json`, `${data}/postgres`, `${data}/agents`, `${data}/artifacts`,
-    `${data}/logs`, `${data}/backups`, `${data}/browser/engines`, `${data}/extension.json`,
-    ...(platform === 'linux' ? [`${data}/vault.json`, `${data}/vault-key`] : []),
+    data, unit, ...['installation.json', 'postgres', 'agents', 'artifacts', 'logs', 'backups', 'browser/engines', 'extension.json'].map(name => p.join(data, name)),
+    ...(platform === 'linux' || platform === 'win32' ? [p.join(data, 'vault.json'), p.join(data, 'vault-key')] : []),
+    ...(platform === 'win32' ? [windowsTaskXmlFile(data)] : []),
   ]);
   let supervisorAlive = opts.supervisor ?? true;
   let loaded = true;
@@ -64,7 +75,7 @@ function machine(opts: {
   m.deps = {
     data, home, platform, env: {}, uid: 501,
     exists: file => [...files].some(f => f === file),
-    remove: async file => { m.removed.push(file); for (const f of [...files]) if (f === file || f.startsWith(`${file}/`)) files.delete(f); },
+    remove: async file => { m.removed.push(file); for (const f of [...files]) if (f === file || f.startsWith(`${file}${p.sep}`)) files.delete(f); },
     move: async (from, to) => { m.moved.push([from, to]); files.delete(from); files.add(to); },
     exec: async (command, argv) => {
       m.exec.push(`${command} ${argv.join(' ')}`);
@@ -74,6 +85,12 @@ function machine(opts: {
         return result;
       }
       if (argv[0] === 'print') return loaded ? { code: 0, stdout: 'state = running', stderr: '' } : { code: 113, stdout: '', stderr: 'Could not find service' };
+      if (command === 'schtasks.exe' && argv[0] === '/Delete') {
+        const result = opts.schtasks?.delete ?? { code: 0, stdout: 'SUCCESS', stderr: '' };
+        if (result.code === 0) loaded = false;
+        return result;
+      }
+      if (command === 'schtasks.exe' && argv[0] === '/Query') return opts.schtasks?.query ?? { code: loaded ? 0 : 1, stdout: '', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     },
     supervisor: {
@@ -91,8 +108,8 @@ function machine(opts: {
         if (!supervisorAlive) throw new Error('the supervisor is not running');
         m.events.push('backup');
         m.backups++;
-        const archive = `${data}/backups/buddi-backup-20260926-120000.tar.gz.age`;
-        files.add(archive); files.add(`${data}/backups/buddi-backup-20260926-120000.tar.gz.json`);
+        const archive = p.join(data, 'backups', 'buddi-backup-20260926-120000.tar.gz.age');
+        files.add(archive); files.add(p.join(data, 'backups', 'buddi-backup-20260926-120000.tar.gz.json'));
         return archive;
       },
     },
@@ -102,7 +119,8 @@ function machine(opts: {
     readState: () => (opts.state as never) ?? undefined,
     now: () => new Date('2026-10-04T10:00:00Z'),
     supervisorPid: () => (supervisorAlive ? 4242 : undefined),
-    signal: () => { supervisorAlive = false; },
+    signal: async () => { if (opts.refuse) throw opts.refuse; supervisorAlive = false; },
+    ...(opts.postmasterLeft === undefined ? {} : { postmasterLeft: () => opts.postmasterLeft === true }),
     ...(platform === 'darwin' ? {
       keychain: {
         service: 'buddi.install.abc',
@@ -134,7 +152,7 @@ function machine(opts: {
 
 const defaults: UninstallOptions = { yes: false, keepData: false, backup: true };
 
-describe.skipIf(POSIX_ONLY)('parseUninstallArgs', () => {
+describe('parseUninstallArgs', () => {
   it('takes its flags and nothing else', () => {
     expect(parseUninstallArgs([])).toEqual(defaults);
     expect(parseUninstallArgs(['--yes', '--keep-data', '--no-backup'])).toEqual({ yes: true, keepData: true, backup: false });
@@ -146,7 +164,7 @@ describe.skipIf(POSIX_ONLY)('parseUninstallArgs', () => {
   });
 });
 
-describe.skipIf(POSIX_ONLY)('uninstallPackaged', () => {
+describe('uninstallPackaged', () => {
   it('prints every path first, then removes everything after yes, and ends on the npm line', async () => {
     const m = machine({ telegram: true, app: `${home}/Applications/Buddi Dashboard.app` });
     const code = await uninstallPackaged(defaults, m.deps);
@@ -259,7 +277,9 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged', () => {
     expect(m.files.has(`${data}/postgres`)).toBe(true);
     expect(m.err.join('\n')).toMatch(/launchctl bootout .* failed \(5\): Input\/output error/);
     expect(m.err.join('\n')).toMatch(/Could not remove the data directory .*the service did not stop/);
-    expect(m.purged).toHaveLength(1);
+    // The credentials stay with the data they open.
+    expect(m.purged).toEqual([]);
+    expect(m.err.join('\n')).toMatch(/Could not remove secrets: .*they were kept because the data directory they open is still there/);
   });
 
   it('on Linux, stops the systemd unit and lists the file vault and its key', async () => {
@@ -267,7 +287,7 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged', () => {
     expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(0);
     const unit = systemdUnitPath(data, {}, home);
     expect(m.out).toContain(`  - the background service: systemd user unit ${label}.service (${unit})`);
-    expect(m.out).toContain(`  - secrets: the file vault ${path.join(data, 'vault.json')} and its key ${path.join(data, 'vault-key')}`);
+    expect(m.out).toContain(`  - secrets: the file vault ${data}/vault.json and its key ${data}/vault-key`);
     expect(m.exec).toContain(`systemctl --user disable --now ${label}.service`);
     expect(m.exec).toContain('systemctl --user daemon-reload');
     expect(m.out.slice(0, 2)).toEqual([`Installation: ${data}`, 'This removes buddi from this machine:']);
@@ -280,7 +300,7 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged', () => {
   });
 });
 
-describe.skipIf(POSIX_ONLY)('uninstallPackaged: with the service stopped', () => {
+describe('uninstallPackaged: with the service stopped', () => {
   const stoppedFiles = [data, `${data}/installation.json`, `${data}/postgres`, `${data}/backups`];
 
   it('starts the database briefly for the last backup and the paired chats, stops it, then removes', async () => {
@@ -310,7 +330,7 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged: with the service stopped', () =>
   });
 });
 
-describe.skipIf(POSIX_ONLY)('uninstallPackaged: buddi.app\'s installation', () => {
+describe('uninstallPackaged: buddi.app\'s installation', () => {
   it('refuses while buddi.app runs it, touching nothing, and points to the app\'s own Uninstall', async () => {
     const m = machine({ buddiApp: 'running', telegram: true });
     expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(1);
@@ -331,7 +351,7 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged: buddi.app\'s installation', () =
   });
 });
 
-describe.skipIf(POSIX_ONLY)('uninstallPackaged: the passphrase leaves with the owner', () => {
+describe('uninstallPackaged: the passphrase leaves with the owner', () => {
   const archive = `${home}/buddi-backups/buddi-backup-20260926-120000.tar.gz.age`;
 
   it('prints it and writes <archive>.passphrase.txt beside the kept backup before the keychain is purged', async () => {
@@ -398,7 +418,7 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged: the passphrase leaves with the o
   });
 });
 
-describe.skipIf(POSIX_ONLY)('uninstallPackaged: buddi.app\'s command line tool', () => {
+describe('uninstallPackaged: buddi.app\'s command line tool', () => {
   it('lists and removes the shims that run this installation', async () => {
     const m = machine();
     const removed: string[] = [];
@@ -409,7 +429,7 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged: buddi.app\'s command line tool',
   });
 });
 
-describe.skipIf(POSIX_ONLY)('uninstallPackaged: only the installation installation.json names', () => {
+describe('uninstallPackaged: only the installation installation.json names', () => {
   it('refuses, touching nothing, when installation.json was written for another folder', async () => {
     const m = machine({ state: { version: 1, kind: 'packaged', dataDir: '/Users/owner/Library/Application Support/buddi', vaultService: 'buddi.install.abc' } });
     expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(1);
@@ -434,7 +454,7 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged: only the installation installati
   });
 });
 
-describe.skipIf(POSIX_ONLY)('uninstallPackaged: the Linux install (scripts/install.sh)', () => {
+describe('uninstallPackaged: the Linux install (scripts/install.sh)', () => {
   const linux = (extra: string[] = []): Machine => {
     const m = machine({ platform: 'linux' });
     for (const file of [`${data}/node`, `${data}/releases`, ...extra]) m.files.add(file);
@@ -486,5 +506,52 @@ describe.skipIf(POSIX_ONLY)('uninstallPackaged: the Linux install (scripts/insta
     m.deps.linuxInstall = { runtime: `${data}/node`, releases: `${data}/releases`, command: `${home}/.local/bin/buddi`, commandOwned: () => false };
     expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
     expect(m.removed).not.toContain(`${home}/.local/bin/buddi`);
+  });
+});
+
+describe('uninstallPackaged: Windows', () => {
+  const taskName = launchAgentLabel(WIN_DATA);
+
+  it('deletes the task, asks the supervisor to exit, and removes the data directory with the file vault', async () => {
+    const m = machine({ platform: 'win32' });
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(0);
+    expect(m.exec).toContain(`schtasks.exe /Delete /TN ${taskName} /F`);
+    expect(m.out).toContain(`  - the background service: Task Scheduler task ${taskName} (${windowsTaskScript(WIN_DATA)})`);
+    expect(m.out).toContain(`  - secrets: the file vault ${WIN_DATA}\\vault.json and its key ${WIN_DATA}\\vault-key`);
+    expect(m.moved.map(([, to]) => to)[0]).toBe(`${WIN_HOME}\\buddi-backups\\buddi-backup-20260926-120000.tar.gz.age`);
+    expect(m.files.has(WIN_DATA)).toBe(false);
+    expect(m.err).toEqual([]);
+  });
+
+  it('takes a task that is already gone as gone, whatever language schtasks answers in', async () => {
+    const m = machine({ platform: 'win32', schtasks: { delete: { code: 1, stdout: '', stderr: 'FEHLER: Das System kann die angegebene Datei nicht finden.' }, query: { code: 1, stdout: '', stderr: 'FEHLER' } } });
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(0);
+    expect(m.exec).toContain(`schtasks.exe /Query /TN ${taskName}`);
+    expect(m.files.has(WIN_DATA)).toBe(false);
+  });
+
+  it('keeps the data directory and the file vault when the task cannot be deleted', async () => {
+    const m = machine({ platform: 'win32', schtasks: { delete: { code: 1, stdout: '', stderr: 'ERROR: Access is denied.' }, query: { code: 0, stdout: taskName, stderr: '' } } });
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(1);
+    expect(m.err.join('\n')).toMatch(/schtasks \/Delete .* failed \(1\): ERROR: Access is denied\./);
+    expect(m.files.has(`${WIN_DATA}\\postgres`)).toBe(true);
+    expect(m.files.has(`${WIN_DATA}\\vault.json`)).toBe(true);
+    expect(m.files.has(`${WIN_DATA}\\vault-key`)).toBe(true);
+  });
+
+  it('stops, and keeps everything that opens the data, when the supervisor refuses to exit (an upgrade under way)', async () => {
+    const m = machine({ platform: 'win32', refuse: new Error('An upgrade is running.') });
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(1);
+    expect(m.err.join('\n')).toMatch(/did not agree to stop: An upgrade is running/);
+    expect(m.files.has(`${WIN_DATA}\\postgres`)).toBe(true);
+    expect(m.files.has(`${WIN_DATA}\\vault-key`)).toBe(true);
+  });
+
+  it('keeps the data directory while a database still runs on it', async () => {
+    const m = machine({ platform: 'win32', postmasterLeft: true });
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(1);
+    expect(m.err.join('\n')).toMatch(/is still running after its supervisor stopped/);
+    expect(m.files.has(`${WIN_DATA}\\postgres`)).toBe(true);
+    expect(m.files.has(`${WIN_DATA}\\vault.json`)).toBe(true);
   });
 });

@@ -30,7 +30,7 @@ import {
   type BackupJob,
   type ScheduleFile,
 } from './backup.js';
-import { controlSocket, listenOnSocket, supervisorSocket, type SupervisorStatus } from './supervisor.js';
+import { controlSocket, listenOnSocket, nameSupervisorPipe, supervisorSocket, type SupervisorStatus } from './supervisor.js';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -89,6 +89,7 @@ function fakeControl(): { control: BackupControl; seen: unknown[] } {
 
 async function serve(): Promise<{ socket: string; data: string; seen: unknown[] }> {
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-backup-socket-'));
+  await nameSupervisorPipe(data);
   const socket = supervisorSocket(data);
   const { control, seen } = fakeControl();
   const server = controlSocket({ status: () => STATUS, action: vi.fn(async () => {}), backup: control, data });
@@ -181,6 +182,7 @@ describe('the control socket, backup half', () => {
 
   test('a supervisor with no installation to back up serves none of it', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-backup-socket-'));
+    await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     const server = controlSocket({ status: () => STATUS, action: async () => {} });
     servers.push(server);
@@ -457,6 +459,7 @@ describe('a restore, as the service runs it', () => {
 
   test('the socket refuses start, stop, restart and a backup while a restore runs', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-backup-socket-'));
+    await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     const { control } = fakeControl();
     const action = vi.fn(async (_name: string) => {});

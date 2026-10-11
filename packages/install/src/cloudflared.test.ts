@@ -31,7 +31,7 @@ import {
   type ConnectorPlan,
   type ConnectorStatus,
 } from './cloudflared.js';
-import { controlSocket, listenOnSocket, supervisorSocket, type SupervisorStatus } from './supervisor.js';
+import { controlSocket, listenOnSocket, nameSupervisorPipe, supervisorSocket, type SupervisorStatus } from './supervisor.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN = 'eyJhIjoiYWNjb3VudCIsInQiOiJ0dW5uZWwiLCJzIjoic2VjcmV0In0=';
@@ -398,7 +398,9 @@ describe('the control socket’s /connector', () => {
     const remove = vi.fn(async () => ({ ...VIEW, state: 'stopped' as const, pid: null, removedBinary: true }));
     const server = controlSocket({ status: () => STATUS, action: async () => {}, connector: { status: () => VIEW, sync, remove } });
     servers.push(server);
-    const socket = supervisorSocket(await mkdtemp(path.join(tmpdir(), 'buddi-sock-')));
+    const sockDir = await mkdtemp(path.join(tmpdir(), 'buddi-sock-'));
+    await nameSupervisorPipe(sockDir);
+    const socket = supervisorSocket(sockDir);
     await listenOnSocket(server, socket);
     expect(await call(socket, 'GET')).toEqual({ status: 200, body: VIEW });
     expect((await call(socket, 'POST', { action: 'sync' })).body).toEqual(VIEW);
@@ -411,7 +413,9 @@ describe('the control socket’s /connector', () => {
   test('is absent without a connector', async () => {
     const server = controlSocket({ status: () => STATUS, action: async () => {} });
     servers.push(server);
-    const socket = supervisorSocket(await mkdtemp(path.join(tmpdir(), 'buddi-sock-')));
+    const sockDir = await mkdtemp(path.join(tmpdir(), 'buddi-sock-'));
+    await nameSupervisorPipe(sockDir);
+    const socket = supervisorSocket(sockDir);
     await listenOnSocket(server, socket);
     expect((await call(socket, 'GET')).status).toBe(404);
   });

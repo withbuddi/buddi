@@ -15,7 +15,7 @@ import { randomBytes, createHash, createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { execFileSync, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 
 /** What a packaged installation persists in `installation.json`. */
@@ -324,7 +324,8 @@ export async function readPrivateFile(file: string): Promise<string | undefined>
     fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = await fd.stat();
     // Windows reports no owner and no permission bits (every file reads 0666):
-    // there the data directory under %LOCALAPPDATA% is what keeps it private.
+    // there the data directory's access list keeps it private, which the
+    // supervisor sets at every start (protectDataDirectory).
     const loose = process.platform !== 'win32' && (info.mode & 0o077) !== 0;
     if (!info.isFile() || (process.getuid && info.uid !== process.getuid()) || loose) {
       throw new Error(`Unsafe private file ${file}: expected an owner-only regular file (mode 0600).`);
@@ -513,7 +514,51 @@ function identity(data: string): Pick<InstallationState, 'kind' | 'dataDir' | 'v
   return { kind: 'packaged', dataDir: path.resolve(data), vaultService: vaultServiceFor(path.resolve(data)) };
 }
 
+/**
+ * Windows: the data directory readable and writable by this account (and
+ * SYSTEM) alone, inheritance from the parent cut, so every file buddi writes
+ * in it inherits the same — the counterpart of mode 0700 elsewhere. Windows
+ * reports no permission bits a check could read, and `BUDDI_DATA_DIR` may
+ * point outside %LOCALAPPDATA%, so it is made so rather than assumed.
+ * Changed only when it is not already so (the change propagates through the
+ * tree); a folder this account may not re-permission is refused.
+ */
+const PROTECT_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$d = $env:BUDDI_PRIVATE_DIR
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+function Others($acl) { @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -ne $sid -and $_.IdentityReference.Value -ne 'S-1-5-18' } | ForEach-Object { $_.IdentityReference.Value }) }
+$now = [IO.Directory]::GetAccessControl($d)
+if ($now.AreAccessRulesProtected -and (Others $now).Count -eq 0) { exit 0 }
+$s = New-Object Security.AccessControl.DirectorySecurity
+$s.SetSecurityDescriptorSddlForm("D:PAI(A;OICI;FA;;;$sid)(A;OICI;FA;;;SY)", [Security.AccessControl.AccessControlSections]::Access)
+[IO.Directory]::SetAccessControl($d, $s)
+$left = Others ([IO.Directory]::GetAccessControl($d))
+if ($left.Count -gt 0) { throw ('others can still reach it: ' + ($left -join ', ')) }
+`;
+
+export type PowerShellRun = (script: string, env: NodeJS.ProcessEnv) => Promise<void>;
+
+const runPowerShell: PowerShellRun = (script, env) => new Promise((resolve, reject) => {
+  const shell = path.win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  execFile(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { env, windowsHide: true, timeout: 120_000 }, (error, _stdout, stderr) => {
+      if (!error) return resolve();
+      const detail = String(stderr).split(/\r?\n/).map(line => line.trim()).find(line => line !== '' && !line.startsWith('At line') && !line.startsWith('+')) ?? error.message;
+      reject(new Error(detail.replace(/^Exception calling .*?: "?|"$/g, '')));
+    });
+});
+
+export async function protectDataDirectory(data: string, platform: NodeJS.Platform | string = process.platform, run: PowerShellRun = runPowerShell): Promise<void> {
+  if (platform !== 'win32') return;
+  try { await run(PROTECT_SCRIPT, { ...process.env, BUDDI_PRIVATE_DIR: data }); }
+  catch (error) {
+    throw new Error(`Unsafe data directory ${data}: it could not be made private to this account (${(error as Error).message.trim()}). Use a folder of your own, such as the default under %LOCALAPPDATA%.`);
+  }
+}
+
 export async function initialize(ctx: InstallContext): Promise<void> {
+  await protectDataDirectory(ctx.data);
   // `incoming` is where the dashboard writes an uploaded archive, and the one
   // directory the control socket accepts a path inside.
   for (const name of ['logs', 'agents', 'skills', 'artifacts', 'backups', 'incoming']) {

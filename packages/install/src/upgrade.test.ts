@@ -25,6 +25,8 @@ import {
   restartPlan,
   upgradeDoctorLines,
   upgradeTarget,
+  npmBinary,
+  npmInvocation,
   versionView,
   writeUpgradeState,
   type UpgradeHistoryEntry,
@@ -33,7 +35,12 @@ import {
 
 /** An installation on disk, minus everything an upgrade does not touch. */
 async function installation(version = '0.1.0'): Promise<ReadyContext> {
-  const root = await mkdtemp(path.join(tmpdir(), 'buddi-root-'));
+  // npm's global tree on this platform: <prefix>/node_modules/@withbuddi/buddi,
+  // and on Windows the buddi.cmd npm writes at the prefix, which is what says "global" there.
+  const prefix = await mkdtemp(path.join(tmpdir(), 'buddi-prefix-'));
+  const root = path.join(prefix, 'node_modules', '@withbuddi', 'buddi');
+  await mkdir(root, { recursive: true });
+  if (process.platform === 'win32') await writeFile(path.join(prefix, 'buddi.cmd'), '@echo off\r\n');
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-data-'));
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: '@withbuddi/buddi', version }));
   return { root, data, env: {}, state: { version: 1, database: 'managed', webPort: 4317, dbPort: 5555, phase: 'ready' } };
@@ -165,8 +172,7 @@ describe('the upgrade state file', () => {
   });
 });
 
-// POSIX fixtures (an npm prefix with lib/node_modules); Windows' global tree is tested in 'where npm is told to install'.
-describe.skipIf(process.platform === 'win32')('the check', () => {
+describe('the check', () => {
   test('records the version the registry named', async () => {
     const ctx = await installation();
     const { upgrade } = service(ctx);
@@ -270,16 +276,26 @@ describe.skipIf(process.platform === 'win32')('the check', () => {
 });
 
 describe('where npm is told to install', () => {
-  test.skipIf(process.platform === 'win32')('is read off the install root, never off npm\'s own prefix', () => {
-    expect(installTarget('/opt/homebrew/lib/node_modules/buddi')).toEqual({ prefix: '/opt/homebrew', global: true });
+  test('is read off the install root, never off npm\'s own prefix (macOS and Linux paths, whatever runs the test)', () => {
+    expect(installTarget('/opt/homebrew/lib/node_modules/buddi', 'darwin')).toEqual({ prefix: '/opt/homebrew', global: true });
     // The scoped name the package is published under sits one level deeper.
-    expect(installTarget('/opt/homebrew/lib/node_modules/@withbuddi/buddi')).toEqual({ prefix: '/opt/homebrew', global: true });
-    expect(installTarget('/tmp/smoke/node_modules/@withbuddi/buddi').prefix).toBe('/tmp/smoke');
-    expect(installArgs('buddi@0.1.1', { registry: 'https://r.example', root: '/opt/homebrew/lib/node_modules/buddi' }))
+    expect(installTarget('/opt/homebrew/lib/node_modules/@withbuddi/buddi', 'darwin')).toEqual({ prefix: '/opt/homebrew', global: true });
+    expect(installTarget('/tmp/smoke/node_modules/@withbuddi/buddi', 'darwin').prefix).toBe('/tmp/smoke');
+    expect(installArgs('buddi@0.1.1', { registry: 'https://r.example', root: '/opt/homebrew/lib/node_modules/buddi', target: installTarget('/opt/homebrew/lib/node_modules/buddi', 'darwin') }))
       .toEqual(['install', '-g', '--prefix', '/opt/homebrew', 'buddi@0.1.1', '--registry', 'https://r.example', '--ignore-scripts', '--no-audit', '--no-fund']);
     // What the release smoke makes: a plain tree, upgraded in place.
-    expect(installTarget('/tmp/smoke/node_modules/buddi').prefix).toBe('/tmp/smoke');
-    expect(installArgs('x.tgz', { registry: 'r', root: '/tmp/smoke/node_modules/buddi' })).not.toContain('-g');
+    expect(installTarget('/tmp/smoke/node_modules/buddi', 'darwin').prefix).toBe('/tmp/smoke');
+    expect(installArgs('x.tgz', { registry: 'r', root: '/tmp/smoke/node_modules/buddi', target: installTarget('/tmp/smoke/node_modules/buddi', 'darwin') })).not.toContain('-g');
+  });
+
+  test('npm on Windows is an absolute npm.cmd: beside node, else found on PATH', () => {
+    const node = 'C:\\Program Files\\nodejs\\node.exe';
+    expect(npmBinary(node, {}, file => file === 'C:\\Program Files\\nodejs\\npm.cmd', 'win32')).toBe('C:\\Program Files\\nodejs\\npm.cmd');
+    const env = { Path: 'C:\\Windows\\System32;;C:\\Users\\me\\AppData\\Roaming\\npm' };
+    expect(npmBinary('C:\\tools\\node.exe', env, file => file === 'C:\\Users\\me\\AppData\\Roaming\\npm\\npm.cmd', 'win32')).toBe('C:\\Users\\me\\AppData\\Roaming\\npm\\npm.cmd');
+    // Its script is then found beside it, and run with this node.
+    expect(npmInvocation('C:\\Users\\me\\AppData\\Roaming\\npm\\npm.cmd', ['view'], 'win32')[1][0]).toBe('C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npm-cli.js');
+    expect(npmBinary('/usr/local/bin/node', {}, () => false, 'linux')).toBe('npm');
   });
 
   test('never runs an install script, here as everywhere else', () => {
@@ -385,8 +401,7 @@ describe('the hand-over', () => {
   });
 });
 
-// POSIX fixtures (an npm prefix with lib/node_modules); Windows' global tree is tested in 'where npm is told to install'.
-describe.skipIf(process.platform === 'win32')('an upgrade', () => {
+describe('an upgrade', () => {
   test('backs up, stops the gateway, installs and hands over', async () => {
     const ctx = await installation();
     const { upgrade, install, stopGateway, restart, startGateway } = service(ctx);
@@ -398,7 +413,7 @@ describe.skipIf(process.platform === 'win32')('an upgrade', () => {
     expect(job.phases).toEqual(['starting', 'backup', 'stopping', 'installing', 'verifying', 'restarting']);
     expect(stopGateway).toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();
-    expect(install).toHaveBeenCalledWith('@withbuddi/buddi@0.1.0', { registry: 'https://registry.example', root: ctx.root, target: { prefix: path.dirname(ctx.root), global: false } });
+    expect(install).toHaveBeenCalledWith('@withbuddi/buddi@0.1.0', { registry: 'https://registry.example', root: ctx.root, target: upgradeTarget(ctx.root) });
     expect(restart).toHaveBeenCalled();
     // The point of no return, on disk before it is taken.
     const state = JSON.parse(await readFile(path.join(ctx.data, 'installation.json'), 'utf8')) as typeof ctx.state;
@@ -789,8 +804,7 @@ describe('is the tarball served yet', () => {
   });
 });
 
-// POSIX fixtures (an npm prefix with lib/node_modules); Windows' global tree is tested in 'where npm is told to install'.
-describe.skipIf(process.platform === 'win32')('npm\'s 404', () => {
+describe('npm\'s 404', () => {
   test('is "still processing" only when it is this package\'s tarball', () => {
     expect(isNotFound('npm install @withbuddi/buddi@0.1.1 failed: npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@withbuddi%2fbuddi/-/buddi-0.1.1.tgz - Not found')).toBe(true);
     expect(isNotFound('npm error code E404\nnpm error 404  \'@withbuddi/buddi@0.1.1\' is not in this registry.')).toBe(true);

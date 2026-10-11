@@ -570,9 +570,14 @@ export type UpgradeInstaller = (spec: string, opts: { registry: string; root: st
  * imported, because nothing in this module may take a value import from a
  * `@buddi/*` package.
  */
-export function npmBinary(execPath = process.execPath): string {
-  const beside = path.join(path.dirname(execPath), process.platform === 'win32' ? 'npm.cmd' : 'npm');
-  return existsSync(beside) ? beside : process.platform === 'win32' ? 'npm.cmd' : 'npm';
+export function npmBinary(execPath = process.execPath, env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = existsSync, platform: NodeJS.Platform | string = process.platform): string {
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  const beside = paths.join(paths.dirname(execPath), platform === 'win32' ? 'npm.cmd' : 'npm');
+  if (exists(beside)) return beside;
+  if (platform !== 'win32') return 'npm';
+  // Absolute on Windows: npmInvocation finds npm-cli.js beside npm.cmd, which a bare name has no folder for.
+  const onPath = (env.Path ?? env.PATH ?? '').split(';').filter(dir => dir.trim() !== '').map(dir => nodePath.win32.join(dir, 'npm.cmd')).find(exists);
+  return onPath ?? 'npm.cmd';
 }
 
 /**

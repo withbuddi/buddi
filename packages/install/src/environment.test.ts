@@ -5,6 +5,7 @@ import { createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  protectDataDirectory,
   acquireLock,
   atomicJson,
   browsersDir,
@@ -277,5 +278,17 @@ describe('an orphaned gateway of this installation', () => {
     const none = orphan({ pid: '' });
     expect(await stopOrphanGateway('/d', none.deps)).toBe(false);
     expect(none.signals).toEqual([]);
+  });
+});
+
+describe('the data directory on Windows', () => {
+  test('is made private to this account, and refused when it cannot be', async () => {
+    const calls: Array<string | undefined> = [];
+    await protectDataDirectory('C:\\data', 'darwin', async () => { calls.push('ran'); });
+    expect(calls).toEqual([]);
+    await protectDataDirectory('C:\\data', 'win32', async (script, env) => { calls.push(env.BUDDI_PRIVATE_DIR); expect(script).toMatch(/D:PAI\(A;OICI;FA;;;\$sid\)\(A;OICI;FA;;;SY\)/); });
+    expect(calls).toEqual(['C:\\data']);
+    await expect(protectDataDirectory('D:\\shared', 'win32', async () => { throw new Error('Attempted to perform an unauthorized operation.'); }))
+      .rejects.toThrow(/^Unsafe data directory D:\\shared: it could not be made private to this account \(Attempted to perform an unauthorized operation\.\)/);
   });
 });

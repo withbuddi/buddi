@@ -85,12 +85,17 @@ export class NpmUnavailable extends Error {
  * The npm to run: the one next to this node first, then PATH.
  *
  * Returned as a bare name when only PATH has it, so `execFile` does the lookup
- * and the error message is the operating system's.
+ * and the error message is the operating system's — except on Windows, where
+ * `npm.cmd` is found on PATH here: its folder is where npm-cli.js is.
  */
-export function npmBinary(execPath = process.execPath): string {
-  const beside = path.join(path.dirname(execPath), process.platform === 'win32' ? 'npm.cmd' : 'npm');
-  if (existsSync(beside)) return beside;
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+export function npmBinary(execPath = process.execPath, env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = existsSync, platform: NodeJS.Platform | string = process.platform): string {
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  const beside = paths.join(paths.dirname(execPath), platform === 'win32' ? 'npm.cmd' : 'npm');
+  if (exists(beside)) return beside;
+  if (platform !== 'win32') return 'npm';
+  // Absolute on Windows: npmInvocation finds npm-cli.js beside npm.cmd, which a bare name has no folder for.
+  const onPath = (env.Path ?? env.PATH ?? '').split(';').filter(dir => dir.trim() !== '').map(dir => path.win32.join(dir, 'npm.cmd')).find(exists);
+  return onPath ?? 'npm.cmd';
 }
 
 function registryArgs(registry?: string): string[] {
