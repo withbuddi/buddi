@@ -10,6 +10,10 @@ What changes in buddi from one release to the next, newest first.
 - A desktop app for Linux, `buddi-desktop` (a .deb and an AppImage per architecture on the GitHub release; Tauri on WebKitGTK): the dashboard in its own window and a tray icon whose menu is buddi.app's (Open buddi, New Conversation, Settings…, Update to / Check for Updates…, Restart, Stop/Start, Lock, Start at Login, Advanced ▸ Open in Browser, Show Logs, Restart with the Previous Version…, Help, About, Uninstall buddi…, Quit), with New Conversation, Check for Updates and Lock on the launcher's right-click too, around the buddi `install.sh` installed, starting in the tray at login. It signs in with `buddi`'s link, shows "Starting buddi…" while the gateway restarts and comes back on the same page, gets a fresh link when the session expired, and shows the install line when `buddi` is missing. The microphone and notifications are granted to the dashboard only, other sites open in the browser, downloads go to ~/Downloads. `install.sh` adds buddi to the app grid (the desktop app when it is installed, else the dashboard in the browser) and, with the desktop app installed, to autostart; `buddi uninstall` removes both.
 - `buddi doctor` says which Node runs buddi and which npm plugin installs use: the bundled runtime (buddi.app, the Linux install) or the machine's own.
 
+### Fixed
+
+- Settings → System and the owner menu say "this computer" instead of "this Mac" when buddi runs on Linux: "Remove buddi from this computer?", and the passphrase leaves "buddi’s secret store" rather than "this Mac’s keychain".
+
 ## 0.1.0-pre.52 — 2026-10-08
 
 ### Added

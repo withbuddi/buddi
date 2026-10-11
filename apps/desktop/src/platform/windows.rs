@@ -43,3 +43,7 @@ pub fn autostart_enabled() -> bool {
 pub fn set_autostart(_on: bool) -> Result<(), String> {
     Err("Start at Login is not there yet on this system.".into())
 }
+
+pub fn launch(url: &str) -> Result<&'static str, String> {
+    open::that_detached(url).map(|_| "open").map_err(|e| e.to_string())
+}

@@ -123,6 +123,23 @@ pub fn tray_wants_dark_ink() -> bool {
     false
 }
 
+/// Hands a URL to the desktop's default browser: xdg-open, else gio, else the
+/// `open` crate's own list. Waits for the launcher's answer (it returns once
+/// the browser took the address).
+pub fn launch(url: &str) -> Result<&'static str, String> {
+    use std::process::{Command, Stdio};
+    let mut problems = Vec::new();
+    for (name, program, args) in [("xdg-open", "xdg-open", vec![url]), ("gio", "gio", vec!["open", url])] {
+        let out = Command::new(program).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).output();
+        match out {
+            Ok(o) if o.status.success() => return Ok(name),
+            Ok(o) => problems.push(format!("{name}: {} {}", o.status, String::from_utf8_lossy(&o.stderr).trim())),
+            Err(e) => problems.push(format!("{name}: {e}")),
+        }
+    }
+    open::that_detached(url).map(|_| "open").map_err(|e| format!("{}; open: {e}", problems.join("; ")))
+}
+
 /// "11:19" or "11:19 AM", as the top bar's clock has it (GNOME's clock-format).
 pub fn clock_text(at: std::time::SystemTime) -> String {
     static TWELVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

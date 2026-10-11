@@ -7,11 +7,11 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ApiError, api } from '../../api';
-import { RemoveBuddi, removalLines } from './RemoveBuddi';
+import { RemoveBuddi, removalLines, removeTitle } from './RemoveBuddi';
 
 vi.mock('../../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../api')>();
-  return { ...original, api: { ...original.api, uninstallPlan: vi.fn(), uninstallBackup: vi.fn(), uninstallJob: vi.fn(), uninstall: vi.fn() } };
+  return { ...original, api: { ...original.api, uninstallPlan: vi.fn(), uninstallBackup: vi.fn(), uninstallJob: vi.fn(), uninstall: vi.fn(), session: vi.fn() } };
 });
 
 const PLAN = {
@@ -28,6 +28,8 @@ const PHRASE = 'able acid actor adult afraid agent';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The gateway runs on a Mac here: "this Mac" (useThisMachine).
+  vi.mocked(api.session).mockResolvedValue({ platform: 'darwin' } as Awaited<ReturnType<typeof api.session>>);
   vi.mocked(api.uninstallPlan).mockResolvedValue(PLAN);
   vi.mocked(api.uninstallBackup).mockResolvedValue({ job: { id: 'j1', kind: 'uninstall-backup', phase: 'starting', startedAt: 'now' } });
   vi.mocked(api.uninstallJob).mockResolvedValue({
@@ -49,7 +51,7 @@ describe('RemoveBuddi', { timeout: 180_000 }, () => {
   it('takes the backup, shows the words, and removes only after "I wrote it down"', async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     render(<RemoveBuddi />);
-    await user.click(screen.getByRole('button', { name: 'Remove buddi from this Mac…' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove buddi from this Mac…' }));
     expect(await screen.findByText(/moved to the Trash/)).toBeInTheDocument();
     // The same question as buddi.app's native sheet (UninstallPolicy.confirmTitle).
     expect(screen.getByRole('alertdialog', { name: 'Remove buddi from this Mac?' })).toBeInTheDocument();
@@ -71,7 +73,7 @@ describe('RemoveBuddi', { timeout: 180_000 }, () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     vi.mocked(api.uninstall).mockRejectedValueOnce(new ApiError(503, 'The supervisor is not answering on its control socket. Run buddi in a terminal.'));
     render(<RemoveBuddi />);
-    await user.click(screen.getByRole('button', { name: 'Remove buddi from this Mac…' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove buddi from this Mac…' }));
     await user.click(await screen.findByRole('button', { name: 'Take the last backup' }));
     expect(await screen.findByText(PHRASE)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('I wrote it down'));
@@ -89,7 +91,7 @@ describe('RemoveBuddi', { timeout: 180_000 }, () => {
     vi.mocked(api.uninstallJob).mockResolvedValue({ id: 'j1', kind: 'uninstall-backup', phase: 'failed', error: 'disk full', startedAt: 'now', finishedAt: 'now' });
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     render(<RemoveBuddi />);
-    await user.click(screen.getByRole('button', { name: 'Remove buddi from this Mac…' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove buddi from this Mac…' }));
     await user.click(await screen.findByRole('button', { name: 'Take the last backup' }));
     expect(await screen.findByText(/disk full\. Nothing was removed\./)).toBeInTheDocument();
     expect(api.uninstall).not.toHaveBeenCalled();
@@ -99,8 +101,15 @@ describe('RemoveBuddi', { timeout: 180_000 }, () => {
     vi.mocked(api.uninstallPlan).mockResolvedValue({ available: false, reason: 'A source checkout removes buddi with buddi uninstall in a terminal.' });
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     render(<RemoveBuddi />);
-    await user.click(screen.getByRole('button', { name: 'Remove buddi from this Mac…' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove buddi from this Mac…' }));
     expect(await screen.findByText(/buddi uninstall in a terminal/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove buddi from this Mac…' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Remove buddi from this Mac…' })).toBeDisabled();
+  });
+});
+
+describe('removeTitle', () => {
+  it('names the Mac on macOS and the computer elsewhere', () => {
+    expect(removeTitle('this Mac')).toBe('Remove buddi from this Mac?');
+    expect(removeTitle('this computer')).toBe('Remove buddi from this computer?');
   });
 });

@@ -32,6 +32,7 @@ import { Icon, Mark, Segment, useAsync } from '../ui';
 import { installApp, useInstallPrompt } from '../views/parts/KeepClose';
 import { useLock } from './lock';
 import { fmtClock } from '../format';
+import { useThisMachine } from '../useThisMachine';
 
 /** What the Settings dot says when a connection needs the owner (the rail's, and Connections' in the settings nav). */
 export const CONNECTION_DOT = 'a connection needs you';
@@ -163,6 +164,7 @@ function OwnerMenu({
   timezone?: string | undefined;
 }): JSX.Element {
   const owner = useAsync(() => api.owner(), []);
+  const machine = useThisMachine();
   const lock = useLock();
   const focusView = useAsync(() => api.focus(), [], 60_000);
   const focus = focusView.data?.focus ?? null;
@@ -195,7 +197,7 @@ function OwnerMenu({
               <span className="rail-owner-face" data-size="lg" aria-hidden="true">{initial}</span>
               <span className="rail-owner-who">
                 <span className="rail-owner-name">{name ?? 'You'}</span>
-                <span className="rail-owner-sub">On this Mac</span>
+                <span className="rail-owner-sub">On {machine}</span>
               </span>
             </div>
             <DropdownMenu.Separator className="ui-menu-sep" />

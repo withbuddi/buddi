@@ -21,7 +21,7 @@ export function useThisMachine(): ThisMachine {
   const [platform, setPlatform] = useState<string | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    asked ??= api.session().then((s) => s.platform, () => { asked = null; return undefined; });
+    asked ??= Promise.resolve().then(() => api.session()).then((s) => s.platform, () => { asked = null; return undefined; });
     void asked.then((p) => { if (live) setPlatform(p); });
     return () => { live = false; };
   }, []);

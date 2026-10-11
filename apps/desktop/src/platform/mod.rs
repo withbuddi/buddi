@@ -32,12 +32,32 @@ pub fn show_main(app: &AppHandle) {
     shell::reopened(app);
 }
 
-/// A link off the dashboard: the default browser, never this window.
+static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// Remembered at start, so a failed hand-off to the browser can say so.
+pub fn remember_app(app: &AppHandle) {
+    let _ = APP.set(app.clone());
+}
+
+/// A link off the dashboard: the default browser, never this window. The
+/// hand-off is checked (a launcher that exits non-zero is retried another
+/// way) and a failure is a notification, never silence: a sign-in page that
+/// does not open looks to the owner like a button that does nothing.
 pub fn open_external(url: &Url) {
-    if matches!(url.scheme(), "http" | "https" | "mailto") {
-        shell::log(format!("opening in the browser: {}", url.origin().ascii_serialization()));
-        if let Err(e) = open::that_detached(url.as_str()) {
-            shell::log(format!("could not open the browser: {e}"));
-        }
+    if !matches!(url.scheme(), "http" | "https" | "mailto") {
+        return;
     }
+    let url = url.clone();
+    std::thread::spawn(move || {
+        let shown = format!("{}{}", url.origin().ascii_serialization(), url.path());
+        match launch(url.as_str()) {
+            Ok(how) => shell::log(format!("opened in the browser ({how}): {shown}")),
+            Err(why) => {
+                shell::log(format!("could not open the browser for {shown}: {why}"));
+                if let Some(app) = APP.get() {
+                    notify(app, "buddi could not open your browser", &format!("Open this address yourself: {url}"));
+                }
+            }
+        }
+    });
 }

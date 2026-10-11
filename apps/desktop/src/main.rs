@@ -264,6 +264,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![retry, start_buddi, session_expired, notify, shell_log])
         .setup(move |app| {
             let handle = app.handle().clone();
+            platform::remember_app(&handle);
             build_window(&handle, hidden)?;
             tray::build(&handle)?;
             shell::connect(&handle, false, false);

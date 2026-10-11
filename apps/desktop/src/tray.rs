@@ -159,12 +159,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             "browser" => actions::open_in_browser(app),
             "logs" => actions::show_logs(),
             "previous" => actions::restart_with_previous(app),
-            "help" => {
-                let _ = open::that_detached(actions::DOCS);
-            }
-            "report" => {
-                let _ = open::that_detached(actions::REPORT_PROBLEM);
-            }
+            "help" => platform::open_external(&tauri::Url::parse(actions::DOCS).unwrap()),
+            "report" => platform::open_external(&tauri::Url::parse(actions::REPORT_PROBLEM).unwrap()),
             "about" => actions::about(app),
             "uninstall" => actions::uninstall(app),
             "quit" => actions::quit(app),

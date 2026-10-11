@@ -1,5 +1,6 @@
 /**
- * Settings → System, the last row: "Remove buddi from this Mac".
+ * Settings → System, the last row: "Remove buddi from this Mac" (from "this
+ * computer" anywhere but macOS, useThisMachine).
  *
  * One dialog, three steps, nothing deleted until the last:
  *
@@ -17,14 +18,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, api, type UninstallPlan as AnyPlan } from '../../api';
 import { Button, ErrorBanner, Modal, Notice, Section, Stack, Toolbar } from '../../ui';
+import { useThisMachine, type ThisMachine } from '../../useThisMachine';
 
 type Step = 'plan' | 'backup' | 'words' | 'removing';
 type UninstallPlan = Extract<AnyPlan, { available: true }>;
 
-/** The dialog's question, the same words as buddi.app's native sheet (UninstallPolicy.confirmTitle). */
-export const REMOVE_TITLE = 'Remove buddi from this Mac?';
+/** The dialog's question, the same words as buddi.app's native sheet (UninstallPolicy.confirmTitle) on a Mac. */
+export function removeTitle(machine: ThisMachine): string {
+  return `Remove buddi from ${machine}?`;
+}
 
 export function RemoveBuddi(): JSX.Element {
+  const machine = useThisMachine();
   const [plan, setPlan] = useState<UninstallPlan | null>(null);
   const [open, setOpen] = useState(false);
   const [unavailable, setUnavailable] = useState<string | null>(null);
@@ -52,11 +57,11 @@ export function RemoveBuddi(): JSX.Element {
         )}
         <Toolbar align="end">
           <Button variant="danger" disabled={busy || unavailable !== null} onClick={start}>
-            Remove buddi from this Mac…
+            Remove buddi from {machine}…
           </Button>
         </Toolbar>
       </Stack>
-      {open && plan ? <RemoveDialog plan={plan} onClose={() => setOpen(false)} /> : null}
+      {open && plan ? <RemoveDialog plan={plan} machine={machine} onClose={() => setOpen(false)} /> : null}
     </Section>
   );
 }
@@ -75,7 +80,7 @@ export function removalLines(plan: UninstallPlan, keepData: boolean): string[] {
 
 const BACKUP_POLL_MS = 1_000;
 
-function RemoveDialog({ plan, onClose }: { plan: UninstallPlan; onClose: () => void }): JSX.Element {
+function RemoveDialog({ plan, machine, onClose }: { plan: UninstallPlan; machine: ThisMachine; onClose: () => void }): JSX.Element {
   const [step, setStep] = useState<Step>('plan');
   const [keepData, setKeepData] = useState(false);
   const [wrote, setWrote] = useState(false);
@@ -135,7 +140,7 @@ function RemoveDialog({ plan, onClose }: { plan: UninstallPlan; onClose: () => v
   ) : null;
 
   return (
-    <Modal title={REMOVE_TITLE} onClose={step === 'removing' ? () => {} : onClose} foot={foot}>
+    <Modal title={removeTitle(machine)} onClose={step === 'removing' ? () => {} : onClose} foot={foot}>
       <Stack gap="sm">
         <ErrorBanner message={failed} />
         {step === 'plan' || step === 'backup' ? (
@@ -155,7 +160,7 @@ function RemoveDialog({ plan, onClose }: { plan: UninstallPlan; onClose: () => v
             <p>The last backup is <span className="mono">{kept.archive}</span>.</p>
             {kept.passphrase ? (
               <>
-                <p>These six words open it. They leave this Mac's keychain with the rest, so write them down now:</p>
+                <p>These six words open it. They leave {machine === 'this Mac' ? 'this Mac’s keychain' : 'buddi’s secret store'} with the rest, so write them down now:</p>
                 <p className="backup-phrase mono" aria-label="Your backup passphrase">{kept.passphrase}</p>
                 {kept.passphraseFile ? <p className="ui-card-meta">They are also in <span className="mono">{kept.passphraseFile}</span>, which only you can read. Delete it once they are written down.</p> : null}
                 <Toolbar align="end">
