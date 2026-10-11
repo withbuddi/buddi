@@ -32,6 +32,37 @@ pub fn tune_webview(window: &WebviewWindow) {
                 settings.set_javascript_can_open_windows_automatically(true);
             }
         }
+        // Navigations, every frame's: a click to another site goes to the
+        // browser; frames and redirects load (a preview's embed), and a main
+        // frame that lands off the dashboard is sent back by main.rs's
+        // page-load guard. (Tauri's on_navigation is not used here: it sees
+        // only the address, not whether a person clicked.)
+        view.connect_decide_policy(|_view, decision, kind| {
+            use webkit2gtk::{NavigationPolicyDecision, NavigationPolicyDecisionExt, PolicyDecisionExt, PolicyDecisionType, URIRequestExt};
+            if kind != PolicyDecisionType::NavigationAction {
+                return false;
+            }
+            let Some(nav) = decision.downcast_ref::<NavigationPolicyDecision>() else { return false };
+            let Some(action) = nav.navigation_action() else { return false };
+            let Some(uri) = action.request().and_then(|r| r.uri()) else { return false };
+            let Ok(url) = Url::parse(&uri) else {
+                decision.ignore();
+                return true;
+            };
+            if shell::may_show(&url) || crate::policy::loopback(&url) {
+                return false;
+            }
+            if crate::policy::may_hand_off(&url) {
+                if action.is_user_gesture() {
+                    super::open_external(&url);
+                    decision.ignore();
+                    return true;
+                }
+                return false;
+            }
+            decision.ignore();
+            true
+        });
         view.connect_permission_request(|view, req| {
             let ours = view.uri().and_then(|u| Url::parse(&u).ok()).map(|u| buddi::is_dashboard(&u)).unwrap_or(false);
             let (kind, wanted) = if let Some(media) = req.downcast_ref::<webkit2gtk::UserMediaPermissionRequest>() {
@@ -154,9 +185,11 @@ pub fn clock_text(at: std::time::SystemTime) -> String {
     local.format(if twelve { "%-I:%M %p" } else { "%H:%M" }).to_string()
 }
 
-const SYSTEM_AUTOSTART: &str = "/etc/xdg/autostart/buddi-desktop.desktop";
-/// install.sh's mark (scripts/install.sh, packages/install/src/linux-install.ts).
+/// install.sh's mark (scripts/install.sh, packages/install/src/linux-install.ts):
+/// an entry install.sh keeps current and `buddi uninstall` removes.
 const MARK: &str = "X-Buddi-Linux-Install=true";
+/// Which installation an entry belongs to: its data folder.
+const DATA_KEY: &str = "X-Buddi-Data=";
 
 fn user_autostart() -> Option<PathBuf> {
     dirs::config_dir().map(|c| c.join("autostart").join("buddi-desktop.desktop"))
@@ -166,29 +199,98 @@ fn turned_off(entry: &str) -> bool {
     entry.lines().any(|l| matches!(l.trim(), "Hidden=true" | "X-GNOME-Autostart-enabled=false"))
 }
 
-/// Start at Login: this account's entry decides when there is one (it shadows
-/// the package's /etc/xdg/autostart entry, same file name); else the package's.
-pub fn autostart_enabled() -> bool {
-    match user_autostart().and_then(|p| std::fs::read_to_string(p).ok()) {
-        Some(entry) => !turned_off(&entry),
-        None => std::path::Path::new(SYSTEM_AUTOSTART).exists(),
+/// An entry this app may change: one it (or install.sh) wrote for this
+/// installation. One the owner wrote, or another installation's, is not.
+pub fn owned_entry(entry: &str, data: &str) -> bool {
+    let named = entry.lines().find_map(|l| l.strip_prefix(DATA_KEY));
+    match named {
+        Some(d) => d == data,
+        // Written before entries named their installation: install.sh's mark decides.
+        None => entry.lines().any(|l| l == MARK),
     }
 }
 
-/// On: this account's entry, marked as install.sh's (kept current by it,
-/// removed by `buddi uninstall`). Off: an entry that says so, unmarked, so
-/// install.sh leaves the owner's choice alone.
+/// Start at Login: this account's autostart entry, on unless it says off.
+/// (The package ships none for every user: it is per account.)
+pub fn autostart_enabled() -> bool {
+    match user_autostart().and_then(|p| std::fs::read_to_string(p).ok()) {
+        Some(entry) => !turned_off(&entry),
+        None => false,
+    }
+}
+
+pub fn autostart_entry(on: bool, exec: &str, data: &str) -> String {
+    if on {
+        format!("[Desktop Entry]\nType=Application\nName=buddi\nComment=buddi in the tray, from login\nExec={exec} --hidden\nIcon=buddi-desktop\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n{MARK}\n{DATA_KEY}{data}\n")
+    } else {
+        // Not marked: install.sh leaves the owner's choice alone.
+        format!("[Desktop Entry]\nType=Application\nName=buddi\nComment=Turned off in buddi's menu (Start at Login)\nExec={exec} --hidden\nNoDisplay=true\nHidden=true\nX-GNOME-Autostart-enabled=false\n{DATA_KEY}{data}\n")
+    }
+}
+
+/// Turns Start at Login on or off. Never over an entry this installation did
+/// not write, never through a link; the new entry replaces the old in one step.
 pub fn set_autostart(on: bool) -> Result<(), String> {
     let file = user_autostart().ok_or("no config folder")?;
-    std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+    let data = buddi::data_dir().ok_or("no buddi installation")?.to_string_lossy().to_string();
+    if let Ok(meta) = std::fs::symlink_metadata(&file) {
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err(format!("{} is not a plain file; buddi leaves it alone.", file.display()));
+        }
+        let entry = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
+        if !owned_entry(&entry, &data) {
+            return Err(format!("{} was not written by buddi for this installation; change it in your startup settings.", file.display()));
+        }
+    }
+    let dir = file.parent().unwrap();
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     // An AppImage starts itself by its own path; the package by its command.
-    let exec = std::env::var("APPIMAGE").map(|p| format!("\"{p}\"")).unwrap_or_else(|_| "buddi-desktop".into());
-    let entry = if on {
-        format!("[Desktop Entry]\nType=Application\nName=buddi\nComment=buddi in the tray, from login\nExec={exec} --hidden\nIcon=buddi-desktop\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n{MARK}\n")
-    } else {
-        format!("[Desktop Entry]\nType=Application\nName=buddi\nComment=Turned off in buddi's menu (Start at Login)\nExec={exec} --hidden\nNoDisplay=true\nHidden=true\nX-GNOME-Autostart-enabled=false\n")
+    let exec = match std::env::var("APPIMAGE") {
+        Ok(p) => crate::policy::exec_arg(&p).ok_or("the AppImage's path cannot go into a desktop entry")?,
+        Err(_) => "buddi-desktop".into(),
     };
-    std::fs::write(&file, entry).map_err(|e| e.to_string())
+    let tmp = dir.join(format!(".buddi-desktop.desktop.{}", std::process::id()));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(|e| e.to_string())?;
+        f.write_all(autostart_entry(on, &exec, &data).as_bytes()).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, &file).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
+/// The first launch turns Start at Login on (the .deb no longer starts it for
+/// every user), unless an entry is there already; asked once.
+pub fn offer_autostart_once(config: &std::path::Path) {
+    let flag = config.join("autostart-offered");
+    if flag.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(config);
+    let _ = std::fs::write(&flag, "");
+    if user_autostart().map(|f| std::fs::symlink_metadata(f).is_err()).unwrap_or(false) {
+        if let Err(e) = set_autostart(true) {
+            shell::log(format!("Start at Login not turned on: {e}"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_this_installations_entries_are_ours() {
+        let ours = autostart_entry(true, "buddi-desktop", "/home/a/.local/share/buddi");
+        assert!(owned_entry(&ours, "/home/a/.local/share/buddi"));
+        assert!(!owned_entry(&ours, "/tmp/other"));
+        let off = autostart_entry(false, "buddi-desktop", "/home/a/.local/share/buddi");
+        assert!(owned_entry(&off, "/home/a/.local/share/buddi") && turned_off(&off) && !off.contains(MARK));
+        assert!(!owned_entry("[Desktop Entry]\nExec=buddi-desktop --hidden\n", "/home/a/.local/share/buddi"), "the owner's");
+        assert!(owned_entry("[Desktop Entry]\nX-Buddi-Linux-Install=true\n", "/x"), "an older marked entry");
+    }
 }
 
 /// Where the tray's icon files go: the session's runtime folder, not /tmp.

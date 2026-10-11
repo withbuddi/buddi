@@ -12,7 +12,15 @@ carries buddi itself); this one never runs a buddi of its own.
   the five-minute ticket a terminal gets. Like `buddi` in a terminal, that
   starts the service when it is not running. The command is found at
   `$BUDDI_BIN`, then the one `installer.json` records, then `~/.local/bin/buddi`,
-  then `PATH`.
+  then `PATH`. That command decides the installation: its data folder (the
+  wrapper's `DATA='…'` line) is the one the supervisor socket, the releases,
+  Start at Login and the service actions use.
+- **One origin.** The dashboard is the exact origin of the last sign-in link
+  (scheme, host, port). Another port on this computer (the gateway's preview
+  origin, any other local server) is not: it may load in a frame of the
+  dashboard, but as the page it goes to the browser and the window goes back.
+  Every command the pages can call checks the calling page's origin
+  (`main.rs`), and the microphone is granted only to it.
 - **The window's phases** (`src/shell.rs`), after buddi.app's
   `MainWindowController`: "Starting buddi…" while a link is on its way; the
   dashboard; back to "Starting buddi…" when the gateway's port stops answering
@@ -67,12 +75,19 @@ carries buddi itself); this one never runs a buddi of its own.
   inside a click and name them after its web process). Links off the
   dashboard, `target=_blank` and `window.open` (the sign-in tabs the dashboard
   opens blank and points afterwards) open in the default browser, never in the
-  app. Downloads go to `~/Downloads` (`name 2.ext` for a second copy), with a
+  app: a click, not a frame loading (on Linux the app decides each navigation
+  itself, `platform/linux.rs`, since WebKitGTK says whether a person clicked);
+  http(s) only; at most four in ten seconds and the same address once; a
+  launcher that fails is retried with gio and then said in a notification.
+  A blank window the page never points anywhere is closed after a minute. Downloads go to `~/Downloads` (`name 2.ext` for a second copy), with a
   notification. The file picker is the system's.
 - **Diagnostics**: `BUDDI_SHELL_DEBUG=1 buddi-desktop` forwards the page's
   console errors to stderr, turns on the inspector, and lets a second launch
   run JavaScript in the window: `buddi-desktop --eval '<js>'`. Without the
-  variable, `--eval` is ignored.
+  variable, `--eval` is ignored. A second launch reaches the first over the
+  session bus, so with the variable set any process of this user can run
+  JavaScript in the signed-in dashboard: set it only by hand, in a terminal,
+  never in a desktop or autostart entry.
 
 ## Build
 
@@ -83,12 +98,14 @@ sudo apt install build-essential file patchelf libwebkit2gtk-4.1-dev \
   libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio gstreamer1.0-pipewire
 cd apps/desktop
-npx @tauri-apps/cli@2 build            # .deb and AppImage under target/release/bundle/
-npx @tauri-apps/cli@2 build --bundles deb
+npx @tauri-apps/cli@2.12.2 build       # .deb and AppImage under target/release/bundle/
+npx @tauri-apps/cli@2.12.2 build --bundles deb
+cargo test                             # the rules in src/policy.rs and the entry ownership
 cargo build --release && ./target/release/buddi-desktop   # just the binary
 ```
 
-The AppImage carries GStreamer (`bundleMediaFramework`): without it the
+`rust-toolchain.toml` pins Rust; the CLI version matches the `tauri` crates
+in `Cargo.lock`. The AppImage carries GStreamer (`bundleMediaFramework`): without it the
 microphone finds no device. That needs `patchelf` on the build machine.
 `scripts/make-icons.sh` copies the app icon from buddi.app's asset catalog
 (librsvg does not draw `app-icon.svg`'s figure: an earlier build shipped a
@@ -100,17 +117,25 @@ The release workflow's `desktop` job builds both for x64 and arm64 on Ubuntu
 
 ## Packaging
 
-- `.deb` `buddi-desktop`: `/usr/bin/buddi-desktop`, the app-grid entry
-  (`linux/buddi-desktop.desktop`, Name=buddi), the autostart entry
-  (`/etc/xdg/autostart/buddi-desktop.desktop`, `--hidden`, `TryExec`), the
-  icon in hicolor. Depends on the system's WebKitGTK 4.1 and Ayatana
-  AppIndicator.
+- `.deb` `buddi-desktop` (a prerelease is versioned `0.1.0~pre.N`):
+  `/usr/bin/buddi-desktop`, the app-grid entry (`linux/buddi-desktop.desktop`,
+  Name=buddi, with New Conversation, Check for Updates and Lock), the icon in
+  hicolor. No autostart for every user: Start at Login is per account, turned
+  on at the first launch (unless an entry is there already) and from the
+  menu. Started with `--hidden` and no buddi installed, or with no tray, the
+  app exits instead of running unseen. Depends on the system's WebKitGTK 4.1
+  and Ayatana AppIndicator.
 - `install.sh` (no sudo) writes `~/.local/share/applications/buddi-desktop.desktop`
   (the same file name, so one "buddi" in the grid: it starts the desktop app
   when it is on PATH, else `buddi dashboard`) and, when the desktop app is on
-  PATH, `~/.config/autostart/buddi-desktop.desktop`. Only files carrying
-  `X-Buddi-Linux-Install=true` are written over or removed by `buddi
-  uninstall`, so an entry the owner turned off stays off.
+  PATH, `~/.config/autostart/buddi-desktop.desktop`. Each entry names its
+  installation (`X-Buddi-Data=<data folder>`). install.sh writes over only a
+  marked entry (`X-Buddi-Linux-Install=true`) of the same installation, the
+  app's Start at Login only an entry of its installation, neither through a
+  link, and `buddi uninstall` removes exactly the entries naming its data
+  folder: one the owner wrote, or another installation's, stays. A command
+  path with characters Exec quotes is written escaped by the spec (and
+  without the right-click actions).
 - Updates: the .deb by the next .deb (an apt repository is not there yet), the
   AppImage by the next AppImage. The app rarely changes; buddi updates itself
   underneath it.

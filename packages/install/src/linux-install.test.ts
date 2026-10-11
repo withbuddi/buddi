@@ -66,15 +66,17 @@ describe('desktopEntryPaths', () => {
 
 describe('ownDesktopEntries', () => {
   const [apps, autostart] = desktopEntryPaths({}, '/home/a');
+  const data = '/home/a/.local/share/buddi';
   const files: Record<string, string> = {
-    [apps as string]: '[Desktop Entry]\nIcon=/home/a/.local/share/buddi/releases/current/packages/web/dist/icon-512.png\nX-Buddi-Linux-Install=true\n',
-    [autostart as string]: '[Desktop Entry]\nExec=buddi-desktop --hidden\nX-Buddi-Linux-Install=true\n',
+    [apps as string]: `[Desktop Entry]\nX-Buddi-Linux-Install=true\nX-Buddi-Data=${data}\n`,
+    [autostart as string]: `[Desktop Entry]\nHidden=true\nX-Buddi-Data=${data}\n`,
   };
-  test('takes the marked entries of this installation', () => {
-    expect(ownDesktopEntries([apps!, autostart!], '/home/a/.local/share/buddi', f => files[f])).toEqual([apps, autostart]);
+  test('takes the entries that name this installation, Start at Login turned off included', () => {
+    expect(ownDesktopEntries([apps!, autostart!], data, f => files[f])).toEqual([apps, autostart]);
   });
-  test('leaves another installation\'s app-grid entry, and anything unmarked', () => {
-    expect(ownDesktopEntries([apps!, autostart!], '/tmp/other', f => files[f])).toEqual([autostart]);
-    expect(ownDesktopEntries([apps!, autostart!], '/home/a/.local/share/buddi', f => f === autostart ? '[Desktop Entry]\nHidden=true\n' : files[f])).toEqual([apps]);
+  test('leaves another installation\'s entries, the owner\'s, and a data folder that only starts the same', () => {
+    expect(ownDesktopEntries([apps!, autostart!], '/tmp/other', f => files[f])).toEqual([]);
+    expect(ownDesktopEntries([apps!, autostart!], '/home/a/.local/share/bud', f => files[f])).toEqual([]);
+    expect(ownDesktopEntries([apps!, autostart!], data, () => '[Desktop Entry]\nX-Buddi-Linux-Install=true\nExec=buddi-desktop --hidden\n')).toEqual([]);
   });
 });

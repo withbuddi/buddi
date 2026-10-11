@@ -37,3 +37,5 @@ pub fn set_autostart(_on: bool) -> Result<(), String> {
 pub fn launch(url: &str) -> Result<&'static str, String> {
     open::that_detached(url).map(|_| "open").map_err(|e| e.to_string())
 }
+
+pub fn offer_autostart_once(_config: &std::path::Path) {}

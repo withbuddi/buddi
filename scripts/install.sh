@@ -71,24 +71,38 @@ fetch() { # <url> <file>
 # (the buddi-desktop .deb or AppImage on PATH) when there is one, else the
 # dashboard in the browser; the same file name as the .deb's own entry, so
 # there is one buddi in the grid either way. With the desktop app installed,
-# it also starts in the tray at login (the .deb ships that entry too, for every
-# user; this one is the same, in this account). Only files carrying the mark
-# are written over, so a copy the owner edited or turned off stays as it is;
-# `buddi uninstall` removes the marked ones.
+# it also starts in the tray at login (the package starts nobody's by itself).
+# Each entry names its installation (X-Buddi-Data=<data folder>). Only a
+# marked entry of this installation (or an older marked one that names none)
+# is written over, never through a link, so one the owner wrote or turned off,
+# or another installation's, stays; `buddi uninstall` removes this one's.
 DESKTOP_MARK='X-Buddi-Linux-Install=true'
 write_entry() { # <file> <content>
-  if [ -e "$1" ] && ! grep -qs "^$DESKTOP_MARK" "$1"; then return 0; fi
+  if [ -L "$1" ]; then return 0; fi
+  if [ -e "$1" ]; then
+    grep -qsx "$DESKTOP_MARK" "$1" || return 0
+    if grep -qs '^X-Buddi-Data=' "$1" && ! grep -qsxF "X-Buddi-Data=$DATA" "$1"; then return 0; fi
+  fi
   mkdir -p "$(dirname "$1")" && printf '%s\n' "$2" > "$1.tmp-$$" && mv -f "$1.tmp-$$" "$1"
+}
+# One argument of an Exec line, by the desktop entry spec's quoting rules:
+# in double quotes, \ " ` $ take a backslash, written twice because the value
+# is an escaped string as well; % is %%.
+exec_arg() {
+  printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\\\\\/g' -e 's/["`$]/\\\\&/g' -e 's/%/%%/g')"
 }
 desktop_entries() {
   apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
   autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
-  # Exec's own quoting rules (the desktop entry spec) are not the shell's: a
-  # command path with anything unusual in it gets the browser only.
+  case "$DATA$COMMAND" in *"
+"*) note "the install folder has a line break in its name: no app-grid entry"; return 0 ;; esac
   # The right-click actions are the desktop app's (its .deb entry has the same).
+  # A command path with anything unusual in it gets the plain entry: the
+  # browser, through the command quoted for Exec (the sh -c line would need a
+  # second, shell-level quoting).
   via() { printf 'Exec=sh -c "command -v buddi-desktop >/dev/null 2>&1 && exec buddi-desktop%s || exec %s dashboard"' "$1" "$COMMAND"; }
   case "$COMMAND" in
-    *[!A-Za-z0-9/._+-]*) exec_line="Exec=\"$COMMAND\" dashboard"; actions="" ;;
+    *[!A-Za-z0-9/._+-]*) exec_line="Exec=$(exec_arg "$COMMAND") dashboard"; actions="" ;;
     *) exec_line=$(via "")
        actions="Actions=new-conversation;check-updates;lock;
 
@@ -115,6 +129,7 @@ Terminal=false
 Categories=Office;
 Keywords=agent;assistant;ai;
 $DESKTOP_MARK
+X-Buddi-Data=$DATA
 $actions" || note "could not add buddi to the app grid ($apps)"
   if command -v buddi-desktop >/dev/null 2>&1; then
     write_entry "$autostart/buddi-desktop.desktop" "[Desktop Entry]
@@ -127,7 +142,8 @@ Icon=buddi-desktop
 Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
-$DESKTOP_MARK" || note "could not add the desktop app to autostart ($autostart)"
+$DESKTOP_MARK
+X-Buddi-Data=$DATA" || note "could not add the desktop app to autostart ($autostart)"
   fi
   command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$apps" 2>/dev/null || true
 }

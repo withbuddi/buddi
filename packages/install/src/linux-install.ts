@@ -21,19 +21,17 @@ export function desktopEntryPaths(env: NodeJS.ProcessEnv, home: string): string[
   return [path.join(data, 'applications', 'buddi-desktop.desktop'), path.join(config, 'autostart', 'buddi-desktop.desktop')];
 }
 
+/** The line that names the installation a desktop entry belongs to (its data folder). */
+export const LINUX_DESKTOP_DATA = 'X-Buddi-Data=';
+
 /**
  * Of the entries at `paths` (app grid, autostart), the ones `buddi uninstall`
- * removes: only those carrying the installer's mark, so an entry the owner
- * wrote or turned off stays; and an app-grid entry only when it is this
- * installation's (it names the data folder), so removing a second install
- * leaves the first one's launcher alone.
+ * removes: exactly those that name this installation's data folder
+ * (install.sh's, and the desktop app's Start at Login, on or off). An entry
+ * the owner wrote, or another installation's, stays.
  */
 export function ownDesktopEntries(paths: string[], data: string, read: (file: string) => string | undefined): string[] {
-  return paths.filter((file, index) => {
-    const text = read(file);
-    if (text === undefined || !text.split('\n').includes(LINUX_DESKTOP_MARK)) return false;
-    return index > 0 || text.includes(`${data}/`);
-  });
+  return paths.filter(file => (read(file) ?? '').split('\n').includes(`${LINUX_DESKTOP_DATA}${data}`));
 }
 
 /** The bundled node the Linux install runs: `<data>/node/node`, never the machine's. */

@@ -366,7 +366,8 @@ jobs:
 
   # The desktop app for Linux (apps/desktop, Tauri on WebKitGTK 4.1): a window
   # and a tray icon around the buddi the linux job's tarball installs. Per
-  # architecture, a .deb (the system's WebKitGTK; ~2.5 MB) and an AppImage
+  # architecture, a .deb (the system's WebKitGTK; ~2.6 MB; a prerelease is
+  # versioned 0.1.0~pre.N so it sorts before 0.1.0) and an AppImage
   # (WebKitGTK and GStreamer inside, so the microphone works; ~90 MB), with
   # their .sha256, attached to the GitHub release. Built on Ubuntu 22.04, the
   # oldest base it supports (glibc 2.35, WebKitGTK 2.4x). Same tag-only guard
@@ -403,22 +404,34 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential file patchelf \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio gstreamer1.0-pipewire
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # The toolchain apps/desktop/rust-toolchain.toml pins.
+          (cd apps/desktop && rustup toolchain install && rustc --version)
       - name: Build the .deb and the AppImage
         working-directory: apps/desktop
-        run: npx --yes @tauri-apps/cli@2 build --config "{\"version\":\"$VERSION\"}"
+        # The CLI pinned to the tauri crates in Cargo.lock.
+        run: npx --yes @tauri-apps/cli@2.12.2 build --config "{\"version\":\"$VERSION\"}"
       - name: Check the .deb
         run: |
           deb=$(ls apps/desktop/target/release/bundle/deb/buddi-desktop_*_${{ matrix.deb }}.deb)
           dpkg-deb -I "$deb" | grep -q 'Package: buddi-desktop'
           dpkg-deb -c "$deb" | grep -q './usr/bin/buddi-desktop$'
-          dpkg-deb -c "$deb" | grep -q './etc/xdg/autostart/buddi-desktop.desktop$'
+          # No autostart for every user: Start at Login is per account.
+          if dpkg-deb -c "$deb" | grep -q '/etc/xdg/autostart/'; then echo "::error::the .deb starts the app for every user"; exit 1; fi
           dpkg-deb -c "$deb" | grep -q './usr/share/applications/buddi-desktop.desktop$'
       - name: Name and checksum
         run: |
           mkdir -p build/desktop
-          cp apps/desktop/target/release/bundle/deb/buddi-desktop_*_${{ matrix.deb }}.deb "build/desktop/buddi-desktop-$VERSION-linux-$ARCH.deb"
+          deb=$(ls apps/desktop/target/release/bundle/deb/buddi-desktop_*_${{ matrix.deb }}.deb)
+          # A prerelease sorts before its release in dpkg only with a tilde: 0.1.0~pre.54 < 0.1.0.
+          debver=$(printf '%s' "$VERSION" | sed 's/-/~/')
+          if [ "$debver" != "$VERSION" ]; then
+            work=$(mktemp -d)
+            dpkg-deb -R "$deb" "$work"
+            sed -i "s/^Version: .*/Version: $debver/" "$work/DEBIAN/control"
+            dpkg-deb --root-owner-group -b "$work" "$deb"
+            dpkg-deb -f "$deb" Version
+          fi
+          cp "$deb" "build/desktop/buddi-desktop-$VERSION-linux-$ARCH.deb"
           cp apps/desktop/target/release/bundle/appimage/buddi-desktop_*_${{ matrix.appimage }}.AppImage "build/desktop/buddi-desktop-$VERSION-linux-$ARCH.AppImage"
           cd build/desktop
           for f in *; do sha256sum "$f" > "$f.sha256"; done

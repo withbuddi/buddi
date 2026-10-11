@@ -158,8 +158,8 @@ one), Restart, Stop and Start, Lock, Start at Login, Advanced (Open in Browser,
 Show Logs, Restart with the Previous Version), Help, About, Uninstall (the
 dashboard's own, with the last backup and its passphrase first) and Quit
 (quitting the app leaves buddi running); closing the window keeps it in
-the tray, and it starts there at login (the package's
-`/etc/xdg/autostart/buddi-desktop.desktop`). The microphone and notifications
+the tray, and it starts there at login (Start at Login, per account, on
+from its first launch). The microphone and notifications
 are allowed for the dashboard only; links to other sites open in your
 browser; downloads go to `~/Downloads`. GNOME needs the AppIndicator extension
 for the tray (Ubuntu and Pop!_OS ship it on). The package's name is

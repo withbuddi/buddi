@@ -16,6 +16,7 @@
 mod actions;
 mod buddi;
 mod platform;
+mod policy;
 mod shell;
 mod supervisor;
 mod tray;
@@ -87,29 +88,47 @@ fn init_script() -> String {
     js
 }
 
-#[tauri::command]
-fn retry(app: AppHandle) {
-    shell::connect(&app, false, false);
+/// Which page called: the dashboard (its exact origin) or the app's own page.
+/// Every command checks; a page on any other origin gets nothing.
+fn from_dashboard(webview: &tauri::Webview) -> bool {
+    webview.url().map(|u| policy::is_dashboard(&u)).unwrap_or(false)
+}
+
+fn from_local_page(webview: &tauri::Webview) -> bool {
+    webview.url().map(|u| shell::is_local_page(&u)).unwrap_or(false)
 }
 
 #[tauri::command]
-fn start_buddi(app: AppHandle) {
-    shell::start(&app);
+fn retry(app: AppHandle, webview: tauri::Webview) {
+    if from_local_page(&webview) {
+        shell::connect(&app, false, false);
+    }
 }
 
 #[tauri::command]
-fn session_expired(app: AppHandle) {
-    shell::session_expired(&app);
+fn start_buddi(app: AppHandle, webview: tauri::Webview) {
+    if from_local_page(&webview) {
+        shell::start(&app);
+    }
 }
 
 #[tauri::command]
-fn notify(app: AppHandle, title: String, body: String) {
-    platform::notify(&app, &title, &body);
+fn session_expired(app: AppHandle, webview: tauri::Webview) {
+    if from_dashboard(&webview) {
+        shell::session_expired(&app);
+    }
 }
 
 #[tauri::command]
-fn shell_log(level: String, msg: String) {
-    if debug() {
+fn notify(app: AppHandle, webview: tauri::Webview, title: String, body: String) {
+    if from_dashboard(&webview) {
+        platform::notify(&app, &title, &body);
+    }
+}
+
+#[tauri::command]
+fn shell_log(webview: tauri::Webview, level: String, msg: String) {
+    if debug() && from_dashboard(&webview) {
         eprintln!("[page:{level}] {msg}");
     }
 }
@@ -119,17 +138,7 @@ fn downloads_path(name: &str) -> PathBuf {
         .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
         .unwrap_or_else(std::env::temp_dir);
     let _ = std::fs::create_dir_all(&dir);
-    let name = name.replace(['/', '\\'], "_");
-    let first = dir.join(&name);
-    if !first.exists() {
-        return first;
-    }
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
-        _ => (name.clone(), String::new()),
-    };
-    // A second copy is "name 2.ext", as on the Mac.
-    (2..).map(|n| dir.join(format!("{stem} {n}{ext}"))).find(|p| !p.exists()).unwrap()
+    policy::downloads_path(&dir, name)
 }
 
 static POPUPS: AtomicU32 = AtomicU32::new(0);
@@ -158,6 +167,14 @@ fn popup(app: &AppHandle, features: tauri::webview::NewWindowFeatures) -> NewWin
             false
         })
         .build();
+    // A blank window the page never points anywhere is closed after a while.
+    let (app2, name2) = (app.clone(), label.clone());
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        if let Some(w) = app2.get_webview_window(&name2) {
+            let _ = w.destroy();
+        }
+    });
     match built {
         Ok(window) => NewWindowResponse::Create { window },
         Err(e) => {
@@ -177,15 +194,14 @@ fn build_window(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
         .min_inner_size(721.0, 560.0)
         .visible(!hidden)
         .initialization_script(&init_script())
-        .on_navigation(|url| {
-            // The dashboard and the app's own page stay; everything else is the browser's.
-            let stay = buddi::is_dashboard(url)
-                || shell::is_local_page(url)
-                || matches!(url.scheme(), "about" | "blob" | "data");
-            if !stay {
-                platform::open_external(url);
+        // The top-level page: anything but the dashboard and the app's own page
+        // goes back, and its address to the browser (main frame only).
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started && !shell::may_show(payload.url()) {
+                let url = payload.url().clone();
+                platform::open_external(&url);
+                shell::back_to_dashboard(webview.app_handle());
             }
-            stay
         })
         .on_new_window(move |url, features| {
             if url.scheme() == "about" {
@@ -221,7 +237,18 @@ fn build_window(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
             }
             true
         })
-        .build()?;
+        ;
+    // Linux decides navigations itself (platform/linux.rs: it can tell a
+    // click from a frame loading); elsewhere by address only.
+    #[cfg(not(target_os = "linux"))]
+    let window = window.on_navigation(|url| {
+        if shell::may_show(url) || policy::loopback(url) {
+            return true;
+        }
+        platform::open_external(url);
+        false
+    });
+    let window = window.build()?;
     platform::tune_webview(&window);
     Ok(())
 }
@@ -249,8 +276,16 @@ fn second_launch(app: &AppHandle, argv: Vec<String>) {
     }
 }
 
+static TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn main() {
     let hidden = std::env::args().any(|a| a == "--hidden");
+    // Started at login with no buddi on this computer: nothing to show, so no
+    // process lingers out of sight.
+    if hidden && buddi::command().is_none() {
+        eprintln!("[buddi-desktop] no buddi command here; not starting in the tray");
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| second_launch(app, argv)))
         .plugin(tauri_plugin_dialog::init())
@@ -266,7 +301,16 @@ fn main() {
             let handle = app.handle().clone();
             platform::remember_app(&handle);
             build_window(&handle, hidden)?;
-            tray::build(&handle)?;
+            match tray::build(&handle) {
+                Ok(()) => TRAY.store(true, Ordering::Relaxed),
+                // No tray (no indicator host): a hidden start would be invisible,
+                // and closing the window quits instead of hiding.
+                Err(e) if hidden => return Err(e.into()),
+                Err(e) => shell::log(format!("no tray icon: {e}; closing the window quits")),
+            }
+            if let Ok(config) = handle.path().app_config_dir() {
+                platform::offer_autostart_once(&config);
+            }
             shell::connect(&handle, false, false);
             shell::watch(&handle);
             let args: Vec<String> = std::env::args().skip(1).collect();
@@ -276,7 +320,7 @@ fn main() {
         .on_window_event(|window, event| {
             // Closing the window hides it; buddi and the tray stay.
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+                if window.label() == "main" && TRAY.load(Ordering::Relaxed) {
                     api.prevent_close();
                     let _ = window.app_handle().save_window_state(StateFlags::all() - StateFlags::VISIBLE);
                     let _ = window.hide();
@@ -288,7 +332,7 @@ fn main() {
         .run(|_app, event| {
             if let RunEvent::ExitRequested { api, code, .. } = event {
                 // The last window hidden is not a reason to quit; Quit in the tray is.
-                if code.is_none() {
+                if code.is_none() && TRAY.load(Ordering::Relaxed) {
                     api.prevent_exit();
                 }
             }

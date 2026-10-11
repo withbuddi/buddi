@@ -9,12 +9,9 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-/// The data folder: $BUDDI_DATA_DIR, else the Linux install's
-/// (~/.local/share/buddi), as the installer and the command have it.
+/// The data folder of the installation the selected command runs (buddi.rs).
 pub fn data_dir() -> Option<PathBuf> {
-    std::env::var_os("BUDDI_DATA_DIR")
-        .map(PathBuf::from)
-        .or_else(|| dirs::data_dir().map(|d| d.join("buddi")))
+    crate::buddi::data_dir()
 }
 
 /// The supervisor's `/version`: what runs, the newest, whether to update.

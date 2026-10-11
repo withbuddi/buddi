@@ -114,6 +114,7 @@ describe.skipIf(process.platform !== 'linux')('install.sh', () => {
     expect(m.run('0.1.0-pre.1').status).toBe(0);
     const entry = readFileSync(apps, 'utf8');
     expect(entry).toContain('X-Buddi-Linux-Install=true');
+    expect(entry).toContain(`X-Buddi-Data=${realpathSync(m.home)}/data`);
     expect(entry).toContain(`exec buddi-desktop || exec ${m.home}/.local/bin/buddi dashboard"`);
     expect(entry).toContain(`Icon=${realpathSync(m.home)}/data/releases/current/packages/web/dist/icon-512.png`);
     expect(entry).toContain('Actions=new-conversation;check-updates;lock;');
@@ -127,10 +128,24 @@ describe.skipIf(process.platform !== 'linux')('install.sh', () => {
     chmodSync(path.join(bin, 'buddi-desktop'), 0o755);
     expect(m.run('0.1.0-pre.1', { PATH: `${bin}:/usr/bin:/bin` }).status).toBe(0);
     expect(readFileSync(autostart, 'utf8')).toContain('Exec=buddi-desktop --hidden');
+    // Another installation's entry: left as it is.
+    writeFileSync(autostart, '[Desktop Entry]\nX-Buddi-Linux-Install=true\nX-Buddi-Data=/elsewhere\n');
+    expect(m.run('0.1.0-pre.1', { PATH: `${bin}:/usr/bin:/bin` }).status).toBe(0);
+    expect(readFileSync(autostart, 'utf8')).toContain('X-Buddi-Data=/elsewhere');
     // The owner turned it off (no mark): left as it is.
     writeFileSync(autostart, '[Desktop Entry]\nHidden=true\n');
     expect(m.run('0.1.0-pre.1', { PATH: `${bin}:/usr/bin:/bin` }).status).toBe(0);
     expect(readFileSync(autostart, 'utf8')).toBe('[Desktop Entry]\nHidden=true\n');
+  });
+
+  test('quotes an unusual command path for Exec by the desktop entry spec', () => {
+    const m = machine();
+    const bin = path.join(m.root, 'b"in $x%');
+    expect(m.run('0.1.0-pre.1', { BUDDI_BIN_DIR: bin }).status).toBe(0);
+    const entry = readFileSync(path.join(m.home, '.local/share/applications/buddi-desktop.desktop'), 'utf8');
+    const quoted = `${m.root}/b\\\\"in \\\\$x%%/buddi`;
+    expect(entry).toContain(`Exec="${quoted}" dashboard`);
+    expect(entry).not.toContain('Actions=');
   });
 
   test('refuses a tarball that is not the version asked for', () => {

@@ -44,7 +44,13 @@ pub fn remember_app(app: &AppHandle) {
 /// way) and a failure is a notification, never silence: a sign-in page that
 /// does not open looks to the owner like a button that does nothing.
 pub fn open_external(url: &Url) {
-    if !matches!(url.scheme(), "http" | "https" | "mailto") {
+    static RECENT: std::sync::Mutex<crate::policy::HandOffs> = std::sync::Mutex::new(crate::policy::HandOffs::new());
+    if !crate::policy::may_hand_off(url) {
+        shell::log(format!("not handed to the browser ({} link)", url.scheme()));
+        return;
+    }
+    if !RECENT.lock().unwrap().allow(url.as_str(), std::time::Instant::now()) {
+        shell::log("not handed to the browser: the same address again, or too many at once");
         return;
     }
     let url = url.clone();

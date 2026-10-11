@@ -116,6 +116,14 @@ pub fn set_phase(app: &AppHandle, phase: Phase) {
     tray::refresh(app);
 }
 
+/// Tries before a reconnect stops asking until Try Again, Start or a reopen.
+const GIVE_UP_AFTER: u32 = 8;
+
+/// 5 s, 10 s, 20 s, 40 s, then a minute between tries.
+fn backoff(failures: u32) -> Duration {
+    Duration::from_secs((5u64 << failures.saturating_sub(1).min(4)).min(60))
+}
+
 /// Get a fresh sign-in link and load it, on the remembered route. Retries
 /// quietly while buddi starts; says why when it keeps failing. `quiet` keeps
 /// the dashboard on screen meanwhile (an expired session); `patient` first
@@ -162,8 +170,14 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
             if phase(&app) == Phase::Stopped {
                 break;
             }
-            match buddi::dashboard_link() {
+            let answer = buddi::dashboard_link();
+            // Stop pressed while the command was answering: the link is not loaded.
+            if phase(&app) == Phase::Stopped {
+                break;
+            }
+            match answer {
                 Ok(link) => {
+                    crate::policy::set_dashboard(&link);
                     let route = with(&app, |s| {
                         s.gateway = buddi::gateway_addr(&link);
                         s.linked_at = Some(Instant::now());
@@ -183,9 +197,14 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
                     break;
                 }
                 Err(Failure::Missing) => {
+                    failures += 1;
                     set_phase(&app, Phase::Missing);
                     placeholder(&app, "missing", buddi::INSTALL_LINE);
-                    thread::sleep(Duration::from_secs(10));
+                    if failures >= GIVE_UP_AFTER {
+                        log("still no buddi command; looking again when the window is reopened");
+                        break;
+                    }
+                    thread::sleep(backoff(failures));
                 }
                 Err(Failure::NoLink(why)) => {
                     failures += 1;
@@ -197,7 +216,11 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
                         set_phase(&app, Phase::Starting);
                         placeholder(&app, "starting", "");
                     }
-                    thread::sleep(Duration::from_secs(5));
+                    if failures >= GIVE_UP_AFTER {
+                        log("giving up until Try Again, Start buddi or the window is reopened");
+                        break;
+                    }
+                    thread::sleep(backoff(failures));
                 }
             }
         }
@@ -318,6 +341,31 @@ pub fn when_dashboard(app: &AppHandle, js: String) {
             thread::sleep(Duration::from_millis(500));
         }
     });
+}
+
+/// The main window left for a page it may not show: back to the dashboard
+/// (its root; the session cookie still signs in), or the app's own page.
+pub fn back_to_dashboard(app: &AppHandle) {
+    let target = crate::policy::dashboard_origin().filter(|_| phase(app) == Phase::Dashboard);
+    if let (Some(origin), Some(w)) = (target, main_window(app)) {
+        if let Ok(url) = Url::parse(&format!("{origin}/")) {
+            let _ = w.navigate(url);
+        }
+    } else {
+        with(app, |s| s.shown = None);
+        let (mode, detail) = match phase(app) {
+            Phase::Stopped => ("stopped", String::new()),
+            Phase::Missing => ("missing", buddi::INSTALL_LINE.to_string()),
+            _ => ("starting", String::new()),
+        };
+        placeholder(app, mode, &detail);
+    }
+}
+
+/// What the main window may show as its page: the dashboard (its exact
+/// origin), the app's own page, and the browser's own empty or local kinds.
+pub fn may_show(url: &Url) -> bool {
+    crate::policy::is_dashboard(url) || is_local_page(url) || matches!(url.scheme(), "about" | "blob" | "data")
 }
 
 pub fn is_local_page(url: &Url) -> bool {
