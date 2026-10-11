@@ -139,8 +139,10 @@ same version (`pnpm release` would refuse, since Unreleased is already empty).
 
 Actions → release → Run workflow:
 
-- **Mac app only** (the npm release is out): `version` = `0.1.0-pre.44`,
-  `publish` off, from any branch.
+- **Mac app and Linux tarballs only** (the npm release is out): use workflow
+  from the tag `v0.1.0-pre.44`, `version` = `0.1.0-pre.44`, `publish` off
+  (`gh workflow run release.yml --ref v0.1.0-pre.44 -f version=0.1.0-pre.44`).
+  Both jobs refuse any other ref, so what they attach is the tag's code.
 - **Publish again** (the tag exists but the publish run failed, or was never
   started): use workflow from the tag `v0.1.0-pre.44`, `version` =
   `0.1.0-pre.44`, `publish` on. A version already on npm fails at the publish

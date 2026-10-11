@@ -33,8 +33,9 @@
 # After the npm publish, `mac-app` builds buddi.app around that same tarball,
 # signs and notarizes it, and publishes the DMG and its Sparkle feed (see the
 # job). The npm release is out by then, so the job can be run again on its own:
-# Actions → release → Run workflow, with the version (`0.1.0-pre.39`) and
-# `publish` left off.
+# Actions → release → Run workflow on the tag `v<version>`, with the version
+# (`0.1.0-pre.39`) and `publish` left off (the Mac and Linux jobs refuse any
+# other ref, so what they attach is the tag's code).
 name: release
 on:
   push:
@@ -317,7 +318,12 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       ARCH: ${{ matrix.arch }}
+      MODE: ${{ needs.plan.outputs.mode }}
     steps:
+      # What is built and attached is the tag's install.sh and bundle script, never a branch's.
+      - name: Run on the version's tag
+        run: |
+          [ "$GITHUB_REF" = "refs/tags/v$VERSION" ] || { echo "::error::Build the Linux tarballs from the tag v$VERSION (Run workflow on that tag), not $GITHUB_REF."; exit 1; }
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
@@ -354,7 +360,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "v$VERSION" >/dev/null || { echo "::error::v$VERSION has no GitHub release to attach to"; exit 1; }
-          gh release upload "v$VERSION" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz.sha256" scripts/install.sh --clobber
+          # install.sh is attached once, by the publish job; both legs here would race on it.
+          gh release upload "v$VERSION" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz.sha256" --clobber
 
   # buddi.app, phase 2 of the Mac app (apps/mac/README.md). Skipped with a
   # notice, never failed, while the signing secrets are not in the repository:
@@ -425,6 +432,11 @@ jobs:
       run:
         working-directory: apps/mac
     steps:
+      # The DMG is built from the tag's app recipe, never a branch's (a Mac-only run included).
+      - name: Run on the version's tag
+        working-directory: .
+        run: |
+          [ "$GITHUB_REF" = "refs/tags/v$VERSION" ] || { echo "::error::Build buddi.app from the tag v$VERSION (Run workflow on that tag), not $GITHUB_REF."; exit 1; }
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
         with: { xcode-version: latest-stable }

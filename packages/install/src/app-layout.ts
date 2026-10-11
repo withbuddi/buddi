@@ -355,6 +355,41 @@ export async function placeRelease(target: string, version: string, staging: str
 
 
 /* ------------------------------------------------------------------ *
+ * One release change at a time
+ * ------------------------------------------------------------------ */
+
+/** `<releases>/.lock`: a folder (mkdir is atomic) holding the owner's pid. scripts/install.sh takes the same one. */
+export const RELEASES_LOCK = '.lock';
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * Take the releases lock, or say who holds it. A lock whose process is gone
+ * is stale and taken over. Resolves with what lets it go again.
+ */
+export async function takeReleasesLock(releases: string, pid = process.pid): Promise<() => Promise<void>> {
+  await mkdir(releases, { recursive: true, mode: 0o700 });
+  const lock = path.join(releases, RELEASES_LOCK);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await mkdir(lock, { mode: 0o700 });
+      await writeFile(path.join(lock, 'pid'), `${pid}\n`);
+      return async () => { await rm(lock, { recursive: true, force: true }).catch(() => {}); };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      const holder = Number((await readFile(path.join(lock, 'pid'), 'utf8').catch(() => '')).trim());
+      if (Number.isInteger(holder) && holder > 0 && holder !== pid && alive(holder)) {
+        throw new Error(`another install or upgrade is changing ${releases} (pid ${holder}); try again when it has finished`);
+      }
+      await rm(lock, { recursive: true, force: true });
+    }
+  }
+  throw new Error(`could not take the lock in ${releases}`);
+}
+
+/* ------------------------------------------------------------------ *
  * current, previous, and what is kept
  * ------------------------------------------------------------------ */
 

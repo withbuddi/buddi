@@ -140,6 +140,8 @@ export interface LinuxInstallParts {
   releases: string;
   /** The `buddi` command the installer wrote, when it is still there and still ours. */
   command?: string;
+  /** Asked again just before the command is removed: is it still this installation's? */
+  commandOwned?: () => boolean;
   /** The installer ran `loginctl enable-linger` itself, so this undoes it. */
   linger?: boolean;
 }
@@ -333,7 +335,10 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
     }
     if (linux.command !== undefined) {
       const command = linux.command;
-      steps.push({ line: `the buddi command ${command}`, run: () => deps.remove(command) });
+      steps.push({ line: `the buddi command ${command}`, bestEffort: true, run: async () => {
+        if (linux.commandOwned !== undefined && !linux.commandOwned()) throw new Error('it now runs another installation, so it stays');
+        await deps.remove(command);
+      } });
     }
     if (linux.linger === true) {
       steps.push({

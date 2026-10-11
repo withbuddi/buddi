@@ -22,8 +22,9 @@ import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
-import { APP_LAYOUT_VAR, APP_RUNNING_LINE, LINUX_INSTALL_VAR, appLayout, currentLauncher, insideAppBundle, linuxInstall, runsAppCopy } from './app-layout.js';
+import { APP_RUNNING_LINE, appLayout, insideAppBundle, linuxInstall, runsAppCopy } from './app-layout.js';
 import { runtimeFacts, runtimeLines } from './runtime-info.js';
+import { commandOwnedBy, linuxUnitSpec } from './linux-install.js';
 import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimRefusesSupervise, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
 
@@ -217,9 +218,6 @@ async function startSupervisorBriefly(ctx: InstallContext, lockPid: () => number
   }
 }
 
-/** The marker line scripts/install.sh writes into the `buddi` command it puts on PATH. */
-const LINUX_COMMAND_MARKER = '# buddi-linux-install';
-
 /**
  * What the Linux install put where: `installer.json` (written by
  * scripts/install.sh) names the command and whether it turned on lingering;
@@ -229,11 +227,12 @@ function linuxInstallParts(ctx: InstallContext, home: string): import('./uninsta
   let recorded: { command?: unknown; linger?: unknown } = {};
   try { recorded = JSON.parse(readFileSync(path.join(ctx.data, 'installer.json'), 'utf8')) as typeof recorded; } catch { /* an older install: the defaults */ }
   const command = typeof recorded.command === 'string' && path.isAbsolute(recorded.command) ? recorded.command : path.join(home, '.local', 'bin', 'buddi');
-  const ours = (() => { try { return readFileSync(command, 'utf8').includes(LINUX_COMMAND_MARKER); } catch { return false; } })();
+  // Ours only while it runs this data folder: another installation may have written the same bin folder since.
+  const owned = (): boolean => commandOwnedBy((() => { try { return readFileSync(command, 'utf8'); } catch { return undefined; } })(), ctx.data, realpathSync);
   return {
     runtime: path.join(ctx.data, 'node'),
     releases: appLayout(process.env) ?? path.join(ctx.data, 'releases'),
-    ...(ours ? { command } : {}),
+    ...(owned() ? { command, commandOwned: owned } : {}),
     ...(recorded.linger === true ? { linger: true } : {}),
   };
 }
@@ -564,14 +563,14 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
      * link and systemd's restart runs the new release from the same unit.
      */
     const releases = isLinuxInstall(ctx) ? appLayout(process.env) ?? path.join(ctx.data, 'releases') : undefined;
+    const spec = releases === undefined
+      ? { nodePath: process.execPath, serveEntry: entry, environment: { BUDDI_DATA_DIR: ctx.data, [SERVICE_UNIT_VAR]: label, ...serviceEnvironment() }, path: [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(':') }
+      : linuxUnitSpec({ data: ctx.data, releases, label, exists: existsSync, extra: serviceEnvironment() });
     await writeFile(unit, buildSystemdUnit({
-      label, nodePath: process.execPath, serveEntry: releases === undefined ? entry : currentLauncher(releases), args: ['supervise'],
-      environment: {
-        BUDDI_DATA_DIR: ctx.data, [SERVICE_UNIT_VAR]: label, ...serviceEnvironment(),
-        ...(releases === undefined ? {} : { [APP_LAYOUT_VAR]: releases, [LINUX_INSTALL_VAR]: '1', npm_config_cache: path.join(ctx.data, 'cache', 'npm') }),
-      },
+      label, nodePath: spec.nodePath, serveEntry: spec.serveEntry, args: ['supervise'],
+      environment: spec.environment,
       workingDirectory: ctx.data,
-      path: [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(':'),
+      path: spec.path,
       logFile: path.join(ctx.data, 'logs/supervisor.log'), errorFile: path.join(ctx.data, 'logs/supervisor.log'),
     }), { mode: 0o600 });
     try {
@@ -846,7 +845,10 @@ async function run(): Promise<void> {
      */
     if (!args.includes('--no-open') && process.platform === 'linux' && (process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) {
       const opened = await new Promise<boolean>(resolve => {
-        const child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore', env: { ...process.env } });
+        // The OS context and the desktop session's own variables only: never the .env secrets or the vault key.
+        const desktop = ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_CURRENT_DESKTOP', 'XDG_SESSION_TYPE', 'XDG_SESSION_DESKTOP', 'DESKTOP_SESSION', 'XDG_DATA_DIRS', 'XDG_CONFIG_DIRS', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'BROWSER'];
+        const env = { ...nativeEnvironment(process.env), ...Object.fromEntries(desktop.filter(key => typeof process.env[key] === 'string').map(key => [key, process.env[key] as string])) };
+        const child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore', env });
         child.once('error', () => resolve(false));
         child.once('spawn', () => { child.unref(); resolve(true); });
       });

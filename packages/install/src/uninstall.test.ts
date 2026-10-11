@@ -468,4 +468,11 @@ describe('uninstallPackaged: the Linux install (scripts/install.sh)', () => {
     expect(m.exec.some(line => line.startsWith('loginctl'))).toBe(false);
     expect(m.out.some(line => line.includes('the buddi command'))).toBe(false);
   });
+
+  it('leaves a command that another installation took over since', async () => {
+    const m = linux();
+    m.deps.linuxInstall = { runtime: `${data}/node`, releases: `${data}/releases`, command: `${home}/.local/bin/buddi`, commandOwned: () => false };
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
+    expect(m.removed).not.toContain(`${home}/.local/bin/buddi`);
+  });
 });

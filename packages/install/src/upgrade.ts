@@ -58,7 +58,7 @@ import { JobStore } from './backup.js';
 import { createPostgresCheck } from './postgres-check.js';
 import type { PostgresCheck } from './postgres-check.js';
 import type { BackupControl, BackupJob } from './backup.js';
-import { APP_BUNDLE, LINUX_INSTALL_LINE, appLayout, appRuns, insideAppBundle, placeRelease, pruneReleases, releaseDir, stageRelease, switchCurrent } from './app-layout.js';
+import { APP_BUNDLE, LINUX_INSTALL_LINE, appLayout, appRuns, insideAppBundle, placeRelease, pruneReleases, releaseDir, stageRelease, switchCurrent, takeReleasesLock } from './app-layout.js';
 import type { StagedRelease } from './app-layout.js';
 
 const run = promisify(execFile);
@@ -1109,6 +1109,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     if ('error' in resolved) return await give('checking', resolved.error, false);
     const to = resolved.version;
     setTo(to);
+    let archiveTaken: string | undefined;
     if (opts.http === undefined) return await give('checking', 'this installation has no outbound transport', false);
     const served = await tarballServed(registry, to, opts.http, { auth }).catch(() => undefined);
     if (served === false) return await give('checking', processingSentence(to), false);
@@ -1117,6 +1118,15 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       return await give('checking', `${to} is the version running.`, false);
     }
 
+    /*
+     * One release change at a time: the Linux installer (scripts/install.sh)
+     * takes the same lock around its own switch and pruning.
+     */
+    let unlock: () => Promise<void>;
+    try { unlock = await takeReleasesLock(dir); }
+    catch (err) { return await give('checking', message(err), false); }
+    let handOver = false;
+    try {
     /*
      * Everything is checked in a staging folder of its own, and only a release
      * that passed every check is renamed into `buddi-<v>`: a failed retry never
@@ -1168,7 +1178,10 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       try { await opts.relinkPlugins(releaseCoreDir(placed.root)); }
       catch (err) { log(`upgrade: relinking plugins to ${to} failed (${message(err)}); the gateway relinks them at start.`); }
     }
-    await handOverTo(job, to, startedAt, taken.archive);
+    handOver = true;
+    archiveTaken = taken.archive;
+    } finally { await unlock(); }
+    if (handOver) await handOverTo(job, to, startedAt, archiveTaken);
   };
 
   /** The point of no return, shared by both layouts. */

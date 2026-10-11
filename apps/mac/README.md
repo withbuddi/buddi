@@ -238,7 +238,7 @@ and uploads the small ones to R2. The DMG is served from
 the GitHub release asset, `https://github.com/withbuddi/buddi/releases/download/v<version>/buddi-<version>.dmg`
 (Wrangler caps R2 uploads at 300 MiB and the DMG is larger); that URL is the
 appcast enclosure and `latest.json`'s `url`. The npm release is out by then, so a
-failed run is repeated on its own: Actions → release → Run workflow, with the version.
+failed run is repeated on its own: Actions → release → Run workflow on the tag `v<version>`, with the version.
 
 | Secret | What |
 | --- | --- |
