@@ -1,7 +1,7 @@
 ---
 title: "Install: one command, then the dashboard"
 status: reference
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 
 # Install: one command, then the dashboard
@@ -119,6 +119,8 @@ sha256, and installs it under your own account, no sudo, no host Node or npm:
 | buddi, the npm tarball with its embedded Postgres | `~/.local/share/buddi/releases/buddi-<version>/`, `current` and `previous` link into them |
 | the command (the bundled node, `current`, this data folder) | `~/.local/bin/buddi` |
 | the service, written by `buddi` | `~/.config/systemd/user/com.buddi.install.<id>.service` |
+| buddi in the app grid (the desktop app below when it is installed, else the dashboard in the browser) | `~/.local/share/applications/buddi-desktop.desktop` |
+| the desktop app in the tray from login, only when it is installed | `~/.config/autostart/buddi-desktop.desktop` |
 
 It then turns on lingering (`loginctl enable-linger`) when the system lets a
 user do that without sudo, so buddi runs after you log out and from boot;
@@ -141,6 +143,23 @@ also what brings a newer Node. `buddi doctor` says which Node and npm run.
 **From an npm install.** Run the installer: it uses the same data folder and
 service name, rewrites the unit to the bundled runtime and keeps your data.
 Then `sudo npm uninstall -g @withbuddi/buddi` removes the old command.
+
+**The desktop app** (optional) puts the dashboard in a window of its own with a
+tray icon, as the Mac app does: `buddi-desktop-<version>-linux-<x64|arm64>.deb`
+from the GitHub release (`sudo apt install ./buddi-desktop-….deb`, about
+2.5 MB on the system's WebKitGTK 4.1: Ubuntu 22.04, Debian 12 or newer), or the
+AppImage beside it (about 90 MB, everything inside). It wraps the buddi the
+command above installed and never runs one of its own: it asks `buddi` for a
+sign-in link and loads it, says "Starting buddi…" while the gateway restarts
+and comes back on the same page, and, when `buddi` is not installed, shows the
+install line. The tray icon has Open buddi, Open in Browser, Start, Stop and
+Quit (quitting the app leaves buddi running); closing the window keeps it in
+the tray, and it starts there at login (the package's
+`/etc/xdg/autostart/buddi-desktop.desktop`). The microphone and notifications
+are allowed for the dashboard only; links to other sites open in your
+browser; downloads go to `~/Downloads`. GNOME needs the AppIndicator extension
+for the tray (Ubuntu and Pop!_OS ship it on). The package's name is
+`buddi-desktop`; the command stays `buddi`.
 
 ---
 
@@ -686,8 +705,10 @@ removes the package: `npm uninstall -g @withbuddi/buddi`.
 
 For the Linux install (§1.2) the data directory holds the bundled Node and
 the releases too, so they go with it (with `--keep-data`, only they go), and
-so do `~/.local/bin/buddi` and the lingering the installer turned on. Nothing
-is left to remove by hand; the last line is the install command, for later.
+so do `~/.local/bin/buddi`, the app-grid and autostart entries the installer
+wrote, and the lingering it turned on. Nothing is left to remove by hand; the
+last line is the install command, for later. The desktop app is a package of
+its own: `sudo apt remove buddi-desktop`.
 
 In a source checkout the same command removes the service and the keychain
 entries, stops the Docker Postgres (`docker compose down`, the volume stays),

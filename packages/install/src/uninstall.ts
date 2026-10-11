@@ -144,6 +144,8 @@ export interface LinuxInstallParts {
   commandOwned?: () => boolean;
   /** The installer ran `loginctl enable-linger` itself, so this undoes it. */
   linger?: boolean;
+  /** The app-grid and autostart entries the installer wrote (marked as its own). */
+  desktopEntries?: string[];
 }
 
 /** What the data directory holds, named for the owner: only what is there. */
@@ -338,6 +340,12 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
       steps.push({ line: `the buddi command ${command}`, bestEffort: true, run: async () => {
         if (linux.commandOwned !== undefined && !linux.commandOwned()) throw new Error('it now runs another installation, so it stays');
         await deps.remove(command);
+      } });
+    }
+    const entries = (linux.desktopEntries ?? []).filter(file => deps.exists(file));
+    if (entries.length > 0) {
+      steps.push({ line: `buddi in the app grid and at login: ${list(entries)}`, bestEffort: true, run: async () => {
+        for (const entry of entries) await deps.remove(entry);
       } });
     }
     if (linux.linger === true) {

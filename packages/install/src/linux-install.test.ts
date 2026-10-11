@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { takeReleasesLock } from './app-layout.js';
-import { LINUX_COMMAND_MARKER, bundledNode, commandData, commandOwnedBy, linuxUnitSpec } from './linux-install.js';
+import { LINUX_COMMAND_MARKER, bundledNode, commandData, commandOwnedBy, desktopEntryPaths, linuxUnitSpec } from './linux-install.js';
 
 const data = '/home/owner/.local/share/buddi';
 const releases = `${data}/releases`;
@@ -54,5 +54,12 @@ describe('the releases lock', () => {
     await unlock();
     const again = await takeReleasesLock(dir, 999_999_9);
     await again();
+  });
+});
+
+describe('desktopEntryPaths', () => {
+  test('names the app-grid and autostart entries install.sh writes, under the XDG folders when set', () => {
+    expect(desktopEntryPaths({}, '/home/a')).toEqual(['/home/a/.local/share/applications/buddi-desktop.desktop', '/home/a/.config/autostart/buddi-desktop.desktop']);
+    expect(desktopEntryPaths({ XDG_DATA_HOME: '/d', XDG_CONFIG_HOME: '/c' }, '/home/a')).toEqual(['/d/applications/buddi-desktop.desktop', '/c/autostart/buddi-desktop.desktop']);
   });
 });

@@ -13,6 +13,9 @@
 #   ~/.local/share/buddi/releases/buddi-<v>/ the release; `current` and `previous` link into them
 #   ~/.local/bin/buddi                       the command
 #   ~/.config/systemd/user/com.buddi.install.<id>.service   the service (written by `buddi`)
+#   ~/.local/share/applications/buddi-desktop.desktop       buddi in the app grid
+#   ~/.config/autostart/buddi-desktop.desktop               the desktop app in the tray from
+#                                                           login (only when it is installed)
 #
 # Running it again upgrades (or reinstalls) in place. Whenever there is data
 # already, a new version starts only after a backup of it succeeded, and the
@@ -62,6 +65,55 @@ fetch() { # <url> <file>
   elif command -v wget >/dev/null 2>&1; then
     if [ "$https" = 1 ]; then wget -q --https-only --tries=3 -O "$2" "$1"; else wget -q --tries=3 -O "$2" "$1"; fi
   else die "curl or wget is needed to download buddi."; fi
+}
+
+# The desktop, without sudo. "buddi" in the app grid opens the desktop app
+# (the buddi-desktop .deb or AppImage on PATH) when there is one, else the
+# dashboard in the browser; the same file name as the .deb's own entry, so
+# there is one buddi in the grid either way. With the desktop app installed,
+# it also starts in the tray at login (the .deb ships that entry too, for every
+# user; this one is the same, in this account). Only files carrying the mark
+# are written over, so a copy the owner edited or turned off stays as it is;
+# `buddi uninstall` removes the marked ones.
+DESKTOP_MARK='X-Buddi-Linux-Install=true'
+write_entry() { # <file> <content>
+  if [ -e "$1" ] && ! grep -qs "^$DESKTOP_MARK" "$1"; then return 0; fi
+  mkdir -p "$(dirname "$1")" && printf '%s\n' "$2" > "$1.tmp-$$" && mv -f "$1.tmp-$$" "$1"
+}
+desktop_entries() {
+  apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+  # Exec's own quoting rules (the desktop entry spec) are not the shell's: a
+  # command path with anything unusual in it gets the browser only.
+  case "$COMMAND" in
+    *[!A-Za-z0-9/._+-]*) exec_line="Exec=\"$COMMAND\" dashboard" ;;
+    *) exec_line="Exec=sh -c \"command -v buddi-desktop >/dev/null 2>&1 && exec buddi-desktop || exec $COMMAND dashboard\"" ;;
+  esac
+  write_entry "$apps/buddi-desktop.desktop" "[Desktop Entry]
+Type=Application
+Name=buddi
+Comment=Your personal agents, on this computer
+$exec_line
+Icon=$DATA/releases/current/packages/web/dist/icon-512.png
+StartupWMClass=buddi-desktop
+Terminal=false
+Categories=Office;
+Keywords=agent;assistant;ai;
+$DESKTOP_MARK" || note "could not add buddi to the app grid ($apps)"
+  if command -v buddi-desktop >/dev/null 2>&1; then
+    write_entry "$autostart/buddi-desktop.desktop" "[Desktop Entry]
+Type=Application
+Name=buddi
+Comment=buddi in the tray, from login
+Exec=buddi-desktop --hidden
+TryExec=buddi-desktop
+Icon=buddi-desktop
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+$DESKTOP_MARK" || note "could not add the desktop app to autostart ($autostart)"
+  fi
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$apps" 2>/dev/null || true
 }
 
 # The releases lock buddi's own upgrade takes too (app-layout.ts takeReleasesLock): a folder holding a pid.
@@ -386,6 +438,8 @@ EOF
     const fs = require("fs"); const [file, version, arch, command, data, linger] = process.argv.slice(1);
     fs.writeFileSync(file, JSON.stringify({ version, arch, command, data, linger: linger === "true", installedAt: new Date().toISOString() }, null, 2) + "\n", { mode: 0o600 });
   ' "$DATA/installer.json" "$NEW_VERSION" "linux-$ARCH" "$COMMAND" "$DATA" "$LINGER_BY_US"
+
+  desktop_entries
 
   # What `current` and `previous` use stays; older releases and the old runtime go.
   # Staging folders belong to buddi's own upgrade, which cleans them itself.

@@ -24,7 +24,7 @@ import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } f
 import type { UpgradeJob, VersionView } from './upgrade.js';
 import { APP_RUNNING_LINE, appLayout, insideAppBundle, linuxInstall, runsAppCopy } from './app-layout.js';
 import { runtimeFacts, runtimeLines } from './runtime-info.js';
-import { commandOwnedBy, linuxUnitSpec } from './linux-install.js';
+import { LINUX_DESKTOP_MARK, commandOwnedBy, desktopEntryPaths, linuxUnitSpec } from './linux-install.js';
 import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimRefusesSupervise, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
 
@@ -234,6 +234,8 @@ function linuxInstallParts(ctx: InstallContext, home: string): import('./uninsta
     releases: appLayout(process.env) ?? path.join(ctx.data, 'releases'),
     ...(owned() ? { command, commandOwned: owned } : {}),
     ...(recorded.linger === true ? { linger: true } : {}),
+    // Only the entries carrying the installer's mark: one the owner wrote (or the .deb's) stays.
+    desktopEntries: desktopEntryPaths(process.env, home).filter(file => { try { return readFileSync(file, 'utf8').split('\n').includes(LINUX_DESKTOP_MARK); } catch { return false; } }),
   };
 }
 

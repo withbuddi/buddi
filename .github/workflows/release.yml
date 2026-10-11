@@ -230,7 +230,8 @@ jobs:
           notes="$section
 
           npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }}).
-          Linux: \`curl -fsSL https://withbuddi.com/install.sh | BUDDI_VERSION=${{ steps.v.outputs.version }} sh\` (the linux-x64 and linux-arm64 tarballs below, attached by the linux job)."
+          Linux: \`curl -fsSL https://withbuddi.com/install.sh | BUDDI_VERSION=${{ steps.v.outputs.version }} sh\` (the linux-x64 and linux-arm64 tarballs below, attached by the linux job).
+          Linux desktop app: \`buddi-desktop-${{ steps.v.outputs.version }}-linux-<arch>.deb\` (\`sudo apt install ./buddi-desktop-…deb\`) or the AppImage, attached by the desktop job; it opens the buddi installed by the line above."
           gh release create "v${{ steps.v.outputs.version }}" --verify-tag $pre --title "buddi ${{ steps.v.outputs.version }}" \
             --notes "$notes" \
             "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install.sh
@@ -362,6 +363,72 @@ jobs:
           gh release view "v$VERSION" >/dev/null || { echo "::error::v$VERSION has no GitHub release to attach to"; exit 1; }
           # install.sh is attached once, by the publish job; both legs here would race on it.
           gh release upload "v$VERSION" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz.sha256" --clobber
+
+  # The desktop app for Linux (apps/desktop, Tauri on WebKitGTK 4.1): a window
+  # and a tray icon around the buddi the linux job's tarball installs. Per
+  # architecture, a .deb (the system's WebKitGTK; ~2.5 MB) and an AppImage
+  # (WebKitGTK and GStreamer inside, so the microphone works; ~90 MB), with
+  # their .sha256, attached to the GitHub release. Built on Ubuntu 22.04, the
+  # oldest base it supports (glibc 2.35, WebKitGTK 2.4x). Same tag-only guard
+  # and the same re-run path as the linux job.
+  desktop:
+    needs: [plan, publish]
+    if: always() && (needs.plan.outputs.mode == 'mac' || needs.publish.result == 'success')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-22.04, deb: amd64, appimage: amd64 }
+          - { arch: arm64, runner: ubuntu-22.04-arm, deb: arm64, appimage: aarch64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: write   # the release assets
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Run on the version's tag
+        run: |
+          [ "$GITHUB_REF" = "refs/tags/v$VERSION" ] || { echo "::error::Build the desktop app from the tag v$VERSION (Run workflow on that tag), not $GITHUB_REF."; exit 1; }
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$' || { echo "::error::\"$VERSION\" is not a buddi version"; exit 1; }
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      # WebKitGTK and the tray for the build; GStreamer's plugins (and patchelf)
+      # for the AppImage, which carries them so getUserMedia finds PipeWire/Pulse.
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential file patchelf \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio gstreamer1.0-pipewire
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build the .deb and the AppImage
+        working-directory: apps/desktop
+        run: npx --yes @tauri-apps/cli@2 build --config "{\"version\":\"$VERSION\"}"
+      - name: Check the .deb
+        run: |
+          deb=$(ls apps/desktop/target/release/bundle/deb/buddi-desktop_*_${{ matrix.deb }}.deb)
+          dpkg-deb -I "$deb" | grep -q 'Package: buddi-desktop'
+          dpkg-deb -c "$deb" | grep -q './usr/bin/buddi-desktop$'
+          dpkg-deb -c "$deb" | grep -q './etc/xdg/autostart/buddi-desktop.desktop$'
+          dpkg-deb -c "$deb" | grep -q './usr/share/applications/buddi-desktop.desktop$'
+      - name: Name and checksum
+        run: |
+          mkdir -p build/desktop
+          cp apps/desktop/target/release/bundle/deb/buddi-desktop_*_${{ matrix.deb }}.deb "build/desktop/buddi-desktop-$VERSION-linux-$ARCH.deb"
+          cp apps/desktop/target/release/bundle/appimage/buddi-desktop_*_${{ matrix.appimage }}.AppImage "build/desktop/buddi-desktop-$VERSION-linux-$ARCH.AppImage"
+          cd build/desktop
+          for f in *; do sha256sum "$f" > "$f.sha256"; done
+          ls -l
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v$VERSION" >/dev/null || { echo "::error::v$VERSION has no GitHub release to attach to"; exit 1; }
+          gh release upload "v$VERSION" build/desktop/* --clobber
 
   # buddi.app, phase 2 of the Mac app (apps/mac/README.md). Skipped with a
   # notice, never failed, while the signing secrets are not in the repository:

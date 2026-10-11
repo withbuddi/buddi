@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>buddi</title>
+<style>
+  /* buddi's tokens (packages/web/src/tokens.css), as buddi.app's placeholder uses them. */
+  :root { --bg: #eef4fd; --text: #152642; --muted: #5a6477; --accent: #2b6fe6; --on-accent: #fff; --line: #d5deec; --code: #fff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0c1627; --text: #ecf1f8; --muted: #a3adbe; --accent: #7db3ff; --on-accent: #0c1627; --line: #24324a; --code: #131f33; }
+  }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+         display: flex; align-items: center; justify-content: center; }
+  main { width: min(30rem, calc(100% - 2rem)); display: flex; flex-direction: column; align-items: center; gap: .75rem; text-align: center; }
+  img { width: 88px; height: 88px; }
+  h1 { font-size: 1.15rem; font-weight: 600; margin: .25rem 0 0; }
+  p { color: var(--muted); margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  code { display: block; width: 100%; box-sizing: border-box; padding: .6rem .75rem; border: 1px solid var(--line); border-radius: 8px;
+         background: var(--code); color: var(--text); font: 13px/1.4 ui-monospace, monospace; text-align: left; user-select: all; }
+  .actions { display: flex; gap: .5rem; justify-content: flex-end; width: 100%; margin-top: .5rem; }
+  .actions:empty { display: none; }
+  button { font: inherit; padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <img src="mascot.png" alt="">
+  <h1 id="title">Starting buddi…</h1>
+  <p id="detail" hidden></p>
+  <code id="code" hidden></code>
+  <div class="actions" id="actions"></div>
+</main>
+<script>
+  const invoke = (cmd) => { try { window.__TAURI_INTERNALS__.invoke(cmd); } catch (_) {} };
+  const q = new URLSearchParams(location.search);
+  const mode = q.get('mode') || 'starting';
+  const detail = q.get('detail') || '';
+  const $ = (id) => document.getElementById(id);
+  const say = (title, text) => { $('title').textContent = title; $('detail').textContent = text || ''; $('detail').hidden = !text; };
+  const button = (label, onClick, primary) => {
+    const b = document.createElement('button');
+    b.textContent = label; b.onclick = onClick; if (primary) b.className = 'primary';
+    $('actions').appendChild(b); return b;
+  };
+  if (mode === 'attention') {
+    say('buddi needs attention', 'buddi did not give a dashboard link. ' + detail);
+    button('Try Again', () => invoke('retry'));
+    button('Start buddi', () => invoke('start_buddi'), true);
+  } else if (mode === 'stopped') {
+    say('buddi is stopped', 'Your agents are paused until you start it again, here or from the buddi icon in the top bar.');
+    button('Start buddi', () => invoke('start_buddi'), true);
+  } else if (mode === 'missing') {
+    say('buddi is not installed', 'This app opens the buddi installed in your account, and there is none yet. Install it with this line in a terminal; this window notices on its own.');
+    $('code').textContent = detail; $('code').hidden = false;
+    const copy = button('Copy', () => {
+      const range = document.createRange(); range.selectNodeContents($('code'));
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      document.execCommand('copy'); copy.textContent = 'Copied';
+    }, true);
+  } else {
+    say('Starting buddi…', '');
+  }
+</script>
+</body>
+</html>

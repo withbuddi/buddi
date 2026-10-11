@@ -11,6 +11,16 @@ import { SERVICE_UNIT_VAR } from './environment.js';
 /** The marker line scripts/install.sh writes into the `buddi` command it puts on PATH. */
 export const LINUX_COMMAND_MARKER = '# buddi-linux-install';
 
+/** The line scripts/install.sh puts in the desktop entries it writes (app grid, autostart). */
+export const LINUX_DESKTOP_MARK = 'X-Buddi-Linux-Install=true';
+
+/** The desktop entries scripts/install.sh writes, where they would be. */
+export function desktopEntryPaths(env: NodeJS.ProcessEnv, home: string): string[] {
+  const data = env.XDG_DATA_HOME || path.join(home, '.local', 'share');
+  const config = env.XDG_CONFIG_HOME || path.join(home, '.config');
+  return [path.join(data, 'applications', 'buddi-desktop.desktop'), path.join(config, 'autostart', 'buddi-desktop.desktop')];
+}
+
 /** The bundled node the Linux install runs: `<data>/node/node`, never the machine's. */
 export function bundledNode(data: string): string {
   return path.join(data, 'node', 'node');

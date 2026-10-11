@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=buddi
+GenericName=Personal agents
+Comment=Your personal agents, on this computer
+Exec={{exec}}
+Icon={{icon}}
+StartupWMClass={{exec}}
+Terminal=false
+Categories={{categories}}
+Keywords=agent;assistant;ai;

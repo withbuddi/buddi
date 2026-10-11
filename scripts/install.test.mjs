@@ -107,6 +107,30 @@ describe.skipIf(process.platform !== 'linux')('install.sh', () => {
     expect(existsSync(path.join(m.releases, 'current'))).toBe(false);
   });
 
+  test('puts buddi in the app grid, and the desktop app in autostart only when it is installed, never over an entry it did not write', () => {
+    const m = machine();
+    const apps = path.join(m.home, '.local/share/applications/buddi-desktop.desktop');
+    const autostart = path.join(m.home, '.config/autostart/buddi-desktop.desktop');
+    expect(m.run('0.1.0-pre.1').status).toBe(0);
+    const entry = readFileSync(apps, 'utf8');
+    expect(entry).toContain('X-Buddi-Linux-Install=true');
+    expect(entry).toContain(`exec buddi-desktop || exec ${m.home}/.local/bin/buddi dashboard"`);
+    expect(entry).toContain(`Icon=${realpathSync(m.home)}/data/releases/current/packages/web/dist/icon-512.png`);
+    // No desktop app on this PATH (unless the machine running the test has it installed).
+    expect(existsSync(autostart)).toBe(existsSync('/usr/bin/buddi-desktop') || existsSync('/bin/buddi-desktop'));
+    // The desktop app on PATH: autostart, in the tray.
+    const bin = path.join(m.root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, 'buddi-desktop'), '#!/bin/sh\n');
+    chmodSync(path.join(bin, 'buddi-desktop'), 0o755);
+    expect(m.run('0.1.0-pre.1', { PATH: `${bin}:/usr/bin:/bin` }).status).toBe(0);
+    expect(readFileSync(autostart, 'utf8')).toContain('Exec=buddi-desktop --hidden');
+    // The owner turned it off (no mark): left as it is.
+    writeFileSync(autostart, '[Desktop Entry]\nHidden=true\n');
+    expect(m.run('0.1.0-pre.1', { PATH: `${bin}:/usr/bin:/bin` }).status).toBe(0);
+    expect(readFileSync(autostart, 'utf8')).toBe('[Desktop Entry]\nHidden=true\n');
+  });
+
   test('refuses a tarball that is not the version asked for', () => {
     const m = machine();
     const r = m.run('0.1.0-pre.1', { BUDDI_VERSION: '0.1.0-pre.9' });

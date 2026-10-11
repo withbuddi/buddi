@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dashboard",
+  "description": "The dashboard served by the local gateway: it may say its session expired (for a fresh sign-in link), show desktop notifications (its window.Notification bridge) and, with BUDDI_SHELL_DEBUG=1 only, forward its console.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"] },
+  "permissions": ["allow-session-expired", "allow-notify", "allow-shell-log"]
+}

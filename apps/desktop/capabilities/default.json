@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "placeholder",
+  "description": "The app's own page (Starting buddi…, stopped, not installed): its Retry and Start buttons.",
+  "windows": ["main"],
+  "permissions": ["allow-retry", "allow-start-buddi"]
+}

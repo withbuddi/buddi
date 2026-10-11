@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-session-expired"
+description = "Enables the session_expired command without any pre-configured scope."
+commands.allow = ["session_expired"]
+
+[[permission]]
+identifier = "deny-session-expired"
+description = "Denies the session_expired command without any pre-configured scope."
+commands.deny = ["session_expired"]

@@ -469,6 +469,15 @@ describe('uninstallPackaged: the Linux install (scripts/install.sh)', () => {
     expect(m.out.some(line => line.includes('the buddi command'))).toBe(false);
   });
 
+  it('removes the app-grid and autostart entries the installer wrote', async () => {
+    const entries = [`${home}/.local/share/applications/buddi-desktop.desktop`, `${home}/.config/autostart/buddi-desktop.desktop`];
+    const m = linux(entries);
+    m.deps.linuxInstall = { runtime: `${data}/node`, releases: `${data}/releases`, desktopEntries: entries };
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
+    expect(m.out).toContain(`  - buddi in the app grid and at login: ${entries[0]} and ${entries[1]}`);
+    expect(m.removed).toEqual(expect.arrayContaining(entries));
+  });
+
   it('leaves a command that another installation took over since', async () => {
     const m = linux();
     m.deps.linuxInstall = { runtime: `${data}/node`, releases: `${data}/releases`, command: `${home}/.local/bin/buddi`, commandOwned: () => false };
