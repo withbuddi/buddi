@@ -413,11 +413,14 @@ jobs:
       - name: Check the .deb
         run: |
           deb=$(ls apps/desktop/target/release/bundle/deb/buddi-desktop_*_${{ matrix.deb }}.deb)
-          dpkg-deb -I "$deb" | grep -q 'Package: buddi-desktop'
-          dpkg-deb -c "$deb" | grep -q './usr/bin/buddi-desktop$'
+          # The paths it holds, without the leading "./" some builders write.
+          files=$(dpkg-deb -c "$deb" | awk '{print $NF}' | sed 's#^\./##; s#^/##')
+          echo "$files"
+          dpkg-deb -f "$deb" Package | grep -qx 'buddi-desktop' || { echo "::error::the .deb is not the buddi-desktop package"; exit 1; }
+          echo "$files" | grep -qx 'usr/bin/buddi-desktop' || { echo "::error::the .deb has no usr/bin/buddi-desktop"; exit 1; }
           # No autostart for every user: Start at Login is per account.
-          if dpkg-deb -c "$deb" | grep -q '/etc/xdg/autostart/'; then echo "::error::the .deb starts the app for every user"; exit 1; fi
-          dpkg-deb -c "$deb" | grep -q './usr/share/applications/buddi-desktop.desktop$'
+          if echo "$files" | grep -q '^etc/xdg/autostart/'; then echo "::error::the .deb starts the app for every user"; exit 1; fi
+          echo "$files" | grep -qx 'usr/share/applications/buddi-desktop.desktop' || { echo "::error::the .deb has no app-grid entry"; exit 1; }
       - name: Name and checksum
         run: |
           mkdir -p build/desktop
