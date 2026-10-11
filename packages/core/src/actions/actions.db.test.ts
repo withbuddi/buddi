@@ -169,7 +169,7 @@ suite('actions and approvals (postgres)', () => {
     it('describes at the instant it records, so a clock-reading preview survives a ticking clock', async () => {
       // Every read of the clock is a millisecond later: the gap between the
       // preview and `createAction`, and the owner's wait, are both real.
-      let tick = Date.parse('2026-10-07T09:00:00.000Z');
+      let tick = Date.now();
       const ticking = (): CoreToolContext => ({ ...ctx(), now: () => new Date(tick++) });
       const sent: unknown[] = [];
       const registry = new ToolRegistry();
