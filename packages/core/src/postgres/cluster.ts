@@ -248,7 +248,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
   // server on the selected port.
   const occupancy = await inspectCluster(cluster, {
     status: async () => {
-      try { await exec(pgBinary(bin, 'pg_ctl'), ['status', '-D', cluster], { timeout: 5000, env: nativeEnvironment(env) }); return true; }
+      try { await exec(pgBinary(bin, 'pg_ctl'), ['status', '-D', cluster], { timeout: 5000, env: nativeEnvironment(env), windowsHide: true }); return true; }
       catch { return false; }
     },
     identity: recorded => portIdentity(cluster, { host: '127.0.0.1', port: recorded, user: 'buddi_admin', password: adminPassword, database: 'postgres', connectionTimeoutMillis: 1000, query_timeout: 1000 }),
@@ -260,25 +260,26 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
   }
   if (occupancy === 'orphan') {
     diagnostic('Stopping an orphaned Postgres server left on this cluster by a previous supervisor.');
-    try { await exec(pgBinary(bin, 'pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-t', '15'], { timeout: 20_000, env: nativeEnvironment(env) }); }
+    try { await exec(pgBinary(bin, 'pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-t', '15'], { timeout: 20_000, env: nativeEnvironment(env), windowsHide: true }); }
     catch (error) {
       // It may have finished shutting down on its own between the status check
       // and this stop, which is exactly the state we wanted. Anything else is
       // fatal: never start a second postmaster on a cluster someone still owns.
       let stopped = false;
-      try { await exec(pgBinary(bin, 'pg_ctl'), ['status', '-D', cluster], { timeout: 5000, env: nativeEnvironment(env) }); }
+      try { await exec(pgBinary(bin, 'pg_ctl'), ['status', '-D', cluster], { timeout: 5000, env: nativeEnvironment(env), windowsHide: true }); }
       catch { stopped = true; }
       if (!stopped) throw new Error(`A Postgres server is already running on ${cluster} and could not be stopped (${(error as Error).message}). No new server was started; stop it before retrying.`);
     }
   }
   const log = createWriteStream(logFile, { flags: 'a', mode: 0o600 });
   /*
-   * Windows: detached, so the postmaster is in no job of the supervisor's
-   * (libuv kills a job's processes when its node exits) and has no console of
-   * its own to be closed under it. A supervisor that dies leaves it running,
-   * as SIGKILL does elsewhere, and the next start stops it (above).
+   * Never detached on Windows: a postmaster without a console of its own gives
+   * every backend it starts a new console window. Hidden, it shares one
+   * invisible console with them, and it lives in the supervisor's job, so it
+   * goes when the supervisor goes (the next start recovers it); a restart or a
+   * sign-out stops it cleanly first (windows-guard.ts).
    */
-  const child = spawn(pgBinary(bin, 'postgres'), ['-D', cluster, '-p', String(port), '-h', '127.0.0.1', '-k', ''], { env: nativeEnvironment(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform === 'win32' });
+  const child = spawn(pgBinary(bin, 'postgres'), ['-D', cluster, '-p', String(port), '-h', '127.0.0.1', '-k', ''], { env: nativeEnvironment(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   child.stdout?.pipe(log, { end: false }); child.stderr?.pipe(log, { end: false });
   let failed: Error | undefined;
   child.on('error', error => { failed = error; });

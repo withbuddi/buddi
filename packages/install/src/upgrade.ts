@@ -915,7 +915,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
   const backupWait = opts.backupWaitMs ?? BACKUP_WAIT_MS;
   /** buddi.app's releases folder, when the app runs this installation. */
   const releases = appLayout(ctx.env);
-  const npm: NpmRunner = opts.npm ?? (async (bin, argv, where) => await run(bin, argv, where));
+  const npm: NpmRunner = opts.npm ?? (async (bin, argv, where) => { const [file, args] = npmInvocation(bin, argv); await run(file, args, { ...where, windowsHide: true }); });
   // The Linux install shares the layout, not the app's menu: its view is npm's words.
   const dressed = (view: VersionView): VersionView => appRuns(ctx.env) ? { ...view, app: true } : view;
   let running: UpgradeJob | undefined;

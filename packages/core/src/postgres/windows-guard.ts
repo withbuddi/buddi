@@ -79,17 +79,18 @@ export interface DatabaseGuardOptions {
 }
 
 /**
- * Start the guard for a running postmaster. Detached, so it is in no job of
- * the supervisor's and outlives it: the postmaster does too (cluster.ts). A
- * failure to start it costs only the clean shutdown at sign-out, so it is
- * reported, never thrown.
+ * Start the guard for a running postmaster: hidden, in the supervisor's job
+ * (detached, PowerShell would have no console and leave at once). At the end
+ * of a session it is told before the supervisor and the postmaster are
+ * stopped, which is all it needs. A failure to start it costs only the clean
+ * shutdown at sign-out, so it is reported, never thrown.
  */
 export function startDatabaseGuard({ cluster, postmaster, logFile, env }: DatabaseGuardOptions, report: (line: string) => void): void {
   const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows';
   const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   try {
     const child = spawn(powershell, guardArguments(), {
-      detached: true, stdio: 'ignore', windowsHide: true,
+      stdio: 'ignore', windowsHide: true,
       env: { ...env, BUDDI_GUARD_CLUSTER: cluster, BUDDI_GUARD_POSTMASTER: String(postmaster), BUDDI_GUARD_LOG: logFile },
     });
     child.once('error', error => report(`The database's sign-out guard did not start (${error.message}); a Windows restart will not stop the database cleanly.`));

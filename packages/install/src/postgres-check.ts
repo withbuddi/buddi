@@ -53,7 +53,7 @@ export function createPostgresCheck(opts: { platform?: string; arch?: string; ti
     // A tree this process cannot write is still worth running: the links may be there.
     await hydratePostgresLinks(dir).catch(() => []);
     try {
-      await run(path.join(dir, 'native/bin/postgres'), ['--version'], { timeout, env });
+      await run(path.join(dir, 'native/bin/postgres'), ['--version'], { timeout, env, windowsHide: true });
       return { ok: true };
     } catch (err) {
       return { ok: false, error: `The new version's Postgres binary does not start: ${tail(err)}` };

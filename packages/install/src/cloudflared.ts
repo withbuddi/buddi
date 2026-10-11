@@ -214,7 +214,7 @@ export async function downloadCloudflared(options: {
 
 function untar(archive: string, into: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile('tar', ['-xzf', archive, '-C', into, 'cloudflared'], { timeout: 60_000 }, error => (error ? reject(new VerifyError(`${path.basename(archive)} could not be unpacked.`)) : resolve()));
+    execFile('tar', ['-xzf', archive, '-C', into, 'cloudflared'], { timeout: 60_000, windowsHide: true }, error => (error ? reject(new VerifyError(`${path.basename(archive)} could not be unpacked.`)) : resolve()));
   });
 }
 

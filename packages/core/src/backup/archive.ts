@@ -75,6 +75,7 @@ export function spawnCapture(
     const child = spawn(command, args, {
       cwd: opts.cwd ?? process.cwd(),
       stdio: [opts.stdinFile ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     });
     const chunks: Buffer[] = [];
     let stderr = '';

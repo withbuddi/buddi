@@ -191,6 +191,7 @@ export function installBrowser(options: { onLine?: (line: string) => void; inher
     const child = spawn(process.execPath, [cli, 'install', 'chromium'], {
       env: options.env ?? process.env,
       stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+      windowsHide: !options.inherit,
     });
     const read = (chunk: Buffer): void => {
       const text = chunk.toString('utf8');

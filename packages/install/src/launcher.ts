@@ -127,7 +127,7 @@ function supervisorLockPid(data: string): number | undefined {
 /**
  * Windows: a postmaster still running on this installation's cluster, its
  * `postmaster.pid` naming a live process. There it can outlive its
- * supervisor (it is detached), and a folder it holds cannot be removed.
+ * supervisor for a moment (it is stopped with pg_ctl), and a folder it holds cannot be removed.
  * Elsewhere the supervisor's own exit is the answer, as before.
  */
 function postmasterLeft(data: string): boolean {
@@ -313,7 +313,7 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
       catch { await copyFile(from, to); await rm(from, { force: true }); }
     },
     exec: (command, argv) => new Promise(resolve => {
-      execFile(command, argv, { env: { ...nativeEnvironment(ctx.env), ...systemdSession(ctx.env) } }, (error, stdout, stderr) => {
+      execFile(command, argv, { env: { ...nativeEnvironment(ctx.env), ...systemdSession(ctx.env) }, windowsHide: true }, (error, stdout, stderr) => {
         const code = (error as { code?: unknown } | null)?.code;
         resolve({ code: error ? (typeof code === 'number' ? code : 1) : 0, stdout: String(stdout), stderr: error && typeof code !== 'number' ? error.message : String(stderr) });
       });
