@@ -22,6 +22,7 @@
  * No administrator rights, no group policy shutdown script, no service.
  */
 import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
 
 const SCRIPT = String.raw`
@@ -49,6 +50,14 @@ public class BuddiDatabaseGuard : NativeWindow {
   }
   bool Capped() { return since != null && since.ElapsedMilliseconds >= CapMs; }
   protected override void WndProc(ref Message m) {
+    // ENDSESSION_CLOSEAPP: not the end of the session but an installer's
+    // Restart Manager asking this program to close (Windows Update does).
+    // The database is none of its business: the guard closes alone, and the
+    // supervisor starts it again.
+    if ((m.Msg == 0x11 || m.Msg == 0x16) && (m.LParam.ToInt64() & 0x1) != 0) {
+      if (m.Msg == 0x16 && m.WParam != IntPtr.Zero) Application.Exit();
+      m.Result = m.Msg == 0x11 ? (IntPtr)1 : IntPtr.Zero; return;
+    }
     if (m.Msg == 0x11) {
       // Asked whether the session may end: begin the fast shutdown now, and
       // hold the end (with a reason on screen) while the database stops, up to the cap.
@@ -102,20 +111,30 @@ export interface DatabaseGuardOptions {
  * Start the guard for a running postmaster: hidden, in the supervisor's job
  * (detached, PowerShell would have no console and leave at once). At the end
  * of a session it is told before the supervisor and the postmaster are
- * stopped, which is all it needs. A failure to start it costs only the clean
- * shutdown at sign-out, so it is reported, never thrown.
+ * stopped, which is all it needs. One that leaves while the postmaster runs
+ * (an installer's Restart Manager closed it) is started again. A failure to
+ * start it costs only the clean shutdown at sign-out, so it is reported,
+ * never thrown. The returned function ends it for good.
  */
-export function startDatabaseGuard({ cluster, postmaster, logFile, env }: DatabaseGuardOptions, report: (line: string) => void): void {
+export function startDatabaseGuard({ cluster, postmaster, logFile, env }: DatabaseGuardOptions, report: (line: string) => void, respawnMs = 10_000): () => void {
   const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows';
   const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  try {
-    const child = spawn(powershell, guardArguments(), {
-      stdio: 'ignore', windowsHide: true,
-      env: { ...env, BUDDI_GUARD_CLUSTER: cluster, BUDDI_GUARD_POSTMASTER: String(postmaster), BUDDI_GUARD_LOG: logFile },
-    });
-    child.once('error', error => report(`The database's sign-out guard did not start (${error.message}); a Windows restart will not stop the database cleanly.`));
-    child.unref();
-  } catch (error) {
-    report(`The database's sign-out guard did not start (${(error as Error).message}); a Windows restart will not stop the database cleanly.`);
-  }
+  let stopped = false, child: ChildProcess | undefined, timer: NodeJS.Timeout | undefined;
+  const alive = (): boolean => { try { process.kill(postmaster, 0); return true; } catch { return false; } };
+  const start = (): void => {
+    if (stopped || !alive()) return;
+    try {
+      child = spawn(powershell, guardArguments(), {
+        stdio: 'ignore', windowsHide: true,
+        env: { ...env, BUDDI_GUARD_CLUSTER: cluster, BUDDI_GUARD_POSTMASTER: String(postmaster), BUDDI_GUARD_LOG: logFile },
+      });
+      child.once('error', error => report(`The database's sign-out guard did not start (${error.message}); a Windows restart will not stop the database cleanly.`));
+      child.once('exit', () => { if (!stopped && alive()) { timer = setTimeout(start, respawnMs); timer.unref(); } });
+      child.unref();
+    } catch (error) {
+      report(`The database's sign-out guard did not start (${(error as Error).message}); a Windows restart will not stop the database cleanly.`);
+    }
+  };
+  start();
+  return () => { stopped = true; clearTimeout(timer); };
 }

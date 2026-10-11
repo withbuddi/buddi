@@ -312,7 +312,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
       } finally { await client.end().catch(() => {}); }
     }
   } catch (error) { await stopPostmaster(child, bin, cluster, env).catch(stop => diagnostic((stop as Error).message)); log.end(); throw error; }
-  if (process.platform === 'win32' && child.pid !== undefined) startDatabaseGuard({ cluster, postmaster: child.pid, logFile, env: nativeEnvironment(env) }, diagnostic);
+  const endGuard = process.platform === 'win32' && child.pid !== undefined ? startDatabaseGuard({ cluster, postmaster: child.pid, logFile, env: nativeEnvironment(env) }, diagnostic) : undefined;
   const url = `postgres://buddi:${encodeURIComponent(password)}@127.0.0.1:${port}/buddi`;
   const monitor = watchDatabase(async () => {
     const client = new Client(connection);
@@ -327,6 +327,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
   if (child.exitCode !== null || child.signalCode !== null) monitor.fail();
   return { pid: child.pid, child, url, exited: monitor.exited, get alive() { return monitor.alive; }, stop: async () => {
     monitor.stop();
+    endGuard?.();
     await stopPostmaster(child, bin, cluster, env);
     log.end();
   } };
