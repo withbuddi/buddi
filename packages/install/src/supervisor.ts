@@ -564,6 +564,8 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   const shutdown = new Promise<void>(resolve => { resolveShutdown = resolve; });
   const onSignal = () => { closing = true; desired = false; resolveShutdown(); };
   process.once('SIGINT', onSignal); process.once('SIGTERM', onSignal);
+  // Windows: its console closing (sign-out, shutdown) is the one signal node gets there.
+  if (process.platform === 'win32') process.once('SIGHUP', onSignal);
   if (briefPid !== undefined) {
     unwatchBrief = watchBriefParent({ parent: briefPid, leave: why => { console.error(`supervisor: leaving the brief run: ${why}.`); onSignal(); } });
   }
@@ -838,7 +840,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     try { await database?.stop(); }
     finally {
       log?.end(); await release();
-      process.removeListener('SIGINT', onSignal); process.removeListener('SIGTERM', onSignal);
+      process.removeListener('SIGINT', onSignal); process.removeListener('SIGTERM', onSignal); process.removeListener('SIGHUP', onSignal);
     }
   }
   // buddi.app finishes an uninstall the owner started in Settings → System (product-uninstall.ts).

@@ -269,7 +269,8 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
     ...(linuxParts === undefined ? {} : { linuxInstall: linuxParts }),
     data: ctx.data, home, platform: process.platform, env: ctx.env, uid: process.getuid?.() ?? 501,
     exists: existsSync,
-    remove: file => rm(file, { recursive: true, force: true }),
+    // Retried: on Windows a process that just exited can hold a folder for a moment (EBUSY).
+    remove: file => rm(file, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }),
     move: async (from, to) => {
       await mkdir(path.dirname(to), { recursive: true, mode: 0o700 });
       try { await rename(from, to); }
@@ -609,7 +610,8 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
     }), { mode: 0o600 });
     const user = [ctx.env.USERDOMAIN, ctx.env.USERNAME ?? os.userInfo().username].filter(Boolean).join('\\');
     await writeFile(windowsTaskXmlFile(ctx.data), taskXmlBytes(buildTaskXml({
-      user, script, workingDirectory: ctx.data, systemRoot: ctx.env.SystemRoot ?? ctx.env.SYSTEMROOT ?? 'C:\\Windows',
+      // Not the data directory: Windows will not remove a folder a process runs in, and uninstall removes it.
+      user, script, workingDirectory: os.homedir(), systemRoot: ctx.env.SystemRoot ?? ctx.env.SYSTEMROOT ?? 'C:\\Windows',
     })), { mode: 0o600 });
     try {
       await registerWindowsTask((cmd, argv) => exec(cmd, argv, { env: nativeEnvironment(ctx.env), windowsHide: true }), windowsTaskName(label), windowsTaskXmlFile(ctx.data));
