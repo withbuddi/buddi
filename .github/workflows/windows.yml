@@ -1,0 +1,100 @@
+# Windows: the gate's suites on windows-latest, to keep buddi building and
+# passing there while Windows is a test platform (not public yet). Runs on the
+# `windows` branch, on demand, and nightly.
+#
+# The runner has no Docker for service containers, so the database suites run
+# against the PostgreSQL the image ships (stopped by default; user postgres,
+# password root, binaries under $PGBIN). Every suite step runs even when an
+# earlier one failed, so one run lists every failure.
+name: windows
+on:
+  push:
+    branches: [windows]
+    paths-ignore: ['docs/**', '**/*.md', 'feedback/**']
+  workflow_dispatch:
+  schedule:
+    - cron: '43 4 * * *'   # nightly, 04:43 UTC
+jobs:
+  suites:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      DATABASE_URL: postgres://postgres:root@127.0.0.1:5432/buddi
+      BUDDI_VAULT: memory
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - name: Start the runner's PostgreSQL
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name postgresql*
+          Set-Service -InputObject $svc -Status running -StartupType automatic
+          & "$env:PGBIN\pg_isready.exe" -h 127.0.0.1 -t 60
+          & "$env:PGBIN\createdb.exe" -h 127.0.0.1 -U postgres buddi
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-boundaries.mjs
+      - run: pnpm -r build
+      - id: typecheck
+        if: ${{ !cancelled() }}
+        run: pnpm -r --no-bail typecheck
+      - id: migrate
+        if: ${{ !cancelled() }}
+        run: node scripts/migrate.mjs
+      - name: core
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @buddi/core test
+      - name: runtime
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @buddi/runtime test
+      - name: tools
+        if: ${{ !cancelled() }}
+        run: pnpm -r --no-bail --filter './packages/tools/*' test
+      - name: cli
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @buddi/cli test
+      - name: install
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @buddi/install test
+      - name: extension
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @buddi/extension test
+      - name: examples
+        if: ${{ !cancelled() }}
+        run: pnpm -r --no-bail --filter './examples/plugins/*' test
+      - name: gateway
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @buddi/gateway test
+      - name: generic install
+        if: ${{ !cancelled() }}
+        run: pnpm check:generic
+      - name: scripts
+        if: ${{ !cancelled() }}
+        run: pnpm exec vitest run --dir scripts
+
+  # The jsdom suite: platform-light, but slow; its own job so it never holds up
+  # the list above.
+  web:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      DATABASE_URL: postgres://x@127.0.0.1:1/x
+      BUDDI_VAULT: memory
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter '@buddi/web^...' build
+      - run: pnpm --filter @buddi/web build
+      - run: pnpm --filter @buddi/web exec vitest run
