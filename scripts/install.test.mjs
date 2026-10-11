@@ -116,6 +116,8 @@ describe.skipIf(process.platform !== 'linux')('install.sh', () => {
     expect(entry).toContain('X-Buddi-Linux-Install=true');
     expect(entry).toContain(`exec buddi-desktop || exec ${m.home}/.local/bin/buddi dashboard"`);
     expect(entry).toContain(`Icon=${realpathSync(m.home)}/data/releases/current/packages/web/dist/icon-512.png`);
+    expect(entry).toContain('Actions=new-conversation;check-updates;lock;');
+    expect(entry).toContain(`Exec=sh -c "command -v buddi-desktop >/dev/null 2>&1 && exec buddi-desktop --lock || exec ${m.home}/.local/bin/buddi dashboard"`);
     // No desktop app on this PATH (unless the machine running the test has it installed).
     expect(existsSync(autostart)).toBe(existsSync('/usr/bin/buddi-desktop') || existsSync('/bin/buddi-desktop'));
     // The desktop app on PATH: autostart, in the tray.

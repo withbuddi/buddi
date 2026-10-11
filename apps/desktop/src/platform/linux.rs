@@ -71,9 +71,10 @@ pub fn tune_webview(window: &WebviewWindow) {
 fn icon_file() -> Option<PathBuf> {
     let dir = dirs::runtime_dir().or_else(dirs::cache_dir)?.join("buddi-desktop");
     let file = dir.join("buddi.png");
-    if !file.exists() {
+    let icon: &[u8] = include_bytes!("../../icons/128x128.png");
+    if std::fs::metadata(&file).map(|m| m.len() != icon.len() as u64).unwrap_or(true) {
         std::fs::create_dir_all(&dir).ok()?;
-        std::fs::write(&file, include_bytes!("../../icons/128x128.png")).ok()?;
+        std::fs::write(&file, icon).ok()?;
     }
     Some(file)
 }
@@ -120,6 +121,57 @@ pub fn tray_wants_dark_ink() -> bool {
         return !globals.lines().any(|l| l.starts_with("ColorScheme=") && l.to_ascii_lowercase().contains("dark"));
     }
     false
+}
+
+/// "11:19" or "11:19 AM", as the top bar's clock has it (GNOME's clock-format).
+pub fn clock_text(at: std::time::SystemTime) -> String {
+    static TWELVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let twelve = *TWELVE.get_or_init(|| {
+        std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "clock-format"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("12h"))
+            .unwrap_or(false)
+    });
+    let local: chrono::DateTime<chrono::Local> = at.into();
+    local.format(if twelve { "%-I:%M %p" } else { "%H:%M" }).to_string()
+}
+
+const SYSTEM_AUTOSTART: &str = "/etc/xdg/autostart/buddi-desktop.desktop";
+/// install.sh's mark (scripts/install.sh, packages/install/src/linux-install.ts).
+const MARK: &str = "X-Buddi-Linux-Install=true";
+
+fn user_autostart() -> Option<PathBuf> {
+    dirs::config_dir().map(|c| c.join("autostart").join("buddi-desktop.desktop"))
+}
+
+fn turned_off(entry: &str) -> bool {
+    entry.lines().any(|l| matches!(l.trim(), "Hidden=true" | "X-GNOME-Autostart-enabled=false"))
+}
+
+/// Start at Login: this account's entry decides when there is one (it shadows
+/// the package's /etc/xdg/autostart entry, same file name); else the package's.
+pub fn autostart_enabled() -> bool {
+    match user_autostart().and_then(|p| std::fs::read_to_string(p).ok()) {
+        Some(entry) => !turned_off(&entry),
+        None => std::path::Path::new(SYSTEM_AUTOSTART).exists(),
+    }
+}
+
+/// On: this account's entry, marked as install.sh's (kept current by it,
+/// removed by `buddi uninstall`). Off: an entry that says so, unmarked, so
+/// install.sh leaves the owner's choice alone.
+pub fn set_autostart(on: bool) -> Result<(), String> {
+    let file = user_autostart().ok_or("no config folder")?;
+    std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+    // An AppImage starts itself by its own path; the package by its command.
+    let exec = std::env::var("APPIMAGE").map(|p| format!("\"{p}\"")).unwrap_or_else(|_| "buddi-desktop".into());
+    let entry = if on {
+        format!("[Desktop Entry]\nType=Application\nName=buddi\nComment=buddi in the tray, from login\nExec={exec} --hidden\nIcon=buddi-desktop\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n{MARK}\n")
+    } else {
+        format!("[Desktop Entry]\nType=Application\nName=buddi\nComment=Turned off in buddi's menu (Start at Login)\nExec={exec} --hidden\nNoDisplay=true\nHidden=true\nX-GNOME-Autostart-enabled=false\n")
+    };
+    std::fs::write(&file, entry).map_err(|e| e.to_string())
 }
 
 /// Where the tray's icon files go: the session's runtime folder, not /tmp.

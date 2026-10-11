@@ -5,13 +5,19 @@
 //! five-minute sign-in link a terminal gets and loads it. It never runs a
 //! buddi of its own, so quitting it leaves buddi running.
 //!
-//!   buddi-desktop            open the window (a second launch brings it forward)
-//!   buddi-desktop --hidden   start in the tray only (the autostart entry)
+//!   buddi-desktop                      open the window (a second launch brings it forward)
+//!   buddi-desktop --hidden             start in the tray only (the autostart entry)
+//!   buddi-desktop --new-conversation   the launcher's right-click actions, as the
+//!                 --check-updates      tray menu has them (actions.rs)
+//!                 --lock
+//!                 --settings
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod actions;
 mod buddi;
 mod platform;
 mod shell;
+mod supervisor;
 mod tray;
 
 use std::path::PathBuf;
@@ -237,13 +243,17 @@ fn second_launch(app: &AppHandle, argv: Vec<String>) {
             _ => {}
         }
     }
-    platform::show_main(app);
+    let rest: Vec<String> = argv.into_iter().skip(1).collect();
+    if !actions::run_args(app, &rest) {
+        platform::show_main(app);
+    }
 }
 
 fn main() {
     let hidden = std::env::args().any(|a| a == "--hidden");
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| second_launch(app, argv)))
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 // Size, position and maximized are remembered; whether it shows is the app's call.
@@ -258,6 +268,8 @@ fn main() {
             tray::build(&handle)?;
             shell::connect(&handle, false, false);
             shell::watch(&handle);
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            actions::run_args(&handle, &args);
             Ok(())
         })
         .on_window_event(|window, event| {

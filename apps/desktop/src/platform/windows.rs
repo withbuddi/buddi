@@ -29,3 +29,17 @@ pub fn tray_wants_dark_ink() -> bool {
 pub fn tray_icon_dir() -> Option<std::path::PathBuf> {
     None
 }
+
+pub fn clock_text(at: std::time::SystemTime) -> String {
+    let local: chrono::DateTime<chrono::Local> = at.into();
+    local.format("%H:%M").to_string()
+}
+
+/// TODO(windows): a Run key or a Startup shortcut with --hidden, written by the installer.
+pub fn autostart_enabled() -> bool {
+    false
+}
+
+pub fn set_autostart(_on: bool) -> Result<(), String> {
+    Err("Start at Login is not there yet on this system.".into())
+}

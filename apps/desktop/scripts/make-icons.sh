@@ -1,7 +1,7 @@
 #!/bin/sh
 # Redraws the desktop app's icons from buddi.app's (apps/mac/Design, itself
 # drawn from the mascot rig by apps/mac/scripts/make-icons.mjs). Needs
-# rsvg-convert (librsvg2-bin) and ImageMagick.
+# rsvg-convert (librsvg2-bin) and ImageMagick for the tray glyphs.
 #   icons/*.png         the app icon (window, launcher, .deb, AppImage)
 #   icons/tray/*.png    the tray glyph per state: running, starting (stopped
 #                       too) and attention; -light for dark panels (GNOME,
@@ -9,9 +9,12 @@
 set -eu
 cd "$(dirname "$0")/.."
 DESIGN=../mac/Design
+# The app icon is buddi.app's own, as its asset catalog has it (librsvg does
+# not draw app-icon.svg's figure, so the PNGs make-icons.mjs rendered are the source).
+APPICON=../mac/Resources/Assets.xcassets/AppIcon.appiconset
 for pair in 32x32:32 128x128:128 256x256:256 icon:512; do
   name=${pair%%:*}; size=${pair##*:}
-  rsvg-convert -w "$size" -h "$size" "$DESIGN/app-icon.svg" | magick - -define png:color-type=6 "PNG32:icons/$name.png"
+  cp "$APPICON/icon_$size.png" "icons/$name.png"
 done
 mkdir -p icons/tray
 for state in running starting attention; do

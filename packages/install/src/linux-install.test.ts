@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { takeReleasesLock } from './app-layout.js';
-import { LINUX_COMMAND_MARKER, bundledNode, commandData, commandOwnedBy, desktopEntryPaths, linuxUnitSpec } from './linux-install.js';
+import { LINUX_COMMAND_MARKER, bundledNode, commandData, commandOwnedBy, desktopEntryPaths, linuxUnitSpec, ownDesktopEntries } from './linux-install.js';
 
 const data = '/home/owner/.local/share/buddi';
 const releases = `${data}/releases`;
@@ -61,5 +61,20 @@ describe('desktopEntryPaths', () => {
   test('names the app-grid and autostart entries install.sh writes, under the XDG folders when set', () => {
     expect(desktopEntryPaths({}, '/home/a')).toEqual(['/home/a/.local/share/applications/buddi-desktop.desktop', '/home/a/.config/autostart/buddi-desktop.desktop']);
     expect(desktopEntryPaths({ XDG_DATA_HOME: '/d', XDG_CONFIG_HOME: '/c' }, '/home/a')).toEqual(['/d/applications/buddi-desktop.desktop', '/c/autostart/buddi-desktop.desktop']);
+  });
+});
+
+describe('ownDesktopEntries', () => {
+  const [apps, autostart] = desktopEntryPaths({}, '/home/a');
+  const files: Record<string, string> = {
+    [apps as string]: '[Desktop Entry]\nIcon=/home/a/.local/share/buddi/releases/current/packages/web/dist/icon-512.png\nX-Buddi-Linux-Install=true\n',
+    [autostart as string]: '[Desktop Entry]\nExec=buddi-desktop --hidden\nX-Buddi-Linux-Install=true\n',
+  };
+  test('takes the marked entries of this installation', () => {
+    expect(ownDesktopEntries([apps!, autostart!], '/home/a/.local/share/buddi', f => files[f])).toEqual([apps, autostart]);
+  });
+  test('leaves another installation\'s app-grid entry, and anything unmarked', () => {
+    expect(ownDesktopEntries([apps!, autostart!], '/tmp/other', f => files[f])).toEqual([autostart]);
+    expect(ownDesktopEntries([apps!, autostart!], '/home/a/.local/share/buddi', f => f === autostart ? '[Desktop Entry]\nHidden=true\n' : files[f])).toEqual([apps]);
   });
 });

@@ -152,8 +152,12 @@ AppImage beside it (about 90 MB, everything inside). It wraps the buddi the
 command above installed and never runs one of its own: it asks `buddi` for a
 sign-in link and loads it, says "Starting buddi…" while the gateway restarts
 and comes back on the same page, and, when `buddi` is not installed, shows the
-install line. The tray icon has Open buddi, Open in Browser, Start, Stop and
-Quit (quitting the app leaves buddi running); closing the window keeps it in
+install line. The tray icon's menu is the Mac app's: Open buddi, New
+Conversation, Settings, Check for Updates (and Update to … when there is
+one), Restart, Stop and Start, Lock, Start at Login, Advanced (Open in Browser,
+Show Logs, Restart with the Previous Version), Help, About, Uninstall (the
+dashboard's own, with the last backup and its passphrase first) and Quit
+(quitting the app leaves buddi running); closing the window keeps it in
 the tray, and it starts there at login (the package's
 `/etc/xdg/autostart/buddi-desktop.desktop`). The microphone and notifications
 are allowed for the dashboard only; links to other sites open in your

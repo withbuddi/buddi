@@ -22,9 +22,34 @@ carries buddi itself); this one never runs a buddi of its own.
   is not installed" with the install line when there is no command (it looks
   again every ten seconds). A 401 from the dashboard's own API (an expired
   session) gets a fresh link on the same route, without the placeholder.
-- **Tray** (`src/tray.rs`): status, Open buddi, Open in Browser (`buddi
-  dashboard`), Start (`buddi --no-open`), Stop (`buddi service stop`), Quit.
-  Quitting leaves buddi running. The glyph is buddi.app's menu-bar glyph per
+- **Tray menu** (`src/tray.rs`, `src/actions.rs`). Linux has no menu bar, so
+  the tray menu is buddi.app's menu-bar glyph menu and app menu in one, in the
+  Mac's words and order: the status line (Running since 11:19, Starting…,
+  Stopped, Updating…, Needs attention); Open buddi, New Conversation,
+  Settings…; Update to <v> (when the supervisor knows of one) and Check for
+  Updates… (the supervisor's `/version/check` on its control socket, then the
+  same `buddi upgrade <v>` as Settings → System, with "Updating buddi…" in the
+  window and the result as a notification); Restart buddi (`buddi service
+  restart`), Stop/Start buddi, Lock buddi (the dashboard's own Ctrl+Alt+L:
+  the lock screen, or Settings → Lock screen without a PIN), Start at Login
+  (a check box over the autostart entry); Advanced ▸ Open in Browser, Show
+  Logs, Restart with the Previous Version (<v>)… (`releases/previous`, as
+  buddi.app's rollback: the service stopped, the links swapped, started);
+  Help ▸ buddi Help, Report a Problem…; About buddi (both versions, the
+  command and the data folder); Uninstall buddi… (after a confirm, the
+  dashboard's own Settings → System removal: the last backup and its
+  passphrase before anything goes); Quit (the app only: buddi keeps running).
+  The launcher's right-click menu has New Conversation, Check for Updates and
+  Lock buddi (`--new-conversation`, `--check-updates`, `--lock`; `--settings`
+  too).
+  - Not mirrored: Install Command Line Tool (the Linux install puts `buddi` in
+    ~/.local/bin; About shows where), Take Over from npm Install (install.sh
+    moves an npm install over), Services / Hide / Show All / Bring All to
+    Front (macOS only), Edit and Find (the web view's own Ctrl+C/V/A/Z work;
+    there is no find bar), View → Zoom and Full Screen (no menu bar to hold
+    them; WebKitGTK has no zoom shortcuts by itself), and the Sparkle check for
+    a new app (the .deb/AppImage is updated by the next .deb/AppImage).
+- **Tray icon**: the glyph is buddi.app's menu-bar glyph per
   state (running, starting/stopped, attention), light ink for dark panels
   (GNOME, Pop!_OS, Ubuntu, COSMIC) and dark ink for light ones (KDE with a
   light scheme); `BUDDI_TRAY_INK=dark|light` overrides. The indicator gets
@@ -65,7 +90,9 @@ cargo build --release && ./target/release/buddi-desktop   # just the binary
 
 The AppImage carries GStreamer (`bundleMediaFramework`): without it the
 microphone finds no device. That needs `patchelf` on the build machine.
-`scripts/make-icons.sh` redraws `icons/` from `apps/mac/Design`.
+`scripts/make-icons.sh` copies the app icon from buddi.app's asset catalog
+(librsvg does not draw `app-icon.svg`'s figure: an earlier build shipped a
+blank tile) and redraws the tray glyphs from `apps/mac/Design`.
 
 The release workflow's `desktop` job builds both for x64 and arm64 on Ubuntu
 22.04 from the tag and attaches them to the GitHub release

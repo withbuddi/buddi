@@ -85,9 +85,24 @@ desktop_entries() {
   autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
   # Exec's own quoting rules (the desktop entry spec) are not the shell's: a
   # command path with anything unusual in it gets the browser only.
+  # The right-click actions are the desktop app's (its .deb entry has the same).
+  via() { printf 'Exec=sh -c "command -v buddi-desktop >/dev/null 2>&1 && exec buddi-desktop%s || exec %s dashboard"' "$1" "$COMMAND"; }
   case "$COMMAND" in
-    *[!A-Za-z0-9/._+-]*) exec_line="Exec=\"$COMMAND\" dashboard" ;;
-    *) exec_line="Exec=sh -c \"command -v buddi-desktop >/dev/null 2>&1 && exec buddi-desktop || exec $COMMAND dashboard\"" ;;
+    *[!A-Za-z0-9/._+-]*) exec_line="Exec=\"$COMMAND\" dashboard"; actions="" ;;
+    *) exec_line=$(via "")
+       actions="Actions=new-conversation;check-updates;lock;
+
+[Desktop Action new-conversation]
+Name=New Conversation
+$(via " --new-conversation")
+
+[Desktop Action check-updates]
+Name=Check for Updates…
+$(via " --check-updates")
+
+[Desktop Action lock]
+Name=Lock buddi
+$(via " --lock")" ;;
   esac
   write_entry "$apps/buddi-desktop.desktop" "[Desktop Entry]
 Type=Application
@@ -99,7 +114,8 @@ StartupWMClass=buddi-desktop
 Terminal=false
 Categories=Office;
 Keywords=agent;assistant;ai;
-$DESKTOP_MARK" || note "could not add buddi to the app grid ($apps)"
+$DESKTOP_MARK
+$actions" || note "could not add buddi to the app grid ($apps)"
   if command -v buddi-desktop >/dev/null 2>&1; then
     write_entry "$autostart/buddi-desktop.desktop" "[Desktop Entry]
 Type=Application

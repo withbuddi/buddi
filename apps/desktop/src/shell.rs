@@ -25,6 +25,9 @@ pub enum Phase {
     Stopped,
     /// No `buddi` command on this computer.
     Missing,
+    /// Check for Updates → Update, or Advanced → the previous version: buddi
+    /// restarts on its own; the gateway going away is expected.
+    Updating,
     /// The dashboard is in the window.
     Dashboard,
 }
@@ -78,7 +81,7 @@ pub fn log(msg: impl AsRef<str>) {
 }
 
 /// The app's own page, `ui/index.html`, in one of its modes.
-fn placeholder(app: &AppHandle, mode: &str, detail: &str) {
+pub fn placeholder(app: &AppHandle, mode: &str, detail: &str) {
     let want = (mode.to_string(), detail.to_string());
     let same = with(app, |s| {
         let same = s.shown.as_ref() == Some(&want);
@@ -108,7 +111,7 @@ fn remember_route(app: &AppHandle, w: &WebviewWindow) {
     }
 }
 
-fn set_phase(app: &AppHandle, phase: Phase) {
+pub fn set_phase(app: &AppHandle, phase: Phase) {
     with(app, |s| s.phase = phase);
     tray::refresh(app);
 }
@@ -208,11 +211,21 @@ pub fn watch(app: &AppHandle) {
     let app = app.clone();
     thread::spawn(move || {
         let mut misses = 0;
+        let mut ticks: u32 = 0;
+        let mut was_up = false;
         loop {
             thread::sleep(Duration::from_secs(2));
+            ticks = ticks.wrapping_add(1);
             let (phase, gateway) = with(&app, |s| (s.phase, s.gateway));
             let up = gateway.map(buddi::answers).unwrap_or(false);
             tray::set_running(&app, up, phase);
+            // "Update to …" and the previous version for the menu: the
+            // supervisor's cached answer, when buddi comes up and every five minutes.
+            if up && (!was_up || ticks % 150 == 0) {
+                let update = crate::supervisor::version().and_then(|v| v.latest.filter(|_| v.update_available));
+                tray::set_update(&app, update);
+            }
+            was_up = up;
             if phase != Phase::Dashboard {
                 misses = 0;
                 continue;
@@ -238,7 +251,7 @@ pub fn reopened(app: &AppHandle) {
             }
         }
         Phase::Attention | Phase::Missing => connect(app, false, false),
-        Phase::Starting | Phase::Stopped => {}
+        Phase::Starting | Phase::Stopped | Phase::Updating => {}
     }
 }
 
@@ -273,6 +286,36 @@ pub fn stop(app: &AppHandle) {
         Err(Failure::NoLink(why)) => {
             log(format!("buddi service stop: {why}"));
             platform::notify(&app, "buddi did not stop", &why);
+        }
+    });
+}
+
+/// Goes to a dashboard route (`#/settings`), now or once the dashboard is loaded.
+pub fn go(app: &AppHandle, route: &str) {
+    if phase(app) == Phase::Dashboard {
+        if let Some(w) = main_window(app) {
+            let _ = w.eval(&format!("location.hash = {}", serde_json::to_string(route).unwrap()));
+        }
+    } else {
+        let route = route.to_string();
+        with(app, |s| s.route = Some(route));
+    }
+}
+
+/// Runs JavaScript in the dashboard once it is loaded (within a minute).
+pub fn when_dashboard(app: &AppHandle, js: String) {
+    let app = app.clone();
+    thread::spawn(move || {
+        for _ in 0..120 {
+            if phase(&app) == Phase::Dashboard {
+                // A fresh load needs a moment before its shortcuts are listening.
+                thread::sleep(Duration::from_millis(800));
+                if let Some(w) = main_window(&app) {
+                    let _ = w.eval(&js);
+                }
+                return;
+            }
+            thread::sleep(Duration::from_millis(500));
         }
     });
 }

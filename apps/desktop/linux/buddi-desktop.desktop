@@ -9,3 +9,16 @@ StartupWMClass={{exec}}
 Terminal=false
 Categories={{categories}}
 Keywords=agent;assistant;ai;
+Actions=new-conversation;check-updates;lock;
+
+[Desktop Action new-conversation]
+Name=New Conversation
+Exec={{exec}} --new-conversation
+
+[Desktop Action check-updates]
+Name=Check for Updates…
+Exec={{exec}} --check-updates
+
+[Desktop Action lock]
+Name=Lock buddi
+Exec={{exec}} --lock
