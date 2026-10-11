@@ -47,10 +47,10 @@ describe('the Windows service', () => {
     expect(xml).toContain('<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>');
     expect(xml).toContain('<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>');
     expect(xml).toContain('<Command>C:\\Windows\\System32\\conhost.exe</Command>');
-    expect(xml).toContain('<Arguments>--headless &quot;C:\\Windows\\System32\\cmd.exe&quot; /d /s /c &quot;&quot;C:\\Users\\me\\AppData\\Local\\buddi\\service\\supervise.cmd&quot;&quot;</Arguments>');
+    expect(xml).toContain('<Arguments>--headless &quot;C:\\Windows\\System32\\cmd.exe&quot; /d /c call &quot;C:\\Users\\me\\AppData\\Local\\buddi\\service\\supervise.cmd&quot;</Arguments>');
     // A profile with ( ) & keeps its path whole.
     const odd = buildTaskXml({ user: 'PC\\me', script: 'C:\\Users\\Jane (Work) & Co\\buddi\\service\\supervise.cmd', workingDirectory: 'C:\\Users\\Jane (Work) & Co', systemRoot: 'C:\\Windows' });
-    expect(odd).toContain('/d /s /c &quot;&quot;C:\\Users\\Jane (Work) &amp; Co\\buddi\\service\\supervise.cmd&quot;&quot;</Arguments>');
+    expect(odd).toContain('/d /c call &quot;C:\\Users\\Jane (Work) &amp; Co\\buddi\\service\\supervise.cmd&quot;</Arguments>');
     const bytes = taskXmlBytes(xml);
     expect([...bytes.subarray(0, 2)]).toEqual([0xff, 0xfe]);
   });

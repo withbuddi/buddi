@@ -11,8 +11,10 @@
  * The task runs `<data>\service\supervise.cmd` (the environment, then node
  * with the launcher's `supervise`, its output appended to the supervisor log)
  * under `conhost.exe --headless`, so no console window opens at logon. cmd
- * gets `/s /c ""<script>""`: /s strips the outer quotes and keeps the inner
- * ones, whatever the path holds (`C:\Users\Jane (Work) & Co`). The
+ * gets `/c call "<script>"`: a command line that does not start with a quote
+ * keeps its quotes whatever the path holds (`C:\Users\Jane (Work) & Co`),
+ * where `/c "<script>"` loses them to cmd's rule and `/s /c ""<script>""`
+ * loses them to conhost re-quoting its arguments (both tried on Windows 11). The
  * script is what says the service is installed, as the plist and the unit do.
  *
  * Node builtins only, and nothing of buddi's: `launcher.ts` and `uninstall.ts`
@@ -123,7 +125,7 @@ export function buildTaskXml({ user, script, workingDirectory, systemRoot }: Tas
   <Actions Context="Author">
     <Exec>
       <Command>${xml(path.win32.join(system32, 'conhost.exe'))}</Command>
-      <Arguments>${xml(`--headless "${path.win32.join(system32, 'cmd.exe')}" /d /s /c ""${script}""`)}</Arguments>
+      <Arguments>${xml(`--headless "${path.win32.join(system32, 'cmd.exe')}" /d /c call "${script}"`)}</Arguments>
       <WorkingDirectory>${xml(workingDirectory)}</WorkingDirectory>
     </Exec>
   </Actions>
