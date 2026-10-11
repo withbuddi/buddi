@@ -43,7 +43,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { authorOfPackageJson, hostApiProblem, parsePluginRequires, parsePluginUses, type PluginAuthor, type PluginSource, type PluginUse } from '@buddi/core';
+import { authorOfPackageJson, systemTar, hostApiProblem, parsePluginRequires, parsePluginUses, type PluginAuthor, type PluginSource, type PluginUse } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
 import { parseBuddiMd, type PluginClaims } from './claims.js';
 import { createNpmRunner, type NpmPackument, type NpmRunner } from './npm.js';
@@ -378,7 +378,7 @@ export async function extractTarball(tgz: string, into: string): Promise<void> {
      * installation should adopt. Extracted as this user, with this user's
      * umask, every time.
      */
-    await run('tar', ['-xzf', tgz, '-C', into, '--no-same-owner', '--no-same-permissions'], {
+    await run(systemTar(), ['-xzf', tgz, '-C', into, '--no-same-owner', '--no-same-permissions'], {
       timeout: 120_000,
     });
   } catch (err) {

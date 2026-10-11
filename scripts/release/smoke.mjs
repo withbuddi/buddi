@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dashboardReady, reloadLaunchAgent } from '../../packages/install/dist/environment.js';
 import { startRegistry } from './registry.mjs';
 
@@ -94,7 +94,7 @@ try {
   const status = JSON.parse(await cli(['service', 'status', '--json'])); pid = status.supervisorPid;
   assert.equal(status.database, 'running'); assert.equal(status.gateway, 'running');
   const require = createRequire(path.join(testRoot, 'node_modules/buddi/package.json'));
-  const core = await import(require.resolve('@buddi/core'));
+  const core = await import(pathToFileURL(require.resolve('@buddi/core')).href);
   const vault = core.createVault({ env: { BUDDI_VAULT: 'file', BUDDI_VAULT_FILE: path.join(data, 'vault.json'), BUDDI_VAULT_KEY: (await readFile(path.join(data, 'vault-key'), 'utf8')).trim() } });
   const password = await vault.get('BUDDI_DB_PASSWORD');
   assert.equal(await readFile(path.join(data, '.initdb-password'), 'utf8').catch(error => error.code), 'ENOENT');

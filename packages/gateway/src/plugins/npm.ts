@@ -26,7 +26,24 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-const run = promisify(execFile);
+const execFileAsync = promisify(execFile);
+
+/**
+ * `execFile` for npm. On Windows npm is `npm.cmd`, a batch file, which Node
+ * refuses to start without a shell (CVE-2024-27980); the script it wraps is
+ * run with this node instead, which is what npm.cmd does itself.
+ */
+export function npmInvocation(binary: string, args: string[], platform: NodeJS.Platform | string = process.platform, exists: (file: string) => boolean = existsSync): [string, string[]] {
+  if (platform !== 'win32' || !/\.cmd$/i.test(binary)) return [binary, args];
+  const cli = path.win32.join(path.win32.dirname(binary), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (!exists(cli)) throw new NpmUnavailable(`npm is not installed beside the node running buddi (${cli} is missing). Install Node.js with npm and try again.`);
+  return [process.execPath, [cli, ...args]];
+}
+
+const run = (binary: string, args: string[], opts: { timeout: number; maxBuffer: number; cwd?: string }) => {
+  const [file, argv] = npmInvocation(binary, args);
+  return execFileAsync(file, argv, { ...opts, windowsHide: true });
+};
 
 /** What `npm view --json` tells us that matters. Everything else is ignored. */
 export interface NpmPackument {

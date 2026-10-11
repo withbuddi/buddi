@@ -14,6 +14,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { npmInvocation } from './upgrade.js';
 
 export interface RuntimeFacts {
   execPath: string;
@@ -39,7 +40,9 @@ const realDeps: RuntimeDeps = {
   read: file => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } },
   // npm's shebang is `env node`: the bundled node goes first on PATH, as the service's PATH has it.
   npmVersion: (npm, runtimeDir) => new Promise((resolve, reject) => {
-    execFile(npm, ['--version'], { timeout: 15_000, env: { ...process.env, PATH: [runtimeDir, process.env.PATH ?? ''].join(path.delimiter) } }, (error, stdout) => {
+    // npm.cmd is a batch file Node will not start without a shell: its script runs with this node (upgrade.ts).
+    const [file, args] = npmInvocation(npm, ['--version']);
+    execFile(file, args, { timeout: 15_000, windowsHide: true, env: { ...process.env, PATH: [runtimeDir, process.env.PATH ?? ''].join(path.delimiter) } }, (error, stdout) => {
       if (error) reject(error); else resolve(String(stdout).trim());
     });
   }),

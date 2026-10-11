@@ -9,7 +9,7 @@
  * the intersection of bsdtar (macOS) and GNU tar (Linux).
  */
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -105,10 +105,22 @@ export function spawnCapture(
   });
 }
 
+/**
+ * The tar to run. On Windows it is the one Windows ships (bsdtar, in System32)
+ * by its full path: a GNU tar earlier on PATH (Git's) reads `C:\\…` as a
+ * remote host and fails. Elsewhere it is PATH's `tar`.
+ */
+export function systemTar(platform: NodeJS.Platform | string = process.platform, env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = existsSync): string {
+  if (platform !== 'win32') return 'tar';
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows';
+  const file = path.win32.join(root, 'System32', 'tar.exe');
+  return exists(file) ? file : 'tar';
+}
+
 /** `tar -czf <out> -C <stage> .` — one archive of everything staged. */
 export async function createArchive(stageDir: string, out: string): Promise<void> {
   await mkdir(path.dirname(out), { recursive: true, mode: DIR_MODE });
-  const res = await spawnCapture('tar', ['-czf', out, '-C', stageDir, '.']);
+  const res = await spawnCapture(systemTar(), ['-czf', out, '-C', stageDir, '.']);
   if (res.code !== 0) {
     throw new TarError(`tar could not write ${out} (exit ${res.code}): ${res.stderr.trim()}`);
   }
@@ -234,10 +246,10 @@ export async function archiveSafetyProblems(archive: string): Promise<string[]> 
 
 /** One member's bytes, without unpacking the rest. */
 export async function readMember(archive: string, member: string): Promise<Buffer> {
-  const res = await spawnCapture('tar', ['-xzOf', archive, `./${member}`]);
+  const res = await spawnCapture(systemTar(), ['-xzOf', archive, `./${member}`]);
   if (res.code !== 0 || res.stdout.length === 0) {
     // bsdtar wants `./name`, GNU tar is happy with either; try the bare form.
-    const retry = await spawnCapture('tar', ['-xzOf', archive, member]);
+    const retry = await spawnCapture(systemTar(), ['-xzOf', archive, member]);
     if (retry.code !== 0) {
       throw new TarError(
         `${member} is not in ${path.basename(archive)} (${retry.stderr.trim() || res.stderr.trim()})`,
@@ -251,7 +263,7 @@ export async function readMember(archive: string, member: string): Promise<Buffe
 /** Unpack the whole archive into `dest` (created if missing, mode 0700). */
 export async function extractAll(archive: string, dest: string): Promise<void> {
   await mkdir(dest, { recursive: true, mode: DIR_MODE });
-  const res = await spawnCapture('tar', ['-xzf', archive, '-C', dest]);
+  const res = await spawnCapture(systemTar(), ['-xzf', archive, '-C', dest]);
   if (res.code !== 0) {
     throw new TarError(`tar could not unpack ${archive} (exit ${res.code}): ${res.stderr.trim()}`);
   }
@@ -259,6 +271,6 @@ export async function extractAll(archive: string, dest: string): Promise<void> {
 
 /** Is `tar` on PATH at all? Answered once, so a missing one is a sentence. */
 export async function tarAvailable(): Promise<boolean> {
-  const res = await spawnCapture('tar', ['--version'], { timeoutMs: 15_000 });
+  const res = await spawnCapture(systemTar(), ['--version'], { timeoutMs: 15_000 });
   return res.code === 0;
 }

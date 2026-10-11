@@ -352,7 +352,7 @@ export function createConnector(deps: ConnectorDeps): Connector {
     const started = now();
     state = 'starting';
     detail = undefined;
-    const proc = spawn(bin, ['tunnel', '--no-autoupdate', 'run'], { env: connectorEnv(env, token), stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(bin, ['tunnel', '--no-autoupdate', 'run'], { env: connectorEnv(env, token), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     child = proc;
     say(`supervisor: cloudflared started (pid ${proc.pid}).`);
     const watch = (chunk: Buffer): void => {

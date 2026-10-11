@@ -22,6 +22,7 @@ import { passphraseBeforeRemoval, passphraseFileFor, passphraseFileText, runUnin
 import type { RemovalStep, UninstallIo, UninstallPlan } from '@buddi/core/uninstall';
 import { identityMismatch, launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
 import type { InstallationState } from './environment.js';
+import { windowsTaskName, windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
 
 export interface UninstallOptions {
   yes: boolean;
@@ -220,14 +221,16 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
   /* The service, and with it the supervisor and the cluster it runs. */
   const label = launchAgentLabel(data);
   const unit = deps.platform === 'darwin' ? launchAgentPlist(data, home)
-    : deps.platform === 'linux' ? systemdUnitPath(data, deps.env, home) : undefined;
+    : deps.platform === 'linux' ? systemdUnitPath(data, deps.env, home)
+      : deps.platform === 'win32' ? windowsTaskScript(data) : undefined;
   const hasUnit = unit !== undefined && deps.exists(unit);
   const pid = deps.supervisorPid();
   if (hasUnit || pid !== undefined) {
     stopped = false;
     const line = !hasUnit ? `the running supervisor (pid ${pid})`
       : deps.platform === 'darwin' ? `the background service: launchd agent ${label} (${unit})`
-        : `the background service: systemd user unit ${label}.service (${unit})`;
+        : deps.platform === 'win32' ? `the background service: Task Scheduler task ${windowsTaskName(label)} (${unit})`
+          : `the background service: systemd user unit ${label}.service (${unit})`;
     steps.push({ line, run: async () => {
       if (await deps.supervisor.answers()) await deps.supervisor.stopGateway().catch(() => {});
       let unloadError: Error | undefined;
@@ -245,6 +248,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
       if (hasUnit) {
         await deps.remove(unit);
         if (deps.platform === 'linux') await deps.exec('systemctl', ['--user', 'daemon-reload']);
+        if (deps.platform === 'win32') await deps.remove(windowsTaskXmlFile(data));
       }
       stopped = true;
     } });
@@ -487,6 +491,15 @@ async function unloadService(deps: PackagedUninstallDeps, label: string): Promis
       if (waited >= 20_000) throw new Error(`launchd did not unload ${label} within 20 seconds`);
       await deps.sleep(100);
     }
+  }
+  if (deps.platform === 'win32') {
+    // Deleting the task leaves a running copy alone: the supervisor is asked
+    // to exit next (the caller's `signal`), which stops the cluster with it.
+    const out = await deps.exec('schtasks.exe', ['/Delete', '/TN', windowsTaskName(label), '/F']);
+    if (out.code !== 0 && !/cannot find|does not exist/i.test(out.stderr + out.stdout)) {
+      throw new Error(`schtasks /Delete /TN ${windowsTaskName(label)} failed (${out.code}): ${(out.stderr || out.stdout).trim() || 'no detail'}`);
+    }
+    return;
   }
   const out = await deps.exec('systemctl', ['--user', 'disable', '--now', `${label}.service`]);
   if (out.code !== 0) {

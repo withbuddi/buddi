@@ -212,8 +212,17 @@ function errorCode(error: unknown): string | undefined {
 
 /** Native utilities need OS context, not provider, vault or database credentials. */
 export function nativeEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  return Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP']
-    .filter(key => typeof env[key] === 'string').map(key => [key, env[key] as string]));
+  // Windows names are case-insensitive (`Path`, `SystemRoot`), and a copy of
+  // process.env is a plain object that no longer is.
+  const lookup = (key: string): string | undefined => {
+    const value = env[key];
+    if (typeof value === 'string' || process.platform !== 'win32') return value;
+    const found = Object.keys(env).find(name => name.toUpperCase() === key);
+    return found === undefined ? undefined : env[found];
+  };
+  return Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'COMSPEC', 'PATHEXT']
+    .map(key => [key, lookup(key)] as const)
+    .filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string'));
 }
 
 /**
@@ -226,7 +235,11 @@ export async function stopChild(child: ChildProcess | undefined, signal: NodeJS.
   await new Promise<void>(resolve => {
     const timer = setTimeout(() => child.kill('SIGKILL'), timeout);
     child.once('exit', () => { clearTimeout(timer); resolve(); });
-    child.kill(signal);
+    // Windows has no signals: any kill is TerminateProcess, with no shutdown.
+    // A child on an IPC channel (the gateway) is told by closing it instead;
+    // it shuts down as it would on SIGTERM.
+    if (process.platform === 'win32' && child.connected) child.disconnect();
+    else child.kill(signal);
   });
 }
 
@@ -310,7 +323,10 @@ export async function readPrivateFile(file: string): Promise<string | undefined>
   try {
     fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = await fd.stat();
-    if (!info.isFile() || (process.getuid && info.uid !== process.getuid()) || (info.mode & 0o077)) {
+    // Windows reports no owner and no permission bits (every file reads 0666):
+    // there the data directory under %LOCALAPPDATA% is what keeps it private.
+    const loose = process.platform !== 'win32' && (info.mode & 0o077) !== 0;
+    if (!info.isFile() || (process.getuid && info.uid !== process.getuid()) || loose) {
       throw new Error(`Unsafe private file ${file}: expected an owner-only regular file (mode 0600).`);
     }
     return await fd.readFile('utf8');

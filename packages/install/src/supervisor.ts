@@ -14,6 +14,7 @@ import type { ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, openSync, closeSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import { readFile, chmod, unlink, lstat, mkdir, rename, copyFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +23,7 @@ import { APP_UNINSTALL_EXIT, UNINSTALL_REQUEST, createProductUninstall } from '.
 import type { ProductUninstall } from './product-uninstall.js';
 import { installShim, shimsFor } from './cli-shim.js';
 import type { ShimOutcome } from './cli-shim.js';
+import { windowsTaskName, windowsTaskScript } from './windows-task.js';
 import type { InstallContext, ReadyContext } from './environment.js';
 import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule, sweepIncoming } from './backup.js';
 import type { BackupControl } from './backup.js';
@@ -51,8 +53,16 @@ export function pendingUpgrade(marker: UpgradeInProgress | undefined): UpgradeIn
   return named ? marker : undefined;
 }
 
-/** The control socket of the installation whose data directory this is. */
-export function supervisorSocket(data: string): string {
+/**
+ * The control socket of the installation whose data directory this is. On
+ * Windows a named pipe instead (Node listens on no other kind of path there),
+ * named after the data directory so two installations never share one.
+ */
+export function supervisorSocket(data: string, platform: NodeJS.Platform | string = process.platform): string {
+  if (platform === 'win32') {
+    const id = createHash('sha256').update(path.win32.resolve(data).toLowerCase()).digest('hex').slice(0, 16);
+    return `\\\\.\\pipe\\buddi-supervisor-${id}`;
+  }
   return path.join(data, 'supervisor.sock');
 }
 
@@ -192,6 +202,12 @@ export interface ControlSocketOptions {
   cli?: { status: () => { available: boolean; installed: string[]; reason?: string }; install: () => Promise<ShimOutcome> } | undefined;
   /** Cloudflare's connector (cloudflared.ts): its status, and the two verbs the gateway asks for. */
   connector?: Pick<Connector, 'status' | 'sync' | 'remove'> | undefined;
+  /**
+   * Shut the supervisor down as SIGTERM would. Windows has no signals (a kill
+   * there is TerminateProcess, which would leave the cluster running), so the
+   * uninstall asks here instead.
+   */
+  exit?: (() => void) | undefined;
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -244,7 +260,7 @@ function optionalString(value: unknown): string | undefined {
  * `<data>/incoming/`, and that is checked to be under that directory, resolved,
  * before it is passed on.
  */
-export function controlSocket({ status, action, backup, upgrade, data, uninstall, cli, connector }: ControlSocketOptions): Server {
+export function controlSocket({ status, action, backup, upgrade, data, uninstall, cli, connector, exit }: ControlSocketOptions): Server {
   return createServer((req, res) => {
     void handle(req, res).catch(() => send(res, 500, { error: 'The supervisor could not complete that action.' }));
   });
@@ -259,6 +275,13 @@ export function controlSocket({ status, action, backup, upgrade, data, uninstall
       const base = status();
       if (!backup) return send(res, 200, base);
       return send(res, 200, { ...base, recovery: await recovery(), lastBackupAt: await backup.lastBackupAt() });
+    }
+    if (method === 'POST' && route === '/exit' && exit) {
+      if (backup?.busy()) return send(res, 409, { error: 'A restore is running.' });
+      if (upgrade?.busy()) return send(res, 409, { error: 'An upgrade is running.' });
+      send(res, 202, status());
+      exit();
+      return;
     }
     if (method === 'POST' && ['/start', '/stop', '/restart'].includes(route)) {
       // One hand on the lever at a time: a restore is already stopping and
@@ -478,6 +501,15 @@ function normalizePassphraseText(input: string): string {
  * can reach the path in that window either way.
  */
 export async function listenOnSocket(server: Server, socket: string): Promise<void> {
+  // A Windows named pipe is no file: nothing to replace, and no mode to set
+  // (a pipe a process creates is its own account's, administrators' and SYSTEM's).
+  if (socket.startsWith('\\\\.\\pipe\\')) {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socket, () => resolve());
+    });
+    return;
+  }
   // Only a socket is replaced: a killed supervisor leaves exactly that. Any
   // other entry at the path is somebody else's, and refusing beats deleting it.
   try {
@@ -605,7 +637,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       clearTimeout(retry);
       if (closing || !database!.alive || (child && child.exitCode === null && child.signalCode === null)) return;
       const started = Date.now();
-      child = spawn(process.execPath, [LAUNCHER, '__gateway'], { env: ready.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+      child = spawn(process.execPath, [LAUNCHER, '__gateway'], { env: ready.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
       console.error(`supervisor: gateway started (pid ${child.pid}).`);
       // Recorded, so a supervisor that dies and leaves it running is not taken
       // for a stranger holding the web port at the next start (environment.ts).
@@ -657,12 +689,12 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     uninstall = createProductUninstall({
       data: ready.data, home, backup, appFinishes,
       plan: () => {
-        const unit = process.platform === 'darwin' ? launchAgentPlist(ready.data, home) : process.platform === 'linux' ? systemdUnitPath(ready.data, ready.env, home) : undefined;
+        const unit = process.platform === 'darwin' ? launchAgentPlist(ready.data, home) : process.platform === 'linux' ? systemdUnitPath(ready.data, ready.env, home) : process.platform === 'win32' ? windowsTaskScript(ready.data) : undefined;
         const bundle = process.env.BUDDI_APP_BUNDLE?.trim();
         return {
           data: ready.data,
           ...(core.vaultSelection({ env: ready.env }) === 'keychain' && ready.env.BUDDI_VAULT_SERVICE ? { keychain: ready.env.BUDDI_VAULT_SERVICE } : {}),
-          ...(unit !== undefined && existsSync(unit) ? { service: process.platform === 'darwin' ? `launchd agent ${launchAgentLabel(ready.data)}` : `systemd user unit ${launchAgentLabel(ready.data)}.service` } : {}),
+          ...(unit !== undefined && existsSync(unit) ? { service: process.platform === 'darwin' ? `launchd agent ${launchAgentLabel(ready.data)}` : process.platform === 'win32' ? `Task Scheduler task ${windowsTaskName(launchAgentLabel(ready.data))}` : `systemd user unit ${launchAgentLabel(ready.data)}.service` } : {}),
           ...(appFinishes && bundle ? { app: bundle } : {}),
           backups: path.join(home, 'buddi-backups'),
           appFinishes,
@@ -690,7 +722,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
           ? ['systemd-run', ['--user', '--collect', '--quiet', '--scope', process.execPath, LAUNCHER, ...argv]]
           : [process.execPath, [LAUNCHER, ...argv]];
         console.error(`supervisor: removing buddi; the account is in ${logFile}.`);
-        const child = spawn(command as string, args as string[], { detached: true, stdio: ['ignore', fd, fd], env, cwd: home });
+        const child = spawn(command as string, args as string[], { detached: true, stdio: ['ignore', fd, fd], env, cwd: home, windowsHide: true });
         child.unref();
         closeSync(fd);
       },
@@ -742,6 +774,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
         current, upgrading: upgrade!.busy(), ...portNotice(ready.state.portMoved), connector: connector!.status().state }),
       action: name => { console.error(`supervisor: ${name} asked for on the control socket.`); chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
       backup, upgrade, data: ready.data, uninstall, cli, connector,
+      exit: () => { console.error('supervisor: asked to exit on the control socket.'); onSignal(); },
     });
     await listenOnSocket(server, supervisorSocket(ready.data));
     if (briefly) console.error('supervisor: started briefly, for an uninstall\'s last backup; the gateway stays stopped.');

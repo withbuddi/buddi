@@ -4,6 +4,16 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Windows (for testing, not public yet): `npm install -g @withbuddi/buddi` then `buddi` runs on Windows 10/11 x64, and on Windows on Arm with the x64 build of Node. The embedded Postgres runs there (initdb, start and a clean `pg_ctl` stop; a missing Visual C++ runtime is named with its download link), secrets live in the file vault, and the service is a Task Scheduler task of your own (no administrator), started at once and at every sign-in with no console window. The supervisor answers on a named pipe instead of a Unix socket; `buddi` and `buddi dashboard` open the link in your default browser; `buddi service logs` follows the logs with PowerShell; `buddi uninstall` removes the task and stops the supervisor and its database cleanly; `buddi upgrade` recognises npm's global tree on Windows.
+
+### Fixed
+
+- Plugin installs, upgrades and `buddi doctor` run npm on Windows (Node refuses to start `npm.cmd` without a shell; its script now runs with buddi's own node).
+- Backups and plugin staging use the tar Windows ships, not a GNU tar earlier on PATH that reads `C:\` as a remote host.
+- `pnpm db:migrate` loads the built plugins on Windows (a file URL, not a bare path).
+
 ## 0.1.0-pre.53 — 2026-10-11
 
 ### Added

@@ -6,7 +6,7 @@
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { config } from 'dotenv';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,7 +40,7 @@ const builtIn = (await readdir(toolsDir, { withFileTypes: true }))
 for (const name of builtIn) {
   const entry = path.join(toolsDir, name, 'dist', 'index.js');
   if (!existsSync(entry)) continue;
-  const mod = await import(entry);
+  const mod = await import(pathToFileURL(entry).href);
   const manifest = mod.manifest ?? mod.default;
   if (manifest && typeof manifest === 'object' && 'migrationsDir' in manifest) {
     manifests.push(manifest);

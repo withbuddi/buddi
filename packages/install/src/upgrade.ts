@@ -42,6 +42,7 @@ import { request } from 'node:http';
 import { createRequire } from 'node:module';
 import { open, readFile, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
+import nodePath from 'node:path';
 import { promisify } from 'node:util';
 /*
  * The one value import from a `@buddi/*` package in this file, and the reason
@@ -496,6 +497,7 @@ export interface InstallTarget {
  * was. The root we are running from is the only fact that cannot be wrong.
  */
 export function installTarget(root: string, platform: NodeJS.Platform | string = process.platform): InstallTarget {
+  const path = platform === 'win32' ? nodePath.win32 : nodePath;
   // A scoped package sits one level deeper: `node_modules/@withbuddi/buddi`.
   let parent = path.dirname(root);
   if (path.basename(parent).startsWith('@')) parent = path.dirname(parent);
@@ -529,12 +531,14 @@ export const NOT_GLOBAL =
  * which is what the release smoke and the local verification of this hand-over
  * both install into. A manifest with a `name` is somebody's project.
  *
- * On Windows the global tree and a project tree have the same shape, so there
- * is nothing to read: it is refused until that layout is known.
+ * On Windows the global tree and a project tree have the same shape
+ * (`<prefix>\node_modules\@withbuddi\buddi`); what tells them apart is the
+ * command npm writes for a global install at the prefix itself, `buddi.cmd`.
+ * A project's tree keeps its commands under `node_modules\.bin`.
  */
 export function upgradeTarget(
   root: string,
-  opts: { platform?: NodeJS.Platform | string; manifest?: (prefix: string) => { name?: unknown } | undefined } = {},
+  opts: { platform?: NodeJS.Platform | string; manifest?: (prefix: string) => { name?: unknown } | undefined; exists?: (file: string) => boolean } = {},
 ): InstallTarget | { error: string } {
   const platform = opts.platform ?? process.platform;
   // The bundle is signed: npm must never write there. buddi.app upgrades it
@@ -542,13 +546,16 @@ export function upgradeTarget(
   if (insideAppBundle(root)) return { error: APP_BUNDLE };
   const target = installTarget(root, platform);
   if (target.global) return target;
-  if (platform === 'win32') return { error: NOT_GLOBAL };
   const read = opts.manifest ?? ((prefix: string) => {
     try { return JSON.parse(readFileSync(path.join(prefix, 'package.json'), 'utf8')) as { name?: unknown }; }
     catch { return undefined; }
   });
   const manifest = read(target.prefix);
   if (manifest !== undefined && typeof manifest.name === 'string' && manifest.name !== '') return { error: NOT_GLOBAL };
+  if (platform === 'win32') {
+    const exists = opts.exists ?? existsSync;
+    return exists(path.win32.join(target.prefix, 'buddi.cmd')) ? { prefix: target.prefix, global: true } : { error: NOT_GLOBAL };
+  }
   return target;
 }
 
@@ -566,6 +573,16 @@ export type UpgradeInstaller = (spec: string, opts: { registry: string; root: st
 export function npmBinary(execPath = process.execPath): string {
   const beside = path.join(path.dirname(execPath), process.platform === 'win32' ? 'npm.cmd' : 'npm');
   return existsSync(beside) ? beside : process.platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
+/**
+ * npm on Windows is `npm.cmd`, which Node will not start without a shell
+ * (CVE-2024-27980): the script it wraps runs with this node instead, as
+ * npm.cmd itself would. Elsewhere npm runs as it is.
+ */
+export function npmInvocation(binary: string, args: string[], platform: NodeJS.Platform | string = process.platform): [string, string[]] {
+  if (platform !== 'win32' || !/\.cmd$/i.test(binary)) return [binary, args];
+  return [process.execPath, [nodePath.win32.join(nodePath.win32.dirname(binary), 'node_modules', 'npm', 'bin', 'npm-cli.js'), ...args]];
 }
 
 export function installArgs(spec: string, opts: { registry: string; root: string; target?: InstallTarget }): string[] {
@@ -616,7 +633,7 @@ function isLocalTarball(spec: string): boolean {
 export function createInstaller(opts: { binary?: string; timeoutMs?: number; runner?: NpmRunner } = {}): UpgradeInstaller {
   const binary = opts.binary ?? npmBinary();
   const timeout = opts.timeoutMs ?? 15 * 60_000;
-  const exec: NpmRunner = opts.runner ?? (async (bin, argv, where) => { await run(bin, argv, where); });
+  const exec: NpmRunner = opts.runner ?? (async (bin, argv, where) => { const [file, args] = npmInvocation(bin, argv); await run(file, args, { ...where, windowsHide: true }); });
   const failed = (verb: string, spec: string, err: unknown): Error => {
     const stderr = (err as { stderr?: string } | null)?.stderr;
     const text = (stderr ?? (err instanceof Error ? err.message : String(err))).toString().trim();

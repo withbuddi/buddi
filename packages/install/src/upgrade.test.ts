@@ -330,8 +330,13 @@ describe('where npm is told to install', () => {
     // The global tree is upgraded whatever sits beside it.
     expect(upgradeTarget('/opt/homebrew/lib/node_modules/buddi', { platform: 'darwin', manifest: () => ({ name: 'anything' }) }))
       .toEqual({ prefix: '/opt/homebrew', global: true });
-    // On Windows the two layouts look the same, so neither is guessed at.
-    expect(upgradeTarget('C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\buddi', { platform: 'win32', manifest: () => undefined }))
+    // On Windows the two layouts look the same: npm's buddi.cmd at the prefix
+    // is what says the tree is the global one.
+    expect(upgradeTarget('C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@withbuddi\\buddi', { platform: 'win32', manifest: () => undefined, exists: file => file === 'C:\\Users\\me\\AppData\\Roaming\\npm\\buddi.cmd' }))
+      .toEqual({ prefix: 'C:\\Users\\me\\AppData\\Roaming\\npm', global: true });
+    expect(upgradeTarget('C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\buddi', { platform: 'win32', manifest: () => undefined, exists: () => false }))
+      .toEqual({ error: NOT_GLOBAL });
+    expect(upgradeTarget('C:\\work\\app\\node_modules\\buddi', { platform: 'win32', manifest: () => ({ name: 'app' }), exists: () => true }))
       .toEqual({ error: NOT_GLOBAL });
   });
 });

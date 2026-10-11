@@ -58,10 +58,13 @@ export interface DashboardOptions {
 }
 
 function defaultLaunch(platform: NodeJS.Platform, url: string): void {
-  // Only macOS gets an opener. Everywhere else the printed URL is the answer —
+  // macOS and Windows get an opener (Windows: the URL handler, with no shell
+  // to split the link at its `&`). Elsewhere the printed URL is the answer —
   // guessing at `xdg-open` and failing silently is worse than saying nothing.
-  if (platform !== 'darwin') return;
-  const child = spawn('open', [url], { stdio: 'ignore', detached: true });
+  if (platform !== 'darwin' && platform !== 'win32') return;
+  const child = platform === 'win32'
+    ? spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], { stdio: 'ignore', detached: true, windowsHide: true })
+    : spawn('open', [url], { stdio: 'ignore', detached: true });
   child.on('error', () => {});
   child.unref();
 }

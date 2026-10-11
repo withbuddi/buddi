@@ -27,6 +27,7 @@ import { runtimeFacts, runtimeLines } from './runtime-info.js';
 import { commandOwnedBy, desktopEntryPaths, linuxUnitSpec, ownDesktopEntries } from './linux-install.js';
 import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimRefusesSupervise, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
+import { buildSuperviseScript, buildTaskXml, registerWindowsTask, taskXmlBytes, windowsTaskName, windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
 
 const entry = fileURLToPath(import.meta.url);
 // <root>/packages/install/dist/launcher.js — the installation root is three up.
@@ -183,7 +184,7 @@ async function startSupervisorBriefly(ctx: InstallContext, lockPid: () => number
   const log = await open(path.join(ctx.data, 'logs/supervisor.log'), 'a', 0o600);
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: briefSupervisorEnv(ctx.env, process.pid, SHIM_VAR) });
+    child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: briefSupervisorEnv(ctx.env, process.pid, SHIM_VAR), windowsHide: true });
     await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
   } finally { await log.close(); }
   let exited = false;
@@ -309,7 +310,12 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
       return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as InstallationState : undefined;
     },
     supervisorPid: lockPid,
-    signal: (pid, signal) => { try { process.kill(pid, signal); } catch { /* gone already */ } },
+    // Windows: a kill is TerminateProcess, which would leave the cluster
+    // running; the supervisor is asked to shut down on its socket instead.
+    signal: (pid, signal) => {
+      if (process.platform === 'win32' && pid === lockPid()) { void ask(ctx, 'POST', '/exit').catch(() => { try { process.kill(pid); } catch { /* gone already */ } }); return; }
+      try { process.kill(pid, signal); } catch { /* gone already */ }
+    },
     ...(core.vaultSelection({ env: ctx.env }) === 'keychain' ? {
       keychain: {
         service,
@@ -586,10 +592,36 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
     console.log(`Background service: systemd user unit ${label}${lingering ? '' : ` (survives logout only after: loginctl enable-linger ${ctx.env.USER ?? '$USER'})`}`);
     return;
   }
-  if (!temporary && process.platform !== 'darwin') throw new Error('Background installation runs under launchd (macOS) or systemd (Linux). Use buddi --no-service or buddi supervise on this platform.');
+  if (!temporary && process.platform === 'win32') {
+    /*
+     * A Task Scheduler task of the owner's (windows-task.ts): started now, and
+     * at every logon from then on. Its script carries what the plist's
+     * environment carries on a Mac.
+     */
+    const label = launchAgentLabel(ctx.data);
+    const script = windowsTaskScript(ctx.data);
+    await mkdir(path.dirname(script), { recursive: true, mode: 0o700 });
+    await writeFile(script, buildSuperviseScript({
+      nodePath: process.execPath, entry, environment: { BUDDI_DATA_DIR: ctx.data, ...serviceEnvironment() },
+      logFile: path.join(ctx.data, 'logs', 'supervisor.log'),
+    }), { mode: 0o600 });
+    const user = [ctx.env.USERDOMAIN, ctx.env.USERNAME ?? os.userInfo().username].filter(Boolean).join('\\');
+    await writeFile(windowsTaskXmlFile(ctx.data), taskXmlBytes(buildTaskXml({
+      user, script, workingDirectory: ctx.data, systemRoot: ctx.env.SystemRoot ?? ctx.env.SYSTEMROOT ?? 'C:\\Windows',
+    })), { mode: 0o600 });
+    try {
+      await registerWindowsTask((cmd, argv) => exec(cmd, argv, { env: nativeEnvironment(ctx.env), windowsHide: true }), windowsTaskName(label), windowsTaskXmlFile(ctx.data));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Task Scheduler could not start the service (${detail.trim()}). Run buddi --no-service to start it in this window instead.`);
+    }
+    console.log(`Background service: Task Scheduler task ${windowsTaskName(label)} (starts at sign-in)`);
+    return;
+  }
+  if (!temporary && process.platform !== 'darwin') throw new Error('Background installation runs under launchd (macOS), systemd (Linux) or Task Scheduler (Windows). Use buddi --no-service or buddi supervise on this platform.');
   const log = await open(path.join(ctx.data, 'logs/supervisor.log'), 'a', 0o600);
   try {
-    const child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: ctx.env });
+    const child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: ctx.env, windowsHide: true });
     await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
   } finally { await log.close(); }
@@ -607,7 +639,9 @@ async function run(): Promise<void> {
   if (args[0] === '__gateway') {
     // Parent death must not leave two gateways claiming jobs on the next boot.
     if (!process.send) throw new Error('The gateway child must be started by buddi supervise.');
-    const parentGone = () => process.kill(process.pid, 'SIGTERM');
+    // On Windows a kill is TerminateProcess, so the gateway's SIGTERM handler
+    // is run directly: it is also how the supervisor stops it there (stopChild).
+    const parentGone = () => { if (process.platform === 'win32') process.emit('SIGTERM', 'SIGTERM'); else process.kill(process.pid, 'SIGTERM'); };
     process.once('disconnect', parentGone);
     const gateway = await import('@buddi/gateway');
     try { await gateway.runServe(); }
@@ -670,9 +704,13 @@ async function run(): Promise<void> {
     // The packaged service is the supervisor and its gateway child; both log here.
     const logs = ['supervisor.log', 'gateway.log'].map(name => path.join(ctx.data, 'logs', name)).filter(file => existsSync(file));
     if (logs.length === 0) { console.error(`buddi: no log yet in ${path.join(ctx.data, 'logs')}. Run buddi to start the service.`); process.exitCode = 1; return; }
-    console.log(`tail -F ${logs.join(' ')}  (Ctrl-C to stop)`);
+    const windows = process.platform === 'win32';
+    console.log(`${windows ? 'Get-Content -Wait' : 'tail -F'} ${logs.join(' ')}  (Ctrl-C to stop)`);
     await new Promise<void>(resolve => {
-      const child = spawn('tail', ['-n', '80', '-F', ...logs], { stdio: 'inherit' });
+      // Windows has no tail: PowerShell's Get-Content follows the same files.
+      const child = windows
+        ? spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-Content -Encoding UTF8 -Tail 80 -Wait -LiteralPath ${logs.map(file => `'${file.replace(/'/g, "''")}'`).join(',')}`], { stdio: 'inherit' })
+        : spawn('tail', ['-n', '80', '-F', ...logs], { stdio: 'inherit' });
       child.once('exit', () => resolve());
       child.once('error', err => { console.error(`buddi: could not follow the log: ${err.message}`); resolve(); });
     });
@@ -770,7 +808,7 @@ async function run(): Promise<void> {
      * (a foreground `buddi supervise`) the owner is told to restart it.
      */
     if (ctx.state !== undefined && askedWebPort !== undefined && askedWebPort !== ctx.state.webPort) {
-      const serviced = process.platform === 'darwin' ? existsSync(launchAgentPlist(ctx.data)) : process.platform === 'linux' ? existsSync(systemdUnitPath(ctx.data, ctx.env)) : false;
+      const serviced = process.platform === 'darwin' ? existsSync(launchAgentPlist(ctx.data)) : process.platform === 'linux' ? existsSync(systemdUnitPath(ctx.data, ctx.env)) : process.platform === 'win32' ? existsSync(windowsTaskScript(ctx.data)) : false;
       if (!serviced) throw new Error(`The dashboard port is ${ctx.state.webPort}. To move it to ${askedWebPort}, stop the running supervisor, change "webPort" in ${path.join(ctx.data, 'installation.json')}, and start it again.`);
       const from = ctx.state.webPort;
       await atomicJson(path.join(ctx.data, 'installation.json'), { ...ctx.state, webPort: askedWebPort });
@@ -838,6 +876,15 @@ async function run(): Promise<void> {
       console.log(outcome.ok ? gateway.browserLine(gateway.detectBrowser()) : `The browser install failed: ${outcome.detail}. Run buddi browser install to try again.`);
     } else if (firstRun || found.engine === 'none') console.log(gateway.browserLine(found));
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
+    // Windows: the default browser, through the URL handler (no shell, so the link's `&` stays the link's).
+    if (!args.includes('--no-open') && process.platform === 'win32') {
+      const opened = await new Promise<boolean>(resolve => {
+        const child = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], { detached: true, stdio: 'ignore', env: nativeEnvironment(process.env), windowsHide: true });
+        child.once('error', () => resolve(false));
+        child.once('spawn', () => { child.unref(); resolve(true); });
+      });
+      if (opened) console.log('Opened it in your browser.');
+    }
     /*
      * On a Linux desktop the link opens in the owner's browser, as `open` does
      * on a Mac: only from a graphical session (a terminal on the desktop has
