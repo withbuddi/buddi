@@ -81,13 +81,13 @@ export async function inspectCluster(cluster: string, checks: OccupancyChecks): 
 }
 
 /** Ask a port which cluster it serves. Only this cluster's own answer is `ours`. */
-async function portIdentity(cluster: string, connection: pg.ClientConfig): Promise<PortIdentity> {
+async function portIdentity(ours: (dir: string) => boolean, connection: pg.ClientConfig): Promise<PortIdentity> {
   const client = new Client(connection);
   client.on('error', () => {});
   try {
     await client.connect();
     const result = await client.query<{ data_directory: string }>('SHOW data_directory');
-    return path.resolve(result.rows[0]!.data_directory) === cluster ? 'ours' : 'other';
+    return ours(result.rows[0]!.data_directory) ? 'ours' : 'other';
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return ['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code as string) ? 'unreachable' : 'unknown';
@@ -210,6 +210,40 @@ async function stopPostmaster(child: ChildProcess, bin: string, cluster: string,
   if (running()) throw new Error(`Postgres (pid ${child.pid}) did not stop${failure === undefined ? '' : ` (${failure})`}. It was left running rather than killed; stop it before removing or moving ${cluster}.`);
 }
 
+const ASCII = /^[\x20-\x7e]*$/;
+
+/**
+ * The data directory as Postgres is given it. Postgres on Windows reads a
+ * path in the ANSI code page and then treats it as UTF-8, so initdb fails on
+ * C:\Users\Zoë ("invalid byte sequence for encoding UTF8"). The folder's 8.3
+ * short name is the same folder in ASCII; a drive that keeps none is refused
+ * in words. Elsewhere, and for a plain path, the directory as it is.
+ */
+export async function postgresDataDir(dataDir: string, env: NodeJS.ProcessEnv, short: (dir: string) => Promise<string> = dir => shortPath(dir, env), platform: NodeJS.Platform | string = process.platform): Promise<string> {
+  if (platform !== 'win32' || ASCII.test(dataDir)) return dataDir;
+  const ascii = await short(dataDir).catch(() => '');
+  if (ascii === '' || !ASCII.test(ascii)) {
+    throw new Error(`Postgres on Windows cannot run in ${dataDir}: its path has letters outside English and this drive keeps no short (8.3) names for it. Set BUDDI_DATA_DIR to a folder whose path is plain English letters, such as C:\\buddi-data, and run buddi again.`);
+  }
+  return ascii;
+}
+
+async function shortPath(dir: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows';
+  const { stdout } = await exec(path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-Command', '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:BUDDI_SHORT_DIR).ShortPath'],
+    { env: { ...nativeEnvironment(env), BUDDI_SHORT_DIR: dir }, windowsHide: true, timeout: 60_000 });
+  return String(stdout).trim();
+}
+
+/** Is `dir` (as Postgres reports it) one of these? Windows paths ignore case. */
+function sameDirectory(dir: string, ...candidates: string[]): boolean {
+  const resolved = path.resolve(dir);
+  return process.platform === 'win32'
+    ? candidates.some(candidate => resolved.toLowerCase() === path.resolve(candidate).toLowerCase())
+    : candidates.includes(resolved);
+}
+
 /** initdb password files a killed supervisor left beside its stage (Windows, see initializeClusterWindows). */
 async function removeStalePasswordFiles(dataDir: string): Promise<void> {
   const names = await readdir(dataDir).catch(() => [] as string[]);
@@ -232,11 +266,15 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
   }
   const bin = await prepareBinaries({ root, dataDir, env, log: diagnostic });
   await removeStalePasswordFiles(dataDir);
+  // What Postgres is told (an ASCII form on Windows), and what it may answer with.
+  const pgData = await postgresDataDir(dataDir, env);
+  const pgCluster = path.join(pgData, 'postgres');
+  const ours = (dir: string): boolean => sameDirectory(dir, cluster, pgCluster);
   if (!existsSync(path.join(cluster, 'PG_VERSION'))) {
     if (existsSync(cluster)) throw new Error('The postgres directory is incomplete or unrecognized. It was preserved; inspect it before retrying.');
-    const stage = path.join(dataDir, `postgres-init-${process.pid}-${Date.now()}`);
-    await initializeCluster(bin, stage, adminPassword, env);
-    await rename(stage, cluster);
+    const name = `postgres-init-${process.pid}-${Date.now()}`;
+    await initializeCluster(bin, path.join(pgData, name), adminPassword, env);
+    await rename(path.join(dataDir, name), cluster);
   }
   const major = (await readFile(path.join(cluster, 'PG_VERSION'), 'utf8')).trim();
   if (major !== BINARY_VERSION.split('.')[0]) throw new Error(`Cluster is Postgres ${major}; this release bundles ${BINARY_VERSION}. Explicit backup/restore is required; no automatic major upgrade.`);
@@ -248,10 +286,10 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
   // server on the selected port.
   const occupancy = await inspectCluster(cluster, {
     status: async () => {
-      try { await exec(pgBinary(bin, 'pg_ctl'), ['status', '-D', cluster], { timeout: 5000, env: nativeEnvironment(env), windowsHide: true }); return true; }
+      try { await exec(pgBinary(bin, 'pg_ctl'), ['status', '-D', pgCluster], { timeout: 5000, env: nativeEnvironment(env), windowsHide: true }); return true; }
       catch { return false; }
     },
-    identity: recorded => portIdentity(cluster, { host: '127.0.0.1', port: recorded, user: 'buddi_admin', password: adminPassword, database: 'postgres', connectionTimeoutMillis: 1000, query_timeout: 1000 }),
+    identity: recorded => portIdentity(ours, { host: '127.0.0.1', port: recorded, user: 'buddi_admin', password: adminPassword, database: 'postgres', connectionTimeoutMillis: 1000, query_timeout: 1000 }),
     command: processCommand,
   });
   if (occupancy === 'stale') {
@@ -260,13 +298,13 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
   }
   if (occupancy === 'orphan') {
     diagnostic('Stopping an orphaned Postgres server left on this cluster by a previous supervisor.');
-    try { await exec(pgBinary(bin, 'pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-t', '15'], { timeout: 20_000, env: nativeEnvironment(env), windowsHide: true }); }
+    try { await exec(pgBinary(bin, 'pg_ctl'), ['stop', '-D', pgCluster, '-m', 'fast', '-t', '15'], { timeout: 20_000, env: nativeEnvironment(env), windowsHide: true }); }
     catch (error) {
       // It may have finished shutting down on its own between the status check
       // and this stop, which is exactly the state we wanted. Anything else is
       // fatal: never start a second postmaster on a cluster someone still owns.
       let stopped = false;
-      try { await exec(pgBinary(bin, 'pg_ctl'), ['status', '-D', cluster], { timeout: 5000, env: nativeEnvironment(env), windowsHide: true }); }
+      try { await exec(pgBinary(bin, 'pg_ctl'), ['status', '-D', pgCluster], { timeout: 5000, env: nativeEnvironment(env), windowsHide: true }); }
       catch { stopped = true; }
       if (!stopped) throw new Error(`A Postgres server is already running on ${cluster} and could not be stopped (${(error as Error).message}). No new server was started; stop it before retrying.`);
     }
@@ -279,7 +317,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
    * goes when the supervisor goes (the next start recovers it); a restart or a
    * sign-out stops it cleanly first (windows-guard.ts).
    */
-  const child = spawn(pgBinary(bin, 'postgres'), ['-D', cluster, '-p', String(port), '-h', '127.0.0.1', '-k', ''], { env: nativeEnvironment(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const child = spawn(pgBinary(bin, 'postgres'), ['-D', pgCluster, '-p', String(port), '-h', '127.0.0.1', '-k', ''], { env: nativeEnvironment(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   child.stdout?.pipe(log, { end: false }); child.stderr?.pipe(log, { end: false });
   let failed: Error | undefined;
   child.on('error', error => { failed = error; });
@@ -294,7 +332,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
         await client.connect();
         // Never mistake another Postgres on the selected port for our child.
         const result = await client.query<{ data_directory: string }>('SHOW data_directory');
-        if (path.resolve(result.rows[0]!.data_directory) !== cluster) throw new Error('database-port-conflict');
+        if (!ours(result.rows[0]!.data_directory)) throw new Error('database-port-conflict');
         const role = await client.query("SELECT 1 FROM pg_roles WHERE rolname = 'buddi'");
         if (!role.rowCount) {
           await client.query('CREATE ROLE buddi LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE');
@@ -311,7 +349,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
         await new Promise(resolve => setTimeout(resolve, 150));
       } finally { await client.end().catch(() => {}); }
     }
-  } catch (error) { await stopPostmaster(child, bin, cluster, env).catch(stop => diagnostic((stop as Error).message)); log.end(); throw error; }
+  } catch (error) { await stopPostmaster(child, bin, pgCluster, env).catch(stop => diagnostic((stop as Error).message)); log.end(); throw error; }
   const endGuard = process.platform === 'win32' && child.pid !== undefined ? startDatabaseGuard({ cluster, postmaster: child.pid, logFile, env: nativeEnvironment(env) }, diagnostic) : undefined;
   const url = `postgres://buddi:${encodeURIComponent(password)}@127.0.0.1:${port}/buddi`;
   const monitor = watchDatabase(async () => {
@@ -320,7 +358,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
     try {
       await client.connect();
       const result = await client.query<{ data_directory: string }>('SHOW data_directory');
-      if (path.resolve(result.rows[0]!.data_directory) !== cluster) throw new Error('Cluster identity changed');
+      if (!ours(result.rows[0]!.data_directory)) throw new Error('Cluster identity changed');
     } finally { await client.end().catch(() => {}); }
   });
   child.once('exit', monitor.fail);
@@ -328,7 +366,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
   return { pid: child.pid, child, url, exited: monitor.exited, get alive() { return monitor.alive; }, stop: async () => {
     monitor.stop();
     endGuard?.();
-    await stopPostmaster(child, bin, cluster, env);
+    await stopPostmaster(child, bin, pgCluster, env);
     log.end();
   } };
 }

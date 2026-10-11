@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { inspectCluster, watchDatabase } from './cluster.js';
+import { inspectCluster, postgresDataDir, watchDatabase } from './cluster.js';
 import type { OccupancyChecks, PortIdentity } from './cluster.js';
 
 /** A cluster directory with the pid file a previous postmaster would have left. */
@@ -99,5 +99,19 @@ describe('the managed database monitor', () => {
     const monitor = watchDatabase(async () => { probes++; }, { interval: 1 });
     monitor.stop(); await new Promise(resolve => setTimeout(resolve, 10));
     expect(probes).toBe(0);
+  });
+});
+
+describe('the data directory Postgres is given on Windows', () => {
+  test('is the folder itself when it is plain ASCII, and everywhere but Windows', async () => {
+    const short = async () => { throw new Error('not asked'); };
+    expect(await postgresDataDir('C:\\Users\\me\\AppData\\Local\\buddi', {}, short, 'win32')).toBe('C:\\Users\\me\\AppData\\Local\\buddi');
+    expect(await postgresDataDir('/home/zoë/.local/share/buddi', {}, short, 'linux')).toBe('/home/zoë/.local/share/buddi');
+  });
+
+  test('is its 8.3 short name when the path has other letters, and refused in words when there is none', async () => {
+    expect(await postgresDataDir('C:\\Users\\Zoë\\AppData\\Local\\buddi', {}, async () => 'C:\\Users\\ZO~1\\AppData\\Local\\buddi', 'win32')).toBe('C:\\Users\\ZO~1\\AppData\\Local\\buddi');
+    await expect(postgresDataDir('C:\\Users\\Zoë\\AppData\\Local\\buddi', {}, async () => 'C:\\Users\\Zoë\\AppData\\Local\\buddi', 'win32'))
+      .rejects.toThrow(/^Postgres on Windows cannot run in C:\\Users\\Zoë\\AppData\\Local\\buddi: .*no short \(8\.3\) names.*Set BUDDI_DATA_DIR/);
   });
 });
