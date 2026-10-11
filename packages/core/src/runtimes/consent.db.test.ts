@@ -107,7 +107,8 @@ suite('one card for a local model', () => {
     if (data) await rm(data, { recursive: true, force: true });
   });
 
-  it('raises one card for the model and the engine, and no more until it is decided', async () => {
+  // The host ONNX engine is off on Windows for now.
+  it.skipIf(process.platform === 'win32')('raises one card for the model and the engine, and no more until it is decided', async () => {
     const speech = hostFor('speech');
     const first = await speech.onnx!.ensure({ reason: 'to transcribe your voice notes', model: { name: 'Whisper base model', bytes: 135_000_000 } });
     expect(first.state).toBe('absent');

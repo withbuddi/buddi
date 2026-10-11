@@ -686,7 +686,8 @@ function tarballOf(build: (dir: string) => void, opts: { members?: string[]; abs
 }
 
 describe('a tarball is files and directories, or it is refused', () => {
-  it('refuses a package with a symlink in it, and keeps nothing', async () => {
+  // The fixtures (a fifo; a junction tar packs as a folder) cannot be made on Windows.
+  it.skipIf(process.platform === 'win32')('refuses a package with a symlink in it, and keeps nothing', async () => {
     const outside = path.join(root, 'outside');
     mkdirSync(outside, { recursive: true });
     const tgz = tarballOf((dir) => {
@@ -728,7 +729,8 @@ describe('a tarball is files and directories, or it is refused', () => {
     expect(existsSync(escapee)).toBe(false);
   });
 
-  it('refuses a device or a fifo among the files', () => {
+  // The fixtures (a fifo; a junction tar packs as a folder) cannot be made on Windows.
+  it.skipIf(process.platform === 'win32')('refuses a device or a fifo among the files', () => {
     const dir = path.join(root, 'fifo-pkg');
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, 'package.json'), '{}');

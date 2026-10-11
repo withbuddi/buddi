@@ -119,7 +119,8 @@ describe('the supervisor', () => {
     expect((await call(socket, '/status')).status).toBe(200);
   });
 
-  test('refuses to replace something at the socket path that is not a socket', async () => {
+  // A named pipe has no path a file could be at.
+  test.skipIf(process.platform === 'win32')('refuses to replace something at the socket path that is not a socket', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
     const socket = supervisorSocket(data);
     await writeFile(socket, 'not a socket');

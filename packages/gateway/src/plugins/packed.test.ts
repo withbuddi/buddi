@@ -33,7 +33,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { systemTar } from '@buddi/core';
 import { approveStaged } from './approve.js';
 import { resetAdoptedPlugins } from './load.js';
-import { npmBinary } from './npm.js';
+import { npmBinary, npmInvocation } from './npm.js';
 import { installedPackageDir } from './paths.js';
 import { integrityOfFile, packageJsonForInstall, stagePlugin } from './stage.js';
 
@@ -143,7 +143,8 @@ function npmPack(edit?: (pkg: Record<string, any>) => void): string {
   }
   const out = path.join(root, 'packed');
   mkdirSync(out, { recursive: true });
-  const stdout = execFileSync(npmBinary(), ['pack', '--json', '--pack-destination', out], {
+  const [npm, npmArgs] = npmInvocation(npmBinary(), ['pack', '--json', '--pack-destination', out]);
+  const stdout = execFileSync(npm, npmArgs, {
     cwd: author,
     encoding: 'utf8',
   });

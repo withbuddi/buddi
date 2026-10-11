@@ -402,7 +402,7 @@ suite('a backup can actually be restored', () => {
     // The archive's plugin record is left where the recovery checklist reads it.
     const restoredPlugins = path.join(dataDir, 'restored-plugins.json');
     expect(existsSync(restoredPlugins)).toBe(true);
-    expect((await stat(restoredPlugins)).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect((await stat(restoredPlugins)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(await readFile(restoredPlugins, 'utf8'))[0].name).toBe('buddi-plugin-drill');
 
     const pool = createPool(url);
@@ -807,7 +807,8 @@ suite('a backup can actually be restored', () => {
       }
     }, 600_000);
 
-    it('keeps the staged copy of an encrypted archive owner-only', async () => {
+    // POSIX modes; Windows has none.
+    it.skipIf(process.platform === 'win32')('keeps the staged copy of an encrypted archive owner-only', async () => {
       await restoreWithoutDrill(oldDir, { passphrase: PASSPHRASE });
       expect((await stat(path.join(dataDir, 'restore'))).mode & 0o777).toBe(0o700);
       expect((await stat(path.join(dataDir, 'restore', 'pending'))).mode & 0o777).toBe(0o700);
