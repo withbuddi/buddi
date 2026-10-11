@@ -264,10 +264,12 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
     password = randomBytes(32).toString('base64url');
     await vault.set('BUDDI_DB_PASSWORD', password);
   }
-  const bin = await prepareBinaries({ root, dataDir, env, log: diagnostic });
+  const binaries = await prepareBinaries({ root, dataDir, env, log: diagnostic });
   await removeStalePasswordFiles(dataDir);
-  // What Postgres is told (an ASCII form on Windows), and what it may answer with.
+  // What Postgres is told (an ASCII form on Windows), and what it may answer
+  // with: its binaries' folder too, which it finds its share files from.
   const pgData = await postgresDataDir(dataDir, env);
+  const bin = await postgresDataDir(binaries, env);
   const pgCluster = path.join(pgData, 'postgres');
   const ours = (dir: string): boolean => sameDirectory(dir, cluster, pgCluster);
   if (!existsSync(path.join(cluster, 'PG_VERSION'))) {
