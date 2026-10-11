@@ -14,13 +14,14 @@ describe('detectBrowser', () => {
     expect(detectBrowser({ platform: 'darwin', env: {}, bundledPath: () => BUNDLED, exists: disk(BUNDLED, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') }))
       .toEqual({ engine: 'chromium', executable: BUNDLED });
   });
-  it('falls back to Google Chrome on macOS', () => {
+  // The fixtures are POSIX paths.
+  it.skipIf(process.platform === 'win32')('falls back to Google Chrome on macOS', () => {
     expect(detectBrowser({ platform: 'darwin', env: {}, bundledPath: () => BUNDLED, exists: disk('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') }))
       .toMatchObject({ engine: 'chrome', channel: true });
     expect(detectBrowser({ platform: 'darwin', env: { HOME: '/Users/ada' }, bundledPath: () => undefined, exists: disk('/Users/ada/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') }))
       .toMatchObject({ engine: 'chrome', channel: false, executable: '/Users/ada/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
   });
-  it('finds Chrome on Linux at its standard place or on PATH', () => {
+  it.skipIf(process.platform === 'win32')('finds Chrome on Linux at its standard place or on PATH', () => {
     expect(detectBrowser({ platform: 'linux', env: { PATH: '/usr/bin' }, bundledPath: () => BUNDLED, exists: disk('/opt/google/chrome/chrome') }))
       .toMatchObject({ engine: 'chrome', channel: true });
     expect(detectBrowser({ platform: 'linux', env: { PATH: ['/usr/local/bin', '/snap/bin'].join(path.delimiter) }, bundledPath: () => BUNDLED, exists: disk('/snap/bin/google-chrome-stable') }))

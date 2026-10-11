@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readPluginsFile, ToolRegistry } from '@buddi/core';
+import { readPluginsFile, systemTar, ToolRegistry } from '@buddi/core';
 import { listPageDescriptors } from './pages.js';
 import { setPluginEnabled } from '../plugins/toggle.js';
 import { resetMarketCache } from './market.js';
@@ -329,7 +329,7 @@ function packFixture(into: string): string {
   cpSync(MARKER_FIXTURE, path.join(staging, 'package'), { recursive: true });
   mkdirSync(into, { recursive: true });
   const tgz = path.join(into, 'fixture.tgz');
-  execFileSync('tar', ['-czf', tgz, '-C', staging, 'package']);
+  execFileSync(systemTar(), ['-czf', tgz, '-C', staging, 'package']);
   rmSync(staging, { recursive: true, force: true });
   return tgz;
 }
@@ -347,7 +347,7 @@ function packPagedFixture(into: string): string {
   writeFileSync(path.join(pkg, 'index.js'), source);
   mkdirSync(into, { recursive: true });
   const tgz = path.join(into, 'fixture.tgz');
-  execFileSync('tar', ['-czf', tgz, '-C', staging, 'package']);
+  execFileSync(systemTar(), ['-czf', tgz, '-C', staging, 'package']);
   rmSync(staging, { recursive: true, force: true });
   return tgz;
 }

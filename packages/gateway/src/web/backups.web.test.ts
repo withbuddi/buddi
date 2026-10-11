@@ -17,6 +17,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
 import { incomingName, isSafeArchiveName } from './backups.js';
+import { socketPath } from '../__fixtures__/socket-path.js';
 
 const servers: WebServer[] = [];
 const fakes: Server[] = [];
@@ -29,7 +30,7 @@ interface Seen { method: string; url: string; body: string }
 
 async function fakeSupervisor(): Promise<{ socket: string; seen: Seen[] }> {
   const seen: Seen[] = [];
-  const socket = path.join(await mkdtemp(path.join(tmpdir(), 'buddi-backups-')), 'supervisor.sock');
+  const socket = socketPath(path.join(await mkdtemp(path.join(tmpdir(), 'buddi-backups-')), 'supervisor.sock'));
   const server = createServer((req, res) => {
     let body = '';
     req.setEncoding('utf8');

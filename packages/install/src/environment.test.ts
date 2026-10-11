@@ -26,7 +26,8 @@ import {
 } from './environment.js';
 
 describe('the packaged installation environment', () => {
-  test('platform data defaults and explicit override do not depend on cwd', () => {
+  // POSIX paths and modes; Windows has neither (readPrivateFile skips the mode check there).
+  test.skipIf(process.platform === 'win32')('platform data defaults and explicit override do not depend on cwd', () => {
     expect(defaultDataDir('darwin', {}, '/owner')).toBe('/owner/Library/Application Support/buddi');
     expect(defaultDataDir('linux', {}, '/owner')).toBe('/owner/.local/share/buddi');
     expect(defaultDataDir('linux', { XDG_DATA_HOME: '/data' }, '/owner')).toBe('/data/buddi');
@@ -34,7 +35,8 @@ describe('the packaged installation environment', () => {
     expect(defaultDataDir('darwin', { BUDDI_DATA_DIR: '/isolated' }, '/owner')).toBe('/isolated');
   });
 
-  test('the agents\' browser lives in the data directory, unless an existing install already fetched it', () => {
+  // POSIX paths and modes; Windows has neither (readPrivateFile skips the mode check there).
+  test.skipIf(process.platform === 'win32')('the agents\' browser lives in the data directory, unless an existing install already fetched it', () => {
     expect(browsersDir('/data')).toBe('/data/browser/engines');
     expect(playwrightCacheDir('linux', {}, '/owner')).toBe('/owner/.cache/ms-playwright');
     expect(playwrightCacheDir('linux', { XDG_CACHE_HOME: '/cache' }, '/owner')).toBe('/cache/ms-playwright');
@@ -89,7 +91,8 @@ describe('the packaged installation environment', () => {
     expect(nativeEnvironment({ PATH: '/bin', HOME: '/owner', BUDDI_VAULT_KEY: 'secret', DATABASE_URL: 'secret', OPENAI_API_KEY: 'secret', PGOPTIONS: 'unsafe', NODE_OPTIONS: 'unsafe', DYLD_INSERT_LIBRARIES: 'unsafe' })).toEqual({ PATH: '/bin', HOME: '/owner' });
   });
 
-  test('private files reject symlinks, non-files and permissive modes', async () => {
+  // POSIX paths and modes; Windows has neither (readPrivateFile skips the mode check there).
+  test.skipIf(process.platform === 'win32')('private files reject symlinks, non-files and permissive modes', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'buddi-private-test-'));
     const file = path.join(dir, 'vault-key');
     expect(await readPrivateFile(file)).toBe(undefined);

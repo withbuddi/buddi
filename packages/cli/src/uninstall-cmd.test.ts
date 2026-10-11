@@ -4,6 +4,9 @@ import { parseArgs } from './args.js';
 import { uninstallCheckout } from './uninstall-cmd.js';
 import type { CheckoutUninstallDeps, CheckoutUninstallOptions } from './uninstall-cmd.js';
 
+// Skipped on Windows: POSIX fixtures (paths printed as written).
+const POSIX_ONLY = process.platform === 'win32';
+
 const repo = '/Users/owner/src/buddi';
 
 function checkout(overrides: Partial<CheckoutUninstallDeps> = {}, answer: string | undefined = 'yes') {
@@ -40,7 +43,7 @@ function checkout(overrides: Partial<CheckoutUninstallDeps> = {}, answer: string
 
 const defaults: CheckoutUninstallOptions = { yes: false, keepData: false, backup: true };
 
-describe('buddi uninstall in a checkout', () => {
+describe.skipIf(POSIX_ONLY)('buddi uninstall in a checkout', () => {
   it('parses its flags', () => {
     expect(parseArgs(['uninstall'])).toEqual({ kind: 'uninstall', yes: false, keepData: false, backup: true });
     expect(parseArgs(['uninstall', '--yes', '--keep-data', '--no-backup'])).toEqual({ kind: 'uninstall', yes: true, keepData: true, backup: false });

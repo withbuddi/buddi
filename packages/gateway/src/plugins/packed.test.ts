@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { systemTar } from '@buddi/core';
 import { approveStaged } from './approve.js';
 import { resetAdoptedPlugins } from './load.js';
 import { npmBinary } from './npm.js';
@@ -54,7 +55,7 @@ function tarballOf(dir: string, pkg: Record<string, unknown>, index: string): Bu
   writeFileSync(path.join(staging, 'package.json'), JSON.stringify(pkg));
   writeFileSync(path.join(staging, 'index.js'), index);
   const tgz = path.join(dir, 'out.tgz');
-  execFileSync('tar', ['-czf', tgz, '-C', dir, 'package']);
+  execFileSync(systemTar(), ['-czf', tgz, '-C', dir, 'package']);
   return readFileSync(tgz);
 }
 

@@ -12,6 +12,7 @@ import { afterEach, expect, it } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import { lockVersion } from './version.js';
 import { csrfCookieName } from './http.js';
+import { socketPath } from '../__fixtures__/socket-path.js';
 
 const servers: WebServer[] = [];
 const fakes: Server[] = [];
@@ -35,7 +36,7 @@ const JOB = { id: '11111111-2222-4333-8444-555555555555', phase: 'backup', phase
 async function fakeSupervisor(): Promise<{ socket: string; seen: string[]; bodies: string[] }> {
   const seen: string[] = [];
   const bodies: string[] = [];
-  const socket = path.join(await mkdtemp(path.join(tmpdir(), 'buddi-version-')), 'supervisor.sock');
+  const socket = socketPath(path.join(await mkdtemp(path.join(tmpdir(), 'buddi-version-')), 'supervisor.sock'));
   const server = createServer((req, res) => {
     seen.push(`${req.method} ${req.url}`);
     let text = '';
@@ -179,7 +180,7 @@ it('falls back to what the last supervisor wrote down when the socket has gone',
     history: [{ from: '0.1.0', to: '0.1.1', startedAt: '2026-01-02T03:05:00.000Z', finishedAt: '2026-01-02T03:06:00.000Z', outcome: 'done', backup: 'buddi-backup-20260102-030500.tar.gz' }],
   }), 'utf8');
   // A socket path nothing is listening on: exactly the middle of an upgrade.
-  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: path.join(data, 'gone.sock'), BUDDI_DATA_DIR: data });
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socketPath(path.join(data, 'gone.sock')), BUDDI_DATA_DIR: data });
   const { origin, headers } = await open(app);
   const view = await fetch(`${origin}/api/version`, { headers });
   expect(view.status).toBe(200);
@@ -206,7 +207,7 @@ it('compares the disk record the way the supervisor does, and defaults the switc
     current: '0.2.0',
     history: [],
   }), 'utf8');
-  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: path.join(data, 'gone.sock'), BUDDI_DATA_DIR: data });
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socketPath(path.join(data, 'gone.sock')), BUDDI_DATA_DIR: data });
   const { origin, headers } = await open(app);
   const view = await fetch(`${origin}/api/version`, { headers });
   expect(await view.json()).toMatchObject({ updateAvailable: false, checkEnabled: true });
@@ -219,7 +220,7 @@ it('never offers from the disk record a version npm was still processing, and sa
     current: '0.1.0-pre.37',
     history: [],
   }), 'utf8');
-  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: path.join(data, 'gone.sock'), BUDDI_DATA_DIR: data });
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socketPath(path.join(data, 'gone.sock')), BUDDI_DATA_DIR: data });
   const { origin, headers } = await open(app);
   const view = await fetch(`${origin}/api/version`, { headers });
   expect(await view.json()).toMatchObject({
@@ -242,7 +243,7 @@ it('refuses a version that is not one before the supervisor is asked at all', as
 
 it('says 503 when there is neither a supervisor answering nor a record on disk', async () => {
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-upgrade-empty-'));
-  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: path.join(data, 'gone.sock'), BUDDI_DATA_DIR: data });
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socketPath(path.join(data, 'gone.sock')), BUDDI_DATA_DIR: data });
   const { origin, headers } = await open(app);
   expect((await fetch(`${origin}/api/version`, { headers })).status).toBe(503);
 });

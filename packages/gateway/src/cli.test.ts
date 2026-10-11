@@ -77,7 +77,8 @@ describe('--quiet', () => {
   });
 });
 
-describe('history', () => {
+// POSIX fixture paths.
+describe.skipIf(process.platform === 'win32')('history', () => {
   it('round-trips, oldest first on disk and newest first in readline', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'buddi-cli-'));
     const file = path.join(dir, 'cli-history');
@@ -105,7 +106,8 @@ describe('history', () => {
   });
 });
 
-describe('tab completion', () => {
+// POSIX fixture paths.
+describe.skipIf(process.platform === 'win32')('tab completion', () => {
   const complete = completerFor({
     handles: ['ledger', 'scout'],
     listDir: (dir) => (dir === '/work/docs' ? ['a.pdf', 'b.csv', 'notes/'] : []),

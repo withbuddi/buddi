@@ -10,6 +10,9 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { hydratePostgresLinks } from './links.js';
 
+// Skipped on Windows: library links are a macOS and Linux matter; the Windows package has none.
+const POSIX_ONLY = process.platform === 'win32';
+
 const MANIFEST = [
   { source: 'native/lib/libicuuc.77.1.dylib', target: 'native/lib/libicuuc.77.dylib' },
   { source: 'native/lib/libicuuc.77.1.dylib', target: 'native/lib/libicuuc.dylib' },
@@ -25,7 +28,7 @@ async function fixture(): Promise<string> {
   return dir;
 }
 
-describe('hydratePostgresLinks', () => {
+describe.skipIf(POSIX_ONLY)('hydratePostgresLinks', () => {
   test('creates every link the manifest names, relative to its own directory', async () => {
     const dir = await fixture();
     expect((await hydratePostgresLinks(dir)).sort()).toEqual(['native/lib/libicuuc.77.dylib', 'native/lib/libicuuc.dylib', 'native/lib/libpq.so.5']);

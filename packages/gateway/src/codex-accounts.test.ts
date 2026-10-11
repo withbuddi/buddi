@@ -153,7 +153,8 @@ describe('ChatGPT credential use', () => {
   });
 });
 
-describe('Codex profile for a native child (image plugin)', () => {
+// A Codex profile needs a verified private ACL on Windows, which is not built yet.
+describe.skipIf(process.platform === 'win32')('Codex profile for a native child (image plugin)', () => {
   it('stages a private CODEX_HOME with a scrubbed env, saves a refresh, and removes the profile', async () => {
     const { readFile, writeFile, stat } = await import('node:fs/promises');
     const { join } = await import('node:path');

@@ -248,7 +248,8 @@ describe('the install record', () => {
     expect(() => parsePluginsFile(odd)).toThrow(/does not know/);
   });
 
-  it('lives in the owner\'s private directory, and is pinnable', () => {
+  // POSIX fixture paths.
+  it.skipIf(process.platform === 'win32')('lives in the owner\'s private directory, and is pinnable', () => {
     expect(pluginsFilePath({ ownerRoot: '/home/me/.buddi' })).toBe('/home/me/.buddi/plugins.json');
     expect(pluginsFilePath({ ownerRoot: '/home/me/.buddi', env: { BUDDI_PLUGINS_FILE: '/tmp/p.json' } })).toBe(
       '/tmp/p.json',

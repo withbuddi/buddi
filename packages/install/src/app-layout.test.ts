@@ -27,6 +27,9 @@ import type { NpmRunner } from './upgrade.js';
 import { provenanceFixture } from './fixtures/provenance.js';
 import type { FixtureOptions } from './fixtures/provenance.js';
 
+// Skipped on Windows: buddi.app and the Linux install layout, with POSIX fixtures; not a Windows layout.
+const POSIX_ONLY = process.platform === 'win32';
+
 const REGISTRY = 'https://registry.example';
 const INTEGRITY = (v: string): string => `sha512-${Buffer.from(`tarball ${v}`).toString('base64')}`;
 /** The test CA every provenance fixture here is signed by. */
@@ -110,7 +113,7 @@ async function leftovers(releases: string): Promise<string[]> {
   return (await readdir(releases).catch(() => [] as string[])).filter(name => name !== 'current' && name !== 'previous').sort();
 }
 
-describe('the app layout', () => {
+describe.skipIf(POSIX_ONLY)('the app layout', () => {
   test('is the app\'s word in the environment, never a guess', () => {
     expect(appLayout({ [APP_LAYOUT_VAR]: '/Users/me/Library/Application Support/buddi/releases' })).toBe('/Users/me/Library/Application Support/buddi/releases');
     expect(appLayout({ [APP_LAYOUT_VAR]: 'relative/releases' })).toBeUndefined();
@@ -156,7 +159,7 @@ describe('the app layout', () => {
   });
 });
 
-describe('staging a release', () => {
+describe.skipIf(POSIX_ONLY)('staging a release', () => {
   const stage = (releases: string, extra: Partial<Parameters<typeof stageRelease>[0]> = {}) =>
     stageRelease({ releases, version: '0.1.1', registry: REGISTRY, http: registry('0.1.1') as never, exec: fakeNpm().runner, binary: 'npm', chain: CHAIN, ...extra });
 
@@ -249,7 +252,7 @@ describe('staging a release', () => {
   });
 });
 
-describe('putting a release in place', () => {
+describe.skipIf(POSIX_ONLY)('putting a release in place', () => {
   async function staged(releases: string, version: string, marker: string): Promise<string> {
     const dir = path.join(releases, `.staging-${version}-${marker}`);
     await mkdir(releaseRoot(dir), { recursive: true });
@@ -279,7 +282,7 @@ describe('putting a release in place', () => {
     expect(await leftovers(releases)).toEqual(['buddi-0.1.1', 'buddi-0.1.2']);
   });
 });
-describe('current and previous', () => {
+describe.skipIf(POSIX_ONLY)('current and previous', () => {
   test('switch in one step and keep exactly two releases', async () => {
     const releases = await releasesDir();
     const bundle = '/Applications/buddi.app/Contents/Resources/buddi/buddi-0.1.0';
@@ -355,7 +358,7 @@ async function finished(upgrade: ReturnType<typeof createUpgradeService>, id: st
   return job;
 }
 
-describe('an upgrade inside buddi.app', () => {
+describe.skipIf(POSIX_ONLY)('an upgrade inside buddi.app', () => {
   function appService(ctx: ReadyContext, opts: Partial<Parameters<typeof createUpgradeService>[0]> = {}) {
     const stopGateway = vi.fn(async () => {});
     const startGateway = vi.fn(() => {});
@@ -472,7 +475,7 @@ describe('an upgrade inside buddi.app', () => {
   });
 });
 
-describe('whose copy a supervisor runs', () => {
+describe.skipIf(POSIX_ONLY)('whose copy a supervisor runs', () => {
   const data = '/Users/me/Library/Application Support/buddi';
   test('buddi.app\'s bundle and the releases it installed are the app\'s; npm\'s is not', async () => {
     const { runsAppCopy, APP_RUNNING_LINE } = await import('./app-layout.js');

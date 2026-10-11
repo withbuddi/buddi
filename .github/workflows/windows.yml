@@ -37,6 +37,9 @@ jobs:
           Set-Service -InputObject $svc -Status running -StartupType automatic
           & "$env:PGBIN\pg_isready.exe" -h 127.0.0.1 -t 60
           & "$env:PGBIN\createdb.exe" -h 127.0.0.1 -U postgres buddi
+      # The runner's own temp folder is an 8.3 path (RUNNER~1), which Vite's
+      # loader percent-encodes and then cannot find; RUNNER_TEMP has no tilde.
+      - run: printf 'TEMP=%s\nTMP=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       - run: node scripts/check-boundaries.mjs
       - run: pnpm -r build

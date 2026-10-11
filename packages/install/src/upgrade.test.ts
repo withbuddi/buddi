@@ -165,7 +165,8 @@ describe('the upgrade state file', () => {
   });
 });
 
-describe('the check', () => {
+// POSIX fixtures (an npm prefix with lib/node_modules); Windows' global tree is tested in 'where npm is told to install'.
+describe.skipIf(process.platform === 'win32')('the check', () => {
   test('records the version the registry named', async () => {
     const ctx = await installation();
     const { upgrade } = service(ctx);
@@ -269,7 +270,7 @@ describe('the check', () => {
 });
 
 describe('where npm is told to install', () => {
-  test('is read off the install root, never off npm\'s own prefix', () => {
+  test.skipIf(process.platform === 'win32')('is read off the install root, never off npm\'s own prefix', () => {
     expect(installTarget('/opt/homebrew/lib/node_modules/buddi')).toEqual({ prefix: '/opt/homebrew', global: true });
     // The scoped name the package is published under sits one level deeper.
     expect(installTarget('/opt/homebrew/lib/node_modules/@withbuddi/buddi')).toEqual({ prefix: '/opt/homebrew', global: true });
@@ -384,7 +385,8 @@ describe('the hand-over', () => {
   });
 });
 
-describe('an upgrade', () => {
+// POSIX fixtures (an npm prefix with lib/node_modules); Windows' global tree is tested in 'where npm is told to install'.
+describe.skipIf(process.platform === 'win32')('an upgrade', () => {
   test('backs up, stops the gateway, installs and hands over', async () => {
     const ctx = await installation();
     const { upgrade, install, stopGateway, restart, startGateway } = service(ctx);
@@ -787,7 +789,8 @@ describe('is the tarball served yet', () => {
   });
 });
 
-describe('npm\'s 404', () => {
+// POSIX fixtures (an npm prefix with lib/node_modules); Windows' global tree is tested in 'where npm is told to install'.
+describe.skipIf(process.platform === 'win32')('npm\'s 404', () => {
   test('is "still processing" only when it is this package\'s tarball', () => {
     expect(isNotFound('npm install @withbuddi/buddi@0.1.1 failed: npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@withbuddi%2fbuddi/-/buddi-0.1.1.tgz - Not found')).toBe(true);
     expect(isNotFound('npm error code E404\nnpm error 404  \'@withbuddi/buddi@0.1.1\' is not in this registry.')).toBe(true);

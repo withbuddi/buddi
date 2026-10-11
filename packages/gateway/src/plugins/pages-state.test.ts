@@ -56,6 +56,7 @@ describe('the pages the running gateway serves', () => {
     // Written after it started: believed.
     expect(readPagesState(env, { startedAt: () => new Date(at.getTime() - 60_000) })?.plugins).toEqual(['weather']);
     // And `ps` really can say when this process started.
-    expect(processStartedAt(process.pid)?.getTime()).toBeLessThanOrEqual(Date.now());
+    // (Windows has no ps: there the state is never believed, and the pages come from the gateway.)
+    if (process.platform !== 'win32') expect(processStartedAt(process.pid)?.getTime()).toBeLessThanOrEqual(Date.now());
   });
 });

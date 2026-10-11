@@ -5,6 +5,9 @@ import { launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environme
 import { APP_LAST_LINE, APP_RUNNING_UNINSTALL, LINUX_LAST_LINE, PACKAGE_LINE, parseUninstallArgs, uninstallPackaged } from './uninstall.js';
 import type { ExecResult, PackagedUninstallDeps, UninstallOptions } from './uninstall.js';
 
+// Skipped on Windows: macOS and Linux fixtures (launchd, systemd, POSIX paths); Windows was run on a VM.
+const POSIX_ONLY = process.platform === 'win32';
+
 const home = '/Users/owner';
 const data = '/Users/owner/Library/Application Support/buddi-test';
 const label = launchAgentLabel(data);
@@ -131,7 +134,7 @@ function machine(opts: {
 
 const defaults: UninstallOptions = { yes: false, keepData: false, backup: true };
 
-describe('parseUninstallArgs', () => {
+describe.skipIf(POSIX_ONLY)('parseUninstallArgs', () => {
   it('takes its flags and nothing else', () => {
     expect(parseUninstallArgs([])).toEqual(defaults);
     expect(parseUninstallArgs(['--yes', '--keep-data', '--no-backup'])).toEqual({ yes: true, keepData: true, backup: false });
@@ -143,7 +146,7 @@ describe('parseUninstallArgs', () => {
   });
 });
 
-describe('uninstallPackaged', () => {
+describe.skipIf(POSIX_ONLY)('uninstallPackaged', () => {
   it('prints every path first, then removes everything after yes, and ends on the npm line', async () => {
     const m = machine({ telegram: true, app: `${home}/Applications/Buddi Dashboard.app` });
     const code = await uninstallPackaged(defaults, m.deps);
@@ -277,7 +280,7 @@ describe('uninstallPackaged', () => {
   });
 });
 
-describe('uninstallPackaged: with the service stopped', () => {
+describe.skipIf(POSIX_ONLY)('uninstallPackaged: with the service stopped', () => {
   const stoppedFiles = [data, `${data}/installation.json`, `${data}/postgres`, `${data}/backups`];
 
   it('starts the database briefly for the last backup and the paired chats, stops it, then removes', async () => {
@@ -307,7 +310,7 @@ describe('uninstallPackaged: with the service stopped', () => {
   });
 });
 
-describe('uninstallPackaged: buddi.app\'s installation', () => {
+describe.skipIf(POSIX_ONLY)('uninstallPackaged: buddi.app\'s installation', () => {
   it('refuses while buddi.app runs it, touching nothing, and points to the app\'s own Uninstall', async () => {
     const m = machine({ buddiApp: 'running', telegram: true });
     expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(1);
@@ -328,7 +331,7 @@ describe('uninstallPackaged: buddi.app\'s installation', () => {
   });
 });
 
-describe('uninstallPackaged: the passphrase leaves with the owner', () => {
+describe.skipIf(POSIX_ONLY)('uninstallPackaged: the passphrase leaves with the owner', () => {
   const archive = `${home}/buddi-backups/buddi-backup-20260926-120000.tar.gz.age`;
 
   it('prints it and writes <archive>.passphrase.txt beside the kept backup before the keychain is purged', async () => {
@@ -395,7 +398,7 @@ describe('uninstallPackaged: the passphrase leaves with the owner', () => {
   });
 });
 
-describe('uninstallPackaged: buddi.app\'s command line tool', () => {
+describe.skipIf(POSIX_ONLY)('uninstallPackaged: buddi.app\'s command line tool', () => {
   it('lists and removes the shims that run this installation', async () => {
     const m = machine();
     const removed: string[] = [];
@@ -406,7 +409,7 @@ describe('uninstallPackaged: buddi.app\'s command line tool', () => {
   });
 });
 
-describe('uninstallPackaged: only the installation installation.json names', () => {
+describe.skipIf(POSIX_ONLY)('uninstallPackaged: only the installation installation.json names', () => {
   it('refuses, touching nothing, when installation.json was written for another folder', async () => {
     const m = machine({ state: { version: 1, kind: 'packaged', dataDir: '/Users/owner/Library/Application Support/buddi', vaultService: 'buddi.install.abc' } });
     expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(1);
@@ -431,7 +434,7 @@ describe('uninstallPackaged: only the installation installation.json names', () 
   });
 });
 
-describe('uninstallPackaged: the Linux install (scripts/install.sh)', () => {
+describe.skipIf(POSIX_ONLY)('uninstallPackaged: the Linux install (scripts/install.sh)', () => {
   const linux = (extra: string[] = []): Machine => {
     const m = machine({ platform: 'linux' });
     for (const file of [`${data}/node`, `${data}/releases`, ...extra]) m.files.add(file);

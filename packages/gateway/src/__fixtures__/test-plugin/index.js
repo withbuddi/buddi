@@ -11,13 +11,14 @@
  * a `main` points at, already built.
  */
 import { z } from 'zod';
+import { fileURLToPath } from 'node:url';
 
 export const manifest = {
   name: 'testplug',
   version: '2.0.0',
   description: 'A plugin that exists to be installed and removed.',
   schema: 'buddi_fixture_testplug',
-  migrationsDir: new URL('./migrations', import.meta.url).pathname,
+  migrationsDir: fileURLToPath(new URL('./migrations', import.meta.url)),
   tools: [
     {
       name: 'testplug.ping',

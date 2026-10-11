@@ -64,7 +64,8 @@ describe('encryptFile / decryptFile', () => {
       const back = path.join(dir, 'round-trip.out');
       await decryptFile(cipher, back, PASSPHRASE);
       expect(await readFile(back)).toEqual(PLAINTEXT);
-      expect((await stat(back)).mode & 0o777).toBe(0o600);
+      // Windows has no POSIX modes (every file reads 0666).
+      if (process.platform !== 'win32') expect((await stat(back)).mode & 0o777).toBe(0o600);
     },
     SLOW,
   );
@@ -216,7 +217,8 @@ describe('verifyEncryptedArchive', () => {
       expect(path.dirname(result.plaintextPath)).toBe(out);
       expect(path.basename(result.plaintextPath)).toBe('hook.tar.gz');
       expect(await readFile(result.plaintextPath)).toEqual(PLAINTEXT);
-      expect((await stat(result.plaintextPath)).mode & 0o777).toBe(0o600);
+      // Windows has no POSIX modes (every file reads 0666).
+      if (process.platform !== 'win32') expect((await stat(result.plaintextPath)).mode & 0o777).toBe(0o600);
     },
     SLOW,
   );

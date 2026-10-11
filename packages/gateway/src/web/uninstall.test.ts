@@ -13,9 +13,10 @@ import {
   uninstallRoute,
   withoutPassphrase,
 } from './uninstall.js';
+import { socketPath } from '../__fixtures__/socket-path.js';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'bu-'));
-const socket = path.join(dir, 's.sock');
+const socket = socketPath(path.join(dir, 's.sock'));
 const asked: Array<{ method: string; url: string; body: string }> = [];
 let server: Server;
 let removeStatus = 202;

@@ -651,7 +651,8 @@ describe('loadAgentCatalog', () => {
       expect(mailer.unavailableReason).toBe('Needs a plugin providing the email tools.');
     });
 
-    it('does not fail to start over an agent that predates the reserved ids', () => {
+    // The warning names a POSIX fixture path.
+    it.skipIf(process.platform === 'win32')('does not fail to start over an agent that predates the reserved ids', () => {
       /*
        * `owner` and `room` were reserved after some installations already had
        * agents. Such a file must not stop the boot: it is said out loud, and

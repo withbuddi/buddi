@@ -109,7 +109,8 @@ describe('the token', () => {
     expect(second.token).toBe(first.token);
   });
 
-  it('falls back to a 0600 file when there is no usable vault', async () => {
+  // POSIX modes and fixture paths.
+  it.skipIf(process.platform === 'win32')('falls back to a 0600 file when there is no usable vault', async () => {
     const e = env();
     const created = await ensureWebToken({ env: e, vault: undefined });
     expect(created.source).toBe('file');
@@ -352,7 +353,8 @@ describe('cookies', () => {
 describe('static files', () => {
   const root = '/srv/buddi/packages/web/dist';
 
-  it('resolve inside the build', () => {
+  // POSIX modes and fixture paths.
+  it.skipIf(process.platform === 'win32')('resolve inside the build', () => {
     expect(resolveAsset(root, '/assets/index-abc.js')).toBe(`${root}/assets/index-abc.js`);
     expect(resolveAsset(root, '/')).toBe(`${root}/index.html`);
   });

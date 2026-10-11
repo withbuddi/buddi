@@ -12,6 +12,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import * as serviceControl from './service.js';
 import { csrfCookieName } from './http.js';
+import { socketPath } from '../__fixtures__/socket-path.js';
 
 const servers: WebServer[] = [];
 const fakes: Server[] = [];
@@ -26,7 +27,7 @@ const STATUS = { phase: 'ready', supervisorPid: 11, installRoot: '/install', nod
 /** A supervisor, as far as these routes can tell: four routes on a socket. */
 async function fakeSupervisor(): Promise<{ socket: string; seen: string[] }> {
   const seen: string[] = [];
-  const socket = path.join(await mkdtemp(path.join(tmpdir(), 'buddi-service-')), 'supervisor.sock');
+  const socket = socketPath(path.join(await mkdtemp(path.join(tmpdir(), 'buddi-service-')), 'supervisor.sock'));
   const server = createServer((req, res) => {
     seen.push(`${req.method} ${req.url}`);
     const ok = (req.method === 'GET' && req.url === '/status') || (req.method === 'POST' && ['/start', '/stop', '/restart'].includes(req.url ?? ''));
@@ -97,7 +98,7 @@ it('has nothing to control without a supervisor, and says so rather than guessin
 });
 
 it('answers 503 when the socket is named but nothing is listening', async () => {
-  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: path.join(await mkdtemp(path.join(tmpdir(), 'buddi-service-')), 'absent.sock') });
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socketPath(path.join(await mkdtemp(path.join(tmpdir(), 'buddi-service-')), 'absent.sock')) });
   const origin = `http://127.0.0.1:${app.port}`;
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);

@@ -7,6 +7,9 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { findNpmBuddi, installShim, readShim, shadowingBuddi, SHIM_VAR, shimAction, shimDoctorLines, shimScript, shimsFor, SYSTEM_SHIM, userShim } from './cli-shim.js';
 import type { ShimDeps } from './cli-shim.js';
 
+// Skipped on Windows: buddi.app's command line tool, macOS only.
+const POSIX_ONLY = process.platform === 'win32';
+
 const home = '/Users/owner';
 const app = '/Applications/buddi.app';
 const data = "/Users/owner/Library/Application Support/buddi";
@@ -35,7 +38,7 @@ function machine(opts: { files?: Record<string, string>; links?: Record<string, 
   return { deps, files, written };
 }
 
-describe('the shim', () => {
+describe.skipIf(POSIX_ONLY)('the shim', () => {
   it('names the app and the data directory, and reads back what it names, quotes and all', () => {
     const odd = { app: "/Users/o'neil/Apps/buddi.app", data: "/Users/o'neil/Library/Application Support/buddi" };
     expect(readShim(shimScript(odd))).toEqual(odd);
@@ -130,7 +133,7 @@ describe('the shim', () => {
   });
 });
 
-describe('the shim, run', () => {
+describe.skipIf(POSIX_ONLY)('the shim, run', () => {
   const scratch = mkdtempSync(path.join(tmpdir(), 'buddi-shim-'));
   afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -183,7 +186,7 @@ describe('the shim, run', () => {
   });
 });
 
-describe('a command through the shim', () => {
+describe.skipIf(POSIX_ONLY)('a command through the shim', () => {
   it('opens buddi.app to start buddi, refuses a service of its own, and passes the rest to the app\'s supervisor', () => {
     expect(shimAction([])).toBe('open-app');
     expect(shimAction(['--no-open'])).toBe('open-app');

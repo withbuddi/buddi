@@ -6,10 +6,13 @@ import { describe, expect, test } from 'vitest';
 import { takeReleasesLock } from './app-layout.js';
 import { LINUX_COMMAND_MARKER, bundledNode, commandData, commandOwnedBy, desktopEntryPaths, linuxUnitSpec, ownDesktopEntries } from './linux-install.js';
 
+// Skipped on Windows: the Linux install, with POSIX fixtures.
+const POSIX_ONLY = process.platform === 'win32';
+
 const data = '/home/owner/.local/share/buddi';
 const releases = `${data}/releases`;
 
-describe('the unit', () => {
+describe.skipIf(POSIX_ONLY)('the unit', () => {
   test('runs the bundled node and current, never the node that ran the command', () => {
     const spec = linuxUnitSpec({ data, releases, label: 'com.buddi.install.abc', exists: file => file === `${data}/node/node`, extra: { BUDDI_WEB_PORT: '4417' } });
     expect(spec.nodePath).toBe(`${data}/node/node`);
@@ -27,7 +30,7 @@ describe('the unit', () => {
   });
 });
 
-describe('the command', () => {
+describe.skipIf(POSIX_ONLY)('the command', () => {
   const command = (dir: string): string => `#!/bin/sh\n${LINUX_COMMAND_MARKER}: written by https://withbuddi.com/install.sh\nDATA='${dir.replace(/'/g, `'\\''`)}'\nexec true\n`;
 
   test('is this installation\'s only while it carries the marker and names this data folder', () => {
@@ -45,7 +48,7 @@ describe('the command', () => {
   });
 });
 
-describe('the releases lock', () => {
+describe.skipIf(POSIX_ONLY)('the releases lock', () => {
   test('is held by one at a time, and a dead holder\'s lock is taken over', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'releases-lock-'));
     const unlock = await takeReleasesLock(dir);
@@ -57,14 +60,14 @@ describe('the releases lock', () => {
   });
 });
 
-describe('desktopEntryPaths', () => {
+describe.skipIf(POSIX_ONLY)('desktopEntryPaths', () => {
   test('names the app-grid and autostart entries install.sh writes, under the XDG folders when set', () => {
     expect(desktopEntryPaths({}, '/home/a')).toEqual(['/home/a/.local/share/applications/buddi-desktop.desktop', '/home/a/.config/autostart/buddi-desktop.desktop']);
     expect(desktopEntryPaths({ XDG_DATA_HOME: '/d', XDG_CONFIG_HOME: '/c' }, '/home/a')).toEqual(['/d/applications/buddi-desktop.desktop', '/c/autostart/buddi-desktop.desktop']);
   });
 });
 
-describe('ownDesktopEntries', () => {
+describe.skipIf(POSIX_ONLY)('ownDesktopEntries', () => {
   const [apps, autostart] = desktopEntryPaths({}, '/home/a');
   const data = '/home/a/.local/share/buddi';
   const files: Record<string, string> = {

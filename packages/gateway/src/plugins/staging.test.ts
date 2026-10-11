@@ -33,7 +33,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { adoptPlugins, loadInstalledPlugins, pluginLoadReport, relinkPlugins, relinkPluginsOnLoad, resetAdoptedPlugins } from './load.js';
 import { isCoreMovedError } from './relink.js';
-import { isPluginSchemaName, type InstalledPlugin } from '@buddi/core';
+import { isPluginSchemaName, systemTar, type InstalledPlugin } from '@buddi/core';
 import { approveStaged } from './approve.js';
 import { InstallRefusal } from './install.js';
 import { driftBetween, parseBuddiMd } from './claims.js';
@@ -109,7 +109,7 @@ function packFixture(source: string, into: string, edit?: (dir: string) => void)
   edit?.(path.join(staging, 'package'));
   mkdirSync(into, { recursive: true });
   const tgz = path.join(into, 'fixture.tgz');
-  execFileSync('tar', ['-czf', tgz, '-C', staging, 'package']);
+  execFileSync(systemTar(), ['-czf', tgz, '-C', staging, 'package']);
   rmSync(staging, { recursive: true, force: true });
   return tgz;
 }
@@ -675,7 +675,7 @@ function tarballOf(build: (dir: string) => void, opts: { members?: string[]; abs
   mkdirSync(path.join(staging, 'package'), { recursive: true });
   build(path.join(staging, 'package'));
   const tgz = path.join(staging, 'evil.tgz');
-  execFileSync('tar', [
+  execFileSync(systemTar(), [
     ...(opts.absolute === true ? ['-czPf'] : ['-czf']),
     tgz,
     '-C',

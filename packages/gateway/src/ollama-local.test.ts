@@ -28,7 +28,8 @@ describe('the model for this machine', () => {
 });
 
 describe('the machine', () => {
-  it('finds Ollama on the PATH or in the usual places, and the app on a Mac', () => {
+  // The fixtures are POSIX paths.
+  it.skipIf(process.platform === 'win32')('finds Ollama on the PATH or in the usual places, and the app on a Mac', () => {
     const base = { platform: 'darwin' as const, arch: 'arm64', totalmem: () => 16 * GiB, env: { PATH: '/x/bin' } };
     expect(ollamaMachine({ ...base, exists: () => false }).installed).toBe(false);
     expect(ollamaMachine({ ...base, exists: (f) => f === '/x/bin/ollama' }).installed).toBe(true);

@@ -37,7 +37,8 @@ class MemorySecrets implements SecretsPort {
 }
 
 const databaseUrl = await testDatabaseUrl();
-const suite = databaseUrl ? describe : describe.skip;
+// Programs on this computer (MCP stdio) are not wired for Windows yet: process groups, POSIX quoting and PATH.
+const suite = databaseUrl && process.platform !== 'win32' ? describe : describe.skip;
 const TEST_DB = `buddi_mcp_stdio_test_${process.pid}`;
 const SECRET = 'tok-7f3a9c';
 

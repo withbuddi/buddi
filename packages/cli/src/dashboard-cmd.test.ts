@@ -158,7 +158,8 @@ describe('the double-clickable app', () => {
     expect(shellQuote("/Users/o'brien/buddi/main.js")).toBe("'/Users/o'\\''brien/buddi/main.js'");
   });
 
-  it('installs into ~/Applications and removes again', async () => {
+  // The dashboard app bundle is macOS only.
+  it.skipIf(process.platform === 'win32')('installs into ~/Applications and removes again', async () => {
     if (!existsSync(CLI_ENTRY)) return; // `pnpm -r build` has not run in this checkout.
     const home = mkdtempSync(path.join(tmpdir(), 'buddi-home-'));
     const lines: string[] = [];

@@ -289,7 +289,8 @@ suite('connections routes', () => {
     expect((await call(owner, 'DELETE', `/${id}`)).status).toBe(200);
   });
 
-  it('adds a program on this computer: kept unstarted, its secret an owner secret bound to mcp.env, reviewed with its command, given, disconnected', async () => {
+  // Programs on this computer (MCP stdio) are not wired for Windows yet: process groups and POSIX quoting.
+  it.skipIf(process.platform === 'win32')('adds a program on this computer: kept unstarted, its secret an owner secret bound to mcp.env, reviewed with its command, given, disconnected', async () => {
     const owner = await signIn();
     const fixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'tools', 'mcp', 'fixtures', 'stdio-server.mjs');
     const added = await call(owner, 'POST', '', {

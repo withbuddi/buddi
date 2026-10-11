@@ -91,7 +91,8 @@ async function setup(options: { token?: () => Promise<string | null>; plan?: Con
   return { data, bin, binary, connector, tokenReads, lines, setPlan: (next: ConnectorPlan) => { plan = next; } };
 }
 
-describe('the connector the supervisor runs', () => {
+// cloudflared is not wired for Windows yet: these run a POSIX script as the binary.
+describe.skipIf(process.platform === 'win32')('the connector the supervisor runs', () => {
   test('starts cloudflared with the token in its environment, never in argv, and is running once it registers', async () => {
     const w = await setup();
     const first = await w.connector.sync();
@@ -159,7 +160,8 @@ describe('the connector the supervisor runs', () => {
   });
 });
 
-describe('Cloudflare’s system service', () => {
+// cloudflared is not wired for Windows yet: these run a POSIX script as the binary.
+describe.skipIf(process.platform === 'win32')('Cloudflare’s system service', () => {
   test('is found where `cloudflared service install` puts it', () => {
     expect(findSystemDaemon('darwin', file => file === PLIST)).toBe(PLIST);
     expect(findSystemDaemon('linux', file => file === '/etc/systemd/system/cloudflared.service')).toBe('/etc/systemd/system/cloudflared.service');
@@ -243,7 +245,8 @@ describe('a read that fails', () => {
   });
 });
 
-describe('the cloudflared binary', () => {
+// cloudflared is not wired for Windows yet: these run a POSIX script as the binary.
+describe.skipIf(process.platform === 'win32')('the cloudflared binary', () => {
   test('is found on PATH, and in Homebrew’s prefixes a launchd PATH leaves out', () => {
     expect(findOnPath('cloudflared', '/usr/bin:/bin', 'darwin', file => file === '/opt/homebrew/bin/cloudflared')).toBe('/opt/homebrew/bin/cloudflared');
     expect(findOnPath('cloudflared', '/x/bin', 'linux', file => file === '/x/bin/cloudflared')).toBe('/x/bin/cloudflared');
@@ -344,7 +347,8 @@ describe('the download verifier', () => {
     const got = await downloadCloudflared({ data, platform: 'linux', arch: 'x64', fetch: github(body, { 'cloudflared-linux-amd64': Buffer.from(FAKE) }) });
     expect(got).toMatchObject({ path: downloadedBinary(data, 'linux'), version: '2026.9.3', sha256: sha256(Buffer.from(FAKE)) });
     expect(await readFile(got.path, 'utf8')).toBe(FAKE);
-    expect(statSync(got.path).mode & 0o777).toBe(0o700);
+    // Windows has no POSIX modes (every file reads 0666).
+    if (process.platform !== 'win32') expect(statSync(got.path).mode & 0o777).toBe(0o700);
   });
 
   test('never leaves an unverified binary behind', async () => {
@@ -356,7 +360,7 @@ describe('the download verifier', () => {
     expect(existsSync(downloadedBinary(data, 'linux'))).toBe(false);
   });
 
-  test('unpacks a Mac .tgz after checking it', async () => {
+  test.skipIf(process.platform === 'win32')('unpacks a Mac .tgz after checking it', async () => {
     const work = await mkdtemp(path.join(tmpdir(), 'buddi-tgz-'));
     await writeFile(path.join(work, 'cloudflared'), FAKE, { mode: 0o755 });
     const archive = path.join(work, 'cloudflared-darwin-arm64.tgz');
@@ -366,7 +370,8 @@ describe('the download verifier', () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-dl-'));
     const got = await downloadCloudflared({ data, platform: 'darwin', arch: 'arm64', fetch: github(body, { 'cloudflared-darwin-arm64.tgz': bytes }) });
     expect(await readFile(got.path, 'utf8')).toBe(FAKE);
-    expect(statSync(got.path).mode & 0o777).toBe(0o700);
+    // Windows has no POSIX modes (every file reads 0666).
+    if (process.platform !== 'win32') expect(statSync(got.path).mode & 0o777).toBe(0o700);
     await rm(work, { recursive: true, force: true });
   });
 });

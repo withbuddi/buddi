@@ -28,7 +28,8 @@ async function until(check: () => boolean, ms = 5000): Promise<boolean> {
   return check();
 }
 
-describe('program helpers', () => {
+// Programs on this computer (MCP stdio) are not wired for Windows yet: process groups, POSIX quoting and PATH.
+describe.skipIf(process.platform === 'win32')('program helpers', () => {
   it('puts the running Node first on PATH, keeps the basics, and only the named variables', () => {
     const env = childEnv({ TOKEN: 's3cret' }, { PATH: '/usr/bin:/bin', HOME: '/home/o', LANG: 'en_GB.UTF-8', AWS_SECRET: 'no', DATABASE_URL: 'no' }, '/opt/node/bin/node');
     expect(env).toEqual({ PATH: ['/opt/node/bin', '/usr/bin', '/bin'].join(path.delimiter), HOME: '/home/o', LANG: 'en_GB.UTF-8', TOKEN: 's3cret' });
@@ -50,7 +51,8 @@ describe('program helpers', () => {
   });
 });
 
-describe('openProgram (a real stdio server)', () => {
+// Programs on this computer (MCP stdio) are not wired for Windows yet: process groups, POSIX quoting and PATH.
+describe.skipIf(process.platform === 'win32')('openProgram (a real stdio server)', () => {
   let dir: string;
   beforeAll(async () => { dir = await mkdtemp(path.join(os.tmpdir(), 'buddi-program-')); });
   afterAll(async () => { await rm(dir, { recursive: true, force: true }); });

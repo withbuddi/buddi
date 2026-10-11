@@ -3,6 +3,9 @@ import { describe, expect, test } from 'vitest';
 import { bundled, runtimeFacts, runtimeLines } from './runtime-info.js';
 import type { RuntimeDeps } from './runtime-info.js';
 
+// Skipped on Windows: POSIX fixtures for the bundled runtime (bin/node, npm).
+const POSIX_ONLY = process.platform === 'win32';
+
 const node = '/home/owner/.local/share/buddi/node/node';
 
 function disk(files: Record<string, string>, npm: string | Error = '10.9.9'): RuntimeDeps {
@@ -13,7 +16,7 @@ function disk(files: Record<string, string>, npm: string | Error = '10.9.9'): Ru
   };
 }
 
-describe('runtime row', () => {
+describe.skipIf(POSIX_ONLY)('runtime row', () => {
   test('a bundled node, with npm beside it', async () => {
     const facts = await runtimeFacts(node, 'v22.23.3', disk({ '/home/owner/.local/share/buddi/node/VERSION': 'v22.23.3\n', '/home/owner/.local/share/buddi/node/npm': '' }));
     expect(bundled(facts)).toBe(true);

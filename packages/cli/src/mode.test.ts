@@ -12,6 +12,9 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { AMBIGUOUS_LINE, detectMode, insideAppBundle, insideReleases, isGuarded, type ModeFacts } from './mode.js';
 import { main } from './main.js';
 
+// Skipped on Windows: buddi.app and checkout layouts with POSIX fixtures.
+const POSIX_ONLY = process.platform === 'win32';
+
 const BUNDLE = '/Applications/buddi.app/Contents/Resources/buddi/buddi-0.1.0-pre.40/packages/cli/dist';
 const RELEASE = '/Users/me/Library/Application Support/buddi/releases/buddi-0.1.0-pre.41/node_modules/@withbuddi/buddi/packages/cli/dist';
 const CHECKOUT = '/Users/me/src/buddi/packages/cli/dist';
@@ -30,7 +33,7 @@ function facts(over: Partial<ModeFacts> & { files?: Record<string, string> } = {
   };
 }
 
-describe('detectMode', () => {
+describe.skipIf(POSIX_ONLY)('detectMode', () => {
   it('trusts the launcher: BUDDI_INSTALL_ROOT is a packaged install', () => {
     expect(detectMode(facts({ env: { BUDDI_INSTALL_ROOT: '/opt/buddi' }, moduleDir: BUNDLE, repoFound: false })).kind).toBe('packaged');
   });
@@ -86,7 +89,7 @@ describe('detectMode', () => {
   });
 });
 
-describe('main refuses an ambiguous run of a guarded command before anything loads', () => {
+describe.skipIf(POSIX_ONLY)('main refuses an ambiguous run of a guarded command before anything loads', () => {
   it('prints why and the one line, exits 2', async () => {
     const err: string[] = [];
     vi.spyOn(console, 'error').mockImplementation((line: unknown) => void err.push(String(line)));
@@ -104,7 +107,7 @@ describe('main refuses an ambiguous run of a guarded command before anything loa
  * guard runs before any vault is opened, and a regression must not be able
  * to reach a real keychain from a test.
  */
-describe('regression: the bundle\'s main.js run directly', () => {
+describe.skipIf(POSIX_ONLY)('regression: the bundle\'s main.js run directly', () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const cliDir = path.resolve(here, '..');
   const built = path.join(cliDir, 'dist', 'main.js');

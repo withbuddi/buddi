@@ -313,7 +313,8 @@ describe('stripDelegate', () => {
     expect(readDelegatesFile('concierge', dir)).toEqual([]);
   });
 
-  it('names a list it cannot write and still updates the ones after it', () => {
+  // A read-only folder through chmod, which Windows does not honour.
+  it.skipIf(process.platform === 'win32')('names a list it cannot write and still updates the ones after it', () => {
     const dir = agentsDirWith({
       'a/delegates.json': '["scout"]',
       'b/delegates.json': '["scout", "ledger"]',

@@ -497,7 +497,7 @@ export interface InstallTarget {
  * was. The root we are running from is the only fact that cannot be wrong.
  */
 export function installTarget(root: string, platform: NodeJS.Platform | string = process.platform): InstallTarget {
-  const path = platform === 'win32' ? nodePath.win32 : nodePath;
+  const path = platform === 'win32' ? nodePath.win32 : nodePath.posix;
   // A scoped package sits one level deeper: `node_modules/@withbuddi/buddi`.
   let parent = path.dirname(root);
   if (path.basename(parent).startsWith('@')) parent = path.dirname(parent);

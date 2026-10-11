@@ -703,7 +703,8 @@ it('reports the machine itself through the CLI', async () => {
     .toEqual({ available: false, self: null });
 });
 
-it('looks for the binary on the PATH first, then where a Mac keeps one', () => {
+// Mac and PATH lookups with POSIX paths.
+it.skipIf(process.platform === 'win32')('looks for the binary on the PATH first, then where a Mac keeps one', () => {
   const present = (...paths: string[]) => (p: string) => paths.includes(p);
   // The PATH wins, and the first PATH entry that has one wins within it.
   expect(resolveTailscaleBinary({

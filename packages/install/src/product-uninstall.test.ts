@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { createProductUninstall, PASSPHRASE_HELD_MS } from './product-uninstall.js';
 import type { ProductUninstallDeps } from './product-uninstall.js';
 
+// Skipped on Windows: macOS and Linux fixtures (POSIX paths).
+const POSIX_ONLY = process.platform === 'win32';
+
 const home = '/Users/owner';
 const data = '/Users/owner/Library/Application Support/buddi';
 const NAME = 'buddi-backup-20261004-100000.tar.gz.age';
@@ -48,7 +51,7 @@ async function finished(m: ReturnType<typeof machine>, id: string) {
   throw new Error('the job never finished');
 }
 
-describe('uninstall from the product', () => {
+describe.skipIf(POSIX_ONLY)('uninstall from the product', () => {
   it('takes the last backup, moves it and its envelope to ~/buddi-backups, and writes the passphrase file beside it', async () => {
     const m = machine();
     const started = m.uninstall.keepLast();

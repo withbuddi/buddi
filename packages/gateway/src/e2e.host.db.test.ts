@@ -17,7 +17,8 @@ import { TelegramApprovals, approvalKeyboard, parseApprovalCallback } from './te
 import type { Pool } from 'pg';
 
 const databaseUrl = await testDatabaseUrl();
-const suite = databaseUrl ? describe : describe.skip;
+// Host execution is macOS and Linux only (tools/host refuses Windows).
+const suite = databaseUrl && process.platform !== 'win32' ? describe : describe.skip;
 const name = `buddi_host_e2e_${process.pid}`;
 suite('host execution permissions and file workflow', () => {
   let admin: Pool, pool: Pool, dir: string, service: HostService, registry: ToolRegistry, ctx: CoreToolContext;

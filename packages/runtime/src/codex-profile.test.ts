@@ -5,7 +5,8 @@ import { expect, it } from 'vitest';
 import { cleanupCodexSessions, codexChildEnv, stageCodexProfile } from './codex-profile.js';
 import type { CodexTokens } from './codex-oauth.js';
 
-it('cleans only recognizable private orphan profiles, never live profiles or symlinks', async () => {
+// POSIX modes and owners decide what is private; Windows has neither (codex-profile.ts).
+it.skipIf(process.platform === 'win32')('cleans only recognizable private orphan profiles, never live profiles or symlinks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'buddi-codex-cleanup-test-'));
   const create = async (name: string, parent: number, mode = 0o700) => {
     const dir = join(root, name); await mkdir(dir); await chmod(dir, mode);

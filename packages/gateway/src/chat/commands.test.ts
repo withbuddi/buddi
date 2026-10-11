@@ -138,7 +138,8 @@ describe('MultilineInput', () => {
   });
 });
 
-describe('attachmentCandidate', () => {
+// POSIX fixture paths.
+describe.skipIf(process.platform === 'win32')('attachmentCandidate', () => {
   const opts = {
     home: '/home/owner',
     cwd: '/work',
@@ -181,7 +182,8 @@ describe('attachmentCandidate', () => {
   });
 });
 
-describe('path helpers', () => {
+// POSIX fixture paths.
+describe.skipIf(process.platform === 'win32')('path helpers', () => {
   it('expands only a leading tilde', () => {
     expect(expandHome('~/x', '/home/o')).toBe('/home/o/x');
     expect(expandHome('~', '/home/o')).toBe('/home/o');

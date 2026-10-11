@@ -16,6 +16,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
 import { readRecoveryView, vaultMarkersIn } from './recovery.js';
+import { socketPath } from '../__fixtures__/socket-path.js';
 
 const servers: WebServer[] = [];
 const fakes: Server[] = [];
@@ -98,7 +99,7 @@ function fakePool(state: PoolState) {
 /** A supervisor that only records what it was asked to do. */
 async function fakeSupervisor(): Promise<{ socket: string; seen: string[] }> {
   const seen: string[] = [];
-  const socket = path.join(await mkdtemp(path.join(tmpdir(), 'buddi-recovery-')), 'supervisor.sock');
+  const socket = socketPath(path.join(await mkdtemp(path.join(tmpdir(), 'buddi-recovery-')), 'supervisor.sock'));
   const server = createServer((req, res) => {
     seen.push(`${req.method} ${req.url}`);
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -268,7 +269,7 @@ it('a body with no grants in it keeps every grant', async () => {
 });
 
 it('a supervisor that will not restart leaves the installation in recovery', async () => {
-  const socket = path.join(await mkdtemp(path.join(tmpdir(), 'buddi-recovery-')), 'nothing.sock');
+  const socket = socketPath(path.join(await mkdtemp(path.join(tmpdir(), 'buddi-recovery-')), 'nothing.sock'));
   const pool = fakePool(state());
   const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory', BUDDI_SUPERVISOR_SOCKET: socket });
 

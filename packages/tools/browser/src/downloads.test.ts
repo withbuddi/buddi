@@ -39,7 +39,8 @@ describe('the downloads area', () => {
     const saved = await store.save('cfo', streamed(CSV));
     expect(saved.path).toBe(path.join(root, 'cfo', '2026-10-05', 'transactions.csv'));
     expect(await readFile(saved.path, 'utf8')).toBe(CSV);
-    expect((await stat(saved.path)).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX modes (every file reads 0666).
+    if (process.platform !== 'win32') expect((await stat(saved.path)).mode & 0o777).toBe(0o600);
     expect(saved).toMatchObject({ filename: 'transactions.csv', size: CSV.length, mime: 'text/csv' });
     // The same name again the same day is a second file, not an overwrite.
     expect((await store.save('cfo', streamed('other'))).filename).toBe('transactions (2).csv');

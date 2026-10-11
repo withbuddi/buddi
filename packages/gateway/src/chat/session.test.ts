@@ -586,7 +586,8 @@ describe('a one-shot that ends by asking the owner something', () => {
   });
 });
 
-describe('/attach', () => {
+// POSIX fixture paths.
+describe.skipIf(process.platform === 'win32')('/attach', () => {
   function fakeStore(): ArtifactStore & { saved: unknown[] } {
     const saved: unknown[] = [];
     return {

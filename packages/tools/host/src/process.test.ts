@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { commandEnv, runCommand } from './process.js';
 
 const base = { cwd: '/tmp', timeoutMs: 3000, env: process.env };
-describe('host command processes', () => {
+// Host execution is macOS and Linux only (process.ts refuses Windows).
+describe.skipIf(process.platform === 'win32')('host command processes', () => {
   it('returns stdout, stderr and nonzero status honestly', async () => {
     expect(await runCommand({ ...base, command: 'printf hello; printf problem >&2; exit 7' }))
       .toMatchObject({ state: 'completed', stdout: 'hello', stderr: 'problem', exitCode: 7 });

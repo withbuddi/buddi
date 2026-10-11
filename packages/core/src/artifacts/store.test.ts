@@ -60,7 +60,8 @@ describe('storagePathFor', () => {
 });
 
 describe('resolveDataDir', () => {
-  it('honours BUDDI_DATA_DIR and falls back to <repo>/data', () => {
+  // POSIX fixture paths.
+  it.skipIf(process.platform === 'win32')('honours BUDDI_DATA_DIR and falls back to <repo>/data', () => {
     expect(resolveDataDir({ BUDDI_DATA_DIR: '/tmp/buddi-data' })).toBe('/tmp/buddi-data');
     expect(resolveDataDir({})).toMatch(/[/\\]data$/);
   });

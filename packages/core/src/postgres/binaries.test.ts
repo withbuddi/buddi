@@ -14,6 +14,9 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { BINARY_VERSION, prepareBinaries } from './binaries.js';
 
+// Skipped on Windows: fake POSIX binaries and library links; Windows ships .exe files and no links.
+const POSIX_ONLY = process.platform === 'win32';
+
 /** The package as npm unpacks it with scripts off: files, no symlinks. */
 async function fakePackage(): Promise<{ root: string; dataDir: string }> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'buddi-binroot-'));
@@ -40,7 +43,7 @@ async function fakePackage(): Promise<{ root: string; dataDir: string }> {
   return { root, dataDir };
 }
 
-describe('the runtime copy of the Postgres binaries', () => {
+describe.skipIf(POSIX_ONLY)('the runtime copy of the Postgres binaries', () => {
   test('creates the symlinks the package only describes, with no install script anywhere', async () => {
     const { root, dataDir } = await fakePackage();
     const bin = await prepareBinaries({ root, dataDir, env: process.env });

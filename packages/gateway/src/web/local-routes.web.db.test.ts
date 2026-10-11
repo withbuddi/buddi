@@ -23,6 +23,7 @@ import { createApiToken } from './api-tokens.js';
 import { csrfCookieName } from './http.js';
 import { startWebServer, type WebServer } from './server.js';
 import { mintTicket } from './token.js';
+import { socketPath } from '../__fixtures__/socket-path.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -82,7 +83,7 @@ suite('this computer only', () => {
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
     await ensureOwner(pool, 'owner');
     dir = mkdtempSync(path.join(tmpdir(), 'buddi-local-'));
-    const socket = path.join(dir, 's.sock');
+    const socket = socketPath(path.join(dir, 's.sock'));
     supervisor = fakeSupervisor(socket);
     app = await startWebServer({
       pool,

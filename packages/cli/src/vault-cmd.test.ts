@@ -34,7 +34,8 @@ describe('buddi vault', () => {
     expect(await runVault('delete', 'BACKUP_PASSPHRASE', { vault, out, backupDir: dir, now: () => new Date('2026-10-04T10:00:00Z') })).toBe(0);
     const file = path.join(dir, 'buddi-passphrase-20261004-100000.txt');
     expect(readFileSync(file, 'utf8')).toContain('one two three four five six');
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX modes (every file reads 0666).
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(lines.join('\n')).toContain('one two three four five six');
     expect(await vault.get('BACKUP_PASSPHRASE')).toBeNull();
     const other = capture();

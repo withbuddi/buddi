@@ -797,7 +797,8 @@ describe('delete moves, it does not destroy', () => {
     expect(JSON.parse(readFileSync(path.join(h.agentsDir, 'desk', 'delegates.json'), 'utf8'))).toEqual(['ghost']);
   });
 
-  it('finishes the removal when a later list cannot be written, and names that list', async () => {
+  // A read-only folder through chmod, which Windows does not honour.
+  it.skipIf(process.platform === 'win32')('finishes the removal when a later list cannot be written, and names that list', async () => {
     for (const id of ['alpha', 'beta', 'gamma']) {
       mkdirSync(path.join(h.agentsDir, id), { recursive: true });
       writeFileSync(path.join(h.agentsDir, id, 'agent.md'), SCOUT.replace(/scout/g, id).replace('Scout', id), 'utf8');

@@ -76,9 +76,10 @@ describe('the supervisor', () => {
 
   test('serves status and the three actions on an owner-only socket', async () => {
     const { socket, action } = await serve();
-    expect(path.basename(socket)).toBe('supervisor.sock');
+    // Windows: a named pipe, which has no file mode (supervisorSocket).
+    if (process.platform !== 'win32') expect(path.basename(socket)).toBe('supervisor.sock');
     // The filesystem is the whole credential, so the mode is the whole check.
-    expect(((await stat(socket)).mode & 0o777).toString(8)).toBe('600');
+    if (process.platform !== 'win32') expect(((await stat(socket)).mode & 0o777).toString(8)).toBe('600');
     expect(await call(socket, '/status')).toEqual({ status: 200, body: STATUS });
     // `start` and `stop` are answered once they are done: neither kills its
     // client, and `buddi service stop` prints the status it is given.
@@ -104,7 +105,8 @@ describe('the supervisor', () => {
     expect(action).not.toHaveBeenCalled();
   });
 
-  test('replaces the socket a killed supervisor left behind', async () => {
+  // A named pipe leaves no file behind on Windows.
+  test.skipIf(process.platform === 'win32')('replaces the socket a killed supervisor left behind', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
     const socket = supervisorSocket(data);
     // A process killed while listening leaves its socket file behind; a clean

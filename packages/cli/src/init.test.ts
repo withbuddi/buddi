@@ -231,7 +231,8 @@ describe('ensureVaultKey', () => {
       assumeYes: false,
       log: () => {},
     });
-    expect(statSync(envFile).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX modes (every file reads 0666).
+    if (process.platform !== 'win32') expect(statSync(envFile).mode & 0o777).toBe(0o600);
   });
 
   it('generates a key with no character a shell would interpret', async () => {
