@@ -428,7 +428,7 @@ describe('an upgrade', () => {
     ctx.env.BUDDI_UPGRADE_SOURCE = '/tmp/buddi-0.1.1.tgz';
     const { upgrade, install } = service(ctx);
     await settled(upgrade, (upgrade.start() as BackupJob).id);
-    expect(install).toHaveBeenCalledWith('/tmp/buddi-0.1.1.tgz', expect.objectContaining({ registry: 'https://registry.example', root: ctx.root }));
+    expect(install).toHaveBeenCalledWith(path.resolve('/tmp/buddi-0.1.1.tgz'), expect.objectContaining({ registry: 'https://registry.example', root: ctx.root }));
   });
 
   test('refuses a version that is not one, and never asks npm', async () => {

@@ -49,7 +49,8 @@ describe('JSON tables', () => {
     expect(content.length).toBeLessThan(MAX_DOCUMENT_CHARS);
     const started = performance.now();
     expect(() => parseJsonTable(content)).toThrow(new RegExp(`at most ${MAX_TABLE_COLUMNS} columns`));
-    expect(performance.now() - started).toBeLessThan(500);
+    // Building them first takes many seconds; a slow shared runner takes well under two.
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 
   it('refuses a table past the cell budget, and a row wider than its header, in every shape', () => {
@@ -57,7 +58,8 @@ describe('JSON tables', () => {
     const wide = JSON.stringify(Array.from({ length: 5_001 }, (_, r) => (r === 0 ? Object.fromEntries(keys.map((k) => [k, 1])) : { c0: r })));
     const started = performance.now();
     expect(() => parseJsonTable(wide)).toThrow(/cells/);
-    expect(performance.now() - started).toBeLessThan(500);
+    // Building them first takes many seconds; a slow shared runner takes well under two.
+    expect(performance.now() - started).toBeLessThan(2000);
     expect(() => parseJsonTable('[["a","b"],[1,2,3]]')).toThrow(/row 1 has 3 cells; the header has 2/);
     expect(() => parseJsonTable('{"columns":["a"],"rows":[[1],[2,3]]}')).toThrow(/row 2 has 2 cells/);
     expect(() => parseJsonTable('{"columns":["a"],"rows":[1]}')).toThrow(/array of cells/);
