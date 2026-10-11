@@ -8,7 +8,7 @@
  * stopped and started again as our own child — never adopted — so there is
  * exactly one lifecycle: a spawned child plus the probe.
  */
-import { readFile, rename, unlink, writeFile, rm } from 'node:fs/promises';
+import { readFile, readdir, rename, unlink, writeFile, rm } from 'node:fs/promises';
 import { existsSync, createWriteStream } from 'node:fs';
 import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { prepareBinaries, nativeEnvironment, pgBinary, BINARY_VERSION } from './binaries.js';
 import type { Vault } from '../vault/index.js';
+import { startDatabaseGuard } from './windows-guard.js';
 
 const exec = promisify(execFile);
 const { Client } = pg;
@@ -171,8 +172,10 @@ async function initializeCluster(bin: string, stage: string, password: string, e
 
 /**
  * Windows has no /dev/stdin to hand initdb: the password goes through a file
- * beside the stage instead, in the private data directory, removed the moment
- * initdb has read it (and on failure too).
+ * beside the stage instead, in the private data directory (owner-only on
+ * Windows too: the supervisor sets its ACL before anything is written there),
+ * removed the moment initdb has read it, on failure too, and at the next
+ * start if the supervisor was killed in between.
  */
 async function initializeClusterWindows(bin: string, stage: string, password: string, env: NodeJS.ProcessEnv): Promise<void> {
   const pwfile = `${stage}.pw`;
@@ -187,14 +190,30 @@ async function initializeClusterWindows(bin: string, stage: string, password: st
 
 /**
  * Stop the postmaster we started. Elsewhere a signal does it (SIGINT is a fast
- * shutdown); Windows has no signals, and killing postgres.exe outright leaves
- * its backends behind, so `pg_ctl stop` asks it the way Postgres does there.
+ * shutdown); Windows has no signals, and killing postgres.exe outright is an
+ * unclean shutdown that can leave its backends behind, so `pg_ctl stop` asks
+ * it the way Postgres does there — and a server that will not stop is left
+ * running and reported, never killed: the caller must not hand the cluster
+ * over, or remove it, while it runs.
  */
 async function stopPostmaster(child: ChildProcess, bin: string, cluster: string, env: NodeJS.ProcessEnv): Promise<void> {
-  if (process.platform === 'win32' && child.exitCode === null && child.signalCode === null) {
-    await exec(pgBinary(bin, 'pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-t', '15'], { timeout: 20_000, env: nativeEnvironment(env), windowsHide: true }).catch(() => {});
-  }
-  await stopChild(child, 'SIGINT');
+  if (process.platform !== 'win32') return stopChild(child, 'SIGINT');
+  const running = (): boolean => child.exitCode === null && child.signalCode === null;
+  if (!running()) return;
+  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+  let failure: string | undefined;
+  // -t 60: a shutdown checkpoint after a busy hour can take a while.
+  try { await exec(pgBinary(bin, 'pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-t', '60'], { timeout: 70_000, env: nativeEnvironment(env), windowsHide: true }); }
+  catch (error) { failure = (error as Error).message.split('\n')[0]; }
+  // pg_ctl returns when postmaster.pid is gone; the process itself follows.
+  if (running()) await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 10_000))]);
+  if (running()) throw new Error(`Postgres (pid ${child.pid}) did not stop${failure === undefined ? '' : ` (${failure})`}. It was left running rather than killed; stop it before removing or moving ${cluster}.`);
+}
+
+/** initdb password files a killed supervisor left beside its stage (Windows, see initializeClusterWindows). */
+async function removeStalePasswordFiles(dataDir: string): Promise<void> {
+  const names = await readdir(dataDir).catch(() => [] as string[]);
+  await Promise.all(names.filter(name => /^postgres-init-.*\.pw$/.test(name)).map(name => rm(path.join(dataDir, name), { force: true })));
 }
 
 export async function startManagedCluster({ root, dataDir, port, vault, logFile, env = process.env, log: diagnostic = (line: string) => console.error(line) }: ManagedClusterOptions): Promise<ManagedCluster> {
@@ -212,6 +231,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
     await vault.set('BUDDI_DB_PASSWORD', password);
   }
   const bin = await prepareBinaries({ root, dataDir, env, log: diagnostic });
+  await removeStalePasswordFiles(dataDir);
   if (!existsSync(path.join(cluster, 'PG_VERSION'))) {
     if (existsSync(cluster)) throw new Error('The postgres directory is incomplete or unrecognized. It was preserved; inspect it before retrying.');
     const stage = path.join(dataDir, `postgres-init-${process.pid}-${Date.now()}`);
@@ -252,7 +272,13 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
     }
   }
   const log = createWriteStream(logFile, { flags: 'a', mode: 0o600 });
-  const child = spawn(pgBinary(bin, 'postgres'), ['-D', cluster, '-p', String(port), '-h', '127.0.0.1', '-k', ''], { env: nativeEnvironment(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  /*
+   * Windows: detached, so the postmaster is in no job of the supervisor's
+   * (libuv kills a job's processes when its node exits) and has no console of
+   * its own to be closed under it. A supervisor that dies leaves it running,
+   * as SIGKILL does elsewhere, and the next start stops it (above).
+   */
+  const child = spawn(pgBinary(bin, 'postgres'), ['-D', cluster, '-p', String(port), '-h', '127.0.0.1', '-k', ''], { env: nativeEnvironment(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform === 'win32' });
   child.stdout?.pipe(log, { end: false }); child.stderr?.pipe(log, { end: false });
   let failed: Error | undefined;
   child.on('error', error => { failed = error; });
@@ -284,7 +310,8 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
         await new Promise(resolve => setTimeout(resolve, 150));
       } finally { await client.end().catch(() => {}); }
     }
-  } catch (error) { await stopPostmaster(child, bin, cluster, env); log.end(); throw error; }
+  } catch (error) { await stopPostmaster(child, bin, cluster, env).catch(stop => diagnostic((stop as Error).message)); log.end(); throw error; }
+  if (process.platform === 'win32' && child.pid !== undefined) startDatabaseGuard({ cluster, postmaster: child.pid, logFile, env: nativeEnvironment(env) }, diagnostic);
   const url = `postgres://buddi:${encodeURIComponent(password)}@127.0.0.1:${port}/buddi`;
   const monitor = watchDatabase(async () => {
     const client = new Client(connection);
