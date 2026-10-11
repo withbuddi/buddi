@@ -294,7 +294,9 @@ describe('where npm is told to install', () => {
     const env = { Path: 'C:\\Windows\\System32;;C:\\Users\\me\\AppData\\Roaming\\npm' };
     expect(npmBinary('C:\\tools\\node.exe', env, file => file === 'C:\\Users\\me\\AppData\\Roaming\\npm\\npm.cmd', 'win32')).toBe('C:\\Users\\me\\AppData\\Roaming\\npm\\npm.cmd');
     // Its script is then found beside it, and run with this node.
-    expect(npmInvocation('C:\\Users\\me\\AppData\\Roaming\\npm\\npm.cmd', ['view'], 'win32')[1][0]).toBe('C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npm-cli.js');
+    expect(npmInvocation('C:\\Users\\me\\AppData\\Roaming\\npm\\npm.cmd', ['view'], 'win32', () => true)[1][0]).toBe('C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npm-cli.js');
+    // A shim with no npm beside it (Volta, Scoop): said in words, not as an ENOENT on node.exe.
+    expect(() => npmInvocation('C:\\Users\\me\\scoop\\shims\\npm.cmd', ['install'], 'win32', () => false)).toThrow(/^npm is not installed beside the node running buddi \(.*npm-cli\.js is missing\)\. Install Node\.js with npm and try again\.$/);
     expect(npmBinary('/usr/local/bin/node', {}, () => false, 'linux')).toBe('npm');
   });
 

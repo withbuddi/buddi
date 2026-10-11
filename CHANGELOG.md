@@ -6,7 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
-- Windows (for testing, not public yet): `npm install -g @withbuddi/buddi` then `buddi` runs on Windows 10/11 x64, and on Windows on Arm with the x64 build of Node. The embedded Postgres runs there (initdb, start and a clean `pg_ctl` stop; a missing Visual C++ runtime is named with its download link), secrets live in the file vault, and the service is a Task Scheduler task of your own (no administrator), started at once and at every sign-in with no console window. The supervisor answers on a named pipe instead of a Unix socket; `buddi` and `buddi dashboard` open the link in your default browser; `buddi service logs` follows the logs with PowerShell; `buddi uninstall` removes the task and stops the supervisor and its database cleanly; `buddi upgrade` recognises npm's global tree on Windows.
+- Windows (for testing, not public yet): `npm install -g @withbuddi/buddi` then `buddi` runs on Windows 10/11 x64, and on Windows on Arm with the x64 build of Node. The embedded Postgres runs there (initdb, start and a clean `pg_ctl` stop; a missing Visual C++ runtime is named with its download link), secrets live in the file vault, and the service is a Task Scheduler task of your own (no administrator), started at once and at every sign-in with no console window. The supervisor answers on a named pipe instead of a Unix socket; `buddi` and `buddi dashboard` open the link in your default browser; `buddi service logs` follows the logs with PowerShell; `buddi uninstall` removes the task and stops the supervisor and its database cleanly; `buddi upgrade` recognises npm's global tree on Windows. Not there yet on Windows: remote access through a Cloudflare tunnel, MCP programs run on this computer, agents running commands on this computer, and Codex sign-ins handed to a plugin's native program (the image plugin). npm must sit beside node (Node's installer or zip, nvm-windows; Volta and Scoop shims are named, not used).
 
 ### Fixed
 
@@ -19,6 +19,7 @@ What changes in buddi from one release to the next, newest first.
 - `buddi uninstall` keeps the secrets when the data directory stays (a service that would not stop, a folder still held): they used to be deleted anyway, leaving data nothing could open. On Windows a task that is already gone is recognised in any system language.
 - Windows: the data directory is private to your account (an access list with only you and SYSTEM, set at every start and refused if it cannot be), the supervisor's pipe has a random name kept in it, and a leftover initdb password file is removed at the next start.
 - Windows: `buddi upgrade` and plugin installs find an npm that is only on PATH.
+- Windows: a data directory whose path has letters outside English (C:\Users\Zoë) or `( ) &` (C:\Users\Jane (Work) & Co) starts at sign-in; `buddi uninstall` asks the supervisor to stop before it deletes the task, so a refusal leaves buddi starting at the next sign-in; the supervisor's pipe is given out only while it runs, and its answers carry a secret from the data directory; `buddi service logs` follows the gateway's log too; a restart holds the end of the session (with a reason on screen, 15 seconds at most) while the database stops.
 
 ## 0.1.0-pre.53 — 2026-10-11
 

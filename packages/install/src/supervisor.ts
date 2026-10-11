@@ -56,29 +56,52 @@ export function pendingUpgrade(marker: UpgradeInProgress | undefined): UpgradeIn
 /** Where a Windows supervisor records the name of its pipe, inside the private data directory. */
 export const PIPE_NAME_FILE = 'supervisor.pipe';
 
+/** The response header a Windows supervisor proves itself with: the secret beside its pipe's name. */
+export const SUPERVISOR_SECRET_HEADER = 'x-buddi-supervisor';
+
+/** The live supervisor's pipe name and secret (Windows), or nothing when `supervisor.lock` names no live process. */
+export function supervisorPipe(data: string): { name: string; secret: string } | undefined {
+  const pid = Number((() => { try { return readFileSync(path.join(data, 'supervisor.lock'), 'utf8').trim(); } catch { return ''; } })());
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try { process.kill(pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EPERM') return undefined; }
+  const [name = '', secret = ''] = (() => { try { return readFileSync(path.join(data, PIPE_NAME_FILE), 'utf8').split(/\r?\n/); } catch { return []; } })();
+  return /^buddi-supervisor-[0-9a-f]{32}$/.test(name) && /^[0-9a-f]{64}$/.test(secret) ? { name, secret } : undefined;
+}
+
 /**
  * The control socket of the installation whose data directory this is. On
  * Windows a named pipe instead (Node listens on no other kind of path there).
- * A pipe's name is in a namespace every account shares, and one created
- * first by someone else would be answered by them; so the name is random,
- * made afresh at each supervisor start, and kept where only this account can
- * read it (`supervisor.pipe` in the data directory, see protectDataDirectory).
- * No supervisor yet: a name nobody can have made, which no one answers.
+ * A pipe's name is in a namespace every account shares and can list, and
+ * one created first by someone else would be answered by them; so the name
+ * is random, made afresh at each supervisor start, kept where only this
+ * account can read it (`supervisor.pipe` in the data directory, see
+ * protectDataDirectory) beside a secret every answer carries, and given out
+ * only while `supervisor.lock` names a live supervisor. Otherwise: a name
+ * nobody can have made, which no one answers.
  */
 export function supervisorSocket(data: string, platform: NodeJS.Platform | string = process.platform): string {
   if (platform === 'win32') {
-    const name = (() => { try { return readFileSync(path.join(data, PIPE_NAME_FILE), 'utf8').trim(); } catch { return ''; } })();
-    return /^buddi-supervisor-[0-9a-f]{32}$/.test(name) ? `\\\\.\\pipe\\${name}` : `\\\\.\\pipe\\buddi-supervisor-none-${randomBytes(16).toString('hex')}`;
+    const pipe = supervisorPipe(data);
+    return pipe !== undefined ? `\\\\.\\pipe\\${pipe.name}` : `\\\\.\\pipe\\buddi-supervisor-none-${randomBytes(16).toString('hex')}`;
   }
   return path.join(data, 'supervisor.sock');
 }
 
-/** A new pipe name for this supervisor (Windows; elsewhere the socket's path is fixed). Called with the lock held. */
-export async function nameSupervisorPipe(data: string, platform: NodeJS.Platform | string = process.platform): Promise<void> {
-  if (platform !== 'win32') return;
+/** Does an answer on this installation's socket come from its supervisor? Always, but on Windows (see supervisorSocket). */
+export function answeredBySupervisor(data: string, headers: Record<string, string | string[] | undefined>, platform: NodeJS.Platform | string = process.platform): boolean {
+  if (platform !== 'win32') return true;
+  const secret = supervisorPipe(data)?.secret;
+  return secret !== undefined && headers[SUPERVISOR_SECRET_HEADER] === secret;
+}
+
+/** A new pipe name and secret for this supervisor (Windows; elsewhere the socket's path is fixed). Called with the lock held; returns the secret. */
+export async function nameSupervisorPipe(data: string, platform: NodeJS.Platform | string = process.platform): Promise<string | undefined> {
+  if (platform !== 'win32') return undefined;
   const file = path.join(data, PIPE_NAME_FILE);
-  await writeFile(`${file}.tmp`, `buddi-supervisor-${randomBytes(16).toString('hex')}\n`, { mode: 0o600 });
+  const secret = randomBytes(32).toString('hex');
+  await writeFile(`${file}.tmp`, `buddi-supervisor-${randomBytes(16).toString('hex')}\n${secret}\n`, { mode: 0o600 });
   await rename(`${file}.tmp`, file);
+  return secret;
 }
 
 /** The moved-port line for `/status`, for a day after the move. */
@@ -572,6 +595,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   /** Has a pending upgrade been written into the history yet? */
   let resolved = false, pending: UpgradeInProgress | undefined;
   let desired = true, closing = false, chain: Promise<void> = Promise.resolve();
+  let pipeSecret: string | undefined;
   let failures = 0;
   const stopGateway = async () => {
     desired = false; clearTimeout(retry);
@@ -591,7 +615,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   }
   try {
     await initialize(ctx);
-    await nameSupervisorPipe(ctx.data);
+    pipeSecret = await nameSupervisorPipe(ctx.data);
     const ready = ctx as ReadyContext;
     /*
      * An upgrade that installed new code and handed over is finished here, by
@@ -799,6 +823,11 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       backup, upgrade, data: ready.data, uninstall, cli, connector,
       exit: () => { console.error('supervisor: asked to exit on the control socket.'); onSignal(); },
     });
+    if (pipeSecret !== undefined) {
+      const secret = pipeSecret;
+      // Before the routes answer: every reply says it is this supervisor's.
+      server.prependListener('request', (_req: IncomingMessage, res: ServerResponse) => { res.setHeader(SUPERVISOR_SECRET_HEADER, secret); });
+    }
     await listenOnSocket(server, supervisorSocket(ready.data));
     if (briefly) console.error('supervisor: started briefly, for an uninstall\'s last backup; the gateway stays stopped.');
     else if (migrationFailure === undefined) { start(); void connector.sync(); }
@@ -860,7 +889,10 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     }
     try { await database?.stop(); }
     finally {
-      log?.end(); await release();
+      log?.end();
+      // Its pipe's name and secret go before the lock does (Windows).
+      if (pipeSecret !== undefined) await rm(path.join(ctx.data, PIPE_NAME_FILE), { force: true });
+      await release();
       process.removeListener('SIGINT', onSignal); process.removeListener('SIGTERM', onSignal); process.removeListener('SIGHUP', onSignal);
     }
   }
@@ -889,7 +921,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
        * installed is the whole hand-over, observed rather than assumed.
        */
       ready: async () => {
-        const status = await statusOnSocket(supervisorSocket(ctx.data));
+        const status = await statusOnSocket(supervisorSocket(ctx.data), undefined, headers => answeredBySupervisor(ctx.data, headers));
         if (status !== undefined && status.current === marker?.to) return true;
         /*
          * Or the successor has already been and written an outcome.

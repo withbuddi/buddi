@@ -39,6 +39,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { request } from 'node:http';
+import type { IncomingHttpHeaders } from 'node:http';
 import { createRequire } from 'node:module';
 import { open, readFile, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -585,9 +586,13 @@ export function npmBinary(execPath = process.execPath, env: NodeJS.ProcessEnv = 
  * (CVE-2024-27980): the script it wraps runs with this node instead, as
  * npm.cmd itself would. Elsewhere npm runs as it is.
  */
-export function npmInvocation(binary: string, args: string[], platform: NodeJS.Platform | string = process.platform): [string, string[]] {
+export function npmInvocation(binary: string, args: string[], platform: NodeJS.Platform | string = process.platform, exists: (file: string) => boolean = existsSync): [string, string[]] {
   if (platform !== 'win32' || !/\.cmd$/i.test(binary)) return [binary, args];
-  return [process.execPath, [nodePath.win32.join(nodePath.win32.dirname(binary), 'node_modules', 'npm', 'bin', 'npm-cli.js'), ...args]];
+  // The layouts that have it: Node's installer and zip, nvm-windows. Volta,
+  // Scoop and the like put a shim there instead, with no npm beside it.
+  const cli = nodePath.win32.join(nodePath.win32.dirname(binary), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (!exists(cli)) throw new Error(`npm is not installed beside the node running buddi (${cli} is missing). Install Node.js with npm and try again.`);
+  return [process.execPath, [cli, ...args]];
 }
 
 export function installArgs(spec: string, opts: { registry: string; root: string; target?: InstallTarget }): string[] {
@@ -795,9 +800,11 @@ export async function handOver(opts: HandOverOptions): Promise<HandOverResult> {
  * gateway's transport, so this is `node:http`'s client: one request, one
  * answer, connection closed. It is the readiness test of the hand-over.
  */
-export async function statusOnSocket(socket: string, timeoutMs = 2_000): Promise<{ current?: string; phase?: string } | undefined> {
+export async function statusOnSocket(socket: string, timeoutMs = 2_000, genuine: (headers: IncomingHttpHeaders) => boolean = () => true): Promise<{ current?: string; phase?: string } | undefined> {
   return await new Promise((resolve) => {
     const req = request({ socketPath: socket, path: '/status', method: 'GET', headers: { host: 'localhost' }, timeout: timeoutMs }, res => {
+      // An answer that is not the supervisor's (Windows: without its secret) is no answer.
+      if (!genuine(res.headers)) { res.resume(); return resolve(undefined); }
       let text = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { text += chunk; });

@@ -64,7 +64,7 @@ import {
   renderHelp,
   type InstallKind,
 } from './commands.js';
-import { collectStatus, renderStatus, startedAt, supervisorSocketPath, type ServiceState } from './status.js';
+import { collectStatus, renderStatus, startedAt, supervisorPipeOf, supervisorSocketPath, type ServiceState } from './status.js';
 import { colorOn, helpStyle } from './style.js';
 import { runBackup } from './backup/index.js';
 import { runDashboard } from './dashboard-cmd.js';
@@ -492,7 +492,7 @@ async function status(json: boolean, env: NodeJS.ProcessEnv): Promise<number> {
     version: () => currentVersion(env),
     service: async (): Promise<{ state: ServiceState; detail: string }> => {
       if (kind === 'packaged') {
-        const reply = await supervisorCall(supervisorSocketPath(DATA_DIR), '/status', 'GET', undefined, 3_000).catch(() => null);
+        const reply = await supervisorCall(supervisorSocketPath(DATA_DIR), '/status', 'GET', undefined, 3_000, process.platform === 'win32' ? supervisorPipeOf(DATA_DIR)?.secret ?? '-' : undefined).catch(() => null);
         if (reply === null || reply.status !== 200) return { state: 'not-installed', detail: 'the supervisor is not answering' };
         const body = reply.body as { gateway?: string; gatewayPid?: number | null };
         if (body.gateway !== 'running') return { state: 'stopped', detail: `the gateway is ${body.gateway ?? 'stopped'}` };

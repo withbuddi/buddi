@@ -57,7 +57,12 @@ export interface SupervisorReply {
 
 export type SupervisorMethod = 'GET' | 'POST' | 'PUT';
 
-export function supervisorCall(socketPath: string, route: string, method: SupervisorMethod, body?: unknown, timeoutMs = 20_000): Promise<SupervisorReply> {
+/**
+ * One call on the supervisor's socket. `secret`, when given (Windows, where a
+ * pipe's name can be listed by anyone), is what the answer must carry in its
+ * `x-buddi-supervisor` header to be the supervisor's own.
+ */
+export function supervisorCall(socketPath: string, route: string, method: SupervisorMethod, body?: unknown, timeoutMs = 20_000, secret?: string): Promise<SupervisorReply> {
   // A body is small and known here, so it is serialized up front and sent with
   // a length: the supervisor reads one object, never a stream it has to bound.
   const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8');
@@ -66,6 +71,10 @@ export function supervisorCall(socketPath: string, route: string, method: Superv
       host: 'localhost',
       ...(payload ? { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': payload.length } : {}),
     }, timeout: timeoutMs }, (res) => {
+      if (secret !== undefined && res.headers['x-buddi-supervisor'] !== secret) {
+        res.resume();
+        return reject(new Error("Something other than this installation's supervisor answered on its pipe."));
+      }
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => {

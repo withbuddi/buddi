@@ -399,7 +399,7 @@ describe('the control socket’s /connector', () => {
     const server = controlSocket({ status: () => STATUS, action: async () => {}, connector: { status: () => VIEW, sync, remove } });
     servers.push(server);
     const sockDir = await mkdtemp(path.join(tmpdir(), 'buddi-sock-'));
-    await nameSupervisorPipe(sockDir);
+    await writeFile(path.join(sockDir, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(sockDir);
     const socket = supervisorSocket(sockDir);
     await listenOnSocket(server, socket);
     expect(await call(socket, 'GET')).toEqual({ status: 200, body: VIEW });
@@ -414,7 +414,7 @@ describe('the control socket’s /connector', () => {
     const server = controlSocket({ status: () => STATUS, action: async () => {} });
     servers.push(server);
     const sockDir = await mkdtemp(path.join(tmpdir(), 'buddi-sock-'));
-    await nameSupervisorPipe(sockDir);
+    await writeFile(path.join(sockDir, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(sockDir);
     const socket = supervisorSocket(sockDir);
     await listenOnSocket(server, socket);
     expect((await call(socket, 'GET')).status).toBe(404);

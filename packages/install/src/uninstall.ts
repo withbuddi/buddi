@@ -242,20 +242,32 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
           : `the background service: systemd user unit ${label}.service (${unit})`;
     steps.push({ line, run: async () => {
       if (await deps.supervisor.answers()) await deps.supervisor.stopGateway().catch(() => {});
-      let unloadError: Error | undefined;
-      if (hasUnit) unloadError = await unloadService(deps, label).then(() => undefined, (error: Error) => error);
-      // A supervisor launchd or systemd did not own (`buddi --no-service`) is asked directly.
-      const left = deps.supervisorPid();
-      if (left !== undefined && unloadError === undefined) {
+      const askToStop = async (): Promise<void> => {
+        const left = deps.supervisorPid();
+        if (left === undefined) return;
         try { await deps.signal(left, 'SIGTERM'); }
         catch (error) { throw new Error(`the supervisor (pid ${left}) did not agree to stop: ${(error as Error).message.replace(/\.$/, '')}`); }
-      }
+      };
+      /*
+       * Windows: deleting a task stops nothing, so the supervisor is asked
+       * first, and the task goes only once it has agreed and left. A refusal
+       * (a restore or an upgrade under way) leaves the task, which starts buddi
+       * again at the next sign-in. launchd and systemd stop the job as they
+       * unload it, so there the unload comes first.
+       */
+      if (deps.platform === 'win32') await askToStop();
+      let unloadError: Error | undefined;
+      const unload = async (): Promise<void> => { if (hasUnit) unloadError = await unloadService(deps, label).then(() => undefined, (error: Error) => error); };
+      if (deps.platform !== 'win32') await unload();
+      // A supervisor launchd or systemd did not own (`buddi --no-service`) is asked directly.
+      if (deps.platform !== 'win32' && unloadError === undefined) await askToStop();
       for (let waited = 0; deps.supervisorPid() !== undefined; waited += 250) {
         if (waited >= 60_000) {
           throw unloadError ?? new Error(`the supervisor (pid ${deps.supervisorPid()}) did not stop within a minute`);
         }
         await deps.sleep(250);
       }
+      if (deps.platform === 'win32') await unload();
       if (unloadError) throw unloadError;
       for (let waited = 0; deps.postmasterLeft?.() === true; waited += 250) {
         if (waited >= 60_000) throw new Error(`the database on ${join('postgres')} is still running after its supervisor stopped`);
@@ -520,8 +532,8 @@ async function unloadService(deps: PackagedUninstallDeps, label: string): Promis
     }
   }
   if (deps.platform === 'win32') {
-    // Deleting the task leaves a running copy alone: the supervisor is asked
-    // to exit next (the caller's `signal`), which stops the cluster with it.
+    // Deleting the task leaves a running copy alone: the supervisor has
+    // already been asked to exit (the caller's `signal`) and has left.
     const out = await deps.exec('schtasks.exe', ['/Delete', '/TN', windowsTaskName(label), '/F']);
     if (out.code === 0) return;
     // Already gone is what we want. Asked again rather than read from the

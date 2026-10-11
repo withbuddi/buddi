@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 import { existsSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs';
 import { environment, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
-import { briefSupervisorEnv, supervise, supervisorSocket } from './supervisor.js';
+import { answeredBySupervisor, briefSupervisorEnv, supervise, supervisorSocket } from './supervisor.js';
 import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
@@ -27,7 +27,7 @@ import { runtimeFacts, runtimeLines } from './runtime-info.js';
 import { commandOwnedBy, desktopEntryPaths, linuxUnitSpec, ownDesktopEntries } from './linux-install.js';
 import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimRefusesSupervise, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
-import { buildSuperviseScript, buildTaskXml, registerWindowsTask, taskXmlBytes, windowsTaskName, windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
+import { buildSuperviseScript, buildTaskXml, followLogsCommand, registerWindowsTask, taskXmlBytes, windowsTaskName, windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
 
 const entry = fileURLToPath(import.meta.url);
 // <root>/packages/install/dist/launcher.js — the installation root is three up.
@@ -62,6 +62,8 @@ async function ask<T>(ctx: InstallContext, method: string, route: string, body?:
       headers: { host: 'localhost', ...(payload === undefined ? {} : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }) },
       timeout: 25_000,
     }, res => {
+      // Windows: a pipe's name can be listed by anyone; the secret beside it in the data directory cannot.
+      if (!answeredBySupervisor(ctx.data, res.headers)) { res.resume(); return reject(new Error('Something other than this installation\'s supervisor answered on its pipe.')); }
       let text = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { text += chunk; });
@@ -774,11 +776,12 @@ async function run(): Promise<void> {
     const logs = ['supervisor.log', 'gateway.log'].map(name => path.join(ctx.data, 'logs', name)).filter(file => existsSync(file));
     if (logs.length === 0) { console.error(`buddi: no log yet in ${path.join(ctx.data, 'logs')}. Run buddi to start the service.`); process.exitCode = 1; return; }
     const windows = process.platform === 'win32';
-    console.log(`${windows ? 'Get-Content -Wait' : 'tail -F'} ${logs.join(' ')}  (Ctrl-C to stop)`);
+    console.log(`${windows ? 'Following' : 'tail -F'} ${logs.join(' ')}  (Ctrl-C to stop)`);
     await new Promise<void>(resolve => {
-      // Windows has no tail: PowerShell's Get-Content follows the same files.
-      const child = windows
-        ? spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-Content -Encoding UTF8 -Tail 80 -Wait -LiteralPath ${logs.map(file => `'${file.replace(/'/g, "''")}'`).join(',')}`], { stdio: 'inherit' })
+      // Windows has no tail: a PowerShell loop follows the same files (windows-task.ts).
+      const follow = windows ? followLogsCommand(logs) : undefined;
+      const child = follow !== undefined
+        ? spawn('powershell.exe', follow.args, { stdio: 'inherit', env: { ...process.env, ...follow.env } })
         : spawn('tail', ['-n', '80', '-F', ...logs], { stdio: 'inherit' });
       child.once('exit', () => resolve());
       child.once('error', err => { console.error(`buddi: could not follow the log: ${err.message}`); resolve(); });

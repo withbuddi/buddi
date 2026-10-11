@@ -488,6 +488,8 @@ export async function acquireLock(data: string): Promise<() => Promise<void>> {
         if (existsSync(file)) {
           if (!stale) throw new Error('This installation already has a supervisor (or startup is in progress).');
           await rename(file, `${file}.stale-${Date.now()}-${process.pid}`);
+          // A dead supervisor's pipe name (Windows) goes with its lock.
+          rmSync(path.join(data, 'supervisor.pipe'), { force: true });
         }
       } finally { await recovery.close(); await unlink(`${file}.recovery`); }
     }

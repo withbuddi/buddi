@@ -173,15 +173,28 @@ export async function startedAt(pid: number): Promise<string | undefined> {
 }
 
 /**
+ * The live Windows supervisor's pipe name and the secret its answers carry,
+ * from `supervisor.pipe` in the data directory, while `supervisor.lock` names
+ * a live process (the same reading as @buddi/install's supervisorPipe).
+ */
+export function supervisorPipeOf(dataDir: string): { name: string; secret: string } | undefined {
+  const pid = Number((() => { try { return readFileSync(path.join(dataDir, 'supervisor.lock'), 'utf8').trim(); } catch { return ''; } })());
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try { process.kill(pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EPERM') return undefined; }
+  const [name = '', secret = ''] = (() => { try { return readFileSync(path.join(dataDir, 'supervisor.pipe'), 'utf8').split(/\r?\n/); } catch { return []; } })();
+  return /^buddi-supervisor-[0-9a-f]{32}$/.test(name) && /^[0-9a-f]{64}$/.test(secret) ? { name, secret } : undefined;
+}
+
+/**
  * The supervisor's control socket, beside the data it looks after; on Windows
  * the named pipe @buddi/install's supervisor listens on, whose random name it
- * keeps in `supervisor.pipe` in the data directory (no supervisor yet: a name
- * no one answers).
+ * keeps in `supervisor.pipe` in the data directory (no live supervisor: a
+ * name no one answers).
  */
 export function supervisorSocketPath(dataDir: string, platform: NodeJS.Platform | string = process.platform): string {
   if (platform === 'win32') {
-    const name = (() => { try { return readFileSync(path.join(dataDir, 'supervisor.pipe'), 'utf8').trim(); } catch { return ''; } })();
-    return /^buddi-supervisor-[0-9a-f]{32}$/.test(name) ? `\\\\.\\pipe\\${name}` : `\\\\.\\pipe\\buddi-supervisor-none-${randomBytes(16).toString('hex')}`;
+    const pipe = supervisorPipeOf(dataDir);
+    return pipe !== undefined ? `\\\\.\\pipe\\${pipe.name}` : `\\\\.\\pipe\\buddi-supervisor-none-${randomBytes(16).toString('hex')}`;
   }
   return path.join(dataDir, 'supervisor.sock');
 }

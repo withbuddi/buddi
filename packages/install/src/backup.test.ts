@@ -89,7 +89,7 @@ function fakeControl(): { control: BackupControl; seen: unknown[] } {
 
 async function serve(): Promise<{ socket: string; data: string; seen: unknown[] }> {
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-backup-socket-'));
-  await nameSupervisorPipe(data);
+  await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
   const socket = supervisorSocket(data);
   const { control, seen } = fakeControl();
   const server = controlSocket({ status: () => STATUS, action: vi.fn(async () => {}), backup: control, data });
@@ -182,7 +182,7 @@ describe('the control socket, backup half', () => {
 
   test('a supervisor with no installation to back up serves none of it', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-backup-socket-'));
-    await nameSupervisorPipe(data);
+    await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     const server = controlSocket({ status: () => STATUS, action: async () => {} });
     servers.push(server);
@@ -459,7 +459,7 @@ describe('a restore, as the service runs it', () => {
 
   test('the socket refuses start, stop, restart and a backup while a restore runs', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-backup-socket-'));
-    await nameSupervisorPipe(data);
+    await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     const { control } = fakeControl();
     const action = vi.fn(async (_name: string) => {});

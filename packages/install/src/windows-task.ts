@@ -10,7 +10,9 @@
  *
  * The task runs `<data>\service\supervise.cmd` (the environment, then node
  * with the launcher's `supervise`, its output appended to the supervisor log)
- * under `conhost.exe --headless`, so no console window opens at logon. The
+ * under `conhost.exe --headless`, so no console window opens at logon. cmd
+ * gets `/s /c ""<script>""`: /s strips the outer quotes and keeps the inner
+ * ones, whatever the path holds (`C:\Users\Jane (Work) & Co`). The
  * script is what says the service is installed, as the plist and the unit do.
  *
  * Node builtins only, and nothing of buddi's: `launcher.ts` and `uninstall.ts`
@@ -50,6 +52,9 @@ function cmdLiteral(value: string): string {
 export function buildSuperviseScript({ nodePath, entry, environment, logFile }: SuperviseScript): string {
   const lines = [
     '@echo off',
+    // The file is UTF-8 and cmd reads each line in the console's code page,
+    // so the lines after this one keep a non-ASCII path (C:\Users\Zoë) intact.
+    'chcp 65001 >nul',
     'rem Written by buddi. Task Scheduler runs it at logon to start the supervisor.',
     ...Object.entries(environment).map(([key, value]) => `set "${cmdLiteral(key)}=${cmdLiteral(value)}"`),
     `"${cmdLiteral(nodePath)}" "${cmdLiteral(entry)}" supervise >> "${cmdLiteral(logFile)}" 2>&1`,
@@ -118,7 +123,7 @@ export function buildTaskXml({ user, script, workingDirectory, systemRoot }: Tas
   <Actions Context="Author">
     <Exec>
       <Command>${xml(path.win32.join(system32, 'conhost.exe'))}</Command>
-      <Arguments>${xml(`--headless "${path.win32.join(system32, 'cmd.exe')}" /d /c "${script}"`)}</Arguments>
+      <Arguments>${xml(`--headless "${path.win32.join(system32, 'cmd.exe')}" /d /s /c ""${script}""`)}</Arguments>
       <WorkingDirectory>${xml(workingDirectory)}</WorkingDirectory>
     </Exec>
   </Actions>
@@ -145,4 +150,44 @@ export async function registerWindowsTask(exec: TaskExec, name: string, xmlFile:
   await exec('schtasks.exe', ['/Create', '/TN', name, '/XML', xmlFile, '/F']);
   await exec('schtasks.exe', ['/End', '/TN', name]).catch(() => {});
   await exec('schtasks.exe', ['/Run', '/TN', name]);
+}
+
+/**
+ * `buddi service logs` on Windows, which has no `tail -F`: PowerShell's
+ * `Get-Content -Wait` follows one file only, so this polls each of them,
+ * prints the last 80 lines of each first, and names the file whenever the
+ * output switches to another, as tail does. The files travel in the
+ * environment (one per line), never through a quoted command line.
+ */
+/** PowerShell's escape character, which a template literal cannot hold as itself. */
+const BACKTICK = '`';
+
+export function followLogsCommand(files: string[]): { args: string[]; env: Record<string, string> } {
+  const script = String.raw`
+$ErrorActionPreference = 'SilentlyContinue'
+$files = @($env:BUDDI_FOLLOW -split "${BACKTICK}n" | Where-Object { $_ -ne '' })
+$pos = @{}; $script:last = ''
+function Show($f, $text) { if ($script:last -ne $f) { [Console]::Out.WriteLine("==> $f <=="); $script:last = $f }; [Console]::Out.Write($text) }
+foreach ($f in $files) {
+  $lines = Get-Content -Encoding UTF8 -Tail 80 -LiteralPath $f
+  if ($lines) { Show $f ((@($lines) -join "${BACKTICK}n") + "${BACKTICK}n") }
+  $pos[$f] = (Get-Item -LiteralPath $f).Length
+}
+while ($true) {
+  foreach ($f in $files) {
+    $len = (Get-Item -LiteralPath $f).Length
+    if ($len -lt $pos[$f]) { $pos[$f] = 0 }
+    if ($len -gt $pos[$f]) {
+      $s = [IO.File]::Open($f, 'Open', 'Read', 'ReadWrite,Delete'); $s.Position = $pos[$f]
+      $r = New-Object IO.StreamReader($s, [Text.Encoding]::UTF8); $t = $r.ReadToEnd(); $r.Close()
+      $pos[$f] = $len; Show $f $t
+    }
+  }
+  Start-Sleep -Milliseconds 500
+}
+`;
+  return {
+    args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    env: { BUDDI_FOLLOW: files.join('\n') },
+  };
 }

@@ -35,7 +35,7 @@ function call(socket: string, route: string, method = 'GET', headers: Record<str
 
 async function serve(action = vi.fn(async (_name: string) => {})): Promise<{ socket: string; action: typeof action }> {
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
-  await nameSupervisorPipe(data);
+  await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
   const socket = supervisorSocket(data);
   const server = controlSocket({ status: () => STATUS, action });
   servers.push(server);
@@ -46,7 +46,7 @@ async function serve(action = vi.fn(async (_name: string) => {})): Promise<{ soc
 describe('the supervisor', () => {
   test('serves uninstall from the product: the plan, the last backup as a job, and the removal', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
-    await nameSupervisorPipe(data);
+    await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     const job = { id: '00000000-0000-4000-8000-000000000001', kind: 'uninstall-backup' as const, phase: 'starting', phases: ['starting'], startedAt: 'now' };
     const started: boolean[] = [];
@@ -110,7 +110,7 @@ describe('the supervisor', () => {
   // A named pipe leaves no file behind on Windows.
   test.skipIf(process.platform === 'win32')('replaces the socket a killed supervisor left behind', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
-    await nameSupervisorPipe(data);
+    await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     // A process killed while listening leaves its socket file behind; a clean
     // close would remove it, so the stale file has to come from a real kill.
@@ -125,7 +125,7 @@ describe('the supervisor', () => {
   // A named pipe has no path a file could be at.
   test.skipIf(process.platform === 'win32')('refuses to replace something at the socket path that is not a socket', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
-    await nameSupervisorPipe(data);
+    await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     await writeFile(socket, 'not a socket');
     const server = controlSocket({ status: () => STATUS, action: async () => {} });
@@ -136,7 +136,7 @@ describe('the supervisor', () => {
 
   test('serves the version and upgrade verbs, and nothing else about them', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
-    await nameSupervisorPipe(data);
+    await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     const view = { current: '0.1.0', latest: '0.1.1', checkEnabled: true, updateAvailable: true, history: [] };
     const job = { id: '11111111-1111-4111-8111-111111111111', kind: 'upgrade', phase: 'backup', phases: ['starting', 'backup'], startedAt: 'now' };
@@ -180,7 +180,7 @@ describe('the supervisor', () => {
 
   test('backing up and restoring wait for an upgrade, as an upgrade waits for them', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
-    await nameSupervisorPipe(data);
+    await writeFile(path.join(data, 'supervisor.lock'), String(process.pid)); await nameSupervisorPipe(data);
     const socket = supervisorSocket(data);
     const backup = {
       busy: () => false,

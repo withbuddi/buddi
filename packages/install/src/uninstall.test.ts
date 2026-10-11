@@ -543,6 +543,8 @@ describe('uninstallPackaged: Windows', () => {
     const m = machine({ platform: 'win32', refuse: new Error('An upgrade is running.') });
     expect(await uninstallPackaged({ ...defaults, yes: true, backup: false }, m.deps)).toBe(1);
     expect(m.err.join('\n')).toMatch(/did not agree to stop: An upgrade is running/);
+    // The task stays, so buddi starts again at the next sign-in.
+    expect(m.exec.some(line => line.includes('/Delete'))).toBe(false);
     expect(m.files.has(`${WIN_DATA}\\postgres`)).toBe(true);
     expect(m.files.has(`${WIN_DATA}\\vault-key`)).toBe(true);
   });

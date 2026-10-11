@@ -10,10 +10,12 @@
  * So a small window-owning helper (Windows PowerShell, compiled C# through
  * Add-Type, present on every Windows 10 and 11) runs beside the postmaster.
  * It asks to be told first (SetProcessShutdownParameters 0x2FF, the top of
- * the range applications may use), and when the session really ends it sends
- * the postmaster a fast shutdown the way `pg_ctl stop -m fast` does on Windows
- * — the signal number on the postmaster's `pgsignal_<pid>` pipe — and waits
- * for it to exit before returning. Starting pg_ctl itself at that moment fails
+ * the range applications may use). Asked whether the session may end
+ * (WM_QUERYENDSESSION), it sends the postmaster a fast shutdown the way
+ * `pg_ctl stop -m fast` does on Windows — the signal number on the
+ * postmaster's `pgsignal_<pid>` pipe — and answers "not yet" with a reason
+ * on screen while the database stops, never past 15 seconds; when the
+ * session does end (WM_ENDSESSION) it waits out what is left of those. Starting pg_ctl itself at that moment fails
  * (a console program cannot start while the session is ending, 0xC0000142).
  * The helper leaves by itself when the postmaster it watches is gone.
  *
@@ -30,37 +32,55 @@ public class BuddiDatabaseGuard : NativeWindow {
   [DllImport("kernel32.dll")] static extern bool SetProcessShutdownParameters(uint level, uint flags);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool ShutdownBlockReasonCreate(IntPtr h, string reason);
   [DllImport("user32.dll")] static extern bool ShutdownBlockReasonDestroy(IntPtr h);
-  readonly string cluster, log; readonly int postmaster; bool stopped;
+  const int CapMs = 15000;
+  readonly string cluster, log; readonly int postmaster; Stopwatch since;
   public BuddiDatabaseGuard(string cluster, int postmaster, string log) {
     this.cluster = cluster; this.postmaster = postmaster; this.log = log;
     SetProcessShutdownParameters(0x2FF, 0);
     CreateHandle(new CreateParams());
   }
   void Note(string line) { try { File.AppendAllText(log, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " buddi: " + line + Environment.NewLine); } catch {} }
+  /** The postmaster this guard watches still runs and still owns the cluster. */
+  public bool Live() {
+    try {
+      if (Process.GetProcessById(postmaster).HasExited) return false;
+      return int.Parse(File.ReadAllLines(Path.Combine(cluster, "postmaster.pid"))[0].Trim()) == postmaster;
+    } catch { return false; }
+  }
+  bool Capped() { return since != null && since.ElapsedMilliseconds >= CapMs; }
   protected override void WndProc(ref Message m) {
-    if (m.Msg == 0x11) { ShutdownBlockReasonCreate(Handle, "Stopping buddi's database"); m.Result = (IntPtr)1; return; }
-    if (m.Msg == 0x16) { if (m.WParam != IntPtr.Zero) Stop(); ShutdownBlockReasonDestroy(Handle); m.Result = IntPtr.Zero; return; }
+    if (m.Msg == 0x11) {
+      // Asked whether the session may end: begin the fast shutdown now, and
+      // hold the end (with a reason on screen) while the database stops, up to the cap.
+      if (Live() && !Capped()) { Begin(); ShutdownBlockReasonCreate(Handle, "Stopping buddi's database"); m.Result = IntPtr.Zero; return; }
+      ShutdownBlockReasonDestroy(Handle); m.Result = (IntPtr)1; return;
+    }
+    if (m.Msg == 0x16) {
+      if (m.WParam != IntPtr.Zero && Live()) { Begin(); while (Live() && !Capped()) System.Threading.Thread.Sleep(100); Note(Live() ? "the database was still stopping when the session ended" : "the database stopped for the end of the session"); }
+      ShutdownBlockReasonDestroy(Handle); m.Result = IntPtr.Zero; return;
+    }
     base.WndProc(ref m);
   }
-  void Stop() {
-    if (stopped) return; stopped = true;
+  void Begin() {
+    if (since != null) return;
+    since = Stopwatch.StartNew();
     try {
-      int pid = int.Parse(File.ReadAllLines(Path.Combine(cluster, "postmaster.pid"))[0].Trim());
-      if (pid != postmaster) return;
-      Note("the Windows session is ending: a fast shutdown of the database (postmaster " + pid + ")");
-      using (var pipe = new NamedPipeClientStream(".", "pgsignal_" + pid, PipeDirection.InOut)) {
-        pipe.Connect(5000); pipe.ReadMode = PipeTransmissionMode.Message; pipe.WriteByte(2); pipe.Flush(); pipe.ReadByte();
+      Note("the Windows session is ending: a fast shutdown of the database (postmaster " + postmaster + ")");
+      // pg_ctl's own way on Windows: the signal number on the postmaster's signal pipe (SIGINT: fast shutdown).
+      using (var pipe = new NamedPipeClientStream(".", "pgsignal_" + postmaster, PipeDirection.InOut)) {
+        pipe.Connect(3000); pipe.ReadMode = PipeTransmissionMode.Message; pipe.WriteByte(2); pipe.Flush(); pipe.ReadByte();
       }
-      Note(Process.GetProcessById(pid).WaitForExit(25000) ? "the database stopped for the end of the session" : "the database was still stopping after 25 seconds");
-    } catch (Exception e) { Note("the database could not be stopped for the end of the session: " + e.Message); }
+    } catch (Exception e) { Note("the database could not be asked to stop for the end of the session: " + e.Message); }
   }
+  /** Called by the timer: once the database is gone, the end of the session is no longer held. */
+  public void Tick() { if (since != null && (!Live() || Capped())) ShutdownBlockReasonDestroy(Handle); }
 }
 '@
 $postmaster = [int]$env:BUDDI_GUARD_POSTMASTER
 $guard = New-Object BuddiDatabaseGuard $env:BUDDI_GUARD_CLUSTER, $postmaster, $env:BUDDI_GUARD_LOG
 $timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 2000
-$timer.add_Tick({ if (-not (Get-Process -Id $postmaster -ErrorAction SilentlyContinue)) { [System.Windows.Forms.Application]::Exit() } })
+$timer.Interval = 250
+$timer.add_Tick({ $guard.Tick(); if (-not (Get-Process -Id $postmaster -ErrorAction SilentlyContinue)) { [System.Windows.Forms.Application]::Exit() } })
 $timer.Start()
 [System.Windows.Forms.Application]::Run()
 `;
