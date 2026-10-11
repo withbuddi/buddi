@@ -762,7 +762,7 @@ export async function handOver(opts: HandOverOptions): Promise<HandOverResult> {
       // as launchd's and exit into nothing.
       const { XPC_SERVICE_NAME: _launchd, [SERVICE_UNIT_VAR]: _systemd, ...env } = opts.env;
       const child = spawnProcess(process.execPath, [opts.launcher, 'supervise'], {
-        detached: true, stdio: ['ignore', logFile.fd, logFile.fd], env,
+        detached: true, stdio: ['ignore', logFile.fd, logFile.fd], env, windowsHide: true,
       });
       child.unref();
       log(`supervisor: started the upgraded supervisor (pid ${child.pid ?? '?'}); ${plan.reason}.`);

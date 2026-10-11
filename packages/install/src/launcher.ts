@@ -14,7 +14,7 @@ import { request } from 'node:http';
 import { open, mkdir, writeFile, rm, rename, copyFile, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs';
 import { environment, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
 import { briefSupervisorEnv, supervise, supervisorSocket } from './supervisor.js';
@@ -602,8 +602,10 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
     const script = windowsTaskScript(ctx.data);
     await mkdir(path.dirname(script), { recursive: true, mode: 0o700 });
     await writeFile(script, buildSuperviseScript({
-      nodePath: process.execPath, entry, environment: { BUDDI_DATA_DIR: ctx.data, ...serviceEnvironment() },
-      logFile: path.join(ctx.data, 'logs', 'supervisor.log'),
+      nodePath: process.execPath, entry,
+      environment: { BUDDI_DATA_DIR: ctx.data, [SUPERVISOR_LOG_VAR]: path.join(ctx.data, 'logs', 'supervisor.log'), ...serviceEnvironment() },
+      // What the supervisor says before it opens its log (a node that will not start).
+      logFile: path.join(ctx.data, 'logs', 'service.log'),
     }), { mode: 0o600 });
     const user = [ctx.env.USERDOMAIN, ctx.env.USERNAME ?? os.userInfo().username].filter(Boolean).join('\\');
     await writeFile(windowsTaskXmlFile(ctx.data), taskXmlBytes(buildTaskXml({
@@ -627,6 +629,26 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
   } finally { await log.close(); }
 }
 
+/**
+ * Where a supervisor started by the Windows task writes its output
+ * (windows-task.ts). The task's own redirection would hold the log open
+ * without letting another process append, and an upgrade's successor appends
+ * to the same file; so the supervisor opens it itself, as node opens files,
+ * shared.
+ */
+const SUPERVISOR_LOG_VAR = 'BUDDI_SUPERVISOR_LOG';
+
+function appendOutputTo(file: string): void {
+  const fd = openSync(file, 'a', 0o600);
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.write = ((chunk: string | Uint8Array, encoding?: BufferEncoding | ((error?: Error | null) => void), done?: (error?: Error | null) => void): boolean => {
+      try { writeSync(fd, typeof chunk === 'string' ? Buffer.from(chunk, typeof encoding === 'string' ? encoding : 'utf8') : chunk); } catch { /* a log that cannot be written is not a reason to stop */ }
+      (typeof encoding === 'function' ? encoding : done)?.();
+      return true;
+    }) as typeof stream.write;
+  }
+}
+
 async function run(): Promise<void> {
   let ctx = await environment(root);
   // A supervisor started through buddi.app's command line tool would compete with the app's own (cli-shim.ts).
@@ -635,7 +657,11 @@ async function run(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  if (args[0] === 'supervise') return supervise(ctx);
+  if (args[0] === 'supervise') {
+    const logFile = (process.env[SUPERVISOR_LOG_VAR] ?? '').trim();
+    if (logFile !== '') appendOutputTo(logFile);
+    return supervise(ctx);
+  }
   if (args[0] === '__gateway') {
     // Parent death must not leave two gateways claiming jobs on the next boot.
     if (!process.send) throw new Error('The gateway child must be started by buddi supervise.');
