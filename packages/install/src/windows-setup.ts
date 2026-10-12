@@ -555,7 +555,9 @@ async function uninstall(args: SetupArgs, said: Said): Promise<number> {
    */
   if (!existsSync(path.join(data, 'installation.json')) && !existsSync(path.join(data, 'postgres'))) {
     for (const part of NEVER_STARTED_PARTS) await rm(path.join(data, part), { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
-    if (readdirSync(data).length === 0) await rm(data, { recursive: true, force: true });
+    // The setup's own unpack folders (.install-*): a scanner can hold one for a moment after the setup let it go.
+    for (const name of readdirSync(data)) if (name.startsWith('.install-')) await rm(path.join(data, name), { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }).catch(() => {});
+    if (readdirSync(data).length === 0) await rm(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
     said.say(`buddi was never started here; removed the program from ${data}.`);
     return 0;
   }
