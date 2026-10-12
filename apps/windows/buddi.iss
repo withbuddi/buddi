@@ -137,11 +137,11 @@ end;
 
 { A program run with no console window at all (conhost --headless), waited for.
   conhost does not pass the exit status on: what it ran says how it went in a file. }
-procedure RunHidden(const Program, Params: String);
+procedure RunHidden(const Exe, Params: String);
 var
   Code: Integer;
 begin
-  Exec(ExpandConstant('{sys}\conhost.exe'), '--headless ' + AddQuotes(Program) + ' ' + Params, GetEnv('USERPROFILE'), SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec(ExpandConstant('{sys}\conhost.exe'), '--headless ' + AddQuotes(Exe) + ' ' + Params, GetEnv('USERPROFILE'), SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
 function ReadFirstLine(const FileName: String): String;
