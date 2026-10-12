@@ -77,8 +77,9 @@ echo "== uninstall"
 # The uninstaller hands over to a copy of itself and returns at once: wait for it to finish.
 MSYS_NO_PATHCONV=1 "$APP/unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG=$(cygpath -w "$LOGS/uninstall.log")"
 for _ in $(seq 1 300); do [ -e "$APP/unins000.exe" ] || break; sleep 1; done
-# Its last step removes the folder it ran from, a moment after the rest.
-for _ in $(seq 1 60); do [ -e "$APP" ] || break; sleep 1; done
+# Its last step removes the folder it ran from, a moment after the rest; a
+# folder a process just let go of can stay for a moment too (error 145).
+for _ in $(seq 1 60); do [ -e "$APP" ] || [ -e "$DATA" ] || break; sleep 1; done
 tail -n 30 "$LOGS/uninstall.log" 2>/dev/null || true
 [ ! -e "$APP" ] || { ls -R "$APP"; die "the uninstall left $APP"; }
 [ ! -e "$DATA" ] || { ls -R "$DATA" | head -50; die "the uninstall left $DATA"; }

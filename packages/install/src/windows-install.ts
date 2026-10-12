@@ -189,16 +189,22 @@ export function nodeOutsideData(data: string, execPath: string = process.execPat
 }
 
 /**
- * When this node is such a copy: the hidden cmd line that removes its folder
- * a few seconds after it has exited (it cannot remove itself while it runs).
+ * When this node is such a copy: the cmd line that removes its folder once it
+ * has exited (it cannot remove itself while it runs), tried every second for
+ * ten. Under `conhost --headless`, so no console window ever shows: a cmd
+ * started with a console of its own is handed to Windows Terminal on Windows
+ * 11, which shows it whatever `windowsHide` asked. The arguments go as they
+ * are (`verbatim`): cmd reads its own quotes, not Node's escaped ones.
  */
-export function cleanupNodeCopyCommand(execPath: string, systemRoot: string, tmp: string = os.tmpdir()): { command: string; args: string[] } | undefined {
+export function cleanupNodeCopyCommand(execPath: string, systemRoot: string, tmp: string = os.tmpdir()): { command: string; args: string[]; verbatim: true } | undefined {
   const dir = win.dirname(execPath);
   if (!win.basename(dir).startsWith(UNINSTALL_NODE_PREFIX) || !insideFolder(dir, tmp, 'win32')) return undefined;
   if (/["%]/.test(dir)) return undefined;
   return {
-    command: win.join(systemRoot, 'System32', 'cmd.exe'),
-    args: ['/d', '/c', `ping -n 6 127.0.0.1 >nul & rmdir /s /q "${dir}"`],
+    command: win.join(systemRoot, 'System32', 'conhost.exe'),
+    args: ['--headless', win.join(systemRoot, 'System32', 'cmd.exe'), '/d', '/c',
+      `for /l %i in (1,1,10) do @(ping -n 2 127.0.0.1 >nul & rmdir /s /q "${dir}" 2>nul & if not exist "${dir}" exit /b 0)`],
+    verbatim: true,
   };
 }
 

@@ -341,7 +341,7 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
   // The copy of node this runs from (see above) goes once it has exited.
   if (process.platform === 'win32') {
     const cleanup = cleanupNodeCopyCommand(process.execPath, ctx.env.SystemRoot ?? ctx.env.SYSTEMROOT ?? 'C:\\Windows');
-    if (cleanup !== undefined) process.once('exit', () => { try { spawn(cleanup.command, cleanup.args, { detached: true, stdio: 'ignore', windowsHide: true, cwd: os.homedir() }).unref(); } catch { /* TEMP is cleaned by Windows too */ } });
+    if (cleanup !== undefined) process.once('exit', () => { try { spawn(cleanup.command, cleanup.args, { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: cleanup.verbatim, cwd: os.homedir() }).unref(); } catch { /* TEMP is cleaned by Windows too */ } });
   }
   return await uninstallPackaged(options, {
     ...(linuxParts === undefined ? {} : { linuxInstall: linuxParts }),
