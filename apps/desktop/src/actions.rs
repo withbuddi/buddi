@@ -1,4 +1,4 @@
-//! What the menu items do: the tray menu (Linux has no menu bar, so it is
+//! What the menu items do: the tray menu (Linux and Windows have no menu bar, so it is
 //! buddi.app's app menu and menu-bar glyph menu in one), the launcher's
 //! right-click actions (`--new-conversation`, `--check-updates`, `--lock`,
 //! `--settings`) and a second launch. Wording follows apps/mac
@@ -139,12 +139,20 @@ fn update_to(app: &AppHandle, version: String) {
     shell::connect(app, false, true);
 }
 
-/// Restart buddi: the supervisor restarts the gateway; the window follows.
+/// Restart buddi: the supervisor restarts the gateway, asked on its control
+/// channel (the socket, or the pipe with its secret on Windows), else through
+/// `buddi service restart`; the window follows.
 pub fn restart(app: &AppHandle) {
     let app = app.clone();
     thread::spawn(move || {
-        if let Err(Failure::NoLink(why)) = buddi::service("restart") {
-            info(&app, "buddi did not restart", &why);
+        match supervisor::restart() {
+            Ok(()) => shell::log("restart asked on the supervisor's control channel"),
+            Err(direct) => {
+                shell::log(format!("control channel: {direct}; asking buddi service restart"));
+                if let Err(Failure::NoLink(why)) = buddi::service("restart") {
+                    info(&app, "buddi did not restart", &why);
+                }
+            }
         }
     });
 }
@@ -165,7 +173,8 @@ pub fn restart_with_previous(app: &AppHandle) {
         if let Err(problem) = supervisor::restart_with_previous() {
             info(&app, "buddi did not switch versions", &problem);
         }
-        shell::connect(&app, false, true);
+        // Linux started the unit again; on Windows the next sign-in link starts the task.
+        shell::connect(&app, false, cfg!(target_os = "linux"));
     });
 }
 
@@ -219,8 +228,11 @@ pub fn uninstall(app: &AppHandle) {
             );
             return;
         }
-        let text = "buddi takes a last backup and shows you the passphrase that opens it; nothing is removed before you have both. You choose in Settings → System whether your data goes too.\n\nThis app stays installed: remove it afterwards with sudo apt remove buddi-desktop.";
-        if !ask(&app, "Remove buddi from this computer?", text, "Continue", "Cancel") {
+        let text = format!(
+            "buddi takes a last backup and shows you the passphrase that opens it; nothing is removed before you have both. You choose in Settings → System whether your data goes too.\n\n{}",
+            platform::APP_STAYS
+        );
+        if !ask(&app, "Remove buddi from this computer?", &text, "Continue", "Cancel") {
             return;
         }
         platform::show_main(&app);

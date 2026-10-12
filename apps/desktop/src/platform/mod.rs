@@ -1,6 +1,6 @@
 //! What differs per platform. Everything else (the command, the window's
-//! phases, the tray menu) is shared. Linux (WebKitGTK) is the target today;
-//! `windows.rs` holds the places a WebView2 build fills in (README.md).
+//! phases, the tray menu) is shared: Linux (WebKitGTK, `linux.rs`) and
+//! Windows (WebView2, `windows.rs`, its rules in `windows_rules.rs`).
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -11,6 +11,8 @@ pub use linux::*;
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
+#[cfg(any(target_os = "windows", test))]
+pub mod windows_rules;
 
 // macOS has buddi.app (apps/mac); this only keeps `cargo check` working there.
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]

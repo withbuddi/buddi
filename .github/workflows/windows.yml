@@ -11,7 +11,8 @@
 # branch instead (`gh workflow run windows.yml --ref <branch> -f installer=true`):
 # two versions packed from this checkout (`version`, and one pre-release above
 # it), each bundled (scripts/release/windows-bundle.sh, around the local
-# tarball) and wrapped (apps/windows/buddi.iss), smoke-installed, the second
+# tarball) and wrapped with the desktop app (scripts/release/windows-desktop.sh,
+# its Rust tests and clippy first; apps/windows/buddi.iss), smoke-installed, the second
 # run over the first (the switch of `current`) and uninstalled
 # (scripts/release/windows-smoke.sh: buddi is not started, Postgres refuses the
 # runner's administrator account), and uploaded as the run's artifact, for a VM
@@ -100,6 +101,22 @@ jobs:
         if: ${{ !cancelled() }}
         run: pnpm exec vitest run --dir scripts
 
+  # The desktop app's Rust on Windows (apps/desktop): the Windows rules'
+  # tests and clippy with warnings as errors.
+  desktop:
+    if: ${{ !inputs.installer }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install && rustup component add clippy && rustc --version
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
   # The jsdom suite: platform-light, but slow; its own job so it never holds up
   # the list above.
   web:
@@ -176,6 +193,14 @@ jobs:
           path: build/pack
       - name: Inno Setup and the Visual C++ runtime
         run: scripts/release/windows-tools.sh
+      - name: The desktop app's tests and clippy
+        working-directory: apps/desktop
+        run: |
+          rustup toolchain install && rustup component add clippy
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: The desktop app and the WebView2 bootstrapper
+        run: scripts/release/windows-desktop.sh "$V1" build/windows
       - name: Two versions, bundled and wrapped
         run: |
           V2="${V1%.*}.$(( ${V1##*.} + 1 ))"
@@ -197,7 +222,7 @@ jobs:
         with:
           name: buddi-windows-setup
           path: |
-            build/windows/*.exe
+            build/windows/*-setup.exe
             build/windows/*.zip
             build/windows/*.sha256
           retention-days: 7

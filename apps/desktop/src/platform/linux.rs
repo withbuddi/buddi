@@ -7,6 +7,14 @@ use tauri::{AppHandle, Manager, Url, WebviewWindow};
 
 use crate::{buddi, shell};
 
+/// Where the tray icon lives, for the words the app says.
+pub const TRAY_PLACE: &str = "the top bar";
+
+/// What Uninstall buddi… says about this app: a package of its own.
+pub const APP_STAYS: &str = "This app stays installed: remove it afterwards with sudo apt remove buddi-desktop.";
+
+pub fn early_init() {}
+
 pub fn local_page() -> Url {
     Url::parse("tauri://localhost/index.html").unwrap()
 }

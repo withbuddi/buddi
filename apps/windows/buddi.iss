@@ -9,14 +9,22 @@
 ; switch of `current` (a junction), the start, and the way back if the new
 ; release does not start. Everything is per user:
 ;
-;   %LOCALAPPDATA%\Programs\buddi\       this setup's files: bin\buddi.cmd (on the user PATH),
-;                                        buddi.ico, unins000.exe (Settings → Apps)
+;   %LOCALAPPDATA%\Programs\buddi\       this setup's files: buddi-desktop.exe (the app: buddi in
+;                                        a window, with a tray icon; apps/desktop), bin\buddi.cmd
+;                                        (on the user PATH), buddi.ico, unins000.exe (Settings → Apps)
 ;   %LOCALAPPDATA%\buddi\                the data directory, as every buddi on Windows has it,
 ;                                        with node\ and releases\ in it (or BUDDI_DATA_DIR)
-;   Start menu → buddi                   opens the dashboard (buddi.cmd, under a hidden console)
+;   Start menu → buddi                   opens the app's window (AppUserModelID com.withbuddi.desktop,
+;                                        which its toasts are shown under)
+;   HKCU\…\Run → buddi                   the app in the tray at sign-in: written by the app itself
+;                                        (Start at Login, on at its first start), recorded in
+;                                        HKCU\Software\buddi\Desktop; removed here only when it is that one
 ;   Task Scheduler → com.buddi.install.<id>   starts buddi at sign-in (written by buddi itself)
 ;
-; Running a newer setup over an installed one upgrades it (a backup first).
+; Running a newer setup over an installed one upgrades it (a backup first); a
+; running app is asked to quit first (buddi-desktop.exe --quit) and started again.
+; The app needs WebView2: part of Windows 11; on Windows 10 without it, the
+; Evergreen bootstrapper carried here installs it for this user.
 ; Uninstalling from Settings → Apps runs `buddi uninstall`: one last backup,
 ; kept in %USERPROFILE%\buddi-backups with its passphrase, then the task, the
 ; data and the secrets, then this setup's files and the PATH entry.
@@ -29,12 +37,15 @@
 ;                                   with administrator rights, so an elevated setup is refused by default)
 ;
 ; Built by the release workflow (and windows.yml for a branch):
-;   iscc /DAppVersion=0.1.0-pre.54 /DVersionInfo=0.1.0.54 /DBundleZip=<zip> /DOutputDir=<dir> apps\windows\buddi.iss
+;   iscc /DAppVersion=0.1.0-pre.54 /DVersionInfo=0.1.0.54 /DBundleZip=<zip> /DDesktopExe=<buddi-desktop.exe>
+;        [/DWebView2Setup=<MicrosoftEdgeWebview2Setup.exe>] /DOutputDir=<dir> apps\windows\buddi.iss
+; (scripts/release/windows-desktop.sh builds the app and fetches the bootstrapper.)
 ;
 ; Signing: unsigned for now (SmartScreen warns once per download). To sign,
 ; define a sign tool on the iscc line and pass its name here, for example
 ;   iscc "/Sbuddisign=signtool.exe sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f cert.pfx /p {pw} $f" /DSignTool=buddisign …
-; and the setup and its uninstaller are both signed.
+; and the setup, its uninstaller and the app (buddi-desktop.exe, `signonce`) are
+; all signed by that one hook. The WebView2 bootstrapper is Microsoft's, signed by them.
 
 #ifndef AppVersion
   #error Pass /DAppVersion=<buddi version>
@@ -44,6 +55,9 @@
 #endif
 #ifndef BundleZip
   #error Pass /DBundleZip=<buddi-version-windows-x64.zip>
+#endif
+#ifndef DesktopExe
+  #error Pass /DDesktopExe=<buddi-desktop.exe> (scripts/release/windows-desktop.sh)
 #endif
 #ifndef OutputDir
   #define OutputDir "."
@@ -99,24 +113,35 @@ SignedUninstaller=yes
 #endif
 
 [Messages]
-WelcomeLabel2=This installs buddi {#AppVersion} for you on this computer. It needs no administrator rights and nothing else installed.%n%nbuddi runs in the background and you use it in your browser.
+WelcomeLabel2=This installs buddi {#AppVersion} for you on this computer. It needs no administrator rights and nothing else installed.%n%nbuddi runs in the background and you use it in its own window.
 FinishedHeadingLabel=buddi is installed
-FinishedLabelNoIcons=buddi runs in the background and starts when you sign in. Open it from the Start menu (buddi), or type buddi in a new Command Prompt or PowerShell window.
-FinishedLabel=buddi runs in the background and starts when you sign in. Open it from the Start menu (buddi), or type buddi in a new Command Prompt or PowerShell window.
+FinishedLabelNoIcons=buddi runs in the background and starts when you sign in. Open it from the Start menu (buddi) or its icon in the notification area; in a new Command Prompt or PowerShell window, type buddi.
+FinishedLabel=buddi runs in the background and starts when you sign in. Open it from the Start menu (buddi) or its icon in the notification area; in a new Command Prompt or PowerShell window, type buddi.
 ConfirmUninstall=This removes buddi from this computer: its background task, its data and its secrets.%n%nOne last backup is taken first and kept in your user folder (buddi-backups), with the passphrase that opens it.%n%nRemove buddi?
 
 [Files]
 Source: "buddi.ico"; DestDir: "{app}"; Flags: ignoreversion
+#ifdef SignTool
+Source: "{#DesktopExe}"; DestDir: "{app}"; DestName: "buddi-desktop.exe"; Flags: ignoreversion signonce
+#else
+Source: "{#DesktopExe}"; DestDir: "{app}"; DestName: "buddi-desktop.exe"; Flags: ignoreversion
+#endif
+#ifdef WebView2Setup
+Source: "{#WebView2Setup}"; DestName: "MicrosoftEdgeWebview2Setup.exe"; Flags: dontcopy
+#endif
 ; Unpacked by the code below (PrepareToInstall), never copied as it is.
 Source: "{#BundleZip}"; DestName: "bundle.zip"; Flags: dontcopy nocompression
 
 [Icons]
-Name: "{autoprograms}\buddi"; Filename: "{sys}\conhost.exe"; Parameters: "--headless ""{sys}\cmd.exe"" /d /c call ""{app}\bin\buddi.cmd"""; WorkingDir: "{%USERPROFILE}"; IconFilename: "{app}\buddi.ico"; Comment: "Open buddi in your browser"
+Name: "{autoprograms}\buddi"; Filename: "{app}\buddi-desktop.exe"; WorkingDir: "{%USERPROFILE}"; Comment: "buddi, in its own window"; AppUserModelID: "com.withbuddi.desktop"
 
 [Run]
-Filename: "{sys}\conhost.exe"; Parameters: "--headless ""{sys}\cmd.exe"" /d /c call ""{app}\bin\buddi.cmd"""; WorkingDir: "{%USERPROFILE}"; Description: "Open buddi"; Flags: postinstall nowait skipifsilent; Check: ShouldStart
+Filename: "{app}\buddi-desktop.exe"; WorkingDir: "{%USERPROFILE}"; Description: "Open buddi"; Flags: postinstall nowait skipifsilent; Check: ShouldStart
 
 [UninstallDelete]
+; The app's own: its window's size and place, its WebView2 profile (the dashboard's session), its log.
+Type: filesandordirs; Name: "{localappdata}\com.withbuddi.desktop"
+Type: filesandordirs; Name: "{userappdata}\com.withbuddi.desktop"
 Type: filesandordirs; Name: "{app}\bin"
 ; The setup program made {app} (for bin\) before Inno Setup did, so Inno Setup does not count it as its own.
 Type: dirifempty; Name: "{app}"
@@ -124,6 +149,7 @@ Type: dirifempty; Name: "{app}"
 [Code]
 var
   DataDirValue: String;
+  AppWasRunning: Boolean;
   Status: TNewStaticText;
   Busy: TNewProgressBar;
 
@@ -219,6 +245,62 @@ begin
   Exec(ExpandConstant('{sys}\conhost.exe'), '--headless ' + AddQuotes(Exe) + ' ' + Params, GetEnv('USERPROFILE'), SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
+{ The app (buddi-desktop.exe) is asked to quit, as its tray's Quit does, before its file is replaced or removed:
+  a second start with --quit reaches the running one and ends at once (with none running, it just ends).
+  One that has not gone after a few seconds is ended. Its window is titled buddi. }
+function QuitDesktopApp(const Exe: String): Boolean;
+var
+  Code, I: Integer;
+begin
+  Result := FindWindowByWindowName('buddi') <> 0;
+  if not FileExists(Exe) then exit;
+  Exec(Exe, '--quit', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  for I := 1 to 20 do begin
+    if FindWindowByWindowName('buddi') = 0 then break;
+    Sleep(250);
+  end;
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM buddi-desktop.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+{ The WebView2 runtime (the Evergreen one: in Windows 11, and Edge's updater keeps it), machine-wide or this user's. }
+function WebView2Present: Boolean;
+var
+  V: String;
+begin
+  Result := False;
+  if RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', V) and (V <> '') and (V <> '0.0.0.0') then Result := True
+  else if RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', V) and (V <> '') and (V <> '0.0.0.0') then Result := True
+  else if RegQueryStringValue(HKCU, 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', V) and (V <> '') and (V <> '0.0.0.0') then Result := True;
+end;
+
+procedure EnsureWebView2;
+var
+  Code: Integer;
+begin
+  if WebView2Present then exit;
+#ifdef WebView2Setup
+  ExtractTemporaryFile('MicrosoftEdgeWebview2Setup.exe');
+  Exec(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'), '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if WebView2Present then exit;
+#endif
+  Log('WebView2 is not installed: buddi works in the browser, its window needs WebView2 (https://go.microsoft.com/fwlink/p/?LinkId=2124703).');
+  if not WizardSilent then
+    SuppressibleMsgBox('buddi is installed, but its window needs Microsoft Edge WebView2, which could not be installed now.' + #13#10#13#10
+      + 'Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703, or type buddi in a Command Prompt to open buddi in your browser.', mbInformation, MB_OK, IDOK);
+end;
+
+{ The Run value the app wrote for Start at Login, when its record says it is that one (windows_rules.rs run_entry_ours). }
+procedure RemoveDesktopRunEntry;
+var
+  Value, Recorded: String;
+begin
+  if not RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'buddi', Value) then exit;
+  if not RegQueryStringValue(HKCU, 'Software\buddi\Desktop', 'RunCommand', Recorded) then exit;
+  if Value <> Recorded then exit;
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'buddi');
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', 'buddi');
+end;
+
 function ReadFirstLine(const FileName: String): String;
 var
   Lines: TArrayOfString;
@@ -258,6 +340,8 @@ var
   Work, Bundle, Node, Script, Params, LogFile, ResultFile, SummaryFile, Kept: String;
 begin
   Result := '';
+  { The app goes before its file is replaced, and comes back after (ssPostInstall). }
+  AppWasRunning := QuitDesktopApp(ExpandConstant('{app}\buddi-desktop.exe'));
   { Unpacked inside the data folder, so the setup program moves it into place with a rename. }
   Work := DataDir + '\.install-' + GetDateTimeString('yyyymmddhhnnss', #0, #0);
   if not ForceDirectories(Work) then begin
@@ -333,10 +417,16 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Code: Integer;
 begin
   if CurStep = ssPostInstall then begin
     AddToPath(ExpandConstant('{app}\bin'));
     RegWriteStringValue(HKCU, 'Software\buddi', 'DataDir', DataDir);
+    EnsureWebView2;
+    { A silent upgrade (no Finish page to open it from) puts back the app it quit, in the tray. }
+    if AppWasRunning and WizardSilent and ShouldStart then
+      Exec(ExpandConstant('{app}\buddi-desktop.exe'), '--hidden', '', SW_SHOWNORMAL, ewNoWait, Code);
   end;
 end;
 
@@ -346,6 +436,8 @@ var
   Data, Node, Script, Work, LogFile, Summary, ResultFile, Words: String;
 begin
   if CurUninstallStep = usUninstall then begin
+    { The app first: Windows will not remove a program that runs. }
+    QuitDesktopApp(ExpandConstant('{app}\buddi-desktop.exe'));
     if not RegQueryStringValue(HKCU, 'Software\buddi', 'DataDir', Data) then Data := ExpandConstant('{localappdata}\buddi');
     Node := Data + '\node\node.exe';
     Script := Data + '\releases\current\packages\install\dist\windows-setup.js';
@@ -384,6 +476,7 @@ begin
   end;
   if CurUninstallStep = usPostUninstall then begin
     RemoveFromPath(ExpandConstant('{app}\bin'));
+    RemoveDesktopRunEntry;
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\buddi');
   end;
 end;

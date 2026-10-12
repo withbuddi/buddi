@@ -1,4 +1,4 @@
-//! buddi's desktop app (Linux today; README.md for Windows).
+//! buddi's desktop app for Linux and Windows (README.md).
 //!
 //! A window and a tray icon around the buddi already installed on this
 //! computer (scripts/install.sh): it asks the `buddi` command for the same
@@ -11,6 +11,7 @@
 //!                 --check-updates      tray menu has them (actions.rs)
 //!                 --lock
 //!                 --settings
+//!   buddi-desktop --quit               quit the running app (the Windows setup, before it replaces it)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
@@ -193,7 +194,7 @@ fn build_window(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
         // One pixel above the dashboard's phone breakpoint: always the desktop layout.
         .min_inner_size(721.0, 560.0)
         .visible(!hidden)
-        .initialization_script(&init_script())
+        .initialization_script(init_script())
         // The top-level page: anything but the dashboard and the app's own page
         // goes back, and its address to the browser (main frame only).
         .on_page_load(|webview, payload| {
@@ -267,6 +268,10 @@ fn second_launch(app: &AppHandle, argv: Vec<String>) {
                 return;
             }
             "--hidden" => return,
+            "--quit" => {
+                actions::quit(app);
+                return;
+            }
             _ => {}
         }
     }
@@ -279,7 +284,11 @@ fn second_launch(app: &AppHandle, argv: Vec<String>) {
 static TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn main() {
+    platform::early_init();
     let hidden = std::env::args().any(|a| a == "--hidden");
+    // `--quit` reaches a running app through the single-instance plugin; with
+    // none running there is nothing to quit.
+    let quitting = std::env::args().any(|a| a == "--quit");
     // Started at login with no buddi on this computer: nothing to show, so no
     // process lingers out of sight.
     if hidden && buddi::command().is_none() {
@@ -299,6 +308,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![retry, start_buddi, session_expired, notify, shell_log])
         .setup(move |app| {
             let handle = app.handle().clone();
+            if quitting {
+                handle.exit(0);
+                return Ok(());
+            }
             platform::remember_app(&handle);
             build_window(&handle, hidden)?;
             match tray::build(&handle) {

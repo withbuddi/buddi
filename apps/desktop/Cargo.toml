@@ -23,6 +23,13 @@ serde_json = "1"
 webkit2gtk = { version = "2", features = ["v2_40"] }
 notify-rust = "4"
 
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell"] }
+winreg = "0.56"
+tauri-winrt-notification = "0.8"
+junction = "1"
+
 [features]
 # Right-click → Inspect in the window; only for local builds (cargo tauri dev, or --features devtools).
 devtools = ["tauri/devtools"]

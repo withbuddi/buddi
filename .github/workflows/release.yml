@@ -372,7 +372,9 @@ jobs:
   # (pinned in scripts/release/windows-tools.sh) into
   # buddi-<version>-windows-x64-setup.exe: per user, no administrator. Both are
   # smoke-installed on the runner (install, doctor, uninstall) before they are
-  # attached to the GitHub release with their .sha256. Unsigned for now
+  # attached to the GitHub release with their .sha256. The setup carries the
+  # desktop app (apps/desktop on WebView2, scripts/release/windows-desktop.sh):
+  # one download, buddi and its window. Unsigned for now
   # (SmartScreen warns); apps/windows/buddi.iss says how to sign. Same tag-only
   # guard and re-run path as the linux job.
   windows:
@@ -407,6 +409,8 @@ jobs:
           exit 1
       - name: Inno Setup and the Visual C++ runtime
         run: scripts/release/windows-tools.sh
+      - name: The desktop app and the WebView2 bootstrapper
+        run: scripts/release/windows-desktop.sh "$VERSION" build/windows
       - name: Build the zip (integrity and provenance checked) and the setup
         run: |
           scripts/release/windows-bundle.sh "$VERSION" build/windows

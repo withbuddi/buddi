@@ -45,6 +45,11 @@ setup "$SETUP" install
 [ -f "$BUDDI" ] || die "the setup wrote no $BUDDI"
 on_path || die "the user PATH does not name $APP/bin"
 [ -f "$(cygpath -u "$APPDATA")/Microsoft/Windows/Start Menu/Programs/buddi.lnk" ] || die "no Start menu item"
+[ -f "$APP/buddi-desktop.exe" ] || die "the setup installed no desktop app ($APP/buddi-desktop.exe)"
+target="$(powershell.exe -NoProfile -NonInteractive -Command "(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Programs') + '\\buddi.lnk').TargetPath" | tr -d '\r')"
+case "$target" in *'\buddi-desktop.exe') ;; *) die "the Start menu item opens $target, not the desktop app" ;; esac
+# It starts (WebView2's loader and its own DLLs are there) and ends at once: --quit with none running.
+timeout 60 "$APP/buddi-desktop.exe" --quit || die "buddi-desktop.exe --quit did not start and end"
 MSYS_NO_PATHCONV=1 reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6F1C9A52-3B7E-4D8A-9E25-B0D7C4F81A36}_is1' /v DisplayName | grep -q buddi || die "no Apps & Features entry"
 buddi --version | tee "$LOGS/version.txt"
 grep -q "buddi $v1" "$LOGS/version.txt" || die "buddi --version does not say $v1"
@@ -79,4 +84,5 @@ tail -n 30 "$LOGS/uninstall.log" 2>/dev/null || true
 [ ! -e "$DATA" ] || { ls -R "$DATA" | head -50; die "the uninstall left $DATA"; }
 if on_path; then die "the uninstall left $APP/bin on the user PATH"; fi
 [ ! -e "$(cygpath -u "$APPDATA")/Microsoft/Windows/Start Menu/Programs/buddi.lnk" ] || die "the uninstall left the Start menu item"
+[ ! -e "$LOCAL/com.withbuddi.desktop" ] || die "the uninstall left the app's data in $LOCAL/com.withbuddi.desktop"
 echo "Windows setup: install, runtime${NEWER:+, upgrade} and uninstall passed."

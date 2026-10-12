@@ -78,6 +78,9 @@ pub fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
 
 pub fn log(msg: impl AsRef<str>) {
     eprintln!("[buddi-desktop] {}", msg.as_ref());
+    // A windowed program has no stderr anyone reads: a file too.
+    #[cfg(windows)]
+    platform::log_line(msg.as_ref());
 }
 
 /// The app's own page, `ui/index.html`, in one of its modes.
@@ -244,7 +247,7 @@ pub fn watch(app: &AppHandle) {
             tray::set_running(&app, up, phase);
             // "Update to …" and the previous version for the menu: the
             // supervisor's cached answer, when buddi comes up and every five minutes.
-            if up && (!was_up || ticks % 150 == 0) {
+            if up && (!was_up || ticks.is_multiple_of(150)) {
                 let update = crate::supervisor::version().and_then(|v| v.latest.filter(|_| v.update_available));
                 tray::set_update(&app, update);
             }
@@ -301,10 +304,10 @@ pub fn start(app: &AppHandle) {
 
 pub fn stop(app: &AppHandle) {
     set_phase(app, Phase::Stopped);
-    placeholder(app, "stopped", "");
+    placeholder(app, "stopped", platform::TRAY_PLACE);
     let app = app.clone();
     thread::spawn(move || match buddi::service("stop") {
-        Ok(_) => platform::notify(&app, "buddi is stopped", "Start it again from the buddi icon in the top bar."),
+        Ok(_) => platform::notify(&app, "buddi is stopped", &format!("Start it again from the buddi icon in {}.", platform::TRAY_PLACE)),
         Err(Failure::Missing) => connect(&app, false, false),
         Err(Failure::NoLink(why)) => {
             log(format!("buddi service stop: {why}"));
@@ -317,7 +320,7 @@ pub fn stop(app: &AppHandle) {
 pub fn go(app: &AppHandle, route: &str) {
     if phase(app) == Phase::Dashboard {
         if let Some(w) = main_window(app) {
-            let _ = w.eval(&format!("location.hash = {}", serde_json::to_string(route).unwrap()));
+            let _ = w.eval(format!("location.hash = {}", serde_json::to_string(route).unwrap()));
         }
     } else {
         let route = route.to_string();
@@ -354,7 +357,7 @@ pub fn back_to_dashboard(app: &AppHandle) {
     } else {
         with(app, |s| s.shown = None);
         let (mode, detail) = match phase(app) {
-            Phase::Stopped => ("stopped", String::new()),
+            Phase::Stopped => ("stopped", platform::TRAY_PLACE.to_string()),
             Phase::Missing => ("missing", buddi::INSTALL_LINE.to_string()),
             _ => ("starting", String::new()),
         };

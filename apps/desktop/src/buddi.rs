@@ -10,8 +10,12 @@ use std::time::{Duration, Instant};
 
 use tauri::Url;
 
-/// The line the installer prints, for the "not installed" page.
+/// The line the installer prints, for the "not installed" page; on Windows
+/// the page the setup is downloaded from.
+#[cfg(not(windows))]
 pub const INSTALL_LINE: &str = "curl -fsSL https://withbuddi.com/install.sh | sh";
+#[cfg(windows)]
+pub const INSTALL_LINE: &str = "https://withbuddi.com";
 
 pub enum Failure {
     /// No `buddi` command anywhere this app looks.
@@ -21,7 +25,9 @@ pub enum Failure {
 }
 
 /// Where the command is: $BUDDI_BIN, then the one the Linux installer
-/// recorded (`installer.json`), then ~/.local/bin/buddi, then PATH.
+/// recorded (`installer.json`), then ~/.local/bin/buddi, then PATH. On
+/// Windows: $BUDDI_BIN, then `bin\buddi.cmd` beside this app (the setup
+/// installs both), then the one the setup recorded, then PATH.
 pub fn command() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("BUDDI_BIN").map(PathBuf::from) {
         return p.is_file().then_some(p);
@@ -46,20 +52,47 @@ pub fn command() -> Option<PathBuf> {
             }
         }
     }
+    #[cfg(windows)]
+    {
+        if let Some(cmd) = crate::platform::installed_command() {
+            return Some(cmd);
+        }
+        let data = std::env::var_os("BUDDI_DATA_DIR")
+            .map(PathBuf::from)
+            .or_else(crate::platform::registered_data_dir)
+            .or_else(|| dirs::data_local_dir().map(|d| d.join("buddi")));
+        if let Some(recorded) = data
+            .and_then(|d| std::fs::read_to_string(d.join("installer.json")).ok())
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.get("command")?.as_str().map(PathBuf::from))
+        {
+            if recorded.is_file() {
+                return Some(recorded);
+            }
+        }
+    }
     on_path(if cfg!(windows) { &["buddi.cmd", "buddi.exe"] } else { &["buddi"] })
 }
 
 /// The installation the selected command runs: its data folder, from the
-/// command itself (install.sh's wrapper names it on its `DATA='…'` line),
-/// else $BUDDI_DATA_DIR, else the Linux install's default. The dashboard,
-/// the supervisor's socket, the releases and the service are all this one's.
+/// command itself (install.sh's wrapper names it on its `DATA='…'` line, the
+/// Windows setup's `buddi.cmd` on its `set "BUDDI_DATA_DIR=…"` line), else
+/// $BUDDI_DATA_DIR, else the install's default. The dashboard, the
+/// supervisor's socket or pipe, the releases and the service are all this one's.
 pub fn data_dir() -> Option<PathBuf> {
-    if let Some(data) = command().and_then(|c| std::fs::read_to_string(c).ok()).and_then(|t| wrapper_data(&t)) {
+    let text = command().and_then(|c| std::fs::read(c).ok()).map(|b| String::from_utf8_lossy(&b).to_string());
+    if let Some(data) = text.as_deref().and_then(wrapper_data) {
         return Some(data);
     }
-    std::env::var_os("BUDDI_DATA_DIR")
-        .map(PathBuf::from)
-        .or_else(|| dirs::data_dir().map(|d| d.join("buddi")))
+    #[cfg(windows)]
+    if let Some(data) = text.as_deref().and_then(crate::platform::windows_rules::command_data) {
+        return Some(data);
+    }
+    #[cfg(windows)]
+    let default = crate::platform::registered_data_dir().or_else(|| dirs::data_local_dir().map(|d| d.join("buddi")));
+    #[cfg(not(windows))]
+    let default = dirs::data_dir().map(|d| d.join("buddi"));
+    std::env::var_os("BUDDI_DATA_DIR").map(PathBuf::from).or(default)
 }
 
 /// The `DATA='…'` line of a command install.sh wrote (packages/install/src/
@@ -87,7 +120,11 @@ fn on_path(names: &[&str]) -> Option<PathBuf> {
 /// are drained while it runs, so a chatty command cannot fill one and stall.
 pub fn run(args: &[&str], timeout: Duration) -> Result<String, Failure> {
     let bin = command().ok_or(Failure::Missing)?;
-    let mut child = Command::new(&bin)
+    let mut cmd = Command::new(&bin);
+    // buddi.cmd runs under cmd.exe: no console window for it, or for node under it.
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, crate::platform::CREATE_NO_WINDOW);
+    let mut child = cmd
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

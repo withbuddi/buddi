@@ -51,12 +51,14 @@
     button('Try Again', () => invoke('retry'));
     button('Start buddi', () => invoke('start_buddi'), true);
   } else if (mode === 'stopped') {
-    say('buddi is stopped', 'Your agents are paused until you start it again, here or from the buddi icon in the top bar.');
+    say('buddi is stopped', 'Your agents are paused until you start it again, here or from the buddi icon in ' + (detail || 'the top bar') + '.');
     button('Start buddi', () => invoke('start_buddi'), true);
   } else if (mode === 'updating') {
     say('Updating buddi…', (detail ? 'To ' + detail + ': ' : '') + 'a backup first, then the new version. buddi restarts on its own; this takes a minute or two.');
   } else if (mode === 'missing') {
-    say('buddi is not installed', 'This app opens the buddi installed in your account, and there is none yet. Install it with this line in a terminal; this window notices on its own.');
+    say('buddi is not installed', /^https?:/.test(detail)
+      ? 'This app opens the buddi installed in your account, and there is none yet. Download the buddi setup from this page and run it; this window notices on its own.'
+      : 'This app opens the buddi installed in your account, and there is none yet. Install it with this line in a terminal; this window notices on its own.');
     $('code').textContent = detail; $('code').hidden = false;
     const copy = button('Copy', () => {
       const range = document.createRange(); range.selectNodeContents($('code'));

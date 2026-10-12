@@ -2,6 +2,11 @@
 
 use tauri::{AppHandle, Url, WebviewWindow};
 
+pub const TRAY_PLACE: &str = "the menu bar";
+pub const APP_STAYS: &str = "This app stays installed.";
+
+pub fn early_init() {}
+
 pub fn local_page() -> Url {
     Url::parse("tauri://localhost/index.html").unwrap()
 }

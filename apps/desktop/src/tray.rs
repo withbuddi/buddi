@@ -1,6 +1,7 @@
 //! The tray icon (the top bar's indicator on Linux, the notification area on
-//! Windows). Linux has no menu bar, so its menu is buddi.app's menu-bar glyph
-//! menu and app menu in one, in the Mac's words and order
+//! Windows, where a left click opens the window and a right click the menu).
+//! Neither has buddi.app's menu bar, so the menu is its menu-bar glyph menu
+//! and app menu in one, in the Mac's words and order
 //! (apps/mac/MenuBar/StatusItemController.swift, App/MainMenu.swift):
 //!
 //!   Running since 11:19
@@ -16,7 +17,7 @@ use std::time::SystemTime;
 
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::{TrayIcon, TrayIconBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
 use crate::shell::{self, Phase};
@@ -136,7 +137,15 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .icon(Image::from_bytes(first)?)
         .tooltip("buddi")
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        // Windows: a left click is the window, as every tray app there has it.
+        .show_menu_on_left_click(!cfg!(windows))
+        .on_tray_icon_event(|tray, event| {
+            if cfg!(windows) {
+                if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                    platform::show_main(tray.app_handle());
+                }
+            }
+        })
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => platform::show_main(app),
             "new-conversation" => actions::new_conversation(app),
