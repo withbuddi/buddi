@@ -223,6 +223,7 @@ jobs:
           name: buddi-windows-setup
           path: |
             build/windows/*-setup.exe
+            build/windows/MicrosoftEdgeWebview2Setup.exe.sha256
             build/windows/*.zip
             build/windows/*.sha256
           retention-days: 7

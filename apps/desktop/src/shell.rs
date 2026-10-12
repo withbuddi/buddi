@@ -50,6 +50,7 @@ struct Inner {
     linking: bool,
     linked_at: Option<Instant>,
     removing_since: Option<Instant>,
+    removal_went_down: bool,
     /// What the placeholder shows now, so it is not reloaded for nothing.
     shown: Option<(String, String)>,
 }
@@ -64,6 +65,7 @@ impl Shell {
                 linking: false,
                 linked_at: None,
                 removing_since: None,
+                removal_went_down: false,
                 shown: None,
             }),
         }
@@ -141,7 +143,8 @@ fn backoff(failures: u32) -> Duration {
 /// waits for a gateway that went away by itself to come back.
 pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
     let busy = with(app, |s| {
-        if s.linking {
+        // Under a removal nothing reconnects: `buddi --no-open` would set buddi up again.
+        if s.linking || matches!(s.phase, Phase::Removing | Phase::Removed) {
             return true;
         }
         s.linking = true;
@@ -153,10 +156,6 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
     if busy {
         return;
     }
-    if matches!(phase(app), Phase::Removing | Phase::Removed) {
-        with(app, |s| s.linking = false);
-        return;
-    }
     if !quiet {
         placeholder(app, "starting", "");
     }
@@ -166,7 +165,7 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
         let mut failures = 0u32;
         let mut patient = patient;
         loop {
-            if phase(&app) == Phase::Stopped {
+            if halted(&app) {
                 break;
             }
             // A gateway that went away (a restart, an update) usually comes back by
@@ -176,13 +175,13 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
             if let Some(addr) = gateway {
                 let since = Instant::now();
                 while !buddi::answers(addr) && since.elapsed() < Duration::from_secs(45) {
-                    if phase(&app) == Phase::Stopped {
+                    if halted(&app) {
                         break;
                     }
                     thread::sleep(Duration::from_secs(1));
                 }
             }
-            if phase(&app) == Phase::Stopped {
+            if halted(&app) {
                 break;
             }
             // buddi was here (a dashboard was shown) and its installation is gone: it
@@ -194,19 +193,24 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
             }
             let answer = buddi::dashboard_link();
             // Stop pressed while the command was answering: the link is not loaded.
-            if phase(&app) == Phase::Stopped {
+            if halted(&app) {
                 break;
             }
             match answer {
                 Ok(link) => {
                     crate::policy::set_dashboard(&link);
                     let route = with(&app, |s| {
+                        // A removal began while the command answered: the link is not loaded.
+                        if matches!(s.phase, Phase::Removing | Phase::Removed | Phase::Stopped) {
+                            return Err(());
+                        }
                         s.gateway = buddi::gateway_addr(&link);
                         s.linked_at = Some(Instant::now());
                         s.shown = None;
                         s.phase = Phase::Dashboard;
-                        s.route.take()
+                        Ok(s.route.take())
                     });
+                    let Ok(route) = route else { break };
                     let mut link = link;
                     if let Some(r) = route {
                         link.set_fragment(Some(r.trim_start_matches('#')));
@@ -300,6 +304,11 @@ fn installation_present() -> bool {
     buddi::named_data_dir().map(|d| d.join("installation.json").is_file()).unwrap_or(true)
 }
 
+/// Stop asking for links: stopped, or buddi is being (or was) removed.
+fn halted(app: &AppHandle) -> bool {
+    matches!(phase(app), Phase::Stopped | Phase::Removing | Phase::Removed)
+}
+
 /// Where the last backup of a removal is (product-uninstall.ts: `~/buddi-backups`).
 fn backups_dir() -> String {
     dirs::home_dir().map(|h| h.join("buddi-backups").display().to_string()).unwrap_or_default()
@@ -312,7 +321,10 @@ pub fn removing(app: &AppHandle) {
         return;
     }
     log("buddi is being removed; not reconnecting");
-    with(app, |s| s.removing_since = Some(Instant::now()));
+    with(app, |s| {
+        s.removing_since = Some(Instant::now());
+        s.removal_went_down = false;
+    });
     set_phase(app, Phase::Removing);
 }
 
@@ -321,16 +333,30 @@ pub fn removing(app: &AppHandle) {
 /// uninstaller says `--removed`). A removal that never happens (it failed, and
 /// the dashboard says why) gives the window back after five minutes.
 fn removal_tick(app: &AppHandle, up: bool) {
+    let (since, seen_down) = with(app, |s| {
+        if !up {
+            s.removal_went_down = true;
+        }
+        (s.removing_since.map(|t| t.elapsed()).unwrap_or_default(), s.removal_went_down)
+    });
     if !up {
         placeholder(app, "removing", &backups_dir());
     }
-    if buddi::command().is_none() {
+    if buddi::command().is_none() || (seen_down && !installation_present()) {
         removed(app);
         return;
     }
-    let lapsed = with(app, |s| s.removing_since.map(|t| t.elapsed() > Duration::from_secs(300)).unwrap_or(true));
-    if lapsed {
-        log("buddi is still here five minutes after the removal began; back to it");
+    if !seen_down && since > Duration::from_secs(120) {
+        // The dashboard never went away: the removal did not begin (it says why).
+        log("the removal did not begin; the dashboard stays");
+        set_phase(app, Phase::Dashboard);
+        return;
+    }
+    // Down, then back up, with buddi still installed: the removal stopped
+    // (it puts the service back when it cannot finish). The uninstall's own
+    // deadline is half an hour.
+    if seen_down && (up || since > Duration::from_secs(30 * 60)) {
+        log("buddi is still installed after its removal stopped; back to it");
         set_phase(app, Phase::Starting);
         connect(app, false, false);
     }

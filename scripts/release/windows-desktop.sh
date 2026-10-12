@@ -24,7 +24,8 @@ mkdir -p "$OUT"
   rustup toolchain install
   rustc --version
   # The tauri crates in Cargo.lock and this CLI move together (README.md, Build).
-  npx --yes @tauri-apps/cli@2.12.2 build --no-bundle --ci --config "{\"version\":\"$VERSION\"}"
+  # --locked after `--`: cargo builds from Cargo.lock as it is, never a rewritten one.
+  npx --yes @tauri-apps/cli@2.12.2 build --no-bundle --ci --config "{\"version\":\"$VERSION\"}" -- --locked
 )
 exe="$ROOT/apps/desktop/target/release/buddi-desktop.exe"
 [ -f "$exe" ] || die "the build wrote no $exe"
@@ -34,4 +35,6 @@ boot="$OUT/MicrosoftEdgeWebview2Setup.exe"
 curl -fsSL "$WEBVIEW2_URL" -o "$boot"
 powershell.exe -NoProfile -NonInteractive -Command "\$s = Get-AuthenticodeSignature -LiteralPath '$(cygpath -w "$boot")'; if (\$s.Status -ne 'Valid' -or \$s.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { Write-Error ('not signed by Microsoft: ' + \$s.Status + ' ' + \$s.SignerCertificate.Subject); exit 1 }" \
   || die "the WebView2 bootstrapper from $WEBVIEW2_URL is not signed by Microsoft"
+# Its checksum beside it, so a release says exactly which bootstrapper it carries.
+( cd "$OUT" && printf '%s  %s\n' "$(sha256sum MicrosoftEdgeWebview2Setup.exe | awk '{ print $1 }')" MicrosoftEdgeWebview2Setup.exe > MicrosoftEdgeWebview2Setup.exe.sha256 && cat MicrosoftEdgeWebview2Setup.exe.sha256 )
 ls -l "$OUT/buddi-desktop.exe" "$boot"

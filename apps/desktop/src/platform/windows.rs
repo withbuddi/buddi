@@ -235,11 +235,18 @@ pub fn process_alive(pid: u32) -> bool {
     }
 }
 
-/// When this computer started, in ms since the epoch (now less its uptime).
-fn boot_ms() -> i64 {
-    let uptime = unsafe { windows::Win32::System::SystemInformation::GetTickCount64() } as i64;
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-    now - uptime
+/// Windows' id for this boot (a DWORD counted up at every boot, readable by
+/// any user), as environment.ts `readBootId` writes it.
+fn boot_id() -> Option<String> {
+    static ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+            .open_subkey_with_flags(r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters", KEY_READ)
+            .and_then(|k| k.get_value::<u32, _>("BootId"))
+            .ok()
+            .map(|v| v.to_string())
+    })
+    .clone()
 }
 
 /// The pid file's process is running (`supervisor.lock`, `postmaster.pid`).
@@ -248,7 +255,7 @@ pub fn pid_file_alive(file: &Path) -> bool {
     let Some(pid) = std::fs::read_to_string(file).ok().and_then(|t| rules::lock_pid(&t)) else { return false };
     if file.file_name().is_some_and(|n| n == "supervisor.lock") {
         let record = file.parent().and_then(|d| std::fs::read_to_string(d.join("supervisor.boot")).ok());
-        if !rules::lock_of_this_boot(pid, record.as_deref(), boot_ms()) {
+        if !rules::lock_of_this_boot(pid, record.as_deref(), boot_id().as_deref()) {
             return false;
         }
     }
@@ -268,7 +275,10 @@ pub fn supervisor_pipe(data: &Path) -> Option<(String, String)> {
 pub fn open_pipe(path: &str) -> Result<std::fs::File, String> {
     let started = std::time::Instant::now();
     loop {
-        match std::fs::OpenOptions::new().read(true).write(true).open(path) {
+        // The client is identified, never impersonated, by whatever serves the pipe.
+        use std::os::windows::fs::OpenOptionsExt;
+        const SECURITY_IDENTIFICATION: u32 = 1 << 16;
+        match std::fs::OpenOptions::new().read(true).write(true).security_qos_flags(SECURITY_IDENTIFICATION).open(path) {
             Ok(f) => return Ok(f),
             Err(e) if e.raw_os_error() == Some(231) && started.elapsed() < std::time::Duration::from_secs(5) => {
                 std::thread::sleep(std::time::Duration::from_millis(100));

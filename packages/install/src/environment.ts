@@ -458,25 +458,41 @@ export async function environment(root: string, env: NodeJS.ProcessEnv = process
 
 /**
  * Beside `supervisor.lock`, which stays a bare pid (scripts, older releases
- * and buddi.app read it so): `<pid> <boot time in ms>`, the start of the
- * computer's session the lock was taken in. After a restart, a pid left in the
- * lock may name some other process by then (Windows reuses pids quickly); a
- * lock taken in an earlier boot is stale, whatever runs under that pid now.
+ * and buddi.app read it so): `<pid> <boot id>`, the id of the computer's boot
+ * the lock was taken in. After a restart, a pid left in the lock may name some
+ * other process by then (Windows reuses pids quickly); a lock of an earlier
+ * boot is stale, whatever runs under that pid now. The id is the system's own
+ * and has nothing to do with the clock: a clock step (a VM restored from a
+ * snapshot, a first time sync) never makes a live lock look old.
  */
 export const LOCK_BOOT_FILE = 'supervisor.boot';
 
-/** When this computer started, in ms (from its uptime; steady to a second or so). */
-export function bootTime(): number {
-  return Date.now() - os.uptime() * 1000;
+/** The system's id for this boot, as text, or undefined where it cannot be read (then the pid alone decides). */
+export function readBootId(platform: NodeJS.Platform | string = process.platform): string | undefined {
+  try {
+    if (platform === 'linux') return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() || undefined;
+    if (platform === 'darwin') return execFileSync('sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 5_000 }).trim() || undefined;
+    if (platform === 'win32') {
+      // A DWORD Windows counts up at every boot, readable by any user.
+      const out = execFileSync('reg', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PrefetchParameters', '/v', 'BootId'], { encoding: 'utf8', timeout: 5_000, windowsHide: true });
+      const match = /BootId\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(out);
+      return match ? String(parseInt(match[1]!, 16)) : undefined;
+    }
+  } catch { /* unreadable: the pid alone decides */ }
+  return undefined;
 }
 
-/** Two boot times further apart than this are two boots (uptime drifts a little, a clock change moves both). */
-const BOOT_SLACK_MS = 120_000;
+let cachedBootId: { value: string | undefined } | undefined;
+/** This boot's id, read once per process (it cannot change while the process runs). */
+export function bootId(): string | undefined {
+  cachedBootId ??= { value: readBootId() };
+  return cachedBootId.value;
+}
 
 export interface LockHolderDeps {
   read?: (file: string) => string | undefined;
   alive?: (pid: number) => boolean;
-  boot?: () => number;
+  boot?: () => string | undefined;
 }
 
 /**
@@ -489,8 +505,12 @@ export function lockHolder(data: string, deps: LockHolderDeps = {}): number | un
   const alive = deps.alive ?? ((pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return errorCode(e) === 'EPERM'; } });
   const pid = Number((read(path.join(data, 'supervisor.lock')) ?? '').trim().split(/\s+/)[0]);
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
-  const [recordedPid, recordedBoot] = (read(path.join(data, LOCK_BOOT_FILE)) ?? '').trim().split(/\s+/).map(Number);
-  if (recordedPid === pid && Number.isFinite(recordedBoot) && Math.abs((deps.boot ?? bootTime)() - recordedBoot!) > BOOT_SLACK_MS) return undefined;
+  const [recordedPid, recordedBoot] = (read(path.join(data, LOCK_BOOT_FILE)) ?? '').trim().split(/\s+/);
+  if (Number(recordedPid) === pid && recordedBoot) {
+    const now = (deps.boot ?? bootId)();
+    // Only two ids that were both read and differ say "an earlier boot".
+    if (now !== undefined && now !== recordedBoot) return undefined;
+  }
   return alive(pid) ? pid : undefined;
 }
 
@@ -503,7 +523,9 @@ export async function acquireLock(data: string, deps: Pick<LockHolderDeps, 'boot
       const fd = await open(file, 'wx', 0o600);
       await fd.writeFile(String(process.pid));
       await fd.close();
-      await writeFile(path.join(data, LOCK_BOOT_FILE), `${process.pid} ${Math.round((deps.boot ?? bootTime)())}\n`, { mode: 0o600 });
+      const boot = (deps.boot ?? bootId)();
+      if (boot !== undefined) await writeFile(path.join(data, LOCK_BOOT_FILE), `${process.pid} ${boot}\n`, { mode: 0o600 });
+      else await unlink(path.join(data, LOCK_BOOT_FILE)).catch(() => {});
       return async () => {
         if ((await readFile(file, 'utf8').catch(() => '')) === String(process.pid)) {
           await unlink(file);
@@ -522,7 +544,7 @@ export async function acquireLock(data: string, deps: Pick<LockHolderDeps, 'boot
         let stale = false;
         if (Number.isInteger(pid) && pid > 0) {
           // A lock of an earlier boot is stale even when its pid runs again (another program by now).
-          stale = lockHolder(data, { boot: deps.boot ?? bootTime }) === undefined;
+          stale = lockHolder(data, { boot: deps.boot ?? bootId }) === undefined;
         } else if (existsSync(file)) {
           stale = Date.now() - (await stat(file)).mtimeMs > 30_000;
         }

@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 import { existsSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs';
 import { environment, lockHolder, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
-import { answeredBySupervisor, awaitStartingSupervisor, briefSupervisorEnv, supervise, supervisorSocket } from './supervisor.js';
+import { NotOurSupervisor, answeredBySupervisor, briefSupervisorEnv, runningOrStarting, supervise, supervisorSocket } from './supervisor.js';
 import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
@@ -64,7 +64,7 @@ async function ask<T>(ctx: InstallContext, method: string, route: string, body?:
       timeout: 25_000,
     }, res => {
       // Windows: a pipe's name can be listed by anyone; the secret beside it in the data directory cannot.
-      if (!answeredBySupervisor(ctx.data, res.headers)) { res.resume(); return reject(new Error('Something other than this installation\'s supervisor answered on its pipe.')); }
+      if (!answeredBySupervisor(ctx.data, res.headers)) { res.resume(); return reject(new NotOurSupervisor()); }
       let text = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { text += chunk; });
@@ -946,23 +946,19 @@ async function run(): Promise<void> {
       await launchService(ctx, false);
       relaunched = true;
     } else {
-      try {
-        let status: SupervisorStatus;
-        try { status = await control(ctx); }
-        catch (error) {
-          const starting = await awaitStartingSupervisor(() => supervisorLockPid(ctx.data), () => control(ctx));
-          if (starting === undefined) throw error;
-          status = starting;
-        }
+      // A missing supervisor is normal on first run; one that holds the lock is
+      // waited for, and if it never answers that is said, not restarted over.
+      const status = await runningOrStarting(() => control(ctx), () => supervisorLockPid(ctx.data));
+      if (status !== undefined) {
         if (status.installRoot === root && status.nodePath === process.execPath) {
-          if (status.gateway === 'stopped') await control(ctx, 'start');
+          if (status.gateway === 'stopped') await control(ctx, 'start').catch(() => undefined);
           running = true;
         } else if (runsFromApp(status, ctx) && (!isAppInstall(ctx) || viaShim)) {
           // npm's buddi, with buddi.app running this installation: install no service, talk to the app's.
           console.log(APP_RUNNING_LINE);
           running = true;
         }
-      } catch { /* A missing supervisor is normal on first run. */ }
+      }
     }
     // The shim never installs a service beside buddi.app (it opened the app above).
     if (!running && viaShim) throw new Error('buddi.app is not running buddi. Open buddi.app, then run buddi again.');

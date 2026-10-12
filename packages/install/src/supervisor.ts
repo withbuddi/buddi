@@ -93,27 +93,51 @@ export function answeredBySupervisor(data: string, headers: Record<string, strin
   return secret !== undefined && headers[SUPERVISOR_SECRET_HEADER] === secret;
 }
 
+/** What a client says when the pipe answered without this supervisor's secret (Windows). */
+export class NotOurSupervisor extends Error {
+  constructor() { super('Something other than this installation\'s supervisor answered on its pipe.'); }
+}
+
+export interface StartingOptions { timeoutMs?: number; intervalMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number }
+
 /**
  * A supervisor that holds the lock but does not answer yet is starting: its
  * database, its migrations, then its socket (or pipe). It is waited for, never
  * started again over it (that is what a sign-in race did: the task's
  * supervisor starting while the desktop app ran `buddi --no-open`, which then
  * tried to restart the service and could not reach it). Undefined when no
- * supervisor holds the lock (any more).
+ * supervisor holds the lock (any more). Throws when it has not answered in
+ * time, or at once when something else answers in its place: either way the
+ * caller must not start or restart anything over a live holder.
  */
-export async function awaitStartingSupervisor<T>(holder: () => number | undefined, ask: () => Promise<T>, options: { timeoutMs?: number; intervalMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number } = {}): Promise<T | undefined> {
-  const { timeoutMs = 180_000, intervalMs = 500 } = options;
+export async function awaitStartingSupervisor<T>(holder: () => number | undefined, ask: () => Promise<T>, options: StartingOptions = {}): Promise<T | undefined> {
+  const { timeoutMs = 90_000, intervalMs = 500 } = options;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const now = options.now ?? Date.now;
   const since = now();
   for (;;) {
     const pid = holder();
     if (pid === undefined) return undefined;
-    try { return await ask(); } catch { /* not listening yet */ }
+    try { return await ask(); } catch (error) { if (error instanceof NotOurSupervisor) throw error; /* not listening yet */ }
     if (now() - since >= timeoutMs) {
       throw new Error(`buddi is starting (supervisor pid ${pid}) and has not answered for ${Math.round(timeoutMs / 1000)} seconds. Its log is logs/supervisor.log in the data folder.`);
     }
     await sleep(intervalMs);
+  }
+}
+
+/**
+ * `buddi` with no command: the running supervisor's status, a starting one's
+ * once it answers, or undefined when none holds the lock (start one). Errors
+ * about a live holder (it never answered, something else answered) are
+ * thrown, never turned into "start another".
+ */
+export async function runningOrStarting<T>(ask: () => Promise<T>, holder: () => number | undefined, options: StartingOptions = {}): Promise<T | undefined> {
+  try { return await ask(); }
+  catch (error) {
+    if (error instanceof NotOurSupervisor) throw error;
+    if (holder() === undefined) return undefined;
+    return await awaitStartingSupervisor(holder, ask, options);
   }
 }
 

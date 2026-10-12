@@ -219,7 +219,11 @@ fn build_window(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started && !shell::may_show(payload.url()) {
                 let url = payload.url().clone();
-                platform::open_external(&url);
+                // Another local server (a preview's frame sending the top page
+                // there) is never for the browser: only back.
+                if !policy::loopback(&url) {
+                    platform::open_external(&url);
+                }
                 shell::back_to_dashboard(webview.app_handle());
             }
         })
@@ -312,7 +316,8 @@ fn main() {
     let hidden = std::env::args().any(|a| a == "--hidden");
     // `--quit` reaches a running app through the single-instance plugin; with
     // none running there is nothing to quit.
-    let quitting = std::env::args().any(|a| a == "--quit");
+    // `--removed` (the setup's uninstaller) likewise: with none running there is no page to show.
+    let quitting = std::env::args().any(|a| a == "--quit" || a == "--removed");
     // Started at login with no buddi on this computer: nothing to show, so no
     // process lingers out of sight.
     if hidden && buddi::command().is_none() {

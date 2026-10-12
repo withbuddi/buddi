@@ -140,14 +140,18 @@ pub fn run(args: &[&str], timeout: Duration) -> Result<String, Failure> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| Failure::NoLink(format!("{} could not run: {e}", bin.display())))?;
+    // Each pipe is read aside and handed over on a channel, so a reader still
+    // blocked (a grandchild holding the pipe) never holds up the answer.
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut text = String::new();
             if let Some(mut p) = pipe {
                 let _ = p.read_to_string(&mut text);
             }
-            text
-        })
+            let _ = tx.send(text);
+        });
+        rx
     };
     let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
@@ -157,18 +161,36 @@ pub fn run(args: &[&str], timeout: Duration) -> Result<String, Failure> {
             break Some(status);
         }
         if started.elapsed() > timeout {
-            let _ = child.kill();
+            kill_tree(&mut child);
             let _ = child.wait();
             break None;
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    let text = format!("{}{}", out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    let collect = |rx: std::sync::mpsc::Receiver<String>| rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+    let text = format!("{}{}", collect(out), collect(err));
     match status {
         Some(s) if s.success() => Ok(text),
         Some(_) => Err(Failure::NoLink(tail(&text))),
         None => Err(Failure::NoLink(format!("No answer within {} seconds.", timeout.as_secs()))),
     }
+}
+
+/// The command and everything it started: on Windows `buddi.cmd` is cmd.exe,
+/// and killing it alone would leave node running.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .creation_flags(crate::platform::CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
 }
 
 /// The last words of the output, without the sign-in link (a ticket).
@@ -184,7 +206,10 @@ fn tail(s: &str) -> String {
 /// (through systemd on Linux); `--no-service` is not passed because, unlike
 /// buddi.app, this app does not supervise buddi itself.
 pub fn dashboard_link() -> Result<Url, Failure> {
-    let out = run(&["--no-open"], Duration::from_secs(150))?;
+    // Longer than the launcher's own waits: 90 s for a supervisor that is
+    // starting, then up to 120 s for a service it starts. The command says
+    // why it gave up; this deadline is only for a command that never ends.
+    let out = run(&["--no-open"], Duration::from_secs(240))?;
     out.lines()
         .find_map(|l| l.strip_prefix("Dashboard: "))
         .and_then(|u| Url::parse(u.trim()).ok())

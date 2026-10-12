@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { BRIEF_SUPERVISOR_VAR, awaitStartingSupervisor, briefParent, briefSupervisorEnv, controlSocket, listenOnSocket, pendingUpgrade, restartDelay, nameSupervisorPipe, supervisorSocket, watchBriefParent, type SupervisorStatus } from './supervisor.js';
+import { BRIEF_SUPERVISOR_VAR, NotOurSupervisor, awaitStartingSupervisor, briefParent, runningOrStarting, briefSupervisorEnv, controlSocket, listenOnSocket, pendingUpgrade, restartDelay, nameSupervisorPipe, supervisorSocket, watchBriefParent, type SupervisorStatus } from './supervisor.js';
 import { SHIM_VAR, shimRefusesSupervise } from './cli-shim.js';
 
 const servers: Server[] = [];
@@ -312,17 +312,37 @@ describe('a starting supervisor is waited for, not started over', () => {
     expect(asks).toBe(4);
   });
 
-  test('no supervisor holds the lock: nothing to wait for', async () => {
-    expect(await awaitStartingSupervisor(() => undefined, async () => 'never', clock())).toBeUndefined();
-  });
-
   test('the holder goes away while it is waited for', async () => {
     let n = 0;
     expect(await awaitStartingSupervisor(() => (++n < 3 ? 77 : undefined), async () => { throw new Error('ENOENT'); }, clock())).toBeUndefined();
   });
 
-  test('one that never answers is said, not restarted', async () => {
-    await expect(awaitStartingSupervisor(() => 77, async () => { throw new Error('ENOENT'); }, { ...clock(), timeoutMs: 5_000 }))
-      .rejects.toThrow(/buddi is starting \(supervisor pid 77\) and has not answered for 5 seconds/);
+  test('something else answering on the pipe ends the wait at once', async () => {
+    let asks = 0;
+    await expect(awaitStartingSupervisor(() => 77, async () => { asks++; throw new NotOurSupervisor(); }, clock())).rejects.toBeInstanceOf(NotOurSupervisor);
+    expect(asks).toBe(1);
+  });
+});
+
+describe('buddi with no command: running, starting, or none (the launcher\'s decision)', () => {
+  const clock = () => { let t = 0; return { now: () => t, sleep: async (ms: number) => { t += ms; } }; };
+
+  test('a running supervisor answers at once', async () => {
+    expect(await runningOrStarting(async () => 'status', () => 1, clock())).toBe('status');
+  });
+
+  test('no lock holder: undefined, so the launcher starts the service', async () => {
+    expect(await runningOrStarting(async () => { throw new Error('ENOENT'); }, () => undefined, clock())).toBeUndefined();
+  });
+
+  test('a live holder that never answers is said after ninety seconds and never treated as missing', async () => {
+    const c = clock();
+    await expect(runningOrStarting(async () => { throw new Error('ENOENT'); }, () => 77, c))
+      .rejects.toThrow(/buddi is starting \(supervisor pid 77\) and has not answered for 90 seconds/);
+    expect(c.now()).toBe(90_000);
+  });
+
+  test('a rogue answer is thrown, whether or not a holder is there', async () => {
+    await expect(runningOrStarting(async () => { throw new NotOurSupervisor(); }, () => undefined, clock())).rejects.toBeInstanceOf(NotOurSupervisor);
   });
 });

@@ -245,37 +245,53 @@ begin
   Exec(ExpandConstant('{sys}\conhost.exe'), '--headless ' + AddQuotes(Exe) + ' ' + Params, GetEnv('USERPROFILE'), SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
-{ The app (buddi-desktop.exe) is asked to quit, as its tray's Quit does, before its file is replaced or removed:
-  a second start with --quit reaches the running one and ends at once (with none running, it just ends).
-  One that has not gone after a few seconds is ended. Its window is titled buddi. }
+{ Is the app running for this user? By its process (tasklist), never by a window title, which any
+  Explorer window on a folder named buddi has too. }
+function DesktopAppRunning: Boolean;
+var
+  Listing: String;
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+  Listing := AddBackslash(GetTempDir) + 'buddi-desktop-tasks.txt';
+  DeleteFile(Listing);
+  RunHidden(ExpandConstant('{sys}\cmd.exe'), '/d /c tasklist /NH /FO CSV /FI "IMAGENAME eq buddi-desktop.exe" /FI "USERNAME eq ' + GetUserNameString + '" > ' + AddQuotes(Listing));
+  if LoadStringsFromFile(Listing, Lines) then
+    for I := 0 to GetArrayLength(Lines) - 1 do
+      if Pos('"buddi-desktop.exe"', Lowercase(Lines[I])) = 1 then Result := True;
+  DeleteFile(Listing);
+end;
+
+{ The app (buddi-desktop.exe) is asked to quit, as its tray's Quit does, before its file is replaced or
+  removed: a second start with --quit reaches the running one (with none running, it just ends). One that
+  has not gone after a few seconds is ended. Says whether it was running. }
 function QuitDesktopApp(const Exe: String): Boolean;
 var
   Code, I: Integer;
 begin
-  Result := FindWindowByWindowName('buddi') <> 0;
-  if not FileExists(Exe) then exit;
+  Result := DesktopAppRunning;
+  if not Result or not FileExists(Exe) then exit;
   Exec(Exe, '--quit', '', SW_HIDE, ewWaitUntilTerminated, Code);
   for I := 1 to 20 do begin
-    if FindWindowByWindowName('buddi') = 0 then break;
+    if not DesktopAppRunning then exit;
     Sleep(250);
   end;
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM buddi-desktop.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
-{ A running app is told buddi is removed (--removed): it shows its last page and quits when the owner closes it.
-  Waited for up to fifteen minutes (the uninstall runs out of sight), then ended. }
+{ buddi was removed already (its own removal started this uninstaller): a running app is told so
+  (--removed), shows its last page and quits when the owner closes it. Waited for up to fifteen minutes
+  (the uninstall runs out of sight), then ended. }
 procedure LastPageThenQuit(const Exe: String);
 var
   Code, I: Integer;
 begin
-  if (FindWindowByWindowName('buddi') = 0) or not FileExists(Exe) then begin
-    QuitDesktopApp(Exe);
-    exit;
-  end;
+  if not DesktopAppRunning or not FileExists(Exe) then exit;
   Exec(Exe, '--removed', '', SW_SHOWNORMAL, ewWaitUntilTerminated, Code);
-  for I := 1 to 3600 do begin
-    if FindWindowByWindowName('buddi') = 0 then break;
-    Sleep(250);
+  for I := 1 to 900 do begin
+    if not DesktopAppRunning then exit;
+    Sleep(1000);
   end;
   QuitDesktopApp(Exe);
 end;
@@ -307,11 +323,27 @@ begin
       + 'Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703, or type buddi in a Command Prompt to open buddi in your browser.', mbInformation, MB_OK, IDOK);
 end;
 
-{ The Run value the app wrote for Start at Login, when its record says it is that one (windows_rules.rs run_entry_ours). }
-procedure RemoveDesktopRunEntry;
+{ Two Windows folders are the same: case and a trailing backslash aside. }
+function SameFolder(const A, B: String): Boolean;
+begin
+  Result := (A <> '') and (CompareText(RemoveBackslashUnlessRoot(A), RemoveBackslashUnlessRoot(B)) = 0);
+end;
+
+{ The app's Start at Login record (HKCU\Software\buddi\Desktop) is this installation's: it names Data. }
+function DesktopRecordOurs(const Data: String): Boolean;
+var
+  Recorded: String;
+begin
+  Result := RegQueryStringValue(HKCU, 'Software\buddi\Desktop', 'DataDir', Recorded) and SameFolder(Recorded, Data);
+end;
+
+{ The Run value the app wrote for Start at Login, when its record says it is that one and this
+  installation's (windows_rules.rs run_entry_ours: the command and the data folder). }
+procedure RemoveDesktopRunEntry(const Data: String);
 var
   Value, Recorded: String;
 begin
+  if not DesktopRecordOurs(Data) then exit;
   if not RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'buddi', Value) then exit;
   if not RegQueryStringValue(HKCU, 'Software\buddi\Desktop', 'RunCommand', Recorded) then exit;
   if Value <> Recorded then exit;
@@ -356,6 +388,7 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Work, Bundle, Node, Script, Params, LogFile, ResultFile, SummaryFile, Kept: String;
+  Code: Integer;
 begin
   Result := '';
   { The app goes before its file is replaced, and comes back after (ssPostInstall). }
@@ -400,6 +433,9 @@ begin
     else
       Result := 'buddi could not be installed: the setup stopped without saying why. Run it again.';
     Result := Result + #13#10 + 'The details are in ' + Kept + '.';
+    { The buddi that was here is back (the setup program puts it back); so is the app it quit. }
+    if AppWasRunning then
+      Exec(ExpandConstant('{app}\buddi-desktop.exe'), '--hidden', '', SW_SHOWNORMAL, ewNoWait, Code);
   end;
   DelTree(Work, True, True, True);
 end;
@@ -454,12 +490,6 @@ var
   Data, Node, Script, Work, LogFile, Summary, ResultFile, Words: String;
 begin
   if CurUninstallStep = usUninstall then begin
-    { The app first: Windows will not remove a program that runs. }
-    if UninstallSilent then
-      { Started by buddi's own removal (the dashboard, buddi uninstall): the app shows its last page, with where the backup is, and goes when the owner closes it. }
-      LastPageThenQuit(ExpandConstant('{app}\buddi-desktop.exe'))
-    else
-      QuitDesktopApp(ExpandConstant('{app}\buddi-desktop.exe'));
     if not RegQueryStringValue(HKCU, 'Software\buddi', 'DataDir', Data) then Data := ExpandConstant('{localappdata}\buddi');
     Node := Data + '\node\node.exe';
     Script := Data + '\releases\current\packages\install\dist\windows-setup.js';
@@ -471,9 +501,15 @@ begin
             + 'Run the buddi setup again (it repairs the install), then remove buddi here.', mbError, MB_OK);
         Abort;
       end;
-      { Already removed (buddi uninstall from a terminal or the dashboard started this): only the setup's own files are left. }
+      { Already removed (buddi uninstall from a terminal or the dashboard started this): only the setup's own
+        files are left. The app says so on its last page and goes when the owner closes it (Windows will not
+        remove a program that runs); asked from Settings → Apps, it just quits. }
+      if UninstallSilent then LastPageThenQuit(ExpandConstant('{app}\buddi-desktop.exe'))
+      else QuitDesktopApp(ExpandConstant('{app}\buddi-desktop.exe'));
       exit;
     end;
+    { buddi is still here: the app quits first, then buddi uninstall runs. }
+    QuitDesktopApp(ExpandConstant('{app}\buddi-desktop.exe'));
     { Not buddi-uninstall-: that prefix is the launcher's own node copy, which it removes once it exits. }
     Work := AddBackslash(GetTempDir) + 'buddi-setup-uninstall-' + GetDateTimeString('yyyymmddhhnnss', #0, #0);
     ForceDirectories(Work);
@@ -494,11 +530,21 @@ begin
     end;
     Words := ReadAll(Summary);
     if (Words <> '') and not UninstallSilent then MsgBox(Words, mbInformation, MB_OK);
+    { A silent run shows nothing: where the backup is and its passphrase go beside the backups instead. }
+    if (Words <> '') and UninstallSilent then begin
+      ForceDirectories(ExpandConstant('{%USERPROFILE}\buddi-backups'));
+      SaveStringToFile(ExpandConstant('{%USERPROFILE}\buddi-backups\uninstall-') + GetDateTimeString('yyyymmdd-hhnnss', #0, #0) + '.txt', Words + #13#10, False);
+    end;
     DelTree(Work, True, True, True);
   end;
   if CurUninstallStep = usPostUninstall then begin
     RemoveFromPath(ExpandConstant('{app}\bin'));
-    RemoveDesktopRunEntry;
-    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\buddi');
+    if not RegQueryStringValue(HKCU, 'Software\buddi', 'DataDir', Data) then Data := ExpandConstant('{localappdata}\buddi');
+    RemoveDesktopRunEntry(Data);
+    { The app's record of another installation stays with it; the rest of the key is this setup's. }
+    if DesktopRecordOurs(Data) or not RegKeyExists(HKCU, 'Software\buddi\Desktop') then
+      RegDeleteKeyIncludingSubkeys(HKCU, 'Software\buddi')
+    else
+      RegDeleteValue(HKCU, 'Software\buddi', 'DataDir');
   end;
 end;

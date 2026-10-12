@@ -116,14 +116,21 @@ fn request(method: &str, route: &str, timeout: Duration) -> Result<(u16, Value),
     let (pipe, secret) = crate::platform::supervisor_pipe(&data).ok_or("buddi's supervisor is not running")?;
     let mut stream = crate::platform::open_pipe(&pipe)?;
     stream.write_all(request_bytes(method, route).as_bytes()).map_err(|e| e.to_string())?;
-    // A pipe read has no timeout of its own: it runs aside, and is given up on.
+    // A pipe read has no timeout of its own: it runs aside, and on a timeout
+    // its blocked read is cancelled, so the thread and the handle end too.
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    let reader = std::thread::spawn(move || {
         let mut raw = Vec::new();
         let read = stream.read_to_end(&mut raw).map(|_| raw);
         let _ = tx.send(read);
     });
-    let raw = match rx.recv_timeout(timeout) {
+    let answer = rx.recv_timeout(timeout);
+    if answer.is_err() {
+        use std::os::windows::io::AsRawHandle;
+        let thread = windows::Win32::Foundation::HANDLE(reader.as_raw_handle());
+        let _ = unsafe { windows::Win32::System::IO::CancelSynchronousIo(thread) };
+    }
+    let raw = match answer {
         Ok(Ok(raw)) => raw,
         // The server closing its end is how an answer ends.
         Ok(Err(e)) if e.raw_os_error() == Some(109) => return Err("the supervisor closed the pipe without answering".into()),
