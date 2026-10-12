@@ -7,7 +7,7 @@ import { pointAt, windowsSetupName } from './app-layout.js';
 import { buildSuperviseScript } from './windows-task.js';
 import { recoverySentence } from './upgrade.js';
 import {
-  UNINSTALL_NODE_PREFIX, WINDOWS_COMMAND_MARKER, buildWindowsCommand, cleanupNodeCopyCommand, insideFolder, readWindowsInstallerRecord,
+  NODE_COPY_DIR_VAR, UNINSTALL_NODE_PREFIX, WINDOWS_COMMAND_MARKER, buildWindowsCommand, cleanupNodeCopyCommand, insideFolder, readWindowsInstallerRecord,
   windowsBundledNode, windowsCommandData, windowsCommandOwnedBy, windowsInstallEnvironment, windowsTaskSpec,
 } from './windows-install.js';
 import { newestArchive, npmShimRunsBuddi, parseSetupArgs, setupPlan, uninstallSummary } from './windows-setup.js';
@@ -104,12 +104,16 @@ describe('installer.json and the node copy', () => {
   test('a node copy in TEMP is removed after it exits; any other node is left alone', () => {
     const tmp = 'C:\\Users\\owner\\AppData\\Local\\Temp';
     const cleanup = cleanupNodeCopyCommand(`${tmp}\\${UNINSTALL_NODE_PREFIX}abc123\\node.exe`, 'C:\\Windows', tmp);
-    // No console window: cmd's own commands only (no ping), retried until the folder is gone, passed verbatim.
-    expect(cleanup?.command).toBe('C:\\Windows\\System32\\cmd.exe');
+    // PowerShell itself, hidden, waiting half a second between tries, the folder in a variable, never in the script.
     const dir = `${tmp}\\${UNINSTALL_NODE_PREFIX}abc123`;
-    expect(cleanup?.args).toEqual(['/d', '/c', `for /l %i in (1,1,60000) do @if exist "${dir}" (rmdir /s /q "${dir}" 2>nul) else exit /b 0`]);
-    expect(cleanup?.verbatim).toBe(true);
-    expect(cleanup?.args.join(' ')).not.toMatch(/ping|timeout|powershell/);
+    expect(cleanup?.command).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+    expect(cleanup?.args.slice(0, 6)).toEqual(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden']);
+    expect(cleanup?.env).toEqual({ [NODE_COPY_DIR_VAR]: dir });
+    const script = cleanup?.args.at(-1) ?? '';
+    expect(script).toContain('Start-Sleep -Milliseconds 500');
+    expect(script).toContain(`$env:${NODE_COPY_DIR_VAR}`);
+    expect(script).not.toContain(dir);
+    expect(script).not.toMatch(/ping|cmd/);
     expect(cleanupNodeCopyCommand(`${data}\\node\\node.exe`, 'C:\\Windows', tmp)).toBeUndefined();
     expect(cleanupNodeCopyCommand(`D:\\${UNINSTALL_NODE_PREFIX}x\\node.exe`, 'C:\\Windows', tmp)).toBeUndefined();
   });

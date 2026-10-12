@@ -188,23 +188,25 @@ export function nodeOutsideData(data: string, execPath: string = process.execPat
   return copy;
 }
 
+/** The variable the cleanup reads its folder from (never put into its command line). */
+export const NODE_COPY_DIR_VAR = 'BUDDI_NODE_COPY_DIR';
+
 /**
- * When this node is such a copy: the cmd line that removes its folder once it
- * has exited (it cannot remove itself while it runs). Only cmd's own commands,
- * tried until the folder is gone: the cmd is started detached, with no console,
- * and any program it ran (the `ping` that used to be the wait) would get a
- * console of its own, which Windows 11 shows in Windows Terminal whatever
- * `windowsHide` asked. The arguments go as they are (`verbatim`): cmd reads
- * its own quotes, not Node's escaped ones.
+ * When this node is such a copy: what removes its folder once it has exited
+ * (it cannot remove itself while it runs). PowerShell is the hidden, detached
+ * child itself, so it starts no console program of its own (one would get a
+ * console, which Windows 11 shows in Windows Terminal whatever `windowsHide`
+ * asked); it tries every half second for up to a minute and ends once the
+ * folder is gone. The folder comes in an environment variable, not the script.
  */
-export function cleanupNodeCopyCommand(execPath: string, systemRoot: string, tmp: string = os.tmpdir()): { command: string; args: string[]; verbatim: true } | undefined {
+export function cleanupNodeCopyCommand(execPath: string, systemRoot: string, tmp: string = os.tmpdir()): { command: string; args: string[]; env: Record<string, string> } | undefined {
   const dir = win.dirname(execPath);
   if (!win.basename(dir).startsWith(UNINSTALL_NODE_PREFIX) || !insideFolder(dir, tmp, 'win32')) return undefined;
-  if (/["%]/.test(dir)) return undefined;
+  const script = `$d = $env:${NODE_COPY_DIR_VAR}; for ($i = 0; $i -lt 120; $i++) { Start-Sleep -Milliseconds 500; Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue; if (-not (Test-Path -LiteralPath $d)) { exit 0 } }`;
   return {
-    command: win.join(systemRoot, 'System32', 'cmd.exe'),
-    args: ['/d', '/c', `for /l %i in (1,1,60000) do @if exist "${dir}" (rmdir /s /q "${dir}" 2>nul) else exit /b 0`],
-    verbatim: true,
+    command: win.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', script],
+    env: { [NODE_COPY_DIR_VAR]: dir },
   };
 }
 
