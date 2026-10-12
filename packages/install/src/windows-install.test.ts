@@ -104,11 +104,12 @@ describe('installer.json and the node copy', () => {
   test('a node copy in TEMP is removed after it exits; any other node is left alone', () => {
     const tmp = 'C:\\Users\\owner\\AppData\\Local\\Temp';
     const cleanup = cleanupNodeCopyCommand(`${tmp}\\${UNINSTALL_NODE_PREFIX}abc123\\node.exe`, 'C:\\Windows', tmp);
-    // No console window: conhost --headless around cmd, and the removal retried until the folder is gone.
-    expect(cleanup?.command).toBe('C:\\Windows\\System32\\conhost.exe');
-    expect(cleanup?.args.slice(0, 2)).toEqual(['--headless', 'C:\\Windows\\System32\\cmd.exe']);
+    // No console window: cmd's own commands only (no ping), retried until the folder is gone, passed verbatim.
+    expect(cleanup?.command).toBe('C:\\Windows\\System32\\cmd.exe');
     const dir = `${tmp}\\${UNINSTALL_NODE_PREFIX}abc123`;
-    expect(cleanup?.args.at(-1)).toBe(`for /l %i in (1,1,10) do @(ping -n 2 127.0.0.1 >nul & rmdir /s /q "${dir}" 2>nul & if not exist "${dir}" exit /b 0)`);
+    expect(cleanup?.args).toEqual(['/d', '/c', `for /l %i in (1,1,60000) do @if exist "${dir}" (rmdir /s /q "${dir}" 2>nul) else exit /b 0`]);
+    expect(cleanup?.verbatim).toBe(true);
+    expect(cleanup?.args.join(' ')).not.toMatch(/ping|timeout|powershell/);
     expect(cleanupNodeCopyCommand(`${data}\\node\\node.exe`, 'C:\\Windows', tmp)).toBeUndefined();
     expect(cleanupNodeCopyCommand(`D:\\${UNINSTALL_NODE_PREFIX}x\\node.exe`, 'C:\\Windows', tmp)).toBeUndefined();
   });

@@ -190,20 +190,20 @@ export function nodeOutsideData(data: string, execPath: string = process.execPat
 
 /**
  * When this node is such a copy: the cmd line that removes its folder once it
- * has exited (it cannot remove itself while it runs), tried every second for
- * ten. Under `conhost --headless`, so no console window ever shows: a cmd
- * started with a console of its own is handed to Windows Terminal on Windows
- * 11, which shows it whatever `windowsHide` asked. The arguments go as they
- * are (`verbatim`): cmd reads its own quotes, not Node's escaped ones.
+ * has exited (it cannot remove itself while it runs). Only cmd's own commands,
+ * tried until the folder is gone: the cmd is started detached, with no console,
+ * and any program it ran (the `ping` that used to be the wait) would get a
+ * console of its own, which Windows 11 shows in Windows Terminal whatever
+ * `windowsHide` asked. The arguments go as they are (`verbatim`): cmd reads
+ * its own quotes, not Node's escaped ones.
  */
 export function cleanupNodeCopyCommand(execPath: string, systemRoot: string, tmp: string = os.tmpdir()): { command: string; args: string[]; verbatim: true } | undefined {
   const dir = win.dirname(execPath);
   if (!win.basename(dir).startsWith(UNINSTALL_NODE_PREFIX) || !insideFolder(dir, tmp, 'win32')) return undefined;
   if (/["%]/.test(dir)) return undefined;
   return {
-    command: win.join(systemRoot, 'System32', 'conhost.exe'),
-    args: ['--headless', win.join(systemRoot, 'System32', 'cmd.exe'), '/d', '/c',
-      `for /l %i in (1,1,10) do @(ping -n 2 127.0.0.1 >nul & rmdir /s /q "${dir}" 2>nul & if not exist "${dir}" exit /b 0)`],
+    command: win.join(systemRoot, 'System32', 'cmd.exe'),
+    args: ['/d', '/c', `for /l %i in (1,1,60000) do @if exist "${dir}" (rmdir /s /q "${dir}" 2>nul) else exit /b 0`],
     verbatim: true,
   };
 }
