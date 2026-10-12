@@ -59,6 +59,7 @@ echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || die "
 echo "$NODE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || die "apps/mac/NODE_VERSION must name one exact Node version like 22.23.3"
 [ -n "${VCRUNTIME_DIR:-}" ] || die "VCRUNTIME_DIR must name the folder with $VC_DLLS (Microsoft.VC14x.CRT from a Visual Studio redistributable folder)"
 mkdir -p "$CACHE" "$OUT"
+OUT="$(cd "$OUT" && pwd)"
 
 # On Windows (Git Bash) the zips go through Windows' own bsdtar, which takes Windows paths.
 case "$(uname -s)" in
