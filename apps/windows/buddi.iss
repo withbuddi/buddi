@@ -114,6 +114,8 @@ Filename: "{sys}\conhost.exe"; Parameters: "--headless ""{sys}\cmd.exe"" /d /c c
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\bin"
+; The setup program made {app} (for bin\) before Inno Setup did, so Inno Setup does not count it as its own.
+Type: dirifempty; Name: "{app}"
 
 [Code]
 var
