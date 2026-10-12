@@ -18,13 +18,13 @@ import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GATEWAY_PID_FILE, acquireLock, initialize, atomicJson, stopChild, portMovedLines, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
-import { APP_UNINSTALL_EXIT, UNINSTALL_REQUEST, createProductUninstall } from './product-uninstall.js';
+import { GATEWAY_PID_FILE, acquireLock, lockHolder, initialize, atomicJson, stopChild, portMovedLines, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
+import { APP_UNINSTALL_EXIT, UNINSTALL_REQUEST, createProductUninstall, desktopAppOnThisComputer } from './product-uninstall.js';
 import type { ProductUninstall } from './product-uninstall.js';
 import { installShim, shimsFor } from './cli-shim.js';
 import type { ShimOutcome } from './cli-shim.js';
 import { windowsTaskName, windowsTaskScript } from './windows-task.js';
-import { nodeOutsideData } from './windows-install.js';
+import { nodeOutsideData, readWindowsInstallerRecord } from './windows-install.js';
 import type { InstallContext, ReadyContext } from './environment.js';
 import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule, sweepIncoming } from './backup.js';
 import type { BackupControl } from './backup.js';
@@ -62,9 +62,7 @@ export const SUPERVISOR_SECRET_HEADER = 'x-buddi-supervisor';
 
 /** The live supervisor's pipe name and secret (Windows), or nothing when `supervisor.lock` names no live process. */
 export function supervisorPipe(data: string): { name: string; secret: string } | undefined {
-  const pid = Number((() => { try { return readFileSync(path.join(data, 'supervisor.lock'), 'utf8').trim(); } catch { return ''; } })());
-  if (!Number.isInteger(pid) || pid <= 0) return undefined;
-  try { process.kill(pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EPERM') return undefined; }
+  if (lockHolder(data) === undefined) return undefined;
   const [name = '', secret = ''] = (() => { try { return readFileSync(path.join(data, PIPE_NAME_FILE), 'utf8').split(/\r?\n/); } catch { return []; } })();
   return /^buddi-supervisor-[0-9a-f]{32}$/.test(name) && /^[0-9a-f]{64}$/.test(secret) ? { name, secret } : undefined;
 }
@@ -93,6 +91,30 @@ export function answeredBySupervisor(data: string, headers: Record<string, strin
   if (platform !== 'win32') return true;
   const secret = supervisorPipe(data)?.secret;
   return secret !== undefined && headers[SUPERVISOR_SECRET_HEADER] === secret;
+}
+
+/**
+ * A supervisor that holds the lock but does not answer yet is starting: its
+ * database, its migrations, then its socket (or pipe). It is waited for, never
+ * started again over it (that is what a sign-in race did: the task's
+ * supervisor starting while the desktop app ran `buddi --no-open`, which then
+ * tried to restart the service and could not reach it). Undefined when no
+ * supervisor holds the lock (any more).
+ */
+export async function awaitStartingSupervisor<T>(holder: () => number | undefined, ask: () => Promise<T>, options: { timeoutMs?: number; intervalMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number } = {}): Promise<T | undefined> {
+  const { timeoutMs = 180_000, intervalMs = 500 } = options;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const now = options.now ?? Date.now;
+  const since = now();
+  for (;;) {
+    const pid = holder();
+    if (pid === undefined) return undefined;
+    try { return await ask(); } catch { /* not listening yet */ }
+    if (now() - since >= timeoutMs) {
+      throw new Error(`buddi is starting (supervisor pid ${pid}) and has not answered for ${Math.round(timeoutMs / 1000)} seconds. Its log is logs/supervisor.log in the data folder.`);
+    }
+    await sleep(intervalMs);
+  }
 }
 
 /** A new pipe name and secret for this supervisor (Windows; elsewhere the socket's path is fixed). Called with the lock held; returns the secret. */
@@ -739,6 +761,10 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       plan: () => {
         const unit = process.platform === 'darwin' ? launchAgentPlist(ready.data, home) : process.platform === 'linux' ? systemdUnitPath(ready.data, ready.env, home) : process.platform === 'win32' ? windowsTaskScript(ready.data) : undefined;
         const bundle = process.env.BUDDI_APP_BUNDLE?.trim();
+        const setupUninstaller = process.platform === 'win32'
+          ? readWindowsInstallerRecord((() => { try { return readFileSync(path.join(ready.data, 'installer.json'), 'utf8'); } catch { return undefined; } })()).uninstaller
+          : undefined;
+        const desktopApp = desktopAppOnThisComputer(process.platform, { exists: existsSync, ...(setupUninstaller === undefined ? {} : { setupUninstaller }) });
         return {
           data: ready.data,
           ...(core.vaultSelection({ env: ready.env }) === 'keychain' && ready.env.BUDDI_VAULT_SERVICE ? { keychain: ready.env.BUDDI_VAULT_SERVICE } : {}),
@@ -746,6 +772,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
           ...(appFinishes && bundle ? { app: bundle } : {}),
           backups: path.join(home, 'buddi-backups'),
           appFinishes,
+          ...(desktopApp === undefined ? {} : { desktopApp }),
         };
       },
       exists: existsSync,

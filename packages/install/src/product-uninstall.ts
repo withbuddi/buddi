@@ -43,6 +43,22 @@ export interface UninstallPlanView {
   backups: string;
   /** buddi.app is the one that finishes it (and moves itself to the Trash). */
   appFinishes: boolean;
+  /**
+   * The desktop app (apps/desktop) on this computer: on Windows the setup
+   * installed it beside its uninstaller, which removes it last (`goes`); on
+   * Linux it is the .deb's, which stays until the owner removes the package.
+   */
+  desktopApp?: { path: string; goes: boolean };
+}
+
+/** Where the desktop app is, by the install's own layout (see UninstallPlanView.desktopApp). */
+export function desktopAppOnThisComputer(platform: NodeJS.Platform | string, deps: { exists: (file: string) => boolean; setupUninstaller?: string }): UninstallPlanView['desktopApp'] {
+  if (platform === 'win32' && deps.setupUninstaller !== undefined) {
+    const exe = path.win32.join(path.win32.dirname(deps.setupUninstaller), 'buddi-desktop.exe');
+    return deps.exists(exe) ? { path: exe, goes: true } : undefined;
+  }
+  if (platform === 'linux' && deps.exists('/usr/bin/buddi-desktop')) return { path: '/usr/bin/buddi-desktop', goes: false };
+  return undefined;
 }
 
 export interface UninstallJob {

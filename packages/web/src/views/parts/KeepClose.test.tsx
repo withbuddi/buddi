@@ -111,6 +111,16 @@ describe('KeepClose', () => {
 });
 
 describe('Settings → System: the dashboard as an app', () => {
+  it('is not offered inside buddi\'s desktop app', async () => {
+    (window as unknown as { __BUDDI_DESKTOP__?: unknown }).__BUDDI_DESKTOP__ = { os: 'windows', removing: () => {} };
+    try {
+      await act(async () => { render(<AppInstallSection />); });
+      expect(screen.queryByText('The dashboard as an app')).toBeNull();
+    } finally {
+      delete (window as unknown as { __BUDDI_DESKTOP__?: unknown }).__BUDDI_DESKTOP__;
+    }
+  });
+
   it('keeps the bookmark tip and, on this Mac, the double-click app', async () => {
     await act(async () => { render(<AppInstallSection />); });
     expect(screen.getByText('The dashboard as an app')).toBeInTheDocument();

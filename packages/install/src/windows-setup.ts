@@ -37,7 +37,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { currentLauncher, pointAt, pruneReleases, releaseDir, releaseRoot, takeReleasesLock } from './app-layout.js';
-import { launchAgentLabel } from './environment.js';
+import { launchAgentLabel, lockHolder } from './environment.js';
 import { answeredBySupervisor, supervisorSocket } from './supervisor.js';
 import { SETUP_UNINSTALL_VAR, buildWindowsCommand, insideFolder, windowsBundledNode, windowsCommandOwnedBy, windowsInstallEnvironment, windowsInstallPath } from './windows-install.js';
 import type { WindowsInstallerRecord } from './windows-install.js';
@@ -208,9 +208,9 @@ const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 
 /** Stop the supervisor on its pipe (never a kill: that skips the database's shutdown), and wait for it and its Postgres. */
 async function stopSupervisor(data: string): Promise<void> {
-  if (!pidAlive(path.join(data, 'supervisor.lock'))) return;
+  if (lockHolder(data) === undefined) return;
   await askSupervisor(data, 'POST', '/exit');
-  for (let waited = 0; pidAlive(path.join(data, 'supervisor.lock')) || pidAlive(path.join(data, 'postgres', 'postmaster.pid')); waited += 250) {
+  for (let waited = 0; lockHolder(data) !== undefined || pidAlive(path.join(data, 'postgres', 'postmaster.pid')); waited += 250) {
     if (waited >= 120_000) throw new SetupError('buddi did not stop within two minutes, so nothing was changed.');
     await sleep(250);
   }

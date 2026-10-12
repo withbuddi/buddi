@@ -15,9 +15,9 @@ import { open, mkdir, writeFile, rm, rename, copyFile, chmod } from 'node:fs/pro
 import os from 'node:os';
 import { promisify } from 'node:util';
 import { existsSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs';
-import { environment, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
+import { environment, lockHolder, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
-import { answeredBySupervisor, briefSupervisorEnv, supervise, supervisorSocket } from './supervisor.js';
+import { answeredBySupervisor, awaitStartingSupervisor, briefSupervisorEnv, supervise, supervisorSocket } from './supervisor.js';
 import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
@@ -128,13 +128,11 @@ async function control(ctx: InstallContext, action = 'status'): Promise<Supervis
   return await ask<SupervisorStatus>(ctx, action === 'status' ? 'GET' : 'POST', `/${action}`);
 }
 
-/** The pid `supervisor.lock` names, while that process lives. */
+/** The pid `supervisor.lock` names, while that process lives and the lock is of this boot (environment.ts `lockHolder`). */
 function supervisorLockPid(data: string): number | undefined {
-  let pid: number;
-  try { pid = Number(readFileSync(path.join(data, 'supervisor.lock'), 'utf8').trim()); } catch { return undefined; }
-  if (!Number.isInteger(pid) || pid <= 0) return undefined;
-  try { process.kill(pid, 0); return pid; } catch { return undefined; }
+  return lockHolder(data);
 }
+
 
 /**
  * Windows: a postmaster still running on this installation's cluster, its
@@ -949,7 +947,13 @@ async function run(): Promise<void> {
       relaunched = true;
     } else {
       try {
-        const status = await control(ctx);
+        let status: SupervisorStatus;
+        try { status = await control(ctx); }
+        catch (error) {
+          const starting = await awaitStartingSupervisor(() => supervisorLockPid(ctx.data), () => control(ctx));
+          if (starting === undefined) throw error;
+          status = starting;
+        }
         if (status.installRoot === root && status.nodePath === process.execPath) {
           if (status.gateway === 'stopped') await control(ctx, 'start');
           running = true;

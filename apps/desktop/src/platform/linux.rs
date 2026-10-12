@@ -162,6 +162,28 @@ pub fn tray_wants_dark_ink() -> bool {
     false
 }
 
+/// KDE's panel follows its colour scheme (kdeglobals): looked at every few
+/// seconds while it runs there. GNOME's, Pop!_OS's and COSMIC's top bars are
+/// dark whatever the theme, so elsewhere there is nothing to follow.
+pub fn watch_tray_ink(changed: impl Fn(bool) + Send + 'static) {
+    let kde = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_ascii_lowercase().contains("kde");
+    if !kde || std::env::var_os("BUDDI_TRAY_INK").is_some() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let file = dirs::config_dir().map(|c| c.join("kdeglobals"));
+        let mut seen = file.as_ref().and_then(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok());
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let now = file.as_ref().and_then(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok());
+            if now != seen {
+                seen = now;
+                changed(tray_wants_dark_ink());
+            }
+        }
+    });
+}
+
 /// Hands a URL to the desktop's default browser: xdg-open, else gio, else the
 /// `open` crate's own list. Waits for the launcher's answer (it returns once
 /// the browser took the address).

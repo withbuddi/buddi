@@ -21,6 +21,8 @@ pub fn tray_wants_dark_ink() -> bool {
     true
 }
 
+pub fn watch_tray_ink(_changed: impl Fn(bool) + Send + 'static) {}
+
 pub fn tray_icon_dir() -> Option<std::path::PathBuf> {
     None
 }

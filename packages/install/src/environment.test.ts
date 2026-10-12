@@ -7,6 +7,8 @@ import path from 'node:path';
 import {
   protectDataDirectory,
   acquireLock,
+  lockHolder,
+  LOCK_BOOT_FILE,
   atomicJson,
   browsersDir,
   browsersPath,
@@ -71,6 +73,36 @@ describe('the packaged installation environment', () => {
     expect(await readFile(path.join(dir, 'supervisor.lock'), 'utf8')).toBe(String(process.pid));
     expect((await readdir(dir)).some(name => name.startsWith('supervisor.lock.stale-'))).toBe(true);
     await release();
+  });
+
+  test('a lock records its boot; one of an earlier boot is stale even when its pid runs again', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'buddi-lock-test-'));
+    const release = await acquireLock(dir, { boot: () => 1_000_000 });
+    expect(await readFile(path.join(dir, 'supervisor.lock'), 'utf8')).toBe(String(process.pid));
+    expect(await readFile(path.join(dir, LOCK_BOOT_FILE), 'utf8')).toBe(`${process.pid} 1000000\n`);
+    // This boot (a minute of uptime drift is still this boot): the live holder.
+    expect(lockHolder(dir, { boot: () => 1_060_000 })).toBe(process.pid);
+    // After a restart the same pid is some other program: no holder, and the lock is taken over.
+    expect(lockHolder(dir, { boot: () => 9_000_000 })).toBeUndefined();
+    const next = await acquireLock(dir, { boot: () => 9_000_000 });
+    expect((await readdir(dir)).some(name => name.startsWith('supervisor.lock.stale-'))).toBe(true);
+    expect(await readFile(path.join(dir, LOCK_BOOT_FILE), 'utf8')).toBe(`${process.pid} 9000000\n`);
+    await next();
+    expect(existsSync(path.join(dir, LOCK_BOOT_FILE))).toBe(false);
+    void release;
+  });
+
+  test('lockHolder: a bare pid (an older release wrote no boot) is judged by the process alone', () => {
+    const files: Record<string, string> = { '/d/supervisor.lock': '4242\n' };
+    const read = (f: string) => files[f.replace(/\\/g, '/')];
+    expect(lockHolder('/d', { read, alive: pid => pid === 4242, boot: () => 5 })).toBe(4242);
+    expect(lockHolder('/d', { read, alive: () => false, boot: () => 5 })).toBeUndefined();
+    files['/d/supervisor.boot'] = '4243 1';
+    expect(lockHolder('/d', { read, alive: () => true, boot: () => 9_999_999 })).toBe(4242);
+    files['/d/supervisor.boot'] = '4242 1';
+    expect(lockHolder('/d', { read, alive: () => true, boot: () => 9_999_999 })).toBeUndefined();
+    files['/d/supervisor.lock'] = 'x';
+    expect(lockHolder('/d', { read, alive: () => true })).toBeUndefined();
   });
 
   test('recent incomplete lock fails closed instead of racing the owner', async () => {

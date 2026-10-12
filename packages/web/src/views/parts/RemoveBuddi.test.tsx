@@ -107,6 +107,14 @@ describe('RemoveBuddi', { timeout: 180_000 }, () => {
   });
 });
 
+describe('the desktop app in the removal', () => {
+  it('goes with the Windows setup: a line of what goes', () => {
+    const lines = removalLines({ ...PLAN, app: undefined, appFinishes: false, desktopApp: { path: 'C:\\P\\buddi-desktop.exe', goes: true } }, false);
+    expect(lines).toContain('The buddi desktop app, its window and its tray icon (C:\\P\\buddi-desktop.exe).');
+    expect(removalLines({ ...PLAN, desktopApp: { path: '/usr/bin/buddi-desktop', goes: false } }, false).some((l) => l.includes('desktop app'))).toBe(false);
+  });
+});
+
 describe('removeTitle', () => {
   it('names the Mac on macOS and the computer elsewhere', () => {
     expect(removeTitle('this Mac')).toBe('Remove buddi from this Mac?');

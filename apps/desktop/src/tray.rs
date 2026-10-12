@@ -65,7 +65,8 @@ pub struct Tray {
     icon: TrayIcon<Wry>,
     items: Mutex<Items>,
     state: Mutex<State>,
-    dark_ink: bool,
+    /// Follows the panel's theme (platform::watch_tray_ink).
+    dark_ink: std::sync::atomic::AtomicBool,
 }
 
 /// FNV-1a: a stable name for an icon's pixels.
@@ -183,8 +184,10 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         icon,
         items: Mutex::new(items),
         state: Mutex::new(State { up: false, since: None, update: None, previous: None, shown: None }),
-        dark_ink,
+        dark_ink: std::sync::atomic::AtomicBool::new(dark_ink),
     });
+    let watched = app.clone();
+    platform::watch_tray_ink(move |dark| set_ink(&watched, dark));
     Ok(())
 }
 
@@ -230,6 +233,8 @@ pub fn set_running(app: &AppHandle, up: bool, phase: Phase) {
         Phase::Stopped => ((if up { "Stopping…" } else { "Stopped" }).into(), Glyph::Starting),
         Phase::Updating => ("Updating…".into(), Glyph::Starting),
         Phase::Attention => ("Needs attention".into(), Glyph::Attention),
+        Phase::Removing => ("Removing buddi…".into(), Glyph::Starting),
+        Phase::Removed => ("buddi is removed".into(), Glyph::Attention),
         Phase::Dashboard if up => (
             st.since.map(|s| format!("Running since {}", since_text(s))).unwrap_or_else(|| "Running".into()),
             Glyph::Running,
@@ -247,18 +252,32 @@ pub fn set_running(app: &AppHandle, up: bool, phase: Phase) {
     let _ = items.status.set_text(&text);
     let stopped = matches!(phase, Phase::Stopped | Phase::Attention);
     let _ = items.start_stop.set_text(if stopped { "Start buddi" } else { "Stop buddi" });
-    let _ = items.start_stop.set_enabled(stopped || running);
+    let gone = matches!(phase, Phase::Removing | Phase::Removed);
+    let _ = items.start_stop.set_enabled(!gone && (stopped || running));
     let _ = items.restart.set_enabled(running);
     let _ = items.lock.set_enabled(running);
     let _ = items.browser.set_enabled(running);
     let _ = items.login.set_checked(platform::autostart_enabled());
     drop(items);
     if glyph_changed {
-        if let Ok(image) = Image::from_bytes(glyph_png(glyph, tray.dark_ink)) {
+        if let Ok(image) = Image::from_bytes(glyph_png(glyph, tray.dark_ink.load(std::sync::atomic::Ordering::Relaxed))) {
             let _ = tray.icon.set_icon(Some(image));
         }
     }
     let _ = tray.icon.set_tooltip(Some(format!("buddi: {text}")));
+}
+
+/// The panel turned light or dark: the same glyph in the other ink.
+pub fn set_ink(app: &AppHandle, dark: bool) {
+    let Some(tray) = app.try_state::<Tray>() else { return };
+    if tray.dark_ink.swap(dark, std::sync::atomic::Ordering::Relaxed) == dark {
+        return;
+    }
+    shell::log(format!("the panel is {} now; the tray icon follows", if dark { "light" } else { "dark" }));
+    let glyph = tray.state.lock().unwrap().shown.as_ref().map(|k| k.1).unwrap_or(Glyph::Starting);
+    if let Ok(image) = Image::from_bytes(glyph_png(glyph, dark)) {
+        let _ = tray.icon.set_icon(Some(image));
+    }
 }
 
 /// Re-read after a phase change, with the last known gateway state.

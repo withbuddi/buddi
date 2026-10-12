@@ -37,6 +37,18 @@ pub fn lock_pid(text: &str) -> Option<u32> {
     text.lines().next()?.trim().parse().ok().filter(|p| *p > 0)
 }
 
+/// `<data>\supervisor.boot` (environment.ts `LOCK_BOOT_FILE`): `<pid> <boot ms>`.
+/// A lock taken in an earlier boot is stale even when its pid runs again
+/// (Windows reuses pids quickly); a lock with no record is judged by its pid.
+pub fn lock_of_this_boot(pid: u32, boot_file: Option<&str>, boot_now_ms: i64) -> bool {
+    let Some(text) = boot_file else { return true };
+    let mut parts = text.split_whitespace();
+    let (Some(p), Some(b)) = (parts.next().and_then(|p| p.parse::<u32>().ok()), parts.next().and_then(|b| b.parse::<f64>().ok())) else {
+        return true;
+    };
+    p != pid || (boot_now_ms as f64 - b).abs() <= 120_000.0
+}
+
 /// Two Windows paths name the same folder: case and a trailing backslash aside.
 pub fn same_path(a: &str, b: &str) -> bool {
     let norm = |s: &str| s.trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase();
@@ -117,6 +129,15 @@ mod tests {
         assert_eq!(lock_pid("4242\n"), Some(4242));
         assert_eq!(lock_pid("0"), None);
         assert_eq!(lock_pid("x"), None);
+    }
+
+    #[test]
+    fn a_lock_of_an_earlier_boot_is_stale() {
+        assert!(lock_of_this_boot(42, None, 5), "no record: the pid decides");
+        assert!(lock_of_this_boot(42, Some("42 1000000\n"), 1_060_000), "this boot, a minute of drift");
+        assert!(!lock_of_this_boot(42, Some("42 1000000"), 9_000_000), "an earlier boot");
+        assert!(lock_of_this_boot(42, Some("43 1"), 9_000_000), "another lock's record");
+        assert!(lock_of_this_boot(42, Some("junk"), 9_000_000));
     }
 
     #[test]

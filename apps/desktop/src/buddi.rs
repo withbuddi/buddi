@@ -80,12 +80,7 @@ pub fn command() -> Option<PathBuf> {
 /// $BUDDI_DATA_DIR, else the install's default. The dashboard, the
 /// supervisor's socket or pipe, the releases and the service are all this one's.
 pub fn data_dir() -> Option<PathBuf> {
-    let text = command().and_then(|c| std::fs::read(c).ok()).map(|b| String::from_utf8_lossy(&b).to_string());
-    if let Some(data) = text.as_deref().and_then(wrapper_data) {
-        return Some(data);
-    }
-    #[cfg(windows)]
-    if let Some(data) = text.as_deref().and_then(crate::platform::windows_rules::command_data) {
+    if let Some(data) = named_data_dir() {
         return Some(data);
     }
     #[cfg(windows)]
@@ -93,6 +88,20 @@ pub fn data_dir() -> Option<PathBuf> {
     #[cfg(not(windows))]
     let default = dirs::data_dir().map(|d| d.join("buddi"));
     std::env::var_os("BUDDI_DATA_DIR").map(PathBuf::from).or(default)
+}
+
+/// The data folder the command itself names (install.sh's wrapper, the
+/// Windows setup's `buddi.cmd`); None for any other command.
+pub fn named_data_dir() -> Option<PathBuf> {
+    let text = command().and_then(|c| std::fs::read(c).ok()).map(|b| String::from_utf8_lossy(&b).to_string())?;
+    if let Some(data) = wrapper_data(&text) {
+        return Some(data);
+    }
+    #[cfg(windows)]
+    if let Some(data) = crate::platform::windows_rules::command_data(&text) {
+        return Some(data);
+    }
+    None
 }
 
 /// The `DATA='…'` line of a command install.sh wrote (packages/install/src/

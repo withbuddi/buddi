@@ -456,8 +456,46 @@ export async function environment(root: string, env: NodeJS.ProcessEnv = process
   return { root, data, env, state };
 }
 
+/**
+ * Beside `supervisor.lock`, which stays a bare pid (scripts, older releases
+ * and buddi.app read it so): `<pid> <boot time in ms>`, the start of the
+ * computer's session the lock was taken in. After a restart, a pid left in the
+ * lock may name some other process by then (Windows reuses pids quickly); a
+ * lock taken in an earlier boot is stale, whatever runs under that pid now.
+ */
+export const LOCK_BOOT_FILE = 'supervisor.boot';
+
+/** When this computer started, in ms (from its uptime; steady to a second or so). */
+export function bootTime(): number {
+  return Date.now() - os.uptime() * 1000;
+}
+
+/** Two boot times further apart than this are two boots (uptime drifts a little, a clock change moves both). */
+const BOOT_SLACK_MS = 120_000;
+
+export interface LockHolderDeps {
+  read?: (file: string) => string | undefined;
+  alive?: (pid: number) => boolean;
+  boot?: () => number;
+}
+
+/**
+ * The pid `supervisor.lock` names, while it names a supervisor of this boot
+ * that is alive (EPERM counts as alive, as `kill(pid, 0)` has it); undefined
+ * for no lock, a lock of an earlier boot, or a dead process.
+ */
+export function lockHolder(data: string, deps: LockHolderDeps = {}): number | undefined {
+  const read = deps.read ?? ((file: string) => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } });
+  const alive = deps.alive ?? ((pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return errorCode(e) === 'EPERM'; } });
+  const pid = Number((read(path.join(data, 'supervisor.lock')) ?? '').trim().split(/\s+/)[0]);
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  const [recordedPid, recordedBoot] = (read(path.join(data, LOCK_BOOT_FILE)) ?? '').trim().split(/\s+/).map(Number);
+  if (recordedPid === pid && Number.isFinite(recordedBoot) && Math.abs((deps.boot ?? bootTime)() - recordedBoot!) > BOOT_SLACK_MS) return undefined;
+  return alive(pid) ? pid : undefined;
+}
+
 /** The supervisor holds this lock throughout its lifetime, including initialization. */
-export async function acquireLock(data: string): Promise<() => Promise<void>> {
+export async function acquireLock(data: string, deps: Pick<LockHolderDeps, 'boot'> = {}): Promise<() => Promise<void>> {
   await mkdir(data, { recursive: true, mode: 0o700 });
   const file = path.join(data, 'supervisor.lock');
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -465,9 +503,11 @@ export async function acquireLock(data: string): Promise<() => Promise<void>> {
       const fd = await open(file, 'wx', 0o600);
       await fd.writeFile(String(process.pid));
       await fd.close();
+      await writeFile(path.join(data, LOCK_BOOT_FILE), `${process.pid} ${Math.round((deps.boot ?? bootTime)())}\n`, { mode: 0o600 });
       return async () => {
         if ((await readFile(file, 'utf8').catch(() => '')) === String(process.pid)) {
           await unlink(file);
+          await unlink(path.join(data, LOCK_BOOT_FILE)).catch(() => {});
         }
       };
     } catch (error) {
@@ -481,7 +521,8 @@ export async function acquireLock(data: string): Promise<() => Promise<void>> {
         const pid = Number(await readFile(file, 'utf8').catch(() => ''));
         let stale = false;
         if (Number.isInteger(pid) && pid > 0) {
-          try { process.kill(pid, 0); } catch (e) { stale = errorCode(e) === 'ESRCH'; }
+          // A lock of an earlier boot is stale even when its pid runs again (another program by now).
+          stale = lockHolder(data, { boot: deps.boot ?? bootTime }) === undefined;
         } else if (existsSync(file)) {
           stale = Date.now() - (await stat(file)).mtimeMs > 30_000;
         }

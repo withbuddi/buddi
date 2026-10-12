@@ -179,6 +179,16 @@ rules as plain tested functions in `src/platform/windows_rules.rs`.
   next sign-in link) go through it.
 - **No console windows**: `buddi.cmd` runs with `CREATE_NO_WINDOW`; links go
   to the default browser through the shell.
+- **Removing buddi**: the dashboard tells the app when the owner confirms
+  "Remove buddi" (`window.__BUDDI_DESKTOP__.removing()`, which the
+  dashboard also uses to leave out "The dashboard as an app"): it stops
+  reconnecting, shows "Removing buddi…", and when buddi is gone (the setup's
+  uninstaller says `--removed`; on Linux the command goes) a last page with
+  where the backup and its passphrase are, until the owner closes it. An
+  installation that disappears under it (`buddi uninstall` in a terminal) is
+  never set up again by a reconnect. The uninstaller waits for that window.
+- **Tray ink follows the theme**: a thread waits on the Personalize key
+  (RegNotifyChangeKeyValue); on Linux, KDE's kdeglobals is watched.
 - **Log**: `%LOCALAPPDATA%\com.withbuddi.desktop\desktop.log` (a windowed
   program has no stderr).
 - **Build**: on Windows, `scripts/release/windows-desktop.sh <version>` (the

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { BRIEF_SUPERVISOR_VAR, briefParent, briefSupervisorEnv, controlSocket, listenOnSocket, pendingUpgrade, restartDelay, nameSupervisorPipe, supervisorSocket, watchBriefParent, type SupervisorStatus } from './supervisor.js';
+import { BRIEF_SUPERVISOR_VAR, awaitStartingSupervisor, briefParent, briefSupervisorEnv, controlSocket, listenOnSocket, pendingUpgrade, restartDelay, nameSupervisorPipe, supervisorSocket, watchBriefParent, type SupervisorStatus } from './supervisor.js';
 import { SHIM_VAR, shimRefusesSupervise } from './cli-shim.js';
 
 const servers: Server[] = [];
@@ -299,5 +299,30 @@ describe('the brief supervisor (buddi uninstall\'s last backup)', () => {
     const stop = watchBriefParent({ parent: 1, leave: other, alive: () => false, every: fn => { tick = fn; return 2; }, clear: () => {} });
     stop(); tick();
     expect(other).not.toHaveBeenCalled();
+  });
+});
+
+describe('a starting supervisor is waited for, not started over', () => {
+  const clock = () => { let t = 0; return { now: () => t, sleep: async (ms: number) => { t += ms; } }; };
+
+  test('it answers once it listens', async () => {
+    let asks = 0;
+    const answer = await awaitStartingSupervisor(() => 77, async () => { if (++asks < 4) throw new Error('ENOENT'); return 'up'; }, clock());
+    expect(answer).toBe('up');
+    expect(asks).toBe(4);
+  });
+
+  test('no supervisor holds the lock: nothing to wait for', async () => {
+    expect(await awaitStartingSupervisor(() => undefined, async () => 'never', clock())).toBeUndefined();
+  });
+
+  test('the holder goes away while it is waited for', async () => {
+    let n = 0;
+    expect(await awaitStartingSupervisor(() => (++n < 3 ? 77 : undefined), async () => { throw new Error('ENOENT'); }, clock())).toBeUndefined();
+  });
+
+  test('one that never answers is said, not restarted', async () => {
+    await expect(awaitStartingSupervisor(() => 77, async () => { throw new Error('ENOENT'); }, { ...clock(), timeoutMs: 5_000 }))
+      .rejects.toThrow(/buddi is starting \(supervisor pid 77\) and has not answered for 5 seconds/);
   });
 });

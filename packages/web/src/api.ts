@@ -2087,7 +2087,7 @@ export type BackupPhase =
 /** Remove buddi from this Mac: what goes, and the token the next two calls bring back. */
 export type UninstallPlan =
   | { available: false; reason: string }
-  | { available: true; data: string; keychain?: string; service?: string; app?: string; backups: string; appFinishes: boolean; token: string };
+  | { available: true; data: string; keychain?: string; service?: string; app?: string; backups: string; appFinishes: boolean; desktopApp?: { path: string; goes: boolean }; token: string };
 
 export interface UninstallJob {
   id: string;

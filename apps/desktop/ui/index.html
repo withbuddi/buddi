@@ -65,6 +65,11 @@
       const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
       document.execCommand('copy'); copy.textContent = 'Copied';
     }, true);
+  } else if (mode === 'removing') {
+    say('Removing buddi…', 'Your last backup and the file with its passphrase stay in ' + detail + '.');
+  } else if (mode === 'removed') {
+    say('buddi is removed', 'Your last backup and the file with its passphrase are in ' + detail + '. Keep the passphrase with the backup: it is the only way to open it. Closing this window closes the app too.');
+    button('Close', () => invoke('quit_app'), true);
   } else {
     say('Starting buddi…', '');
   }

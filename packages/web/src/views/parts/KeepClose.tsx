@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import { Button, Section, Stack, Toolbar } from '../../ui';
+import { desktopShell } from '../../desktopShell';
 
 /** Set once the owner dismissed the line or installed the app. */
 export const KEEP_CLOSE_KEY = 'buddi.keepClose';
@@ -176,7 +177,8 @@ export function AppInstallSection(): JSX.Element | null {
     return () => { live = false; };
   }, [inApp]);
 
-  if (inApp) return null;
+  // buddi's desktop app (Linux, Windows) is already the dashboard in a window of its own.
+  if (inApp || desktopShell() !== undefined) return null;
 
   const agent = typeof navigator === 'undefined' ? '' : navigator.userAgent;
   const local = onLoopback();

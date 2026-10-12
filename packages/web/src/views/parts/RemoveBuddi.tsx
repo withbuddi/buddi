@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ApiError, api, type UninstallPlan as AnyPlan } from '../../api';
 import { Button, ErrorBanner, Modal, Notice, Section, Stack, Toolbar } from '../../ui';
 import { useThisMachine, type ThisMachine } from '../../useThisMachine';
+import { desktopShell } from '../../desktopShell';
 
 type Step = 'plan' | 'backup' | 'words' | 'removing';
 type UninstallPlan = Extract<AnyPlan, { available: true }>;
@@ -75,6 +76,7 @@ export function removalLines(plan: UninstallPlan, keepData: boolean): string[] {
     if (plan.keychain) lines.push(`The passwords and keys buddi keeps in the keychain (${plan.keychain}).`);
   }
   if (plan.app) lines.push(`buddi.app, moved to the Trash (${plan.app}).`);
+  if (plan.desktopApp?.goes) lines.push(`The buddi desktop app, its window and its tray icon (${plan.desktopApp.path}).`);
   return lines;
 }
 
@@ -114,6 +116,8 @@ function RemoveDialog({ plan, machine, onClose }: { plan: UninstallPlan; machine
   const remove = (): void => {
     setFailed(null);
     setStep('removing');
+    // In the desktop app: it stops reconnecting, and says when buddi is gone.
+    desktopShell()?.removing();
     api
       .uninstall({ token: plan.token, wroteItDown: true, keepData })
       .catch((error: unknown) => {
@@ -147,6 +151,9 @@ function RemoveDialog({ plan, machine, onClose }: { plan: UninstallPlan; machine
           <>
             <p>This removes:</p>
             <ul className="remove-list">{lines.map((line) => <li key={line}>{line}</li>)}</ul>
+            {plan.desktopApp && !plan.desktopApp.goes ? (
+              <p className="ui-card-meta">The desktop app stays installed (<span className="mono">{plan.desktopApp.path}</span>); remove it afterwards with <span className="mono">sudo apt remove buddi-desktop</span>.</p>
+            ) : null}
             <p className="ui-card-meta">First, one last backup goes to <span className="mono">{plan.backups}</span>, where it stays.</p>
             <label className="backup-check">
               <input type="checkbox" checked={keepData} disabled={step !== 'plan'} onChange={(event) => setKeepData(event.target.checked)} />

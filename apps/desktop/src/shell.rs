@@ -30,6 +30,12 @@ pub enum Phase {
     Updating,
     /// The dashboard is in the window.
     Dashboard,
+    /// The owner confirmed "Remove buddi" in the dashboard: nothing reconnects
+    /// (`buddi --no-open` would start buddi again under the removal).
+    Removing,
+    /// buddi is gone (the Windows setup's uninstaller said so with
+    /// `--removed`, or the command went): a last page until the owner closes it.
+    Removed,
 }
 
 pub struct Shell {
@@ -43,6 +49,7 @@ struct Inner {
     route: Option<String>,
     linking: bool,
     linked_at: Option<Instant>,
+    removing_since: Option<Instant>,
     /// What the placeholder shows now, so it is not reloaded for nothing.
     shown: Option<(String, String)>,
 }
@@ -56,6 +63,7 @@ impl Shell {
                 route: None,
                 linking: false,
                 linked_at: None,
+                removing_since: None,
                 shown: None,
             }),
         }
@@ -145,6 +153,10 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
     if busy {
         return;
     }
+    if matches!(phase(app), Phase::Removing | Phase::Removed) {
+        with(app, |s| s.linking = false);
+        return;
+    }
     if !quiet {
         placeholder(app, "starting", "");
     }
@@ -171,6 +183,13 @@ pub fn connect(app: &AppHandle, quiet: bool, patient: bool) {
                 }
             }
             if phase(&app) == Phase::Stopped {
+                break;
+            }
+            // buddi was here (a dashboard was shown) and its installation is gone: it
+            // was removed (`buddi uninstall` from a terminal, say). Asking the command
+            // now would set up a new buddi under the removal.
+            if gateway_seen(&app) && !installation_present() {
+                removed(&app);
                 break;
             }
             let answer = buddi::dashboard_link();
@@ -252,6 +271,10 @@ pub fn watch(app: &AppHandle) {
                 tray::set_update(&app, update);
             }
             was_up = up;
+            if phase == Phase::Removing {
+                removal_tick(&app, up);
+                continue;
+            }
             if phase != Phase::Dashboard {
                 misses = 0;
                 continue;
@@ -266,6 +289,62 @@ pub fn watch(app: &AppHandle) {
     });
 }
 
+fn gateway_seen(app: &AppHandle) -> bool {
+    with(app, |s| s.gateway.is_some())
+}
+
+/// The installation's own record (`installation.json`), there while buddi is
+/// installed; judged only for a command that names its data folder (the
+/// installs), never by a guess.
+fn installation_present() -> bool {
+    buddi::named_data_dir().map(|d| d.join("installation.json").is_file()).unwrap_or(true)
+}
+
+/// Where the last backup of a removal is (product-uninstall.ts: `~/buddi-backups`).
+fn backups_dir() -> String {
+    dirs::home_dir().map(|h| h.join("buddi-backups").display().to_string()).unwrap_or_default()
+}
+
+/// The dashboard's "Remove buddi" was confirmed (its `removing` call): the app
+/// stops reconnecting and follows the removal.
+pub fn removing(app: &AppHandle) {
+    if matches!(phase(app), Phase::Removing | Phase::Removed) {
+        return;
+    }
+    log("buddi is being removed; not reconnecting");
+    with(app, |s| s.removing_since = Some(Instant::now()));
+    set_phase(app, Phase::Removing);
+}
+
+/// While buddi is removed: the "Removing buddi…" page once the dashboard goes;
+/// the last page once the command is gone (Linux; on Windows the setup's
+/// uninstaller says `--removed`). A removal that never happens (it failed, and
+/// the dashboard says why) gives the window back after five minutes.
+fn removal_tick(app: &AppHandle, up: bool) {
+    if !up {
+        placeholder(app, "removing", &backups_dir());
+    }
+    if buddi::command().is_none() {
+        removed(app);
+        return;
+    }
+    let lapsed = with(app, |s| s.removing_since.map(|t| t.elapsed() > Duration::from_secs(300)).unwrap_or(true));
+    if lapsed {
+        log("buddi is still here five minutes after the removal began; back to it");
+        set_phase(app, Phase::Starting);
+        connect(app, false, false);
+    }
+}
+
+/// buddi is removed: the last page, with where the backup and its passphrase
+/// are, until the owner closes the window (which then quits the app).
+pub fn removed(app: &AppHandle) {
+    set_phase(app, Phase::Removed);
+    with(app, |s| s.shown = None);
+    placeholder(app, "removed", &backups_dir());
+    platform::show_main(app);
+}
+
 /// The window came forward (tray, second launch): a dashboard whose session
 /// lapsed while it was hidden gets a fresh link (the page's 401 says so, see
 /// `session_expired`); a placeholder that gave up tries again.
@@ -277,7 +356,7 @@ pub fn reopened(app: &AppHandle) {
             }
         }
         Phase::Attention | Phase::Missing => connect(app, false, false),
-        Phase::Starting | Phase::Stopped | Phase::Updating => {}
+        Phase::Starting | Phase::Stopped | Phase::Updating | Phase::Removing | Phase::Removed => {}
     }
 }
 

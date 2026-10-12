@@ -262,6 +262,24 @@ begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM buddi-desktop.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
+{ A running app is told buddi is removed (--removed): it shows its last page and quits when the owner closes it.
+  Waited for up to fifteen minutes (the uninstall runs out of sight), then ended. }
+procedure LastPageThenQuit(const Exe: String);
+var
+  Code, I: Integer;
+begin
+  if (FindWindowByWindowName('buddi') = 0) or not FileExists(Exe) then begin
+    QuitDesktopApp(Exe);
+    exit;
+  end;
+  Exec(Exe, '--removed', '', SW_SHOWNORMAL, ewWaitUntilTerminated, Code);
+  for I := 1 to 3600 do begin
+    if FindWindowByWindowName('buddi') = 0 then break;
+    Sleep(250);
+  end;
+  QuitDesktopApp(Exe);
+end;
+
 { The WebView2 runtime (the Evergreen one: in Windows 11, and Edge's updater keeps it), machine-wide or this user's. }
 function WebView2Present: Boolean;
 var
@@ -437,7 +455,11 @@ var
 begin
   if CurUninstallStep = usUninstall then begin
     { The app first: Windows will not remove a program that runs. }
-    QuitDesktopApp(ExpandConstant('{app}\buddi-desktop.exe'));
+    if UninstallSilent then
+      { Started by buddi's own removal (the dashboard, buddi uninstall): the app shows its last page, with where the backup is, and goes when the owner closes it. }
+      LastPageThenQuit(ExpandConstant('{app}\buddi-desktop.exe'))
+    else
+      QuitDesktopApp(ExpandConstant('{app}\buddi-desktop.exe'));
     if not RegQueryStringValue(HKCU, 'Software\buddi', 'DataDir', Data) then Data := ExpandConstant('{localappdata}\buddi');
     Node := Data + '\node\node.exe';
     Script := Data + '\releases\current\packages\install\dist\windows-setup.js';

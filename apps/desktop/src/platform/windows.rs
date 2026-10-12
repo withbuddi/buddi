@@ -117,6 +117,30 @@ pub fn tray_wants_dark_ink() -> bool {
     rules::dark_ink(light)
 }
 
+/// Calls `changed` with the ink whenever the taskbar's theme changes: a
+/// thread waits on the Personalize key (RegNotifyChangeKeyValue), no polling.
+pub fn watch_tray_ink(changed: impl Fn(bool) + Send + 'static) {
+    if std::env::var_os("BUDDI_TRAY_INK").is_some() {
+        return;
+    }
+    std::thread::spawn(move || {
+        use windows::Win32::System::Registry::{RegNotifyChangeKeyValue, HKEY, REG_NOTIFY_CHANGE_LAST_SET};
+        let Ok(key) = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", KEY_READ | winreg::enums::KEY_NOTIFY)
+        else {
+            return;
+        };
+        loop {
+            let waited = unsafe { RegNotifyChangeKeyValue(HKEY(key.raw_handle() as _), false, REG_NOTIFY_CHANGE_LAST_SET, None, false) };
+            if waited.is_err() {
+                shell::log("not following the taskbar's theme: the registry did not say when it changes");
+                return;
+            }
+            changed(tray_wants_dark_ink());
+        }
+    });
+}
+
 pub fn tray_icon_dir() -> Option<PathBuf> {
     None
 }
@@ -232,9 +256,24 @@ pub fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// When this computer started, in ms since the epoch (now less its uptime).
+fn boot_ms() -> i64 {
+    let uptime = unsafe { windows::Win32::System::SystemInformation::GetTickCount64() } as i64;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    now - uptime
+}
+
 /// The pid file's process is running (`supervisor.lock`, `postmaster.pid`).
+/// For `supervisor.lock`, only a lock of this boot counts (`supervisor.boot` beside it).
 pub fn pid_file_alive(file: &Path) -> bool {
-    std::fs::read_to_string(file).ok().and_then(|t| rules::lock_pid(&t)).map(process_alive).unwrap_or(false)
+    let Some(pid) = std::fs::read_to_string(file).ok().and_then(|t| rules::lock_pid(&t)) else { return false };
+    if file.file_name().is_some_and(|n| n == "supervisor.lock") {
+        let record = file.parent().and_then(|d| std::fs::read_to_string(d.join("supervisor.boot")).ok());
+        if !rules::lock_of_this_boot(pid, record.as_deref(), boot_ms()) {
+            return false;
+        }
+    }
+    process_alive(pid)
 }
 
 /// The live supervisor's pipe path and secret, or None while none runs.

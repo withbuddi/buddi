@@ -1,7 +1,7 @@
 /** Uninstall from the product, against a fake machine: nothing is moved, written or spawned for real. */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createProductUninstall, PASSPHRASE_HELD_MS } from './product-uninstall.js';
+import { createProductUninstall, desktopAppOnThisComputer, PASSPHRASE_HELD_MS } from './product-uninstall.js';
 import type { ProductUninstallDeps } from './product-uninstall.js';
 
 // Paths in the running platform's own form: the module joins them with node:path.
@@ -137,5 +137,21 @@ describe('uninstall from the product', () => {
     expect(c.uninstall.job(three.id)?.report?.passphrase).toBe(PHRASE);
     clock = new Date(clock.getTime() + 1);
     expect(c.uninstall.job(three.id)?.report?.passphrase).toBeUndefined();
+  });
+});
+
+describe('the desktop app in the removal plan', () => {
+  it('Windows: the setup installed it beside its uninstaller, which removes it', () => {
+    const exe = 'C:\\Users\\a\\AppData\\Local\\Programs\\buddi\\buddi-desktop.exe';
+    const setupUninstaller = 'C:\\Users\\a\\AppData\\Local\\Programs\\buddi\\unins000.exe';
+    expect(desktopAppOnThisComputer('win32', { exists: f => f === exe, setupUninstaller })).toEqual({ path: exe, goes: true });
+    expect(desktopAppOnThisComputer('win32', { exists: () => false, setupUninstaller })).toBeUndefined();
+    expect(desktopAppOnThisComputer('win32', { exists: () => true })).toBeUndefined();
+  });
+
+  it('Linux: the package stays', () => {
+    expect(desktopAppOnThisComputer('linux', { exists: f => f === '/usr/bin/buddi-desktop' })).toEqual({ path: '/usr/bin/buddi-desktop', goes: false });
+    expect(desktopAppOnThisComputer('linux', { exists: () => false })).toBeUndefined();
+    expect(desktopAppOnThisComputer('darwin', { exists: () => true })).toBeUndefined();
   });
 });

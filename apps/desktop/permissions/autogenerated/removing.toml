@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-removing"
+description = "Enables the removing command without any pre-configured scope."
+commands.allow = ["removing"]
+
+[[permission]]
+identifier = "deny-removing"
+description = "Denies the removing command without any pre-configured scope."
+commands.deny = ["removing"]

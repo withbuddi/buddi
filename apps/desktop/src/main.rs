@@ -39,10 +39,12 @@ fn debug() -> bool {
 /// would only ask inside a click, and names them after the web process. With
 /// BUDDI_SHELL_DEBUG=1 the page's console errors go to the app's stderr too.
 fn init_script() -> String {
-    let mut js = String::from(
+    let js = String::from(
         r#"(function () {
   if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\//.test(location.href)) return;
   const invoke = (cmd, args) => { try { return window.__TAURI_INTERNALS__.invoke(cmd, args || {}).catch(() => {}); } catch (_) {} };
+  // The dashboard knows it is in this app (packages/web/src/desktopShell.ts).
+  Object.defineProperty(window, '__BUDDI_DESKTOP__', { value: Object.freeze({ os: __OS__, removing: () => { invoke('removing'); } }) });
   const fetch0 = window.fetch.bind(window);
   window.fetch = async (...args) => {
     const res = await fetch0(...args);
@@ -74,6 +76,8 @@ fn init_script() -> String {
   Object.defineProperty(window, 'Notification', { value: Notification, configurable: true, writable: true });
 "#,
     );
+    let js = js.replace("__OS__", &serde_json::to_string(std::env::consts::OS).unwrap());
+    let mut js = js;
     if debug() {
         js.push_str(
             r#"  const fmt = (a) => { try { return typeof a === 'string' ? a : (a instanceof Error ? (a.stack || String(a)) : JSON.stringify(a)); } catch (_) { return String(a); } };
@@ -117,6 +121,21 @@ fn start_buddi(app: AppHandle, webview: tauri::Webview) {
 fn session_expired(app: AppHandle, webview: tauri::Webview) {
     if from_dashboard(&webview) {
         shell::session_expired(&app);
+    }
+}
+
+#[tauri::command]
+fn removing(app: AppHandle, webview: tauri::Webview) {
+    if from_dashboard(&webview) {
+        shell::removing(&app);
+    }
+}
+
+/// The last page's Close (buddi is removed): the app goes too.
+#[tauri::command]
+fn quit_app(app: AppHandle, webview: tauri::Webview) {
+    if from_local_page(&webview) && shell::phase(&app) == shell::Phase::Removed {
+        actions::quit(&app);
     }
 }
 
@@ -272,6 +291,11 @@ fn second_launch(app: &AppHandle, argv: Vec<String>) {
                 actions::quit(app);
                 return;
             }
+            // The Windows setup's uninstaller, run by buddi's own removal: the last page, then the owner closes it.
+            "--removed" => {
+                shell::removed(app);
+                return;
+            }
             _ => {}
         }
     }
@@ -305,7 +329,7 @@ fn main() {
                 .build(),
         )
         .manage(shell::Shell::new())
-        .invoke_handler(tauri::generate_handler![retry, start_buddi, session_expired, notify, shell_log])
+        .invoke_handler(tauri::generate_handler![retry, start_buddi, session_expired, removing, quit_app, notify, shell_log])
         .setup(move |app| {
             let handle = app.handle().clone();
             if quitting {
@@ -333,6 +357,11 @@ fn main() {
         .on_window_event(|window, event| {
             // Closing the window hides it; buddi and the tray stay.
             if let WindowEvent::CloseRequested { api, .. } = event {
+                // buddi is removed: closing its last page is the end of the app too.
+                if window.label() == "main" && shell::phase(window.app_handle()) == shell::Phase::Removed {
+                    actions::quit(window.app_handle());
+                    return;
+                }
                 if window.label() == "main" && TRAY.load(Ordering::Relaxed) {
                     api.prevent_close();
                     let _ = window.app_handle().save_window_state(StateFlags::all() - StateFlags::VISIBLE);
