@@ -1,4 +1,4 @@
-# buddi-desktop (Linux; Windows later)
+# buddi-desktop (Linux and Windows)
 
 buddi's desktop app: the dashboard in a window of its own and a tray icon,
 around the buddi that `scripts/install.sh` installed. Tauri v2 on the system
@@ -142,21 +142,49 @@ The release workflow's `desktop` job builds both for x64 and arm64 on Ubuntu
 
 ## Windows
 
-The Rust is split so a WebView2 build reuses it: `src/buddi.rs` (the
-command), `src/shell.rs` (the phases), `src/tray.rs` and `src/main.rs` are
-platform-free; what differs is in `src/platform/` (`linux.rs`, and
-`windows.rs` with the gaps marked `TODO(windows)`). A Windows build needs:
+The same Rust on WebView2; what differs is `src/platform/windows.rs`, its
+rules as plain tested functions in `src/platform/windows_rules.rs`.
 
-- **buddi on Windows first**: a `buddi` command (`buddi.cmd` on PATH, or
-  `$BUDDI_BIN`) and a service; the app only wraps it.
-- **Permissions**: `ICoreWebView2::add_PermissionRequested` through
-  `with_webview`, allowing MICROPHONE (and NOTIFICATIONS) for the dashboard's
-  origin and denying the rest.
-- **Notifications**: a toast under the app's AppUserModelID (set by the
-  installer); `notify-rust` or `tauri-plugin-notification` do it.
-- **Tray ink**: light or dark from
-  `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\SystemUsesLightTheme`.
-- **The local page** is `http://tauri.localhost/index.html` (done in `windows.rs`).
-- **Packaging**: Tauri's NSIS or MSI bundle with the WebView2 bootstrapper,
-  code-signed; autostart through the installer (a Run key or Startup shortcut
-  with `--hidden`).
+- **Shipped inside the Windows setup** (apps/windows/buddi.iss): one download,
+  buddi and its window. `buddi-desktop.exe` sits in
+  `%LOCALAPPDATA%\Programs\buddi` beside `bin\buddi.cmd`, which is the command
+  it runs (then `$BUDDI_BIN`, the setup's `installer.json`, PATH); the data
+  folder is the one `buddi.cmd` names. The Start menu's "buddi" opens the app
+  (AppUserModelID `com.withbuddi.desktop`); a setup over a running app asks it
+  to quit (`buddi-desktop.exe --quit`) and starts it again; the uninstaller
+  quits it and removes it, its WebView2 profile and its Run entry. buddi's
+  own service stays the Task Scheduler task: the app replaces nothing of it.
+- **WebView2**: part of Windows 11; on Windows 10 without it the setup runs
+  Microsoft's Evergreen bootstrapper (carried in the setup, checked to be
+  signed by Microsoft when it is fetched).
+- **Permissions**: WebView2's `PermissionRequested`, by the requesting
+  frame's address: the microphone (and notifications) for the dashboard's
+  exact origin, everything else denied without a prompt.
+- **Notifications**: toasts under the AppUserModelID; a click brings the window.
+- **Tray**: a left click opens the window, a right click the menu (the same
+  menu as Linux, with "Uninstall buddi…" saying the app goes too). Ink from
+  `HKCU\…\Themes\Personalize\SystemUsesLightTheme`, read at start.
+- **Start at Login**: `HKCU\…\Run\buddi = "<exe>" --hidden`, on at the first
+  start. What the app wrote, and for which data folder, is recorded in
+  `HKCU\Software\buddi\Desktop`; the app changes, and the uninstaller removes,
+  only a Run value that matches that record. Turning it on again clears a
+  "disabled" switch in Settings → Apps → Startup.
+- **The supervisor's control channel**: the named pipe whose random name and
+  secret are in `<data>\supervisor.pipe`, used only while `supervisor.lock`
+  names a live process, and an answer counts only when its
+  `x-buddi-supervisor` header is that secret (packages/install/src/supervisor.ts).
+  Check for Updates, the version, Restart buddi (`/restart`, then `buddi
+  service restart` if the pipe does not answer) and the previous version
+  (`/exit`, the junctions swapped under the releases lock, then started by the
+  next sign-in link) go through it.
+- **No console windows**: `buddi.cmd` runs with `CREATE_NO_WINDOW`; links go
+  to the default browser through the shell.
+- **Log**: `%LOCALAPPDATA%\com.withbuddi.desktop\desktop.log` (a windowed
+  program has no stderr).
+- **Build**: on Windows, `scripts/release/windows-desktop.sh <version>` (the
+  pinned toolchain and CLI, `--no-bundle`); the release's `windows` job and
+  `windows.yml` with `installer` on run it, with `cargo test` and clippy first.
+  From a Mac: `cargo xwin build --release --target x86_64-pc-windows-msvc
+  --features tauri/custom-protocol` (rustup's Windows target and cargo-xwin).
+  x64 only: it runs emulated on Windows on Arm, as the bundled node does.
+- **Signing**: the setup's one SignTool hook signs the app too (`signonce`).
