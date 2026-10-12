@@ -148,6 +148,10 @@ class Said {
   say(line: string): void {
     this.lines.push(line);
     process.stdout.write(`${line}\n`);
+    this.record(line);
+  }
+  /** Into the log only: what helps a report, not the owner (a stack). */
+  record(line: string): void {
     if (this.file !== undefined) { try { appendFileSync(this.file, `${line}\r\n`); } catch { /* as above */ } }
   }
 }
@@ -211,14 +215,24 @@ async function stopSupervisor(data: string): Promise<void> {
   }
 }
 
-/** A rename, or a copy where the bundle sits on another drive than the data folder. */
-async function move(from: string, to: string): Promise<void> {
-  try { await rename(from, to); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
-    await cp(from, to, { recursive: true, verbatimSymlinks: true });
-    await rm(from, { recursive: true, force: true });
+/**
+ * A rename, retried while Windows says the folder is busy (an antivirus
+ * scanning what was just unpacked holds files for a moment), else a copy:
+ * where the bundle sits on another drive, or the folder stays held.
+ */
+async function move(from: string, to: string, attempts = 8): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try { await rename(from, to); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EXDEV' || ((code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') && attempt >= attempts)) break;
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') throw error;
+      await sleep(250 * attempt);
+    }
   }
+  await rm(to, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+  await cp(from, to, { recursive: true, verbatimSymlinks: true });
+  await rm(from, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }).catch(() => {});
 }
 
 const real = (file: string): string | undefined => { try { return realpathSync(file); } catch { return undefined; } };
@@ -333,9 +347,17 @@ async function install(args: SetupArgs, said: Said): Promise<number> {
       }
     }
     if (runtimeChanges) {
+      /*
+       * Copied, never renamed: this program runs on the bundle's node.exe,
+       * and Windows will not rename a folder whose program is running. The
+       * copy goes beside the old runtime first, so the swap is two renames.
+       */
+      const nodeNew = `${nodeDir}.new`;
       await rm(nodeOld, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
-      if (existsSync(nodeDir)) { await rename(nodeDir, nodeOld); runtimeSwapped = true; }
-      await move(runtime, nodeDir);
+      await rm(nodeNew, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+      await cp(runtime, nodeNew, { recursive: true });
+      if (existsSync(nodeDir)) { await move(nodeDir, nodeOld); runtimeSwapped = true; }
+      await move(nodeNew, nodeDir);
     }
 
     /* The switch, recorded as buddi's own upgrade records it: the new release's first start finishes it. */
@@ -459,7 +481,12 @@ export async function main(argv: readonly string[]): Promise<number> {
   try {
     code = args.command === 'install' ? await install(args, said) : await uninstall(args, said);
   } catch (error) {
-    said.say(`buddi setup: ${error instanceof SetupError ? error.message : (error as Error).stack ?? String(error)}`);
+    // The owner reads one sentence with a next step; the stack goes to the log only.
+    const plain = error instanceof SetupError ? error.message
+      : `something unexpected went wrong (${(error as Error).message?.split('\n')[0] ?? String(error)}). Nothing you need is lost: run the setup again, and if it fails the same way, send the log below.`;
+    said.say(`buddi setup: ${plain}`);
+    if (!(error instanceof SetupError)) said.record(String((error as Error).stack ?? error));
+    if (args.summary !== undefined) { try { writeFileSync(args.summary, `\ufeff${plain.charAt(0).toUpperCase()}${plain.slice(1)}\r\n`); } catch { /* the log says it */ } }
     code = 1;
   }
   if (args.result !== undefined) { try { writeFileSync(args.result, `${code}\r\n`); } catch { /* the log says it */ } }

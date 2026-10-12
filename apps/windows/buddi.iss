@@ -63,6 +63,8 @@ DefaultDirName={autopf}\buddi
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
+; One click: the welcome page's button is Install.
+DisableReadyPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -88,7 +90,7 @@ SignedUninstaller=yes
 #endif
 
 [Messages]
-WelcomeLabel2=This installs buddi [ver] for you on this computer. It needs no administrator rights and nothing else installed.%n%nbuddi runs in the background and you use it in your browser.
+WelcomeLabel2=This installs buddi {#AppVersion} for you on this computer. It needs no administrator rights and nothing else installed.%n%nbuddi runs in the background and you use it in your browser.
 FinishedHeadingLabel=buddi is installed
 FinishedLabelNoIcons=buddi runs in the background and starts when you sign in. Open it from the Start menu (buddi), or type buddi in a new Command Prompt or PowerShell window.
 FinishedLabel=buddi runs in the background and starts when you sign in. Open it from the Start menu (buddi), or type buddi in a new Command Prompt or PowerShell window.
@@ -111,6 +113,38 @@ Type: filesandordirs; Name: "{app}\bin"
 [Code]
 var
   DataDirValue: String;
+  Status: TNewStaticText;
+  Busy: TNewProgressBar;
+
+{ What the setup is doing while its program runs, on the Preparing page (which shows nothing by itself). }
+procedure InitializeWizard;
+begin
+  Status := TNewStaticText.Create(WizardForm);
+  Status.Parent := WizardForm.PreparingPage;
+  Status.Left := 0;
+  Status.Top := ScaleY(8);
+  Status.Width := WizardForm.PreparingPage.Width;
+  Status.AutoSize := False;
+  Status.WordWrap := True;
+  Status.Height := ScaleY(40);
+  Status.Caption := '';
+  Busy := TNewProgressBar.Create(WizardForm);
+  Busy.Parent := WizardForm.PreparingPage;
+  Busy.Left := 0;
+  Busy.Top := ScaleY(56);
+  Busy.Width := WizardForm.PreparingPage.Width;
+  Busy.Height := ScaleY(16);
+  Busy.Style := npbstMarquee;
+  Busy.Visible := False;
+end;
+
+procedure SayStatus(const Text: String);
+begin
+  Status.Caption := Text;
+  Status.Visible := Text <> '';
+  Busy.Visible := Text <> '';
+  WizardForm.Repaint;
+end;
 
 function HasParam(const Name: String): Boolean;
 var
@@ -168,7 +202,7 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  Work, Bundle, Node, Script, Params, LogFile, ResultFile: String;
+  Work, Bundle, Node, Script, Params, LogFile, ResultFile, SummaryFile, Kept: String;
 begin
   Result := '';
   { Unpacked inside the data folder, so the setup program moves it into place with a rename. }
@@ -177,7 +211,7 @@ begin
     Result := 'buddi could not create ' + Work + '.';
     exit;
   end;
-  WizardForm.PreparingLabel.Caption := 'Unpacking buddi…';
+  SayStatus('Unpacking buddi…');
   ExtractTemporaryFile('bundle.zip');
   RunHidden(ExpandConstant('{sys}\tar.exe'), '-xf ' + AddQuotes(ExpandConstant('{tmp}\bundle.zip')) + ' -C ' + AddQuotes(Work));
   Bundle := Work + '\buddi-{#AppVersion}-windows-x64';
@@ -185,24 +219,33 @@ begin
   Script := Bundle + '\release\node_modules\@withbuddi\buddi\packages\install\dist\windows-setup.js';
   if not FileExists(Node) or not FileExists(Script) then begin
     DelTree(Work, True, True, True);
-    Result := 'buddi could not be unpacked into ' + Work + '. Nothing was changed.';
+    SayStatus('');
+    Result := 'buddi could not be unpacked into ' + Work + '. Nothing was changed. Check there is about 1 GB free on that drive, then run the setup again.';
     exit;
   end;
   LogFile := Work + '\setup.log';
   ResultFile := Work + '\result.txt';
+  SummaryFile := Work + '\summary.txt';
   Params := AddQuotes(Script) + ' install --bundle ' + AddQuotes(Bundle) + ' --data ' + AddQuotes(DataDir)
     + ' --bin ' + AddQuotes(ExpandConstant('{app}\bin')) + ' --uninstaller ' + AddQuotes(ExpandConstant('{app}\unins000.exe'))
-    + ' --log ' + AddQuotes(LogFile) + ' --result ' + AddQuotes(ResultFile);
+    + ' --log ' + AddQuotes(LogFile) + ' --result ' + AddQuotes(ResultFile) + ' --summary ' + AddQuotes(SummaryFile);
   if not ShouldStart then Params := Params + ' --no-start';
   if HasParam('/SKIPBACKUP') then Params := Params + ' --skip-backup';
-  WizardForm.PreparingLabel.Caption := 'Installing buddi and starting it (a backup of your data comes first)…';
+  SayStatus('Installing buddi and starting it. When buddi is already here, your data is backed up first. This takes a minute or two.');
   RunHidden(Node, Params);
+  SayStatus('');
   Log('buddi setup log:' + #13#10 + Tail(LogFile, 200));
-  if ReadFirstLine(ResultFile) <> '0' then
-    Result := 'buddi could not be installed.' + #13#10#13#10 + Tail(LogFile, 12);
   { What it said stays beside the other logs. }
+  Kept := DataDir + '\logs\setup.log';
   ForceDirectories(DataDir + '\logs');
-  FileCopy(LogFile, DataDir + '\logs\setup.log', False);
+  FileCopy(LogFile, Kept, False);
+  if ReadFirstLine(ResultFile) <> '0' then begin
+    if FileExists(SummaryFile) then
+      Result := 'buddi could not be installed: ' + Tail(SummaryFile, 5)
+    else
+      Result := 'buddi could not be installed: the setup stopped without saying why. Run it again.';
+    Result := Result + #13#10 + 'The details are in ' + Kept + '.';
+  end;
   DelTree(Work, True, True, True);
 end;
 
