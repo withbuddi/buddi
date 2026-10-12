@@ -25,10 +25,12 @@ describe('host commands on Windows (simulated)', () => {
   });
 });
 
-// The real thing, where it can run: a command, a native failure, and a timeout that ends a child.
-describe.runIf(process.platform === 'win32')('host command processes on Windows', () => {
+// The real thing, on a Windows computer: a command, a native failure, a timeout
+// that ends a child, a background program ended with its command. Not on the
+// GitHub runner, where powershell.exe alone takes 18 to 60+ seconds to start
+// (measured): it would test the runner, not this. Run on a Windows VM.
+describe.runIf(process.platform === 'win32' && !process.env.CI)('host command processes on Windows', () => {
   const base = { cwd: process.cwd(), timeoutMs: 20_000, env: process.env };
-  // A cold Add-Type (the job) costs a couple of seconds per command.
   it('runs PowerShell and reports a native failure', { timeout: 60_000 }, async () => {
     const hello = await runCommand({ ...base, command: 'Write-Output "hello"' });
     expect(hello, JSON.stringify(hello)).toMatchObject({ state: 'completed', exitCode: 0, stdout: expect.stringContaining('hello') });
