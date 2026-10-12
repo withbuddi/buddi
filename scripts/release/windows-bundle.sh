@@ -65,6 +65,7 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) WINDOWS=1; BSDTAR="$(cygpath -u "${SYSTEMROOT:-C:\\Windows}")/System32/tar.exe" ;;
   *) WINDOWS=0; BSDTAR="$(command -v bsdtar || command -v tar)" ;;
 esac
+if [ "$WINDOWS" = 1 ] && [ -n "${BUDDI_TGZ:-}" ]; then BUDDI_TGZ="$(cygpath -u "$BUDDI_TGZ")"; fi
 "$BSDTAR" --version 2>/dev/null | grep -q bsdtar || die "a bsdtar is needed for the zips ($BSDTAR is not one)"
 nat() { if [ "$WINDOWS" = 1 ]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 # Extract with bsdtar: zip or tar.gz alike, without the build host's extended attributes.
@@ -73,7 +74,7 @@ unpack() { # <archive> <dir> [args...]
   "$BSDTAR" -xf "$(nat "$archive")" -C "$(nat "$dir")" "$@"
 }
 
-sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{ print $1 }'; else shasum -a 256 "$1" | awk '{ print $1 }'; fi; }
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | awk '{ print $1 }'; else shasum -a 256 < "$1" | awk '{ print $1 }'; fi; }
 # One field of a JSON file, read with node (the build host's; nothing it runs ships).
 field() { node -e 'const v=String(process.argv[2]).split(".").reduce((o,k)=>o?.[k],JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")));if(v===undefined)process.exit(1);console.log(typeof v==="string"?v:JSON.stringify(v))' "$(nat "$1")" "$2"; }
 

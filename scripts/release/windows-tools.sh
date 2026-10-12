@@ -20,11 +20,11 @@ INNO_URL="https://github.com/jrsoftware/issrc/releases/download/is-${INNO_VERSIO
 die() { printf 'windows-tools: %s\n' "$*" >&2; exit 1; }
 out() { if [ -n "${GITHUB_ENV:-}" ]; then echo "$1" >> "$GITHUB_ENV"; fi; echo "$1"; }
 
-tmp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+tmp="$(cygpath -u "${RUNNER_TEMP:-${TMPDIR:-/tmp}}")"
 dir="$tmp/inno"
 if [ ! -f "$dir/ISCC.exe" ]; then
   curl -fsSL "$INNO_URL" -o "$tmp/innosetup.exe"
-  [ "$(sha256sum "$tmp/innosetup.exe" | awk '{ print $1 }')" = "$INNO_SHA256" ] || die "innosetup-$INNO_VERSION.exe does not match its pinned sha256"
+  [ "$(sha256sum < "$tmp/innosetup.exe" | awk '{ print $1 }')" = "$INNO_SHA256" ] || die "innosetup-$INNO_VERSION.exe does not match its pinned sha256"
   "$tmp/innosetup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER "/DIR=$(cygpath -w "$dir")"
   [ -f "$dir/ISCC.exe" ] || die "Inno Setup $INNO_VERSION did not install into $dir"
 fi

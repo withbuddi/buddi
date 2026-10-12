@@ -13,9 +13,9 @@ is where you set buddi up, upgrade it and add plugins. A source checkout is
 for people working on buddi itself (§14). §13 lists what is not there yet.
 
 buddi runs as a background service on your machine and you reach it in the
-browser. On a Mac you can also install it as an app, and on Linux with one
-command, with nothing else to install (§1.1, §1.2); there is no Windows
-installer yet.
+browser. On a Mac you can also install it as an app, on Linux with one
+command, and on Windows with one setup, with nothing else to install (§1.1,
+§1.2, §1.3; Windows is still for testing).
 
 ---
 
@@ -164,6 +164,71 @@ are allowed for the dashboard only; links to other sites open in your
 browser; downloads go to `~/Downloads`. GNOME needs the AppIndicator extension
 for the tray (Ubuntu and Pop!_OS ship it on). The package's name is
 `buddi-desktop`; the command stays `buddi`.
+
+### 1.3 Windows, with nothing installed first (for testing)
+
+Download `buddi-<version>-windows-x64-setup.exe` from the GitHub release and
+double-click it. It installs for you only: no administrator, no Node, no
+Visual C++ redistributable, no terminal. Windows 10 1809 or newer; x64, and
+Windows on Arm, where the x64 build runs emulated (Postgres has no Windows on
+Arm binaries). The setup is not signed yet, so SmartScreen asks once: More
+info → Run anyway.
+
+| What | Where |
+|---|---|
+| Node and npm, pinned as in buddi.app, and the Visual C++ runtime (`vcruntime\`) | `%LOCALAPPDATA%\buddi\node\` |
+| buddi, the npm tarball with its embedded Postgres | `%LOCALAPPDATA%\buddi\releases\buddi-<version>\`; `current` and `previous` are junctions into them |
+| the command (the bundled node, `current`, this data folder), on your PATH | `%LOCALAPPDATA%\Programs\buddi\bin\buddi.cmd` |
+| the setup's icon and uninstaller | `%LOCALAPPDATA%\Programs\buddi\` |
+| the Start menu item: opens the dashboard, with no console window | Start → buddi |
+| the service, written by `buddi` | Task Scheduler → `com.buddi.install.<id>`, at your sign-in |
+
+The setup is Inno Setup around a zip, `buddi-<version>-windows-x64.zip`
+(beside it on the release with its `.sha256`), which
+`scripts/release/windows-bundle.sh` builds the way the Linux tarball is built:
+Node checked against its SHASUMS256, buddi's tarball against its integrity and
+provenance. The setup unpacks it and hands it to the release's own program,
+`packages/install/dist/windows-setup.js`, which does what `install.sh` does on
+Linux: it moves the runtime and the release into place, switches `current`,
+writes `buddi.cmd`, starts buddi (which registers its task) and records what
+it installed in `installer.json`. Then the welcome page opens in your browser.
+`buddi` works in a new Command Prompt or PowerShell window (a `.cmd`, so
+PowerShell's script policy does not apply). Options, on the setup's command
+line: `/VERYSILENT /SUPPRESSMSGBOXES` (Inno Setup's own), `/NOSTART` (or
+`BUDDI_NO_START=1`), `/SKIPBACKUP`; `BUDDI_DATA_DIR` picks another data folder.
+
+**The Visual C++ runtime.** The Postgres binaries for Windows are built with
+Visual C++ and import `vcruntime140.dll`, `vcruntime140_1.dll` and
+`msvcp140.dll` (the rest, `api-ms-win-crt-*`, is the Universal CRT Windows 10
+and 11 ship). A fresh Windows has none of the three, and the redistributable
+that installs them needs an administrator. So the bundle carries them, taken
+from Visual Studio's redistributable folder
+(`VC\Redist\MSVC\<version>\x64\Microsoft.VC14x.CRT`), and buddi copies them
+beside the Postgres binaries in `<data>\runtime` (app-local deployment, which
+Microsoft's licence allows for these files as distributable code). The copy
+is checked at every start, so a Postgres an upgrade brought with npm gets
+them too. An npm install of buddi still needs the redistributable, and says so
+with its link.
+
+**Updates** go the Linux install's way: Settings → System or `buddi upgrade`
+downloads the release into `releases\` with the bundled npm, checks integrity
+and provenance, takes the backup, switches `current` and hands over. Running a
+newer setup also upgrades: a backup first, then buddi stops (Windows will not
+replace files a running program holds), the new release goes beside the old
+one, `current` is switched and buddi started (and switched back if it does
+not start). The setup is also what brings a newer Node.
+
+**From an npm install.** Run the setup: when the npm copy serves the same data
+folder, it takes the backup with it, moves the installation over (same data,
+same task name), and removes the npm copy once the new one runs. An npm copy
+serving another folder is left alone, with the line that removes it.
+
+**Removing it.** Settings → Apps → buddi → Uninstall runs `buddi uninstall`
+(§11) with a copy of node from outside the data folder, then removes the
+setup's files, the Start menu item and the PATH entry; the last backup and its
+passphrase are shown and kept in `%USERPROFILE%\buddi-backups`. `buddi
+uninstall` in a terminal does the same and starts the setup's uninstaller for
+what is left.
 
 ---
 
@@ -613,13 +678,14 @@ unpacked). Nothing about it is macOS-only.
   lingering on, which the installer turns on when it may). The agents' own
   browser and "Your browser" are untested there. Computer control does not
   work, and says so.
-- **Windows** is not supported yet. What is aimed for is the core loop, the
-  dashboard, the bundled Postgres, Telegram, email, memory and the web plugin.
-  Running commands on the host (`host.exec`) is refused on Windows until it is
+- **Windows** is for testing, not public yet. The setup (§1.3) and the npm
+  install both work, tested on Windows 11 on Arm; the service is a Task
+  Scheduler task of your own and secrets live in the file vault. Running
+  commands on the host (`host.exec`) is refused on Windows until it is
   written against PowerShell with the same approval. The agents' own browser
-  and "Your browser" are expected to work. The Task Scheduler service and the
-  Credential Manager vault do not exist yet, and plugins do not yet say which
-  platforms they support.
+  and "Your browser" are expected to work. The Credential Manager vault does
+  not exist yet, plugins do not yet say which platforms they support, the
+  setup is unsigned, and there is no desktop app (tray) for Windows.
 
 ---
 
@@ -756,10 +822,10 @@ What a working install looks like, and how to see it:
 
 ## 13. What is not there yet
 
-- **Windows.** The data directory knows where it goes
-  (`packages/install/src/environment.ts`) and nothing else does: there is no
-  Credential Manager vault and no Task Scheduler unit, and `host.exec` is
-  refused.
+- **Windows, fully.** The setup and the Task Scheduler service work (§1.3);
+  there is no Credential Manager vault, `host.exec` is refused, the setup is
+  not signed (SmartScreen asks once), and there is no tray app (the Linux
+  desktop app's Tauri shell, built for Windows, would be it).
 - **Linux, fully.** The file vault, the bundled Postgres and the systemd user
   unit work (`packages/install/src/launcher.ts`); the browser modes are
   untested and computer control is macOS-only. A Secret Service vault is not

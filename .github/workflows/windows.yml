@@ -120,8 +120,40 @@ jobs:
       - run: pnpm --filter @buddi/web build
       - run: pnpm --filter @buddi/web exec vitest run
 
-  # The Windows setup, built from the branch (see the top).
+  # The Windows setup, built from the branch (see the top). The tarballs are
+  # packed on Linux, as the release packs them (build.mjs runs npm without a shell).
+  pack:
+    if: ${{ inputs.installer }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      V1: ${{ inputs.version }}
+      BUDDI_RELEASE_NOTES_OPTIONAL: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Two versions
+        run: |
+          echo "$V1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-pre\.[0-9]+$' || { echo "::error::\"$V1\" is not a version like 0.1.0-pre.900"; exit 1; }
+          V2="${V1%.*}.$(( ${V1##*.} + 1 ))"
+          mkdir -p build/pack
+          for v in "$V1" "$V2"; do
+            out=$(BUDDI_RELEASE_VERSION="$v" pnpm -s release:pack | tail -1)
+            cp "${out##*Release: }" "build/pack/buddi-$v.tgz"
+          done
+          ls -l build/pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buddi-tarballs
+          path: build/pack/*.tgz
+          retention-days: 7
+
   installer:
+    needs: [pack]
     if: ${{ inputs.installer }}
     runs-on: windows-latest
     timeout-minutes: 60
@@ -133,24 +165,20 @@ jobs:
     steps:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: printf 'TEMP=%s\nTMP=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
+        with: { node-version: 22 }
+      - uses: actions/download-artifact@v4
+        with:
+          name: buddi-tarballs
+          path: build/pack
       - name: Inno Setup and the Visual C++ runtime
         run: scripts/release/windows-tools.sh
       - name: Two versions, bundled and wrapped
         run: |
-          echo "$V1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-pre\.[0-9]+$' || { echo "::error::\"$V1\" is not a version like 0.1.0-pre.900"; exit 1; }
           V2="${V1%.*}.$(( ${V1##*.} + 1 ))"
           echo "V2=$V2" >> "$GITHUB_ENV"
-          mkdir -p build/windows
           for v in "$V1" "$V2"; do
-            out=$(BUDDI_RELEASE_VERSION="$v" pnpm -s release:pack | tail -1)
-            tgz="${out##*Release: }"
-            BUDDI_TGZ="$tgz" scripts/release/windows-bundle.sh "$v" build/windows
+            BUDDI_TGZ="build/pack/buddi-$v.tgz" scripts/release/windows-bundle.sh "$v" build/windows
             scripts/release/windows-setup.sh "$v" "build/windows/buddi-$v-windows-x64.zip" build/windows
           done
           ls -l build/windows
@@ -160,7 +188,7 @@ jobs:
         if: ${{ failure() }}
         run: |
           cat "$RUNNER_TEMP"/windows-smoke/*.log 2>/dev/null || true
-          cat "$LOCALAPPDATA"/buddi/logs/*.log 2>/dev/null | tail -n 200 || true
+          tail -n 200 "$LOCALAPPDATA"/buddi/logs/*.log 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
