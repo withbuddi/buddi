@@ -367,7 +367,11 @@ fn removal_tick(app: &AppHandle, up: bool) {
 pub fn removed(app: &AppHandle) {
     set_phase(app, Phase::Removed);
     with(app, |s| s.shown = None);
-    placeholder(app, "removed", &backups_dir());
+    // "Keep my data for a reinstall": the data folder, with its last backup, is still there.
+    match buddi::data_dir().filter(|d| d.join("installation.json").is_file()) {
+        Some(data) => placeholder(app, "kept", &data.display().to_string()),
+        None => placeholder(app, "removed", &backups_dir()),
+    }
     platform::show_main(app);
 }
 

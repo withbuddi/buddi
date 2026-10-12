@@ -67,6 +67,9 @@
     }, true);
   } else if (mode === 'removing') {
     say('Removing buddi…', 'Your last backup and the file with its passphrase stay in ' + detail + '.');
+  } else if (mode === 'kept') {
+    say('buddi is removed', 'Your data stays in ' + detail + ', with the last backup in its backups folder, for a reinstall: run the buddi setup again and buddi starts where you left off. Closing this window closes the app too.');
+    button('Close', () => invoke('quit_app'), true);
   } else if (mode === 'removed') {
     say('buddi is removed', 'Your last backup and the file with its passphrase are in ' + detail + '. Keep the passphrase with the backup: it is the only way to open it. Closing this window closes the app too.');
     button('Close', () => invoke('quit_app'), true);

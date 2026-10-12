@@ -494,8 +494,10 @@ begin
     Node := Data + '\node\node.exe';
     Script := Data + '\releases\current\packages\install\dist\windows-setup.js';
     if not FileExists(Node) or not FileExists(Script) then begin
-      { buddi's data is still there but its program is not: removing only the entry would leave the data, the task and the secrets with no way to remove them. }
-      if FileExists(Data + '\installation.json') or DirExists(Data + '\postgres') then begin
+      { buddi's data is still there but its program is not: removing only the entry would leave the data, the task and the secrets with no way to remove them.
+        Unless it was kept on purpose ("Keep my data for a reinstall": the marker, or no releases at all), which is the already-removed case below. }
+      if (FileExists(Data + '\installation.json') or DirExists(Data + '\postgres'))
+        and not FileExists(Data + '\kept-for-reinstall.json') and DirExists(Data + '\releases') then begin
         if not UninstallSilent then
           MsgBox('buddi''s program files in ' + Data + ' are missing, so its data, background task and secrets cannot be removed safely. Nothing was removed.' + #13#10#13#10
             + 'Run the buddi setup again (it repairs the install), then remove buddi here.', mbError, MB_OK);
@@ -541,8 +543,12 @@ begin
     RemoveFromPath(ExpandConstant('{app}\bin'));
     if not RegQueryStringValue(HKCU, 'Software\buddi', 'DataDir', Data) then Data := ExpandConstant('{localappdata}\buddi');
     RemoveDesktopRunEntry(Data);
+    { Data kept for a reinstall keeps its place: the next setup finds it where it is (DataDir). }
+    if FileExists(Data + '\installation.json') then begin
+      if DesktopRecordOurs(Data) then RegDeleteKeyIncludingSubkeys(HKCU, 'Software\buddi\Desktop');
+    end
     { The app's record of another installation stays with it; the rest of the key is this setup's. }
-    if DesktopRecordOurs(Data) or not RegKeyExists(HKCU, 'Software\buddi\Desktop') then
+    else if DesktopRecordOurs(Data) or not RegKeyExists(HKCU, 'Software\buddi\Desktop') then
       RegDeleteKeyIncludingSubkeys(HKCU, 'Software\buddi')
     else
       RegDeleteValue(HKCU, 'Software\buddi', 'DataDir');
