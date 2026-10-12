@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -68,12 +70,12 @@ export function commandEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = p
  * every process in it when its last handle closes. PowerShell holds that
  * handle, so when it exits (done, or killed) a program the command left
  * running in the background goes with it — what a process group does on
- * POSIX. No administrator rights. Where it cannot (a policy refuses Add-Type),
- * the command still runs, and taskkill /T still ends the tree on a stop.
+ * POSIX. No administrator rights. Compiled once into a small assembly in the
+ * user's temp folder (a cold Add-Type costs seconds per command); where that
+ * cannot be done, the command still runs, and taskkill /T still ends the tree
+ * on a stop.
  */
-const WINDOWS_JOB = String.raw`try {
-Add-Type -TypeDefinition @'
-using System; using System.Runtime.InteropServices;
+const JOB_SOURCE = String.raw`using System; using System.Runtime.InteropServices;
 public static class BuddiHostJob {
   [StructLayout(LayoutKind.Sequential)] struct Basic { public long A; public long B; public uint LimitFlags; public UIntPtr C; public UIntPtr D; public uint E; public UIntPtr F; public uint G; public uint H; }
   [StructLayout(LayoutKind.Sequential)] struct Io { public ulong A, B, C, D, E, F; }
@@ -91,26 +93,54 @@ public static class BuddiHostJob {
     if (!AssignProcessToJobObject(job, GetCurrentProcess())) return false;
     held = job; return true;
   }
+}`;
+
+/** A path as a PowerShell single-quoted string. */
+const psQuote = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+
+let jobAssembly: Promise<string | null> | undefined;
+/** The compiled job helper, built on first use and kept; null when it cannot be. */
+function windowsJobAssembly(env: NodeJS.ProcessEnv): Promise<string | null> {
+  jobAssembly ??= (async () => {
+    const hash = createHash('sha256').update(JOB_SOURCE).digest('hex').slice(0, 16);
+    const dll = path.join(os.tmpdir(), `buddi-host-job-${hash}.dll`);
+    if (existsSync(dll)) return dll;
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'buddi-host-'));
+    try {
+      const partial = path.join(dir, 'job.dll');
+      const script = path.join(dir, 'build.ps1');
+      await writeFile(script, `﻿Add-Type -TypeDefinition @'\r\n${JOB_SOURCE}\r\n'@ -OutputAssembly ${psQuote(partial)} -OutputType Library\r\n`, 'utf8');
+      const result = await spawnCommand({ command: '', cwd: dir, timeoutMs: 30_000, env }, true, script);
+      if (result.state !== 'completed' || result.exitCode !== 0 || !existsSync(partial)) return null;
+      await rename(partial, dll).catch(() => undefined);
+      return existsSync(dll) ? dll : null;
+    } catch {
+      return null;
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  })();
+  return jobAssembly;
 }
-'@
-[void][BuddiHostJob]::Enter()
-} catch { }`;
 
 /**
- * The script a Windows command runs as: its children in a kill-on-close job,
- * UTF-8 out, no progress records, and a native program's failure as the exit
- * code (PowerShell itself would exit 0). Run with -File, so nothing in the
- * command is quoted for a command line.
+ * The script a Windows command runs as: its children in a kill-on-close job
+ * (when the helper is there), UTF-8 out, no progress records, and a native
+ * program's failure as the exit code (PowerShell itself would exit 0). Run
+ * with -File, so nothing in the command is quoted for a command line.
  */
-export function powershellScript(command: string): string {
+export function powershellScript(command: string, jobDll: string | null = null): string {
   return [
-    WINDOWS_JOB,
+    ...(jobDll ? [`try { Add-Type -Path ${psQuote(jobDll)}; [void][BuddiHostJob]::Enter() } catch { }`] : []),
     "$ProgressPreference = 'SilentlyContinue'",
     '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
     '$OutputEncoding = [System.Text.Encoding]::UTF8',
     '$global:LASTEXITCODE = 0',
     command,
+    // As bash: the last command's status. A native program's code, else 1 when it failed (not found, an error).
+    '$buddiLastOk = $?',
     'if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
+    'if (-not $buddiLastOk) { exit 1 }',
     '',
   ].join('\r\n');
 }
@@ -142,11 +172,13 @@ export function runCommand(input: {
 }
 
 async function runWindows(input: Parameters<typeof runCommand>[0]): Promise<CommandResult> {
+  const jobDll = await windowsJobAssembly(input.env);
+  input.signal?.throwIfAborted();
   const dir = await mkdtemp(path.join(os.tmpdir(), 'buddi-host-'));
   try {
     const script = path.join(dir, 'command.ps1');
     // With a BOM: Windows PowerShell 5.1 reads a file without one in the ANSI code page.
-    await writeFile(script, `\ufeff${powershellScript(input.command)}`, { encoding: 'utf8', mode: 0o600 });
+    await writeFile(script, `\ufeff${powershellScript(input.command, jobDll)}`, { encoding: 'utf8', mode: 0o600 });
     return await spawnCommand(input, true, script);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);

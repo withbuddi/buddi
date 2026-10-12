@@ -10,12 +10,12 @@ describe('host commands on Windows (simulated)', () => {
     expect(hostShell('linux').name).toBe('/bin/bash');
   });
   it('puts the command in a kill-on-close job, with UTF-8 out and a native failure as its exit code', () => {
-    const script = powershellScript('pandoc in.md -o out.docx');
-    expect(script).toContain('AssignProcessToJobObject');
-    expect(script).toContain('0x2000');
+    const script = powershellScript('pandoc in.md -o out.docx', "C:\\Users\\o'b\\Temp\\buddi-host-job-1.dll");
+    expect(script).toContain("Add-Type -Path 'C:\\Users\\o''b\\Temp\\buddi-host-job-1.dll'");
+    expect(powershellScript('Get-Date')).not.toContain('BuddiHostJob');
     expect(script).toContain('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8');
     expect(script.indexOf('BuddiHostJob]::Enter()')).toBeLessThan(script.indexOf('pandoc in.md -o out.docx'));
-    expect(script.trimEnd().endsWith('if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }')).toBe(true);
+    expect(script.trimEnd().endsWith('if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\r\nif (-not $buddiLastOk) { exit 1 }')).toBe(true);
   });
   it('passes the system and profile variables and the owner\'s PATH, never credentials', () => {
     const env = commandEnv({ SystemRoot: 'C:\\Windows', Path: 'C:\\Python312;C:\\Windows\\System32', USERPROFILE: 'C:\\Users\\o', TEMP: 'C:\\Users\\o\\AppData\\Local\\Temp',
@@ -30,14 +30,27 @@ describe.runIf(process.platform === 'win32')('host command processes on Windows'
   const base = { cwd: process.cwd(), timeoutMs: 20_000, env: process.env };
   // A cold Add-Type (the job) costs a couple of seconds per command.
   it('runs PowerShell and reports a native failure', { timeout: 60_000 }, async () => {
-    expect(await runCommand({ ...base, command: 'Write-Output "hello"' })).toMatchObject({ state: 'completed', exitCode: 0, stdout: expect.stringContaining('hello') });
+    const hello = await runCommand({ ...base, command: 'Write-Output "hello"' });
+    expect(hello, JSON.stringify(hello)).toMatchObject({ state: 'completed', exitCode: 0, stdout: expect.stringContaining('hello') });
     expect((await runCommand({ ...base, command: 'cmd /c exit 7' })).exitCode).toBe(7);
+    // A program that is not installed fails, with PowerShell's sentence on stderr.
+    const missing = await runCommand({ ...base, command: 'pandoc-not-installed in.md -o out.docx' });
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain('is not recognized');
   });
   it('times out and ends the whole tree', { timeout: 60_000 }, async () => {
     const started = Date.now();
     const result = await runCommand({ ...base, timeoutMs: 1500, command: 'Start-Process -NoNewWindow -FilePath powershell.exe -ArgumentList "-NoProfile","-Command","Start-Sleep 60"; Start-Sleep 60' });
     expect(result.state).toBe('timed-out');
     expect(Date.now() - started).toBeLessThan(15_000);
+  });
+  it('ends a background program with the command that started it', { timeout: 60_000 }, async () => {
+    const result = await runCommand({ ...base, command: '(Start-Process -PassThru -WindowStyle Hidden -FilePath powershell.exe -ArgumentList "-NoProfile","-Command","Start-Sleep 60").Id' });
+    expect(result, JSON.stringify(result)).toMatchObject({ state: 'completed', exitCode: 0 });
+    const pid = Number(result.stdout.trim());
+    expect(pid).toBeGreaterThan(0);
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 });
 
