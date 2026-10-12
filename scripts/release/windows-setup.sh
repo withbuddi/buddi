@@ -8,8 +8,8 @@
 #
 # Runs on Windows (Git Bash).
 set -euo pipefail
-# Git Bash rewrites an argument that starts with / into a path (/VERYSILENT → C:/Program Files/Git/VERYSILENT): not here.
-export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
+# Git Bash rewrites an argument that starts with / into a path (/VERYSILENT → C:/Program Files/Git/VERYSILENT):
+# commands given /SWITCHES run with MSYS_NO_PATHCONV=1 and Windows paths (cygpath -w).
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VERSION="${1:?usage: windows-setup.sh <buddi-version> <bundle.zip> [out-dir]}"
@@ -20,8 +20,8 @@ ISCC="${ISCC:-C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe}"
 die() { printf 'windows-setup: %s\n' "$*" >&2; exit 1; }
 [ -f "$ZIP" ] || die "$ZIP is not a file"
 mkdir -p "$OUT"
-info="$(node "$(cygpath -w "$ROOT/scripts/release/bundle-version.mjs")" "$VERSION")" || die "\"$VERSION\" has no four-number form"
-"$(cygpath -u "$ISCC")" /Q "/DAppVersion=$VERSION" "/DVersionInfo=$info" "/DBundleZip=$(cygpath -w "$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")")" \
+info="$(node "$ROOT/scripts/release/bundle-version.mjs" "$VERSION")" || die "\"$VERSION\" has no four-number form"
+MSYS_NO_PATHCONV=1 "$(cygpath -u "$ISCC")" /Q "/DAppVersion=$VERSION" "/DVersionInfo=$info" "/DBundleZip=$(cygpath -w "$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")")" \
   "/DOutputDir=$(cygpath -w "$(cd "$OUT" && pwd)")" "$(cygpath -w "$ROOT/apps/windows/buddi.iss")"
 name="buddi-$VERSION-windows-x64-setup.exe"
 [ -f "$OUT/$name" ] || die "Inno Setup wrote no $OUT/$name"
