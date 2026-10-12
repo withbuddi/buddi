@@ -20,7 +20,7 @@
 import path from 'node:path';
 import { passphraseBeforeRemoval, passphraseFileFor, passphraseFileText, runUninstallPlan } from '@buddi/core/uninstall';
 import type { RemovalStep, UninstallIo, UninstallPlan } from '@buddi/core/uninstall';
-import { identityMismatch, launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
+import { KEPT_FOR_REINSTALL_FILE, identityMismatch, launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
 import type { InstallationState } from './environment.js';
 import { windowsTaskName, windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
 import { SETUP_UNINSTALL_ARGS } from './windows-install.js';
@@ -471,6 +471,12 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
   const pairing = join('extension.json');
   if (!options.keepData && deps.exists(pairing)) {
     steps.push({ line: `the extension pairing record ${pairing}`, run: async () => { if (deps.exists(pairing)) await deps.remove(pairing); } });
+  }
+
+  /* Kept data says so, for the next install (environment.ts keptForReinstall). */
+  if (options.keepData && hasData && isInstallation) {
+    const marker = join(KEPT_FOR_REINSTALL_FILE);
+    steps.push({ line: `a note that the data stays for a reinstall (${marker})`, bestEffort: true, run: () => deps.writePrivate(marker, `${JSON.stringify({ keptAt: (deps.now?.() ?? new Date()).toISOString() })}\n`) });
   }
 
   const notes: string[] = [];

@@ -9,6 +9,7 @@ import {
   acquireLock,
   lockHolder,
   LOCK_BOOT_FILE,
+  keptForReinstall,
   readBootId,
   atomicJson,
   browsersDir,
@@ -120,6 +121,15 @@ describe('the packaged installation environment', () => {
 
   test('this computer has a boot id', () => {
     if (['linux', 'darwin', 'win32'].includes(process.platform)) expect(readBootId()).toMatch(/\S/);
+  });
+
+  test('data a keep-data uninstall left is recognised, marked or not', () => {
+    const has = (files: string[]) => (file: string) => files.includes(file.replace(/\\/g, '/'));
+    expect(keptForReinstall('/d', has(['/d/kept-for-reinstall.json']))).toBe(true);
+    expect(keptForReinstall('/d', has(['/d/installation.json', '/d/postgres/PG_VERSION']))).toBe(true);
+    expect(keptForReinstall('/d', has(['/d/installation.json', '/d/postgres/PG_VERSION', '/d/releases']))).toBe(false);
+    expect(keptForReinstall('/d', has(['/d/installation.json']))).toBe(false);
+    expect(keptForReinstall('/d', has([]))).toBe(false);
   });
 
   test('recent incomplete lock fails closed instead of racing the owner', async () => {

@@ -154,6 +154,41 @@ describe('the setup over an installed buddi', () => {
   });
 });
 
+describe('the setup over data kept by an uninstall ("Keep my data for a reinstall")', () => {
+  /** What `buddi uninstall --keep-data` leaves: the data, its database, its last backup, and no program. */
+  async function kept(data: string, marked: boolean): Promise<void> {
+    await mkdir(path.join(data, 'postgres'), { recursive: true });
+    await writeFile(path.join(data, 'postgres', 'PG_VERSION'), '17\n');
+    await writeFile(path.join(data, 'installation.json'), JSON.stringify({ version: 1, database: 'managed', webPort: 4317, dbPort: 5555, phase: 'ready' }));
+    await mkdir(path.join(data, 'backups'), { recursive: true });
+    await writeFile(path.join(data, 'backups', 'buddi-backup-20261012-120000.tar.gz.age'), 'archive');
+    if (marked) await writeFile(path.join(data, 'kept-for-reinstall.json'), '{"keptAt":"2026-10-12T12:00:00.000Z"}');
+  }
+
+  test.each([true, false])('installs on it, says why no new backup is taken and where the last one is, and starts buddi on it (marker: %s)', async (marked) => {
+    const dir = await scratch(); const data = path.join(dir, 'data'); const bin = path.join(dir, 'bin');
+    await kept(data, marked);
+    const f = fake(data);
+    const said = quiet();
+    expect(await install(args(await bundle(data, '0.1.0-pre.55'), data, bin), said, f.deps)).toBe(0);
+    expect(f.calls.some(call => call.includes('backup'))).toBe(false);
+    expect(f.calls.at(-1)).toBe('new --no-open');
+    expect(said.lines.join('\n')).toMatch(/No new backup first: the buddi that wrote this data was removed/);
+    expect(said.lines.join('\n')).toContain(path.join(data, 'backups', 'buddi-backup-20261012-120000.tar.gz.age'));
+    // The data is untouched, and an installation's again.
+    expect(await readFile(path.join(data, 'postgres', 'PG_VERSION'), 'utf8')).toBe('17\n');
+    expect(existsSync(path.join(data, 'kept-for-reinstall.json'))).toBe(false);
+    expect(await target(path.join(data, 'releases', 'current'))).toBe(releaseRoot(releaseDir(path.join(data, 'releases'), '0.1.0-pre.55')));
+  });
+
+  test('a data folder that is not one an uninstall kept still asks for /SKIPBACKUP', async () => {
+    const dir = await scratch(); const data = path.join(dir, 'data'); const bin = path.join(dir, 'bin');
+    await mkdir(data, { recursive: true });
+    await writeFile(path.join(data, 'installation.json'), JSON.stringify({ version: 1, database: 'managed', webPort: 4317, dbPort: 5555, phase: 'ready' }));
+    await expect(install(args(await bundle(data, '0.1.0-pre.55'), data, bin), quiet(), fake(data).deps)).rejects.toThrow(/SKIPBACKUP/);
+  });
+});
+
 describe('the setup over an npm install', () => {
   async function npmCopy(dir: string, data: string): Promise<{ prefix: string; pkg: string }> {
     const prefix = path.join(dir, 'npm');

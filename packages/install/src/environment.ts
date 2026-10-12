@@ -564,6 +564,23 @@ export async function acquireLock(data: string, deps: Pick<LockHolderDeps, 'boot
 export const UNINSTALL_REQUEST_FILE = 'uninstall.json';
 
 /**
+ * Left in the data directory by `buddi uninstall --keep-data` ("Keep my data
+ * for a reinstall"): the program went, the data stays for the next install,
+ * which starts on it instead of refusing it for want of a buddi to back it up.
+ */
+export const KEPT_FOR_REINSTALL_FILE = 'kept-for-reinstall.json';
+
+/**
+ * Data a keep-data uninstall left: its marker, or (an uninstall from before
+ * the marker) installation.json and a database cluster with no program
+ * (no `releases`). Such data has no buddi left to back it up first.
+ */
+export function keptForReinstall(data: string, exists: (file: string) => boolean = existsSync): boolean {
+  if (exists(path.join(data, KEPT_FOR_REINSTALL_FILE))) return true;
+  return exists(path.join(data, 'installation.json')) && exists(path.join(data, 'postgres', 'PG_VERSION')) && !exists(path.join(data, 'releases'));
+}
+
+/**
  * Has the installation in `data` been moved here from the folder its
  * `installation.json` names? Only when the folder holds a managed cluster
  * (`postgres/PG_VERSION`) and this process holds its `supervisor.lock`: a

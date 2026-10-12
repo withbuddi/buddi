@@ -267,6 +267,12 @@ main() {
   fi
   [ ! -e "$RELEASES/previous" ] || OLD_PREV=$(resolve "$RELEASES/previous")
   EXISTING=0; [ ! -f "$DATA/installation.json" ] || EXISTING=1
+  # Data an uninstall with "Keep my data" left (packages/install/src/environment.ts keptForReinstall):
+  # its marker, or (an older uninstall) installation.json and a database cluster with no program.
+  kept_for_reinstall() {
+    [ -f "$DATA/kept-for-reinstall.json" ] && return 0
+    [ -f "$DATA/installation.json" ] && [ -f "$DATA/postgres/PG_VERSION" ] && [ ! -e "$DATA/releases" ]
+  }
 
   # npm's buddi (`npm install -g @withbuddi/buddi`) on PATH, and whether it is the one serving this data folder.
   NPM_BUDDI=""; NPM_PKG=""; NPM_PREFIX=""; NPM_SERVES=0; NPM_VERSION=""
@@ -306,6 +312,7 @@ main() {
   SAME=0; [ -z "$OLD_ROOT" ] || [ "$OLD_ROOT" != "$(resolve "$NEW_ROOT")" ] || SAME=1
   if [ "$SAME" = 1 ]; then note "buddi $NEW_VERSION is installed already; refreshing the runtime, the command and the service"
   elif [ -n "$OLD_VERSION" ]; then say "Upgrading buddi $OLD_VERSION to $NEW_VERSION"
+  elif [ "$EXISTING" = 1 ] && [ "$HAVE_OLD" = 0 ] && kept_for_reinstall; then say "Reinstalling buddi on the data kept in $DATA."
   elif [ "$EXISTING" = 1 ]; then say "Moving the buddi in $DATA onto this install; its data stays."
   fi
 
@@ -314,6 +321,17 @@ main() {
   if [ "$EXISTING" = 1 ] && [ "$SAME" = 0 ]; then
     if [ "${BUDDI_SKIP_BACKUP:-}" = "1" ]; then
       dim "BUDDI_SKIP_BACKUP=1: no backup of $DATA before the switch."
+    elif [ "$HAVE_OLD" = 0 ] && kept_for_reinstall; then
+      # "Keep my data for a reinstall": the buddi that could back it up is gone, which is the point of keeping it.
+      LAST=""
+      for f in "$DATA"/backups/buddi-backup-*; do
+        case "$f" in *.json|*.txt) continue;; esac
+        [ -f "$f" ] || continue
+        if [ -z "$LAST" ] || [ "$f" -nt "$LAST" ]; then LAST="$f"; fi
+      done
+      if [ -n "$LAST" ]; then note "no new backup first: the buddi that wrote this data was removed, and only it could back up its database as it is. The last backup it took is $LAST. The install leaves the data folder as it is; buddi $NEW_VERSION starts on it."
+      else note "no new backup first: the buddi that wrote this data was removed, and only it could back up its database as it is; it left no backup in $DATA/backups. The install leaves the data folder as it is; buddi $NEW_VERSION starts on it."
+      fi
     elif [ "$HAVE_OLD" = 0 ]; then
       die "$DATA holds a buddi installation, but no buddi here can back it up first (no release under $RELEASES, no npm copy serving it). Nothing was changed. To go on without a backup: BUDDI_SKIP_BACKUP=1"
     else
@@ -470,6 +488,8 @@ EOF
     const fs = require("fs"); const [file, version, arch, command, data, linger] = process.argv.slice(1);
     fs.writeFileSync(file, JSON.stringify({ version, arch, command, data, linger: linger === "true", installedAt: new Date().toISOString() }, null, 2) + "\n", { mode: 0o600 });
   ' "$DATA/installer.json" "$NEW_VERSION" "linux-$ARCH" "$COMMAND" "$DATA" "$LINGER_BY_US"
+  # The data is an installation's again.
+  rm -f "$DATA/kept-for-reinstall.json"
 
   desktop_entries
 

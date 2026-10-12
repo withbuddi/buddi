@@ -549,6 +549,10 @@ describe('uninstallPackaged: the Windows install (the setup)', () => {
     expect(m.removed).toEqual(expect.arrayContaining([`${WIN_DATA}\\node`, `${WIN_DATA}\\releases`]));
     expect(m.removed).not.toContain(WIN_DATA);
     expect(m.removed).not.toContain(`${WIN_DATA}\\vault.json`);
+    // The data says it was kept, for the setup that comes next.
+    const marker = [...m.written.keys()].find(file => file.endsWith('kept-for-reinstall.json'));
+    expect(marker).toBeDefined();
+    expect(JSON.parse(m.written.get(marker as string) as string)).toHaveProperty('keptAt');
   });
 
   it('starts nothing and removes nothing more when the service would not stop', async () => {

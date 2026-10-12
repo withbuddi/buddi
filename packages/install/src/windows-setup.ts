@@ -37,7 +37,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { currentLauncher, pointAt, pruneReleases, releaseDir, releaseRoot, takeReleasesLock } from './app-layout.js';
-import { launchAgentLabel, lockHolder } from './environment.js';
+import { KEPT_FOR_REINSTALL_FILE, keptForReinstall, launchAgentLabel, lockHolder } from './environment.js';
 import { answeredBySupervisor, supervisorSocket } from './supervisor.js';
 import { SETUP_UNINSTALL_VAR, buildWindowsCommand, insideFolder, windowsBundledNode, windowsCommandOwnedBy, windowsInstallEnvironment, windowsInstallPath } from './windows-install.js';
 import type { WindowsInstallerRecord } from './windows-install.js';
@@ -97,12 +97,19 @@ export interface SetupFacts {
   /** An npm copy on PATH, and whether it serves this data folder. */
   npm?: { version?: string; serves: boolean };
   skipBackup: boolean;
+  /** The data an uninstall with "Keep my data" left (environment.ts keptForReinstall). */
+  kept?: boolean;
 }
 
 export interface SetupPlan {
   kind: 'fresh' | 'reinstall' | 'upgrade' | 'move';
-  /** `take`: back up with the buddi there now; `refuse`: data that nothing here can back up. */
-  backup: 'none' | 'take' | 'skipped' | 'refuse';
+  /**
+   * `take`: back up with the buddi there now; `kept`: data a keep-data
+   * uninstall left, whose buddi is gone (its last backup is in its backups
+   * folder, and the install leaves the folder as it is); `refuse`: data that
+   * nothing here can back up.
+   */
+  backup: 'none' | 'take' | 'skipped' | 'kept' | 'refuse';
   /** Which buddi serves the data now: the release under `current`, npm's copy, or none. */
   old: 'release' | 'npm' | 'none';
   /** The version recorded as `from` in the upgrade marker. */
@@ -114,7 +121,7 @@ export function setupPlan(f: SetupFacts): SetupPlan {
   const from = f.oldVersion ?? (old === 'npm' ? f.npm?.version : undefined);
   const kind = f.sameRelease ? 'reinstall' : f.oldRoot !== undefined ? 'upgrade' : f.existing ? 'move' : 'fresh';
   let backup: SetupPlan['backup'] = 'none';
-  if (f.existing && !f.sameRelease) backup = f.skipBackup ? 'skipped' : old === 'none' ? 'refuse' : 'take';
+  if (f.existing && !f.sameRelease) backup = f.skipBackup ? 'skipped' : old !== 'none' ? 'take' : f.kept ? 'kept' : 'refuse';
   return { kind, backup, old, ...(from === undefined ? {} : { from }) };
 }
 
@@ -343,9 +350,11 @@ export async function install(args: SetupArgs, said: Said, deps: InstallDeps = r
     break;
   }
 
-  const plan = setupPlan({ existing, ...(oldRoot === undefined ? {} : { oldRoot }), ...(oldVersion === undefined ? {} : { oldVersion }), newVersion, sameRelease, ...(npm === undefined ? {} : { npm: { serves: npm.serves, ...(npm.version === undefined ? {} : { version: npm.version }) } }), skipBackup: args.skipBackup });
+  const kept = existing && oldRoot === undefined && keptForReinstall(data);
+  const plan = setupPlan({ existing, kept, ...(oldRoot === undefined ? {} : { oldRoot }), ...(oldVersion === undefined ? {} : { oldVersion }), newVersion, sameRelease, ...(npm === undefined ? {} : { npm: { serves: npm.serves, ...(npm.version === undefined ? {} : { version: npm.version }) } }), skipBackup: args.skipBackup });
   if (plan.kind === 'reinstall') say(`buddi ${newVersion} is installed already; refreshing the runtime, the command and the service.`);
   else if (plan.kind === 'upgrade') say(`Upgrading buddi ${oldVersion ?? ''} to ${newVersion}.`.replace('  ', ' '));
+  else if (plan.kind === 'move' && plan.backup === 'kept') say(`Reinstalling buddi on the data kept in ${data}.`);
   else if (plan.kind === 'move') say(`Moving the buddi in ${data} onto this install; its data stays.`);
 
   /** The buddi serving this folder now, as a program: what takes the backup, and what a rollback starts again. */
@@ -359,6 +368,11 @@ export async function install(args: SetupArgs, said: Said, deps: InstallDeps = r
     throw new SetupError(`${data} holds a buddi installation, but no buddi here can back it up first (no release under ${releases}, no npm copy serving it). Nothing was changed. To go on without a backup, run the setup with /SKIPBACKUP.`);
   }
   if (plan.backup === 'skipped') say(`No backup of ${data} before the switch (asked for).`);
+  if (plan.backup === 'kept') {
+    const names = (() => { try { return readdirSync(path.join(data, 'backups')).map(name => ({ name, mtimeMs: statSync(path.join(data, 'backups', name)).mtimeMs })); } catch { return []; } })();
+    const last = newestArchive(names);
+    say(`No new backup first: the buddi that wrote this data was removed, and only it could back up its database as it is. ${last !== undefined ? `The last backup it took is ${path.join(data, 'backups', last)}.` : 'It left no backup in its backups folder.'} The install leaves the data folder as it is; buddi ${newVersion} starts on it.`);
+  }
   if (plan.backup === 'take') {
     if (await deps.status(data) === undefined) {
       say('Starting the installed buddi briefly for the backup.');
@@ -492,6 +506,8 @@ export async function install(args: SetupArgs, said: Said, deps: InstallDeps = r
   /* Past this point the install stands: a failure is said, never undone. */
   const record: WindowsInstallerRecord = { version: newVersion, arch: 'windows-x64', command, data, ...(args.uninstaller === undefined ? {} : { uninstaller: path.resolve(args.uninstaller) }), installedAt: new Date().toISOString() };
   await writeFile(path.join(data, 'installer.json'), JSON.stringify(record, null, 2) + '\n', { mode: 0o600 }).catch(err => say(`(could not write installer.json: ${(err as Error).message})`));
+  // The data is an installation's again.
+  await rm(path.join(data, KEPT_FOR_REINSTALL_FILE), { force: true }).catch(() => {});
   await pruneReleases(releases).catch(err => say(`(an old release could not be removed yet: ${(err as Error).message}; it goes at the next install)`));
   await rm(nodeOld, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }).catch(() => { say(`(${nodeOld} is still in use; it goes at the next install.)`); });
 

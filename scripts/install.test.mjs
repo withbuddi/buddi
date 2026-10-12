@@ -107,6 +107,26 @@ describe.skipIf(process.platform !== 'linux')('install.sh', () => {
     expect(existsSync(path.join(m.releases, 'current'))).toBe(false);
   });
 
+  test('reinstalls on data an uninstall kept ("Keep my data"): no backup to refuse over, the last one named, buddi started on it', () => {
+    const m = machine();
+    const data = path.join(realpathSync(m.home), 'data');
+    mkdirSync(path.join(data, 'postgres'), { recursive: true });
+    mkdirSync(path.join(data, 'backups'), { recursive: true });
+    writeFileSync(path.join(data, 'postgres/PG_VERSION'), '17\n');
+    writeFileSync(path.join(data, 'installation.json'), JSON.stringify({ version: 1, phase: 'ready', dataDir: m.data }));
+    writeFileSync(path.join(data, 'backups/buddi-backup-20261012-120000.tar.gz.age'), 'x');
+    writeFileSync(path.join(data, 'kept-for-reinstall.json'), '{}');
+    const r = m.run('0.1.0-pre.2');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('Reinstalling buddi on the data kept in');
+    expect(r.stdout).toMatch(/no new backup first: the buddi that wrote this data was removed.*The last backup it took is \S*\/data\/backups\/buddi-backup-20261012-120000\.tar\.gz\.age/);
+    expect(m.link('current')).toMatch(/buddi-0\.1\.0-pre\.2\//);
+    expect(readFileSync(path.join(data, 'postgres/PG_VERSION'), 'utf8')).toBe('17\n');
+    expect(existsSync(path.join(data, 'kept-for-reinstall.json'))).toBe(false);
+    const calls = existsSync(path.join(data, 'calls.log')) ? readFileSync(path.join(data, 'calls.log'), 'utf8') : '';
+    expect(calls).not.toContain('backup create');
+  });
+
   test('puts buddi in the app grid, and the desktop app in autostart only when it is installed, never over an entry it did not write', () => {
     const m = machine();
     const apps = path.join(m.home, '.local/share/applications/buddi-desktop.desktop');

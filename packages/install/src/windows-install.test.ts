@@ -179,6 +179,11 @@ describe('the setup program', () => {
       .toMatchObject({ kind: 'move', backup: 'refuse', old: 'none' });
     expect(setupPlan({ existing: true, newVersion: '0.1.0-pre.55', sameRelease: false, skipBackup: true }))
       .toMatchObject({ backup: 'skipped' });
+    // "Keep my data for a reinstall": no buddi left to back it up, and that is the point of keeping it.
+    expect(setupPlan({ existing: true, newVersion: '0.1.0-pre.55', sameRelease: false, skipBackup: false, kept: true }))
+      .toEqual({ kind: 'move', backup: 'kept', old: 'none' });
+    expect(setupPlan({ existing: true, newVersion: '0.1.0-pre.55', sameRelease: false, npm: { serves: true }, skipBackup: false, kept: true }))
+      .toMatchObject({ backup: 'take', old: 'npm' });
   });
 
   test('the newest archive, never its envelope or passphrase file', () => {

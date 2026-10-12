@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GATEWAY_PID_FILE, acquireLock, lockHolder, initialize, atomicJson, stopChild, portMovedLines, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
+import { GATEWAY_PID_FILE, KEPT_FOR_REINSTALL_FILE, acquireLock, lockHolder, initialize, atomicJson, stopChild, portMovedLines, launchAgentLabel, launchAgentPlist, systemdUnitPath, nativeEnvironment, SERVICE_UNIT_VAR } from './environment.js';
 import { APP_UNINSTALL_EXIT, UNINSTALL_REQUEST, createProductUninstall, desktopAppOnThisComputer } from './product-uninstall.js';
 import type { ProductUninstall } from './product-uninstall.js';
 import { installShim, shimsFor } from './cli-shim.js';
@@ -662,6 +662,8 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   }
   try {
     await initialize(ctx);
+    // Kept data that a buddi runs on again (buddi.app reinstalled on a Mac, where no setup clears it).
+    await rm(path.join(ctx.data, KEPT_FOR_REINSTALL_FILE), { force: true }).catch(() => {});
     pipeSecret = await nameSupervisorPipe(ctx.data);
     const ready = ctx as ReadyContext;
     /*
