@@ -246,6 +246,12 @@ export function toWireMessages(
         ...(signature !== undefined ? { extra_content: { google: { thought_signature: signature } } } : {}),
       };
     });
+    // A turn with nothing this wire carries — only thinking, which is not
+    // replayed here — is not sent at all. `content: null` is valid only beside
+    // `tool_calls`; alone it is a 400 ("invalid message content type: <nil>"
+    // from Ollama), and the stored turn would make every later request in the
+    // conversation fail the same way.
+    if (text === '' && toolCalls.length === 0) return [];
     const wire: WireMessage = {
       role: 'assistant',
       content: text === '' ? null : text,
@@ -309,6 +315,40 @@ export function toWireMessages(
     ...toolMessages,
     { role: 'user', content: onlyText === undefined ? parts : onlyText },
   ];
+}
+
+/**
+ * A whole neutral history as this wire's messages.
+ *
+ * A neutral turn can become nothing here (an assistant turn of thinking
+ * alone), which puts the owner's turns either side of it next to each other.
+ * Two `user` messages in a row are merged into one, in order, so a strict
+ * server that wants turns to alternate is never handed a pair.
+ */
+export function toWireConversation(
+  messages: readonly NeutralMessage[],
+  names: Map<string, string>,
+  provider: string,
+  options: { gemini?: boolean } = {},
+): WireMessage[] {
+  const out: WireMessage[] = [];
+  for (const message of messages) {
+    for (const wire of toWireMessages(message, names, provider, options)) {
+      const last = out[out.length - 1];
+      if (wire.role === 'user' && last?.role === 'user') {
+        last.content = mergeUserContent(last.content, wire.content);
+        continue;
+      }
+      out.push(wire);
+    }
+  }
+  return out;
+}
+
+function mergeUserContent(a: string | WirePart[], b: string | WirePart[]): string | WirePart[] {
+  if (typeof a === 'string' && typeof b === 'string') return `${a}\n\n${b}`;
+  const parts = (c: string | WirePart[]): WirePart[] => (typeof c === 'string' ? [{ type: 'text', text: c }] : c);
+  return [...parts(a), ...parts(b)];
 }
 
 export function toWireTools(tools: ToolSchema[], names: Map<string, string>): WireRequest['tools'] {
@@ -632,9 +672,7 @@ export function createOpenAiProvider(
     // The system prompt is a `system` role message — never the Claude Code
     // identity line, which belongs to one vendor's subscription and nowhere else.
     if (req.system.trim() !== '') messages.push({ role: 'system', content: req.system });
-    for (const message of req.messages) {
-      messages.push(...toWireMessages(message, names, 'openai', { gemini }));
-    }
+    messages.push(...toWireConversation(req.messages, names, 'openai', { gemini }));
     const wire: WireRequest = {
       model: resolved.model,
       ...(resolved.compatible

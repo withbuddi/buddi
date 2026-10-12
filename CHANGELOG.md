@@ -11,6 +11,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A conversation on an OpenAI-compatible provider (Ollama, OpenRouter, Gemini, a local server) no longer fails on every turn once the model answered a step with thinking alone (it happened after a question to the owner): that step is left out of what is sent instead of going as an empty assistant message the provider refuses ("invalid message content type: <nil>"). Conversations already stuck this way work again.
 - Plugin installs, upgrades and `buddi doctor` run npm on Windows (Node refuses to start `npm.cmd` without a shell; its script now runs with buddi's own node).
 - Backups and plugin staging use the tar Windows ships, not a GNU tar earlier on PATH that reads `C:\` as a remote host.
 - `pnpm db:migrate` loads the built plugins on Windows (a file URL, not a bare path).

@@ -915,3 +915,68 @@ describe('createOpenAiProvider — reasoning never reaches the answer', () => {
     expect(bodies.map((b) => [b.reasoning_effort, b.think])).toEqual([['low', 'low'], ['low', 'low'], ['none', false]]);
   });
 });
+
+describe('createOpenAiProvider — a history with a turn this wire cannot carry', () => {
+  const ask: CompletionRequest['tools'] = [
+    { name: 'conversation.ask', description: 'Ask the owner.', input_schema: { type: 'object', properties: {} } },
+    { name: 'platform.list_agents', description: 'List agents.', input_schema: { type: 'object', properties: {} } },
+  ];
+  const NOT_EXECUTED = 'not-executed: waiting for the owner to answer the question; finish your reply and do not call more tools';
+
+  // The stored sequence of a real conversation (Windows VM, Ollama cloud,
+  // gpt-oss:120b then minimax-m3): after a not-executed second ask, the model
+  // answered with thinking alone. Every later turn was refused with
+  // "invalid message content type: <nil>".
+  const poisoned: CompletionRequest['messages'] = [
+    { role: 'user', content: [{ type: 'text', text: 'Can you review if all the agents are authorized to delegate?' }] },
+    { role: 'assistant', content: [{ type: 'thinking', text: 'list them' }, { type: 'tool_use', id: 'call_39nloiyv', name: 'platform.list_agents', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_39nloiyv', content: '{"agents":[]}' }] },
+    { role: 'assistant', content: [{ type: 'thinking', text: 'ask' }, { type: 'tool_use', id: 'call_5btlnf97', name: 'conversation.ask', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_5btlnf97', content: '{"pending":true}' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Do you want any of the agents to be allowed to delegate?' }] },
+    { role: 'user', content: [{ type: 'text', text: 'Yes, set up delegation (please specify)' }] },
+    { role: 'assistant', content: [{ type: 'thinking', text: 'ask which' }, { type: 'tool_use', id: 'call_zeba9i7m', name: 'conversation.ask', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_zeba9i7m', content: '{"pending":true}' }] },
+    { role: 'assistant', content: [{ type: 'thinking', text: 'clarify' }, { type: 'text', text: 'Which ones?' }, { type: 'tool_use', id: 'call_1lyf033q', name: 'conversation.ask', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1lyf033q', is_error: true, content: NOT_EXECUTED }] },
+    { role: 'assistant', content: [{ type: 'thinking', text: 'The assistant messed up. Need to correct.' }] },
+    { role: 'user', content: [{ type: 'text', text: 'buddi (concierge)' }] },
+    { role: 'assistant', content: [{ type: 'text', text: '(This turn failed before I could answer, and you were shown the error.)' }] },
+    { role: 'user', content: [{ type: 'text', text: 'try again' }] },
+  ];
+
+  it('never sends an assistant message with neither content nor tool calls', async () => {
+    const { sent } = await send({ system: 'sys', messages: poisoned, tools: ask });
+    const messages = sent.messages as { role: string; content: unknown; tool_calls?: unknown[] }[];
+    for (const m of messages) {
+      if (m.role === 'assistant') expect(m.content !== null || (m.tool_calls?.length ?? 0) > 0).toBe(true);
+      if (m.role !== 'assistant') expect(m.content).not.toBeNull();
+    }
+    // The thinking-only turn is gone; the not-executed result is answered and
+    // the owner's next words follow it directly.
+    const i = messages.findIndex((m) => m.role === 'tool' && (m as { tool_call_id?: string }).tool_call_id === 'call_1lyf033q');
+    expect(messages[i]).toMatchObject({ role: 'tool', content: `error: ${NOT_EXECUTED}` });
+    expect(messages[i + 1]).toEqual({ role: 'user', content: 'buddi (concierge)' });
+    expect(messages.at(-1)).toEqual({ role: 'user', content: 'try again' });
+    expect(messages.filter((m) => m.role === 'assistant')).toHaveLength(6);
+  });
+
+  it('merges the owner turns a dropped turn left side by side', async () => {
+    const { sent } = await send({
+      system: '',
+      tools: [],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'first' }] },
+        { role: 'assistant', content: [{ type: 'thinking', text: 'only thoughts' }] },
+        { role: 'user', content: [{ type: 'text', text: 'second' }, { type: 'image', mime: 'image/png', data: 'AAAA' }] },
+      ],
+    });
+    expect(sent.messages).toEqual([
+      { role: 'user', content: [
+        { type: 'text', text: 'first' },
+        { type: 'text', text: 'second' },
+        { type: 'image_url', image_url: { url: dataUrl('image/png', 'AAAA') } },
+      ] },
+    ]);
+  });
+});
