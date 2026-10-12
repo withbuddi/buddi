@@ -362,6 +362,21 @@ fn removal_tick(app: &AppHandle, up: bool) {
     }
 }
 
+/// The newest backup archive in these folders (not its envelope or passphrase file).
+fn newest_backup(dirs: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    dirs.iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.starts_with("buddi-backup-") && !name.ends_with(".json") && !name.ends_with(".txt")
+        })
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, p)| p)
+}
+
 /// buddi is removed: the last page, with where the backup and its passphrase
 /// are, until the owner closes the window (which then quits the app).
 pub fn removed(app: &AppHandle) {
@@ -369,7 +384,12 @@ pub fn removed(app: &AppHandle) {
     with(app, |s| s.shown = None);
     // "Keep my data for a reinstall": the data folder, with its last backup, is still there.
     match buddi::data_dir().filter(|d| d.join("installation.json").is_file()) {
-        Some(data) => placeholder(app, "kept", &data.display().to_string()),
+        Some(data) => {
+            let home = dirs::home_dir().map(|h| h.join("buddi-backups"));
+            let last = newest_backup(&[Some(data.join("backups")), home].into_iter().flatten().collect::<Vec<_>>());
+            let detail = format!("{}\n{}", data.display(), last.map(|p| p.display().to_string()).unwrap_or_default());
+            placeholder(app, "kept", &detail)
+        }
         None => placeholder(app, "removed", &backups_dir()),
     }
     platform::show_main(app);
