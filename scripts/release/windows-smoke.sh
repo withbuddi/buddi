@@ -10,6 +10,8 @@
 #
 # Runs on Windows (Git Bash), in an account with no buddi.
 set -euo pipefail
+# Git Bash rewrites an argument that starts with / into a path (/VERYSILENT → C:/Program Files/Git/VERYSILENT): not here.
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
 
 SETUP="${1:?usage: windows-smoke.sh <setup.exe> [<newer setup.exe>]}"
 NEWER="${2:-}"
@@ -21,7 +23,7 @@ LOGS="${RUNNER_TEMP:-/tmp}/windows-smoke"
 mkdir -p "$LOGS"
 
 die() { printf '::error::%s\n' "$*"; exit 1; }
-buddi() { cmd //d //c call "$(cygpath -w "$BUDDI")" "$@"; }
+buddi() { cmd /d /c call "$(cygpath -w "$BUDDI")" "$@"; }
 setup() { # <exe> <log name>
   "$1" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOSTART "/LOG=$(cygpath -w "$LOGS/$2.log")" \
     || { cat "$LOGS/$2.log"; cat "$DATA/logs/setup.log" 2>/dev/null || true; die "$(basename "$1") failed"; }
@@ -33,7 +35,7 @@ v1="$(basename "$SETUP" | sed -E 's/^buddi-(.*)-windows-x64-setup\.exe$/\1/')"
 echo "== install $v1"
 setup "$SETUP" install
 [ -f "$BUDDI" ] || die "the setup wrote no $BUDDI"
-reg query 'HKCU\Environment' //v Path | grep -qi 'Programs\\buddi\\bin' || die "the user PATH does not name $APP/bin"
+reg query 'HKCU\Environment' /v Path | grep -qi 'Programs\\buddi\\bin' || die "the user PATH does not name $APP/bin"
 [ -f "$(cygpath -u "$APPDATA")/Microsoft/Windows/Start Menu/Programs/buddi.lnk" ] || die "no Start menu item"
 buddi --version | tee "$LOGS/version.txt"
 grep -q "buddi $v1" "$LOGS/version.txt" || die "buddi --version does not say $v1"
@@ -65,8 +67,8 @@ for _ in $(seq 1 300); do [ -e "$APP/unins000.exe" ] || break; sleep 1; done
 sleep 2
 [ ! -e "$APP" ] || { ls -R "$APP"; cat "$LOGS/uninstall.log"; die "the uninstall left $APP"; }
 [ ! -e "$DATA" ] || { ls "$DATA"; cat "$LOGS/uninstall.log"; die "the uninstall left $DATA"; }
-reg query 'HKCU\Environment' //v Path | grep -qi 'Programs\\buddi\\bin' && die "the uninstall left $APP/bin on the user PATH"
+reg query 'HKCU\Environment' /v Path | grep -qi 'Programs\\buddi\\bin' && die "the uninstall left $APP/bin on the user PATH"
 ls "$(cygpath -u "$USERPROFILE")/buddi-backups" | tee "$LOGS/kept.txt"
 grep -q '^buddi-backup-' "$LOGS/kept.txt" || die "no last backup kept in buddi-backups"
-schtasks //Query //FO LIST | grep -qi 'com.buddi.install' && die "a buddi task is still registered"
+schtasks /Query /FO LIST | grep -qi 'com.buddi.install' && die "a buddi task is still registered"
 echo "Windows setup: install, start, doctor${NEWER:+, upgrade}, uninstall all passed."

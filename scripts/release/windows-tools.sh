@@ -12,6 +12,8 @@
 #
 # Writes ISCC=<path> and VCRUNTIME_DIR=<dir> to $GITHUB_ENV (or prints them).
 set -euo pipefail
+# Git Bash rewrites an argument that starts with / into a path (/VERYSILENT → C:/Program Files/Git/VERYSILENT): not here.
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
 
 INNO_VERSION=6.7.3
 INNO_SHA256=9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
