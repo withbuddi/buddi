@@ -323,14 +323,15 @@ main() {
       dim "BUDDI_SKIP_BACKUP=1: no backup of $DATA before the switch."
     elif [ "$HAVE_OLD" = 0 ] && kept_for_reinstall; then
       # "Keep my data for a reinstall": the buddi that could back it up is gone, which is the point of keeping it.
+      # The uninstall keeps its last backup in the data folder's backups, or in ~/buddi-backups when the dashboard took it.
       LAST=""
-      for f in "$DATA"/backups/buddi-backup-*; do
+      for f in "$DATA"/backups/buddi-backup-* "$HOME"/buddi-backups/buddi-backup-*; do
         case "$f" in *.json|*.txt) continue;; esac
         [ -f "$f" ] || continue
         if [ -z "$LAST" ] || [ "$f" -nt "$LAST" ]; then LAST="$f"; fi
       done
       if [ -n "$LAST" ]; then note "no new backup first: the buddi that wrote this data was removed, and only it could back up its database as it is. The last backup it took is $LAST. The install leaves the data folder as it is; buddi $NEW_VERSION starts on it."
-      else note "no new backup first: the buddi that wrote this data was removed, and only it could back up its database as it is; it left no backup in $DATA/backups. The install leaves the data folder as it is; buddi $NEW_VERSION starts on it."
+      else note "no new backup first: the buddi that wrote this data was removed, and only it could back up its database as it is; it left no backup in $DATA/backups or ~/buddi-backups. The install leaves the data folder as it is; buddi $NEW_VERSION starts on it."
       fi
     elif [ "$HAVE_OLD" = 0 ]; then
       die "$DATA holds a buddi installation, but no buddi here can back it up first (no release under $RELEASES, no npm copy serving it). Nothing was changed. To go on without a backup: BUDDI_SKIP_BACKUP=1"

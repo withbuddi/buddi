@@ -13,7 +13,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { pointAt, releaseDir, releaseRoot } from './app-layout.js';
 import { buildWindowsCommand } from './windows-install.js';
-import { Said, SetupError, install, parseSetupArgs } from './windows-setup.js';
+import { Said, SetupError, install, lastKeptBackup, parseSetupArgs } from './windows-setup.js';
 import type { InstallDeps, Run } from './windows-setup.js';
 
 const dirs: string[] = [];
@@ -179,6 +179,15 @@ describe('the setup over data kept by an uninstall ("Keep my data for a reinstal
     expect(await readFile(path.join(data, 'postgres', 'PG_VERSION'), 'utf8')).toBe('17\n');
     expect(existsSync(path.join(data, 'kept-for-reinstall.json'))).toBe(false);
     expect(await target(path.join(data, 'releases', 'current'))).toBe(releaseRoot(releaseDir(path.join(data, 'releases'), '0.1.0-pre.55')));
+  });
+
+  test('the last backup is the newest of the data folder\'s backups and buddi-backups (where the dashboard\'s removal keeps it)', () => {
+    const lists: Record<string, Array<{ name: string; mtimeMs: number }>> = {
+      '/d/backups': [{ name: 'buddi-backup-1.tar.gz.age', mtimeMs: 1 }],
+      '/h/buddi-backups': [{ name: 'buddi-backup-2.tar.gz.age', mtimeMs: 2 }, { name: 'buddi-backup-2.tar.gz.age.passphrase.txt', mtimeMs: 3 }],
+    };
+    expect(lastKeptBackup(['/d/backups', '/h/buddi-backups'], dir => lists[dir] ?? [])).toBe(path.join('/h/buddi-backups', 'buddi-backup-2.tar.gz.age'));
+    expect(lastKeptBackup(['/none'], () => [])).toBeUndefined();
   });
 
   test('a data folder that is not one an uninstall kept still asks for /SKIPBACKUP', async () => {

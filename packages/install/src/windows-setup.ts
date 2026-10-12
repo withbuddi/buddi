@@ -125,6 +125,20 @@ export function setupPlan(f: SetupFacts): SetupPlan {
   return { kind, backup, old, ...(from === undefined ? {} : { from }) };
 }
 
+/** The newest backup archive in any of these folders (the uninstall keeps its last one in the data folder's backups, or in buddi-backups when the dashboard took it). */
+export function lastKeptBackup(dirs: string[], list: (dir: string) => Array<{ name: string; mtimeMs: number }> = dir => {
+  try { return readdirSync(dir).map(name => ({ name, mtimeMs: statSync(path.join(dir, name)).mtimeMs })); } catch { return []; }
+}): string | undefined {
+  let best: { file: string; mtimeMs: number } | undefined;
+  for (const dir of dirs) {
+    const entries = list(dir);
+    const name = newestArchive(entries);
+    const entry = entries.find(e => e.name === name);
+    if (name !== undefined && entry !== undefined && (best === undefined || entry.mtimeMs > best.mtimeMs)) best = { file: path.join(dir, name), mtimeMs: entry.mtimeMs };
+  }
+  return best?.file;
+}
+
 /** The newest archive in `<data>\backups` (not an envelope or a passphrase file). */
 export function newestArchive(names: Array<{ name: string; mtimeMs: number }>): string | undefined {
   const archives = names.filter(entry => entry.name.startsWith('buddi-backup-') && !/\.(json|txt)$/i.test(entry.name));
@@ -369,9 +383,8 @@ export async function install(args: SetupArgs, said: Said, deps: InstallDeps = r
   }
   if (plan.backup === 'skipped') say(`No backup of ${data} before the switch (asked for).`);
   if (plan.backup === 'kept') {
-    const names = (() => { try { return readdirSync(path.join(data, 'backups')).map(name => ({ name, mtimeMs: statSync(path.join(data, 'backups', name)).mtimeMs })); } catch { return []; } })();
-    const last = newestArchive(names);
-    say(`No new backup first: the buddi that wrote this data was removed, and only it could back up its database as it is. ${last !== undefined ? `The last backup it took is ${path.join(data, 'backups', last)}.` : 'It left no backup in its backups folder.'} The install leaves the data folder as it is; buddi ${newVersion} starts on it.`);
+    const last = lastKeptBackup([path.join(data, 'backups'), path.join(os.homedir(), 'buddi-backups')]);
+    say(`No new backup first: the buddi that wrote this data was removed, and only it could back up its database as it is. ${last !== undefined ? `The last backup it took is ${last}.` : 'It left no backup in its backups folder or in buddi-backups.'} The install leaves the data folder as it is; buddi ${newVersion} starts on it.`);
   }
   if (plan.backup === 'take') {
     if (await deps.status(data) === undefined) {
