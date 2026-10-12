@@ -210,3 +210,15 @@ describe('the setup program', () => {
     expect(sentence).toContain('buddi backup restore buddi-backup-1.tar.gz.age');
   });
 });
+
+describe('the setup program, run', () => {
+  test('runs when node names it through current (a junction), not only by its own path', async () => {
+    const { runAsProgram } = await import('./windows-setup.js');
+    const real = (file: string): string => file.replace('\\current\\', '\\buddi-0.1.0-pre.55\\node_modules\\@withbuddi\\buddi\\');
+    const self = 'C:\\d\\releases\\buddi-0.1.0-pre.55\\node_modules\\@withbuddi\\buddi\\packages\\install\\dist\\windows-setup.js';
+    expect(runAsProgram('C:\\d\\releases\\current\\packages\\install\\dist\\windows-setup.js', self, real)).toBe(true);
+    expect(runAsProgram(self.toUpperCase(), self, file => file)).toBe(true);
+    expect(runAsProgram('C:\\other.js', self, real)).toBe(false);
+    expect(runAsProgram(undefined, self, real)).toBe(false);
+  });
+});

@@ -497,7 +497,11 @@ export async function main(argv: readonly string[]): Promise<number> {
   return code;
 }
 
-// Run as a program (not imported by a test). Windows paths ignore case.
-if (process.argv[1] !== undefined && path.resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase()) {
+/** Is this module the program node was asked to run? Named through `current` (a junction) it is still this file; Windows paths ignore case. */
+export function runAsProgram(argv1: string | undefined, self: string, resolve: (file: string) => string = file => { try { return realpathSync(file); } catch { return path.resolve(file); } }): boolean {
+  return argv1 !== undefined && resolve(argv1).toLowerCase() === resolve(self).toLowerCase();
+}
+
+if (runAsProgram(process.argv[1], fileURLToPath(import.meta.url))) {
   main(process.argv.slice(2)).then(code => { process.exitCode = code; }, error => { console.error(error); process.exitCode = 1; });
 }
