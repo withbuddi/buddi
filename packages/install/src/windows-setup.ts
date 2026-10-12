@@ -260,6 +260,10 @@ async function install(args: SetupArgs, said: Said): Promise<number> {
   if (typeof named === 'string' && named !== data && real(named)?.toLowerCase() === real(data)?.toLowerCase()) data = named;
   const releases = path.join(data, 'releases');
   const nodeDir = path.join(data, 'node');
+  // What an earlier setup could not clean up (a scanner held a file): any unpacked bundle but this one.
+  for (const name of readdirSync(data)) {
+    if (name.startsWith('.install-') && !insideFolder(bundle, path.join(data, name))) await rm(path.join(data, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+  }
   const env = (): NodeJS.ProcessEnv => ({ ...process.env, ...windowsInstallEnvironment(data), PATH: windowsInstallPath(data, process.env.PATH ?? process.env.Path), Path: undefined });
   const command = path.join(bin, 'buddi.cmd');
 
