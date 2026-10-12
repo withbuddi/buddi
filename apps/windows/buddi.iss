@@ -1,0 +1,283 @@
+﻿; buddi for Windows: buddi-<version>-windows-x64-setup.exe (Inno Setup 6).
+;
+; One download a person double-clicks: no administrator, no Node, no terminal.
+; It carries the bundle scripts/release/windows-bundle.sh builds (Node with npm,
+; the Visual C++ runtime Postgres needs, the npm release with its embedded
+; Postgres) and hands it to the release's own program,
+; packages/install/src/windows-setup.ts, which does what scripts/install.sh
+; does on Linux: a backup of existing data first, the releases lock, the
+; switch of `current` (a junction), the start, and the way back if the new
+; release does not start. Everything is per user:
+;
+;   %LOCALAPPDATA%\Programs\buddi\       this setup's files: bin\buddi.cmd (on the user PATH),
+;                                        buddi.ico, unins000.exe (Settings → Apps)
+;   %LOCALAPPDATA%\buddi\                the data directory, as every buddi on Windows has it,
+;                                        with node\ and releases\ in it (or BUDDI_DATA_DIR)
+;   Start menu → buddi                   opens the dashboard (buddi.cmd, under a hidden console)
+;   Task Scheduler → com.buddi.install.<id>   starts buddi at sign-in (written by buddi itself)
+;
+; Running a newer setup over an installed one upgrades it (a backup first).
+; Uninstalling from Settings → Apps runs `buddi uninstall`: one last backup,
+; kept in %USERPROFILE%\buddi-backups with its passphrase, then the task, the
+; data and the secrets, then this setup's files and the PATH entry.
+;
+; Command line (all optional):
+;   /VERYSILENT /SUPPRESSMSGBOXES   no wizard (Inno Setup's own switches)
+;   /NOSTART                        install, but leave buddi stopped (also BUDDI_NO_START=1)
+;   /SKIPBACKUP                     go on without the backup of existing data (not advised)
+;
+; Built by the release workflow (and windows.yml for a branch):
+;   iscc /DAppVersion=0.1.0-pre.54 /DVersionInfo=0.1.0.54 /DBundleZip=<zip> /DOutputDir=<dir> apps\windows\buddi.iss
+;
+; Signing: unsigned for now (SmartScreen warns once per download). To sign,
+; define a sign tool on the iscc line and pass its name here, for example
+;   iscc "/Sbuddisign=signtool.exe sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f cert.pfx /p {pw} $f" /DSignTool=buddisign …
+; and the setup and its uninstaller are both signed.
+
+#ifndef AppVersion
+  #error Pass /DAppVersion=<buddi version>
+#endif
+#ifndef VersionInfo
+  #error Pass /DVersionInfo=<four numbers> (scripts/release/bundle-version.mjs)
+#endif
+#ifndef BundleZip
+  #error Pass /DBundleZip=<buddi-version-windows-x64.zip>
+#endif
+#ifndef OutputDir
+  #define OutputDir "."
+#endif
+
+[Setup]
+AppId={{6F1C9A52-3B7E-4D8A-9E25-B0D7C4F81A36}
+AppName=buddi
+AppVersion={#AppVersion}
+AppVerName=buddi {#AppVersion}
+AppPublisher=buddi
+AppPublisherURL=https://withbuddi.com
+AppSupportURL=https://withbuddi.com
+AppUpdatesURL=https://withbuddi.com
+VersionInfoVersion={#VersionInfo}
+VersionInfoProductName=buddi
+VersionInfoDescription=buddi setup
+DefaultDirName={autopf}\buddi
+DisableDirPage=yes
+DisableProgramGroupPage=yes
+DisableWelcomePage=no
+PrivilegesRequired=lowest
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+; Windows 10 1809: tar.exe and conhost --headless, which the setup and buddi's task both use.
+MinVersion=10.0.17763
+OutputDir={#OutputDir}
+OutputBaseFilename=buddi-{#AppVersion}-windows-x64-setup
+SetupIconFile=buddi.ico
+UninstallDisplayIcon={app}\buddi.ico
+UninstallDisplayName=buddi
+WizardStyle=modern
+Compression=lzma2
+SolidCompression=no
+; buddi stops itself, on its pipe, before anything of it is replaced; Restart
+; Manager would end the database without a shutdown.
+CloseApplications=no
+RestartApplications=no
+ChangesEnvironment=yes
+SetupLogging=yes
+#ifdef SignTool
+SignTool={#SignTool}
+SignedUninstaller=yes
+#endif
+
+[Messages]
+WelcomeLabel2=This installs buddi [ver] for you on this computer. It needs no administrator rights and nothing else installed.%n%nbuddi runs in the background and you use it in your browser.
+FinishedHeadingLabel=buddi is installed
+FinishedLabelNoIcons=buddi runs in the background and starts when you sign in. Open it from the Start menu (buddi), or type buddi in a new Command Prompt or PowerShell window.
+FinishedLabel=buddi runs in the background and starts when you sign in. Open it from the Start menu (buddi), or type buddi in a new Command Prompt or PowerShell window.
+ConfirmUninstall=This removes buddi from this computer: its background task, its data and its secrets.%n%nOne last backup is taken first and kept in your user folder (buddi-backups), with the passphrase that opens it.%n%nRemove buddi?
+
+[Files]
+Source: "buddi.ico"; DestDir: "{app}"; Flags: ignoreversion
+; Unpacked by the code below (PrepareToInstall), never copied as it is.
+Source: "{#BundleZip}"; DestName: "bundle.zip"; Flags: dontcopy nocompression
+
+[Icons]
+Name: "{autoprograms}\buddi"; Filename: "{sys}\conhost.exe"; Parameters: "--headless ""{sys}\cmd.exe"" /d /c call ""{app}\bin\buddi.cmd"""; WorkingDir: "{%USERPROFILE}"; IconFilename: "{app}\buddi.ico"; Comment: "Open buddi in your browser"
+
+[Run]
+Filename: "{sys}\conhost.exe"; Parameters: "--headless ""{sys}\cmd.exe"" /d /c call ""{app}\bin\buddi.cmd"""; WorkingDir: "{%USERPROFILE}"; Description: "Open buddi"; Flags: postinstall nowait; Check: ShouldStart
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\bin"
+
+[Code]
+var
+  DataDirValue: String;
+
+function HasParam(const Name: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), Name) = 0 then Result := True;
+end;
+
+function ShouldStart: Boolean;
+begin
+  Result := not HasParam('/NOSTART') and (GetEnv('BUDDI_NO_START') <> '1');
+end;
+
+function DataDir: String;
+begin
+  if DataDirValue = '' then begin
+    DataDirValue := GetEnv('BUDDI_DATA_DIR');
+    if DataDirValue = '' then DataDirValue := ExpandConstant('{localappdata}\buddi');
+  end;
+  Result := DataDirValue;
+end;
+
+{ A program run with no console window at all (conhost --headless), waited for.
+  conhost does not pass the exit status on: what it ran says how it went in a file. }
+procedure RunHidden(const Program, Params: String);
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\conhost.exe'), '--headless ' + AddQuotes(Program) + ' ' + Params, GetEnv('USERPROFILE'), SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+function ReadFirstLine(const FileName: String): String;
+var
+  Lines: TArrayOfString;
+begin
+  Result := '';
+  if LoadStringsFromFile(FileName, Lines) and (GetArrayLength(Lines) > 0) then Result := Trim(Lines[0]);
+end;
+
+{ The last lines of a log, for a message box. }
+function Tail(const FileName: String; Count: Integer): String;
+var
+  Lines: TArrayOfString;
+  I, First: Integer;
+begin
+  Result := '';
+  if not LoadStringsFromFile(FileName, Lines) then exit;
+  First := GetArrayLength(Lines) - Count;
+  if First < 0 then First := 0;
+  for I := First to GetArrayLength(Lines) - 1 do
+    if Trim(Lines[I]) <> '' then Result := Result + Lines[I] + #13#10;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Work, Bundle, Node, Script, Params, LogFile, ResultFile: String;
+begin
+  Result := '';
+  { Unpacked inside the data folder, so the setup program moves it into place with a rename. }
+  Work := DataDir + '\.install-' + GetDateTimeString('yyyymmddhhnnss', #0, #0);
+  if not ForceDirectories(Work) then begin
+    Result := 'buddi could not create ' + Work + '.';
+    exit;
+  end;
+  WizardForm.PreparingLabel.Caption := 'Unpacking buddi…';
+  ExtractTemporaryFile('bundle.zip');
+  RunHidden(ExpandConstant('{sys}\tar.exe'), '-xf ' + AddQuotes(ExpandConstant('{tmp}\bundle.zip')) + ' -C ' + AddQuotes(Work));
+  Bundle := Work + '\buddi-{#AppVersion}-windows-x64';
+  Node := Bundle + '\runtime\node.exe';
+  Script := Bundle + '\release\node_modules\@withbuddi\buddi\packages\install\dist\windows-setup.js';
+  if not FileExists(Node) or not FileExists(Script) then begin
+    DelTree(Work, True, True, True);
+    Result := 'buddi could not be unpacked into ' + Work + '. Nothing was changed.';
+    exit;
+  end;
+  LogFile := Work + '\setup.log';
+  ResultFile := Work + '\result.txt';
+  Params := AddQuotes(Script) + ' install --bundle ' + AddQuotes(Bundle) + ' --data ' + AddQuotes(DataDir)
+    + ' --bin ' + AddQuotes(ExpandConstant('{app}\bin')) + ' --uninstaller ' + AddQuotes(ExpandConstant('{app}\unins000.exe'))
+    + ' --log ' + AddQuotes(LogFile) + ' --result ' + AddQuotes(ResultFile);
+  if not ShouldStart then Params := Params + ' --no-start';
+  if HasParam('/SKIPBACKUP') then Params := Params + ' --skip-backup';
+  WizardForm.PreparingLabel.Caption := 'Installing buddi and starting it (a backup of your data comes first)…';
+  RunHidden(Node, Params);
+  Log('buddi setup log:' + #13#10 + Tail(LogFile, 200));
+  if ReadFirstLine(ResultFile) <> '0' then
+    Result := 'buddi could not be installed.' + #13#10#13#10 + Tail(LogFile, 12);
+  { What it said stays beside the other logs. }
+  ForceDirectories(DataDir + '\logs');
+  FileCopy(LogFile, DataDir + '\logs\setup.log', False);
+  DelTree(Work, True, True, True);
+end;
+
+{ The user PATH (HKCU\Environment), with this setup's bin folder once. }
+function PathHas(const Path, Dir: String): Boolean;
+begin
+  Result := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Path) + ';') > 0;
+end;
+
+procedure AddToPath(const Dir: String);
+var
+  Path: String;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Path) then Path := '';
+  if PathHas(Path, Dir) then exit;
+  if (Path <> '') and (Copy(Path, Length(Path), 1) <> ';') then Path := Path + ';';
+  RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Path + Dir);
+end;
+
+procedure RemoveFromPath(const Dir: String);
+var
+  Path: String;
+  P: Integer;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Path) then exit;
+  Path := ';' + Path + ';';
+  P := Pos(';' + Uppercase(Dir) + ';', Uppercase(Path));
+  if P = 0 then exit;
+  Delete(Path, P, Length(Dir) + 1);
+  Path := Copy(Path, 2, Length(Path) - 2);
+  RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Path);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then begin
+    AddToPath(ExpandConstant('{app}\bin'));
+    RegWriteStringValue(HKCU, 'Software\buddi', 'DataDir', DataDir);
+  end;
+end;
+
+{ buddi uninstall, with a copy of buddi's node from outside the data folder (Windows will not remove a folder whose program runs). }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Data, Node, Script, Work, LogFile, Summary, ResultFile, Words: String;
+begin
+  if CurUninstallStep = usUninstall then begin
+    if not RegQueryStringValue(HKCU, 'Software\buddi', 'DataDir', Data) then Data := ExpandConstant('{localappdata}\buddi');
+    Node := Data + '\node\node.exe';
+    Script := Data + '\releases\current\packages\install\dist\windows-setup.js';
+    { Already removed (buddi uninstall from a terminal or the dashboard started this): only the setup's own files are left. }
+    if not FileExists(Node) or not FileExists(Script) then exit;
+    Work := AddBackslash(GetTempDir) + 'buddi-uninstall-' + GetDateTimeString('yyyymmddhhnnss', #0, #0);
+    ForceDirectories(Work);
+    if not FileCopy(Node, Work + '\node.exe', False) then begin
+      if not UninstallSilent then MsgBox('buddi could not be removed: its node could not be copied to ' + Work + '. Nothing was removed.', mbError, MB_OK);
+      Abort;
+    end;
+    LogFile := Work + '\uninstall.log';
+    Summary := Work + '\summary.txt';
+    ResultFile := Work + '\result.txt';
+    RunHidden(Work + '\node.exe', AddQuotes(Script) + ' uninstall --data ' + AddQuotes(Data) + ' --log ' + AddQuotes(LogFile)
+      + ' --summary ' + AddQuotes(Summary) + ' --result ' + AddQuotes(ResultFile));
+    Log('buddi uninstall log:' + #13#10 + Tail(LogFile, 200));
+    if ReadFirstLine(ResultFile) <> '0' then begin
+      if not UninstallSilent then
+        MsgBox('buddi could not be removed, so nothing else was either.' + #13#10#13#10 + Tail(LogFile, 12), mbError, MB_OK);
+      Abort;
+    end;
+    Words := Tail(Summary, 20);
+    if (Words <> '') and not UninstallSilent then MsgBox(Words, mbInformation, MB_OK);
+    DelTree(Work, True, True, True);
+  end;
+  if CurUninstallStep = usPostUninstall then begin
+    RemoveFromPath(ExpandConstant('{app}\bin'));
+    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\buddi');
+  end;
+end;

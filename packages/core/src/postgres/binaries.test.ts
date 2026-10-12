@@ -8,11 +8,11 @@
  * it describes actually created. Making those links is this module's job, and
  * this is the test that says so.
  */
-import { chmod, mkdir, mkdtemp, readlink, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readlink, symlink, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { BINARY_VERSION, prepareBinaries } from './binaries.js';
+import { BINARY_VERSION, defaultVcRuntime, placeVcRuntime, prepareBinaries } from './binaries.js';
 
 // Skipped on Windows: fake POSIX binaries and library links; Windows ships .exe files and no links.
 const POSIX_ONLY = process.platform === 'win32';
@@ -84,5 +84,27 @@ describe.skipIf(POSIX_ONLY)('the runtime copy of the Postgres binaries', () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), 'buddi-bindata-'));
     await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'buddi', version: '0.1.0' }));
     await expect(prepareBinaries({ root, dataDir, env: process.env })).rejects.toThrow(/Postgres binaries missing/);
+  });
+});
+
+describe('the Visual C++ runtime beside the Windows binaries', () => {
+  test('copies the DLLs that are missing, once, and only on Windows', async () => {
+    const source = await mkdtemp(path.join(os.tmpdir(), 'buddi-vcrt-'));
+    const bin = await mkdtemp(path.join(os.tmpdir(), 'buddi-pgbin-'));
+    for (const name of ['vcruntime140.dll', 'vcruntime140_1.dll', 'MSVCP140.dll', 'README.txt']) await writeFile(path.join(source, name), name);
+    await writeFile(path.join(bin, 'vcruntime140.dll'), 'already here');
+    expect(await placeVcRuntime(bin, source, 'darwin')).toEqual([]);
+    expect((await placeVcRuntime(bin, source, 'win32')).sort()).toEqual(['MSVCP140.dll', 'vcruntime140_1.dll']);
+    expect(await readFile(path.join(bin, 'vcruntime140.dll'), 'utf8')).toBe('already here');
+    expect(await placeVcRuntime(bin, source, 'win32')).toEqual([]);
+  });
+
+  test('a folder that is not there places nothing (an npm install brings no runtime)', async () => {
+    const bin = await mkdtemp(path.join(os.tmpdir(), 'buddi-pgbin-'));
+    expect(await placeVcRuntime(bin, path.join(bin, 'nowhere'), 'win32')).toEqual([]);
+  });
+
+  test('is looked for beside the node that runs buddi', () => {
+    expect(defaultVcRuntime(path.join('/data', 'node', 'node.exe'))).toBe(path.join('/data', 'node', 'vcruntime'));
   });
 });

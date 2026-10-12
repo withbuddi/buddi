@@ -23,6 +23,7 @@ import type { RemovalStep, UninstallIo, UninstallPlan } from '@buddi/core/uninst
 import { identityMismatch, launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
 import type { InstallationState } from './environment.js';
 import { windowsTaskName, windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
+import { SETUP_UNINSTALL_ARGS } from './windows-install.js';
 
 export interface UninstallOptions {
   yes: boolean;
@@ -140,6 +141,14 @@ export interface PackagedUninstallDeps {
    * and `installer.json` says whether the installer turned on lingering.
    */
   linuxInstall?: LinuxInstallParts;
+  /**
+   * The Windows install (the setup, apps/windows): its program files live in
+   * the data directory as on Linux, its `buddi.cmd` and its uninstaller in
+   * %LOCALAPPDATA%\Programs\buddi.
+   */
+  windowsInstall?: WindowsInstallParts;
+  /** Start a program and leave it running (the setup's uninstaller, which outlives this process). */
+  launch?: (command: string, args: string[]) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   io: UninstallIo;
 }
@@ -155,6 +164,20 @@ export interface LinuxInstallParts {
   linger?: boolean;
   /** The app-grid and autostart entries the installer wrote (marked as its own). */
   desktopEntries?: string[];
+}
+
+export interface WindowsInstallParts {
+  runtime: string;
+  releases: string;
+  /** `buddi.cmd`, when it is still there and still this installation's. */
+  command?: string;
+  commandOwned?: () => boolean;
+  /**
+   * The setup's uninstaller (`unins000.exe`), started at the end to remove the
+   * Apps & Features entry, the Start menu item, PATH and `buddi.cmd`. Absent
+   * when that uninstaller is the one running this.
+   */
+  uninstaller?: string;
 }
 
 /** What the data directory holds, named for the owner: only what is there. */
@@ -184,6 +207,9 @@ export const PACKAGE_LINE = 'Now remove the package: npm uninstall -g @withbuddi
 
 /** The last line for the Linux install: nothing is left to remove by hand. */
 export const LINUX_LAST_LINE = 'buddi is removed. To install it again: curl -fsSL https://withbuddi.com/install.sh | sh';
+
+/** The last line for the Windows install: its uninstaller finishes the rest. */
+export const WINDOWS_LAST_LINE = 'buddi is removed. To install it again, download the setup from https://withbuddi.com';
 
 /** The last line when buddi.app owns the installation: the app is what is left. */
 export const APP_LAST_LINE = 'Now move buddi.app to the Trash.';
@@ -403,6 +429,38 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
     }
   }
 
+  /* The Windows install: the program, its command, and the setup's own entry. */
+  if (deps.windowsInstall) {
+    const windows = deps.windowsInstall;
+    if (options.keepData) {
+      const parts = [windows.runtime, windows.releases].filter(file => deps.exists(file));
+      if (parts.length > 0) {
+        steps.push({
+          line: `the program: ${list(parts)}`,
+          run: async () => {
+            if (!stopped) throw new Error('it was left in place because the service did not stop');
+            for (const part of parts) await deps.remove(part);
+          },
+        });
+      }
+    }
+    if (windows.uninstaller !== undefined && deps.launch !== undefined) {
+      // Started last and left running: it removes buddi.cmd too, once this command has returned.
+      const uninstaller = windows.uninstaller;
+      const launch = deps.launch;
+      steps.push({ line: `buddi in Apps & Features and the Start menu, buddi.cmd and its PATH entry (${uninstaller})`, bestEffort: true, run: async () => {
+        if (!stopped) throw new Error('it was left in place because the service did not stop');
+        await launch(uninstaller, SETUP_UNINSTALL_ARGS);
+      } });
+    } else if (windows.command !== undefined) {
+      const command = windows.command;
+      steps.push({ line: `the buddi command ${command}`, bestEffort: true, run: async () => {
+        if (windows.commandOwned !== undefined && !windows.commandOwned()) throw new Error('it now runs another installation, so it stays');
+        await deps.remove(command);
+      } });
+    }
+  }
+
   /* buddi.app's command line tool: a buddi on PATH that would run nothing once this is gone. */
   if (deps.shims) {
     const shims = deps.shims;
@@ -429,7 +487,7 @@ export async function uninstallPackaged(options: UninstallOptions, deps: Package
     heading: `This removes buddi from ${machine}:`,
     steps,
     notes,
-    last: app === 'installed' ? APP_LAST_LINE : deps.linuxInstall ? LINUX_LAST_LINE : PACKAGE_LINE,
+    last: app === 'installed' ? APP_LAST_LINE : deps.linuxInstall ? LINUX_LAST_LINE : deps.windowsInstall ? WINDOWS_LAST_LINE : PACKAGE_LINE,
     prepare: async () => {
       const lines: string[] = [];
       // The vault that keeps the passphrase goes with the secrets (and with the data directory on Linux).

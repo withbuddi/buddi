@@ -23,7 +23,7 @@
 # version (`v0.1.0`) goes under `latest`. The GitHub release is created in
 # the same run, marked latest until a stable version exists, with the
 # tarball, the Chrome Web Store zip of the extension and the Linux install
-# script attached. Computer control (the macOS helper) is not in it: it is
+# script attached (the linux, desktop and windows jobs add their builds). Computer control (the macOS helper) is not in it: it is
 # the Computer plugin, built and published from withbuddi/buddi-plugins.
 #
 # Once, on npmjs.com: package `@withbuddi/buddi` → Settings → Publishing access →
@@ -231,7 +231,8 @@ jobs:
 
           npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }}).
           Linux: \`curl -fsSL https://withbuddi.com/install.sh | BUDDI_VERSION=${{ steps.v.outputs.version }} sh\` (the linux-x64 and linux-arm64 tarballs below, attached by the linux job).
-          Linux desktop app: \`buddi-desktop-${{ steps.v.outputs.version }}-linux-<arch>.deb\` (\`sudo apt install ./buddi-desktop-…deb\`) or the AppImage, attached by the desktop job; it opens the buddi installed by the line above."
+          Linux desktop app: \`buddi-desktop-${{ steps.v.outputs.version }}-linux-<arch>.deb\` (\`sudo apt install ./buddi-desktop-…deb\`) or the AppImage, attached by the desktop job; it opens the buddi installed by the line above.
+          Windows (for testing): \`buddi-${{ steps.v.outputs.version }}-windows-x64-setup.exe\`, attached by the windows job; per user, no administrator, x64 and Windows on Arm. Unsigned for now: SmartScreen asks once (More info → Run anyway)."
           gh release create "v${{ steps.v.outputs.version }}" --verify-tag $pre --title "buddi ${{ steps.v.outputs.version }}" \
             --notes "$notes" \
             "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install.sh
@@ -363,6 +364,63 @@ jobs:
           gh release view "v$VERSION" >/dev/null || { echo "::error::v$VERSION has no GitHub release to attach to"; exit 1; }
           # install.sh is attached once, by the publish job; both legs here would race on it.
           gh release upload "v$VERSION" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz" "build/linux/buddi-$VERSION-linux-$ARCH.tar.gz.sha256" --clobber
+
+  # The Windows setup (apps/windows, docs/install.md): the zip
+  # scripts/release/windows-bundle.sh builds (the Node buddi.app pins, with npm
+  # and the Visual C++ runtime beside it; this version's npm tarball, integrity
+  # and provenance checked; its embedded Postgres), wrapped by Inno Setup
+  # (pinned in scripts/release/windows-tools.sh) into
+  # buddi-<version>-windows-x64-setup.exe: per user, no administrator. Both are
+  # smoke-installed on the runner (install, doctor, uninstall) before they are
+  # attached to the GitHub release with their .sha256. Unsigned for now
+  # (SmartScreen warns); apps/windows/buddi.iss says how to sign. Same tag-only
+  # guard and re-run path as the linux job.
+  windows:
+    needs: [plan, publish]
+    if: always() && (needs.plan.outputs.mode == 'mac' || needs.publish.result == 'success')
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write   # the release assets
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - name: Run on the version's tag
+        run: |
+          [ "$GITHUB_REF" = "refs/tags/v$VERSION" ] || { echo "::error::Build the Windows setup from the tag v$VERSION (Run workflow on that tag), not $GITHUB_REF."; exit 1; }
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$' || { echo "::error::\"$VERSION\" is not a buddi version"; exit 1; }
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Wait for npm to serve the tarball
+        run: |
+          url="https://registry.npmjs.org/@withbuddi/buddi/-/buddi-$VERSION.tgz"
+          for i in $(seq 1 60); do
+            if curl -sfI "$url" >/dev/null; then echo "served after $i check(s)"; exit 0; fi
+            sleep 20
+          done
+          echo "::error::npm did not serve $url within 20 minutes; run this workflow again with version $VERSION"
+          exit 1
+      - name: Inno Setup and the Visual C++ runtime
+        run: scripts/release/windows-tools.sh
+      - name: Build the zip (integrity and provenance checked) and the setup
+        run: |
+          scripts/release/windows-bundle.sh "$VERSION" build/windows
+          scripts/release/windows-setup.sh "$VERSION" "build/windows/buddi-$VERSION-windows-x64.zip" build/windows
+      - name: Install, start, check, uninstall
+        run: scripts/release/windows-smoke.sh "build/windows/buddi-$VERSION-windows-x64-setup.exe"
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v$VERSION" >/dev/null || { echo "::error::v$VERSION has no GitHub release to attach to"; exit 1; }
+          gh release upload "v$VERSION" \
+            "build/windows/buddi-$VERSION-windows-x64-setup.exe" "build/windows/buddi-$VERSION-windows-x64-setup.exe.sha256" \
+            "build/windows/buddi-$VERSION-windows-x64.zip" "build/windows/buddi-$VERSION-windows-x64.zip.sha256" --clobber
 
   # The desktop app for Linux (apps/desktop, Tauri on WebKitGTK 4.1): a window
   # and a tray icon around the buddi the linux job's tarball installs. Per

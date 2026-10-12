@@ -160,8 +160,11 @@ const HTTP_EXEMPT = [
   // `upgrade.ts` is the third: an upgrade asks the successor's own socket for
   // `/status` to know the hand-over worked, and it may not import a `@buddi/*`
   // value (see the note at the top of that file), transport included.
+  // `windows-setup.ts` is the fourth: the Windows setup asks the supervisor it
+  // replaces for `/status` and `/exit` on its pipe, as the launcher does.
   /^packages\/install\/src\/launcher\.ts$/,
   /^packages\/install\/src\/upgrade\.ts$/,
+  /^packages\/install\/src\/windows-setup\.ts$/,
   /^packages\/gateway\/src\/web\/service\.ts$/,
   // The local Tailscale daemon's API, for the same reason: it lives on a Unix
   // socket in /var/run, there is no origin and so no pool to wedge, and one

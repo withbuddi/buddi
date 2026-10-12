@@ -6,16 +6,33 @@
 # against the PostgreSQL the image ships (stopped by default; user postgres,
 # password root, binaries under $PGBIN). Every suite step runs even when an
 # earlier one failed, so one run lists every failure.
+#
+# Run on demand with `installer` on, it builds the Windows setup from the
+# branch instead (`gh workflow run windows.yml --ref <branch> -f installer=true`):
+# two versions packed from this checkout (`version`, and one pre-release above
+# it), each bundled (scripts/release/windows-bundle.sh, around the local
+# tarball) and wrapped (apps/windows/buddi.iss), smoke-installed, upgraded from
+# the first to the second and uninstalled (scripts/release/windows-smoke.sh),
+# and uploaded as the run's artifact, for a VM before any tag.
 name: windows
 on:
   push:
     branches: [windows]
     paths-ignore: ['docs/**', '**/*.md', 'feedback/**']
   workflow_dispatch:
+    inputs:
+      installer:
+        description: 'Build and smoke the Windows setup from this branch instead of running the suites'
+        type: boolean
+        default: false
+      version:
+        description: 'The version the first setup is built as (0.1.0-pre.N); the second is pre.N+1'
+        default: '0.1.0-pre.900'
   schedule:
     - cron: '43 4 * * *'   # nightly, 04:43 UTC
 jobs:
   suites:
+    if: ${{ !inputs.installer }}
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -83,6 +100,7 @@ jobs:
   # The jsdom suite: platform-light, but slow; its own job so it never holds up
   # the list above.
   web:
+    if: ${{ !inputs.installer }}
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -101,3 +119,54 @@ jobs:
       - run: pnpm --filter '@buddi/web^...' build
       - run: pnpm --filter @buddi/web build
       - run: pnpm --filter @buddi/web exec vitest run
+
+  # The Windows setup, built from the branch (see the top).
+  installer:
+    if: ${{ inputs.installer }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      V1: ${{ inputs.version }}
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: printf 'TEMP=%s\nTMP=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Inno Setup and the Visual C++ runtime
+        run: scripts/release/windows-tools.sh
+      - name: Two versions, bundled and wrapped
+        run: |
+          echo "$V1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-pre\.[0-9]+$' || { echo "::error::\"$V1\" is not a version like 0.1.0-pre.900"; exit 1; }
+          V2="${V1%.*}.$(( ${V1##*.} + 1 ))"
+          echo "V2=$V2" >> "$GITHUB_ENV"
+          mkdir -p build/windows
+          for v in "$V1" "$V2"; do
+            out=$(BUDDI_RELEASE_VERSION="$v" pnpm -s release:pack | tail -1)
+            tgz="${out##*Release: }"
+            BUDDI_TGZ="$tgz" scripts/release/windows-bundle.sh "$v" build/windows
+            scripts/release/windows-setup.sh "$v" "build/windows/buddi-$v-windows-x64.zip" build/windows
+          done
+          ls -l build/windows
+      - name: Install, start, check, upgrade, uninstall
+        run: scripts/release/windows-smoke.sh "build/windows/buddi-$V1-windows-x64-setup.exe" "build/windows/buddi-$V2-windows-x64-setup.exe"
+      - name: Logs
+        if: ${{ failure() }}
+        run: |
+          cat "$RUNNER_TEMP"/windows-smoke/*.log 2>/dev/null || true
+          cat "$LOCALAPPDATA"/buddi/logs/*.log 2>/dev/null | tail -n 200 || true
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: buddi-windows-setup
+          path: |
+            build/windows/*.exe
+            build/windows/*.zip
+            build/windows/*.sha256
+          retention-days: 7

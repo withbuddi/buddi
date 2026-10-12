@@ -47,7 +47,7 @@
  * is the `http` seam and npm is the `exec` seam.
  */
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { HttpTransport } from '@buddi/gateway';
 import { DEFAULT_REGISTRY, PACKAGE_NAME, PACKAGE_PATH, CHECK_TIMEOUT_MS, authFor, npmBinary, sanitizeNpmOutput } from './upgrade.js';
@@ -91,13 +91,41 @@ export function linuxInstall(env: NodeJS.ProcessEnv): boolean {
   return appLayout(env) !== undefined && (env[LINUX_INSTALL_VAR] ?? '').trim() === '1';
 }
 
-/** Is buddi.app the one running this installation (the layout, and not the Linux install's)? */
+/**
+ * The Windows install (`buddi-<version>-windows-x64-setup.exe`, apps/windows)
+ * uses the same layout as the Linux one: `<data>\node\node.exe` with npm and
+ * the Visual C++ runtime beside it, `<data>\releases\current` a junction to
+ * the release that runs (junctions need no administrator; symlinks do), and a
+ * Task Scheduler task that runs `current`'s launcher. Its `buddi.cmd` and the
+ * task's script set this variable next to `BUDDI_APP_LAYOUT`.
+ */
+export const WINDOWS_INSTALL_VAR = 'BUDDI_WINDOWS_INSTALL';
+
+/** Is this the Windows install's layout (no app, the task runs `current`)? */
+export function windowsInstall(env: NodeJS.ProcessEnv): boolean {
+  return appLayout(env) !== undefined && (env[WINDOWS_INSTALL_VAR] ?? '').trim() === '1';
+}
+
+/** Is this one of the installers' layouts (Linux or Windows), where no app restarts `current`? */
+export function installerLayout(env: NodeJS.ProcessEnv): boolean {
+  return linuxInstall(env) || windowsInstall(env);
+}
+
+/** Is buddi.app the one running this installation (the layout, and not an installer's)? */
 export function appRuns(env: NodeJS.ProcessEnv): boolean {
-  return appLayout(env) !== undefined && !linuxInstall(env);
+  return appLayout(env) !== undefined && !installerLayout(env);
 }
 
 /** The line the Linux install is installed and upgraded with (the site serves scripts/install.sh). */
 export const LINUX_INSTALL_LINE = 'curl -fsSL https://withbuddi.com/install.sh | sh';
+
+/** Where the Windows install's setup is downloaded, one per version. */
+export const WINDOWS_RELEASES_URL = 'https://github.com/withbuddi/buddi/releases';
+
+/** The Windows setup's file name for a version. */
+export function windowsSetupName(version: string): string {
+  return `buddi-${version}-windows-x64-setup.exe`;
+}
 
 /** The command the Linux install's own launcher runs: `current`'s, so a unit written once follows every upgrade. */
 export function currentLauncher(releases: string): string {
@@ -398,11 +426,27 @@ async function linkTarget(link: string): Promise<string | undefined> {
   catch { return undefined; }
 }
 
-/** Replace a symlink in one rename, so the app never sees it missing. */
-async function pointAt(link: string, target: string): Promise<void> {
+/**
+ * Replace a symlink in one rename, so the app never sees it missing.
+ *
+ * Windows: a junction, which an account without the right to make symbolic
+ * links (every account but an administrator's, unless Developer Mode is on)
+ * may make. A rename does not replace an existing directory link there, so the
+ * new one is made aside, the old one removed (the link only: unlink never
+ * follows it) and the new one renamed into place: the name is missing for that
+ * moment only, and nothing starts the launcher in it then (the supervisor that
+ * would has stopped its gateway, and the task starts only at sign-in).
+ */
+export async function pointAt(link: string, target: string, platform: NodeJS.Platform | string = process.platform): Promise<void> {
   const tmp = `${link}.tmp-${process.pid}`;
   await rm(tmp, { force: true });
-  await symlink(target, tmp);
+  if (platform !== 'win32') {
+    await symlink(target, tmp);
+    await rename(tmp, link);
+    return;
+  }
+  await symlink(path.resolve(target), tmp, 'junction');
+  await unlink(link).catch((err: NodeJS.ErrnoException) => { if (err.code !== 'ENOENT') throw err; });
   await rename(tmp, link);
 }
 

@@ -60,7 +60,7 @@ import { JobStore } from './backup.js';
 import { createPostgresCheck } from './postgres-check.js';
 import type { PostgresCheck } from './postgres-check.js';
 import type { BackupControl, BackupJob } from './backup.js';
-import { APP_BUNDLE, LINUX_INSTALL_LINE, appLayout, appRuns, insideAppBundle, placeRelease, pruneReleases, releaseDir, stageRelease, switchCurrent, takeReleasesLock } from './app-layout.js';
+import { APP_BUNDLE, LINUX_INSTALL_LINE, WINDOWS_RELEASES_URL, appLayout, appRuns, windowsSetupName, insideAppBundle, placeRelease, pruneReleases, releaseDir, stageRelease, switchCurrent, takeReleasesLock } from './app-layout.js';
 import type { StagedRelease } from './app-layout.js';
 
 const run = promisify(execFile);
@@ -830,7 +830,7 @@ export async function statusOnSocket(socket: string, timeoutMs = 2_000, genuine:
  * dashboard is not available in that state — the gateway is deliberately not
  * started — so this has to be complete on its own.
  */
-export function recoverySentence(entry: UpgradeHistoryEntry, opts: { app?: boolean; linux?: boolean } = {}): string {
+export function recoverySentence(entry: UpgradeHistoryEntry, opts: { app?: boolean; linux?: boolean; windows?: boolean } = {}): string {
   const where = entry.step === 'starting' ? 'while starting' : 'while migrating';
   const head = `Upgrade to ${entry.to} failed ${where}: ${entry.error ?? 'unknown error'}. ` +
     `The backup taken first is ${entry.backup ?? 'not available'}. `;
@@ -841,6 +841,10 @@ export function recoverySentence(entry: UpgradeHistoryEntry, opts: { app?: boole
   if (opts.linux === true) {
     // The Linux install (scripts/install.sh) installs any version again, with its own Node.
     return head + `Install ${entry.from} again with \`${LINUX_INSTALL_LINE.replace('| sh', `| BUDDI_VERSION=${entry.from} sh`)}\` and run \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
+  }
+  if (opts.windows === true) {
+    // The Windows setup installs any version again over this one, with its own Node.
+    return head + `Run ${windowsSetupName(entry.from)} (from ${WINDOWS_RELEASES_URL}/tag/v${entry.from}) and then \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
   }
   return head + `Reinstall with \`npm install -g ${PACKAGE_NAME}@${entry.from}\` and run \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
 }
@@ -1362,7 +1366,7 @@ export async function finishUpgrade(ctx: ReadyContext, pending: UpgradeInProgres
 }
 
 /** The `upgrade` row `buddi doctor` prints, in a packaged installation. */
-export function upgradeDoctorLines(view: VersionView, phase: string | undefined, opts: { linux?: boolean } = {}): string[] {
+export function upgradeDoctorLines(view: VersionView, phase: string | undefined, opts: { linux?: boolean; windows?: boolean } = {}): string[] {
   const lines = [`Version: ${view.current}${view.updateAvailable ? ` (${view.latest} is available)` : ''}`];
   lines.push(view.checkedAt === undefined
     ? `Update check: ${view.checkEnabled ? 'on, not run yet' : 'off'}`
@@ -1370,7 +1374,7 @@ export function upgradeDoctorLines(view: VersionView, phase: string | undefined,
   const last = view.history[view.history.length - 1];
   if (last !== undefined) {
     lines.push(`Last upgrade: ${last.from} to ${last.to}, ${last.outcome}${last.step === undefined ? '' : ` at ${last.step}`}`);
-    if (phase === 'upgrade-failed' && last.outcome === 'failed') lines.push(recoverySentence(last, { app: view.app === true, linux: opts.linux === true }));
+    if (phase === 'upgrade-failed' && last.outcome === 'failed') lines.push(recoverySentence(last, { app: view.app === true, linux: opts.linux === true, windows: opts.windows === true }));
   }
   return lines;
 }

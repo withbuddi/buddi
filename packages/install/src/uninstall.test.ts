@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { launchAgentLabel, launchAgentPlist, systemdUnitPath } from './environment.js';
 import { windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
-import { APP_LAST_LINE, APP_RUNNING_UNINSTALL, LINUX_LAST_LINE, PACKAGE_LINE, parseUninstallArgs, uninstallPackaged } from './uninstall.js';
+import { APP_LAST_LINE, APP_RUNNING_UNINSTALL, LINUX_LAST_LINE, PACKAGE_LINE, WINDOWS_LAST_LINE, parseUninstallArgs, uninstallPackaged } from './uninstall.js';
 import type { ExecResult, PackagedUninstallDeps, UninstallOptions } from './uninstall.js';
 
 const HOME = '/Users/owner';
@@ -506,6 +506,58 @@ describe('uninstallPackaged: the Linux install (scripts/install.sh)', () => {
     m.deps.linuxInstall = { runtime: `${data}/node`, releases: `${data}/releases`, command: `${home}/.local/bin/buddi`, commandOwned: () => false };
     expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
     expect(m.removed).not.toContain(`${home}/.local/bin/buddi`);
+  });
+});
+
+describe('uninstallPackaged: the Windows install (the setup)', () => {
+  const programs = `${WIN_HOME}\\AppData\\Local\\Programs\\buddi`;
+  const command = `${programs}\\bin\\buddi.cmd`;
+  const uninstaller = `${programs}\\unins000.exe`;
+  const windows = (): Machine & { launched: string[] } => {
+    const m = machine({ platform: 'win32' }) as Machine & { launched: string[] };
+    for (const file of [`${WIN_DATA}\\node`, `${WIN_DATA}\\releases`, command, uninstaller]) m.files.add(file);
+    m.launched = [];
+    m.deps.launch = async (program, argv) => { m.launched.push(`${program} ${argv.join(' ')}`); };
+    return m;
+  };
+
+  it('removes the data directory with the program in it, then starts the setup\'s uninstaller for its entry and buddi.cmd', async () => {
+    const m = windows();
+    m.deps.windowsInstall = { runtime: `${WIN_DATA}\\node`, releases: `${WIN_DATA}\\releases`, command, commandOwned: () => true, uninstaller };
+    expect(await uninstallPackaged({ ...defaults, yes: true }, m.deps)).toBe(0);
+    expect(m.out).toContain(`  - the data directory ${WIN_DATA}: the bundled Node, buddi itself, the database, agents and skills, the files library, logs, backups and the fetched Chromium`);
+    expect(m.out).toContain(`  - buddi in Apps & Features and the Start menu, buddi.cmd and its PATH entry (${uninstaller})`);
+    expect(m.launched).toEqual([`${uninstaller} /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`]);
+    // The uninstaller removes buddi.cmd itself, once the command that runs this has returned.
+    expect(m.removed).not.toContain(command);
+    expect(m.out[m.out.length - 1]).toBe(WINDOWS_LAST_LINE);
+  });
+
+  it('run by the setup\'s own uninstaller (no uninstaller to start), removes the command itself', async () => {
+    const m = windows();
+    m.deps.windowsInstall = { runtime: `${WIN_DATA}\\node`, releases: `${WIN_DATA}\\releases`, command, commandOwned: () => true };
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).toBe(0);
+    expect(m.launched).toEqual([]);
+    expect(m.removed).toContain(command);
+  });
+
+  it('--keep-data removes the program only, and keeps the data with its secrets', async () => {
+    const m = windows();
+    m.deps.windowsInstall = { runtime: `${WIN_DATA}\\node`, releases: `${WIN_DATA}\\releases`, uninstaller };
+    expect(await uninstallPackaged({ ...defaults, yes: true, keepData: true }, m.deps)).toBe(0);
+    expect(m.out).toContain(`  - the program: ${WIN_DATA}\\node and ${WIN_DATA}\\releases`);
+    expect(m.removed).toEqual(expect.arrayContaining([`${WIN_DATA}\\node`, `${WIN_DATA}\\releases`]));
+    expect(m.removed).not.toContain(WIN_DATA);
+    expect(m.removed).not.toContain(`${WIN_DATA}\\vault.json`);
+  });
+
+  it('starts nothing and removes nothing more when the service would not stop', async () => {
+    const m = windows();
+    m.deps.windowsInstall = { runtime: `${WIN_DATA}\\node`, releases: `${WIN_DATA}\\releases`, uninstaller };
+    m.deps.signal = async () => { throw new Error('a restore is running'); };
+    expect(await uninstallPackaged({ ...defaults, yes: true, backup: false, havePassphrase: true }, m.deps)).not.toBe(0);
+    expect(m.launched).toEqual([]);
+    expect(m.removed).not.toContain(WIN_DATA);
   });
 });
 

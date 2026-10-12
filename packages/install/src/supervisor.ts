@@ -24,6 +24,7 @@ import type { ProductUninstall } from './product-uninstall.js';
 import { installShim, shimsFor } from './cli-shim.js';
 import type { ShimOutcome } from './cli-shim.js';
 import { windowsTaskName, windowsTaskScript } from './windows-task.js';
+import { nodeOutsideData } from './windows-install.js';
 import type { InstallContext, ReadyContext } from './environment.js';
 import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule, sweepIncoming } from './backup.js';
 import type { BackupControl } from './backup.js';
@@ -31,7 +32,7 @@ import { startDatabase } from './postgres.js';
 import type { ManagedDatabase } from './postgres.js';
 import { createUpgradeService, finishUpgrade, handOver, installedVersion, isVersion, recoverySentence, statusOnSocket, TICK_INTERVAL_MS } from './upgrade.js';
 import type { UpgradeControl, UpgradeInProgress } from './upgrade.js';
-import { APP_RESTART_EXIT, appLayout, appRuns, currentLauncher, linuxInstall } from './app-layout.js';
+import { APP_RESTART_EXIT, appLayout, appRuns, currentLauncher, installerLayout, linuxInstall, windowsInstall } from './app-layout.js';
 import { createConnector } from './cloudflared.js';
 import type { Connector, ConnectorStatus } from './cloudflared.js';
 import type { Pool } from 'pg';
@@ -671,7 +672,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       // back and came up, so the upgrade is over without having arrived.
       console.error(entry.outcome === 'done'
         ? `upgrade: ${entry.from} to ${entry.to} finished.`
-        : entry.step === 'finishing' ? `upgrade: ${entry.error}.` : recoverySentence(entry, { app: appRuns(process.env), linux: linuxInstall(process.env) }));
+        : entry.step === 'finishing' ? `upgrade: ${entry.error}.` : recoverySentence(entry, { app: appRuns(process.env), linux: linuxInstall(process.env), windows: windowsInstall(process.env) }));
     } else {
       ready.state.phase = 'ready'; await atomicJson(path.join(ready.data, 'installation.json'), ready.state);
     }
@@ -765,9 +766,11 @@ export async function supervise(ctx: InstallContext): Promise<void> {
         const env = { ...nativeEnvironment(startEnv), BUDDI_DATA_DIR: ready.data,
           ...Object.fromEntries(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(key => typeof startEnv[key] === 'string').map(key => [key, startEnv[key] as string])) };
         // systemd stops every process in the unit's cgroup with it: the uninstall runs in a transient scope of its own.
+        // Windows: a node from inside the data folder (the Windows install's) would keep it from being removed.
+        const node = nodeOutsideData(ready.data);
         const [command, args] = startEnv[SERVICE_UNIT_VAR]
           ? ['systemd-run', ['--user', '--collect', '--quiet', '--scope', process.execPath, LAUNCHER, ...argv]]
-          : [process.execPath, [LAUNCHER, ...argv]];
+          : [node, [LAUNCHER, ...argv]];
         console.error(`supervisor: removing buddi; the account is in ${logFile}.`);
         const child = spawn(command as string, args as string[], { detached: true, stdio: ['ignore', fd, fd], env, cwd: home, windowsHide: true });
         child.unref();
@@ -862,7 +865,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     if (pending && !resolved) {
       const entry = await finishUpgrade(ctx as ReadyContext, pending, { ok: false, error: error instanceof Error ? error.message : String(error) }, 'starting')
         .catch(() => undefined);
-      if (entry) console.error(recoverySentence(entry, { app: appRuns(process.env), linux: linuxInstall(process.env) }));
+      if (entry) console.error(recoverySentence(entry, { app: appRuns(process.env), linux: linuxInstall(process.env), windows: windowsInstall(process.env) }));
     }
     throw error;
   } finally {
@@ -912,8 +915,8 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   if (handingOver) {
     const marker = ctx.state?.upgrade;
     const result = await handOver({
-      // The Linux install's successor is `current`'s launcher, which the upgrade just switched.
-      ctx, launcher: linuxInstall(process.env) ? currentLauncher(appLayout(process.env) as string) : LAUNCHER, env: startEnv,
+      // An installer's successor (Linux, Windows) is `current`'s launcher, which the upgrade just switched.
+      ctx, launcher: installerLayout(process.env) ? currentLauncher(appLayout(process.env) as string) : LAUNCHER, env: startEnv,
       /*
        * The successor is ready when it serves, not when it holds the lock: it
        * takes the lock first and then starts a cluster and runs migrations,
@@ -950,7 +953,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     if (!result.ok && marker) {
       const entry = await finishUpgrade(ctx as ReadyContext, marker, { ok: false, error: `the upgraded supervisor did not answer on ${supervisorSocket(ctx.data)}` }, 'starting')
         .catch(() => undefined);
-      if (entry) console.error(recoverySentence(entry, { app: appRuns(process.env), linux: linuxInstall(process.env) }));
+      if (entry) console.error(recoverySentence(entry, { app: appRuns(process.env), linux: linuxInstall(process.env), windows: windowsInstall(process.env) }));
     }
     /*
      * And then go, whatever is still holding the loop.

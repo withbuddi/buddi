@@ -43,15 +43,17 @@ export interface SuperviseScript {
   entry: string;
   environment: Record<string, string>;
   logFile: string;
+  /** A folder put first on PATH (the Windows install's bundled node, whose npm runs `node`). */
+  pathPrefix?: string;
 }
 
 /** `%` is the one character cmd expands inside a quoted `set`; doubled, it is literal. */
-function cmdLiteral(value: string): string {
+export function cmdLiteral(value: string): string {
   if (/["\r\n]/.test(value)) throw new Error(`A value with a quote or a line break cannot go in a cmd script: ${JSON.stringify(value)}`);
   return value.replace(/%/g, '%%');
 }
 
-export function buildSuperviseScript({ nodePath, entry, environment, logFile }: SuperviseScript): string {
+export function buildSuperviseScript({ nodePath, entry, environment, logFile, pathPrefix }: SuperviseScript): string {
   const lines = [
     '@echo off',
     // The file is UTF-8 and cmd reads each line in the console's code page,
@@ -59,6 +61,7 @@ export function buildSuperviseScript({ nodePath, entry, environment, logFile }: 
     'chcp 65001 >nul',
     'rem Written by buddi. Task Scheduler runs it at logon to start the supervisor.',
     ...Object.entries(environment).map(([key, value]) => `set "${cmdLiteral(key)}=${cmdLiteral(value)}"`),
+    ...(pathPrefix === undefined ? [] : [`set "PATH=${cmdLiteral(pathPrefix)};%PATH%"`]),
     `"${cmdLiteral(nodePath)}" "${cmdLiteral(entry)}" supervise >> "${cmdLiteral(logFile)}" 2>&1`,
   ];
   return lines.join('\r\n') + '\r\n';

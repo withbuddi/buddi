@@ -22,12 +22,13 @@ import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
-import { APP_RUNNING_LINE, appLayout, insideAppBundle, linuxInstall, runsAppCopy } from './app-layout.js';
+import { APP_RUNNING_LINE, appLayout, insideAppBundle, linuxInstall, runsAppCopy, windowsInstall } from './app-layout.js';
 import { runtimeFacts, runtimeLines } from './runtime-info.js';
 import { commandOwnedBy, desktopEntryPaths, linuxUnitSpec, ownDesktopEntries } from './linux-install.js';
 import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimRefusesSupervise, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
 import { buildSuperviseScript, buildTaskXml, followLogsCommand, registerWindowsTask, taskXmlBytes, windowsTaskName, windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
+import { SETUP_UNINSTALL_VAR, cleanupNodeCopyCommand, insideFolder, readWindowsInstallerRecord, windowsCommandOwnedBy, windowsTaskSpec } from './windows-install.js';
 
 const entry = fileURLToPath(import.meta.url);
 // <root>/packages/install/dist/launcher.js — the installation root is three up.
@@ -110,8 +111,17 @@ function isLinuxInstall(ctx: InstallContext): boolean {
   return linuxInstall(process.env) || (process.platform === 'linux' && isAppInstall(ctx));
 }
 
+/**
+ * Is this the Windows install (the setup, apps/windows)? Its `buddi.cmd` and
+ * its task say so; as on Linux, there is no buddi.app on Windows, so a
+ * release under `<data>\releases` is the setup's.
+ */
+function isWindowsInstall(ctx: InstallContext): boolean {
+  return windowsInstall(process.env) || (process.platform === 'win32' && isAppInstall(ctx));
+}
+
 function withApp(view: VersionView, ctx: InstallContext): VersionView {
-  return isAppInstall(ctx) && !isLinuxInstall(ctx) ? { ...view, app: true } : view;
+  return isAppInstall(ctx) && !isLinuxInstall(ctx) && !isWindowsInstall(ctx) ? { ...view, app: true } : view;
 }
 
 async function control(ctx: InstallContext, action = 'status'): Promise<SupervisorStatus> {
@@ -283,6 +293,25 @@ function linuxInstallParts(ctx: InstallContext, home: string): import('./uninsta
 }
 
 /**
+ * What the Windows setup put where: `installer.json` (written by its
+ * windows-setup.ts) names `buddi.cmd` and the setup's uninstaller; the command
+ * is removed only while it still runs this data folder.
+ */
+function windowsInstallParts(ctx: InstallContext): import('./uninstall.js').WindowsInstallParts {
+  const recorded = readWindowsInstallerRecord((() => { try { return readFileSync(path.join(ctx.data, 'installer.json'), 'utf8'); } catch { return undefined; } })());
+  const command = recorded.command;
+  const owned = (): boolean => command !== undefined && windowsCommandOwnedBy((() => { try { return readFileSync(command, 'utf8'); } catch { return undefined; } })(), ctx.data, realpathSync);
+  const uninstaller = recorded.uninstaller !== undefined && existsSync(recorded.uninstaller) ? recorded.uninstaller : undefined;
+  return {
+    runtime: path.join(ctx.data, 'node'),
+    releases: appLayout(process.env) ?? path.join(ctx.data, 'releases'),
+    ...(command !== undefined && owned() ? { command, commandOwned: owned } : {}),
+    // Run from the setup's own uninstaller, which removes its entry itself afterwards.
+    ...(uninstaller !== undefined && (process.env[SETUP_UNINSTALL_VAR] ?? '').trim() !== '1' ? { uninstaller } : {}),
+  };
+}
+
+/**
  * `buddi uninstall`, in a packaged installation. The order and the refusals
  * are in `uninstall.ts`; this wires them to the real machine: the supervisor's
  * socket, `launchctl`/`systemctl`, the keychain, the Telegram Bot API.
@@ -303,10 +332,29 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
   const token = stored ?? (ctx.env.TELEGRAM_BOT_TOKEN?.startsWith('<') ? undefined : ctx.env.TELEGRAM_BOT_TOKEN?.trim() || undefined);
   const app = dashboardAppOwnedBy(path.join(root, 'packages/cli/dist/main.js'), home);
   const linuxParts = isLinuxInstall(ctx) ? linuxInstallParts(ctx, home) : undefined;
+  const windowsParts = isWindowsInstall(ctx) ? windowsInstallParts(ctx) : undefined;
+  if (windowsParts !== undefined && insideFolder(process.execPath, ctx.data)) {
+    // buddi.cmd, the dashboard and the setup's uninstaller run a copy of node from TEMP for this.
+    console.error(`buddi: this node runs from inside ${ctx.data}, which Windows will not remove while it runs. Run buddi uninstall from a new Command Prompt (buddi.cmd runs it from a copy), or remove buddi in Settings → Apps. Nothing was removed.`);
+    return 1;
+  }
+  // The copy of node this runs from (see above) goes once it has exited.
+  if (process.platform === 'win32') {
+    const cleanup = cleanupNodeCopyCommand(process.execPath, ctx.env.SystemRoot ?? ctx.env.SYSTEMROOT ?? 'C:\\Windows');
+    if (cleanup !== undefined) process.once('exit', () => { try { spawn(cleanup.command, cleanup.args, { detached: true, stdio: 'ignore', windowsHide: true, cwd: os.homedir() }).unref(); } catch { /* TEMP is cleaned by Windows too */ } });
+  }
   return await uninstallPackaged(options, {
     ...(linuxParts === undefined ? {} : { linuxInstall: linuxParts }),
+    ...(windowsParts === undefined ? {} : { windowsInstall: windowsParts }),
     data: ctx.data, home, platform: process.platform, env: ctx.env, uid: process.getuid?.() ?? 501,
     exists: existsSync,
+    launch: async (command, argv) => {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(command, argv, { detached: true, stdio: 'ignore', windowsHide: true, cwd: home });
+        child.once('error', reject);
+        child.once('spawn', () => { child.unref(); resolve(); });
+      });
+    },
     // Retried: on Windows a process that just exited can hold a folder for a moment (EBUSY).
     remove: file => rm(file, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }),
     move: async (from, to) => {
@@ -328,7 +376,7 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
     },
     // Run by buddi.app itself (its uninstall route), the app is already on its way out: nothing to say about it.
     buddiApp: async () => {
-      if (appLayout(process.env) !== undefined || isLinuxInstall(ctx)) return undefined;
+      if (appLayout(process.env) !== undefined || isLinuxInstall(ctx) || isWindowsInstall(ctx)) return undefined;
       const status = await control(ctx).catch(() => undefined);
       if (status !== undefined && runsFromApp(status, ctx)) return 'running';
       return isAppInstall(ctx) ? 'installed' : undefined;
@@ -642,9 +690,17 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
     const label = launchAgentLabel(ctx.data);
     const script = windowsTaskScript(ctx.data);
     await mkdir(path.dirname(script), { recursive: true, mode: 0o700 });
+    /*
+     * The Windows install runs `<data>\releases\current` with its bundled
+     * node, named through the junction: an upgrade switches it, and the task
+     * runs the new release at the next sign-in without being written again.
+     */
+    const logs = { [SUPERVISOR_LOG_VAR]: path.join(ctx.data, 'logs', 'supervisor.log') };
+    const spec = isWindowsInstall(ctx)
+      ? windowsTaskSpec({ data: ctx.data, label, exists: existsSync, extra: { ...logs, ...serviceEnvironment() } })
+      : { nodePath: process.execPath, entry, environment: { BUDDI_DATA_DIR: ctx.data, ...logs, ...serviceEnvironment() } };
     await writeFile(script, buildSuperviseScript({
-      nodePath: process.execPath, entry,
-      environment: { BUDDI_DATA_DIR: ctx.data, [SUPERVISOR_LOG_VAR]: path.join(ctx.data, 'logs', 'supervisor.log'), ...serviceEnvironment() },
+      ...spec,
       // What the supervisor says before it opens its log (a node that will not start).
       logFile: path.join(ctx.data, 'logs', 'service.log'),
     }), { mode: 0o600 });
@@ -793,9 +849,10 @@ async function run(): Promise<void> {
     const invoked = (() => { try { return realpathSync(process.argv[1] ?? entry); } catch { return entry; } })();
     console.log(`This buddi: ${invoked} (Node ${process.execPath})`);
     const linux = isLinuxInstall(ctx);
-    console.log(`From: ${insideAppBundle(root) ? `buddi.app (${root.slice(0, root.indexOf('.app/') + 4)})` : linux ? `the Linux install (${root})` : root.startsWith(path.join(ctx.data, 'releases') + path.sep) ? `an update buddi.app installed (${root})` : `npm (${root})`}`);
+    const windows = isWindowsInstall(ctx);
+    console.log(`From: ${insideAppBundle(root) ? `buddi.app (${root.slice(0, root.indexOf('.app/') + 4)})` : linux ? `the Linux install (${root})` : windows ? `the Windows install (${root})` : root.startsWith(path.join(ctx.data, 'releases') + path.sep) ? `an update buddi.app installed (${root})` : `npm (${root})`}`);
     // Which Node and which npm: the bundled runtime, or the machine's (roadmap: no dependence on a host Node).
-    for (const line of runtimeLines(await runtimeFacts(), insideAppBundle(process.execPath) ? 'buddi.app' : linux ? 'the Linux install' : 'this installation')) console.log(line);
+    for (const line of runtimeLines(await runtimeFacts(), insideAppBundle(process.execPath) ? 'buddi.app' : linux ? 'the Linux install' : windows ? 'the Windows install' : 'this installation')) console.log(line);
     for (const line of shimDoctorLines({ home: os.homedir(), exists: existsSync, read: file => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } } })) console.log(line);
     console.log(`Data: ${ctx.data}`);
     // What the vault is and what it protects, said the same way everywhere
@@ -818,7 +875,7 @@ async function run(): Promise<void> {
      * looking at a supervisor that is barely up. The file is the record.
      */
     const state = await readUpgradeState(ctx.data, await installedVersion(root));
-    for (const line of upgradeDoctorLines(withApp(versionView(state), ctx), ctx.state?.phase, { linux })) console.log(line);
+    for (const line of upgradeDoctorLines(withApp(versionView(state), ctx), ctx.state?.phase, { linux, windows })) console.log(line);
     console.log(`Logs: ${path.join(ctx.data, 'logs')}`); return;
   }
   if (!wantsHelp && (args[0] === 'version' || args[0] === '--version' || args[0] === '-v')) {

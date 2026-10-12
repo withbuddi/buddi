@@ -5,7 +5,7 @@
  * root, so core gains no dependency on `@embedded-postgres/*`: whoever ships
  * those binaries says where they are.
  */
-import { cp, mkdir, writeFile, chmod, stat } from 'node:fs/promises';
+import { cp, copyFile, mkdir, readdir, writeFile, chmod, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -49,10 +49,40 @@ export interface BinaryOptions {
   env?: NodeJS.ProcessEnv;
   /** Where the one line about repaired links goes; defaults to stderr. */
   log?: (line: string) => void;
+  /** Windows: the folder of Visual C++ runtime DLLs to put beside the binaries; `vcruntime` beside node by default. */
+  vcRuntime?: string;
+  platform?: NodeJS.Platform | string;
+}
+
+/**
+ * Windows: the Visual C++ runtime the binaries link against (vcruntime140,
+ * vcruntime140_1, msvcp140), copied app-local beside them from the folder the
+ * Windows install ships it in (`<data>\node\vcruntime`, see
+ * scripts/release/windows-bundle.sh), so a fresh Windows needs no
+ * administrator to install the redistributable. Only the files missing there
+ * are copied, on every start: a copy made before the runtime was there (an npm
+ * install moved onto the Windows install, a release an upgrade staged with
+ * npm) heals itself. Elsewhere, or without that folder, nothing happens.
+ */
+export async function placeVcRuntime(bin: string, source: string, platform: NodeJS.Platform | string = process.platform): Promise<string[]> {
+  if (platform !== 'win32') return [];
+  const names = (await readdir(source).catch(() => [] as string[])).filter(name => /\.dll$/i.test(name));
+  const placed: string[] = [];
+  for (const name of names) {
+    if (existsSync(path.join(bin, name))) continue;
+    await copyFile(path.join(source, name), path.join(bin, name));
+    placed.push(name);
+  }
+  return placed;
+}
+
+/** Where the Windows install keeps the Visual C++ runtime: `vcruntime` beside the node running this. */
+export function defaultVcRuntime(execPath: string = process.execPath): string {
+  return path.join(path.dirname(execPath), 'vcruntime');
 }
 
 /** Copy into writable private storage; --ignore-scripts and read-only global installs work. */
-export async function prepareBinaries({ root, dataDir, env = process.env, log = line => console.error(line) }: BinaryOptions): Promise<string> {
+export async function prepareBinaries({ root, dataDir, env = process.env, log = line => console.error(line), vcRuntime = defaultVcRuntime(), platform = process.platform }: BinaryOptions): Promise<string> {
   if (!['darwin', 'linux', 'win32'].includes(process.platform)) throw new Error(`Managed Postgres startup is supported on macOS, Linux and Windows only, not ${process.platform}.`);
   // Windows ships x64 binaries only; on Windows on Arm, an x64 Node (which runs
   // emulated) installs and runs them.
@@ -72,6 +102,7 @@ export async function prepareBinaries({ root, dataDir, env = process.env, log = 
     // absolute one back into the npm tree, which an upgrade then replaces.
     await cp(native, dest, { recursive: true, force: true, verbatimSymlinks: true });
     await hydratePostgresLinks(dest);
+    await placeVcRuntime(path.join(dest, 'bin'), vcRuntime, platform);
     // This upstream binary distribution contains server tools only. Packaged
     // backup/restore is deliberately disabled until client tools are shipped.
     for (const name of ['initdb', 'postgres', 'pg_ctl'] as const) {
@@ -93,6 +124,8 @@ export async function prepareBinaries({ root, dataDir, env = process.env, log = 
     // runs from this copy, so this copy is the one whose links matter.
     const restored = await hydratePostgresLinks(dest);
     if (restored.length > 0) log(`postgres: restored ${restored.length} library links npm did not create`);
+    const placed = await placeVcRuntime(path.join(dest, 'bin'), vcRuntime, platform);
+    if (placed.length > 0) log(`postgres: placed the Visual C++ runtime beside it (${placed.join(', ')})`);
   }
   return path.join(dest, 'bin');
 }
