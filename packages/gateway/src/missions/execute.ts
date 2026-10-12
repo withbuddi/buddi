@@ -326,7 +326,7 @@ export interface MissionRunResult {
 
 /**
  * Ask the owner, once per mission while a request is open, whether this
- * mission may use his Chrome: `schedule.use_chrome` as the mission's agent,
+ * mission may use his browser: `schedule.use_chrome` as the mission's agent,
  * recorded as an approval and posted like any other a run raises. Asking
  * never fails the run.
  */
@@ -341,7 +341,7 @@ async function askForChrome(
   try {
     const open = await pendingUseChrome(deps.pool, mission.id, deps.now());
     if (open) {
-      log(`mission ${mission.id}: needed the owner's Chrome; the request ${open} is still open`);
+      log(`mission ${mission.id}: needed the owner's browser; the request ${open} is still open`);
       return;
     }
     const result = await deps.registry.invoke(
@@ -351,15 +351,15 @@ async function askForChrome(
       { ...deps.ctx, agentId: mission.agentId || agentId, conversationId, now: deps.now, [RUN_CHROME_ASK]: true } as CoreToolContext,
     );
     if (result.ok || result.reason !== 'approval-required') {
-      log(`mission ${mission.id}: could not ask for the owner's Chrome: ${result.ok ? 'it ran without an approval' : result.message}`);
+      log(`mission ${mission.id}: could not ask for the owner's browser: ${result.ok ? 'it ran without an approval' : result.message}`);
       return;
     }
-    log(`mission ${mission.id}: needed the owner's Chrome; asked (action ${result.actionId})`);
+    log(`mission ${mission.id}: needed the owner's browser; asked (action ${result.actionId})`);
     await appendEvent(deps.pool, 'mission.chrome_asked', { missionId: mission.id, actionId: result.actionId, ...(need.site ? { site: need.site } : {}) }, conversationId);
     const action = await getAction(deps.pool, result.actionId);
     if (action && deps.askApproval) await deps.askApproval(action);
   } catch (err) {
-    log(`mission ${mission.id}: could not ask for the owner's Chrome: ${err instanceof Error ? err.message : String(err)}`);
+    log(`mission ${mission.id}: could not ask for the owner's browser: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -392,8 +392,8 @@ export class RunRegistry extends ToolRegistry {
   }
 }
 
-/** Why a run that needed the owner's Chrome dispatches nothing more. Agent-facing. */
-export const CHROME_HALT = "the run stopped: it needs the owner's Chrome, and the owner has been asked. Do not call more tools; end your reply in one short line.";
+/** Why a run that needed the owner's browser dispatches nothing more. Agent-facing. */
+export const CHROME_HALT = "the run stopped: it needs the owner's browser, and the owner has been asked. Do not call more tools; end your reply in one short line.";
 
 function registryForRun(base: ToolRegistry, sink: DecisionSink, reportMax?: number | null, ask?: AskSink): RunRegistry {
   const registry = new RunRegistry();
@@ -630,10 +630,10 @@ export function createMissionExecutor(
 
     // Opted in (`browser: own`): browser.act with nobody there, in buddi's own
     // browser only, and the browser's owner moments are caught as one card.
-    // `browser: owner`: the owner also let it use his signed-in Chrome.
+    // `browser: owner`: the owner also let it use his signed-in browser.
     const browses = mission.browser === 'own' || mission.browser === 'owner';
-    // A run that needed the owner's Chrome and may not use it: the browser says so here, once,
-    // and the owner gets one "Let … use your Chrome?" approval instead of a report about it.
+    // A run that needed the owner's browser and may not use it: the browser says so here, once,
+    // and the owner gets one "Let … use your browser?" approval instead of a report about it.
     let chromeNeed: { site?: string } | undefined;
     const askChrome = browses && unattended && mission.browser !== 'owner';
     // The owner's answer is a touch on the page: the card is answered (Take over, Keep going) and the budget renews.
@@ -722,7 +722,7 @@ export function createMissionExecutor(
       ...(deps.onToolCall ? { onToolCall: deps.onToolCall } : {}),
     });
 
-    // It needed the owner's Chrome and may not use it: one approval (Allow runs it once now with his
+    // It needed the owner's browser and may not use it: one approval (Allow runs it once now with his
     // Chrome; Not now leaves it), and nothing else. Whatever the run said after is held back: the
     // card is the whole message, never "ask me in a chat to change this mission". It comes first:
     // nothing was dispatched after the refusal, so no other approval can outrank it.

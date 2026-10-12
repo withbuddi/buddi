@@ -102,7 +102,7 @@ describe('the owner\'s Chrome as a route', () => {
 
     expect((await controller.configure({ yourChrome: true })).settings).toMatchObject({ yourChrome: true });
     expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8'))).toMatchObject({ version: 2, yourChrome: true });
-    await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('b'))).resolves.toMatchObject({ completed: true, route: 'chrome', routeNote: 'I used your Chrome because Example needs your sign-in.' });
+    await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('b'))).resolves.toMatchObject({ completed: true, route: 'chrome', routeNote: 'I used your browser because Example needs your sign-in.' });
     expect(sent.map((c) => c.name)).toEqual(['navigate', 'observe', 'screenshot']);
   });
 });
@@ -130,7 +130,7 @@ describe('when your Chrome opens the page and then something fails', () => {
   });
 
   it('says in one line that the page opened in a new window', async () => {
-    const note = "Your Chrome couldn't open a tab in that window; opened a new window instead.";
+    const note = "Your browser couldn't open a tab in that window; opened a new window instead.";
     const { controller } = await chromeRoute({ navigate: { observation: { note } }, observe: page, screenshot: shot });
     const result = await controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('n'));
     expect(result).toMatchObject({ completed: true, route: 'chrome' });
@@ -142,7 +142,7 @@ describe('when your Chrome opens the page and then something fails', () => {
     await expect(controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('r'))).rejects.toThrow('Grouping is not supported');
     const second = await controller.execute(command({ action: 'navigate', url: 'https://example.com/' }), ctx('r'));
     expect(second).toEqual({ completed: false, dispatched: false,
-      message: "Your Chrome failed the same way twice: Grouping is not supported by tabs in this window. Don't try it again; tell the owner that in one sentence." });
+      message: "Your browser failed the same way twice: Grouping is not supported by tabs in this window. Don't try it again; tell the owner that in one sentence." });
     expect(sent.filter((c) => c.name === 'navigate')).toHaveLength(2);
   });
 });
@@ -278,7 +278,7 @@ describe('taking over a page in your Chrome', () => {
     const status = await controller.control('takeover', sessionId);
     expect(status.state).toBe('paused');
     expect(status.held).toBeUndefined();
-    expect(status.message).toContain("Your Chrome couldn't bring the page forward");
+    expect(status.message).toContain("Your browser couldn't bring the page forward");
   });
 });
 

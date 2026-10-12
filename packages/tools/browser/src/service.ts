@@ -81,6 +81,8 @@ export interface RouteStatus {
   installed?: boolean;
   /** Apps: how the providing plugin names it. */
   label?: string;
+  /** Chrome (the owner's browser): its name as the extension said it ("Microsoft Edge"), when it did. */
+  browser?: string;
   message?: string;
   repair?: 'install' | 'permissions' | 'pair' | 'helper' | 'sandbox';
   /** Chrome: a pairing exists / the extension is connected right now. */
@@ -369,10 +371,10 @@ export class BrowserService {
       try {
         await this.driver.bringToFront();
         this.#held = true;
-        this.#message = 'The page is in front of you in your Chrome. Give it back when you are done.';
+        this.#message = 'The page is in front of you in your browser. Give it back when you are done.';
       } catch (error) {
         const why = error instanceof Error ? error.message.replace(/\.$/, '') : String(error);
-        throw new BrowserPreconditionError(`Your Chrome couldn't bring the page forward (${why}).`);
+        throw new BrowserPreconditionError(`Your browser couldn't bring the page forward (${why}).`);
       }
       return this.status();
     };
@@ -409,7 +411,7 @@ export class BrowserService {
   }
 
   hand(_scope?: BrowserScope): BrowserHandOffer {
-    if (this.#held && this.#state === 'paused') return { supported: false, message: 'The page is in front of you in your Chrome.' };
+    if (this.#held && this.#state === 'paused') return { supported: false, message: 'The page is in front of you in your browser.' };
     if (this.driver.supportsHand === false || !this.driver.hand) {
       return { supported: false, message: this.driver.handMessage ?? 'Take over at the computer for this route.' };
     }
@@ -810,7 +812,7 @@ export class BrowserService {
   async secretFill(input: SecretFillInput, ctx: ToolContext): Promise<unknown> {
     return this.#under(ctx, 'secret.fill', async (controller) => {
       if (typeof this.driver.secretFieldInfo !== 'function' || typeof this.driver.secretFillField !== 'function') {
-        throw new BrowserPreconditionError('secret.fill works on web pages (buddi\'s own browser or your Chrome); an app window has no page fields to fill.');
+        throw new BrowserPreconditionError('secret.fill works on web pages (buddi\'s own browser or yours); an app window has no page fields to fill.');
       }
       const observation = input.observation ?? this.#observation?.id ?? '';
       // A label is read against the latest page, so a page that renumbered its refs after the last fill still finds its field.
@@ -954,10 +956,10 @@ export class BrowserService {
     try {
       await this.driver.takeover?.();
       this.#held = true;
-      this.#message = 'The page is in front of you in your Chrome. Give it back when you are done.';
+      this.#message = 'The page is in front of you in your browser. Give it back when you are done.';
     } catch (error) {
       const why = error instanceof Error ? error.message.replace(/\.$/, '') : String(error);
-      this.#message = `Your Chrome couldn't bring the page forward (${why}). It is in the buddi tab group there; give it back when you are done.`;
+      this.#message = `Your browser couldn't bring the page forward (${why}). It is in the buddi tab group there; give it back when you are done.`;
     }
   }
 

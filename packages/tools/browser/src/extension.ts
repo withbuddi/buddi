@@ -53,6 +53,8 @@ export interface ExtensionResult {
  */
 export interface ExtensionBridge {
   connected(): boolean;
+  /** The paired browser's name as the extension said it ("Microsoft Edge"), when it did. */
+  browser?(): string | undefined;
   send(command: ExtensionCommand): Promise<ExtensionResult>;
   close(): void;
   /**
@@ -129,7 +131,7 @@ export type ExtensionEvent = 'takeover' | 'giveback' | 'castended';
 /** How the Canvas's picture is painted while an agent works: the hand's normal size, two frames a second. */
 export const WATCH_QUALITY = { ...HAND_QUALITY, interval: 500 } as const;
 
-export const NOT_CONNECTED = 'Your browser is not connected. Open the buddi extension in Chrome and press Connect.';
+export const NOT_CONNECTED = 'Your browser is not connected. Open the buddi extension in your browser and press Connect.';
 
 /** What the extension is allowed to claim about a page. */
 const observationSchema = z.object({
@@ -416,11 +418,11 @@ export class ExtensionDriver implements BrowserDriver {
    * nothing of the agent's evidence is spent.
    */
   async capture(): Promise<{ png: Buffer; title: string; url: string }> {
-    if (!this.#live()) throw new BrowserPreconditionError('Update the buddi extension in Chrome to capture a page there.');
+    if (!this.#live()) throw new BrowserPreconditionError('Update the buddi extension in your browser to capture a page there.');
     if (!this.bridge.connected()) throw new BrowserPreconditionError(NOT_CONNECTED);
     const result = await this.bridge.send({ name: 'capture', session: this.session, args: {}, owner: true });
     const png = typeof result.screenshot === 'string' && result.screenshot !== '' ? Buffer.from(result.screenshot, 'base64') : undefined;
-    if (!png) throw new BrowserPreconditionError('Your Chrome did not hand over a picture of that page.');
+    if (!png) throw new BrowserPreconditionError('Your browser did not hand over a picture of that page.');
     const page = (result.observation ?? {}) as { url?: unknown; title?: unknown };
     const url = typeof page.url === 'string' ? page.url.slice(0, 4096) : '';
     this.#checkHost(url);
@@ -486,7 +488,7 @@ export class ExtensionDriver implements BrowserDriver {
       if (event.kind === 'copy') return;
       if (event.kind === 'nav') {
         // An extension from before has no window buttons; Chrome's own are right there in the owner's window.
-        if (!this.#live()) throw new BrowserPreconditionError('Use Chrome’s own buttons for that page.');
+        if (!this.#live()) throw new BrowserPreconditionError('Use the browser’s own buttons for that page.');
         // A typed address goes through the same check an agent's navigate does.
         if (event.action === 'navigate') {
           const checked = checkUrl(event.url ?? '').url;

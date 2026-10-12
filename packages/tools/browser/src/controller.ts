@@ -8,6 +8,7 @@ import { PlaywrightHost, type DriverOptions, type LaunchProblem } from './host.j
 import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
+import { YourBrowser } from './brand.js';
 import { modeOf, browserStoppedMessage, type BrowserController, type BrowserEngineStatus, type BrowserHandOffer, type BrowserScope, type BrowserServiceOptions, type BrowserStatus, type BrowserRollover, type BrowserTouch, type BrowserGiveBack, type BrowserCapture, type CardResult, type RouteStatus, type SecretFillInput, type SecretTypeInput } from './service.js';
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
@@ -28,12 +29,12 @@ function isAppEnvelope(value: unknown): value is AppEnvelope {
 }
 /** What the agent is told when an app job has no route: the one fix, never a mode. */
 /** What a mission is told when it asks for the owner's Chrome (docs/browser.md, "Missions"). */
-export const UNATTENDED_CHROME = "A mission looks only in buddi's own browser, never the owner's Chrome: nobody is there to watch it. Use the own browser, or report what needs the owner's sign-in.";
+export const UNATTENDED_CHROME = "A mission looks only in buddi's own browser, never the owner's own browser: nobody is there to watch it. Use the own browser, or report what needs the owner's sign-in.";
 /**
  * What a mission is told when it needed the owner's Chrome, may not use it, and the
  * owner was just asked (one "Let … use your Chrome?" card): stop, and say nothing.
  */
-export const UNATTENDED_CHROME_ASKED = "This needs the owner's signed-in Chrome, which this mission may not use yet. The owner has been asked, with a card, whether it may; nothing more is needed from you. Stop here: no report, no question, no other route.";
+export const UNATTENDED_CHROME_ASKED = "This needs the owner's own signed-in browser, which this mission may not use yet. The owner has been asked, with a card, whether it may; nothing more is needed from you. Stop here: no report, no question, no other route.";
 /** What a mission is told when it asks for an app. */
 export const UNATTENDED_APPS = "A mission looks only in buddi's own browser; the owner's apps need the owner. Report what you could not do instead.";
 export const APPS_UNAVAILABLE = 'Your apps are not available to agents right now. The owner can turn them on, or repair them, in Settings → Browser & apps.';
@@ -219,6 +220,8 @@ export class HostController implements BrowserController {
   /* ---------------- routes and their health ---------------- */
 
   #chromeConnected(): boolean { try { return this.#bridge().connected(); } catch { return false; } }
+  /** The paired browser's name ("Microsoft Edge"), when the extension said it. */
+  #browserName(): string | undefined { try { return this.#bridge().browser?.(); } catch { return undefined; } }
   #chromePaired(): boolean { try { return this.#bridge().paired?.() ?? this.#chromeConnected(); } catch { return false; } }
   /** The owner's Chrome as Settings and the composer's pin see it: not paired with this buddi, paired but closed, or connected. */
   chromeLink(): ChromeLink {
@@ -240,8 +243,9 @@ export class HostController implements BrowserController {
     const paired = this.#chromePaired();
     const chrome: RouteStatus = { kind: 'chrome', allowed: this.#settings.yourChrome, available: this.#settings.yourChrome && connected, provider: 'core', paired, connected,
       link: connected ? 'connected' : paired ? 'closed' : 'unpaired',
-      ...(!paired ? { message: 'Add buddi to Chrome and pair it to let agents use your Chrome.', repair: 'pair' as const }
-        : !connected ? { message: 'Your Chrome is paired but not connected right now: open Chrome.' } : {}) };
+      ...(this.#browserName() ? { browser: this.#browserName() } : {}),
+      ...(!paired ? { message: 'Add the buddi extension to your browser and pair it to let agents use it.', repair: 'pair' as const }
+        : !connected ? { message: `${YourBrowser(this.#browserName())} is paired but not connected right now: open it.` } : {}) };
     const plugin = this.#pluginApps();
     let health: { ok: boolean; message?: string; repair?: string };
     if (this.options.drivers?.apps) health = { ok: true };
@@ -723,7 +727,7 @@ export class HostController implements BrowserController {
     if (this.#chromeFailed.get(key) !== said) { this.#chromeFailed.set(key, said); return undefined; }
     this.#chromeFailed.delete(key);
     return { completed: false, dispatched: false,
-      message: `Your Chrome failed the same way twice: ${said.replace(/\.$/, '')}. Don't try it again; tell the owner that in one sentence.` };
+      message: `${YourBrowser(this.#browserName())} failed the same way twice: ${said.replace(/\.$/, '')}. Don't try it again; tell the owner that in one sentence.` };
   }
 
   /**
@@ -774,7 +778,7 @@ export class HostController implements BrowserController {
     // A mission's sign-in is one of the four moments too: the card parks the run until the owner answers (Take over, or a saved login).
     this.telemetry.stop('sign-in', { route, agent: ctx.agentId!, ...missionMark(ctx), ...(site ? { host: site } : {}) });
     const kind = wall === 'code' ? 'code' as const : 'sign-in' as const;
-    const card: OwnerCard = child.park(kind, { chrome: route === 'chrome' ? 'none' : chromeUsable ? 'usable' : allowed.chrome && !available.chrome ? 'offline' : 'none', storedLogin: false });
+    const card: OwnerCard = child.park(kind, { browser: this.#browserName(), chrome: route === 'chrome' ? 'none' : chromeUsable ? 'usable' : allowed.chrome && !available.chrome ? 'offline' : 'none', storedLogin: false });
     // Nothing saved for the site: the card can take the sign-in in place (docs/owner-secrets.md §6).
     // On the parked card itself, so the page's later reads hand on the same card and it is asked once.
     card.signIn = { kind, url, ...(observation.observation.title ? { title: observation.observation.title } : {}), fields: signInFields(observation.observation, kind) };
@@ -788,7 +792,7 @@ export class HostController implements BrowserController {
     let note: string | undefined;
     const reason: RouteReason = choice.reason;
     if (route !== 'own' || choice.fallbackFrom) {
-      const candidate = routeNote(route, reason, site, appName, choice.fallbackFrom === 'chrome' ? this.#chromeMiss() : undefined);
+      const candidate = routeNote(route, reason, site, appName, choice.fallbackFrom === 'chrome' ? this.#chromeMiss() : undefined, this.#browserName());
       const said = `${ctx.conversationId}|${route}|${site ?? appName ?? ''}`;
       if (candidate && !this.#noted.has(said) && reason !== 'continuing') { this.#noted.add(said); note = candidate; }
     }

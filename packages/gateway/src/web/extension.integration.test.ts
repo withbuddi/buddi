@@ -154,7 +154,7 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     for (const dir of [dataHome, profile]) if (dir) await rm(dir, { recursive: true, force: true });
   }, MINUTE);
 
-  it('drives the owner\'s Chrome through the whole command set and leaves their tab alone', async function () {
+  it('drives the owner\'s browser through the whole command set and leaves their tab alone', async function () {
     if (skip) { console.log(`skipped: ${skip}`); return; }
     const driver = new ExtensionDriver(endpoint);
     const ownerUrl = ownerTab.url();

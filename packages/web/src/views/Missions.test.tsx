@@ -4,6 +4,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, ApiError, type MissionRow } from '../api';
 import { Missions } from './Missions';
+import { rememberBrowser, resetBrowserName } from '../browser-name';
 
 vi.mock('../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../api')>();
@@ -68,6 +69,16 @@ describe('missions that stop themselves', () => {
 describe('where a mission browses', () => {
   afterEach(() => cleanup());
 
+  it('names the paired browser: "Uses your Edge"', async () => {
+    rememberBrowser({ browser: 'Microsoft Edge', pairedAt: '2026-10-01T00:00:00Z' });
+    try {
+      vi.mocked(api.missions).mockResolvedValue({ missions: [{ ...mission('agent:cfo:bills', 'UTC', false), name: 'Bills', browser: 'owner' }] });
+      render(<Missions timezone="UTC" />);
+      expect(await screen.findByText('Uses your Edge')).toBeInTheDocument();
+      expect(screen.getByRole('switch', { name: 'Let Bills use your Edge' })).toBeChecked();
+    } finally { resetBrowserName(); }
+  });
+
   it('says "Uses your Chrome" or "Own browser" with a switch, and a mission that opens no page has neither', async () => {
     vi.mocked(api.missions).mockResolvedValue({ missions: [
       { ...mission('agent:cfo:pnc-pull', 'UTC', false), name: 'PNC pull', browser: 'own' },
@@ -77,10 +88,10 @@ describe('where a mission browses', () => {
     const set = vi.spyOn(api, 'setMissionChrome').mockResolvedValue({ id: 'agent:cfo:pnc-pull', browser: 'owner' });
     render(<Missions timezone="UTC" />);
     expect(await screen.findByText('Own browser')).toBeInTheDocument();
-    expect(screen.getByText('Uses your Chrome')).toBeInTheDocument();
-    expect(screen.queryByRole('switch', { name: 'Let Recap use your Chrome' })).toBeNull();
-    expect(screen.getByRole('switch', { name: 'Let Bills use your Chrome' })).toBeChecked();
-    const pnc = screen.getByRole('switch', { name: 'Let PNC pull use your Chrome' });
+    expect(screen.getByText('Uses your browser')).toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Let Recap use your browser' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Let Bills use your browser' })).toBeChecked();
+    const pnc = screen.getByRole('switch', { name: 'Let PNC pull use your browser' });
     expect(pnc).not.toBeChecked();
     fireEvent.click(pnc);
     await waitFor(() => expect(set).toHaveBeenCalledWith('agent:cfo:pnc-pull', true));

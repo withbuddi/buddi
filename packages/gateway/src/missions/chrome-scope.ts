@@ -1,21 +1,21 @@
 /**
- * A mission and the owner's Chrome (docs/browser.md, "Your Chrome for a
+ * A mission and the owner's browser (docs/browser.md, "Your Chrome for a
  * mission"; docs/architecture.md, "Reminders and agent-proposed schedules").
  *
- * An unattended run never gets the owner's signed-in Chrome unless he said
+ * An unattended run never gets the owner's signed-in browser unless he said
  * so, for that mission. He says so in one of three places, each a decision
  * he can see:
  *
  *  - **When it is proposed**: a schedule (`schedule.propose`) or an agent
- *    package whose mission needs his Chrome carries one line on its card,
- *    "Runs every day at 07:00, using your Chrome for PNC", and approving the
+ *    package whose mission needs his browser carries one line on its card,
+ *    "Runs every day at 07:00, using your browser for PNC", and approving the
  *    card grants it. Never silently.
  *  - **When a run needed it and could not have it**: the run stops, reports
  *    nothing, and the owner gets one approval, "Let the PNC pull use your
  *    Chrome?", with Allow and Not now. Allow (`schedule.use_chrome`, run by
  *    the executor only after his yes) grants it and runs the mission once now;
  *    Not now leaves the mission as it was.
- *  - **On Missions**: the row's "Uses your Chrome" switch, both ways.
+ *  - **On Missions**: the row's "Uses your browser" switch, both ways.
  */
 import {
   OWNER_AGENT_ID,
@@ -32,7 +32,7 @@ import {
 import type { Pool } from 'pg';
 import { z } from 'zod';
 
-/** The approval a refused run raises: Allow grants the owner's Chrome and runs the mission once now. */
+/** The approval a refused run raises: Allow grants the owner's browser and runs the mission once now. */
 export const USE_CHROME_TOOL = 'schedule.use_chrome';
 
 /** The button words on that approval's card, everywhere it is drawn (web, chat, Telegram). */
@@ -77,18 +77,18 @@ function inSentence(name: string): string {
 
 /**
  * The one line a proposal's card carries when the mission will use the
- * owner's Chrome: "Runs every day at 07:00, using your Chrome for PNC."
+ * owner's browser: "Runs every day at 07:00, using your browser for PNC."
  * `cadence` is `describeCadence`'s words, or null when there is no schedule.
  */
 export function chromeLine(cadence: string | null, site?: string | null): string {
   const label = siteLabel(site ?? undefined) ?? (site?.trim() || undefined);
-  const using = `using your Chrome${label ? ` for ${label}` : ''}`;
+  const using = `using your browser${label ? ` for ${label}` : ''}`;
   return cadence ? `Runs ${cadence}, ${using}.` : `It runs while you are away, ${using}.`;
 }
 
-/** The ask's heading, also the preview's first line: "Let the PNC pull use your Chrome?". */
+/** The ask's heading, also the preview's first line: "Let the PNC pull use your browser?". */
 export function useChromeAsk(missionName: string): string {
-  return `Let the ${inSentence(missionName.trim())} use your Chrome?`;
+  return `Let the ${inSentence(missionName.trim())} use your browser?`;
 }
 
 /** When the mission last brought the owner something (a delivered report), if ever. */
@@ -106,7 +106,7 @@ async function lastDelivered(pool: Pool, missionId: string): Promise<Date | null
 
 /**
  * How the mission executor marks the ask it raises for a run that was
- * refused the owner's Chrome. A symbol: no agent's tool call can carry it, so
+ * refused the owner's browser. A symbol: no agent's tool call can carry it, so
  * an ask an agent raises never reads as "its run stopped there".
  */
 export const RUN_CHROME_ASK: unique symbol = Symbol('buddi.run-chrome-ask');
@@ -136,16 +136,16 @@ export function renderUseChromePreview(envelope: UseChromeEnvelope, timezone: st
   const label = siteLabel(envelope.site);
   const since = envelope.lastDelivered ? ` What it last brought you is still from ${ownerDate(new Date(envelope.lastDelivered), timezone)}.` : '';
   const why = envelope.raisedBy === 'run'
-    ? `Its scheduled run needed your signed-in Chrome${label ? ` for ${label}` : ''} and stopped there: nothing was read or changed.${since}`
-    : `${envelope.agentId} asks to use your signed-in Chrome${label ? ` for ${label}` : ''} in this mission while you are away.`;
+    ? `Its scheduled run needed your signed-in browser${label ? ` for ${label}` : ''} and stopped there: nothing was read or changed.${since}`
+    : `${envelope.agentId} asks to use your signed-in browser${label ? ` for ${label}` : ''} in this mission while you are away.`;
   const allow = envelope.off
-    ? 'It is off, so Allow only lets it use your Chrome when it runs again; it does not run now. Not now leaves it as it is. Missions has the switch either way.'
-    : 'Allow lets it use your Chrome while you are away and runs it once now; Not now leaves it as it is. Missions has the switch either way.';
+    ? 'It is off, so Allow only lets it use your browser when it runs again; it does not run now. Not now leaves it as it is. Missions has the switch either way.'
+    : 'Allow lets it use your browser while you are away and runs it once now; Not now leaves it as it is. Missions has the switch either way.';
   return [useChromeAsk(envelope.missionName), '', why, allow].join('\n');
 }
 
 const useChromeInput = z.object({
-  missionId: z.string().min(1).describe('The mission that needed your Chrome.'),
+  missionId: z.string().min(1).describe('The mission that needed your browser.'),
   site: z.string().max(253).optional().describe('The site it needed, a host like pnc.com.'),
 }).strict();
 
@@ -169,7 +169,7 @@ async function runOnceNow(pool: Pool, mission: Mission, now: Date): Promise<stri
 
 /**
  * `schedule.use_chrome`: gated, so only the owner's Allow runs it. The
- * mission executor raises it for a run that needed his Chrome; an agent may
+ * mission executor raises it for a run that needed his browser; an agent may
  * also ask it for one of its own missions. It never runs for a mission of
  * another agent.
  */
@@ -177,15 +177,15 @@ export function createUseChromeTool(): ToolDefinition<z.infer<typeof useChromeIn
   return {
     name: USE_CHROME_TOOL,
     description:
-      "Ask the owner to let one of your missions use their signed-in Chrome while they are away (a bank or a site that needs their sign-in). " +
-      'They see one card, "Let the … use your Chrome?", with Allow and Not now; Allow also runs the mission once now. Only for your own missions.',
+      "Ask the owner to let one of your missions use their signed-in browser while they are away (a bank or a site that needs their sign-in). " +
+      'They see one card, "Let the … use your browser?", with Allow and Not now; Allow also runs the mission once now. Only for your own missions.',
     tier: 'gated',
     input: useChromeInput,
     async describe(input, ctx: CoreToolContext) {
       const mission = await getMission(ctx.db as Pool, input.missionId);
       if (!mission) throw new Error(`no mission ${input.missionId}`);
       if (!mayAsk(ctx, mission)) throw new Error(`${input.missionId} is not one of your missions`);
-      if (mission.browser === 'owner') throw new Error(`${mission.name} may already use the owner's Chrome`);
+      if (mission.browser === 'owner') throw new Error(`${mission.name} may already use the owner's browser`);
       // Whether it browses at all was approved with its package or its proposal, never here (as the web route's 409).
       if (!mission.browser) throw new Error(`${mission.name} does not browse; whether it may is decided where it was proposed, not here`);
       const last = await lastDelivered(ctx.db as Pool, mission.id);

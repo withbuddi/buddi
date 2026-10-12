@@ -374,7 +374,7 @@ export const SCRIPT = {
     },
     app: {
       title: 'buddi as an app, and a browser of its own',
-      line: 'Keep buddi in your Dock; give your assistant Chrome or its own Chromium (150 MB) so it can look at websites. Chrome pairs later, in Settings → Browser & apps.',
+      line: 'Keep buddi in your Dock; give your assistant Chrome or its own Chromium (150 MB) so it can look at websites. Your own browser pairs later, in Settings → Browser & apps.',
       install: 'Install app',
       installed: 'App installed',
       chrome: 'Use Chrome',
@@ -384,8 +384,8 @@ export const SCRIPT = {
       /** Inside buddi.app: it is in the Dock already, so no install advice. */
       inApp: {
         title: 'buddi is in your Dock, and a browser of its own',
-        line: 'You’re in buddi.app already. To open it when your Mac starts, choose Start at Login in the buddi menu at the top of your screen. Give your assistant Chrome or its own Chromium (150 MB) so it can look at websites. Chrome pairs later, in Settings → Browser & apps.',
-        extension: 'Get the Chrome extension',
+        line: 'You’re in buddi.app already. To open it when your Mac starts, choose Start at Login in the buddi menu at the top of your screen. Give your assistant Chrome or its own Chromium (150 MB) so it can look at websites. Your own browser pairs later, in Settings → Browser & apps.',
+        extension: 'Get the buddi extension',
       },
     },
     /** The map's line once answered. */

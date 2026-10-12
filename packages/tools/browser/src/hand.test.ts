@@ -249,7 +249,7 @@ describe('the Playwright driver’s hand', () => {
     const { fake, sent } = bridge();
     const driver = new ExtensionDriver(fake);
     await driver.hand.start(() => {});
-    await expect(driver.hand.input({ kind: 'nav', action: 'reload' })).rejects.toThrow(/Chrome’s own buttons/);
+    await expect(driver.hand.input({ kind: 'nav', action: 'reload' })).rejects.toThrow(/browser’s own buttons/);
     expect(sent.some((command) => command.name === 'input')).toBe(false);
   });
 

@@ -261,7 +261,7 @@ export function browserStatusText(status: BrowserStatus): string {
   if (!status.enabled) {
     return 'The host browser is unavailable. Start buddi serve on a machine with a desktop session.';
   }
-  const where = status.route === 'chrome' ? ' in your Chrome' : status.route === 'apps' ? ' in your apps' : '';
+  const where = status.route === 'chrome' ? ' in your browser' : status.route === 'apps' ? ' in your apps' : '';
   const lines: string[] = [];
   if (status.stop) {
     lines.push(`Agents' browsing is stopped${status.stop.until ? ` until ${status.stop.until.slice(11, 16)} UTC` : ' until you say'}. Send /browser resume to let them look again.`);

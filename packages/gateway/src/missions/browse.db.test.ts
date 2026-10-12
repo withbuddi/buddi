@@ -4,9 +4,9 @@
  *
  *  - A mission whose package says `browser: own` may use browser.act with
  *    nobody there, in buddi's own browser; one that did not opt in may not.
- *  - Asked for the owner's Chrome, it stops and the owner gets one approval,
- *    "Let the PNC pull use your Chrome?" (Allow / Not now): Allow lets it
- *    and runs it once now, and the next run goes to his Chrome; a second
+ *  - Asked for the owner's browser, it stops and the owner gets one approval,
+ *    "Let the PNC pull use your browser?" (Allow / Not now): Allow lets it
+ *    and runs it once now, and the next run goes to his browser; a second
  *    refused run while the first ask is open does not ask again.
  *  - A browser moment (here a sign-in wall) parks the run on a question card:
  *    answered (as Needs you answers it), the run resumes in its conversation;
@@ -223,7 +223,7 @@ suite('missions that browse (postgres)', () => {
     expect(toolResults(seen).join('\n')).toMatch(/has not opted in to browsing/);
   });
 
-  it("needing the owner's Chrome, a mission stops and he gets one Allow / Not now approval instead of a report", async () => {
+  it("needing the owner's browser, a mission stops and he gets one Allow / Not now approval instead of a report", async () => {
     const m = await mission('own', 'PNC pull');
     const occurrence = await insertOccurrence(pool, m.id, 0, new Date(), 'claimed');
     const seen: CompletionRequest[] = [];
@@ -232,7 +232,7 @@ suite('missions that browse (postgres)', () => {
     const result = await executor([
       { tool: 'browser.act', input: { action: 'navigate', url: 'https://www.pnc.com/', prefer: 'yours' } },
       // What the model said after is held back: the card is the whole message.
-      { tool: 'mission.report', input: { urgency: 'normal', text: 'This scheduled mission is not allowed to open your Chrome; ask me in a normal chat to adjust it.' } },
+      { tool: 'mission.report', input: { urgency: 'normal', text: 'This scheduled mission is not allowed to open your browser; ask me in a normal chat to adjust it.' } },
       { text: 'done' },
     ], seen, delivered, asked)(occurrence, m);
     expect(log).toEqual([]);
@@ -245,12 +245,12 @@ suite('missions that browse (postgres)', () => {
     const action = asked[0]!;
     expect(action).toMatchObject({ tool: USE_CHROME_TOOL, agentId: AGENT, canonicalArgs: { missionId: m.id, site: 'pnc.com' } });
     const lines = action.preview.split('\n');
-    expect(lines[0]).toBe('Let the PNC pull use your Chrome?');
-    expect(action.preview).toContain('needed your signed-in Chrome for PNC and stopped there: nothing was read or changed.');
+    expect(lines[0]).toBe('Let the PNC pull use your browser?');
+    expect(action.preview).toContain('needed your signed-in browser for PNC and stopped there: nothing was read or changed.');
     expect(action.preview).not.toMatch(/normal chat/);
     // It reached the owner as an actionable notification (Needs you, Telegram) titled with the ask.
     const { rows } = await pool.query(`select kind, title, action_id from core.owner_notifications`);
-    expect(rows).toEqual([{ kind: 'approval', title: 'Let the PNC pull use your Chrome?', action_id: action.id }]);
+    expect(rows).toEqual([{ kind: 'approval', title: 'Let the PNC pull use your browser?', action_id: action.id }]);
     // Telegram draws its own two answers on the card: Not now, then Allow.
     expect(approvalKeyboard(action.id, false, undefined, approvalAnswers(action.tool)).inline_keyboard[0]!.map((b) => b.text)).toEqual(['Not now', '✅ Allow']);
     // The mission is unchanged until he answers.
@@ -266,7 +266,7 @@ suite('missions that browse (postgres)', () => {
     expect(await listPendingActions(pool, { now: new Date() })).toHaveLength(1);
   });
 
-  it('Allow lets the mission use his Chrome and runs it once now; its next run goes to his Chrome', async () => {
+  it('Allow lets the mission use his browser and runs it once now; its next run goes to his browser', async () => {
     const m = await mission('own', 'PNC pull');
     const occurrence = await insertOccurrence(pool, m.id, 0, new Date(Date.now() - 60_000), 'claimed');
     const asked: ActionRecord[] = [];
@@ -285,7 +285,7 @@ suite('missions that browse (postgres)', () => {
     const { rows } = await pool.query(`select state from core.occurrences where mission_id = $1 and state = 'pending'`, [m.id]);
     expect(rows).toHaveLength(1);
 
-    // That run: his Chrome, and no new ask.
+    // That run: his browser, and no new ask.
     const rerun = await insertOccurrence(pool, m.id, 0, new Date(), 'claimed');
     const delivered: string[] = [];
     await executor([
@@ -327,7 +327,7 @@ suite('missions that browse (postgres)', () => {
     expect(asked[0]!.preview).toContain('stopped there: nothing was read or changed.');
   });
 
-  it("an agent may not ask for the owner's Chrome for a mission that never browsed; its own ask says it asks", async () => {
+  it("an agent may not ask for the owner's browser for a mission that never browsed; its own ask says it asks", async () => {
     const ask = (missionId: string) => registry.invoke(USE_CHROME_TOOL, { missionId, site: 'pnc.com' }, { ...ctx, agentId: AGENT });
     const plain = await mission(null, 'Digest');
     const refused = await ask(plain.id);
@@ -340,7 +340,7 @@ suite('missions that browse (postgres)', () => {
     const asked = await ask(browsing.id);
     if (asked.ok || asked.reason !== 'approval-required') throw new Error('expected an approval');
     const action = (await getAction(pool, asked.actionId))!;
-    expect(action.preview).toContain(`${AGENT} asks to use your signed-in Chrome for PNC`);
+    expect(action.preview).toContain(`${AGENT} asks to use your signed-in browser for PNC`);
     expect(action.preview).not.toContain('stopped there');
     // Approved through the real executor: the wording the owner saw is the one re-described.
     await decideApproval(pool, { actionId: asked.actionId, decision: 'approved', by: 'owner', via: 'web', now: new Date() });
@@ -353,7 +353,7 @@ suite('missions that browse (postgres)', () => {
     await setMissionEnabled(pool, m.id, false);
     const asked = await registry.invoke(USE_CHROME_TOOL, { missionId: m.id }, { ...ctx, agentId: AGENT });
     if (asked.ok || asked.reason !== 'approval-required') throw new Error('expected an approval');
-    expect((await getAction(pool, asked.actionId))!.preview).toContain('It is off, so Allow only lets it use your Chrome');
+    expect((await getAction(pool, asked.actionId))!.preview).toContain('It is off, so Allow only lets it use your browser');
     await decideApproval(pool, { actionId: asked.actionId, decision: 'approved', by: 'owner', via: 'web', now: new Date() });
     expect((await executeApproved(pool, { actionId: asked.actionId, registry, ctx, worker: 'test', now: new Date() })).state).toBe('succeeded');
     expect((await getMission(pool, m.id))?.browser).toBe('owner');

@@ -180,7 +180,7 @@ export function approvalKeyboard(
       ],
     };
   }
-  // A question core asks in its own words ("Let the PNC pull use your Chrome?"): its two answers, the way out first.
+  // A question core asks in its own words ("Let the PNC pull use your browser?"): its two answers, the way out first.
   if (answers) {
     return {
       inline_keyboard: [[

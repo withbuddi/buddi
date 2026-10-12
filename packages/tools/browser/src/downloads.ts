@@ -236,7 +236,7 @@ export class DownloadStore {
    * descriptor, so nothing swapped in after the check is what gets read.
    */
   async #ownerFile(file: string, reported: number | undefined): Promise<Readable> {
-    const folderWord = this.#chromeFolder()?.trim() ? 'your Chrome’s download folder' : 'your Downloads folder';
+    const folderWord = this.#chromeFolder()?.trim() ? 'your browser’s download folder' : 'your Downloads folder';
     const refuse = () => new DownloadRefused(`That download could not be read from ${folderWord}.`);
     if (!path.isAbsolute(file)) throw refuse();
     let real: string;

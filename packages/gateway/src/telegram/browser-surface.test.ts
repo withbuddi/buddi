@@ -263,7 +263,7 @@ describe('/browser', () => {
   it('says who is looking at a page, where, and whether browsing is stopped — never a step count', () => {
     expect(browserStatusText(status())).toContain('concierge is looking at a page, for “Book the fixture”');
     expect(browserStatusText(status())).not.toContain('of 80 steps');
-    expect(browserStatusText(status({ route: 'chrome' }))).toContain('in your Chrome');
+    expect(browserStatusText(status({ route: 'chrome' }))).toContain('in your browser');
     expect(browserStatusText(status())).toContain('Waiting for you: example.com needs your sign-in.');
     const stopped = browserStatusText(status({ state: 'stopped', session: undefined, page: undefined, needsOwner: undefined, stop: { at: '2026-10-03T10:00:00.000Z', until: '2026-10-03T11:00:00.000Z' } }));
     expect(stopped).toContain("Agents' browsing is stopped until 11:00 UTC");

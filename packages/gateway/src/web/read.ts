@@ -475,7 +475,7 @@ export interface MissionView {
   quietRuns?: number;
   /** Set while "Still useful?" waits for Keep or Stop. */
   stillUsefulAskedAt?: string;
-  /** Where it browses while the owner is away: `own` (buddi's browser), `owner` (his Chrome too); absent: no pages. */
+  /** Where it browses while the owner is away: `own` (buddi's browser), `owner` (his browser too); absent: no pages. */
   browser?: 'own' | 'owner';
 }
 

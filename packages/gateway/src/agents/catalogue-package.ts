@@ -108,7 +108,7 @@ const missionSchema = z
      * grants it, never the package alone.
      */
     browser: z.enum(['own', 'owner']).optional(),
-    /** With `browser: owner`: the site it needs the owner's Chrome for, a host like `pnc.com`. */
+    /** With `browser: owner`: the site it needs the owner's browser for, a host like `pnc.com`. */
     browserFor: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/).max(253).optional(),
     /** Host API 1.27: an export of a required plugin, read before each run. */
     context: z

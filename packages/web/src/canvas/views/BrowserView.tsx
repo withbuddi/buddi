@@ -41,6 +41,7 @@ import { RemoteHand, type HandNav, type RemoteHandHandle } from '../../views/Rem
 import { useMediaQuery } from '../../useMediaQuery';
 import { appWord, lookingLine, siteOfUrl } from '../../views/Browser';
 import { useThisMachine } from '../../useThisMachine';
+import { theBrowser, useBrowserWord, yourBrowser, YourBrowser } from '../../browser-name';
 import { SaveLoginCard } from './SaveLoginCard';
 
 /** How often the last observation is re-requested while a page is open. */
@@ -129,6 +130,7 @@ export function tileLetter(status: BrowserStatus | undefined): string {
 
 export function BrowserView({ status, error, reload, live, agentName = 'The agent', timezone, paused = null }: BrowserViewProps): JSX.Element {
   const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const word = useBrowserWord();
   /*
    * One counter, appended to the screenshot's URL. The image element is the
    * poller: a new query means a new request, and nothing here has to hold a
@@ -332,13 +334,14 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   const done = !live && !paused;
   const site = siteOfUrl(shown?.page?.url) ?? (shown?.page?.appId ? appWord(shown.page.appId) : 'the page');
   const chromeRoute = shown?.route === 'chrome';
-  const where = chromeRoute ? 'in your Chrome · background tab' : shown?.route === 'apps' ? `in ${site}` : 'in buddi’s browser';
+  const yours = yourBrowser(word);
+  const where = chromeRoute ? `in ${yours} · background tab` : shown?.route === 'apps' ? `in ${site}` : 'in buddi’s browser';
   const title = paused ? 'Browsing is paused' : shown?.page?.title || site;
   const line = paused ? `By you at ${fmtClock(new Date(paused.at), zone)} · ${paused.until ? `until ${fmtClock(new Date(paused.until), zone)}` : 'until you resume it'}`
-    : inChrome ? 'You have the page · in your Chrome · it’s in front'
-    : taking ? `You have the page · ${chromeRoute ? 'in your Chrome' : where}`
+    : inChrome ? `You have the page · in ${yours} · it’s in front`
+    : taking ? `You have the page · ${chromeRoute ? `in ${yours}` : where}`
     : done ? `${agentName} looked at ${site} · done${closedAt ? ` at ${fmtClock(new Date(closedAt), zone)}` : ''}`
-    : shown ? lookingLine(shown) : 'Opening the page…';
+    : shown ? lookingLine(shown, word) : 'Opening the page…';
   const src = live ? (shown ? screenshotUrl(shown, tick) : null) ?? lastHand : frame ?? lastHand;
   const app = shown?.route === 'apps';
   const address = hand ? location ?? shown?.page?.url : shown?.page?.url;
@@ -364,7 +367,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
           <Toolbar align="end">
             {inChrome ? null : hand ? (touch ? <Button size="sm" variant={typing ? 'accent' : 'ghost'} aria-pressed={typing} onClick={() => setTyping(!typing)}>Type into the page</Button> : null)
               : <Button size="sm" variant="ghost" disabled={busy} onClick={takeOver}>Drive it here</Button>}
-            {chromeRoute && !inChrome ? <Button size="sm" variant="ghost" disabled={busy} title="For when you are at the computer: the tab comes to the front of your Chrome" onClick={toFront}>Bring the tab to the front</Button> : null}
+            {chromeRoute && !inChrome ? <Button size="sm" variant="ghost" disabled={busy} title={`For when you are at the computer: the tab comes to the front of ${yours}`} onClick={toFront}>Bring the tab to the front</Button> : null}
             <Button size="sm" variant="accent" disabled={busy} onClick={giveBack}>Give it back</Button>
             {enlarge}
           </Toolbar>
@@ -378,7 +381,7 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
           </Toolbar>
         )}
       </header>
-      {taking ? <p className="br-hand-said" role="status">{inChrome ? 'Finish in Chrome, then give it back.' : hand ? `Nothing you type here is kept. ${agentName} carries on when you give it back.${touch ? ' Tap Type into the page to bring up your keyboard.' : ''}` : `${agentName} waits. It carries on when you give the page back.`}</p> : null}
+      {taking ? <p className="br-hand-said" role="status">{inChrome ? `Finish in ${theBrowser(word)}, then give it back.` : hand ? `Nothing you type here is kept. ${agentName} carries on when you give it back.${touch ? ' Tap Type into the page to bring up your keyboard.' : ''}` : `${agentName} waits. It carries on when you give the page back.`}</p> : null}
       {failure || error ? <Notice tone="critical" role="alert">{failure ?? error}</Notice> : null}
       {note ? <Notice tone="warning" role="status">{note}</Notice> : null}
       {captured ? (
@@ -388,9 +391,9 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
         </Notice>
       ) : null}
       {offline ? (
-        <Notice tone="warning" role="status" title="Your Chrome isn’t connected."
+        <Notice tone="warning" role="status" title={`${YourBrowser(word)} isn’t connected.`}
           action={<Toolbar align="end"><Button size="sm" disabled={busy} onClick={ownBrowser}>Use buddi’s browser</Button><Button size="sm" variant="accent" disabled={busy} onClick={takeOver}>Try again</Button></Toolbar>}>
-          {`Open Chrome on ${machine} and try again, or let this conversation use buddi’s own browser.`}
+          {`Open ${theBrowser(word)} on ${machine} and try again, or let this conversation use buddi’s own browser.`}
         </Notice>
       ) : null}
       {login ? <SaveLoginCard login={login} onDone={() => setLogin(null)} /> : null}

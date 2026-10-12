@@ -32,7 +32,8 @@ export interface BrowserCard {
 
 const SAVE_LOGIN = 'Save a login for next time';
 const QUIET = new Set(['Skip this site', 'Skip it', 'Keep paused', 'Leave it stopped']);
-const CHROME = ['Use my Chrome', 'Use Chrome when it’s open', "Open Chrome and I'll use it there"];
+/** "Use my Edge", "Use Edge when it’s open" (any browser's name), and the Chrome words older cards carry. */
+const CHROME = /^(Use (my )?\S+( when it’s open)?|Open Chrome and I'll use it there)$/;
 
 /** Which of the five this question is, or null for any other question. */
 export function browserCardOf(question: ChatQuestion | null | undefined): BrowserCard | null {
@@ -44,7 +45,7 @@ export function browserCardOf(question: ChatQuestion | null | undefined): Browse
     : has('Keep going') && has('Stop here') ? 'budget'
     : has('Resume') && has('Keep paused', 'Leave it stopped') ? 'paused'
     : has('Take over') && has('Skip this site', 'Skip it') ? 'human'
-    : has('Take over') && (has(SAVE_LOGIN, ...CHROME) || /sign-in|asks for a code/i.test(question.question)) ? 'signin'
+    : has('Take over') && (has(SAVE_LOGIN) || question.options.some((option) => option.label !== 'Take over' && CHROME.test(option.label)) || /sign-in|asks for a code/i.test(question.question)) ? 'signin'
     : null;
   if (!kind) return null;
   const [first, ...rest] = question.question.split('\n');

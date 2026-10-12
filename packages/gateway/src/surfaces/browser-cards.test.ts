@@ -29,7 +29,7 @@ describe('a login wall on a surface that takes the sign-in in place', () => {
     question: 'Wikimedia needs your sign-in\nSign in on the page and give it back, and I carry on.',
     options: [
       { label: 'Take over', hint: 'Sign in yourself, then give it back', recommended: true },
-      { label: 'Use Chrome when it’s open', hint: 'I wait for Chrome, where you are signed in' },
+      { label: 'Use my browser when it’s open', hint: 'I wait for Chrome, where you are signed in' },
       { label: 'Save a login for next time', hint: 'Keys and secrets, with the site filled in' },
     ],
     allowOther: false,
@@ -45,20 +45,20 @@ describe('a login wall on a surface that takes the sign-in in place', () => {
     const sink: AskSink = {};
     askInto(sink, { agentName: 'Scout' })(wall);
     expect(sink.asked?.question).toBe('No saved sign-in for wikimedia.org');
-    expect(sink.asked?.options.map((option) => option.label)).toEqual(['Use Chrome when it’s open', 'Decline']);
+    expect(sink.asked?.options.map((option) => option.label)).toEqual(['Use my browser when it’s open', 'Decline']);
     expect(sink.asked?.request).toMatchObject({
       kind: 'secret.request',
       site: 'wikimedia.org',
       origins: ['https://auth.wikimedia.org', 'https://wikimedia.org', 'https://*.wikimedia.org'],
       fields: [{ label: 'Username', kind: 'username', ref: 'e3' }, { label: 'Password', kind: 'password', ref: 'e4' }],
-      choices: ['Use Chrome when it’s open'],
+      choices: ['Use my browser when it’s open'],
       agentName: 'Scout',
     });
   });
 
-  it('offers no Chrome choice when the browser card had none', () => {
+  it('offers no browser choice when the browser card had none', () => {
     const sink: AskSink = {};
-    askInto(sink)({ ...wall, options: wall.options.filter((option) => !option.label.startsWith('Use Chrome')) });
+    askInto(sink)({ ...wall, options: wall.options.filter((option) => !option.label.startsWith('Use my browser')) });
     expect(sink.asked?.options.map((option) => option.label)).toEqual(['Decline']);
     expect(sink.asked?.request?.choices).toBeUndefined();
   });
@@ -81,7 +81,7 @@ describe('a login wall on a surface that takes the sign-in in place', () => {
     const ctx = { agentId: 'scout', conversationId: '11111111-1111-4111-8111-111111111111', db: {} as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
     const refused = await registry.invoke('secret.request', { fields: [{ label: 'Password', kind: 'password' }] }, ctx as never);
     expect(refused.ok).toBe(false);
-    expect(browserFirst.asked?.request?.choices).toEqual(['Use Chrome when it’s open']);
+    expect(browserFirst.asked?.request?.choices).toEqual(['Use my browser when it’s open']);
 
     const agentFirst: AskSink = {};
     const registry2 = new ToolRegistry();

@@ -28,7 +28,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionDownload, type ExtensionEvent, type ExtensionLogin, type ExtensionResult, type HandFrame, type LoginAck, type LoginCheck, LOGIN_GONE, LOGIN_NOT_KEPT } from '@buddi/tool-browser';
+import { BrowserOpenedError, BrowserPreconditionError, NOT_CONNECTED, browserBrand, type ExtensionBridge, type ExtensionCommand, type ExtensionDownload, type ExtensionEvent, type ExtensionLogin, type ExtensionResult, type HandFrame, type LoginAck, type LoginCheck, LOGIN_GONE, LOGIN_NOT_KEPT } from '@buddi/tool-browser';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
@@ -71,6 +71,8 @@ export interface ExtensionRecord {
   lastSeenAt: string;
   /** The `chrome-extension://<id>` this buddi was paired with, once it is known. */
   extensionId?: string;
+  /** Which browser that is ("Microsoft Edge"), as its hello said; absent from an extension that does not say. */
+  browser?: string;
 }
 
 /**
@@ -92,6 +94,8 @@ export interface ExtensionView {
   pairedAt?: string;
   extension?: string;
   lastSeenAt?: string;
+  /** The paired browser's name ("Microsoft Edge"), when its extension said it; the page names it. */
+  browser?: string;
   /**
    * This buddi's own version (`0.1.0-pre.25`, without a checkout's git
    * description), so the page can say when the extension is older or newer.
@@ -169,7 +173,8 @@ export async function readExtensionRecord(env: NodeJS.ProcessEnv = process.env):
     const parsed = JSON.parse(await readFile(extensionFile(env), 'utf8')) as Partial<ExtensionRecord>;
     if (typeof parsed?.tokenHash !== 'string' || parsed.tokenHash === '') return undefined;
     return { tokenHash: parsed.tokenHash, pairedAt: String(parsed.pairedAt ?? ''), extension: String(parsed.extension ?? ''), lastSeenAt: String(parsed.lastSeenAt ?? ''),
-      ...(typeof parsed.extensionId === 'string' && parsed.extensionId ? { extensionId: parsed.extensionId } : {}) };
+      ...(typeof parsed.extensionId === 'string' && parsed.extensionId ? { extensionId: parsed.extensionId } : {}),
+      ...(browserBrand(parsed.browser) ? { browser: browserBrand(parsed.browser) } : {}) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
@@ -221,16 +226,16 @@ function extensionIdOf(origin: string): string {
 export class ExtensionEndpoint implements ExtensionBridge {
   #wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   #socket?: WebSocket;
-  #pair?: { code: string; expiresAt: number; socket: WebSocket; extension: string; extensionId: string; attempts: number; timer: NodeJS.Timeout };
+  #pair?: { code: string; expiresAt: number; socket: WebSocket; extension: string; extensionId: string; browser?: string; attempts: number; timer: NodeJS.Timeout };
   /** A socket that was sent a proof and owes this buddi its token. */
-  #challenge?: { socket: WebSocket; nonce: string; extension: string; extensionId: string; timer: NodeJS.Timeout };
+  #challenge?: { socket: WebSocket; nonce: string; extension: string; extensionId: string; browser?: string; timer: NodeJS.Timeout };
   #pending = new Map<string, { resolve: (value: ExtensionResult) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   /** Screencast listeners, by browser session. Frames are never kept here. */
   #frames = new Map<string, (frame: HandFrame) => void>();
   #events = new Map<string, Set<(event: ExtensionEvent) => void>>();
   /** Who hears a sign-in the owner answered in a held tab, by browser session. The pair is never kept here. */
   #logins = new Map<string, (login: ExtensionLogin) => Promise<LoginAck | LoginCheck> | void>();
-  /** Who hears that an agent's download finished in the owner's Chrome, by browser session. */
+  /** Who hears that an agent's download finished in the owner's browser, by browser session. */
   #downloads = new Map<string, (file: ExtensionDownload) => void>();
   /** Other upgrade paths on this server's one listener; see `attachPath`. */
   #routes = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>();
@@ -366,7 +371,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
   }
 
   /**
-   * An agent's download finished in the owner's Chrome: where Chrome saved
+   * An agent's download finished in the owner's browser: where Chrome saved
    * it and what it reported. Only from the paired socket, only for a session
    * someone listens for; the driver decides whether it is its action's, and
    * the downloads store whether the file may be read.
@@ -484,6 +489,8 @@ export class ExtensionEndpoint implements ExtensionBridge {
   async #hello(ws: WebSocket, frame: Record<string, unknown>, extensionId: string): Promise<void> {
     const version = typeof frame.extension === 'string' ? frame.extension.slice(0, 40) : '';
     const nonce = typeof frame.nonce === 'string' ? frame.nonce.slice(0, 128) : '';
+    // Optional: an extension from before it named its browser says nothing, and the words fall back to "your browser".
+    const browser = browserBrand(frame.browser);
     this.#said.set(ws, new Set(Array.isArray(frame.features) ? frame.features.filter((item): item is string => typeof item === 'string' && KNOWN_EXTENSION_FEATURES.has(item)) : []));
     const record = await this.#read();
     // One browser per buddi: a different unpacked copy is a different browser,
@@ -504,7 +511,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
         ws.send(JSON.stringify({ type: 'rehello', reason: 'That handshake went unanswered.' }));
       }, this.options.authTimeoutMs ?? AUTH_TIMEOUT_MS);
       timer.unref?.();
-      this.#challenge = { socket: ws, nonce, extension: version, extensionId, timer };
+      this.#challenge = { socket: ws, nonce, extension: version, extensionId, ...(browser ? { browser } : {}), timer };
       this.#log(`extension: hello from ${extensionId} (${version || 'no version'}), paired: proof sent`);
       ws.send(JSON.stringify({ type: 'challenge', proof: pairingProof(record.tokenHash, nonce), installation: this.#installation(), name: this.#name(), features: [...GATEWAY_FEATURES] }));
       return;
@@ -528,7 +535,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
       ws.close(1000, 'pairing timed out');
     }, PAIR_TTL_MS);
     timer.unref?.();
-    this.#pair = { code, expiresAt: this.#now() + PAIR_TTL_MS, socket: ws, extension: version, extensionId, attempts: 0, timer };
+    this.#pair = { code, expiresAt: this.#now() + PAIR_TTL_MS, socket: ws, extension: version, extensionId, ...(browser ? { browser } : {}), attempts: 0, timer };
     /*
      * Ping the socket while it waits. A Manifest V3 service worker is
      * stopped after thirty seconds without an event, an open WebSocket or
@@ -561,6 +568,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     }
     this.#clearChallenge();
     this.#adopt(ws, { ...record, extension: challenge.extension || record.extension, extensionId,
+      ...(challenge.browser ? { browser: challenge.browser } : {}),
       lastSeenAt: new Date(this.#now()).toISOString() });
     await this.#announce(ws, { type: 'paired', installation: this.#installation(), name: this.#name(), features: [...GATEWAY_FEATURES] });
     this.#log(`extension: ${extensionId} reconnected`);
@@ -745,7 +753,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#buddiVersion ??= currentVersion(this.#env()).then((version) => version.split(' ')[0] || version);
     return { connected: this.connected(), pending, path: await extensionDir(this.#env()), checkout: await runsFromCheckout(this.#env()), buddi: await this.#buddiVersion, extensionMinimum: MIN_EXTENSION_VERSION,
       name: this.#name(), live: this.supports('live'),
-      ...(record ? { pairedAt: record.pairedAt, extension: record.extension, lastSeenAt: record.lastSeenAt } : {}),
+      ...(record ? { pairedAt: record.pairedAt, extension: record.extension, lastSeenAt: record.lastSeenAt, ...(record.browser ? { browser: record.browser } : {}) } : {}),
       ...((): { portMoved?: { from: number; to: number } } => {
         const moved = portMovedSincePairing(this.#env(), record?.pairedAt);
         return moved ? { portMoved: moved } : {};
@@ -778,7 +786,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     }
     const token = randomBytes(32).toString('base64url');
     const now = new Date(this.#now()).toISOString();
-    this.#adopt(pending.socket, { tokenHash: hashToken(token), pairedAt: now, extension: pending.extension, extensionId: pending.extensionId, lastSeenAt: now });
+    this.#adopt(pending.socket, { tokenHash: hashToken(token), pairedAt: now, extension: pending.extension, extensionId: pending.extensionId, ...(pending.browser ? { browser: pending.browser } : {}), lastSeenAt: now });
     await this.#write(this.#record!);
     await this.#announce(pending.socket, { type: 'paired', token, installation: this.#installation(), name: this.#name(), features: [...GATEWAY_FEATURES] });
     this.#log(`extension: paired with ${pending.extensionId}`);
@@ -812,7 +820,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         if (socket.readyState === socket.OPEN) this.#cancel(socket, id);
-        reject(new Error('Your browser did not answer within a minute. Check the buddi extension in Chrome, then observe again before retrying.'));
+        reject(new Error('Your browser did not answer within a minute. Check the buddi extension there, then observe again before retrying.'));
       }, this.options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS);
       timer.unref?.();
       this.#pending.set(id, { resolve, reject, timer });
@@ -851,15 +859,22 @@ export class ExtensionEndpoint implements ExtensionBridge {
     try { const stat = statSync(file); stamp = `${file}|${stat.mtimeMs}|${stat.size}`; }
     catch { this.#pairedCache = undefined; return false; }
     if (this.#pairedCache?.stamp === stamp) return this.#pairedCache.paired;
-    let paired = false;
+    let paired = false, browser: string | undefined;
     try {
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { tokenHash?: unknown };
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { tokenHash?: unknown; browser?: unknown };
       paired = typeof parsed?.tokenHash === 'string' && parsed.tokenHash !== '';
+      browser = paired ? browserBrand(parsed.browser) : undefined;
     } catch { paired = false; }
-    this.#pairedCache = { stamp, paired };
+    this.#pairedCache = { stamp, paired, ...(browser ? { browser } : {}) };
     return paired;
   }
-  #pairedCache: { stamp: string; paired: boolean } | undefined;
+  #pairedCache: { stamp: string; paired: boolean; browser?: string } | undefined;
+
+  /** The paired browser's name ("Microsoft Edge"), when its extension said it: the connected one's, else the pairing's on disk. */
+  browser(): string | undefined {
+    if (this.connected() && this.#record?.browser) return this.#record.browser;
+    return this.paired() ? this.#pairedCache?.browser : undefined;
+  }
 
   /** One hand per session: a second subscription replaces the first. */
   frames(session: string, onFrame: (frame: HandFrame) => void): () => void {

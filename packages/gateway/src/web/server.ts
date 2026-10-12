@@ -3265,7 +3265,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       catch (error) { return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) }); }
     }
     /*
-     * A tap on a browser card (Look, Keep going, Take over, Use my Chrome,
+     * A tap on a browser card (Look, Keep going, Take over, Use my browser,
      * Resume) from a page that draws its own buttons: the same as the owner
      * sending the label in the chat, without a message.
      */
@@ -3320,7 +3320,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, 200, { artifactId: row.id, name: row.filename ?? filename, mime: row.mime });
     }
     /*
-     * Bring the tab to the front: a page in the owner's Chrome that they hold,
+     * Bring the tab to the front: a page in the owner's browser that they hold,
      * for when they are at the machine. The remote hand ends first; the page
      * is in front of them instead.
      */
@@ -3329,7 +3329,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (typeof body?.sessionId !== 'string' || body.sessionId.length > 200) return sendJson(res, 400, { error: 'Name the page to bring forward: { sessionId }.' });
       if (!browser.front) return sendJson(res, 409, { error: 'This host has no tab to bring to the front.' });
       try {
-        await hand.close(body.sessionId, 'The tab is in front of you in Chrome.');
+        await hand.close(body.sessionId, 'The tab is in front of you in your browser.');
         return sendJson(res, 200, { ...await browser.front(body.sessionId), hand: false });
       } catch (error) {
         return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
@@ -3352,7 +3352,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         // Whether this screen can be driven from here at all. The dashboard
         // shows the mode's own sentence when it cannot.
         const taken = sessionId ?? status.session?.id;
-        // A page in the owner's Chrome is taken over where it is: its tab came to the front there, so no frame will come.
+        // A page in the owner's browser is taken over where it is: its tab came to the front there, so no frame will come.
         if (action === 'takeover' && status.held) return sendJson(res, 200, { ...status, hand: false });
         const offer = action === 'takeover' && taken ? browser.hand?.({ sessionId: taken }) : undefined;
         /*

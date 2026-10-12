@@ -65,9 +65,9 @@ interface FieldRead {
 /** A group's title when the buddi it belongs to has not said its name. */
 const GROUP_TITLE = 'buddi';
 /** The window picked for the tab would not take one; a new window, in the background, did. */
-export const NEW_WINDOW_NOTE = "Your Chrome couldn't open a tab in that window; opened a new window instead.";
+export const NEW_WINDOW_NOTE = "Your browser couldn't open a tab in that window; opened a new window instead.";
 /** Chrome had no ordinary window open (only popups or app windows). */
-export const NO_WINDOW_NOTE = 'Your Chrome had no ordinary window open, so the page opened in a new one, in the background.';
+export const NO_WINDOW_NOTE = 'Your browser had no ordinary window open, so the page opened in a new one, in the background.';
 /** The driver reads the main frame plus ten, and caps the whole tree at 32k. */
 const MAX_FRAMES = 11;
 const MAX_TREE = 32_000;
@@ -693,13 +693,13 @@ export class BrowserCommands implements Executor {
       note = NO_WINDOW_NOTE;
     }
     if (!tab) {
-      if (!this.#chrome.windows.create) throw new Error('Your Chrome has no ordinary window to open a tab in. Open a Chrome window and try again.');
+      if (!this.#chrome.windows.create) throw new Error('Your browser has no ordinary window to open a tab in. Open a browser window and try again.');
       const created = await this.#chrome.windows.create({ url, focused: false, state: 'normal' });
       tab = created.tabs?.[0];
       // A window of its own is already apart from the owner's tabs; its tab stays out of any group.
       groupable = false;
     }
-    if (tab?.id === undefined) throw new Error('Chrome opened a tab without an id.');
+    if (tab?.id === undefined) throw new Error('The browser opened a tab without an id.');
     const tabId = tab.id;
     if (groupable) {
       try {
@@ -1025,7 +1025,7 @@ export class BrowserCommands implements Executor {
     if (held === 0) {
       try { await this.#chrome.debugger.attach({ tabId }, '1.3'); }
       catch (error) {
-        throw new PreconditionError(`Chrome would not let buddi drive that tab (${error instanceof Error ? error.message : String(error)}). Close DevTools on it and observe again.`);
+        throw new PreconditionError(`The browser would not let buddi drive that tab (${error instanceof Error ? error.message : String(error)}). Close DevTools on it and observe again.`);
       }
     }
     this.#attached.set(tabId, held + 1);
@@ -1306,7 +1306,7 @@ export class BrowserCommands implements Executor {
           if (!this.#castsByTab.has(tabId)) await send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
         }
       });
-      if (!png) throw new Error('Chrome did not hand over a picture of that tab.');
+      if (!png) throw new Error('The browser did not hand over a picture of that tab.');
       // The page's title and address name the file; they ride the observation passthrough.
       return { screenshot: png, observation: { url: tab.url ?? '', title: tab.title ?? '' } as unknown as Observation };
     } finally {

@@ -73,6 +73,7 @@ import { CommandMenu, MentionPopup, optionId, type Mentionable } from './Compose
 import { ListeningPanel, MicButton, useVoice } from './MicButton';
 import { snapTab } from './snap';
 import type { ChatAgent, UploadedAttachment } from './types';
+import { useBrowserWord, yourBrowser } from '../browser-name';
 
 /**
  * Where a file sent mid-run goes, in one sentence under the box. It queues
@@ -245,6 +246,7 @@ export const Composer = forwardRef<ComposerHandle, {
   /** One line that grows as it is typed into, the controls on its right (Home's box). */
   slim?: boolean;
 }>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, chrome, setupHref, thinking, onThinking, onOpenFile, mentions, team, onCommand, history, threadKey, conversationId, readAloud, onReadAloud, placeholder, slim }, ref) {
+  const browserWord = useBrowserWord();
   /*
    * Where this thread's draft is kept, and the function that reads it.
    *
@@ -969,14 +971,14 @@ export const Composer = forwardRef<ComposerHandle, {
                 aria-pressed={chrome.on}
                 disabled={disabled}
                 title={chrome.on
-                  ? 'This conversation looks in your Chrome first, where you are signed in. Click to let the agent choose again.'
-                  : 'Use my Chrome for this conversation: pages open in background tabs of your Chrome, where you are signed in.'}
+                  ? `This conversation looks in ${yourBrowser(browserWord)} first, where you are signed in. Click to let the agent choose again.`
+                  : `Use my ${browserWord ?? 'browser'} for this conversation: pages open in background tabs of ${yourBrowser(browserWord)}, where you are signed in.`}
                 onClick={() => chrome.onChange(!chrome.on)}
               >
                 <span className="wb-composer-think-dot" aria-hidden="true" />
                 {/* A narrow box (the corner chat, a squeezed column) drops the
-                    lead and says just "Chrome", as the phone does. */}
-                <span className="wb-composer-chip-label">{phone ? null : <span className="wb-composer-chip-lead">Use my </span>}Chrome</span>
+                    lead and says just "Edge" (or "Browser"), as the phone does. */}
+                <span className="wb-composer-chip-label">{phone ? null : <span className="wb-composer-chip-lead">Use my </span>}{browserWord ?? (phone ? 'Browser' : 'browser')}</span>
               </button>
             ) : null}
 

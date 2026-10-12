@@ -53,6 +53,16 @@ describe('the handshake', () => {
     expect(protocol.state().connection).toBe('connecting');
   });
 
+  it('names its browser in the hello, and leaves the field out when it cannot tell', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const named = new Protocol({ chrome: fakeChrome().chrome, version: '0.1.0', browser: () => 'Microsoft Edge', send: (frame) => { sent.push(frame as Record<string, unknown>); }, execute: async () => ({}) });
+    await named.open();
+    expect(sent[0]).toMatchObject({ type: 'hello', browser: 'Microsoft Edge' });
+    const unnamed = new Protocol({ chrome: fakeChrome().chrome, version: '0.1.0', browser: () => undefined, send: (frame) => { sent.push(frame as Record<string, unknown>); }, execute: async () => ({}) });
+    await unnamed.open();
+    expect('browser' in sent[1]!).toBe(false);
+  });
+
   it('says it holds a token, but still does not send it', async () => {
     const { protocol, sent } = harness({ stored: { token: 'kept' } });
     await protocol.open();
