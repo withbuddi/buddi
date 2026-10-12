@@ -422,10 +422,24 @@ async function install(args: SetupArgs, said: Said): Promise<number> {
   }
 }
 
+/** What the setup alone puts in the data folder, before buddi first starts. */
+export const NEVER_STARTED_PARTS = ['node', 'releases', 'installer.json', 'cache', 'logs'];
+
 async function uninstall(args: SetupArgs, said: Said): Promise<number> {
   const data = path.resolve(args.data as string);
   const launcher = currentLauncher(path.join(data, 'releases'));
   if (!existsSync(launcher)) { said.say(`No buddi release in ${data}; nothing for buddi uninstall to do.`); return 0; }
+  /*
+   * Installed (/NOSTART) and never started: no installation, nothing to back
+   * up, and `buddi uninstall` rightly refuses a folder that is not one. Only
+   * the program the setup put there goes, and the folder if that leaves it empty.
+   */
+  if (!existsSync(path.join(data, 'installation.json')) && !existsSync(path.join(data, 'postgres'))) {
+    for (const part of NEVER_STARTED_PARTS) await rm(path.join(data, part), { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+    if (readdirSync(data).length === 0) await rm(data, { recursive: true, force: true });
+    said.say(`buddi was never started here; removed the program from ${data}.`);
+    return 0;
+  }
   const env = { ...process.env, ...windowsInstallEnvironment(data), PATH: windowsInstallPath(data, process.env.PATH ?? process.env.Path), Path: undefined, [SETUP_UNINSTALL_VAR]: '1' };
   const run = await runProgram(process.execPath, [launcher, 'uninstall', '--yes', ...(args.keepData ? ['--keep-data'] : [])], env, { timeoutMs: 30 * 60_000 });
   for (const line of run.output.split(/\r?\n/)) if (line.trim() !== '') said.say(line);
