@@ -1,5 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import { commandEnv, runCommand } from './process.js';
+import { commandEnv, hostShell, powershellScript, runCommand, shellArgv } from './process.js';
+
+describe('host commands on Windows (simulated)', () => {
+  it('runs a script file in Windows PowerShell 5.1, never through a quoted command line', () => {
+    const argv = shellArgv('win32', 'Get-Date', { SystemRoot: 'C:\\Windows' }, 'C:\\Temp\\buddi-host-1\\command.ps1');
+    expect(argv).toEqual(['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\\Temp\\buddi-host-1\\command.ps1']);
+    expect(hostShell('win32')).toEqual({ name: 'powershell.exe', label: 'Windows PowerShell 5.1 (powershell.exe)' });
+    expect(hostShell('linux').name).toBe('/bin/bash');
+  });
+  it('puts the command in a kill-on-close job, with UTF-8 out and a native failure as its exit code', () => {
+    const script = powershellScript('pandoc in.md -o out.docx');
+    expect(script).toContain('AssignProcessToJobObject');
+    expect(script).toContain('0x2000');
+    expect(script).toContain('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8');
+    expect(script.indexOf('BuddiHostJob]::Enter()')).toBeLessThan(script.indexOf('pandoc in.md -o out.docx'));
+    expect(script.trimEnd().endsWith('if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }')).toBe(true);
+  });
+  it('passes the system and profile variables and the owner\'s PATH, never credentials', () => {
+    const env = commandEnv({ SystemRoot: 'C:\\Windows', Path: 'C:\\Python312;C:\\Windows\\System32', USERPROFILE: 'C:\\Users\\o', TEMP: 'C:\\Users\\o\\AppData\\Local\\Temp',
+      DATABASE_URL: 'secret', OPENAI_API_KEY: 'secret', BUDDI_VAULT: 'secret', NODE_OPTIONS: '--inspect' }, 'win32');
+    expect(env).toMatchObject({ SystemRoot: 'C:\\Windows', PATH: 'C:\\Python312;C:\\Windows\\System32', USERPROFILE: 'C:\\Users\\o', TEMP: 'C:\\Users\\o\\AppData\\Local\\Temp' });
+    for (const key of ['DATABASE_URL', 'OPENAI_API_KEY', 'BUDDI_VAULT', 'NODE_OPTIONS', 'HOME']) expect(env).not.toHaveProperty(key);
+  });
+});
+
+// The real thing, where it can run: a command, a native failure, and a timeout that ends a child.
+describe.runIf(process.platform === 'win32')('host command processes on Windows', () => {
+  const base = { cwd: process.cwd(), timeoutMs: 20_000, env: process.env };
+  it('runs PowerShell and reports a native failure', async () => {
+    expect(await runCommand({ ...base, command: 'Write-Output "hello"' })).toMatchObject({ state: 'completed', exitCode: 0, stdout: expect.stringContaining('hello') });
+    expect((await runCommand({ ...base, command: 'cmd /c exit 7' })).exitCode).toBe(7);
+  });
+  it('times out and ends the whole tree', async () => {
+    const started = Date.now();
+    const result = await runCommand({ ...base, timeoutMs: 1500, command: 'Start-Process -NoNewWindow -FilePath powershell.exe -ArgumentList "-NoProfile","-Command","Start-Sleep 60"; Start-Sleep 60' });
+    expect(result.state).toBe('timed-out');
+    expect(Date.now() - started).toBeLessThan(15_000);
+  });
+});
 
 const base = { cwd: '/tmp', timeoutMs: 3000, env: process.env };
 // Host execution is macOS and Linux only (process.ts refuses Windows).

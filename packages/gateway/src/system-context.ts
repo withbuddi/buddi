@@ -2,6 +2,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { hostShell } from '@buddi/tool-host';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
@@ -82,7 +83,7 @@ export function hostFacts(): Promise<HostFacts> {
     return { os: platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform,
       version, kernel: os.release(), architecture: os.arch(), hardwareModel,
       hostTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      shell: platform === 'win32' ? 'none: running commands on this computer is not available on Windows yet' : '/bin/bash',
+      shell: hostShell(platform).label,
       execution: container ? 'Detected container; facts describe the runtime environment.' : 'Buddi server host; container/VM status not verified. This is not necessarily the dashboard client device.' };
   })();
   cached = { at: Date.now(), value }; return value;

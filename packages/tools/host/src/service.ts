@@ -3,7 +3,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { z } from 'zod';
 import { sha256Of, ToolRefusal, type ToolContext } from '@buddi/core/plugin';
-import { runCommand } from './process.js';
+import { hostShell, runCommand } from './process.js';
 import {
   RUNNABLE_EXTENSIONS, noConfinementReason, confinementArgv, detectConfinement, interpreterFor, sha256File, shellQuote,
   type Confinement, type SkillBundles,
@@ -16,7 +16,7 @@ const skillRunInput = z.object({
 }).strict();
 
 export const execInput = z.object({
-  command: z.string().min(1).max(32_000).optional().describe('Bash command or script; stdin is closed. Never include passwords or secrets. Leave out when running a skill bundle\'s script.'),
+  command: z.string().min(1).max(32_000).optional().describe('Bash command or script (Windows PowerShell 5.1 on Windows); stdin is closed. Never include passwords or secrets. Leave out when running a skill bundle\'s script.'),
   skill: skillRunInput.optional().describe('Run a script from a skill bundle you hold, instead of a command: it works in its own folder, reads the bundle, writes only in that folder, and asks the owner every time.'),
   cwd: z.string().min(1).max(4096).optional().describe('Optional absolute working directory. Defaults to this conversation’s persistent workspace.'),
   timeoutMs: z.number().int().min(100).max(600_000).default(120_000),
@@ -41,8 +41,6 @@ interface HostEnvelope {
   skillRun?: SkillRunView;
 }
 const LIMIT = 20 * 1024 * 1024;
-/** Until commands run through PowerShell there (process.ts). */
-export const HOST_EXEC_WINDOWS = 'Running commands on this computer is not available on Windows yet. Nothing was run and nothing needs approving.';
 let processBundles: SkillBundles | null = null;
 /** The gateway's bundles for every host service in this process (set once at start). */
 export function useSkillBundles(skills: SkillBundles | null): void { processBundles = skills; }
@@ -75,8 +73,6 @@ export class HostService {
     return runs.length;
   }
   async describe(input: Input, ctx: ToolContext): Promise<{ envelope: HostEnvelope; preview: string }> {
-    // Refused before a card is raised: never ask the owner to approve what cannot run.
-    if (this.platform === 'win32') throw new ToolRefusal(HOST_EXEC_WINDOWS);
     if ((input.command === undefined) === (input.skill === undefined)) {
       throw new ToolRefusal('Give host.exec either a command or skill: { bundle, script, args }, not both and not neither.');
     }
@@ -108,7 +104,7 @@ export class HostService {
       const v = run.view;
       return { envelope, preview: `Run a script from ${v.title} — asks every time.\n\nAgent: ${ctx.agentId}\nScript: ${v.interpreter} ${v.script}\nBundle: ${v.title} (${v.bundle})\nArguments: ${v.args.length ? v.args.join(' ') : 'none'}\nWorking folder: ${v.writes}\nIt reads only ${v.title}'s ${v.files} files, the working folder and the system it runs on — none of your own files. It writes only in the working folder.${v.confinement === 'macos-sandbox' ? ' It cannot open other apps.' : ''} ${v.network ? `Network: on — ${v.title} says its scripts need it, so this script can send what it reads to the internet.` : 'Network: off.'}\nTimeout: ${input.timeoutMs / 1000}s\n\nInputs: ${attachments.map(a => a.path).join(', ') || 'none'}\nReturned files: ${input.outputs.join(', ') || 'none'}\n\nAllow once runs this script with these arguments, once. A bundle script is never allowed for a conversation or always.` };
     }
-    const envelope = { command: input.command!, shell: '/bin/bash', cwd, workspace,
+    const envelope = { command: input.command!, shell: hostShell(this.platform).name, cwd, workspace,
       timeoutMs: input.timeoutMs, attachments, outputs: input.outputs, authority: 'host-user-unsandboxed' };
     return { envelope, preview: `Run as your host user — NOT sandboxed. Commands can access your files and network, install software and modify this installation. No administrator password is provided.\n\nAgent: ${ctx.agentId}\nDirectory: ${cwd}\nTimeout: ${input.timeoutMs / 1000}s\n\n${input.command}\n\nInputs: ${attachments.map(a => a.path).join(', ') || 'none'}\nReturned files: ${input.outputs.join(', ') || 'none'}\n\nAllow once approves this command. Conversation auto-mode allows ALL host commands by this agent in this conversation until revoked. Always allows ALL host commands by this agent across future conversations/tasks until revoked. These are not command-prefix grants.` };
   }

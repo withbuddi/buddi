@@ -9,7 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isToolRefusal, type ToolContext } from '@buddi/core/plugin';
-import { HOST_EXEC_WINDOWS, HostService, execInput } from './service.js';
+import { HostService, execInput } from './service.js';
+import { createHostManifest } from './index.js';
 import { runCommand } from './process.js';
 import { confinementArgv, detectConfinement, noConfinementReason, skillScriptsRunnable, type SkillBundleView, type SkillBundles } from './skill-run.js';
 
@@ -88,14 +89,21 @@ describe('host.exec runs a bundle script', () => {
     expect(await refusal({ skill: { bundle: 'cover-art', script: 'scripts/make_cover.py' } })).toMatch(/no way to confine a script/);
   });
 
-  it('on Windows: refuses a command and a bundle script before any card, and offers no script runs', async () => {
+  it('on Windows: a command is asked for in PowerShell; a bundle script is refused before any card', async () => {
     service.platform = 'win32';
     service.confinement = () => detectConfinement('win32');
-    expect(await refusal({ command: 'pandoc report.md -o report.docx' })).toBe(HOST_EXEC_WINDOWS);
-    expect(await refusal({ skill: { bundle: 'cover-art', script: 'scripts/make_cover.py' } })).toBe(HOST_EXEC_WINDOWS);
+    const { envelope, preview } = await service.describe(input({ command: 'Get-Date' }), ctx());
+    expect(envelope).toMatchObject({ shell: 'powershell.exe', command: 'Get-Date', authority: 'host-user-unsandboxed' });
+    expect(preview).toContain('NOT sandboxed');
+    expect(await refusal({ skill: { bundle: 'cover-art', script: 'scripts/make_cover.py' } })).toMatch(/do not run on Windows yet/);
     expect(skillScriptsRunnable('win32')).toBe(false);
     expect(noConfinementReason('win32')).toMatch(/do not run on Windows yet/);
     expect(noConfinementReason('win32')).not.toMatch(/apt install/);
+    // The model is told the dialect, and the same approval rules hold.
+    const exec = createHostManifest(service).tools.find((t) => t.name === 'host.exec')!;
+    expect(exec.tier).toBe('gated');
+    expect(exec.description).toContain('Windows PowerShell 5.1 (powershell.exe)');
+    expect(exec.description).toContain('Skill bundle scripts do not run on Windows.');
   });
 
   it('refuses to run a script that changed after it was approved', async () => {
