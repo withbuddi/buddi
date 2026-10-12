@@ -163,3 +163,20 @@ export function confinementArgv(kind: Confinement, work: string, opts: ConfineOp
 /** The sentence a refusal says when a run cannot be confined here. */
 export const NO_CONFINEMENT =
   'This computer has no way to confine a script to its folder (macOS sandbox-exec, or bubblewrap on Linux: `apt install bubblewrap`), so bundle scripts do not run here.';
+/** Windows has no confinement a user can set up without administrator rights. */
+export const NO_CONFINEMENT_WINDOWS =
+  'Skill bundle scripts do not run on Windows yet: there is no way to confine a script to its folder there without administrator rights.';
+
+/** The refusal for this platform when a bundle script cannot be confined. */
+export function noConfinementReason(platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? NO_CONFINEMENT_WINDOWS : NO_CONFINEMENT;
+}
+
+/**
+ * Whether a bundle's scripts can run here: the one confinement check the
+ * agent prompt ("to run one of its scripts…"), the Skills page ("can run
+ * scripts") and host.exec's `skill` form all read.
+ */
+export function skillScriptsRunnable(platform: NodeJS.Platform = process.platform): boolean {
+  return detectConfinement(platform) !== null;
+}

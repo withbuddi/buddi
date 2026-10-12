@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { sha256Of, ToolRefusal, type ToolContext } from '@buddi/core/plugin';
 import { runCommand } from './process.js';
 import {
-  NO_CONFINEMENT, RUNNABLE_EXTENSIONS, confinementArgv, detectConfinement, interpreterFor, sha256File, shellQuote,
+  RUNNABLE_EXTENSIONS, noConfinementReason, confinementArgv, detectConfinement, interpreterFor, sha256File, shellQuote,
   type Confinement, type SkillBundles,
 } from './skill-run.js';
 
@@ -41,6 +41,8 @@ interface HostEnvelope {
   skillRun?: SkillRunView;
 }
 const LIMIT = 20 * 1024 * 1024;
+/** Until commands run through PowerShell there (process.ts). */
+export const HOST_EXEC_WINDOWS = 'Running commands on this computer is not available on Windows yet. Nothing was run and nothing needs approving.';
 let processBundles: SkillBundles | null = null;
 /** The gateway's bundles for every host service in this process (set once at start). */
 export function useSkillBundles(skills: SkillBundles | null): void { processBundles = skills; }
@@ -49,7 +51,9 @@ export class HostService {
   /** The owner's skill bundles, for the `skill` form; this service's own, else the process's (`useSkillBundles`). */
   skills: SkillBundles | null = null;
   /** The confinement a script runs inside; detected unless a caller (a test) says. */
-  confinement: () => Confinement | null = () => detectConfinement();
+  confinement: () => Confinement | null = () => detectConfinement(this.platform);
+  /** The platform this service decides for; a test simulating another computer sets it. */
+  platform: NodeJS.Platform = process.platform;
   constructor(readonly env: NodeJS.ProcessEnv = process.env) {}
   useSkillBundles(skills: SkillBundles | null): void { this.skills = skills; }
   #bundles(): SkillBundles | null { return this.skills ?? processBundles; }
@@ -71,6 +75,8 @@ export class HostService {
     return runs.length;
   }
   async describe(input: Input, ctx: ToolContext): Promise<{ envelope: HostEnvelope; preview: string }> {
+    // Refused before a card is raised: never ask the owner to approve what cannot run.
+    if (this.platform === 'win32') throw new ToolRefusal(HOST_EXEC_WINDOWS);
     if ((input.command === undefined) === (input.skill === undefined)) {
       throw new ToolRefusal('Give host.exec either a command or skill: { bundle, script, args }, not both and not neither.');
     }
@@ -122,7 +128,7 @@ export class HostService {
     const interpreter = interpreterFor(script);
     if (!interpreter) throw new ToolRefusal(`buddi runs a bundle's ${RUNNABLE_EXTENSIONS.join(', ')} scripts; "${script}" is none of them.`);
     const confinement = this.confinement();
-    if (!confinement) throw new ToolRefusal(NO_CONFINEMENT);
+    if (!confinement) throw new ToolRefusal(noConfinementReason(this.platform));
     const file = path.join(bundle.dir, script);
     const key = sha256Of(Buffer.from(JSON.stringify([ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId]))).slice(0, 16);
     const work = path.join(ctx.buddi!.dir.legacyPath!, 'skill-runs', bundle.name, key);

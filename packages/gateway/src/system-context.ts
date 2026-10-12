@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
@@ -18,6 +19,42 @@ async function command(file: string, args: string[]): Promise<string | null> {
 export interface HostFacts {
   os: string; version: string; kernel: string; architecture: string;
   hardwareModel: string | null; hostTimezone: string; execution: string;
+  /** The shell host.exec runs commands in, or why there is none. */
+  shell: string;
+}
+
+/**
+ * "Windows 11 Pro 24H2 (build 26100)" from the kernel release and the
+ * registry's CurrentVersion values. The release alone (10.0.26100) reads as
+ * Windows 10 to a model, and so does ProductName, which Windows 11 never
+ * changed: build 22000 and up is Windows 11.
+ */
+export function windowsVersion(release: string, values: Record<string, string>): string {
+  const build = Number(release.split('.')[2] ?? values.CurrentBuildNumber ?? NaN);
+  const product = (values.ProductName ?? '').trim();
+  const server = /^Windows Server/i.test(product);
+  const edition = server ? product : product.replace(/^Windows\s+\d+\s*/i, '').trim();
+  const name = server ? '' : Number.isFinite(build) ? `Windows ${build >= 22000 ? '11' : '10'}` : 'Windows';
+  const display = (values.DisplayVersion ?? values.ReleaseId ?? '').trim();
+  return [name, edition, display].filter((p) => p !== '').join(' ') + (Number.isFinite(build) ? ` (build ${build})` : '');
+}
+
+/** The values under HKLM\\…\\Windows NT\\CurrentVersion, as `reg query` prints them. */
+export function parseRegQuery(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s+(\S+)\s+REG_[A-Z_]+\s+(.*)$/.exec(line);
+    if (match) out[match[1]!] = clean(match[2]!);
+  }
+  return out;
+}
+
+async function windowsRegistryValues(): Promise<Record<string, string>> {
+  const reg = path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'reg.exe');
+  try {
+    const { stdout } = await exec(reg, ['query', 'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'], { timeout: 1500, maxBuffer: 64 * 1024, windowsHide: true });
+    return parseRegQuery(stdout);
+  } catch { return {}; }
 }
 let cached: { at: number; value: Promise<HostFacts> } | undefined;
 /** Only allowlisted facts. Never hostname, serial number, usernames, paths or environment dumps. */
@@ -33,6 +70,8 @@ export function hostFacts(): Promise<HostFacts> {
         command('/usr/sbin/sysctl', ['-n', 'hw.model']),
       ]);
       version = product ?? version; hardwareModel = model;
+    } else if (platform === 'win32') {
+      version = windowsVersion(os.release(), await windowsRegistryValues());
     } else if (platform === 'linux') {
       try { hardwareModel = clean(await readFile('/sys/devices/virtual/dmi/id/product_name', 'utf8')) || null; } catch { /* Not exposed on every host/container. */ }
     }
@@ -43,6 +82,7 @@ export function hostFacts(): Promise<HostFacts> {
     return { os: platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform,
       version, kernel: os.release(), architecture: os.arch(), hardwareModel,
       hostTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      shell: platform === 'win32' ? 'none: running commands on this computer is not available on Windows yet' : '/bin/bash',
       execution: container ? 'Detected container; facts describe the runtime environment.' : 'Buddi server host; container/VM status not verified. This is not necessarily the dashboard client device.' };
   })();
   cached = { at: Date.now(), value }; return value;

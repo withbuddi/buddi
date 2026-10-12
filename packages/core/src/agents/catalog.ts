@@ -338,6 +338,12 @@ export interface LoadAgentCatalogOptions {
    */
   disabledPlugins?: readonly string[];
   /**
+   * Whether a skill bundle's scripts can run on this computer (a confinement
+   * exists: sandbox-exec, bwrap; none on Windows). False: an agent holding
+   * host.exec is not told it can run them. Default true.
+   */
+  skillScriptsRunnable?: boolean;
+  /**
    * A single directory — the original shape, kept because most tests and every
    * ad-hoc caller means exactly one. A directory that cannot be read is an
    * error here, as it always was.
@@ -953,7 +959,7 @@ function buildAgent(
     opts.log ?? ((line: string) => console.warn(line)),
     opts.log ?? ((line: string) => catalogNotice(line)),
   );
-  const section = skillsSection(skills, { canRunScripts: tools.includes(SKILL_SCRIPT_TOOL) });
+  const section = skillsSection(skills, { canRunScripts: tools.includes(SKILL_SCRIPT_TOOL) && opts.skillScriptsRunnable !== false });
   const colleagues = roster.filter((entry) => entry.id !== frontmatter.id);
   /*
    * The allowlist as the installation holds it, resolved against the roster.

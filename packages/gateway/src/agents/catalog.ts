@@ -35,7 +35,7 @@ import { buildPreamble, manifest as memoryManifest,
 import { manifest as webManifest } from '@buddi/tool-web';
 import { createBrowserManifest } from '@buddi/tool-browser';
 import { browserHost, signInSitesOnDisk } from '../browser-host.js';
-import { createHostManifest, hostService } from '@buddi/tool-host';
+import { createHostManifest, hostService, skillScriptsRunnable } from '@buddi/tool-host';
 import { createConnectionsManifest } from '@buddi/tool-mcp';
 import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
@@ -416,7 +416,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, disabledPlugins, delegatesFor: delegatesForPrompt(), delegateTargetAllowed, ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }) });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, disabledPlugins, skillScriptsRunnable: skillScriptsRunnable(), delegatesFor: delegatesForPrompt(), delegateTargetAllowed, ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }) });
     assertNoDelegationToWriters(single);
     return single;
   }
@@ -433,6 +433,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     providerSelection: opts.providerSelection,
     pluginForFamily,
     disabledPlugins,
+    skillScriptsRunnable: skillScriptsRunnable(),
     delegatesFor: delegatesForPrompt(), delegateTargetAllowed,
     // The owner's recorded choice, which core prefers over any file flag.
     ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }),

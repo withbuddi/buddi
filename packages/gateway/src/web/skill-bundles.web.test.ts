@@ -13,7 +13,7 @@ import path from 'node:path';
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import { asksEachTime, loadAgentCatalog } from '@buddi/core';
 import { isToolRefusal, type ToolContext } from '@buddi/core/plugin';
-import { HostService, execInput } from '@buddi/tool-host';
+import { HostService, execInput, skillScriptsRunnable } from '@buddi/tool-host';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createToolRegistry, EXAMPLES_AGENTS_DIR, EXAMPLES_SKILLS_DIR, reloadableCatalog } from '../agents/catalog.js';
 import { BUNDLE_MAX_FILES, readStaged, stageBundle, type Refusal, type StagedBundle } from './skill-bundles.js';
@@ -192,7 +192,8 @@ describe('skill bundles, server side', () => {
     const row = rows().find((r) => r.id === 'cover-art-kit')!;
     expect(row).toMatchObject({ group: 'mine', untrusted: 'upload', bundle: { files: 4, scripts: ['scripts/make_cover.py', 'scripts/setup.sh'] } });
     expect(row.holders.map((h) => h.agent).sort()).toEqual(['dev', 'ledger']);
-    expect(agents().filter((a) => a.canRunScripts).map((a) => a.id)).toEqual(['dev']);
+    // Only where a bundle script can be confined (sandbox-exec, bwrap; never Windows).
+    expect(agents().filter((a) => a.canRunScripts).map((a) => a.id)).toEqual(skillScriptsRunnable() ? ['dev'] : []);
 
     const detail = skillDetailRoute(deps, 'cover-art-kit').body as { bundle: { files: Array<{ path: string }>; scripts: string[] } };
     expect(detail.bundle.files.map((f) => f.path)).toEqual(['SKILL.md', 'assets/logo.png', 'assets/palette.json', 'scripts/make_cover.py', 'scripts/setup.sh']);
@@ -225,6 +226,7 @@ describe('skill bundles, server side', () => {
     const service = new HostService({});
     service.useSkillBundles(skillBundlesFor(deps));
     service.confinement = () => 'macos-sandbox';
+    service.platform = 'darwin';
     const ctx = { agentId: 'dev', conversationId: 'c-1', buddi: { owner: { id: 'o' }, dir: { legacyPath: path.join(root, 'data') } } } as unknown as ToolContext;
     const run = execInput.parse({ skill: { bundle: 'cover-art-kit', script: 'scripts/make_cover.py', args: ['--title', 'Night Train'] } });
     await expect(service.describe(run, ctx)).rejects.toSatisfy((err: unknown) => isToolRefusal(err) && /cannot run/.test((err as Error).message));

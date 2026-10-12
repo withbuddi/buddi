@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
-import { birthdayLine, createSystemManifest, DECISION_LINES, GROUNDING_LINES, formatLine, hostFacts, LIST_ANSWER_LINE, NOTIFY_LINE, ownerLines, REPLY_LANGUAGE_LINE, resourcefulLines, systemContext, systemTime } from './system-context.js';
+import { birthdayLine, createSystemManifest, DECISION_LINES, GROUNDING_LINES, formatLine, hostFacts, LIST_ANSWER_LINE, parseRegQuery, windowsVersion, NOTIFY_LINE, ownerLines, REPLY_LANGUAGE_LINE, resourcefulLines, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
@@ -151,13 +151,24 @@ describe('shared platform context', () => {
   });
   it('publishes bounded host facts, never identifying or secret inventory', async () => {
     const host = await hostFacts();
-    expect(Object.keys(host).sort()).toEqual(['architecture', 'execution', 'hardwareModel', 'hostTimezone', 'kernel', 'os', 'version'].sort());
+    expect(Object.keys(host).sort()).toEqual(['architecture', 'execution', 'hardwareModel', 'hostTimezone', 'kernel', 'os', 'shell', 'version'].sort());
     expect(host.os).toBeTruthy();
     const { ctx } = fixture();
     const context = await systemContext(ctx);
     expect(context.timezone).toBe('America/Los_Angeles');
     expect(context.prompt).toContain('system.time');
     expect(context.prompt).toContain('Host facts do not grant access');
+  });
+  it('names Windows 11 by its build, not by the kernel release or ProductName', () => {
+    const values = parseRegQuery([
+      '', 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion',
+      '    ProductName    REG_SZ    Windows 10 Pro', '    DisplayVersion    REG_SZ    24H2',
+      '    CurrentBuildNumber    REG_SZ    26100', '    InstallDate    REG_DWORD    0x66f00000', '',
+    ].join('\r\n'));
+    expect(values).toMatchObject({ ProductName: 'Windows 10 Pro', DisplayVersion: '24H2' });
+    expect(windowsVersion('10.0.26100', values)).toBe('Windows 11 Pro 24H2 (build 26100)');
+    expect(windowsVersion('10.0.19045', { ProductName: 'Windows 10 Home', DisplayVersion: '22H2' })).toBe('Windows 10 Home 22H2 (build 19045)');
+    expect(windowsVersion('10.0.26100', {})).toBe('Windows 11 (build 26100)');
   });
   it('offers strict read-only system tools without approval', async () => {
     const registry = new ToolRegistry(); registry.register(createSystemManifest());

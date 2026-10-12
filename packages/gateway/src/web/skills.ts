@@ -61,6 +61,7 @@ import { readProvenance } from '../plugins/provenance.js';
 import { removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
 import { replaceBody, trashStamp, writeFilesAtomic, type FileWrite } from '../agents/platform-files.js';
 import { bundleFileRows, bundleFileView, bundleImage, incomingDirFor, readStaged, zipBundle, type BundleFileRow } from './skill-bundles.js';
+import { skillScriptsRunnable } from '@buddi/tool-host';
 
 export interface RouteReply {
   status: number;
@@ -218,7 +219,7 @@ function agentRecords(catalog: AgentCatalog): AgentRecord[] {
       }
       return {
         id: agent.id, handle: agent.handle, name: agent.name, file: agent.file, writable: agent.source === 'private', declared,
-        canRunScripts: (agent.tools ?? []).includes(SKILL_SCRIPT_TOOL),
+        canRunScripts: (agent.tools ?? []).includes(SKILL_SCRIPT_TOOL) && skillScriptsRunnable(),
       };
     });
 }

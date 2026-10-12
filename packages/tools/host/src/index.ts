@@ -23,6 +23,6 @@ export function createHostManifest(service: HostService = hostService()): Plugin
   };
 }
 export { hostService, HostService, execInput, useSkillBundles, type SkillRunView } from './service.js';
-export { detectConfinement, type Confinement, type SkillBundles, type SkillBundleView } from './skill-run.js';
+export { detectConfinement, skillScriptsRunnable, noConfinementReason, type Confinement, type SkillBundles, type SkillBundleView } from './skill-run.js';
 export const manifest = createHostManifest();
 export default manifest;

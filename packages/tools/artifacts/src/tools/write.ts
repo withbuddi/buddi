@@ -52,7 +52,7 @@ const writeInput = z.object({
     .min(1)
     .max(MAX_FOLDER_CHARS)
     .optional()
-    .describe('A short label to file it under, e.g. "Taxes 2026". Shown with the file and found by search.'),
+    .describe('A short label to file it under in Files, e.g. "Taxes 2026". Shown with the file and found by search; not a folder on the owner\'s computer.'),
 }).strict();
 
 export interface WrittenDocument {
@@ -72,7 +72,7 @@ export interface WrittenDocument {
 export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> = {
   name: 'artifacts.write',
   description:
-    "Save a document into the owner's Files: a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program. Writing the same title again in this conversation saves a new version; the earlier one stays.",
+    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program, and never convert it yourself (no pandoc): point them to Files and the download. Writing the same title again in this conversation saves a new version; the earlier one stays.",
   tier: 'auto',
   sideEffect: true,
   producesArtifacts: true,
@@ -130,7 +130,7 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
       ...(unchanged ? { unchanged: true } : {}),
       note: unchanged
         ? `These exact contents are already in Files as ${saved.filename ?? 'an earlier file'}; nothing new was saved.`
-        : `Saved to Files as ${filename}. The owner can open it there and download it as ${kind}.`,
+        : `Saved to Files${folder === undefined ? '' : ` under "${folder}"`} as ${filename} (buddi's Files, not the computer's desktop or disk). The owner can open it there and download it as ${kind}; no conversion needed.`,
     };
   },
 };
