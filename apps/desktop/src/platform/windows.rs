@@ -105,40 +105,19 @@ fn hkcu(path: &str) -> Option<RegKey> {
     RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(path, KEY_READ).ok()
 }
 
-/// Dark ink for a light taskbar, light ink for a dark one (Windows 11's
-/// default). BUDDI_TRAY_INK=dark|light overrides.
+/// The colour tray icon has no ink to choose (tray.rs).
 pub fn tray_wants_dark_ink() -> bool {
-    match std::env::var("BUDDI_TRAY_INK").as_deref() {
-        Ok("dark") => return true,
-        Ok("light") => return false,
-        _ => {}
-    }
-    let light = hkcu(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize").and_then(|k| k.get_value::<u32, _>("SystemUsesLightTheme").ok());
-    rules::dark_ink(light)
+    false
 }
 
-/// Calls `changed` with the ink whenever the taskbar's theme changes: a
-/// thread waits on the Personalize key (RegNotifyChangeKeyValue), no polling.
-pub fn watch_tray_ink(changed: impl Fn(bool) + Send + 'static) {
-    if std::env::var_os("BUDDI_TRAY_INK").is_some() {
-        return;
-    }
-    std::thread::spawn(move || {
-        use windows::Win32::System::Registry::{RegNotifyChangeKeyValue, HKEY, REG_NOTIFY_CHANGE_LAST_SET};
-        let Ok(key) = RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", KEY_READ | winreg::enums::KEY_NOTIFY)
-        else {
-            return;
-        };
-        loop {
-            let waited = unsafe { RegNotifyChangeKeyValue(HKEY(key.raw_handle() as _), false, REG_NOTIFY_CHANGE_LAST_SET, None, false) };
-            if waited.is_err() {
-                shell::log("not following the taskbar's theme: the registry did not say when it changes");
-                return;
-            }
-            changed(tray_wants_dark_ink());
-        }
-    });
+/// The colour icon needs no following of the taskbar's theme.
+pub fn watch_tray_ink(_changed: impl Fn(bool) + Send + 'static) {}
+
+/// The notification area's icon size for the system's display scale: 16 px
+/// at 100 %, 20 at 125 %, 24 at 150 %, 32 at 200 % and above.
+pub fn tray_icon_px() -> u32 {
+    let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForSystem() };
+    rules::tray_px(dpi)
 }
 
 pub fn tray_icon_dir() -> Option<PathBuf> {

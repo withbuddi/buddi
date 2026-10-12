@@ -30,6 +30,28 @@ enum Glyph {
     Attention,
 }
 
+/// Windows: the full-colour Blob (the notification area there is in colour),
+/// at the size the display's scale wants (platform::tray_icon_px).
+#[cfg(windows)]
+fn glyph_png(glyph: Glyph, _dark_ink: bool) -> &'static [u8] {
+    match (glyph, platform::tray_icon_px()) {
+        (Glyph::Running, 16) => include_bytes!("../icons/tray/win-running-16.png"),
+        (Glyph::Running, 20) => include_bytes!("../icons/tray/win-running-20.png"),
+        (Glyph::Running, 24) => include_bytes!("../icons/tray/win-running-24.png"),
+        (Glyph::Running, _) => include_bytes!("../icons/tray/win-running-32.png"),
+        (Glyph::Starting, 16) => include_bytes!("../icons/tray/win-starting-16.png"),
+        (Glyph::Starting, 20) => include_bytes!("../icons/tray/win-starting-20.png"),
+        (Glyph::Starting, 24) => include_bytes!("../icons/tray/win-starting-24.png"),
+        (Glyph::Starting, _) => include_bytes!("../icons/tray/win-starting-32.png"),
+        (Glyph::Attention, 16) => include_bytes!("../icons/tray/win-attention-16.png"),
+        (Glyph::Attention, 20) => include_bytes!("../icons/tray/win-attention-20.png"),
+        (Glyph::Attention, 24) => include_bytes!("../icons/tray/win-attention-24.png"),
+        (Glyph::Attention, _) => include_bytes!("../icons/tray/win-attention-32.png"),
+    }
+}
+
+/// Linux: buddi.app's menu-bar glyph, in the ink the panel wants.
+#[cfg(not(windows))]
 fn glyph_png(glyph: Glyph, dark_ink: bool) -> &'static [u8] {
     match (glyph, dark_ink) {
         (Glyph::Running, false) => include_bytes!("../icons/tray/running-light.png"),

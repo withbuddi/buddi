@@ -90,10 +90,10 @@ pub fn startup_approved(bytes: Option<&[u8]>) -> bool {
     }
 }
 
-/// Dark ink on a light taskbar: `SystemUsesLightTheme` = 1. Windows 11's
-/// default taskbar is dark (0, or no value).
-pub fn dark_ink(system_uses_light_theme: Option<u32>) -> bool {
-    system_uses_light_theme == Some(1)
+/// The tray icon cut for a display's DPI (96 = 100 %): the nearest of 16, 20, 24 and 32 px, never smaller.
+pub fn tray_px(dpi: u32) -> u32 {
+    let want = 16 * dpi.max(96) / 96;
+    [16, 20, 24, 32].into_iter().find(|s| *s >= want).unwrap_or(32)
 }
 
 /// The clock as the taskbar shows it: `sShortTime` (Control Panel →
@@ -159,7 +159,7 @@ mod tests {
         assert!(startup_approved(Some(&[2, 0, 0])));
         assert!(startup_approved(Some(&[6])));
         assert!(!startup_approved(Some(&[3, 0, 0])));
-        assert!(dark_ink(Some(1)) && !dark_ink(Some(0)) && !dark_ink(None));
+        assert_eq!((tray_px(96), tray_px(120), tray_px(144), tray_px(192), tray_px(288), tray_px(0)), (16, 20, 24, 32, 32, 16));
         assert_eq!(clock_format(Some("h:mm tt")), "%-I:%M %p");
         assert_eq!(clock_format(Some("HH:mm")), "%H:%M");
         assert_eq!(clock_format(None), "%H:%M");

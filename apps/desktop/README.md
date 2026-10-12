@@ -162,8 +162,11 @@ rules as plain tested functions in `src/platform/windows_rules.rs`.
   exact origin, everything else denied without a prompt.
 - **Notifications**: toasts under the AppUserModelID; a click brings the window.
 - **Tray**: a left click opens the window, a right click the menu (the same
-  menu as Linux, with "Uninstall buddi…" saying the app goes too). Ink from
-  `HKCU\…\Themes\Personalize\SystemUsesLightTheme`, read at start.
+  menu as Linux, with "Uninstall buddi…" saying the app goes too). The icon is
+  the full-colour Blob, as the taskbar and Start show it (the notification
+  area there is in colour), cut at 16, 20, 24 and 32 px for the display scale
+  (`scripts/make-win-tray.sh`, from buddi.app's favicon cuts): grey while
+  starting or stopped, an amber dot when buddi needs attention.
 - **Start at Login**: `HKCU\…\Run\buddi = "<exe>" --hidden`, on at the first
   start. What the app wrote, and for which data folder, is recorded in
   `HKCU\Software\buddi\Desktop`; the app changes, and the uninstaller removes,
@@ -187,8 +190,8 @@ rules as plain tested functions in `src/platform/windows_rules.rs`.
   where the backup and its passphrase are, until the owner closes it. An
   installation that disappears under it (`buddi uninstall` in a terminal) is
   never set up again by a reconnect. The uninstaller waits for that window.
-- **Tray ink follows the theme**: a thread waits on the Personalize key
-  (RegNotifyChangeKeyValue); on Linux, KDE's kdeglobals is watched.
+- **Tray ink on Linux follows the theme**: KDE's kdeglobals is watched (GNOME's
+  and COSMIC's top bars are dark whatever the theme).
 - **Log**: `%LOCALAPPDATA%\com.withbuddi.desktop\desktop.log` (a windowed
   program has no stderr).
 - **Build**: on Windows, `scripts/release/windows-desktop.sh <version>` (the

@@ -307,6 +307,11 @@ pub fn offer_autostart_once(config: &std::path::Path) {
     }
 }
 
+/// Where the tray's icon files go: the session's runtime folder, not /tmp.
+pub fn tray_icon_dir() -> Option<PathBuf> {
+    dirs::runtime_dir().map(|d| d.join("buddi-desktop").join("tray"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,9 +326,4 @@ mod tests {
         assert!(!owned_entry("[Desktop Entry]\nExec=buddi-desktop --hidden\n", "/home/a/.local/share/buddi"), "the owner's");
         assert!(owned_entry("[Desktop Entry]\nX-Buddi-Linux-Install=true\n", "/x"), "an older marked entry");
     }
-}
-
-/// Where the tray's icon files go: the session's runtime folder, not /tmp.
-pub fn tray_icon_dir() -> Option<PathBuf> {
-    dirs::runtime_dir().map(|d| d.join("buddi-desktop").join("tray"))
 }
