@@ -1,8 +1,4 @@
-import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 
 export interface CommandResult {
@@ -65,94 +61,139 @@ export function commandEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = p
   return out;
 }
 
+/** What the supervisor writes to stderr, and exits 125 with, when it could not set up the job. Nothing ran. */
+export const JOB_FAILED_MARKER = 'BUDDI-HOST-JOB-FAILED: ';
+const JOB_FAILED_EXIT = 125;
+
 /**
- * Before the command: PowerShell puts itself in a new job object that kills
- * every process in it when its last handle closes. PowerShell holds that
- * handle, so when it exits (done, or killed) a program the command left
- * running in the background goes with it — what a process group does on
- * POSIX. No administrator rights. Compiled once into a small assembly in the
- * user's temp folder (a cold Add-Type costs seconds per command); where that
- * cannot be done, the command still runs, and taskkill /T still ends the tree
- * on a stop.
+ * The PowerShell that runs a Windows command, handed over stdin from this
+ * process's memory (no file anywhere for anyone to swap). It puts itself in a new job object that
+ * kills every process in it when its last handle closes — the handle only it
+ * holds — so when it exits (done, or killed by buddi) every program the
+ * command started goes with it, as a process group does on POSIX. The job is
+ * made through a P/Invoke defined in memory (Reflection.Emit): no compiler, no
+ * DLL on disk, no administrator rights. If it cannot be made and joined, the
+ * command does not run (fail closed). Only then is the command read, from
+ * stdin (base64 UTF-8; stdin is then at end, as a closed one), and run in
+ * this same process.
  */
-const JOB_SOURCE = String.raw`using System; using System.Runtime.InteropServices;
-public static class BuddiHostJob {
-  [StructLayout(LayoutKind.Sequential)] struct Basic { public long A; public long B; public uint LimitFlags; public UIntPtr C; public UIntPtr D; public uint E; public UIntPtr F; public uint G; public uint H; }
-  [StructLayout(LayoutKind.Sequential)] struct Io { public ulong A, B, C, D, E, F; }
-  [StructLayout(LayoutKind.Sequential)] struct Extended { public Basic Basic; public Io Io; public UIntPtr A; public UIntPtr B; public UIntPtr C; public UIntPtr D; }
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateJobObject(IntPtr a, string name);
-  [DllImport("kernel32.dll")] static extern bool SetInformationJobObject(IntPtr job, int kind, ref Extended info, uint size);
-  [DllImport("kernel32.dll")] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
-  static IntPtr held;
-  public static bool Enter() {
-    IntPtr job = CreateJobObject(IntPtr.Zero, null);
-    if (job == IntPtr.Zero) return false;
-    var info = new Extended(); info.Basic.LimitFlags = 0x2000; // KILL_ON_JOB_CLOSE
-    if (!SetInformationJobObject(job, 9, ref info, (uint)Marshal.SizeOf(typeof(Extended)))) return false;
-    if (!AssignProcessToJobObject(job, GetCurrentProcess())) return false;
-    held = job; return true;
+export const WINDOWS_SUPERVISOR = String.raw`$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
+try {
+  $__buddiType = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object Reflection.AssemblyName 'BuddiHostJob'), [Reflection.Emit.AssemblyBuilderAccess]::Run).DefineDynamicModule('BuddiHostJob').DefineType('BuddiHostJob', 'Public, Class')
+  foreach ($__buddiDef in @(
+    @('CreateJobObjectW', [IntPtr], [Type[]]@([IntPtr], [IntPtr])),
+    @('SetInformationJobObject', [bool], [Type[]]@([IntPtr], [int], [IntPtr], [uint32])),
+    @('AssignProcessToJobObject', [bool], [Type[]]@([IntPtr], [IntPtr]))
+  )) {
+    $__buddiMethod = $__buddiType.DefinePInvokeMethod($__buddiDef[0], 'kernel32.dll', [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard, $__buddiDef[1], $__buddiDef[2], [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
+    $__buddiMethod.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
   }
-}`;
-
-/** A path as a PowerShell single-quoted string. */
-const psQuote = (value: string): string => `'${value.replace(/'/g, "''")}'`;
-
-let jobAssembly: Promise<string | null> | undefined;
-/** The compiled job helper, built on first use and kept; null when it cannot be. */
-function windowsJobAssembly(env: NodeJS.ProcessEnv): Promise<string | null> {
-  jobAssembly ??= (async () => {
-    const hash = createHash('sha256').update(JOB_SOURCE).digest('hex').slice(0, 16);
-    const dll = path.join(os.tmpdir(), `buddi-host-job-${hash}.dll`);
-    if (existsSync(dll)) return dll;
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'buddi-host-'));
-    try {
-      const partial = path.join(dir, 'job.dll');
-      const script = path.join(dir, 'build.ps1');
-      await writeFile(script, `﻿Add-Type -TypeDefinition @'\r\n${JOB_SOURCE}\r\n'@ -OutputAssembly ${psQuote(partial)} -OutputType Library\r\n`, 'utf8');
-      const result = await spawnCommand({ command: '', cwd: dir, timeoutMs: 30_000, env }, true, script);
-      if (result.state !== 'completed' || result.exitCode !== 0 || !existsSync(partial)) return null;
-      await rename(partial, dll).catch(() => undefined);
-      return existsSync(dll) ? dll : null;
-    } catch {
-      return null;
-    } finally {
-      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-    }
-  })();
-  return jobAssembly;
+  $__buddiNative = $__buddiType.CreateType()
+  $__buddiJob = $__buddiNative::CreateJobObjectW([IntPtr]::Zero, [IntPtr]::Zero)
+  if ($__buddiJob -eq [IntPtr]::Zero) { throw 'CreateJobObject failed' }
+  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION: LimitFlags at offset 16 on 32- and 64-bit alike.
+  $__buddiSize = if ([IntPtr]::Size -eq 8) { 144 } else { 112 }
+  $__buddiInfo = [Runtime.InteropServices.Marshal]::AllocHGlobal($__buddiSize)
+  for ($__buddiI = 0; $__buddiI -lt $__buddiSize; $__buddiI++) { [Runtime.InteropServices.Marshal]::WriteByte($__buddiInfo, $__buddiI, 0) }
+  [Runtime.InteropServices.Marshal]::WriteInt32($__buddiInfo, 16, 0x2000) # KILL_ON_JOB_CLOSE
+  if (-not $__buddiNative::SetInformationJobObject($__buddiJob, 9, $__buddiInfo, [uint32]$__buddiSize)) { throw 'SetInformationJobObject failed' }
+  [Runtime.InteropServices.Marshal]::FreeHGlobal($__buddiInfo)
+  if (-not $__buddiNative::AssignProcessToJobObject($__buddiJob, [IntPtr](-1))) { throw 'AssignProcessToJobObject failed' }
+} catch {
+  [Console]::Error.WriteLine('${JOB_FAILED_MARKER}' + $_.Exception.Message)
+  exit ${JOB_FAILED_EXIT}
 }
+try {
+  $__buddiCommand = [ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())))
+} catch {
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$OutputEncoding = [Text.Encoding]::UTF8
+$global:LASTEXITCODE = 0
+. $__buddiCommand
+`;
 
 /**
- * The script a Windows command runs as: its children in a kill-on-close job
- * (when the helper is there), UTF-8 out, no progress records, and a native
- * program's failure as the exit code (PowerShell itself would exit 0). Run
- * with -File, so nothing in the command is quoted for a command line.
+ * The command as the supervisor runs it, with its status as bash would give
+ * it: the last statement's. It succeeded: 0. It failed: a native program's
+ * code when it set one, else 1 (not found, a cmdlet's error). A stale code from
+ * an earlier program never decides.
  */
-export function powershellScript(command: string, jobDll: string | null = null): string {
+export function windowsCommandScript(command: string): string {
   return [
-    ...(jobDll ? [`try { Add-Type -Path ${psQuote(jobDll)}; [void][BuddiHostJob]::Enter() } catch { }`] : []),
-    "$ProgressPreference = 'SilentlyContinue'",
-    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    '$OutputEncoding = [System.Text.Encoding]::UTF8',
-    '$global:LASTEXITCODE = 0',
     command,
-    // As bash: the last command's status. A native program's code, else 1 when it failed (not found, an error).
-    '$buddiLastOk = $?',
+    '$__buddiLastOk = $?',
+    'if ($__buddiLastOk) { exit 0 }',
     'if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
-    'if (-not $buddiLastOk) { exit 1 }',
+    'exit 1',
     '',
   ].join('\r\n');
 }
 
-/** The argv a command runs as (on Windows, the script file it was written to). */
-export function shellArgv(platform: NodeJS.Platform, command: string, env: NodeJS.ProcessEnv, scriptFile?: string): string[] {
+/**
+ * The fixed bootstrap on the command line: it reads the supervisor from the
+ * first line of stdin and runs it. Not -EncodedCommand: with that, Windows
+ * PowerShell writes stderr as CLIXML (measured), which no model should read.
+ */
+export const WINDOWS_BOOTSTRAP = '. ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine()))))';
+
+/** The argv a command runs as. On Windows the supervisor and the command go on stdin (`windowsStdin`), not here. */
+export function shellArgv(platform: NodeJS.Platform, command: string, env: NodeJS.ProcessEnv): string[] {
   if (platform === 'win32') {
     const systemRoot = lookup(env, 'SystemRoot') ?? 'C:\\Windows';
     return [path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptFile ?? ''];
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', WINDOWS_BOOTSTRAP];
   }
   return ['/bin/bash', '--noprofile', '--norc', '-c', command];
+}
+
+/** What a Windows command's stdin carries: the supervisor, then the command, each base64 UTF-8 on its own line; then it ends. */
+export function windowsStdin(command: string): string {
+  const line = (text: string): string => Buffer.from(text, 'utf8').toString('base64');
+  return `${line(WINDOWS_SUPERVISOR)}\n${line(windowsCommandScript(command))}\n`;
+}
+
+/** Settles true when `promise` settles within `ms`, false otherwise. */
+function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    promise.then(() => { clearTimeout(timer); resolve(true); }, () => { clearTimeout(timer); resolve(true); });
+  });
+}
+
+/**
+ * End a Windows command and everything it started, and say whether that is
+ * confirmed. Terminating the supervisor closes the job's only handle, which
+ * kills every process in the job. Not gone within the bound: `taskkill /T /F`,
+ * awaited and bounded, then wait again. Only an observed exit counts.
+ */
+export async function stopWindowsCommand(deps: {
+  terminate: () => void;
+  exited: Promise<unknown>;
+  taskkill: () => Promise<number | null>;
+  boundMs: number;
+}): Promise<boolean> {
+  try { deps.terminate(); } catch { /* Already gone, or refused: the exit decides. */ }
+  if (await within(deps.exited, deps.boundMs)) return true;
+  await within(deps.taskkill().catch(() => null), deps.boundMs);
+  return within(deps.exited, deps.boundMs);
+}
+
+/** `taskkill /T /F` on a process, with its exit code (null when it could not run). */
+function taskkill(pid: number, env: NodeJS.ProcessEnv): Promise<number | null> {
+  const systemRoot = lookup(env, 'SystemRoot') ?? 'C:\\Windows';
+  return new Promise((resolve) => {
+    try {
+      const killer = spawn(path.win32.join(systemRoot, 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      killer.once('error', () => resolve(null));
+      killer.once('exit', (code) => resolve(code));
+    } catch { resolve(null); }
+  });
 }
 
 export function runCommand(input: {
@@ -167,53 +208,43 @@ export function runCommand(input: {
   const windows = process.platform === 'win32';
   // A confinement wraps a POSIX shell; Windows has none (bundle scripts are refused before this).
   if (windows && input.wrap && input.wrap.length > 0) throw new Error('A confined script cannot run on Windows.');
-  if (!windows) return spawnCommand(input, false, undefined);
-  return runWindows(input);
-}
-
-async function runWindows(input: Parameters<typeof runCommand>[0]): Promise<CommandResult> {
-  const jobDll = await windowsJobAssembly(input.env);
-  input.signal?.throwIfAborted();
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'buddi-host-'));
-  try {
-    const script = path.join(dir, 'command.ps1');
-    // With a BOM: Windows PowerShell 5.1 reads a file without one in the ANSI code page.
-    await writeFile(script, `\ufeff${powershellScript(input.command, jobDll)}`, { encoding: 'utf8', mode: 0o600 });
-    return await spawnCommand(input, true, script);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-function spawnCommand(input: Parameters<typeof runCommand>[0], windows: boolean, scriptFile: string | undefined): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const shell = shellArgv(windows ? 'win32' : process.platform, input.command, input.env, scriptFile);
+    const shell = shellArgv(process.platform, input.command, input.env);
     const argv = input.wrap && input.wrap.length > 0 ? [...input.wrap, ...shell] : shell;
-    const child = spawn(argv[0] as string, argv.slice(1), {
+    const child: ChildProcess & { stdout: NonNullable<ChildProcess['stdout']>; stderr: NonNullable<ChildProcess['stderr']> } = spawn(argv[0] as string, argv.slice(1), {
       cwd: input.cwd, env: { ...commandEnv(input.env), ...(input.extraEnv ?? {}) },
-      // POSIX: its own process group, killed as one. Windows: no console window; the job and taskkill end the tree.
-      detached: !windows, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    });
+      // POSIX: its own process group, killed as one; stdin closed. Windows: no
+      // console window; stdin carries the command, then ends; the job ends the tree.
+      detached: !windows, windowsHide: true, stdio: [windows ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    }) as never;
+    if (windows && child.stdin) {
+      child.stdin.on('error', () => { /* It left before reading: its exit says why. */ });
+      child.stdin.end(windowsStdin(input.command));
+    }
+    const exited = new Promise<void>((done) => child.once('exit', () => done()));
     let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0);
     let state: CommandResult['state'] = 'completed';
     let hardKill: ReturnType<typeof setTimeout> | undefined;
-    let treeKilled = false;
+    let unstoppable = false;
     const killGroup = (signal: NodeJS.Signals): void => {
-      if (!child.pid) return;
-      if (windows) {
-        // Windows has no TERM to wait out: the tree at once, while its root still runs.
-        if (treeKilled || child.exitCode !== null || child.signalCode !== null) return;
-        treeKilled = true;
-        killTree(child.pid, input.env);
-        return;
-      }
-      try { process.kill(-child.pid, signal); } catch { /* Already gone. */ }
+      if (child.pid) { try { process.kill(-child.pid, signal); } catch { /* Already gone. */ } }
     };
     const stop = (reason: CommandResult['state']): void => {
       if (state !== 'completed') return;
       state = reason;
+      if (windows) {
+        const pid = child.pid;
+        if (!pid) return;
+        void stopWindowsCommand({ terminate: () => child.kill(), exited, taskkill: () => taskkill(pid, input.env), boundMs: 5000 })
+          .then((stopped) => {
+            if (stopped) return;
+            unstoppable = true;
+            finish();
+          });
+        return;
+      }
       killGroup('SIGTERM');
-      if (!windows) hardKill = setTimeout(() => killGroup('SIGKILL'), 500);
+      hardKill = setTimeout(() => killGroup('SIGKILL'), 500);
     };
     const abort = (): void => stop('cancelled');
     const timeout = setTimeout(() => stop('timed-out'), input.timeoutMs);
@@ -229,29 +260,39 @@ function spawnCommand(input: Parameters<typeof runCommand>[0], windows: boolean,
     };
     child.stdout.on('data', (bytes: Buffer) => capture('stdout', bytes));
     child.stderr.on('data', (bytes: Buffer) => capture('stderr', bytes));
+    let settled = false;
+    let pipesTimer: ReturnType<typeof setTimeout> | undefined;
     const cleanup = (): void => {
       clearTimeout(timeout);
       if (hardKill) clearTimeout(hardKill);
+      if (pipesTimer) clearTimeout(pipesTimer);
       input.signal?.removeEventListener('abort', abort);
       // Do not leave background children running after a command exits
-      // (POSIX: the group; Windows: the job closed with PowerShell).
+      // (POSIX: the group; Windows: the job, closed with the supervisor).
       if (!windows) killGroup('SIGKILL');
     };
-    child.once('error', (error) => { cleanup(); reject(error); });
-    child.once('exit', () => { if (!windows) killGroup('SIGKILL'); });
-    child.once('close', (exitCode, signal) => {
+    const finish = (exitCode: number | null = child.exitCode, signal: NodeJS.Signals | null = child.signalCode): void => {
+      if (settled) return;
+      settled = true;
       cleanup();
-      resolve({ state, exitCode, signal, stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8') });
+      if (unstoppable) {
+        reject(new Error('The command could not be stopped: Windows did not end it. It may still be running; check Task Manager.'));
+        return;
+      }
+      const err = stderr.toString('utf8');
+      if (windows && exitCode === JOB_FAILED_EXIT && err.startsWith(JOB_FAILED_MARKER)) {
+        reject(new Error(`Nothing ran: buddi could not contain the command in a Windows job (${err.slice(JOB_FAILED_MARKER.length).trim()}).`));
+        return;
+      }
+      resolve({ state, exitCode, signal, stdout: stdout.toString('utf8'), stderr: err });
+    };
+    child.once('error', (error) => { if (settled) return; settled = true; cleanup(); reject(error); });
+    child.once('exit', () => {
+      if (!windows) { killGroup('SIGKILL'); return; }
+      // The job ended everything in it with the supervisor, so its pipes close
+      // now. Should something outside the job still hold one, do not wait on it.
+      pipesTimer = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); finish(); }, 5000);
     });
+    child.once('close', (exitCode, signal) => finish(exitCode, signal));
   });
-}
-
-/** End a Windows process and every process under it (`taskkill /T /F`). */
-function killTree(pid: number, env: NodeJS.ProcessEnv): void {
-  const systemRoot = lookup(env, 'SystemRoot') ?? 'C:\\Windows';
-  const fallback = (): void => { try { process.kill(pid); } catch { /* Already gone. */ } };
-  try {
-    const killer = spawn(path.win32.join(systemRoot, 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    killer.once('error', fallback);
-  } catch { fallback(); }
 }
