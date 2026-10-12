@@ -14,7 +14,7 @@ import { request } from 'node:http';
 import { open, mkdir, writeFile, rm, rename, copyFile, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import { promisify } from 'node:util';
-import { existsSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs';
+import { existsSync, openSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
 import { environment, lockHolder, identityMismatch, portMovedLines, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, InstallationState } from './environment.js';
 import { NotOurSupervisor, answeredBySupervisor, briefSupervisorEnv, runningOrStarting, supervise, supervisorSocket } from './supervisor.js';
@@ -341,7 +341,7 @@ async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
   // The copy of node this runs from (see above) goes once it has exited.
   if (process.platform === 'win32') {
     const cleanup = cleanupNodeCopyCommand(process.execPath, ctx.env.SystemRoot ?? ctx.env.SYSTEMROOT ?? 'C:\\Windows');
-    if (cleanup !== undefined) process.once('exit', () => { try { spawn(cleanup.command, cleanup.args, { detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, ...cleanup.env }, cwd: os.homedir() }).unref(); } catch { /* TEMP is cleaned by Windows too */ } });
+    if (cleanup !== undefined) process.once('exit', () => { try { writeFileSync(cleanup.script.file, cleanup.script.text); spawn(cleanup.command, cleanup.args, { detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, ...cleanup.env }, cwd: os.homedir() }).unref(); } catch { /* TEMP is cleaned by Windows too */ } });
   }
   return await uninstallPackaged(options, {
     ...(linuxParts === undefined ? {} : { linuxInstall: linuxParts }),

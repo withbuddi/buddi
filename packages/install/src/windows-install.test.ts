@@ -104,16 +104,16 @@ describe('installer.json and the node copy', () => {
   test('a node copy in TEMP is removed after it exits; any other node is left alone', () => {
     const tmp = 'C:\\Users\\owner\\AppData\\Local\\Temp';
     const cleanup = cleanupNodeCopyCommand(`${tmp}\\${UNINSTALL_NODE_PREFIX}abc123\\node.exe`, 'C:\\Windows', tmp);
-    // PowerShell itself, hidden, waiting half a second between tries, the folder in a variable, never in the script.
+    // wscript (a windowed program, no window with //B), a script that waits half a second between tries; the folder in a variable.
     const dir = `${tmp}\\${UNINSTALL_NODE_PREFIX}abc123`;
-    expect(cleanup?.command).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
-    expect(cleanup?.args.slice(0, 6)).toEqual(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden']);
+    const file = `${tmp}\\buddi-cleanup-${UNINSTALL_NODE_PREFIX}abc123.js`;
+    expect(cleanup?.command).toBe('C:\\Windows\\System32\\wscript.exe');
+    expect(cleanup?.args).toEqual(['//B', '//NoLogo', '//E:JScript', file]);
     expect(cleanup?.env).toEqual({ [NODE_COPY_DIR_VAR]: dir });
-    const script = cleanup?.args.at(-1) ?? '';
-    expect(script).toContain('Start-Sleep -Milliseconds 500');
-    expect(script).toContain(`$env:${NODE_COPY_DIR_VAR}`);
-    expect(script).not.toContain(dir);
-    expect(script).not.toMatch(/ping|cmd/);
+    expect(cleanup?.script.file).toBe(file);
+    expect(cleanup?.script.text).toContain('WScript.Sleep(500)');
+    expect(cleanup?.script.text).toContain(`Environment("Process")("${NODE_COPY_DIR_VAR}")`);
+    expect(cleanup?.script.text).not.toContain(dir);
     expect(cleanupNodeCopyCommand(`${data}\\node\\node.exe`, 'C:\\Windows', tmp)).toBeUndefined();
     expect(cleanupNodeCopyCommand(`D:\\${UNINSTALL_NODE_PREFIX}x\\node.exe`, 'C:\\Windows', tmp)).toBeUndefined();
   });

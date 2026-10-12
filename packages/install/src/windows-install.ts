@@ -193,20 +193,35 @@ export const NODE_COPY_DIR_VAR = 'BUDDI_NODE_COPY_DIR';
 
 /**
  * When this node is such a copy: what removes its folder once it has exited
- * (it cannot remove itself while it runs). PowerShell is the hidden, detached
- * child itself, so it starts no console program of its own (one would get a
- * console, which Windows 11 shows in Windows Terminal whatever `windowsHide`
- * asked); it tries every half second for up to a minute and ends once the
- * folder is gone. The folder comes in an environment variable, not the script.
+ * (it cannot remove itself while it runs). A JScript run by wscript.exe, the
+ * detached child: wscript is a windowed program with no window under `//B`,
+ * so nothing ever shows. A console program would not do: started detached it
+ * has no console (PowerShell then exits at once, doing nothing), and anything
+ * it started would get a console of its own, which Windows 11 shows in Windows
+ * Terminal whatever `windowsHide` asked. The script sleeps half a second
+ * between tries for up to a minute, then deletes itself; the folder comes in
+ * an environment variable, never in its text. The caller writes `script`.
  */
-export function cleanupNodeCopyCommand(execPath: string, systemRoot: string, tmp: string = os.tmpdir()): { command: string; args: string[]; env: Record<string, string> } | undefined {
+export function cleanupNodeCopyCommand(execPath: string, systemRoot: string, tmp: string = os.tmpdir()): { command: string; args: string[]; env: Record<string, string>; script: { file: string; text: string } } | undefined {
   const dir = win.dirname(execPath);
   if (!win.basename(dir).startsWith(UNINSTALL_NODE_PREFIX) || !insideFolder(dir, tmp, 'win32')) return undefined;
-  const script = `$d = $env:${NODE_COPY_DIR_VAR}; for ($i = 0; $i -lt 120; $i++) { Start-Sleep -Milliseconds 500; Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue; if (-not (Test-Path -LiteralPath $d)) { exit 0 } }`;
+  const file = win.join(tmp, `buddi-cleanup-${win.basename(dir)}.js`);
+  const text = [
+    'var fso = new ActiveXObject("Scripting.FileSystemObject");',
+    `var dir = new ActiveXObject("WScript.Shell").Environment("Process")("${NODE_COPY_DIR_VAR}");`,
+    'for (var i = 0; i < 120 && dir; i++) {',
+    '  WScript.Sleep(500);',
+    '  try { fso.DeleteFolder(dir, true); } catch (e) {}',
+    '  if (!fso.FolderExists(dir)) break;',
+    '}',
+    'try { fso.DeleteFile(WScript.ScriptFullName, true); } catch (e) {}',
+    '',
+  ].join('\r\n');
   return {
-    command: win.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', script],
+    command: win.join(systemRoot, 'System32', 'wscript.exe'),
+    args: ['//B', '//NoLogo', '//E:JScript', file],
     env: { [NODE_COPY_DIR_VAR]: dir },
+    script: { file, text },
   };
 }
 
