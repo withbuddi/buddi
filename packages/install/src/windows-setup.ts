@@ -31,12 +31,13 @@
  */
 import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { currentLauncher, pointAt, pruneReleases, releaseDir, releaseRoot, takeReleasesLock } from './app-layout.js';
+import { launchAgentLabel } from './environment.js';
 import { answeredBySupervisor, supervisorSocket } from './supervisor.js';
 import { SETUP_UNINSTALL_VAR, buildWindowsCommand, insideFolder, windowsBundledNode, windowsCommandOwnedBy, windowsInstallEnvironment, windowsInstallPath } from './windows-install.js';
 import type { WindowsInstallerRecord } from './windows-install.js';
@@ -139,7 +140,7 @@ export function uninstallSummary(output: string): string[] {
  * The effects
  * ------------------------------------------------------------------ */
 
-class Said {
+export class Said {
   lines: string[] = [];
   constructor(private readonly file: string | undefined) {
     // A byte order mark, so the setup reads the log as UTF-8 (C:\Users\Zoë).
@@ -156,9 +157,9 @@ class Said {
   }
 }
 
-class SetupError extends Error {}
+export class SetupError extends Error {}
 
-interface Run { code: number; output: string }
+export interface Run { code: number; output: string }
 
 function runProgram(command: string, args: string[], env: NodeJS.ProcessEnv, opts: { verbatim?: boolean; timeoutMs?: number } = {}): Promise<Run> {
   return new Promise(resolve => {
@@ -240,7 +241,56 @@ const versionOf = (root: string): string | undefined => {
   try { return (JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { version?: string }).version; } catch { return undefined; }
 };
 
-async function install(args: SetupArgs, said: Said): Promise<number> {
+/**
+ * Everything `install` does to processes, as seams: the real ones below, fakes
+ * in the tests (windows-setup.test.ts), so the backup, the stop, the marker,
+ * the swap, the rollback and the takeover are tested on a folder, anywhere.
+ */
+export interface InstallDeps {
+  /** The supervisor answering for this data folder: its install root, or undefined when none answers. */
+  status(data: string): Promise<{ installRoot?: string } | undefined>;
+  /** Stop that supervisor on its pipe and wait for it and its database. */
+  stop(data: string): Promise<void>;
+  /** Run a release's launcher with the bundled node and the Windows install's environment. */
+  runRelease(data: string, root: string, argv: string[]): Promise<Run>;
+  /** Run npm's `buddi.cmd` for this data folder. */
+  runNpm(cmd: string, data: string, argv: string[]): Promise<Run>;
+  /** The folders on PATH, where npm's `buddi.cmd` is looked for. */
+  pathDirs(): string[];
+  /** The scripts of every other buddi task on this machine (Task Scheduler), their text. */
+  otherTaskScripts(data: string): Promise<string[]>;
+}
+
+const realDeps: InstallDeps = {
+  status: data => askSupervisor<{ installRoot?: string }>(data, 'GET', '/status').catch(() => undefined),
+  stop: stopSupervisor,
+  runRelease: (data, root, argv) => runProgram(windowsBundledNode(data), [path.join(root, 'packages', 'install', 'dist', 'launcher.js'), ...argv],
+    { ...process.env, ...windowsInstallEnvironment(data), PATH: windowsInstallPath(data, process.env.PATH ?? process.env.Path), Path: undefined }, { timeoutMs: 5 * 60_000 }),
+  runNpm: (cmd, data, argv) => runProgram(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `""${cmd}" ${argv.join(' ')}"`], { ...process.env, BUDDI_DATA_DIR: data }, { verbatim: true }),
+  pathDirs: () => (process.env.Path ?? process.env.PATH ?? '').split(';').filter(Boolean),
+  otherTaskScripts: async data => {
+    const own = launchAgentLabel(data).toLowerCase();
+    const listed = await runProgram('schtasks.exe', ['/Query', '/FO', 'CSV', '/NH'], process.env);
+    const names = [...new Set(listed.output.split(/\r?\n/).map(line => line.split(',')[0]?.replace(/"/g, '').trim() ?? '')
+      .filter(name => /\\com\.buddi\.install\.[0-9a-f]+$/i.test(name) && !name.toLowerCase().endsWith(own)))];
+    const scripts: string[] = [];
+    for (const name of names) {
+      const xml = await runProgram('schtasks.exe', ['/Query', '/TN', name, '/XML'], process.env);
+      const script = /call &quot;(.+?)&quot;|call "(.+?)"/.exec(xml.output);
+      const file = script?.[1] ?? script?.[2];
+      if (file !== undefined) { try { scripts.push(readFileSync(file, 'utf8')); } catch { scripts.push(''); } }
+    }
+    return scripts;
+  },
+};
+
+/** Does any of these task scripts run something from inside this package folder? */
+export function scriptsUse(scripts: string[], pkg: string): boolean {
+  const needle = pkg.toLowerCase();
+  return scripts.some(text => text.toLowerCase().includes(needle));
+}
+
+export async function install(args: SetupArgs, said: Said, deps: InstallDeps = realDeps): Promise<number> {
   const say = (line: string): void => said.say(line);
   const bundle = path.resolve(args.bundle as string);
   const bin = path.resolve(args.bin as string);
@@ -260,18 +310,14 @@ async function install(args: SetupArgs, said: Said): Promise<number> {
   if (typeof named === 'string' && named !== data && real(named)?.toLowerCase() === real(data)?.toLowerCase()) data = named;
   const releases = path.join(data, 'releases');
   const nodeDir = path.join(data, 'node');
-  // What an earlier setup could not clean up (a scanner held a file): any unpacked bundle but this one.
-  for (const name of readdirSync(data)) {
-    if (name.startsWith('.install-') && !insideFolder(bundle, path.join(data, name))) await rm(path.join(data, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
-  }
-  const env = (): NodeJS.ProcessEnv => ({ ...process.env, ...windowsInstallEnvironment(data), PATH: windowsInstallPath(data, process.env.PATH ?? process.env.Path), Path: undefined });
   const command = path.join(bin, 'buddi.cmd');
 
   /* What is there now. */
   const currentLink = path.join(releases, 'current');
+  const previousLink = path.join(releases, 'previous');
   const oldRoot = existsSync(path.join(currentLink, 'packages', 'install', 'dist', 'launcher.js')) ? real(currentLink) : undefined;
   const oldVersion = oldRoot === undefined ? undefined : versionOf(oldRoot);
-  const oldPrev = existsSync(path.join(releases, 'previous')) ? real(path.join(releases, 'previous')) : undefined;
+  const oldPrev = existsSync(previousLink) ? real(previousLink) : undefined;
   const existing = existsSync(path.join(data, 'installation.json'));
   const newDir = releaseDir(releases, newVersion);
   const newRoot = releaseRoot(newDir);
@@ -279,18 +325,18 @@ async function install(args: SetupArgs, said: Said): Promise<number> {
 
   /* npm's buddi on PATH (`npm install -g @withbuddi/buddi`), and whether it serves this data folder. */
   let npm: { cmd: string; prefix: string; pkg: string; version?: string; serves: boolean } | undefined;
-  for (const dir of (process.env.Path ?? process.env.PATH ?? '').split(';').filter(Boolean)) {
-    const cmd = win.join(dir, 'buddi.cmd');
+  for (const dir of deps.pathDirs()) {
+    const cmd = path.join(dir, 'buddi.cmd');
     if (insideFolder(cmd, bin) || !existsSync(cmd)) continue;
     const text = (() => { try { return readFileSync(cmd, 'utf8'); } catch { return undefined; } })();
     if (windowsCommandOwnedBy(text, data) || !npmShimRunsBuddi(text)) continue;
-    const pkg = win.join(dir, 'node_modules', '@withbuddi', 'buddi');
+    const pkg = path.join(dir, 'node_modules', '@withbuddi', 'buddi');
     if (!existsSync(path.join(pkg, 'package.json'))) continue;
     let serves = false;
     if (existing && oldRoot === undefined) {
-      const script = (() => { try { return readFileSync(path.join(data, 'service', 'supervise.cmd'), 'utf8').toLowerCase(); } catch { return ''; } })();
-      const status = await askSupervisor<{ installRoot?: string }>(data, 'GET', '/status').catch(() => undefined);
-      serves = script.includes(pkg.toLowerCase()) || (real(pkg) !== undefined && script.includes((real(pkg) as string).toLowerCase()))
+      const script = (() => { try { return readFileSync(path.join(data, 'service', 'supervise.cmd'), 'utf8'); } catch { return ''; } })();
+      const status = await deps.status(data);
+      serves = scriptsUse([script], pkg) || (real(pkg) !== undefined && scriptsUse([script], real(pkg) as string))
         || (status?.installRoot !== undefined && insideFolder(status.installRoot, real(pkg) ?? pkg));
     }
     npm = { cmd, prefix: dir, pkg, ...(versionOf(pkg) === undefined ? {} : { version: versionOf(pkg) as string }), serves };
@@ -304,8 +350,8 @@ async function install(args: SetupArgs, said: Said): Promise<number> {
 
   /** The buddi serving this folder now, as a program: what takes the backup, and what a rollback starts again. */
   const oldBuddi = (argv: string[]): Promise<Run> => plan.old === 'release'
-    ? runProgram(windowsBundledNode(data), [path.join(oldRoot as string, 'packages', 'install', 'dist', 'launcher.js'), ...argv], env())
-    : runProgram(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `""${npm!.cmd}" ${argv.join(' ')}"`], { ...process.env, BUDDI_DATA_DIR: data }, { verbatim: true });
+    ? deps.runRelease(data, oldRoot as string, argv)
+    : deps.runNpm(npm!.cmd, data, argv);
 
   /* The backup, before anything changes. */
   let archive: string | undefined;
@@ -314,8 +360,7 @@ async function install(args: SetupArgs, said: Said): Promise<number> {
   }
   if (plan.backup === 'skipped') say(`No backup of ${data} before the switch (asked for).`);
   if (plan.backup === 'take') {
-    const running = await askSupervisor(data, 'GET', '/status').then(() => true, () => false);
-    if (!running) {
+    if (await deps.status(data) === undefined) {
       say('Starting the installed buddi briefly for the backup.');
       const brief = await oldBuddi(['--no-service', '--no-open']);
       if (brief.code !== 0) { say(brief.output.trim()); throw new SetupError('the installed buddi would not start for the backup, so nothing was changed. To go on without one, run the setup with /SKIPBACKUP.'); }
@@ -332,120 +377,152 @@ async function install(args: SetupArgs, said: Said): Promise<number> {
   const runtimeChanges = !existsSync(path.join(nodeDir, 'node.exe'))
     || (() => { try { return readFileSync(path.join(nodeDir, 'VERSION'), 'utf8').trim() !== readFileSync(path.join(runtime, 'VERSION'), 'utf8').trim(); } catch { return true; } })();
   if (!sameRelease || runtimeChanges) {
-    try { await stopSupervisor(data); }
+    try { await deps.stop(data); }
     catch (error) { throw new SetupError(`buddi could not be stopped for the switch (${(error as Error).message.replace(/\.$/, '')}). Nothing was changed; run the setup again when it has finished what it is doing.`); }
   }
 
   /* Put it in place, under the releases lock buddi's own upgrade takes too. */
   const unlock = await takeReleasesLock(releases);
-  let runtimeSwapped = false;
-  let switched = false;
   const nodeOld = `${nodeDir}.old`;
+  let started = false;
   try {
-    if (!sameRelease) {
-      const there = real(newDir);
-      const used = there !== undefined && [oldRoot, oldPrev].some(root => root !== undefined && insideFolder(root, there));
-      if (!used) {
-        await rm(newDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
-        await move(release, newDir);
+    // What an earlier setup could not clean up (a scanner held a file): any unpacked bundle but this one. Under the lock, so never a running setup's.
+    for (const name of readdirSync(data)) {
+      if (name.startsWith('.install-') && !insideFolder(bundle, path.join(data, name))) await rm(path.join(data, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+    }
+    /*
+     * Every change from here is undone, last first, if anything after it
+     * fails: the files, the links, the command, the state, and then the buddi
+     * that served this folder before is started again.
+     */
+    const undo: Array<{ what: string; run: () => Promise<void> }> = [];
+    try {
+      if (!sameRelease) {
+        const there = real(newDir);
+        const used = there !== undefined && [oldRoot, oldPrev].some(root => root !== undefined && insideFolder(root, there));
+        if (!used) {
+          await rm(newDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+          await move(release, newDir);
+          undo.push({ what: `the new release ${newDir}`, run: () => rm(newDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }) });
+        }
       }
-    }
-    if (runtimeChanges) {
-      /*
-       * Copied, never renamed: this program runs on the bundle's node.exe,
-       * and Windows will not rename a folder whose program is running. The
-       * copy goes beside the old runtime first, so the swap is two renames.
-       */
-      const nodeNew = `${nodeDir}.new`;
-      await rm(nodeOld, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
-      await rm(nodeNew, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
-      await cp(runtime, nodeNew, { recursive: true });
-      if (existsSync(nodeDir)) { await move(nodeDir, nodeOld); runtimeSwapped = true; }
-      await move(nodeNew, nodeDir);
-    }
-
-    /* The switch, recorded as buddi's own upgrade records it: the new release's first start finishes it. */
-    if (!sameRelease && existing && plan.from !== undefined) {
-      const file = path.join(data, 'installation.json');
-      const state = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
-      state.phase = 'upgrading';
-      state.upgrade = { from: plan.from, to: newVersion, startedAt: new Date().toISOString(), ...(archive === undefined ? {} : { backup: path.basename(archive) }) };
-      await writeFile(`${file}.tmp`, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
-      await rename(`${file}.tmp`, file);
-    }
-    if (!sameRelease) {
-      if (oldRoot !== undefined) await pointAt(path.join(releases, 'previous'), oldRoot);
-      await pointAt(currentLink, newRoot);
-      switched = true;
-    }
-
-    /* The command: the bundled node, `current`, this data folder. Never rewritten by an upgrade. */
-    await mkdir(bin, { recursive: true });
-    await writeFile(`${command}.tmp`, buildWindowsCommand(data));
-    await rename(`${command}.tmp`, command);
-
-    /* Start it: the new release writes and starts the Task Scheduler task (and stops anything still running). */
-    const rollBack = async (why: string): Promise<never> => {
-      say(`buddi ${newVersion} did not start.`);
-      if (switched && oldRoot !== undefined) {
-        await pointAt(currentLink, oldRoot).catch(() => {});
-        if (oldPrev !== undefined) await pointAt(path.join(releases, 'previous'), oldPrev).catch(() => {});
-        else await rm(path.join(releases, 'previous'), { force: true }).catch(() => {});
+      if (runtimeChanges) {
+        /*
+         * Copied, never renamed: this program runs on the bundle's node.exe,
+         * and Windows will not rename a folder whose program is running. The
+         * copy goes beside the old runtime first, so the swap is two renames.
+         */
+        const nodeNew = `${nodeDir}.new`;
+        await rm(nodeOld, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+        await rm(nodeNew, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+        await cp(runtime, nodeNew, { recursive: true });
+        const hadRuntime = existsSync(nodeDir);
+        if (hadRuntime) await move(nodeDir, nodeOld);
+        undo.push({ what: `the runtime ${nodeDir}`, run: async () => {
+          await rm(nodeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+          if (hadRuntime) await move(nodeOld, nodeDir);
+        } });
+        await move(nodeNew, nodeDir);
       }
-      if (runtimeSwapped && existsSync(nodeOld)) {
-        await stopSupervisor(data).catch(() => {});
-        await rm(nodeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }).catch(() => {});
-        await rename(nodeOld, nodeDir).catch(() => {});
+
+      /* The switch, recorded as buddi's own upgrade records it: the new release's first start finishes it. */
+      if (!sameRelease && existing && plan.from !== undefined) {
+        const file = path.join(data, 'installation.json');
+        const before = await readFile(file, 'utf8');
+        const state = JSON.parse(before) as Record<string, unknown>;
+        state.phase = 'upgrading';
+        state.upgrade = { from: plan.from, to: newVersion, startedAt: new Date().toISOString(), ...(archive === undefined ? {} : { backup: path.basename(archive) }) };
+        undo.push({ what: `the state in ${file}`, run: async () => { await writeFile(`${file}.tmp`, before, { mode: 0o600 }); await rename(`${file}.tmp`, file); } });
+        await writeFile(`${file}.tmp`, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+        await rename(`${file}.tmp`, file);
       }
-      if (!sameRelease && plan.old !== 'none') {
+      if (!sameRelease) {
+        undo.push({ what: `the links in ${releases}`, run: async () => {
+          if (oldRoot !== undefined) await pointAt(currentLink, oldRoot);
+          else await unlink(currentLink).catch(() => {});
+          if (oldPrev !== undefined) await pointAt(previousLink, oldPrev);
+          else await unlink(previousLink).catch(() => {});
+        } });
+        if (oldRoot !== undefined) await pointAt(previousLink, oldRoot);
+        await pointAt(currentLink, newRoot);
+      }
+
+      /* The command: the bundled node, `current`, this data folder. Never rewritten by an upgrade. */
+      const commandBefore = (() => { try { return readFileSync(command, 'utf8'); } catch { return undefined; } })();
+      undo.push({ what: `the command ${command}`, run: async () => {
+        if (commandBefore === undefined) await rm(command, { force: true });
+        else await writeFile(command, commandBefore);
+      } });
+      await mkdir(bin, { recursive: true });
+      await writeFile(`${command}.tmp`, buildWindowsCommand(data));
+      await rename(`${command}.tmp`, command);
+
+      /* Start it: the new release writes and starts the Task Scheduler task (and stops anything still running). */
+      if (args.noStart) {
+        say(`Installed. Start it with: ${command}`);
+      } else {
+        say('Starting buddi.');
+        const start = await deps.runRelease(data, currentLinkRoot(releases), ['--no-open']);
+        for (const line of start.output.split(/\r?\n/)) if (line.trim() !== '' && !/^(Dashboard: |The link is good)/.test(line)) say(`  ${line}`);
+        if (start.code !== 0) throw new SetupError(`buddi ${newVersion} did not start (it exited with ${start.code})`);
+        started = true;
+      }
+    } catch (error) {
+      const why = error instanceof SetupError ? error.message : `the install stopped: ${(error as Error).message.split('\n')[0]}`;
+      say(`${why}. Putting back what was there.`);
+      if (!(error instanceof SetupError)) said.record(String((error as Error).stack ?? error));
+      // Whatever runs now is the failed one (or nothing): it stops before its files go.
+      await deps.stop(data).catch(err => say(`(it would not stop: ${(err as Error).message})`));
+      for (const step of undo.reverse()) await step.run().catch(err => say(`(could not put back ${step.what}: ${(err as Error).message})`));
+      if (plan.old !== 'none' && !sameRelease) {
+        // npm's buddi or the old release writes its own service again (its task script) and starts it.
         const back = await oldBuddi(['--no-open']);
         say(back.code === 0 ? `Back on ${plan.from ?? 'the version before'}, running.` : `${plan.from ?? 'The version before'} did not come back either. See ${path.join(data, 'logs', 'supervisor.log')}.`);
         if (archive !== undefined) say(`If ${newVersion} changed the database before it failed, ${plan.from ?? 'the old version'} may refuse it; restore the backup taken first: buddi backup restore ${archive}`);
+      } else if (sameRelease && oldRoot !== undefined) {
+        const back = await deps.runRelease(data, oldRoot, ['--no-open']);
+        say(back.code === 0 ? `Back on ${newVersion} as it was, running.` : `buddi did not come back. See ${path.join(data, 'logs', 'supervisor.log')}.`);
       }
-      throw new SetupError(`buddi did not start (${why}). See ${path.join(data, 'logs', 'supervisor.log')}.`);
-    };
-    let started = false;
-    if (args.noStart) {
-      say(`Installed. Start it with: ${command}`);
-    } else {
-      say('Starting buddi.');
-      const start = await runProgram(windowsBundledNode(data), [currentLauncher(releases), '--no-open'], env(), { timeoutMs: 5 * 60_000 });
-      for (const line of start.output.split(/\r?\n/)) if (line.trim() !== '' && !/^(Dashboard: |The link is good)/.test(line)) say(`  ${line}`);
-      if (start.code !== 0) await rollBack(`it exited with ${start.code}`);
-      started = true;
+      throw new SetupError(`${why}. What was there before is back; see ${path.join(data, 'logs', 'supervisor.log')}.`);
     }
-
-    /* What `buddi uninstall` reads: the command and the setup's uninstaller. */
-    const record: WindowsInstallerRecord = { version: newVersion, arch: 'windows-x64', command, data, ...(args.uninstaller === undefined ? {} : { uninstaller: path.resolve(args.uninstaller) }), installedAt: new Date().toISOString() };
-    await writeFile(path.join(data, 'installer.json'), JSON.stringify(record, null, 2) + '\n', { mode: 0o600 });
-
-    /* What `current` and `previous` use stays; older releases and the old runtime go. */
-    await pruneReleases(releases).catch(() => []);
-    await rm(nodeOld, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }).catch(() => { say(`(${nodeOld} is still in use; it goes at the next install.)`); });
-
-    /*
-     * npm's copy would answer `buddi` before this one on PATH. Removed only once
-     * this install serves the same data folder and runs; otherwise, the line that removes it.
-     */
-    if (npm !== undefined) {
-      if (started && npm.serves) {
-        const shims = ['buddi.cmd', 'buddi.ps1', 'buddi'].map(name => win.join(npm!.prefix, name)).filter(file => npmShimRunsBuddi((() => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } })()));
-        try {
-          await rm(npm.pkg, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
-          for (const shim of shims) await rm(shim, { force: true });
-          say(`Removed the npm copy of buddi (${npm.pkg}): this install serves its data now.`);
-        } catch (error) {
-          say(`The npm copy of buddi at ${npm.pkg} could not be removed (${(error as Error).message}); remove it with: npm uninstall -g @withbuddi/buddi`);
-        }
-      } else {
-        say(`An npm copy of buddi is at ${npm.cmd}. It was left alone (it may serve another installation, or this one has not taken over yet); once you no longer need it: npm uninstall -g @withbuddi/buddi`);
-      }
-    }
-    say(`buddi ${newVersion} is installed in ${data}. ${command} runs it; buddi doctor checks it; Settings → Apps removes it (keeping one last backup).`);
-    return 0;
   } finally {
     await unlock();
   }
+
+  /* Past this point the install stands: a failure is said, never undone. */
+  const record: WindowsInstallerRecord = { version: newVersion, arch: 'windows-x64', command, data, ...(args.uninstaller === undefined ? {} : { uninstaller: path.resolve(args.uninstaller) }), installedAt: new Date().toISOString() };
+  await writeFile(path.join(data, 'installer.json'), JSON.stringify(record, null, 2) + '\n', { mode: 0o600 }).catch(err => say(`(could not write installer.json: ${(err as Error).message})`));
+  await pruneReleases(releases).catch(err => say(`(an old release could not be removed yet: ${(err as Error).message}; it goes at the next install)`));
+  await rm(nodeOld, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }).catch(() => { say(`(${nodeOld} is still in use; it goes at the next install.)`); });
+
+  /*
+   * npm's copy would answer `buddi` before this one on PATH. Removed only once
+   * this install serves the same data folder, runs, and no other buddi task on
+   * this machine runs that package; otherwise, the line that removes it.
+   */
+  if (npm !== undefined) {
+    const others = started && npm.serves ? await deps.otherTaskScripts(data).catch(() => undefined) : undefined;
+    const elsewhere = others === undefined || scriptsUse(others, npm.pkg) || (real(npm.pkg) !== undefined && scriptsUse(others, real(npm.pkg) as string));
+    if (started && npm.serves && !elsewhere) {
+      const shims = ['buddi.cmd', 'buddi.ps1', 'buddi'].map(name => path.join(npm!.prefix, name)).filter(file => npmShimRunsBuddi((() => { try { return readFileSync(file, 'utf8'); } catch { return undefined; } })()));
+      try {
+        await rm(npm.pkg, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+        for (const shim of shims) await rm(shim, { force: true });
+        say(`Removed the npm copy of buddi (${npm.pkg}): this install serves its data now, and nothing else ran it.`);
+      } catch (error) {
+        say(`The npm copy of buddi at ${npm.pkg} could not be removed (${(error as Error).message}); remove it with: npm uninstall -g @withbuddi/buddi`);
+      }
+    } else {
+      say(`An npm copy of buddi is at ${npm.cmd}. It was left alone (${started && npm.serves ? 'another buddi installation on this computer runs it' : 'it may serve another installation'}); once you no longer need it: npm uninstall -g @withbuddi/buddi`);
+    }
+  }
+  say(`buddi ${newVersion} is installed in ${data}. ${command} runs it; buddi doctor checks it; Settings → Apps removes it (keeping one last backup).`);
+  return 0;
+}
+
+/** The release `current` names, as a path through the link (the launcher resolves it). */
+function currentLinkRoot(releases: string): string {
+  return path.join(releases, 'current');
 }
 
 /** What the setup alone puts in the data folder, before buddi first starts. */
@@ -468,7 +545,8 @@ async function uninstall(args: SetupArgs, said: Said): Promise<number> {
   }
   const env = { ...process.env, ...windowsInstallEnvironment(data), PATH: windowsInstallPath(data, process.env.PATH ?? process.env.Path), Path: undefined, [SETUP_UNINSTALL_VAR]: '1' };
   const run = await runProgram(process.execPath, [launcher, 'uninstall', '--yes', ...(args.keepData ? ['--keep-data'] : [])], env, { timeoutMs: 30 * 60_000 });
-  for (const line of run.output.split(/\r?\n/)) if (line.trim() !== '') said.say(line);
+  // The six words go to the summary the uninstaller shows, never into a log (Inno Setup's /LOG copies this one).
+  for (const line of run.output.split(/\r?\n/)) if (line.trim() !== '') said.say(/^Your backup passphrase/.test(line.trim()) ? 'Your backup passphrase: shown on screen and kept beside the backup, not in this log.' : line);
   if (args.summary !== undefined) {
     const lines = uninstallSummary(run.output);
     // A blank line between them: the uninstaller shows them as they are.

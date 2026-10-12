@@ -220,8 +220,19 @@ not start). The setup is also what brings a newer Node.
 
 **From an npm install.** Run the setup: when the npm copy serves the same data
 folder, it takes the backup with it, moves the installation over (same data,
-same task name), and removes the npm copy once the new one runs. An npm copy
-serving another folder is left alone, with the line that removes it.
+same task name), and removes the npm copy once the new one runs and no other
+buddi task on the computer runs that copy. Otherwise it is left alone, with
+the line that removes it.
+
+**When something fails.** Anything that fails after the backup (a file that
+cannot be moved, the new release not starting) puts back what was there: the
+runtime, `current` and `previous`, `buddi.cmd`, `installation.json`, and the
+buddi that served the folder before, started again (npm's too). Running the
+setup again then starts over, backup included. The setup refuses to run as
+administrator (Postgres refuses administrator rights; `/ALLOWADMIN` with
+`/NOSTART` is for CI), and a later setup installs into the folder the first
+one used (`BUDDI_DATA_DIR` pointing elsewhere is refused while that
+installation exists).
 
 **Removing it.** Settings → Apps → buddi → Uninstall runs `buddi uninstall`
 (§11) with a copy of node from outside the data folder, then removes the

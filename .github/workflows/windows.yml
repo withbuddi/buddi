@@ -11,9 +11,12 @@
 # branch instead (`gh workflow run windows.yml --ref <branch> -f installer=true`):
 # two versions packed from this checkout (`version`, and one pre-release above
 # it), each bundled (scripts/release/windows-bundle.sh, around the local
-# tarball) and wrapped (apps/windows/buddi.iss), smoke-installed, upgraded from
-# the first to the second and uninstalled (scripts/release/windows-smoke.sh),
-# and uploaded as the run's artifact, for a VM before any tag.
+# tarball) and wrapped (apps/windows/buddi.iss), smoke-installed, the second
+# run over the first (the switch of `current`) and uninstalled
+# (scripts/release/windows-smoke.sh: buddi is not started, Postgres refuses the
+# runner's administrator account), and uploaded as the run's artifact, for a VM
+# before any tag. The backup, stop, rollback and npm takeover are
+# windows-setup.test.ts's, and a VM pass's (docs/install.md §1.3).
 name: windows
 on:
   push:

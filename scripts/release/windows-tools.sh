@@ -41,4 +41,5 @@ redist="$(tr -d '[:space:]' < "$vs/VC/Auxiliary/Build/Microsoft.VCRedistVersion.
 crt="$(ls -d "$vs/VC/Redist/MSVC/$redist/x64/"Microsoft.VC*.CRT 2>/dev/null | head -n 1)"
 [ -n "$crt" ] && [ -f "$crt/vcruntime140.dll" ] || die "no x64 Microsoft.VC*.CRT folder under $vs/VC/Redist/MSVC/$redist"
 out "VCRUNTIME_DIR=$crt"
+out "VCRUNTIME_VERSION=$redist"
 echo "Visual C++ runtime $redist from $crt" >&2

@@ -467,7 +467,8 @@ export async function switchCurrent(target: string, next: string, running: strin
   const releases = await realpath(target);
   await pointAt(path.join(releases, 'previous'), running);
   await pointAt(path.join(releases, 'current'), next);
-  await pruneReleases(releases);
+  // The switch has happened: a release a scanner still holds goes at the next prune, it does not undo this one.
+  await pruneReleases(releases).catch(() => []);
 }
 
 /** Where `current` or `previous` leads: resolved, else as the link says, else nowhere. */
@@ -493,7 +494,8 @@ export async function pruneReleases(releases: string): Promise<string[]> {
     if (kept.has(name)) continue;
     const full = path.join(releases, name);
     if (!(await lstat(full)).isDirectory()) continue;
-    await rm(full, { recursive: true, force: true });
+    // Retried: on Windows an antivirus scan holds a file for a moment (EBUSY, EPERM).
+    await rm(full, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
     removed.push(name);
   }
   return removed;

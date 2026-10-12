@@ -34,6 +34,7 @@
 #
 # Usage: scripts/release/windows-bundle.sh <buddi-version> [out-dir]
 #   VCRUNTIME_DIR=<dir>  the folder holding the three DLLs (required)
+#   VCRUNTIME_VERSION=<v> the redistributable version they come from, recorded in release.json
 #   BUDDI_TGZ=<path>     build around a local tarball (`pnpm release:pack`) instead of
 #                        the registry's: for testing a branch on a VM. No provenance,
 #                        and release.json says so.
@@ -139,6 +140,10 @@ for dll in $VC_DLLS; do
   pe_x64 "$src" || die "$src is not the x64 build"
   cp "$src" "$BUNDLE/runtime/vcruntime/$dll"
 done
+# Which redistributable they came from, and their bytes, in release.json: two builds of one tag can be told apart.
+vc_files=""
+for dll in $VC_DLLS; do vc_files="$vc_files${vc_files:+, }\"$dll\": \"$(sha256 "$BUNDLE/runtime/vcruntime/$dll")\""; done
+vcruntime="{ \"version\": \"${VCRUNTIME_VERSION:-unknown}\", \"files\": { $vc_files } }"
 
 # ---------------------------------------------------------------- buddi release
 RELEASE="$BUNDLE/release"
@@ -198,7 +203,8 @@ cat > "$RELEASE/release.json" <<JSON
   "provenance": $provenance,
   "stagedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "node": "$NODE_VERSION",
-  "arch": "windows-$ARCH"
+  "arch": "windows-$ARCH",
+  "vcruntime": $vcruntime
 }
 JSON
 echo "$VERSION" > "$BUNDLE/VERSION"

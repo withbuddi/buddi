@@ -25,6 +25,8 @@
 ;   /VERYSILENT /SUPPRESSMSGBOXES   no wizard (Inno Setup's own switches)
 ;   /NOSTART                        install, but leave buddi stopped (also BUDDI_NO_START=1)
 ;   /SKIPBACKUP                     go on without the backup of existing data (not advised)
+;   /ALLOWADMIN                     run elevated anyway (CI with /NOSTART: Postgres refuses to start
+;                                   with administrator rights, so an elevated setup is refused by default)
 ;
 ; Built by the release workflow (and windows.yml for a branch):
 ;   iscc /DAppVersion=0.1.0-pre.54 /DVersionInfo=0.1.0.54 /DBundleZip=<zip> /DOutputDir=<dir> apps\windows\buddi.iss
@@ -86,6 +88,8 @@ SolidCompression=no
 ; would read as missing to buddi's own setup program and to buddi itself.
 RedirectionGuard=no
 CloseApplications=no
+; One setup at a time: a second would unpack beside the first and share its folders.
+SetupMutex=buddi-setup
 RestartApplications=no
 ChangesEnvironment=yes
 SetupLogging=yes
@@ -110,7 +114,7 @@ Source: "{#BundleZip}"; DestName: "bundle.zip"; Flags: dontcopy nocompression
 Name: "{autoprograms}\buddi"; Filename: "{sys}\conhost.exe"; Parameters: "--headless ""{sys}\cmd.exe"" /d /c call ""{app}\bin\buddi.cmd"""; WorkingDir: "{%USERPROFILE}"; IconFilename: "{app}\buddi.ico"; Comment: "Open buddi in your browser"
 
 [Run]
-Filename: "{sys}\conhost.exe"; Parameters: "--headless ""{sys}\cmd.exe"" /d /c call ""{app}\bin\buddi.cmd"""; WorkingDir: "{%USERPROFILE}"; Description: "Open buddi"; Flags: postinstall nowait; Check: ShouldStart
+Filename: "{sys}\conhost.exe"; Parameters: "--headless ""{sys}\cmd.exe"" /d /c call ""{app}\bin\buddi.cmd"""; WorkingDir: "{%USERPROFILE}"; Description: "Open buddi"; Flags: postinstall nowait skipifsilent; Check: ShouldStart
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\bin"
@@ -167,13 +171,43 @@ begin
   Result := not HasParam('/NOSTART') and (GetEnv('BUDDI_NO_START') <> '1');
 end;
 
+{ The data folder recorded by the last install of this setup, if any. }
+function RegisteredDataDir: String;
+begin
+  if not RegQueryStringValue(HKCU, 'Software\buddi', 'DataDir', Result) then Result := '';
+end;
+
+{ BUDDI_DATA_DIR when set, else the folder this setup installed into before (an upgrade stays where it is), else the default. }
 function DataDir: String;
 begin
   if DataDirValue = '' then begin
     DataDirValue := GetEnv('BUDDI_DATA_DIR');
+    if DataDirValue = '' then DataDirValue := RegisteredDataDir;
     if DataDirValue = '' then DataDirValue := ExpandConstant('{localappdata}\buddi');
   end;
   Result := DataDirValue;
+end;
+
+function InitializeSetup: Boolean;
+var
+  Registered: String;
+begin
+  Result := True;
+  { Postgres will not run with administrator rights, and an elevated install would register buddi for the wrong token. }
+  if IsAdmin and not HasParam('/ALLOWADMIN') then begin
+    SuppressibleMsgBox('The buddi setup is running as administrator. buddi installs for you only and its database refuses administrator rights.' + #13#10#13#10
+      + 'Close this and open the setup again with a double-click (not "Run as administrator").', mbError, MB_OK, IDOK);
+    Result := False;
+    exit;
+  end;
+  { One registration per account: a second data folder would take over the first one's uninstall entry. }
+  Registered := RegisteredDataDir;
+  if (Registered <> '') and (CompareText(RemoveBackslashUnlessRoot(Registered), RemoveBackslashUnlessRoot(DataDir)) <> 0)
+    and (FileExists(AddBackslash(Registered) + 'installation.json') or DirExists(AddBackslash(Registered) + 'releases')) then begin
+    SuppressibleMsgBox('buddi is already installed for you in ' + Registered + ', and this setup was asked to install into ' + DataDir + '.' + #13#10#13#10
+      + 'To upgrade that buddi, run the setup without BUDDI_DATA_DIR. To move to another folder, remove buddi in Settings > Apps first (a last backup is kept).', mbError, MB_OK, IDOK);
+    Result := False;
+  end;
 end;
 
 { A program run with no console window at all (conhost --headless), waited for.
@@ -315,9 +349,19 @@ begin
     if not RegQueryStringValue(HKCU, 'Software\buddi', 'DataDir', Data) then Data := ExpandConstant('{localappdata}\buddi');
     Node := Data + '\node\node.exe';
     Script := Data + '\releases\current\packages\install\dist\windows-setup.js';
-    { Already removed (buddi uninstall from a terminal or the dashboard started this): only the setup's own files are left. }
-    if not FileExists(Node) or not FileExists(Script) then exit;
-    Work := AddBackslash(GetTempDir) + 'buddi-uninstall-' + GetDateTimeString('yyyymmddhhnnss', #0, #0);
+    if not FileExists(Node) or not FileExists(Script) then begin
+      { buddi's data is still there but its program is not: removing only the entry would leave the data, the task and the secrets with no way to remove them. }
+      if FileExists(Data + '\installation.json') or DirExists(Data + '\postgres') then begin
+        if not UninstallSilent then
+          MsgBox('buddi''s program files in ' + Data + ' are missing, so its data, background task and secrets cannot be removed safely. Nothing was removed.' + #13#10#13#10
+            + 'Run the buddi setup again (it repairs the install), then remove buddi here.', mbError, MB_OK);
+        Abort;
+      end;
+      { Already removed (buddi uninstall from a terminal or the dashboard started this): only the setup's own files are left. }
+      exit;
+    end;
+    { Not buddi-uninstall-: that prefix is the launcher's own node copy, which it removes once it exits. }
+    Work := AddBackslash(GetTempDir) + 'buddi-setup-uninstall-' + GetDateTimeString('yyyymmddhhnnss', #0, #0);
     ForceDirectories(Work);
     if not FileCopy(Node, Work + '\node.exe', False) then begin
       if not UninstallSilent then MsgBox('buddi could not be removed: its node could not be copied to ' + Work + '. Nothing was removed.', mbError, MB_OK);

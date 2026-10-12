@@ -31,7 +31,7 @@ mkdir -p "$LOGS"
 die() { printf '::error::%s\n' "$*"; exit 1; }
 buddi() { MSYS_NO_PATHCONV=1 cmd /d /c call "$(cygpath -w "$BUDDI")" "$@"; }
 setup() { # <exe> <log name>
-  MSYS_NO_PATHCONV=1 "$1" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOSTART "/LOG=$(cygpath -w "$LOGS/$2.log")" \
+  MSYS_NO_PATHCONV=1 "$1" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOSTART /ALLOWADMIN "/LOG=$(cygpath -w "$LOGS/$2.log")" \
     || { cat "$LOGS/$2.log"; cat "$DATA/logs/setup.log" 2>/dev/null || true; die "$(basename "$1") failed"; }
 }
 version_in() { basename "$1" | sed -E 's/^buddi-(.*)-windows-x64-setup\.exe$/\1/'; }

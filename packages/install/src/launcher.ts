@@ -9,7 +9,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
 import { request } from 'node:http';
 import { open, mkdir, writeFile, rm, rename, copyFile, chmod } from 'node:fs/promises';
 import os from 'node:os';
@@ -28,7 +28,7 @@ import { commandOwnedBy, desktopEntryPaths, linuxUnitSpec, ownDesktopEntries } f
 import { APP_BUNDLE_ID, SHIM_REFUSAL, SHIM_VAR, shimAction, shimDoctorLines, shimRefusesSupervise, shimsFor } from './cli-shim.js';
 import type { SupervisorStatus } from './supervisor.js';
 import { buildSuperviseScript, buildTaskXml, followLogsCommand, registerWindowsTask, taskXmlBytes, windowsTaskName, windowsTaskScript, windowsTaskXmlFile } from './windows-task.js';
-import { SETUP_UNINSTALL_VAR, cleanupNodeCopyCommand, insideFolder, readWindowsInstallerRecord, windowsCommandOwnedBy, windowsTaskSpec } from './windows-install.js';
+import { SETUP_DATA_KEY, SETUP_UNINSTALL_VAR, cleanupNodeCopyCommand, regQueryValue, uninstallerIsOurs, insideFolder, readWindowsInstallerRecord, windowsCommandOwnedBy, windowsTaskSpec } from './windows-install.js';
 
 const entry = fileURLToPath(import.meta.url);
 // <root>/packages/install/dist/launcher.js — the installation root is three up.
@@ -301,7 +301,9 @@ function windowsInstallParts(ctx: InstallContext): import('./uninstall.js').Wind
   const recorded = readWindowsInstallerRecord((() => { try { return readFileSync(path.join(ctx.data, 'installer.json'), 'utf8'); } catch { return undefined; } })());
   const command = recorded.command;
   const owned = (): boolean => command !== undefined && windowsCommandOwnedBy((() => { try { return readFileSync(command, 'utf8'); } catch { return undefined; } })(), ctx.data, realpathSync);
-  const uninstaller = recorded.uninstaller !== undefined && existsSync(recorded.uninstaller) ? recorded.uninstaller : undefined;
+  // The setup's one registration serves one data folder: started for another, it would remove that one.
+  const registered = (() => { try { return regQueryValue(execFileSync('reg.exe', ['query', SETUP_DATA_KEY, '/v', 'DataDir'], { encoding: 'utf8', windowsHide: true }), 'DataDir'); } catch { return undefined; } })();
+  const uninstaller = recorded.uninstaller !== undefined && existsSync(recorded.uninstaller) && uninstallerIsOurs(registered, ctx.data) ? recorded.uninstaller : undefined;
   return {
     runtime: path.join(ctx.data, 'node'),
     releases: appLayout(process.env) ?? path.join(ctx.data, 'releases'),

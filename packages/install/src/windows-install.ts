@@ -201,3 +201,20 @@ export function cleanupNodeCopyCommand(execPath: string, systemRoot: string, tmp
     args: ['/d', '/c', `ping -n 6 127.0.0.1 >nul & rmdir /s /q "${dir}"`],
   };
 }
+
+/** Where the setup records the data folder its uninstaller removes (HKCU), as `reg query` prints it. */
+export const SETUP_DATA_KEY = 'HKCU\\Software\\buddi';
+
+/** The value `reg query <key> /v DataDir` printed, or undefined. */
+export function regQueryValue(output: string, name: string): string | undefined {
+  for (const line of output.split(/\r?\n/)) {
+    const match = new RegExp(`^\\s*${name}\\s+REG_(?:EXPAND_)?SZ\\s+(.*)$`, 'i').exec(line);
+    if (match) return match[1]!.trim();
+  }
+  return undefined;
+}
+
+/** Is the setup's uninstaller this installation's (it removes the data folder the registry names)? */
+export function uninstallerIsOurs(registered: string | undefined, data: string): boolean {
+  return registered !== undefined && win.resolve(registered).toLowerCase() === win.resolve(data).toLowerCase();
+}
