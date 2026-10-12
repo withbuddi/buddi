@@ -347,7 +347,7 @@ export async function stageRelease(opts: StageOptions): Promise<StagedRelease> {
 
 /** Is `dir` (a `buddi-<v>` in `releases`) the one `current` or `previous` points into? */
 async function referenced(releases: string, dir: string): Promise<boolean> {
-  const targets = await Promise.all(['current', 'previous'].map(name => realpath(path.join(releases, name)).catch(() => undefined)));
+  const targets = await Promise.all(['current', 'previous'].map(name => linkedRelease(path.join(releases, name))));
   return targets.some(target => target !== undefined && path.relative(releases, target).split(path.sep)[0] === path.basename(dir));
 }
 
@@ -470,12 +470,21 @@ export async function switchCurrent(target: string, next: string, running: strin
   await pruneReleases(releases);
 }
 
+/** Where `current` or `previous` leads: resolved, else as the link says, else nowhere. */
+async function linkedRelease(link: string): Promise<string | undefined> {
+  const resolved = await realpath(link).catch(() => undefined);
+  if (resolved !== undefined) return resolved;
+  return await linkTarget(link);
+}
+
 /** Remove release directories `current` and `previous` do not use, and stale staging. */
 export async function pruneReleases(releases: string): Promise<string[]> {
   // Both sides resolved: a data folder under a symlink (`/var` → `/private/var`)
   // must never make the release `current` points at look like someone else's.
   const base = await realpath(releases).catch(() => releases);
-  const targets = await Promise.all(['current', 'previous'].map(name => realpath(path.join(base, name)).catch(() => undefined)));
+  // A link that is there but will not resolve (Windows' RedirectionGuard
+  // refusing a junction) still names what it keeps: read, never guessed empty.
+  const targets = await Promise.all(['current', 'previous'].map(name => linkedRelease(path.join(base, name))));
   const kept = new Set(targets.filter((p): p is string => p !== undefined).map(p => path.relative(base, p).split(path.sep)[0]));
   releases = base;
   const removed: string[] = [];

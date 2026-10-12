@@ -80,6 +80,11 @@ Compression=lzma2
 SolidCompression=no
 ; buddi stops itself, on its pipe, before anything of it is replaced; Restart
 ; Manager would end the database without a shutdown.
+; Off: Inno Setup's RedirectionGuard reaches the programs it starts (tried on
+; Windows 11 24H2 with 6.7.3, though its help says otherwise), and there it
+; stops a junction this user made from being followed: `releases\current`
+; would read as missing to buddi's own setup program and to buddi itself.
+RedirectionGuard=no
 CloseApplications=no
 RestartApplications=no
 ChangesEnvironment=yes
