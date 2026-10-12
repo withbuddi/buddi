@@ -193,6 +193,18 @@ begin
   if LoadStringsFromFile(FileName, Lines) and (GetArrayLength(Lines) > 0) then Result := Trim(Lines[0]);
 end;
 
+{ A whole short file, blank lines kept, for a message box. }
+function ReadAll(const FileName: String): String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := '';
+  if not LoadStringsFromFile(FileName, Lines) then exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do Result := Result + Lines[I] + #13#10;
+  Result := Trim(Result);
+end;
+
 { The last lines of a log, for a message box. }
 function Tail(const FileName: String; Count: Integer): String;
 var
@@ -322,7 +334,7 @@ begin
         MsgBox('buddi could not be removed, so nothing else was either.' + #13#10#13#10 + Tail(LogFile, 12), mbError, MB_OK);
       Abort;
     end;
-    Words := Tail(Summary, 20);
+    Words := ReadAll(Summary);
     if (Words <> '') and not UninstallSilent then MsgBox(Words, mbInformation, MB_OK);
     DelTree(Work, True, True, True);
   end;

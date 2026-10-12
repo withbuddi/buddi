@@ -471,7 +471,8 @@ async function uninstall(args: SetupArgs, said: Said): Promise<number> {
   for (const line of run.output.split(/\r?\n/)) if (line.trim() !== '') said.say(line);
   if (args.summary !== undefined) {
     const lines = uninstallSummary(run.output);
-    try { writeFileSync(args.summary, `\ufeff${lines.join('\r\n')}\r\n`); } catch { /* the log has it all */ }
+    // A blank line between them: the uninstaller shows them as they are.
+    try { writeFileSync(args.summary, `\ufeff${lines.join('\r\n\r\n')}\r\n`); } catch { /* the log has it all */ }
   }
   return run.code;
 }
