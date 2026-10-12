@@ -19,7 +19,7 @@ export interface ApprovalAnswers { approve: string; reject: string }
 
 /**
  * Core's own asks that read better as a question than an approval: "Let the
- * PNC pull use your Chrome?" is answered Allow or Not now. Keyed by core's
+ * PNC pull use your browser?" is answered Allow or Not now. Keyed by core's
  * tool names only, never read from an envelope, so no plugin can relabel a
  * button. Absent: Approve and Reject.
  */

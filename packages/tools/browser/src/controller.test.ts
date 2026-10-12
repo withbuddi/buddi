@@ -123,7 +123,7 @@ describe('the route, chosen per task', () => {
   });
   it('is the owner\'s Chrome for a site on his sign-in list, said once in the chat', async () => {
     const { controller } = await routes({ settings: { yourChrome: true, signInSites: ['amazon.com'] } });
-    await expect(controller.execute(navigate('https://www.amazon.com/cart'), ctx())).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome because Amazon needs your sign-in.' });
+    await expect(controller.execute(navigate('https://www.amazon.com/cart'), ctx())).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your browser because Amazon needs your sign-in.' });
     const again = await controller.execute(observe, ctx()) as { route: string; routeNote?: string };
     expect(again).toMatchObject({ route: 'chrome' });
     expect(again.routeNote).toBeUndefined();
@@ -131,7 +131,7 @@ describe('the route, chosen per task', () => {
   it('follows the agent\'s ask (prefer: yours) and the pins: conversation over agent over global', async () => {
     const { controller } = await routes({ settings: { yourChrome: true }, agentPin: (id) => id === 'pinned' ? 'chrome' : undefined });
     await expect(controller.execute(navigate('https://shop.test/', { prefer: 'yours' }), ctx('a'))).resolves.toMatchObject({ route: 'chrome' });
-    await expect(controller.execute(navigate('https://shop.test/'), ctx('pinned'))).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome for shop.test, as you set it.' });
+    await expect(controller.execute(navigate('https://shop.test/'), ctx('pinned'))).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your browser for shop.test, as you set it.' });
     await controller.pin('pinned', 'own');
     await expect(controller.execute(navigate('https://shop.test/'), ctx('pinned'))).resolves.toMatchObject({ route: 'own' });
     expect(controller.status({ conversationId: 'pinned' }).pin).toBe('own');
@@ -149,7 +149,7 @@ describe('the route, chosen per task', () => {
   it('a pin never allows what the switches forbid: Chrome off falls back to the own browser, silently but said', async () => {
     const { controller } = await routes({ settings: { yourChrome: false } });
     await controller.pin('a', 'chrome');
-    await expect(controller.execute(navigate('https://shop.test/'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: 'Your Chrome is turned off for agents in Settings, so I looked in my own browser.' });
+    await expect(controller.execute(navigate('https://shop.test/'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: 'Your browser is turned off for agents in Settings, so I looked in my own browser.' });
   });
   it('apps only for app jobs; an app job with apps off says the one fix', async () => {
     const off = await routes();
@@ -190,7 +190,7 @@ describe('the route, chosen per task', () => {
     const result = await controller.execute(navigate('https://www.amazon.com/ap/signin'), mission) as { route: string; needsOwner?: { kind: string; options: Array<{ label: string }> } };
     expect(result.route).toBe('own');
     expect(result.needsOwner?.kind).toBe('sign-in');
-    expect(result.needsOwner?.options.map((o) => o.label)).not.toContain('Use my Chrome');
+    expect(result.needsOwner?.options.map((o) => o.label)).not.toContain('Use my browser');
     expect(asked).toHaveLength(1);
   });
   it("a mission the owner let use his Chrome (`browser: owner`) goes there as his own run would, never to apps", async () => {
@@ -234,7 +234,7 @@ describe('a page that renders signed out', () => {
     const result = await controller.execute(navigate('https://www.amazon.com/gp/cart/view.html'), ctx('s', asked)) as { completed: boolean; needsOwner?: { kind: string; title: string; options: Array<{ label: string }> } };
     expect(result.completed).toBe(false);
     expect(result.needsOwner).toMatchObject({ kind: 'sign-in', title: 'Amazon needs your sign-in' });
-    expect(result.needsOwner!.options.map((option) => option.label)).toEqual(['Take over', 'Use Chrome when it\u2019s open', 'Save a login for next time']);
+    expect(result.needsOwner!.options.map((option) => option.label)).toEqual(['Take over', 'Use my browser when it\u2019s open', 'Save a login for next time']);
     expect(asked).toHaveLength(1);
     // Learned: the next visit to amazon.com goes to the owner's Chrome when it is there.
     expect(controller.status().learnedSignInSites).toContain('amazon.com');
@@ -255,17 +255,17 @@ describe('a page that renders signed out', () => {
 describe('fallback without a stop', () => {
   it('not-connected: Chrome asked for but offline means the own browser, and the chat line says so', async () => {
     const { controller, log } = await routes({ settings: { yourChrome: true, signInSites: ['shop.test'] }, connected: false });
-    await expect(controller.execute(navigate('https://shop.test/'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your Chrome isn't open right now, so I looked in my own browser." });
+    await expect(controller.execute(navigate('https://shop.test/'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your browser isn't open right now, so I looked in my own browser." });
     expect(log).toEqual(['own https://shop.test/']);
     expect(controller.telemetry.events.map((event) => event.type === 'browser.stop' ? event.cause : event.type)).toContain('route-unavailable');
   });
   it('a Chrome the owner asked for and buddi cannot use is explained: not paired with this buddi, or closed', async () => {
     const unpaired = await routes({ settings: { yourChrome: true }, connected: false, paired: false });
     await unpaired.controller.pin('a', 'chrome');
-    await expect(unpaired.controller.execute(navigate('https://shop.test/cart'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your Chrome isn't connected to this buddi, so I looked in my own browser." });
+    await expect(unpaired.controller.execute(navigate('https://shop.test/cart'), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your browser isn't connected to this buddi, so I looked in my own browser." });
     // The agent's ask (prefer: yours) with Chrome paired but closed.
     const closed = await routes({ settings: { yourChrome: true }, connected: false });
-    await expect(closed.controller.execute(navigate('https://shop.test/orders', { prefer: 'yours' }), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your Chrome isn't open right now, so I looked in my own browser." });
+    await expect(closed.controller.execute(navigate('https://shop.test/orders', { prefer: 'yours' }), ctx())).resolves.toMatchObject({ route: 'own', routeNote: "Your browser isn't open right now, so I looked in my own browser." });
     expect(closed.log).toEqual(['own https://shop.test/orders']);
   });
   it('the status says where the owner\'s Chrome stands, the same word on the route and at the top', async () => {
@@ -297,7 +297,7 @@ describe('fallback without a stop', () => {
   });
   it('a sign-in wall in the own browser moves to the owner\'s Chrome, and the site is remembered', async () => {
     const { controller, log, dir } = await routes({ settings: { yourChrome: true }, page: LOGIN });
-    await expect(controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx())).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your Chrome because Amazon needs your sign-in.' });
+    await expect(controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx())).resolves.toMatchObject({ route: 'chrome', routeNote: 'I used your browser because Amazon needs your sign-in.' });
     expect(log.slice(0, 2)).toEqual(['own https://www.amazon.com/ap/signin', 'chrome https://www.amazon.com/ap/signin']);
     await vi.waitFor(async () => expect(JSON.parse(await readFile(path.join(dir, 'sign-in-sites.json'), 'utf8'))).toEqual(['amazon.com']));
     // Next time it goes to Chrome first.
@@ -314,7 +314,7 @@ describe('fallback without a stop', () => {
     const result = await controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx('a', asked)) as { route: string; needsOwner: { kind: string } };
     expect(result).toMatchObject({ route: 'own', needsOwner: { kind: 'sign-in' } });
     expect(log).toEqual(['own https://www.amazon.com/ap/signin']);
-    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', 'Use my Chrome', 'Save a login for next time']);
+    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', 'Use my browser', 'Save a login for next time']);
   });
 });
 
@@ -351,7 +351,7 @@ describe('the owner cards, through the existing question card', () => {
     const asked: Asked[] = [];
     const { controller } = await routes({ settings: { yourChrome: true }, connected: false, page: LOGIN });
     await controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx('a', asked));
-    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', 'Use Chrome when it\u2019s open', 'Save a login for next time']);
+    expect(asked[0]!.options.map((option) => option.label)).toEqual(['Take over', 'Use my browser when it\u2019s open', 'Save a login for next time']);
   });
   it('sign-in: a stored login for the site is pointed at instead of a card', async () => {
     const asked: Asked[] = [];
@@ -382,7 +382,7 @@ describe('the owner cards, through the existing question card', () => {
     const other = await routes({ connected: true, page: LOGIN });
     await other.controller.execute(navigate('https://www.amazon.com/ap/signin'), ctx('b'));
     await other.controller.configure({ yourChrome: true });
-    await expect(other.controller.touch({ conversationId: 'b', text: 'Use my Chrome' })).resolves.toEqual({ answered: 'chrome' });
+    await expect(other.controller.touch({ conversationId: 'b', text: 'Use my browser' })).resolves.toEqual({ answered: 'chrome' });
     expect(other.controller.status({ conversationId: 'b' }).pin).toBe('chrome');
   });
   it('take-over answers with the page asked about, never the page that changed last', async () => {

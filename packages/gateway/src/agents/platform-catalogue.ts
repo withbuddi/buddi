@@ -443,9 +443,9 @@ export interface PackageMissionPlan {
   /** Host API 1.27: an export read before each run, and the longest report. */
   context?: { plugin: string; export: string; args?: Record<string, unknown> };
   reportMax?: number;
-  /** `own`: browses unattended in buddi's own browser; `owner`: the owner's Chrome too (docs/browser.md, "Missions"). */
+  /** `own`: browses unattended in buddi's own browser; `owner`: the owner's browser too (docs/browser.md, "Missions"). */
   browser?: MissionBrowser;
-  /** With `owner`: the site it needs the owner's Chrome for. */
+  /** With `owner`: the site it needs the owner's browser for. */
   browserFor?: string;
 }
 
@@ -527,13 +527,13 @@ export interface MissionSettingsChange {
   reportMax: number | null;
   /** Present only when it changes (absent in an envelope from before pre.38): absent keeps the mission's own. */
   browser?: MissionBrowser | null;
-  /** With `owner`: the site it needs the owner's Chrome for. */
+  /** With `owner`: the site it needs the owner's browser for. */
   browserFor?: string;
 }
 
 /**
  * The browsing a mission keeps when its package changes: the owner's own
- * grant of his Chrome (`owner`, from an approval or the Missions switch)
+ * grant of his browser (`owner`, from an approval or the Missions switch)
  * survives an update whose package still says `own`; anything else follows
  * the package.
  */
@@ -560,12 +560,12 @@ export function missionSettingsWords(change: MissionSettingsChange): string {
 }
 
 /** What the card says about a mission that opted in to browsing. */
-export const BROWSES_WORDS = "may look at pages in buddi's own browser while you are away (never your Chrome or apps); a sign-in or a check waits for you";
+export const BROWSES_WORDS = "may look at pages in buddi's own browser while you are away (never your browser or apps); a sign-in or a check waits for you";
 
-/** What the card says about a mission that needs the owner's Chrome: never granted without this line. */
+/** What the card says about a mission that needs the owner's browser: never granted without this line. */
 export function chromeWords(site?: string): string {
   const label = siteLabel(site);
-  return `using your Chrome${label ? ` for ${label}` : ''} while you are away (approving this lets it); a check waits for you`;
+  return `using your browser${label ? ` for ${label}` : ''} while you are away (approving this lets it); a check waits for you`;
 }
 
 export const installAgentInput = z
@@ -1211,7 +1211,7 @@ async function buildUpdate(
       // An existing mission is the owner's; only what the package says it reads and how long it reports may follow it.
       const context = plan.context ?? null;
       const reportMax = plan.reportMax ?? null;
-      // The owner's own grant of his Chrome is his: a package that still says `own` keeps it.
+      // The owner's own grant of his browser is his: a package that still says `own` keeps it.
       const browser = keptBrowser(row.browser, plan.browser);
       if (stableJson(row.context ?? null) !== stableJson(context) || (row.reportMax ?? null) !== reportMax || (row.browser ?? null) !== browser) {
         // `browser` only when it changes: the card names what changes, and an absent one keeps the row's.

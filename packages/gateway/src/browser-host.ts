@@ -40,7 +40,7 @@ export async function browserDoctor(env: NodeJS.ProcessEnv = process.env, days =
     const { settings } = migrateSettings(raw, { paired: record !== undefined });
     const parts = ['own browser'];
     if (settings.yourChrome) {
-      parts.push(record ? `your Chrome (paired${record.lastSeenAt ? `, last seen ${record.lastSeenAt}` : ''})` : 'your Chrome (on, not paired)');
+      parts.push(record ? `your browser (${record.browser ?? 'name not known'}, paired${record.lastSeenAt ? `, last seen ${record.lastSeenAt}` : ''})` : 'your browser (on, not paired)');
       if (!record) warn = true;
     }
     if (settings.yourApps !== 'off') parts.push(`your apps (${settings.yourApps}; served by the Computer plugin when installed)`);

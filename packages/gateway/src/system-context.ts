@@ -143,7 +143,7 @@ export function resourcefulLines(tools: readonly string[]): string {
       : 'it asks the owner once with a card when a page needs their sign-in.';
     lines.push(
       '- A website the owner uses (an account page, a cart, an order, a statement): look with browser.act; buddi picks the browser ' +
-        "(the owner's Chrome where they are signed in, when allowed) and " + login,
+        "(the owner's browser where they are signed in, when allowed) and " + login,
     );
   } else {
     lines.push(

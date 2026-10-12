@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-07
+updated: 2026-10-12
 ---
 
 # The HTTP API
@@ -2198,7 +2198,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/missions` | Every mission, its schedule, next run and recent occurrences. | yes |
 | POST | `/api/missions/:id/enabled` | Switch a mission on or off. | yes |
 | POST | `/api/missions/:id/run` | Run now: one occurrence of the mission, queued at once and run like a scheduled one (its context, its report or silence, the owner’s notifications). It is listed with the mission’s occurrences as `manual`, and a silent one counts toward “Still useful?” like any run. | yes |
-| POST | `/api/missions/:id/browser` | For a mission that browses: let it use your signed-in Chrome while you are away (`chrome: true`), or keep it in buddi’s own browser. | no |
+| POST | `/api/missions/:id/browser` | For a mission that browses: let it use your signed-in browser while you are away (`chrome: true`), or keep it in buddi’s own browser. | no |
 | POST | `/api/missions/:id/keep` | Keep an agent’s quiet watch after “Still useful?”: its count of silent runs starts again. | yes |
 | POST | `/api/missions/:id/still-useful` | Answer “Still useful?” with Keep or Stop. The first answer from any surface decides; a later one changes nothing and says what was decided. | yes |
 | POST | `/api/missions/:id/schedule` | Change a mission’s schedule (a new revision). | yes |
@@ -2261,7 +2261,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/missions/<i
 
 #### `POST /api/missions/:id/browser`
 
-For a mission that browses: let it use your signed-in Chrome while you are away (`chrome: true`), or keep it in buddi’s own browser.
+For a mission that browses: let it use your signed-in browser while you are away (`chrome: true`), or keep it in buddi’s own browser.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes what an agent may do without asking.
 - **Body:** `{ chrome: boolean }`
@@ -3983,16 +3983,16 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | GET | `/api/browser/screenshot` | The browser’s current screen, as JPEG. | yes |
 | POST | `/api/browser/install` | Download the browser agents use (about 150 MB); follow on GET /api/browser. | no |
 | POST | `/api/browser/check` | Launch the browser once to see it starts. | yes |
-| POST | `/api/browser/settings` | Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window, the folder your Chrome saves downloads to (downloadsFolder). A partial object. | no |
+| POST | `/api/browser/settings` | Change where agents may look: your browser on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window, the folder your browser saves downloads to (downloadsFolder). A partial object. | no |
 | POST | `/api/browser/pin` | Pin one conversation to a route, or clear it. | yes |
-| POST | `/api/browser/card` | Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) without a chat message. | yes |
+| POST | `/api/browser/card` | Answer a browser card (Look, Keep going, Take over, Use my browser, Resume) without a chat message. | yes |
 | GET | `/api/browser/downloads` | The agents' downloads area: bytes and files by agent, the per-file and per-agent caps, the retention in days, and the files waiting there because they could not be filed (newest day first, at most 200). | yes |
 | POST | `/api/browser/downloads/clear` | Empty the agents' downloads area. What waits there is not in Files, so it is gone for good. | yes |
 | POST | `/api/browser/downloads/file` | File it: register one waiting download in Files as its agent's, then drop it from the area. | yes |
 | GET | `/api/browser/telemetry` | Browser stops by cause, cards and routes over the last days. | yes |
 | POST | `/api/browser/capture` | Capture: a full-resolution PNG of one page as it is now, whoever holds it, saved to Files under its title and the time. | yes |
 | POST | `/api/browser/stop` | Stop one page, or with no session stop agents' browsing (expires after the set time unless forever). | yes |
-| POST | `/api/browser/front` | Bring a page the owner holds in their Chrome to the front there, for an owner at the machine; the remote hand ends. | yes |
+| POST | `/api/browser/front` | Bring a page the owner holds in their browser to the front there, for an owner at the machine; the remote hand ends. | yes |
 | POST | `/api/browser/takeover` | Take over the screen from the agent. | yes |
 | POST | `/api/browser/resume` | Give the screen back to the agent. | yes |
 | POST | `/api/browser/release` | Release the session. | yes |
@@ -4098,7 +4098,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/browser/che
 
 #### `POST /api/browser/settings`
 
-Change where agents may look: your Chrome on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window, the folder your Chrome saves downloads to (downloadsFolder). A partial object.
+Change where agents may look: your browser on/off, your apps off/ask/on, sites that need your sign-in, the Stop's expiry, pages at once, show the window, the folder your browser saves downloads to (downloadsFolder). A partial object.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes what an agent may do without asking.
 - **Answer:** JSON
@@ -4125,7 +4125,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `POST /api/browser/card`
 
-Answer a browser card (Look, Keep going, Take over, Use my Chrome, Resume) without a chat message.
+Answer a browser card (Look, Keep going, Take over, Use my browser, Resume) without a chat message.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ conversationId: string, answer: string }`
@@ -4218,12 +4218,12 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `POST /api/browser/front`
 
-Bring a page the owner holds in their Chrome to the front there, for an owner at the machine; the remote hand ends.
+Bring a page the owner holds in their browser to the front there, for an owner at the machine; the remote hand ends.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ sessionId: string }`
 - **Answer:** `the status, with held: { by: "owner", where: "chrome" } and hand: false`
-- **Errors:** 400; 409 not taken over, or not a page in your Chrome
+- **Errors:** 400; 409 not taken over, or not a page in your browser
 - **Since:** 0.1.0-pre.52
 
 ```sh
@@ -4236,7 +4236,7 @@ Take over the screen from the agent.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ sessionId?: string }`
-- **Answer:** `the status, with hand: boolean; a page in your Chrome comes to the front there instead and the status carries held: { by: "owner", where: "chrome" }`
+- **Answer:** `the status, with hand: boolean; a page in your browser comes to the front there instead and the status carries held: { by: "owner", where: "chrome" }`
 - **Since:** 0.1.0-pre.15
 
 ```sh

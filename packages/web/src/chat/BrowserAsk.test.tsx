@@ -130,7 +130,7 @@ describe('in a conversation', () => {
     vi.spyOn(chatApi, 'conversation').mockResolvedValue({ conversationId: 'c1', agentId: 'keeper', messages: [] } as never);
     const pin = vi.spyOn(api, 'browserPin').mockResolvedValue({ ...idle, routes, pin: 'chrome' });
     render(<ChatPage {...props} />);
-    const chip = await screen.findByRole('button', { name: 'Use my Chrome' });
+    const chip = await screen.findByRole('button', { name: 'Use my browser' });
     expect(chip).toHaveAttribute('aria-pressed', 'false');
     await act(async () => { fireEvent.click(chip); });
     await waitFor(() => expect(pin).toHaveBeenCalledWith('c1', 'chrome'));
@@ -142,6 +142,6 @@ describe('in a conversation', () => {
     render(<ChatPage {...props} />);
     await screen.findByTestId('composer');
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
-    expect(screen.queryByRole('button', { name: 'Use my Chrome' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use my browser' })).not.toBeInTheDocument();
   });
 });

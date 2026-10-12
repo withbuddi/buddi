@@ -554,7 +554,7 @@ export async function main(): Promise<void> {
   const sourceWatches = createSourceWatches(pool);
 
   try {
-    // "Your browser" mode drives the owner's Chrome through the dashboard's
+    // "Your browser" mode drives the owner's browser through the dashboard's
     // own WebSocket endpoint. Handed over before `enable`, which is what
     // builds the driver for whichever mode the owner last chose.
     try { await browserHost(process.env, { extensionBridge: () => extensionEndpoint(process.env) }).enable(); }

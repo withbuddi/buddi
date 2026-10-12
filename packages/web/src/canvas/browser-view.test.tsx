@@ -198,7 +198,7 @@ describe('the Page tab', () => {
 
   it('names your Chrome and an app when the route is not the own browser', () => {
     const view = render(<BrowserView status={{ ...status, route: 'chrome', page: { ...status.page!, url: 'https://amazon.com/cart' } }} error={null} reload={() => {}} live />);
-    expect(screen.getByText('Looking at amazon.com · in your Chrome · background tab')).toBeInTheDocument();
+    expect(screen.getByText('Looking at amazon.com · in your browser · background tab')).toBeInTheDocument();
     view.rerender(<BrowserView status={{ ...status, route: 'apps', page: { ...status.page!, url: 'app://x', appId: 'com.apple.iWork.Numbers' } }} error={null} reload={() => {}} live />);
     expect(screen.getByText('Working in Numbers · its own window')).toBeInTheDocument();
   });
@@ -375,12 +375,12 @@ describe('the Page tab', () => {
     });
     vi.mocked(api.browserFront).mockImplementation(async () => { state = { ...chrome, state: 'paused', held: { by: 'owner', where: 'chrome' } }; return state; });
     const view = render(<BrowserView status={state} error={null} reload={() => view.rerender(<BrowserView status={state} error={null} reload={() => {}} live agentName="Home Manager" />)} live agentName="Home Manager" />);
-    expect(screen.getByText('Looking at amazon.com · in your Chrome · background tab')).toBeInTheDocument();
+    expect(screen.getByText('Looking at amazon.com · in your browser · background tab')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('takeover', 's1'));
     view.rerender(<BrowserView status={state} error={null} reload={() => {}} live agentName="Home Manager" />);
     // The remote hand, in the same frame as buddi's own browser, and a socket asked for it.
-    expect(await screen.findByText('You have the page · in your Chrome')).toBeInTheDocument();
+    expect(await screen.findByText('You have the page · in your browser')).toBeInTheDocument();
     expect(screen.getByTestId('remote-hand')).toBeInTheDocument();
     expect(FakeSocket.all.length).toBeGreaterThan(0);
     FakeSocket.all[0]!.drive('https://www.amazon.com/cart', 'sharp');
@@ -395,7 +395,7 @@ describe('the Page tab', () => {
     fireEvent.click(front);
     await waitFor(() => expect(api.browserFront).toHaveBeenCalledWith('s1'));
     view.rerender(<BrowserView status={state} error={null} reload={() => {}} live agentName="Home Manager" />);
-    expect(await screen.findByText('You have the page · in your Chrome · it’s in front')).toBeInTheDocument();
+    expect(await screen.findByText('You have the page · in your browser · it’s in front')).toBeInTheDocument();
     expect(screen.queryByTestId('remote-hand')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Bring the tab to the front' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Give it back' }));
@@ -416,8 +416,8 @@ describe('the Page tab', () => {
     vi.mocked(api.browserControl).mockResolvedValue(status);
     const inChrome: BrowserStatus = { ...status, state: 'paused', route: 'chrome', held: { by: 'owner', where: 'chrome' }, page: { ...status.page!, url: 'https://www.amazon.com/cart', title: 'Your cart' } };
     render(<BrowserView status={inChrome} error={null} reload={() => {}} live agentName="Home Manager" />);
-    expect(screen.getByText('You have the page · in your Chrome · it’s in front')).toBeInTheDocument();
-    expect(screen.getByText('Finish in Chrome, then give it back.')).toBeInTheDocument();
+    expect(screen.getByText('You have the page · in your browser · it’s in front')).toBeInTheDocument();
+    expect(screen.getByText('Finish in your browser, then give it back.')).toBeInTheDocument();
     // No reattach on a desktop, no Drive it here, no socket.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(api.browserControl).not.toHaveBeenCalledWith('takeover', 's1');
@@ -529,7 +529,7 @@ describe('the Page tab', () => {
     vi.mocked(api.browserPin).mockResolvedValue(status);
     render(<BrowserView status={{ ...status, route: 'chrome' }} error={null} reload={() => {}} live />);
     fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
-    expect(await screen.findByText('Your Chrome isn’t connected.')).toBeInTheDocument();
+    expect(await screen.findByText('Your browser isn’t connected.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use buddi’s browser' }));
     await waitFor(() => expect(api.browserPin).toHaveBeenCalledWith('c1', 'own'));
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('release', 's1'));

@@ -249,12 +249,12 @@ describe('Take over with your Chrome not connected', () => {
     vi.mocked(api.browserControl).mockResolvedValue(offline);
     render(<BrowserView status={extension} error={null} reload={() => {}} live />);
     fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
-    expect(await screen.findByText('Your Chrome isn\u2019t connected.')).toBeInTheDocument();
-    expect(screen.getByText(/Open Chrome on this Mac/)).toBeInTheDocument();
+    expect(await screen.findByText('Your browser isn\u2019t connected.')).toBeInTheDocument();
+    expect(screen.getByText(/Open your browser on this Mac/)).toBeInTheDocument();
     expect(screen.queryByTestId('remote-hand')).not.toBeInTheDocument();
     vi.mocked(api.browserControl).mockResolvedValue({ ...offline, hand: true, handReason: undefined, handMessage: undefined });
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    await waitFor(() => expect(screen.queryByText('Your Chrome isn\u2019t connected.')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Your browser isn\u2019t connected.')).not.toBeInTheDocument());
     expect(api.browserControl).toHaveBeenLastCalledWith('takeover', 's1');
   });
 

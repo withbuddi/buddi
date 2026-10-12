@@ -33,7 +33,7 @@ describe('sites, notes and walls', () => {
     expect(siteOf('https://www.amazon.com/cart')).toBe('amazon.com');
     expect(siteListed('smile.amazon.com', ['amazon.com'])).toBe(true);
     expect(siteListed('notamazon.com', ['amazon.com'])).toBe(false);
-    expect(routeNote('chrome', 'sign-in', 'amazon.com')).toBe('I used your Chrome because Amazon needs your sign-in.');
+    expect(routeNote('chrome', 'sign-in', 'amazon.com')).toBe('I used your browser because Amazon needs your sign-in.');
     expect(siteName('smile.amazon.co.uk')).toBe('Amazon');
     expect(routeNote('own', 'default', 'amazon.com')).toBeUndefined();
   });
@@ -53,11 +53,11 @@ describe('the cards and their answers', () => {
     expect(cardAnswer(look, 'carry on.')).toBe('continue');
     expect(cardAnswer(look, 'what happened?')).toBeUndefined();
     expect(cardAnswer(ownerCard('budget'), 'Keep going')).toBe('continue');
-    expect(cardAnswer(ownerCard('sign-in', { chrome: 'usable' }), 'Use my Chrome')).toBe('chrome');
+    expect(cardAnswer(ownerCard('sign-in', { chrome: 'usable' }), 'Use my browser')).toBe('chrome');
     expect(cardAnswer(ownerCard('human'), 'Take over')).toBe('takeover');
     expect(cardAnswer(ownerCard('stopped', { stoppedAgo: '2 days ago' }), 'Resume')).toBe('resume');
     expect(ownerCard('stopped', { since: '10:12', until: '11:12', site: 'amazon.com' }).question).toBe('Browsing is paused since 10:12\nYou paused agents\u2019 browsing from the Canvas, until 11:12. I need one page: amazon.com.');
-    expect(ownerCard('sign-in', { site: 'amazon.com', chrome: 'usable' })).toMatchObject({ title: 'Amazon needs your sign-in', line: 'Sign in on the page and give it back, and I carry on. Or let me use your Chrome, where you\u2019re signed in.' });
+    expect(ownerCard('sign-in', { site: 'amazon.com', chrome: 'usable' })).toMatchObject({ title: 'Amazon needs your sign-in', line: 'Sign in on the page and give it back, and I carry on. Or let me use your browser, where you\u2019re signed in.' });
     // A tap on a label an older card carried still answers it.
     expect(cardAnswer(ownerCard('human'), 'Skip it')).toBe('decline');
     expect(cardAnswer(ownerCard('stopped'), 'Leave it stopped')).toBe('decline');
@@ -141,9 +141,9 @@ describe('a page that renders signed out', () => {
     expect(detectWall(HN_FRONT)).toBeUndefined();
   });
   it('says why the owner\'s Chrome could not serve, in one line', () => {
-    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'unpaired')).toBe("Your Chrome isn't connected to this buddi, so I looked in my own browser.");
-    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'closed')).toBe("Your Chrome isn't open right now, so I looked in my own browser.");
-    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'off')).toBe('Your Chrome is turned off for agents in Settings, so I looked in my own browser.');
+    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'unpaired')).toBe("Your browser isn't connected to this buddi, so I looked in my own browser.");
+    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'closed')).toBe("Your browser isn't open right now, so I looked in my own browser.");
+    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'off')).toBe('Your browser is turned off for agents in Settings, so I looked in my own browser.');
   });
 });
 
@@ -191,5 +191,22 @@ describe('signInFields', () => {
   it('asks for a username and a password on a page with no boxes yet, and on a code page fills nothing by itself', () => {
     expect(signInFields({ targets: [] }, 'sign-in')).toEqual([{ label: 'Username', kind: 'username' }, { label: 'Password', kind: 'password' }]);
     expect(signInFields({ targets: [{ ref: 'e9', frame: 0, role: 'textbox', name: 'Verification code' }] }, 'code').every((field) => field.ref === undefined)).toBe(true);
+  });
+});
+
+describe('the owner browser, by name', () => {
+  it('names Edge in the notes and the card, and reads a tap on its labels', () => {
+    expect(routeNote('chrome', 'sign-in', 'amazon.com', undefined, undefined, 'Microsoft Edge')).toBe('I used your Edge because Amazon needs your sign-in.');
+    expect(routeNote('own', 'chrome-unavailable', 'amazon.com', undefined, 'closed', 'Microsoft Edge')).toBe("Your Edge isn't open right now, so I looked in my own browser.");
+    const usable = ownerCard('sign-in', { site: 'amazon.com', chrome: 'usable', browser: 'Microsoft Edge' });
+    expect(usable.options.map((option) => option.label)).toContain('Use my Edge');
+    expect(usable.line).toContain('let me use your Edge');
+    expect(cardAnswer(usable, 'Use my Edge')).toBe('chrome');
+    const offline = ownerCard('sign-in', { site: 'amazon.com', chrome: 'offline', browser: 'Microsoft Edge' });
+    expect(offline.options.map((option) => option.label)).toContain('Use Edge when it’s open');
+    expect(cardAnswer(offline, 'Use Edge when it’s open')).toBe('chrome');
+    // A card from before still answers to the Chrome words.
+    expect(cardAnswer(usable, 'Use my Chrome')).toBe('chrome');
+    expect(cardAnswer(usable, 'Take over')).toBe('takeover');
   });
 });

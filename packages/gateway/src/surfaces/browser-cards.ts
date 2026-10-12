@@ -23,7 +23,7 @@ const FOLDED = new Set<string>([CARD_LABELS.takeOver, CARD_LABELS.saveLogin]);
  *
  * A login wall (`signIn`) is the sign-in card of docs/owner-secrets.md §6:
  * the fields as inputs, Save and fill, with the browser's other choices
- * that still apply ("Use my Chrome") as secondary actions. A code page keeps
+ * that still apply ("Use my browser") as secondary actions. A code page keeps
  * the browser's card, with the sign-in card opening in place from its "Save a
  * login for next time" instead of a link to Settings.
  */

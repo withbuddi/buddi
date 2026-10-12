@@ -589,7 +589,7 @@ describe('the send button beside every chip', () => {
           onReadAloud={() => {}}
         />,
       );
-      expect(screen.getByRole('button', { name: 'Use my Chrome' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Use my browser' })).toBeInTheDocument();
       const send = screen.getByRole('button', { name: 'Send' });
       expect(send).toBeVisible();
       expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible();
@@ -681,7 +681,7 @@ describe('the composer row at 520, 420 and 360 px', () => {
     expect(thinking.title).toBe('Thinking: off');
     expect(thinking.getAttribute('aria-pressed')).toBe('false');
     expect(thinking.textContent).toBe('');
-    expect(screen.getByRole('button', { name: /Chrome/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /browser/ })).toBeVisible();
     const send = screen.getByRole('button', { name: 'Send' });
     expect(send).toBeVisible();
     expect((send.parentElement as HTMLElement).lastElementChild).toBe(send);

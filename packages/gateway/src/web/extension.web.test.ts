@@ -145,6 +145,35 @@ describe('the browser extension endpoint', () => {
     await expect(readFile(path.join(dir, 'extension.json'), 'utf8')).rejects.toThrow();
   });
 
+  it('keeps the browser the extension names, ignores a name it does not know, and does without one', async () => {
+    const { dir, socketUrl, origin, extension } = await setup({ pairThrottleMs: 0 });
+    const headers = await session(origin);
+    const client = connect(socketUrl);
+    await client.open;
+    client.send({ type: 'hello', extension: '0.1.0', nonce: 'nonce-edge-1', paired: false, browser: 'Microsoft Edge' });
+    const pair = await client.next('pair');
+    const response = await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code: String(pair.code) }) });
+    expect(await response.json()).toMatchObject({ connected: true, browser: 'Microsoft Edge' });
+    const token = String((await client.next('paired')).token);
+    expect(JSON.parse(await readFile(path.join(dir, 'extension.json'), 'utf8')).browser).toBe('Microsoft Edge');
+    expect(extension.browser()).toBe('Microsoft Edge');
+    client.socket.close();
+
+    // An extension from before the name reconnects: the pairing keeps the name it had.
+    const older = connect(socketUrl);
+    await older.open;
+    await older.handshake(token);
+    expect(extension.browser()).toBe('Microsoft Edge');
+    older.socket.close();
+
+    // A name that is not one of the browsers is dropped, never shown.
+    const odd = connect(socketUrl);
+    await odd.open;
+    odd.send({ type: 'hello', extension: '0.1.0', nonce: 'nonce-edge-2', paired: false, browser: '<script>' });
+    await odd.next('pair');
+    expect(((await (await fetch(`${origin}/api/extension`, { headers })).json()) as { browser?: string }).browser).toBe('Microsoft Edge');
+  });
+
   it('is not connected until the paired frame has left the building', async () => {
     const { socketUrl, extension } = await setup();
     const client = connect(socketUrl);

@@ -11,6 +11,7 @@
 
 import type { ChromeLike } from './chrome.js';
 import type { TokenStore } from './pairings.js';
+import { thisBrowser } from './brand.js';
 
 export interface ObservedTarget {
   ref: string;
@@ -164,6 +165,8 @@ export interface ProtocolOptions {
   /** This link's own token, in the list of pairings (pairings.ts). */
   tokens?: TokenStore;
   version: string;
+  /** Which browser this is ("Microsoft Edge"), said in the hello so buddi can name it. Defaults to asking `navigator`. */
+  browser?: () => string | undefined;
   send(frame: unknown): void;
   execute(command: Command, cancel: Cancellation): Promise<CommandResult>;
   /** Called on every state change so the popup can redraw. */
@@ -248,7 +251,9 @@ export class Protocol {
     this.#nonce = nonce();
     this.#authenticated = false;
     this.#set({ connection: 'connecting', code: null, error: null, features: [], refused: false });
-    this.#options.send({ type: 'hello', extension: this.#options.version, nonce: this.#nonce, paired: stored !== null, features: [...EXTENSION_FEATURES] });
+    // `browser` is optional on the wire: a buddi from before it ignores it, and says "your browser" without it.
+    const browser = (this.#options.browser ?? thisBrowser)();
+    this.#options.send({ type: 'hello', extension: this.#options.version, nonce: this.#nonce, paired: stored !== null, features: [...EXTENSION_FEATURES], ...(browser ? { browser } : {}) });
   }
 
   closed(reason?: string, options: { refused?: boolean } = {}): void {

@@ -3389,6 +3389,8 @@ export interface ExtensionState {
   pairedAt?: string;
   extension?: string;
   lastSeenAt?: string;
+  /** The paired browser's name ("Microsoft Edge"), as its extension said it. Optional: an older gateway or extension does not send it. */
+  browser?: string;
   /** This buddi's own version, to compare with the extension's. Optional: an older gateway does not send it. */
   buddi?: string;
   /** The oldest extension this buddi works with, in Chrome's numeric scheme (`0.1.0.24`). Optional: an older gateway does not send it. */

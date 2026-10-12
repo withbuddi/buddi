@@ -116,8 +116,8 @@ describe('approval callbacks (pure)', () => {
       { text: 'Not now', callback_data: `apr:${ACTION_ID}:reject` },
       { text: '✅ Allow', callback_data: `apr:${ACTION_ID}:approve` },
     ]]);
-    const chrome = { ...sampleAction, tool: 'schedule.use_chrome', preview: 'Let the PNC pull use your Chrome?\n\nIts scheduled run needed your signed-in Chrome for PNC and stopped there: nothing was read or changed.' };
-    expect(approvalRequestText(chrome, 'UTC')).toContain('Let the PNC pull use your Chrome?');
+    const chrome = { ...sampleAction, tool: 'schedule.use_chrome', preview: 'Let the PNC pull use your browser?\n\nIts scheduled run needed your signed-in browser for PNC and stopped there: nothing was read or changed.' };
+    expect(approvalRequestText(chrome, 'UTC')).toContain('Let the PNC pull use your browser?');
     expect(decidedText(chrome, 'rejected').split('\n')[0]).toBe('Not now — left as it was');
   });
 

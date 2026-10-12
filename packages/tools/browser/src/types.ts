@@ -24,7 +24,7 @@ export const commandSchema = z.object({
   direction: z.enum(['up', 'down']).optional(),
   tabId: z.string().max(40).optional(),
   observation: z.string().max(80).optional().describe('Optional: the observation.id your target came from. Left out, buddi uses the latest page; if the page changed, you get the fresh page back instead of an action.'),
-  prefer: z.enum(['own', 'yours']).optional().describe('Where you read the task as belonging: "yours" for the owner\'s own account, cart or orders (their Chrome, where they are signed in), "own" for a plain public page. buddi decides; this is a hint.'),
+  prefer: z.enum(['own', 'yours']).optional().describe('Where you read the task as belonging: "yours" for the owner\'s own account, cart or orders (their own browser, where they are signed in), "own" for a plain public page. buddi decides; this is a hint.'),
 }).strict().superRefine((input, ctx) => {
   const require = (key: keyof typeof input) => {
     if (input[key] === undefined) ctx.addIssue({ code: 'custom', path: [key], message: `Required for ${input.action}` });

@@ -520,7 +520,7 @@ const proposeInput = z.object({
     .enum(['none', 'own', 'owner'])
     .optional()
     .describe(
-      "Whether each run opens web pages while the owner is away: 'own' in buddi's own browser, 'owner' in the owner's signed-in Chrome " +
+      "Whether each run opens web pages while the owner is away: 'own' in buddi's own browser, 'owner' in the owner's signed-in browser " +
         "(a bank or any site that needs their sign-in; the card says so in one line and approving it grants it). " +
         "Left out, buddi decides from the instruction: a site that needs the owner's sign-in means 'owner', otherwise no pages.",
     ),
@@ -528,7 +528,7 @@ const proposeInput = z.object({
     .string()
     .max(253)
     .optional()
-    .describe("With browser 'owner': the site it needs the owner's Chrome for, a host like pnc.com."),
+    .describe("With browser 'owner': the site it needs the owner's browser for, a host like pnc.com."),
 });
 
 export interface ScheduleEnvelope {
@@ -547,7 +547,7 @@ export interface ScheduleEnvelope {
   endsAt: string;
   /** Where its runs may browse unattended; absent: no pages. Approving the card grants exactly this. */
   browser?: MissionBrowser;
-  /** With `owner`: the site it needs the owner's Chrome for, when known. */
+  /** With `owner`: the site it needs the owner's browser for, when known. */
   browserSite?: string;
 }
 
@@ -555,7 +555,7 @@ export function renderSchedulePreview(envelope: ScheduleEnvelope): string {
   return [
     `Let ${envelope.agentId} run itself on a schedule: ${envelope.name}`,
     '',
-    // The owner's Chrome is never granted silently: one line, right under the ask.
+    // The owner's browser is never granted silently: one line, right under the ask.
     ...(envelope.browser === 'owner' ? [chromeLine(describeCadence(envelope.cron, envelope.timezone), envelope.browserSite), ''] : []),
     `Cadence: ${describeCadence(envelope.cron, envelope.timezone)}`,
     `Cron:    ${envelope.cron} (${envelope.timezone}, misfire ${envelope.misfirePolicy})`,
@@ -570,7 +570,7 @@ export function renderSchedulePreview(envelope: ScheduleEnvelope): string {
     'Each run does exactly this:',
     envelope.prompt,
     '',
-    ...(envelope.browser === 'own' ? ["It may look at pages in buddi's own browser while you are away (never your Chrome or apps)."] : []),
+    ...(envelope.browser === 'own' ? ["It may look at pages in buddi's own browser while you are away (never your browser or apps)."] : []),
     ...(envelope.stopWhen ? [`It stops itself when: ${envelope.stopWhen}`] : []),
     `It ends on its own after ${localDateTimeString(new Date(envelope.endsAt), envelope.timezone)}.`,
     '',
@@ -631,14 +631,14 @@ function zoneOffsetMs(at: Date, timezone: string): number {
 
 /** The schedule tools: propose (gated), list mine, cancel mine. */
 export interface ScheduleManifestOptions {
-  /** The sites that need the owner's sign-in (the browser's list), to tell when a proposal needs his Chrome. */
+  /** The sites that need the owner's sign-in (the browser's list), to tell when a proposal needs his browser. */
   signInSites?: () => Promise<readonly string[]>;
 }
 
 /**
  * Where a proposed schedule's runs may browse. The agent's word wins; left
  * out, a plan that names a site needing the owner's sign-in, from an agent
- * that may browse at all, needs his Chrome. Nothing else browses.
+ * that may browse at all, needs his browser. Nothing else browses.
  */
 async function proposedBrowser(
   input: z.infer<typeof proposeInput>,

@@ -130,8 +130,8 @@ describe('a sign-in card on Telegram', () => {
   });
 
   it('a browser choice folded into the card ("Use Chrome") is answered as itself', async () => {
-    const withChrome: Question = { ...card, options: [{ id: 'option-1', label: 'Use Chrome when it’s open', hint: null, recommended: false }, { id: 'option-2', label: DECLINE_LABEL, hint: null, recommended: false }], request: { ...card.request!, choices: ['Use Chrome when it’s open'] } };
-    expect(questionKeyboard(withChrome).inline_keyboard.flat().map((button) => button.text)).toEqual(['Use Chrome when it’s open', DECLINE_LABEL]);
+    const withChrome: Question = { ...card, options: [{ id: 'option-1', label: 'Use my browser when it’s open', hint: null, recommended: false }, { id: 'option-2', label: DECLINE_LABEL, hint: null, recommended: false }], request: { ...card.request!, choices: ['Use my browser when it’s open'] } };
+    expect(questionKeyboard(withChrome).inline_keyboard.flat().map((button) => button.text)).toEqual(['Use my browser when it’s open', DECLINE_LABEL]);
     const { api } = fakeApi();
     const run = vi.fn(async () => 'Waiting for Chrome.');
     const surface = new TelegramSurface({ api, pool: new FakeDb(withChrome), catalog: catalog(), timezone: 'UTC', run, log: () => {}, typingIntervalMs: 60_000 } as any);
@@ -141,6 +141,6 @@ describe('a sign-in card on Telegram', () => {
       message: { message_id: 56, chat: { id: Number(OWNER), type: 'private' }, date: 0 },
       data: questionCallbackData(QUESTION_ID, 0),
     } as unknown as NonNullable<TelegramUpdate['callback_query']>);
-    expect((run.mock.calls[0] as unknown as [{ text: string }])[0].text).toBe('Use Chrome when it’s open');
+    expect((run.mock.calls[0] as unknown as [{ text: string }])[0].text).toBe('Use my browser when it’s open');
   });
 });

@@ -258,7 +258,7 @@ export async function runMissionNowFromWeb(
 
 /**
  * The owner's switch on Missions for a mission that browses: on lets it use
- * his signed-in Chrome while he is away (`owner`), off keeps it in buddi's
+ * his signed-in browser while he is away (`owner`), off keeps it in buddi's
  * own browser (`own`). A mission that opens no page has no switch: whether
  * it browses at all is its package's or its proposal's, approved there.
  */

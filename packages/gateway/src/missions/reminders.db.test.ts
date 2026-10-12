@@ -330,7 +330,7 @@ suite('reminders and proposed schedules (postgres)', () => {
     expect(spec).toMatchObject({ timezone: 'Asia/Tokyo', timezoneExplicit: true });
   });
 
-  it("says in one line when the schedule will use the owner's Chrome, and approving it grants exactly that", async () => {
+  it("says in one line when the schedule will use the owner's browser, and approving it grants exactly that", async () => {
     const registry = createToolRegistry();
     const proposed = await registry.invoke(
       'schedule.propose',
@@ -342,21 +342,21 @@ suite('reminders and proposed schedules (postgres)', () => {
     const lines = action!.preview.split('\n');
     // Right under the ask, never only in the envelope.
     expect(lines[0]).toBe('Let cfo run itself on a schedule: PNC pull');
-    expect(lines[2]).toBe('Runs every day at 07:00 America/New_York, using your Chrome for PNC.');
+    expect(lines[2]).toBe('Runs every day at 07:00 America/New_York, using your browser for PNC.');
     expect(action!.envelope).toMatchObject({ browser: 'owner', browserSite: 'pnc.com' });
     await decideApproval(pool, { actionId: proposed.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
     expect((await executeApproved(pool, { actionId: proposed.actionId, registry, ctx, worker: 'test', now: NOW })).ok).toBe(true);
     expect((await getMission(pool, agentMissionId('cfo', 'pnc-pull')))?.browser).toBe('owner');
   });
 
-  it("works out from the plan when a schedule needs the owner's Chrome; otherwise it opens no page", async () => {
+  it("works out from the plan when a schedule needs the owner's browser; otherwise it opens no page", async () => {
     const registry = new ToolRegistry();
     registry.register(createScheduleManifest({ signInSites: async () => ['pnc.com'] }));
     const browsing: CoreToolContext = { ...ctx, agentId: 'cfo', sessionTools: ['browser.act'] };
     const derived = await registry.invoke('schedule.propose', { name: 'Morning balances', cron: '0 7 * * *', prompt: 'Pull the PNC balances.' }, browsing);
     if (derived.ok || derived.reason !== 'approval-required') throw new Error('expected an approval');
     expect((await getAction(pool, derived.actionId))?.envelope).toMatchObject({ browser: 'owner', browserSite: 'pnc.com' });
-    expect((await getAction(pool, derived.actionId))?.preview).toContain('using your Chrome for PNC');
+    expect((await getAction(pool, derived.actionId))?.preview).toContain('using your browser for PNC');
     // Approved through the real executor, whose re-description has no session tools: the Chrome he said yes to stands.
     await decideApproval(pool, { actionId: derived.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
     const ran = await executeApproved(pool, { actionId: derived.actionId, registry, ctx, worker: 'test', now: NOW });
@@ -369,7 +369,7 @@ suite('reminders and proposed schedules (postgres)', () => {
       if (result.ok || result.reason !== 'approval-required') throw new Error('expected an approval');
       const action = await getAction(pool, result.actionId);
       expect(action?.envelope).not.toHaveProperty('browser');
-      expect(action?.preview).not.toContain('your Chrome');
+      expect(action?.preview).not.toContain('your browser');
     }
     // Approved, the one that names nothing writes no browsing.
     if (elsewhere.ok || elsewhere.reason !== 'approval-required') return;

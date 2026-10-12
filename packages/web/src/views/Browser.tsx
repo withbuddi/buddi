@@ -19,6 +19,7 @@ import { chatRoute, parsePairingCode, pluginSettingsRoute, withoutPairingCode } 
 import { ActionMenu, Avatar, Icon, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Modal, Notice, Panel, Pill, Segment, Sheet, Spacer, Switch, Toolbar, useAsync } from '../ui';
 import { useThisMachine } from '../useThisMachine';
 import { formatBytes } from '../chat/attachments';
+import { currentBrowserWord, extensionsPage, rememberBrowser, storeLabel, theBrowser, useBrowserWord, yourBrowser, YourBrowser } from '../browser-name';
 
 /** The fix Ubuntu's AppArmor needs before Chromium's sandbox starts (docs/browser.md, Linux). */
 export const SANDBOX_COMMAND = 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0';
@@ -97,15 +98,16 @@ function listWords(names: string[]): string {
 const PIN_CHOICES: Array<{ value: 'auto' | BrowserRoute; label: string }> = [
   { value: 'auto', label: 'Let it choose' },
   { value: 'own', label: 'Its own browser only' },
-  { value: 'chrome', label: 'Your Chrome first' },
+  { value: 'chrome', label: 'Your browser first' },
   { value: 'apps', label: 'Your apps first' },
 ];
 
 /** Where an agent may look, as a select: the Advanced list and the agent's own page. */
 export function PinSelect({ value, label, apps, disabled, onChange }: { value: 'auto' | BrowserRoute; label: string; apps: boolean; disabled?: boolean; onChange: (value: 'auto' | BrowserRoute) => void }): JSX.Element {
+  const word = useBrowserWord();
   return (
     <select className="br-select" value={value} aria-label={label} disabled={disabled} onChange={(event) => onChange(event.target.value as 'auto' | BrowserRoute)}>
-      {PIN_CHOICES.filter((choice) => apps || choice.value !== 'apps' || value === 'apps').map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+      {PIN_CHOICES.filter((choice) => apps || choice.value !== 'apps' || value === 'apps').map((choice) => <option key={choice.value} value={choice.value}>{choice.value === 'chrome' ? `${YourBrowser(word)} first` : choice.label}</option>)}
     </select>
   );
 }
@@ -166,13 +168,14 @@ function WhereAgentsLook({ data, macOS, reload, timezone, go }: { data: BrowserS
   const save = (next: SettingsChange) => void run(() => api.browserSettings(next));
   const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const learned = data.learnedSignInSites ?? [];
+  const word = useBrowserWord();
   const appsRoute = data.routes?.find((route) => route.kind === 'apps');
   const showApps = appsProvided(appsRoute);
   const sessions = data.sessions?.length ? data.sessions : data.session ? [data] : [];
 
   return (
     <>
-      <Notice>Agents pick where to look for each task: their own browser first, your Chrome for a site that needs your sign-in, an app when you name one. You don’t choose each time; here you say what they may use.</Notice>
+      <Notice>Agents pick where to look for each task: their own browser first, {yourBrowser(word)} for a site that needs your sign-in, an app when you name one. You don’t choose each time; here you say what they may use.</Notice>
       <ErrorBanner message={failure} />
       {!data.enabled ? <Notice tone="warning">Agents can’t look at pages from here. Start buddi serve on the machine buddi runs on.</Notice> : null}
       {data.stop ? (
@@ -232,6 +235,7 @@ function DownloadsPanel({ busy, run }: { busy: boolean; run: (action: () => Prom
   const usage = useAsync(() => api.browserDownloads(), [], 30_000);
   const agents = useAsync(() => api.agents(), []);
   const [confirming, setConfirming] = useState(false);
+  const word = useBrowserWord();
   const data = usage.data;
   const waiting = data?.waiting ?? [];
   const names = new Map((agents.data?.agents ?? []).map((agent) => [agent.id, agent.name]));
@@ -244,7 +248,7 @@ function DownloadsPanel({ busy, run }: { busy: boolean; run: (action: () => Prom
           <span className="ui-list-main">
             <span className="ui-list-title">Files agents download</span>
             <span className="ui-list-sub">{data ? downloadsLine(data) : 'Checking…'}. A download goes straight to Files; only one that could not be filed waits here.</span>
-            <span className="ui-list-sub">In your Chrome, agents’ downloads need the extension’s Downloads permission: open the buddi extension and press Allow downloads. Downloads you start yourself are never read.</span>
+            <span className="ui-list-sub">In {yourBrowser(word)}, agents’ downloads need the extension’s Downloads permission: open the buddi extension and press Allow downloads. Downloads you start yourself are never read.</span>
           </span>
           <span className="ui-list-side">
             <Button size="sm" disabled={busy || !data || data.files === 0} onClick={() => setConfirming(true)}>Clear</Button>
@@ -277,12 +281,12 @@ function DownloadsPanel({ busy, run }: { busy: boolean; run: (action: () => Prom
   );
 }
 
-/** "Looking at amazon.com · in your Chrome · background tab": the Page tab's quiet line. */
-export function lookingLine(status: BrowserStatus): string {
+/** "Looking at amazon.com · in your Edge · background tab": the Page tab's quiet line. */
+export function lookingLine(status: BrowserStatus, word: string | undefined = currentBrowserWord()): string {
   if (status.needsOwner) return `Waiting for you · ${status.needsOwner.kind === 'human' ? 'it asks for a human' : status.needsOwner.kind === 'uncertain' ? 'did that click land?' : status.needsOwner.kind === 'budget' ? 'keep going?' : 'it asks for your sign-in'}`;
   if (status.route === 'apps') return `Working in ${status.page?.appId ? appWord(status.page.appId) : 'an app'} · its own window`;
   const site = siteOfUrl(status.page?.url);
-  return `Looking at ${site ?? 'a page'} · ${status.route === 'chrome' ? 'in your Chrome · background tab' : 'in buddi’s browser'}`;
+  return `Looking at ${site ?? 'a page'} · ${status.route === 'chrome' ? `in ${yourBrowser(word)} · background tab` : 'in buddi’s browser'}`;
 }
 
 /** The host without `www.`, as the runtime names a site. */
@@ -365,6 +369,9 @@ type SettingsChange = Partial<ControlSettings> & { forgetSignInSite?: string };
 
 function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlSettings; learned: readonly string[]; busy: boolean; save: (next: SettingsChange) => void; zone: string }): JSX.Element {
   const ext = useAsync(() => api.extension(), [], 3_000);
+  useEffect(() => { rememberBrowser(ext.data); }, [ext.data]);
+  const word = useBrowserWord();
+  const yours = yourBrowser(word), Yours = YourBrowser(word), named = theBrowser(word);
   const probe = useAsync(() => askExtension(), [], 3_000).data ?? null;
   const thisMachine = useThisMachine();
   // A `buddi://settings/browser?code=…` link pre-fills the code; the owner still presses Pair.
@@ -402,12 +409,12 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   const paired = ext.data?.pairedAt ? `paired ${fmtTime(ext.data.pairedAt, zone)}` : null;
   const version = probe?.version ?? ext.data?.extension;
   const more = (
-    <ActionMenu label="More for your Chrome" items={[
+    <ActionMenu label={`More for ${yours}`} items={[
       paired || state === 'broken' || state === 'notrunning' || state === 'connected' ? { label: 'Pair again', hint: [version ? `Extension ${version}` : null, paired].filter(Boolean).join(' · ') || undefined, onSelect: () => void act(() => api.forgetExtension()) } : null,
       // A developer's errand: only when buddi runs from a checkout. A packaged install has the store.
       ext.data?.checkout ? { label: 'Install unpacked…', hint: 'For a developer build of the extension', onSelect: () => setUnpacked(true) } : null,
       ext.data?.pairedAt ? 'separator' : null,
-      ext.data?.pairedAt ? { label: 'Forget this Chrome…', tone: 'critical', onSelect: () => setForgetting(true) } : null,
+      ext.data?.pairedAt ? { label: word ? `Forget this ${word}…` : 'Forget this browser…', tone: 'critical', onSelect: () => setForgetting(true) } : null,
     ]} />
   );
   /*
@@ -425,7 +432,7 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   );
   const enterCode = (
     <span className="br-enter-code">
-      <span className="pl-row-line">Enter the code · Open the buddi icon in Chrome; type its code here</span>
+      <span className="pl-row-line">{`Enter the code · Open the buddi icon in ${named}; type its code here`}</span>
       {codeField}
     </span>
   );
@@ -435,11 +442,11 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
   let side: ReactNode;
   if (state === 'none') {
     sub = <Lines line="For sites that need your sign-in" status={target === 'chromium'
-      ? 'Add the buddi extension to Chrome, then pair it here. Until then agents use their own browser and your saved logins.'
+      ? `Add the buddi extension to ${named}, then pair it here. Until then agents use their own browser and your saved logins.`
       : `The buddi extension runs in Chrome, Edge, Brave or Arc on a computer: add it there, then pair it on this page. Until then agents use their own browser and your saved logins.`}>{enterCode}</Lines>;
-    side = <>{target === 'chromium' ? <ButtonLink size="sm" variant="accent" href={STORE_URL} target="_blank" rel="noopener noreferrer">Add to Chrome <span aria-hidden="true">↗</span></ButtonLink> : null}{more}</>;
+    side = <>{target === 'chromium' ? <ButtonLink size="sm" variant="accent" href={STORE_URL} target="_blank" rel="noopener noreferrer">{storeLabel(word)} <span aria-hidden="true">↗</span></ButtonLink> : null}{more}</>;
   } else if (state === 'pair') {
-    const found = probe ? `Extension ${probe.version} found in Chrome` : 'The buddi extension asks to pair';
+    const found = probe ? `Extension ${probe.version} found in ${named}` : 'The buddi extension asks to pair';
     // An extension that already works for another buddi adds this one from its popup's Add a buddi, which offers this address.
     const press = probe && knowsSeveral(probe) && (probe.pairings ?? []).length > 0 && !probe.pairings!.some((entry) => sameGateway(entry.origin))
       ? 'Open the extension and press Add a buddi: it offers this buddi’s address, then shows a code, and this page pairs with it.'
@@ -451,24 +458,24 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
     ) : <Lines line={found} status={press}>{enterCode}</Lines>;
     side = more;
   } else if (state === 'broken') {
-    sub = <Lines line="Used only for sites that need your sign-in" tone="critical" status="Chrome forgot the pairing, so agents use their own browser instead." />;
+    sub = <Lines line="Used only for sites that need your sign-in" tone="critical" status={`${word ?? 'The browser'} forgot the pairing, so agents use their own browser instead.`} />;
     side = <><Button size="sm" variant="accent" disabled={disabled} onClick={() => void act(() => api.forgetExtension())}>Pair again</Button>{more}</>;
   } else {
     const line = !settings.yourChrome ? 'Off. Sites that need a sign-in use your saved logins, or ask you.'
-      : state === 'notrunning' ? `Used only for sites that need your sign-in · Chrome isn’t open on ${thisMachine}; agents wait or use their own browser`
+      : state === 'notrunning' ? `Used only for sites that need your sign-in · ${word ?? 'Your browser'} isn’t open on ${thisMachine}; agents wait or use their own browser`
       : state === 'off' ? 'Switched off for this buddi in the buddi extension · turn it on in its popup; until then agents use their own browser'
       : `Used only for sites that need your sign-in · background tabs in a buddi group${othersWords(otherBuddis(probe)) ? ` · ${othersWords(otherBuddis(probe))}` : ''}`;
     sub = sitesLine && settings.yourChrome ? <Lines line={line} status={sitesLine} /> : line;
     side = (
       <>
-        {settings.yourChrome ? (state === 'notrunning' ? <Pill>Chrome closed</Pill> : state === 'off' ? <Pill>off in Chrome</Pill> : <Pill tone="good" dot>connected</Pill>) : null}
-        <Switch checked={settings.yourChrome} label="Let agents use your Chrome" disabled={disabled} onChange={(on) => save({ yourChrome: on })} />
+        {settings.yourChrome ? (state === 'notrunning' ? <Pill>{word ? `${word} closed` : 'closed'}</Pill> : state === 'off' ? <Pill>{word ? `off in ${word}` : 'off in the browser'}</Pill> : <Pill tone="good" dot>connected</Pill>) : null}
+        <Switch checked={settings.yourChrome} label={`Let agents use ${yours}`} disabled={disabled} onChange={(on) => save({ yourChrome: on })} />
         {more}
       </>
     );
   }
   const outdated = probe && ext.data?.extensionMinimum && olderExtension(probe.version, ext.data.extensionMinimum)
-    ? `This extension is ${probe.version}; this buddi needs ${ext.data.extensionMinimum} or later. Update it from chrome://extensions or the store.` : null;
+    ? `This extension is ${probe.version}; this buddi needs ${ext.data.extensionMinimum} or later. Update it from ${extensionsPage(word)} or the store.` : null;
   // An extension from before several buddis points at one address; one that pairs with several never needs re-pointing.
   const elsewhere = probe && !knowsSeveral(probe) && !sameGateway(probe.gateway) ? `The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in its popup.` : null;
   // The dashboard moved port since the pairing: the extension looks in the old place until it is paired again.
@@ -482,7 +489,7 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
       <div className="ui-list-row">
         <Glyph kind="chrome" />
         <span className="ui-list-main">
-          <span className="ui-list-title">Your Chrome</span>
+          <span className="ui-list-title">{Yours}</span>
           <span className="ui-list-sub">{sub}{outdated ? <span className="pl-row-status" data-tone="warning">{outdated}</span> : null}{elsewhere ? <span className="pl-row-status" data-tone="warning">{elsewhere}</span> : null}{moved ? <span className="pl-row-status" data-tone="warning">{moved}</span> : null}{failure ?? ext.error ? <span className="pl-row-status" data-tone="critical">{failure ?? ext.error}</span> : null}</span>
         </span>
         <span className="ui-list-side"><span className="br-side">{side}</span></span>
@@ -490,14 +497,14 @@ function ChromeRow({ settings, learned, busy, save, zone }: { settings: ControlS
       {forgetting ? (
         <div className="br-confirm">
           <Notice tone="warning" action={<Toolbar align="end"><Button size="sm" variant="ghost" onClick={() => setForgetting(false)}>Cancel</Button><Button size="sm" variant="danger" disabled={disabled} onClick={() => { setForgetting(false); void act(() => api.forgetExtension()); }}>Forget</Button></Toolbar>}>
-            Forget this Chrome? Agents stop using it until you pair it again.
+            {word ? `Forget this ${word}?` : 'Forget this browser?'} Agents stop using it until you pair it again.
           </Notice>
         </div>
       ) : null}
       {unpacked ? (
         <Sheet title="Install the extension unpacked" onClose={() => setUnpacked(false)}>
           <div className="ui-prose muted">
-            <p>For a developer build. Open chrome://extensions, turn on Developer mode, choose Load unpacked, and pick this folder. Then pair it on this page.</p>
+            <p>For a developer build. Open {extensionsPage(word)}, turn on Developer mode, choose Load unpacked, and pick this folder. Then pair it on this page.</p>
           </div>
           <Code label="The unpacked extension">{ext.data?.path ?? '…'}</Code>
         </Sheet>
@@ -535,6 +542,7 @@ function AppsRow({ route, settings, busy, save, run, onSettings }: { route: Brow
 
 function Advanced({ settings, learned, busy, save, run, showApps }: { settings: ControlSettings; learned: readonly string[]; busy: boolean; save: (next: SettingsChange) => void; run: (action: () => Promise<unknown>) => Promise<void>; showApps: boolean }): JSX.Element {
   const agents = useAsync(() => api.agents(), []);
+  const word = useBrowserWord();
   const engines: AgentEngine[] = agents.data?.engines ?? [];
   const ruled = engines.filter((engine) => engine.browser && engine.browser !== 'auto');
   const free = engines.filter((engine) => !engine.browser || engine.browser === 'auto');
@@ -556,7 +564,7 @@ function Advanced({ settings, learned, busy, save, run, showApps }: { settings: 
       <div className="br-adv">
         <Pref label="First choice for every agent" hint="Let them choose is right for almost everyone: a wrong guess costs one extra page load, never a stop.">
           <Segment label="First choice for every agent" value={first} onChange={(value) => save({ defaultRoute: value })}
-            options={[{ value: 'auto', label: 'Let them choose' }, { value: 'own', label: 'Own browser only' }, { value: 'chrome', label: 'Your Chrome first' }]} />
+            options={[{ value: 'auto', label: 'Let them choose' }, { value: 'own', label: 'Own browser only' }, { value: 'chrome', label: `${YourBrowser(word)} first` }]} />
         </Pref>
         <div className="br-adv-block">
           <span className="br-adv-head"><span className="br-adv-title">Agents with their own rule</span><span className="br-adv-hint">Also on each agent’s page, under Where it may look. A rule never allows what is off above.</span></span>
@@ -590,7 +598,7 @@ function Advanced({ settings, learned, busy, save, run, showApps }: { settings: 
           )}
         </div>
         <div className="br-adv-block">
-          <span className="br-adv-head"><span className="br-adv-title">Sites that need your sign-in</span><span className="br-adv-hint">Always looked at in your Chrome while it is on and connected. buddi adds a site, outlined dashed, when it meets its sign-in page.</span></span>
+          <span className="br-adv-head"><span className="br-adv-title">Sites that need your sign-in</span><span className="br-adv-hint">Always looked at in {yourBrowser(word)} while it is on and connected. buddi adds a site, outlined dashed, when it meets its sign-in page.</span></span>
           {settings.signInSites.length || learned.length ? (
             <span className="br-sites">
               {settings.signInSites.map((host) => (
@@ -617,7 +625,7 @@ function Advanced({ settings, learned, busy, save, run, showApps }: { settings: 
         <Pref label="Show buddi’s browser as a window" hint="Off: it works out of sight and you watch on the Canvas. On for the few sites that refuse a hidden browser.">
           <Switch checked={settings.showWindow} label="Show buddi’s browser as a window" disabled={busy} onChange={(on) => save({ showWindow: on })} />
         </Pref>
-        <p className="br-adv-empty">Missions run without you, so they look only in buddi’s own browser, never in your Chrome.</p>
+        <p className="br-adv-empty">Missions run without you, so they look only in buddi’s own browser, never in {yourBrowser(word)}.</p>
       </div>
     </Details>
   );

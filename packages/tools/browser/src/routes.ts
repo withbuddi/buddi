@@ -1,6 +1,7 @@
 import type { AskSignIn, RouteCommand, RoutePage, RouteProvider } from '@buddi/core/plugin';
 import type { RouteKind, RoutePin } from './settings.js';
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
+import { browserWord, yourBrowser, YourBrowser } from './brand.js';
 
 /**
  * Picking where an agent looks, per task (docs/browser.md, "Routes").
@@ -108,20 +109,21 @@ export type ChromeLink = 'unpaired' | 'closed' | 'connected';
 export type ChromeMiss = 'unpaired' | 'closed' | 'off';
 
 /** The one chat line, only when the route is not the own browser or changed mid-task. */
-export function routeNote(route: RouteKind, reason: RouteReason, site: string | undefined, appName?: string, chrome?: ChromeMiss): string | undefined {
+export function routeNote(route: RouteKind, reason: RouteReason, site: string | undefined, appName?: string, chrome?: ChromeMiss, browser?: string): string | undefined {
   const where = site ?? 'this site';
+  const yours = yourBrowser(browser), Yours = YourBrowser(browser);
   if (route === 'chrome') {
-    if (reason === 'sign-in' || reason === 'sign-in-fallback') return `I used your Chrome because ${siteName(site) ?? 'this site'} needs your sign-in.`;
-    if (reason === 'prefer') return `I used your Chrome for ${where}, as you asked.`;
-    if (reason === 'pin') return `I used your Chrome for ${where}, as you set it.`;
-    return `I used your Chrome for ${where}.`;
+    if (reason === 'sign-in' || reason === 'sign-in-fallback') return `I used ${yours} because ${siteName(site) ?? 'this site'} needs your sign-in.`;
+    if (reason === 'prefer') return `I used ${yours} for ${where}, as you asked.`;
+    if (reason === 'pin') return `I used ${yours} for ${where}, as you set it.`;
+    return `I used ${yours} for ${where}.`;
   }
   if (route === 'apps') return appName ? `I opened ${appName} because the task needs it.` : 'I used your apps for this.';
   if (reason === 'chrome-unavailable') {
-    if (chrome === 'unpaired') return "Your Chrome isn't connected to this buddi, so I looked in my own browser.";
-    if (chrome === 'closed') return "Your Chrome isn't open right now, so I looked in my own browser.";
-    if (chrome === 'off') return "Your Chrome is turned off for agents in Settings, so I looked in my own browser.";
-    return `Your Chrome isn't connected, so I used my own browser for ${where}.`;
+    if (chrome === 'unpaired') return `${Yours} isn't connected to this buddi, so I looked in my own browser.`;
+    if (chrome === 'closed') return `${Yours} isn't open right now, so I looked in my own browser.`;
+    if (chrome === 'off') return `${Yours} is turned off for agents in Settings, so I looked in my own browser.`;
+    return `${Yours} isn't connected, so I used my own browser for ${where}.`;
   }
   if (reason === 'apps-unavailable') return `Your apps aren't available, so I used my own browser for ${where}.`;
   return undefined;
@@ -245,6 +247,16 @@ export const CARD_LABELS = {
   saveLogin: 'Save a login for next time', skip: 'Skip this site', resume: 'Resume', leaveStopped: 'Keep paused',
 } as const;
 
+/**
+ * The two labels that name the owner's browser: "Use my Edge", "Use Edge when
+ * it’s open"; "Use my browser" when its name is not known. `CARD_LABELS` keeps
+ * the Chrome words, which a card from before still carries.
+ */
+export function browserLabels(browser?: string): { useChrome: string; openChrome: string } {
+  const word = browserWord(browser);
+  return word ? { useChrome: `Use my ${word}`, openChrome: `Use ${word} when it\u2019s open` } : { useChrome: 'Use my browser', openChrome: 'Use my browser when it\u2019s open' };
+}
+
 /** Labels an older card carried: a tap on one still answers it. */
 const OLD_LABELS = { openChrome: "Open Chrome and I'll use it there", skip: 'Skip it', leaveStopped: 'Leave it stopped' } as const;
 
@@ -255,6 +267,8 @@ export interface CardFacts {
   site?: string | undefined;
   chrome?: 'usable' | 'offline' | 'none';
   storedLogin?: boolean;
+  /** The owner's browser by name ("Microsoft Edge"), when the extension said it. */
+  browser?: string | undefined;
   /** The Stop's start and end, already in the owner's clock (`10:12`). */
   since?: string;
   until?: string;
@@ -278,12 +292,14 @@ export function ownerCard(kind: CardKind, facts: CardFacts = {}): OwnerCard {
     case 'sign-in':
     case 'code': {
       const options: OwnerCard['options'] = [{ label: CARD_LABELS.takeOver, hint: kind === 'code' ? 'Enter the code yourself, then give it back' : 'Sign in yourself, then give it back', recommended: true }];
-      if (facts.chrome === 'usable') options.push({ label: CARD_LABELS.useChrome, hint: 'Where you are already signed in' });
-      if (facts.chrome === 'offline') options.push({ label: CARD_LABELS.openChrome, hint: 'I wait for Chrome, where you are signed in' });
+      const labels = browserLabels(facts.browser);
+      const word = browserWord(facts.browser);
+      if (facts.chrome === 'usable') options.push({ label: labels.useChrome, hint: 'Where you are already signed in' });
+      if (facts.chrome === 'offline') options.push({ label: labels.openChrome, hint: `I wait for ${word ?? 'your browser'}, where you are signed in` });
       if (!facts.storedLogin) options.push({ label: CARD_LABELS.saveLogin, hint: 'Keys and secrets, with the site filled in' });
       const first = kind === 'code' ? 'Enter the code on the page and give it back, and I carry on.' : 'Sign in on the page and give it back, and I carry on.';
-      const chrome = facts.chrome === 'usable' ? ' Or let me use your Chrome, where you\u2019re signed in.'
-        : facts.chrome === 'offline' ? ' Or open Chrome, where you\u2019re signed in, and I use that.' : '';
+      const chrome = facts.chrome === 'usable' ? ` Or let me use ${yourBrowser(facts.browser)}, where you\u2019re signed in.`
+        : facts.chrome === 'offline' ? ` Or open ${word ?? 'your browser'}, where you\u2019re signed in, and I use that.` : '';
       return card(kind, kind === 'code' ? `${name} asks for a code` : `${name} needs your sign-in`, `${first}${chrome}`, options, site);
     }
     case 'human':
@@ -301,6 +317,11 @@ export function ownerCard(kind: CardKind, facts: CardFacts = {}): OwnerCard {
   }
 }
 
+/** The card's own "Use my Edge" labels, whatever browser it named. */
+function browserOptions(card: OwnerCard): string[] {
+  return card.options.map((option) => option.label).filter((label) => /^Use (my )?\S+( when it\u2019s open)?$/.test(label) && label !== CARD_LABELS.takeOver);
+}
+
 /** Which card option an owner message answers, read loosely: a tap sends the label, a typed answer is close to it. */
 export function cardAnswer(card: OwnerCard, text: string): 'takeover' | 'continue' | 'chrome' | 'resume' | 'decline' | undefined {
   const said = text.trim().toLowerCase().replace(/[.!]+$/, '');
@@ -310,7 +331,7 @@ export function cardAnswer(card: OwnerCard, text: string): 'takeover' | 'continu
     case 'uncertain': return is(CARD_LABELS.look, 'take over') ? 'takeover' : is(CARD_LABELS.carryOn, 'continue', 'go on') ? 'continue' : undefined;
     case 'budget': return is(CARD_LABELS.keepGoing, 'continue', 'go on', 'yes') ? 'continue' : is(CARD_LABELS.stopHere, 'stop', 'no') ? 'decline' : undefined;
     case 'sign-in': case 'code': case 'human':
-      return is(CARD_LABELS.takeOver, 'look') ? 'takeover' : is(CARD_LABELS.useChrome, CARD_LABELS.openChrome, OLD_LABELS.openChrome, 'use chrome', 'in my chrome') ? 'chrome' : is(CARD_LABELS.skip, OLD_LABELS.skip, 'skip') ? 'decline' : undefined;
+      return is(CARD_LABELS.takeOver, 'look') ? 'takeover' : is(CARD_LABELS.useChrome, CARD_LABELS.openChrome, OLD_LABELS.openChrome, ...browserOptions(card), 'use chrome', 'in my chrome', 'use my browser') ? 'chrome' : is(CARD_LABELS.skip, OLD_LABELS.skip, 'skip') ? 'decline' : undefined;
     case 'stopped': return is(CARD_LABELS.resume, 'yes') ? 'resume' : is(CARD_LABELS.leaveStopped, OLD_LABELS.leaveStopped, 'no') ? 'decline' : undefined;
   }
 }

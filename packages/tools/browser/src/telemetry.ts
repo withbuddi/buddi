@@ -27,11 +27,11 @@ export const STOP_CAUSES = {
   'stale-ref': { outcome: 'retry', what: 'A ref that no longer matched; re-observed' },
   'redirect': { outcome: 'retry', what: 'The page moved since the observation; re-observed' },
   'stale-observation': { outcome: 'retry', what: 'An old observation id; re-observed' },
-  'not-connected': { outcome: 'retry', what: 'The owner\'s Chrome not connected; fell back to the own browser' },
+  'not-connected': { outcome: 'retry', what: 'The owner\'s browser not connected; fell back to the own browser' },
   // One owner card (4).
   'uncertain-input': { outcome: 'card', what: 'A click or fill that may not have landed: Look?' },
   'budget': { outcome: 'card', what: 'The task used its steps or its hour: Keep going?' },
-  'sign-in': { outcome: 'card', what: 'A sign-in or a code with no stored login and no Chrome: Sign in' },
+  'sign-in': { outcome: 'card', what: 'A sign-in or a code with no stored login and no owner\'s browser: Sign in' },
   'human-check': { outcome: 'card', what: 'A captcha or "verify you are human": Human check' },
   // Kept: the owner's own stops, and the facts that have no alternative.
   'owner-stop': { outcome: 'kept', what: 'The owner\'s Stop agents\' browsing (expires; Resume card)' },

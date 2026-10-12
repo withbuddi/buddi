@@ -11,6 +11,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- buddi names the browser you actually use instead of always saying Chrome: "your Edge" on Edge (also Brave, Opera, Vivaldi, Arc; "your browser" when it cannot tell), on Settings → Browser & apps, the chat's Use my … chip, the browser cards and notes, Missions and the Canvas. The extension tells buddi which browser it runs in when it connects (with the next Chrome Web Store update; an older extension or buddi simply leaves it out), and on Edge the store button reads "Get the buddi extension (Chrome Web Store, works in Edge)".
 - A conversation on an OpenAI-compatible provider (Ollama, OpenRouter, Gemini, a local server) no longer fails on every turn once the model answered a step with thinking alone (it happened after a question to the owner): that step is left out of what is sent instead of going as an empty assistant message the provider refuses ("invalid message content type: <nil>"). Conversations already stuck this way work again.
 - Plugin installs, upgrades and `buddi doctor` run npm on Windows (Node refuses to start `npm.cmd` without a shell; its script now runs with buddi's own node).
 - Backups and plugin staging use the tar Windows ships, not a GNU tar earlier on PATH that reads `C:\` as a remote host.

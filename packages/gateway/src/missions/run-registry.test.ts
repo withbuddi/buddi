@@ -1,5 +1,5 @@
 /**
- * A mission run's registry, halted once the run needed the owner's Chrome:
+ * A mission run's registry, halted once the run needed the owner's browser:
  * every later call is answered unrun — an auto tool does not execute, and a
  * gated one records no approval of its own to outrank the Chrome ask. No
  * database: a halted call never reaches one.

@@ -518,10 +518,10 @@ describe('browser dashboard endpoints', () => {
     const telemetry = await fetch(`${origin}/api/browser/telemetry`, { headers });
     expect(await telemetry.json()).toMatchObject({ tasks: 3, byCause: [{ cause: 'sign-in', count: 1 }] });
   });
-  it('take over of a page in your Chrome passes the held status through, with no hand offered', async () => {
+  it('take over of a page in your browser passes the held status through, with no hand offered', async () => {
     const held = { state: 'paused', enabled: true, busy: false, hasScreenshot: false, route: 'chrome', mode: 'extension', chrome: 'connected',
       session: { id: 's1', agentId: 'a', conversationId: 'c1', requestId: 'r', task: 't', expiresAt: '', steps: 0, maxSteps: 200 },
-      held: { by: 'owner', where: 'chrome' }, message: 'The page is in front of you in your Chrome. Give it back when you are done.' };
+      held: { by: 'owner', where: 'chrome' }, message: 'The page is in front of you in your browser. Give it back when you are done.' };
     const control = vi.fn(async () => held);
     const hand = vi.fn(() => ({ supported: true, hand: {} }));
     const fake = { enable: async () => {}, shutdown: async () => {}, status: () => held, screenshot: () => undefined,

@@ -63,7 +63,7 @@ async function setup() {
   let state: BrowserStatus['state'] = 'running';
   const fronted: string[] = [];
   const status = (): BrowserStatus => ({ state, enabled: true, busy: false, hasScreenshot: !!driver.livePicture(), route: 'chrome', session: { ...session, route: 'chrome' } as never });
-  // The host controller around one page in the owner's Chrome, with the driver's own hand.
+  // The host controller around one page in the owner's browser, with the driver's own hand.
   const browser: BrowserController = {
     enable: async () => {}, shutdown: async () => {}, status,
     screenshot: () => driver.livePicture(), execute: async () => ({}), secretFill: async () => ({}), secretType: async () => ({}),
@@ -117,7 +117,7 @@ function dashboard(url: string, headers: Record<string, string>) {
   return { socket, seen, pictures, open, send: (frame: unknown) => socket.send(JSON.stringify(frame)) };
 }
 
-describe('your Chrome, live', () => {
+describe('your browser, live', () => {
   it('pairs a live extension: says its name and what it reads, believes only what it knows', async () => {
     const { socketUrl, origin, headers, extension, dir } = await setup();
     const fake = await liveExtension(socketUrl, origin, headers);

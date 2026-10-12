@@ -135,7 +135,7 @@ describe('the downloads area', () => {
     await writeFile(path.join(owner, 'Downloads', 'april.csv'), CSV);
     expect(moved.chromeFolder()).toBe(path.join(owner, 'Statements'));
     await expect(moved.save('cfo', chrome(path.join(owner, 'Statements', 'march.csv')))).resolves.toMatchObject({ size: CSV.length });
-    await expect(moved.save('cfo', chrome(path.join(owner, 'Downloads', 'april.csv')))).rejects.toThrow(/your Chrome’s download folder/);
+    await expect(moved.save('cfo', chrome(path.join(owner, 'Downloads', 'april.csv')))).rejects.toThrow(/your browser’s download folder/);
     folder = undefined;
     await expect(moved.save('cfo', chrome(path.join(owner, 'Downloads', 'april.csv')))).resolves.toMatchObject({ size: CSV.length });
   });

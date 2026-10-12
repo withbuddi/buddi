@@ -181,7 +181,7 @@ describe('the page and its lifecycle', () => {
 
     await expect(service.front()).resolves.toMatchObject({ state: 'paused', held: { by: 'owner', where: 'chrome' } });
     expect(driver.bringToFront).toHaveBeenCalledOnce();
-    expect(service.hand()).toMatchObject({ supported: false, message: 'The page is in front of you in your Chrome.' });
+    expect(service.hand()).toMatchObject({ supported: false, message: 'The page is in front of you in your browser.' });
     // Asked twice, held once.
     await service.front();
     expect(driver.bringToFront).toHaveBeenCalledOnce();

@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 import { api, type MissionRow } from '../api';
 import { fmtRelative, fmtTime, truncate } from '../format';
 import { Button, Card, Code, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Section, Spacer, Stack, StatePill, Switch, Table, Toolbar, useAsync, EmptyState } from '../ui';
+import { useBrowserWord, yourBrowser } from '../browser-name';
 
 const POLICIES = ['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline'] as const;
 
@@ -100,6 +101,7 @@ function Mission({
   onRunNow: () => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  const yours = yourBrowser(useBrowserWord());
   // Only a mission that is on can run now; an off one shows Enable instead.
   const runnable = mission.enabled && !mission.pausedReason;
   const running = starting || missionBusy(mission);
@@ -153,17 +155,17 @@ function Mission({
       {mission.browser ? (
         <Toolbar>
           <span>
-            <strong>{mission.browser === 'owner' ? 'Uses your Chrome' : 'Own browser'}</strong>
+            <strong>{mission.browser === 'owner' ? `Uses ${yours}` : 'Own browser'}</strong>
             <span className="muted">
               {mission.browser === 'owner'
-                ? ' · it may open pages in your signed-in Chrome while you are away'
-                : ' · it opens pages only in buddi’s browser, never your Chrome'}
+                ? ` · it may open pages in ${yours}, signed in, while you are away`
+                : ` · it opens pages only in buddi’s browser, never ${yours}`}
             </span>
           </span>
           <Spacer />
           <Switch
             checked={mission.browser === 'owner'}
-            label={`Let ${mission.name} use your Chrome`}
+            label={`Let ${mission.name} use ${yours}`}
             onChange={(on) => onRun(api.setMissionChrome(mission.id, on))}
           />
         </Toolbar>

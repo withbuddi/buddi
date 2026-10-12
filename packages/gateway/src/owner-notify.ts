@@ -108,7 +108,7 @@ export async function notifyApproval(pool: Queryable, opts: NotifyDeps, action: 
   return notifyOwner(pool, opts, {
     kind: 'approval',
     urgency: 'now',
-    // A question core asks in its own words ("Let the PNC pull use your Chrome?", "Download the … model?") is its own title.
+    // A question core asks in its own words ("Let the PNC pull use your browser?", "Download the … model?") is its own title.
     title: asksInOwnWords(action.tool) ? approvalAsk(action.tool, action.preview) : `${action.agentId} needs your approval to run ${action.tool}`,
     ...(action.preview ? { text: action.preview } : {}),
     ...(action.conversationId ? { link: { route: `#/chat/${encodeURIComponent(action.agentId)}/${encodeURIComponent(action.conversationId)}` } } : {}),
