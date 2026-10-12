@@ -28,11 +28,12 @@ describe('host commands on Windows (simulated)', () => {
 // The real thing, where it can run: a command, a native failure, and a timeout that ends a child.
 describe.runIf(process.platform === 'win32')('host command processes on Windows', () => {
   const base = { cwd: process.cwd(), timeoutMs: 20_000, env: process.env };
-  it('runs PowerShell and reports a native failure', async () => {
+  // A cold Add-Type (the job) costs a couple of seconds per command.
+  it('runs PowerShell and reports a native failure', { timeout: 60_000 }, async () => {
     expect(await runCommand({ ...base, command: 'Write-Output "hello"' })).toMatchObject({ state: 'completed', exitCode: 0, stdout: expect.stringContaining('hello') });
     expect((await runCommand({ ...base, command: 'cmd /c exit 7' })).exitCode).toBe(7);
   });
-  it('times out and ends the whole tree', async () => {
+  it('times out and ends the whole tree', { timeout: 60_000 }, async () => {
     const started = Date.now();
     const result = await runCommand({ ...base, timeoutMs: 1500, command: 'Start-Process -NoNewWindow -FilePath powershell.exe -ArgumentList "-NoProfile","-Command","Start-Sleep 60"; Start-Sleep 60' });
     expect(result.state).toBe('timed-out');
