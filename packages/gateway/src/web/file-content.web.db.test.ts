@@ -26,7 +26,8 @@ vi.mock('node:fs/promises', async (original) => {
     },
   };
 });
-import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, saveArtifact, saveArtifactVersion, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import pg from 'pg';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, replaceArtifactContent, saveArtifact, saveArtifactVersion, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { enterWorkspace, hostWorkspaceDir, hostWorkspaceKey } from '@buddi/tool-host';
 import { systemContext } from '../system-context.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -267,6 +268,46 @@ suite('file content routes', () => {
       const again = await save(id, { text: '# Mine\n', base: sha('# Mine\n') });
       expect(await again.json()).toMatchObject({ workspace: { updated: true } });
       expect(await readFile(onDisk, 'utf8')).toBe('# Mine\n');
+    });
+
+    it('does not take a newer output of another path with the same name for a newer version', async () => {
+      const a = await captured('one/notes.md', '# One\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await captured('two/notes.md', '# Two\n');
+      expect((await save(a.id, { text: '# One, mine\n', base: sha('# One\n') })).status).toBe(200);
+      expect(await readFile(a.onDisk, 'utf8')).toBe('# One, mine\n');
+      // The same path captured again is the newer version.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const again = await captured('one/notes.md', '# One, by buddi\n');
+      const stale = await save(a.id, { text: '# One, mine again\n', base: sha('# One, mine\n') });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toMatchObject({ current: { artifactId: again.id } });
+    });
+
+    it('says when the workspace copy is gone, and saves in Files only', async () => {
+      const { id, onDisk } = await captured('gone.md', '# Gone\n');
+      await rm(onDisk);
+      expect(await (await save(id, { text: '# Mine\n', base: sha('# Gone\n') })).json())
+        .toMatchObject({ workspace: { updated: false, reason: 'the workspace copy is gone; saved in Files only' } });
+    });
+
+    it('finishes a write-through on a pool of one connection', async () => {
+      const { id, onDisk } = await captured('one-connection.md', '# One\n');
+      const url = new URL(databaseUrl as string);
+      url.pathname = `/${TEST_DB}`;
+      const single = new pg.Pool({ connectionString: url.toString(), max: 1 });
+      try {
+        const done = replaceArtifactContent(single, {
+          id, bytes: Buffer.from('# Two\n'), expectedSha256: sha('# One\n'),
+          workspace: async () => ({ kind: 'write', commit: () => writeFile(onDisk, '# Two\n'), abort: async () => {} }),
+        }, env);
+        const result = await Promise.race([done, new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 5_000))]);
+        expect(result).toMatchObject({ ok: true, workspace: { updated: true } });
+        const { rows } = await pool.query('select origin_sha256 from core.artifacts where id = $1', [id]);
+        expect(rows[0].origin_sha256).toBe(sha('# Two\n'));
+      } finally {
+        await single.end();
+      }
     });
 
     it('keeps the same bytes from two outputs as two files, each written to its own path', async () => {

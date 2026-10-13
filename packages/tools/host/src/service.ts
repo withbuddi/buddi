@@ -50,32 +50,37 @@ export function hostWorkspaceKey(ownerId: string, agentId: string, conversationI
  * edit of a captured output back there (web/file-content.ts).
  */
 /*
- * One workspace, one writer at a time, across every host service in this
- * process: a command running in it, or the owner's save writing a captured
- * output back into it (gateway web/file-content.ts). A save refuses while a
- * command runs; a command waits for a save to finish before it starts.
+ * The owner's save of a command's output into a workspace (gateway
+ * web/file-content.ts) holds one lock for the whole process while it checks,
+ * stages and renames — milliseconds — and every host.exec run, in any
+ * conversation and with any cwd, waits for it before it starts. Node has no
+ * openat, so the save's lstat-then-rename is only sound while nothing buddi
+ * starts can swap a folder under it; this is what guarantees that.
+ *
+ * Separately, the runs in each workspace are counted, so a save can refuse
+ * while a command is working in the conversation the file came from.
  */
 const running = new Map<string, number>();
-const holding = new Map<string, Promise<void>>();
+let holding: Promise<void> | null = null;
 /** Is a command running in this workspace (by `hostWorkspaceKey`)? */
 export function workspaceBusy(key: string): boolean {
   return (running.get(key) ?? 0) > 0;
 }
-/** Run `fn` holding the workspace: no command starts in it meanwhile. */
-export async function holdWorkspace<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  while (holding.has(key)) await holding.get(key);
+/** Run `fn` holding every workspace: no command starts anywhere meanwhile. */
+export async function holdWorkspaces<T>(fn: () => Promise<T>): Promise<T> {
+  while (holding) await holding;
   let release: () => void = () => {};
-  holding.set(key, new Promise<void>((resolve) => { release = resolve; }));
+  holding = new Promise<void>((resolve) => { release = resolve; });
   try {
     return await fn();
   } finally {
-    holding.delete(key);
+    holding = null;
     release();
   }
 }
-/** A command entering its workspace: waits for a save, and returns its way out. */
+/** A command entering its workspace: waits for a save in progress, and returns its way out. */
 export async function enterWorkspace(key: string): Promise<() => void> {
-  while (holding.has(key)) await holding.get(key);
+  while (holding) await holding;
   running.set(key, (running.get(key) ?? 0) + 1);
   return () => {
     const left = (running.get(key) ?? 1) - 1;
@@ -257,7 +262,7 @@ export class HostService {
     const view: HostRun = { actionId: ctx.actionId, ownerId: ctx.buddi!.owner.id, agentId: ctx.agentId!,
       conversationId: ctx.conversationId!, command: envelope.command, cwd: envelope.cwd,
       startedAt: new Date().toISOString(), stdout: '', stderr: '' };
-    // After an owner's save into this workspace, never during one.
+    // After an owner's save into any workspace, never during one.
     const leave = await enterWorkspace(hostWorkspaceKey(ctx.buddi!.owner.id, ctx.agentId!, ctx.conversationId!));
     this.#runs.set(ctx.actionId, { view, controller });
     try {

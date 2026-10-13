@@ -450,9 +450,10 @@ export interface WorkspaceRow {
  * the same conversation and name, with the row locked: a version written at
  * the same moment either lands before (and this save is stale) or waits until
  * this one is in. Stale is the bytes not being the ones the owner opened
- * (`expectedSha256`), or a newer version of the same file — same name, type
- * and author, in the same conversation — and that version comes back as
- * `current`. The new bytes are stored content-addressed like any other (the
+ * (`expectedSha256`), or a newer version of the same file — same type and
+ * author in the same conversation, and the same name for a document or the
+ * same workspace path for a command's output (two outputs that share a
+ * basename are two files) — and that version comes back as `current`. The new bytes are stored content-addressed like any other (the
  * path comes from their hash, never from the caller), written only once the
  * row is known to take them and removed again if it does not; the old bytes
  * stay on disk, since another row may share them.
@@ -469,14 +470,18 @@ export async function replaceArtifactContent(
   env: EnvLike = process.env,
 ): Promise<ReplaceArtifactResult> {
   const peek = await pool.query(
-    `select filename, conversation_id from core.artifacts where id = $1 and deleted_at is null`,
+    `select filename, conversation_id, origin_path from core.artifacts where id = $1 and deleted_at is null`,
     [input.id],
   );
   if (!peek.rows[0]) return { ok: false, reason: 'gone' };
-  const chain = fileChainName(peek.rows[0].filename ?? null);
-  const lockKey = peek.rows[0].conversation_id && chain
-    ? `buddi.files.version:${peek.rows[0].conversation_id}:${chain}`
-    : `buddi.files.edit:${input.id}`;
+  // A captured file's versions are the captures of the same workspace path; a document's, its name.
+  const origin: string | null = peek.rows[0].origin_path ?? null;
+  const chain = origin === null ? fileChainName(peek.rows[0].filename ?? null) : null;
+  const lockKey = origin !== null
+    ? `buddi.files.origin:${origin}`
+    : peek.rows[0].conversation_id && chain
+      ? `buddi.files.version:${peek.rows[0].conversation_id}:${chain}`
+      : `buddi.files.edit:${input.id}`;
   const client = await pool.connect();
   let written: string | null = null;
   let staged: Extract<WorkspaceCopy, { kind: 'write' }> | null = null;
@@ -491,15 +496,17 @@ export async function replaceArtifactContent(
     const found = locked.rows[0];
     if (!found) { await client.query('rollback'); return { ok: false, reason: 'gone' }; }
     const row = toRow(found);
-    if (found.conversation_id && chain) {
+    if (found.conversation_id && (chain || found.origin_path)) {
       const { rows } = await client.query(
-        `select ${SELECT_COLUMNS}, created_by from core.artifacts
+        `select ${SELECT_COLUMNS}, created_by, origin_path from core.artifacts
           where conversation_id = $1 and id <> $2 and deleted_at is null
             and created_at > $3 and mime = $4 and created_by = $5
           order by created_at desc, id desc`,
         [found.conversation_id, row.id, found.created_at, row.mime, found.created_by],
       );
-      const newer = rows.find((other) => fileChainName(other.filename ?? null) === chain);
+      const newer = rows.find((other) => (found.origin_path
+        ? other.origin_path === found.origin_path
+        : other.origin_path == null && fileChainName(other.filename ?? null) === chain));
       if (newer) { await client.query('rollback'); return { ok: false, reason: 'stale', current: toRow(newer) }; }
     }
     if (row.sha256 !== input.expectedSha256) { await client.query('rollback'); return { ok: false, reason: 'stale', current: row }; }
@@ -530,7 +537,8 @@ export async function replaceArtifactContent(
         await staged.abort().catch(() => {});
         return { ok: true, row: saved, workspace: { updated: false, reason: err instanceof Error ? err.message : String(err) } };
       }
-      await pool.query(`update core.artifacts set origin_sha256 = $2 where id = $1`, [saved.id, saved.sha256]).catch(() => {});
+      // On the connection already held: a second one from the pool could wait on this one forever.
+      await client.query(`update core.artifacts set origin_sha256 = $2 where id = $1`, [saved.id, saved.sha256]).catch(() => {});
       return { ok: true, row: saved, workspace: { updated: true } };
     };
     if (sha256 === row.sha256) {

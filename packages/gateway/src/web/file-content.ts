@@ -16,7 +16,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { holdWorkspace, hostWorkspaceDir, hostWorkspaceKey, workspaceBusy } from '@buddi/tool-host';
+import { holdWorkspaces, hostWorkspaceDir, hostWorkspaceKey, workspaceBusy } from '@buddi/tool-host';
 import type { Pool } from 'pg';
 import {
   artifactBytesExist,
@@ -80,7 +80,16 @@ const LINKED = 'its folder in buddi’s workspace is a link, so buddi did not wr
  * The new bytes are staged in a new file beside the copy (exclusive create)
  * and renamed over it once the save is committed — a rename replaces a link
  * at the leaf rather than following it — after the folders and the copy's
- * hash are checked once more. A copy that is gone is left alone.
+ * hash are checked once more, and after it the copy must still resolve to
+ * the same place. A copy that is gone is left alone, and said so.
+ *
+ * All of it runs holding host.exec's process-wide lock (`holdWorkspaces`),
+ * so no command buddi starts can swap a folder between a check and the
+ * rename. What remains is a process an earlier command left running in the
+ * background (host.exec ends its process tree, but a detached daemon can
+ * escape that), or a command already running in another conversation with
+ * its cwd here: it could still race the rename. The check after the rename
+ * catches the result and reports it, loudly, rather than preventing it.
  */
 async function workspaceCopy(
   env: EnvLike,
@@ -95,7 +104,7 @@ async function workspaceCopy(
   const file = path.join(data, captured.originPath);
   if (!inside(root, file)) return { kind: 'refused', reason: 'it is not in this agent’s workspace for this conversation' };
   const way = await linkOnTheWay(data, file);
-  if (way === 'missing') return { kind: 'none' };
+  if (way === 'missing') return { kind: 'refused', reason: 'the workspace copy is gone; saved in Files only' };
   if (way !== null) return { kind: 'refused', reason: LINKED };
   if (!(await lstat(file)).isFile()) return { kind: 'refused', reason: 'it is no longer a file' };
   const known = captured.originSha256 ?? save.base;
@@ -116,6 +125,12 @@ async function workspaceCopy(
       if (leaf?.isSymbolicLink()) throw new Error(LINKED);
       if (leaf && !(await holds()).ok) throw new Error('a command changed it meanwhile');
       await rename(temp, file);
+      // And once more after: the file must still be where it was, by no link.
+      const after = await realpath(file).catch(() => null);
+      if (after !== file || (await linkOnTheWay(data, file)) !== null) {
+        console.error(`file-content: the workspace copy of ${captured.id} no longer resolves inside its workspace after the owner's save (${file} → ${after ?? 'gone'}); refused`);
+        throw new Error('the workspace copy no longer resolves inside its workspace');
+      }
     },
     abort: () => unlink(temp).catch(() => {}),
   };
@@ -181,7 +196,7 @@ export async function saveFileContent(pool: Pool, env: EnvLike, id: string, body
   const captured = origin.rows[0]?.origin_path && origin.rows[0]?.conversation_id
     ? hostWorkspaceKey(ownerId, String(origin.rows[0].created_by), String(origin.rows[0].conversation_id)) : null;
   const result = captured
-    ? await holdWorkspace(captured, async () => (workspaceBusy(captured) ? 'busy' as const : replace()))
+    ? await holdWorkspaces(async () => (workspaceBusy(captured) ? 'busy' as const : replace()))
     : await replace();
   if (result === 'busy') return { status: 409, body: { error: 'buddi is running a command in this conversation; try again when it finishes', busy: true } };
   if (result.ok) {
