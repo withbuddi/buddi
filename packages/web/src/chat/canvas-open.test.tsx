@@ -23,6 +23,11 @@ vi.mock('./stream', () => ({
 }));
 
 const idle: BrowserStatus = { state: 'idle', enabled: true, busy: false, hasScreenshot: false };
+const live: BrowserStatus = {
+  state: 'running', enabled: true, busy: false, hasScreenshot: false,
+  session: { id: 's1', agentId: 'keeper', conversationId: 'c1', requestId: 'r1', task: 'Sign in to Wikipedia', expiresAt: new Date().toISOString(), steps: 1, maxSteps: 80 },
+  page: { id: 'o1', url: 'https://en.wikipedia.org/', title: 'Wikipedia', capturedAt: new Date().toISOString(), tabs: [] },
+};
 
 const props: ChatPageProps = {
   timezone: 'UTC', agentId: 'keeper', onSelectAgent: vi.fn(), attention: new Map(),
@@ -121,6 +126,40 @@ describe('the desktop Canvas, closed until used', () => {
     fireEvent.click(reopen);
     await waitFor(() => expect(screen.getByTestId('canvas')).toBeVisible());
     expect(screen.queryByRole('button', { name: /Open the canvas/ })).toBeNull();
+    // Focus lands on the tab in front, and goes back to the button on the next close.
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('role', 'tab'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close the canvas' }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open the canvas' })));
+  });
+
+  it('counts a live page that opens behind a closed canvas', async () => {
+    transcript = [said('Which logins do I have?', 0), ...call('l1', 'shed.saved_logins', rows, 1)];
+    page();
+    await waitFor(() => expect(screen.getByTestId('canvas')).toBeVisible());
+    fireEvent.click(screen.getByRole('button', { name: 'Close the canvas' }));
+    vi.mocked(api.browser).mockResolvedValue(live);
+    await screen.findByRole('button', { name: 'Open the canvas, 1 new' }, { timeout: 4000 });
+    expect(screen.getByTestId('canvas')).not.toBeVisible();
+  });
+
+  it('keeps an unsent chat’s choice off an older thread opened afterwards', async () => {
+    transcript = [said('Which logins do I have?', 0), ...call('l1', 'shed.saved_logins', rows, 1)];
+    const view = render(<Tooltip.Provider><ChatPage {...props} requestedConversationId="new" /></Tooltip.Provider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open the canvas' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Close the canvas' }));
+    view.rerender(<Tooltip.Provider><ChatPage {...props} requestedConversationId="c1" /></Tooltip.Provider>);
+    await waitFor(() => expect(screen.getByTestId('canvas')).toBeVisible());
+    expect(window.sessionStorage.getItem('buddi.canvas.c1')).toBe('open');
+  });
+
+  it('hands an unsent chat’s choice to the conversation its first send creates', async () => {
+    vi.spyOn(chatApi, 'send').mockResolvedValue({ conversationId: 'c9', runId: 'r1' } as never);
+    render(<Tooltip.Provider><ChatPage {...props} requestedConversationId="new" /></Tooltip.Provider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open the canvas' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Close the canvas' }));
+    fireEvent.change(await screen.findByPlaceholderText(/Message/i), { target: { value: 'Which logins do I have?' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send/ }));
+    await waitFor(() => expect(window.sessionStorage.getItem('buddi.canvas.c9')).toBe('closed'));
   });
 
   it('remembers the owner’s close for the conversation across a reload', async () => {

@@ -112,6 +112,8 @@ export interface BrowserViewProps {
    * tab says so with Resume, even though no page is open.
    */
   paused?: { at: string; until?: string } | null;
+  /** In view: its tab in front and the canvas unfolded. Frames are polled only while it is. */
+  visible?: boolean;
 }
 
 /** Where the route serves the picture for the observation on screen now. */
@@ -128,7 +130,7 @@ export function tileLetter(status: BrowserStatus | undefined): string {
   return (site ?? status?.page?.title ?? '·').charAt(0).toUpperCase();
 }
 
-export function BrowserView({ status, error, reload, live, agentName = 'The agent', timezone, paused = null }: BrowserViewProps): JSX.Element {
+export function BrowserView({ status, error, reload, live, agentName = 'The agent', timezone, paused = null, visible = true }: BrowserViewProps): JSX.Element {
   const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const word = useBrowserWord();
   /*
@@ -140,13 +142,13 @@ export function BrowserView({ status, error, reload, live, agentName = 'The agen
   const [failures, setFailures] = useState(0);
   const stalled = failures >= MAX_SCREENSHOT_FAILURES;
   useEffect(() => {
-    if (!live || stalled) return undefined;
+    if (!live || stalled || !visible) return undefined;
     const handle = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
       setTick((value) => value + 1);
     }, BROWSER_POLL_MS);
     return () => window.clearInterval(handle);
-  }, [live, stalled]);
+  }, [live, stalled, visible]);
 
   // The last status this tab saw while the page was its own: after the close
   // there is nothing to read, and this is the record of what there was.

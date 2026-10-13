@@ -701,10 +701,27 @@ export function ChatPage({
    * he cannot take the controls of a screen he cannot see.
    */
   const canvasUsed = conversation !== null && conversation.conversationId === conversationId
-    && renderables.some((item) => item.id !== FILES_TAB_ID && item.source !== 'approval' && item.source !== 'profile');
+    && renderables.some(landsOnCanvas);
   const sideCanvas = useCanvasOpen(conversationId ?? null, canvasUsed);
   const sideCanvasOpen = !narrow && sideCanvas.open;
   const setSideCanvas = sideCanvas.setMode;
+  const adoptSideCanvas = sideCanvas.adopt;
+  /*
+   * Where focus goes when the canvas folds or unfolds by the owner's hand:
+   * to the header button that brings it back, and back to the tab in front.
+   * Otherwise it would be left on a control that has just disappeared.
+   */
+  const reopenButton = useRef<HTMLButtonElement>(null);
+  const focusAfter = useRef<'reopen' | 'canvas' | null>(null);
+  useEffect(() => {
+    const target = focusAfter.current;
+    focusAfter.current = null;
+    if (target === 'reopen' && !sideCanvasOpen) reopenButton.current?.focus();
+    if (target === 'canvas' && sideCanvasOpen) {
+      const pane = columnRef.current?.parentElement?.querySelector<HTMLElement>('[data-testid="canvas"]');
+      (pane?.querySelector<HTMLElement>('[role="tab"][data-state="active"]') ?? pane?.querySelector<HTMLElement>('.wb-canvas-hide'))?.focus();
+    }
+  }, [sideCanvasOpen]);
   /** Bring the canvas into view for something the owner asked to see: the sheet on a phone, the pane on a desk. */
   const revealCanvas = (): void => {
     if (narrow) onOpenCanvas?.();
@@ -867,8 +884,13 @@ export function ChatPage({
     const before = seen.current.stamps;
     seen.current.stamps = stamps;
     const changed = renderables.filter((item) => before.get(item.id) !== stamps.get(item.id) && item.at !== null);
-    // Behind a closed canvas everything new is missed, the one it would have turned to included.
-    const behindClosed = narrow || sideCanvasOpen ? [] : changed.filter((item) => item.id !== FILES_TAB_ID);
+    /*
+     * Behind a closed canvas everything new is missed, the one it would have
+     * turned to included, by the same rule that opens it. A live page has no
+     * time of its own, so it counts once, when it first appears.
+     */
+    const behindClosed = narrow || sideCanvasOpen ? [] : renderables.filter((item) => landsOnCanvas(item)
+      && (changed.includes(item) || (item.source === 'browser' && !before.has(item.id))));
     if (behindClosed.length > 0) setMissed((current) => new Set([...current, ...behindClosed.map((item) => item.id)]));
     const arrived = changed.filter((item) => item.id !== shownTab
       && !(tabStamp(item) === focusId && takesFront(item)));
@@ -1082,6 +1104,8 @@ export function ChatPage({
         if (result.conversationId !== conversationId) {
           if (preserveDraft) composer.current?.carryDraftTo(result.conversationId);
           setConversation(null);
+          // The unsent conversation's canvas choice goes with its first send.
+          if (!conversationId) adoptSideCanvas(result.conversationId);
           setConversationId(result.conversationId);
         }
         else await refresh(result.conversationId);
@@ -1210,6 +1234,7 @@ export function ChatPage({
     if (group) {
       // A room needs its row before the first message: the request goes to a conversation, not to a group.
       chatApi.startGroupConversation(group.id).then(({ conversationId: next }) => {
+        adoptSideCanvas(next);
         setConversationId(next);
         if (agentId) onConversationOpened?.(agentId, next);
       }).catch((err: unknown) => setError(message(err)));
@@ -1217,7 +1242,7 @@ export function ChatPage({
     }
     setFreshFor(threadOwner);
     if (agentId) onConversationOpened?.(agentId, 'new');
-  }, [agentId, group, threadOwner, onConversationOpened]);
+  }, [agentId, group, threadOwner, onConversationOpened, adoptSideCanvas]);
 
   useEffect(() => {
     if (newConversationSignal && newConversationSignal !== previousNewSignal.current) {
@@ -1310,8 +1335,9 @@ export function ChatPage({
       onDecided={onDecided}
       onChangeAgent={changeVia}
       agents={everyone}
-      browserPanel={browserTab ? (
+      browserPanel={browserTab ? (visible: boolean) => (
         <BrowserView
+          visible={visible}
           key={browserTab.id}
           status={ownStatus}
           error={browser.error}
@@ -1327,7 +1353,7 @@ export function ChatPage({
       grantedTools={group ? members.flatMap((member) => member.tools ?? []) : agent?.tools ?? []}
       {...(agent ? { agentName: agent.name } : {})}
       loading={threadLoading}
-      {...(narrow ? {} : { onHide: () => setSideCanvas('closed'), folded: !sideCanvasOpen })}
+      {...(narrow ? {} : { onHide: () => { focusAfter.current = 'reopen'; setSideCanvas('closed'); }, folded: !sideCanvasOpen })}
       {...(!group && agent ? { face: <AgentAvatar agents={everyone} id={agent.id} size="xl" />, cardFace: <AgentAvatar agents={everyone} id={agent.id} size="sm" /> } : {})}
     />
   );
@@ -1454,9 +1480,10 @@ export function ChatPage({
                  is counted on the button, never opened by itself. */
               <button
                 type="button"
+                ref={reopenButton}
                 className="ui-btn wb-canvas-reopen"
                 aria-label={missedCount > 0 ? `Open the canvas, ${missedCount} new` : 'Open the canvas'}
-                onClick={() => setSideCanvas('open')}
+                onClick={() => { focusAfter.current = 'canvas'; setSideCanvas('open'); }}
               >
                 Canvas
                 {missedCount > 0 ? <span className="ui-badge" aria-hidden="true">{missedCount}</span> : null}
@@ -1698,7 +1725,8 @@ export function ChatPage({
             onSignInMyself={() => {
               const sessionId = ownStatus?.session?.id;
               if (sessionId) void api.browserControl('takeover', sessionId).catch(() => undefined).finally(browser.reload);
-              // Taking the controls of a page needs the page in view.
+              // Taking the controls of a page needs the page in view, in front.
+              if (browserTab) openTab(browserTab.id);
               if (!narrow) setSideCanvas('open');
             }}
           />
@@ -1775,6 +1803,16 @@ export function ChatPage({
       )}
     </>
   );
+}
+
+/**
+ * Does this tab count as the canvas being used? Not the Files tab, which every
+ * conversation with a workspace has; not an approval, which the dock under the
+ * conversation already shows in full; not the Properties, which only the
+ * owner opens. The same rule opens the canvas and counts what it missed.
+ */
+function landsOnCanvas(item: Renderable): boolean {
+  return item.id !== FILES_TAB_ID && item.source !== 'approval' && item.source !== 'profile';
 }
 
 function byRecency(a: { lastMessageAt: string | null; createdAt?: string; startedAt?: string | null }, b: { lastMessageAt: string | null; createdAt?: string; startedAt?: string | null }): number {

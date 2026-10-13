@@ -114,8 +114,12 @@ export function Canvas({
   agentName?: string;
   /** Forces how many tabs fit, for tests: jsdom lays nothing out and measures 0. */
   maxTabs?: number;
-  /** Live host state supplied by the page, never by tool-result props. */
-  browserPanel?: ReactNode;
+  /**
+   * Live host state supplied by the page, never by tool-result props. Given
+   * whether it can be seen — its tab in front and the canvas unfolded — so a
+   * live page stops fetching frames nobody is looking at.
+   */
+  browserPanel?: ReactNode | ((visible: boolean) => ReactNode);
   /** The Page tab's overflow (Stop agents' browsing, Show the window, the full page view), at the strip's end while it is in front. */
   browserMenu?: ReactNode;
   /**
@@ -255,7 +259,7 @@ export function Canvas({
               />
             ) : null}
             {/* The Page tab draws on the canvas's ground, as the kit does: no panel around it. */}
-            {item.source === 'browser' ? browserPanel : <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
+            {item.source === 'browser' ? (typeof browserPanel === 'function' ? browserPanel(tab.id === active && !folded) : browserPanel) : <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
               {item.source !== 'files' && !genericCard(item) && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
                 <h2 className="ui-panel-title">{item.title}</h2>
                 <span className="ui-panel-tool mono">{item.source === 'sources' ? sourcesSummary(item.props as SourcesPanelProps) : item.tool}</span>
