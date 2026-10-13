@@ -11,6 +11,10 @@ What changes in buddi from one release to the next, newest first.
 - Agents work with files by id: `artifacts.write` takes `fileId` to write the next version of an existing file (a command's output keeps its name and workspace), a title names the conversation's file of that name, and `artifacts.list`, `artifacts.text` and `artifacts.describe` say each file's `fileId` and `version`. `canvas.open { fileId }` opens one of your files on the Canvas, in its own tab (on Telegram it is sent as the file); asked to show a file, agents open it instead of searching the disk with shell commands and pasting it into the chat.
 - Files can be deleted: a file's page has Delete file (all its versions, after a confirm) in its ⋯ menu, and each version has Delete version (the one before becomes the newest). Undo is offered for a few seconds and a deleted file can be brought back for 30 days; after that the hourly artifact sweep removes it, and its bytes unless another version stores them. Workspace copies and the computer's disk are never touched. A deleted file's Canvas tab goes unless it holds an unsaved edit, which you can keep with Save as new file (always a new file, listed in Files). `DELETE /api/files/:id[/versions/:n]`, `POST /api/files/:id/undelete`, `POST /api/files`.
 
+### Fixed
+
+- A document an agent names with punctuation between words gets a readable file name: "List: Two" is saved as "List - Two.md", no longer "List- Two.md". One rule in core names every file buddi makes from a title.
+
 ### Changed
 
 - On a desktop a conversation starts with the chat alone: the Canvas opens the first time something lands on it, and once you close it (the × in its header) it stays closed for that conversation; what arrives later counts up on the Canvas button in the chat header, which opens it at any time.

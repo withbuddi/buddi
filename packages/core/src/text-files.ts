@@ -51,6 +51,36 @@ export function versionedFileName(name: string | null | undefined, version: numb
 }
 
 /**
+ * A title made into a file name, the one rule for every name buddi gives a
+ * file from words (an agent's document title, a folder label): safe on every
+ * system the owner might save it to — no separators, no control characters,
+ * nothing a shell or Windows refuses, no leading dots (so never `..` or a
+ * hidden file) — and still readable. Punctuation set off by spaces, like a
+ * title's ": ", becomes " - " ("List: Two" is "List - Two", never
+ * "List- Two"); inside a word it is a hyphen ("A/B" is "A-B"). Longer than
+ * `max`, it is cut at a word.
+ */
+export function safeFileName(raw: string, max: number, fallback: string): string {
+  let name = raw
+    .normalize('NFC')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/(\s*)[\\/:*?"<>|]+(\s*)/g, (_all, before: string, after: string) => (before || after ? ' - ' : '-'))
+    .replace(/\s+/g, ' ')
+    .replace(/( - )+/g, ' - ')
+    .trim()
+    .replace(/^[.\-\s]+/, '')
+    .replace(/[.\-\s]+$/, '');
+  if (name.length > max) {
+    const cut = name.slice(0, max);
+    const space = cut.lastIndexOf(' ');
+    name = (space > max / 2 ? cut.slice(0, space) : cut).replace(/[.\s-]+$/, '');
+  }
+  // Names Windows reserves for devices, whatever the extension.
+  if (/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(name)) name = `${name}-file`;
+  return name === '' ? fallback : name;
+}
+
+/**
  * What every refused save says, wherever it was made — the editor, Restore,
  * the server's 409: one phrase for "a newer version was saved meanwhile".
  */
