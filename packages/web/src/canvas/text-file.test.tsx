@@ -16,6 +16,7 @@ import { getDraft, resetDrafts } from './file-drafts';
 import { renderablesFrom } from './renderables';
 import { changedLines, fileChainName, isTextFile, textFilesOf } from './text-files';
 import { TextFileView } from './views/TextFileView';
+import { Canvas } from './Canvas';
 import type { CodeEditorProps } from './views/CodeEditor';
 
 vi.mock('./views/CodeEditor', () => ({
@@ -114,6 +115,35 @@ describe('a text file a run produced, on the canvas', () => {
     expect((files[0]!.props as { attachment: { artifactId: string } }).attachment.artifactId).toBe(ID(2));
   });
 
+  it('keeps one tab per file across writes, opens and reads, as the gateway chains them', () => {
+    const chain = 'o:c1:host/workspaces/k/out/packing.md';
+    const made = (id: string, name: string, output: unknown, s: number, files: Array<{ artifactId: string; filename: string }>, readsFile = false): ChatMessage[] => [
+      { id: `${id}-use`, role: 'assistant', at: at(s), blocks: [{ type: 'tool_use', id, name, input: {} }] },
+      { id: `${id}-result`, role: 'user', at: at(s), blocks: [{
+        type: 'tool_result', toolUseId: id, name, ok: true, output,
+        files: files.map((file) => ({ ...file, mime: 'text/markdown', chain, deleted: false })),
+        ...(readsFile ? { readsFile: true as const } : {}),
+      }] },
+    ];
+    const items = renderablesFrom({ messages: [
+      ...made('x1', 'host.exec', { exitCode: 0, stdout: 'ok', stderr: '', state: 'exited', artifacts: [{ id: ID(1), filename: 'packing.md', mime: 'text/markdown' }] }, 1, [{ artifactId: ID(1), filename: 'packing.md' }]),
+      ...made('t1', 'artifacts.text', { id: ID(1), sha256: sha(1), text: '# a\nb\nc\nd\ne\nf\ng', chars: 9, truncated: false }, 2, [], true),
+      ...made('d1', 'files.look', { id: ID(1), kind: 'document', mime: 'text/markdown', filename: 'packing.md', sizeBytes: 9, text: '# a' }, 3, [], true),
+      ...made('w1', 'artifacts.write', { artifactId: ID(2), filename: 'Montreal Packing.md', mime: 'text/markdown' }, 4, [{ artifactId: ID(2), filename: 'Montreal Packing.md' }]),
+      ...made('l1', 'artifacts.list', { artifacts: [{ id: ID(1), filename: 'packing.md', mime: 'text/markdown' }, { id: ID(2), filename: 'Montreal Packing.md', mime: 'text/markdown' }], count: 2 }, 5, []),
+      ...made('o1', 'canvas.open', { opened: true, artifactId: ID(2), filename: 'Montreal Packing.md', mime: 'text/markdown' }, 6, [{ artifactId: ID(2), filename: 'Montreal Packing.md' }]),
+      ...made('w2', 'artifacts.write', { artifactId: ID(3), filename: 'Montreal Packing (v2).md', mime: 'text/markdown' }, 7, [{ artifactId: ID(3), filename: 'Montreal Packing (v2).md' }]),
+    ], descriptors: [] });
+    const files = items.filter((item) => item.source === 'artifact');
+    expect(files).toHaveLength(1);
+    expect(items.at(-1)).toBe(files[0]);
+    expect((files[0]!.props as { attachment: { artifactId: string } }).attachment.artifactId).toBe(ID(3));
+    expect(new Set(items.map((item) => item.id)).size).toBe(items.length);
+    // The reads opened nothing, and a listing names files without opening them.
+    expect(items.some((item) => item.tool === 'artifacts.text' || item.tool === 'files.look')).toBe(false);
+    expect(items.filter((item) => item.source === 'artifact' && item.id !== files[0]!.id)).toEqual([]);
+  });
+
   it('keeps same-named files from different tools apart', () => {
     const items = renderablesFrom({ messages: [
       ...call('w1', 'artifacts.write', { artifactId: ID(1), filename: 'notes.md', mime: 'text/markdown' }, 1),
@@ -130,6 +160,22 @@ describe('a text file a run produced, on the canvas', () => {
     }, 1), descriptors: [] });
     expect(items.map((item) => item.source)).toEqual(['fallback', 'artifact']);
     expect(items.at(-1)!.substantial).toBe(true);
+  });
+});
+
+describe('a file tab on the canvas', () => {
+  it('draws one panel, the newest version, with no stepper through the calls that touched it', async () => {
+    files.set(ID(3), content('# v3\n', 3));
+    const tab = {
+      id: 'file:x', tool: 'Document', title: 'Plan.md', renderer: 'artifact' as const, source: 'artifact' as const, at: null, substantial: true,
+      props: { attachment: attachment(3, 'Plan.md'), tabId: 'file:x' },
+      versions: [1, 2, 3].map((n) => ({ id: `w${n}`, at: null, title: 'Plan.md', renderer: 'artifact' as const, props: { attachment: attachment(n, 'Plan.md'), tabId: 'file:x' }, substantial: true })),
+      focus: 'w1',
+    };
+    render(<Canvas renderables={[tab]} activeId="file:x" onActivate={() => {}} timezone="UTC" />);
+    expect(await screen.findByRole('heading', { name: 'v3' })).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-testid="text-file"]')).toHaveLength(1);
+    expect(screen.queryByRole('group', { name: 'Earlier results' })).toBeNull();
   });
 });
 

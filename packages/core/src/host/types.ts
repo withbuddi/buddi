@@ -464,6 +464,12 @@ export interface FilesArea {
    * the newest version (1.34), the next is refused unless `readVersion` is
    * that version's sha256: the writer read his edit first.
    *
+   * `version.of` (1.34) names any version of an existing file by id: the
+   * save is that file's next version, whatever `base` says — a command's
+   * output keeps its name. Without it, a title that only differs from one of
+   * the conversation's files by case, spaces, hyphens or a `(vN)` joins that
+   * file too.
+   *
    * `workspacePath` (1.34) is the absolute path the bytes were read from,
    * inside this plugin's own data folder (`dir.path`, or `dir.legacyPath`):
    * the owner's save of the file on the Canvas writes back there.
@@ -474,7 +480,7 @@ export interface FilesArea {
     filename?: string;
     caption?: string;
     source?: ArtifactSource;
-    version?: { base: string; ext: string; readVersion?: string };
+    version?: { base: string; ext: string; readVersion?: string; of?: string };
     workspacePath?: string;
   }): Promise<FileRow & { existed?: boolean; version?: number }>;
   get(id: string): Promise<FileRow | null>;

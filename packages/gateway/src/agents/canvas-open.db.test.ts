@@ -54,7 +54,7 @@ suite('canvas.open', () => {
 
   it('opens a file by id, saying its name and type', async () => {
     const id = await file('# Packing\n', 'packing-list.md', here);
-    expect(await open({ artifactId: id }, here)).toEqual({ opened: true, artifactId: id, filename: 'packing-list.md', mime: 'text/markdown' });
+    expect(await open({ artifactId: id }, here)).toEqual({ opened: true, artifactId: id, filename: 'packing-list.md', mime: 'text/markdown', note: `To change this file, write it with artifacts.write { fileId: "${id}" }.` });
   });
 
   it('opens a name: this conversation’s newest first, else the library’s only one', async () => {

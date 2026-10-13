@@ -165,10 +165,8 @@ export function ownerEditLine(edit: OwnerFileEdit, timezone: string, tools: read
   }
   const stale = `${head} Your earlier copy (including any copy in your workspace) is out of date.`;
   if (!tools.includes('artifacts.text')) return `${stale} You cannot read files in Files; ask the owner what changed before changing it.`;
-  // The title that continues this file's versions: its name, less the version mark and extension.
-  const title = name.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').replace(/\.[^.]+$/, '');
   const save = tools.includes('artifacts.write')
-    ? ` then save changes with artifacts.write (title "${title}"), passing readVersion = the sha256 artifacts.text returned.`
+    ? ` then save changes with artifacts.write { fileId: "${edit.artifactId}" }, passing readVersion = the sha256 artifacts.text returned.`
     : ' before you change anything that depends on it.';
   return `${stale} Read the current text with artifacts.text { id: "${edit.artifactId}" },${save} Don't ask the owner to paste it.`;
 }

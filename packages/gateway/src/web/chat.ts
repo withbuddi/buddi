@@ -79,6 +79,7 @@ import {
   idleRolloverMs,
   feedbackForMessages,
   type MessageFeedbackView,
+  fileChainKeySql,
 } from '@buddi/core';
 import {
   BudgetExhausted,
@@ -398,6 +399,15 @@ export type ChatBlock =
        * waiting, when there is one.
        */
       delegation?: { state: 'waiting'; approvalId: string | null };
+      /**
+       * The library files this call made (a tool that saves files) or opened
+       * (`canvas.open`), with the file each is a version of (`chain`, core's
+       * `fileChainKeySql`): the canvas keeps one tab per file by it. Empty
+       * for every other call, once the reader knows which tools save files.
+       */
+      files?: Array<{ artifactId: string; filename: string | null; mime: string; chain: string; deleted: boolean }>;
+      /** The call read a library file (its result names one) without making it: it opens no tab. */
+      readsFile?: true;
     }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }
@@ -546,6 +556,8 @@ export async function readChatTranscript(
   now: Date = new Date(),
   /** The idle limit of the conversation's agent, by id; `Infinity` is never. */
   idleFor: (agentId: string) => number = () => IDLE_TIMEOUT_MS,
+  /** Whether a tool saves files (`producesArtifacts`): its results carry `files`. */
+  producesFiles?: (tool: string) => boolean,
 ): Promise<ChatTranscript | null> {
   const { rows: head } = await pool.query(
     `select id, agent_id, group_id, created_at from core.conversations where id = $1::uuid`,
@@ -633,6 +645,21 @@ export async function readChatTranscript(
   // must not promise 80k to a thread that has 400k, or the reverse.
   const budget = await transcriptBudget(pool, conversationId).catch(() => null);
 
+  const shown = [...parsed.map((m) => ({
+      id: m.id,
+      role: m.role,
+      at: m.at,
+      blocks: m.speaker === APPROVAL_RESUME_SPEAKER
+        ? approvalResultBlocks(m.raw, approvals, under.resumed)
+        : m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
+            .map((block) => withDelegation(block, delegations))
+            .map((block) => withDelegationOutcome(block, under))
+            .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
+      ...(m.speaker ? { speaker: m.speaker } : {}),
+      ...(feedback.has(m.id) ? { feedback: feedback.get(m.id)! } : {}),
+    }))];
+  if (producesFiles) await withFiles(pool, shown, producesFiles);
+
   return {
     lifetime: {
       messages: vitals.messages,
@@ -655,19 +682,7 @@ export async function readChatTranscript(
     agentId: String(conversation.agent_id),
     ...(conversation.group_id ? { groupId: String(conversation.group_id) } : {}),
     startedAt: new Date(conversation.created_at).toISOString(),
-    messages: [...parsed.map((m) => ({
-      id: m.id,
-      role: m.role,
-      at: m.at,
-      blocks: m.speaker === APPROVAL_RESUME_SPEAKER
-        ? approvalResultBlocks(m.raw, approvals, under.resumed)
-        : m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
-            .map((block) => withDelegation(block, delegations))
-            .map((block) => withDelegationOutcome(block, under))
-            .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
-      ...(m.speaker ? { speaker: m.speaker } : {}),
-      ...(feedback.has(m.id) ? { feedback: feedback.get(m.id)! } : {}),
-    })),
+    messages: [...shown,
     // Said while the agent was working, and still waiting for it. Drawn as
     // the owner's turn, because it is one — with the marker that says it went
     // in mid-run, which it keeps until a run takes it into a turn.
@@ -684,6 +699,65 @@ export async function readChatTranscript(
     ...(await runsOf(pool, conversationId)),
     ...(under.approvals.length > 0 ? { delegatedApprovals: under.approvals } : {}),
   };
+}
+
+/** The canvas's file-opening tool: what it names is opened, not made. */
+const CANVAS_OPEN_TOOL = 'canvas.open';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The library ids a result names: `artifactId`, `id`, and `artifacts[].id`. */
+function namedIds(output: unknown): { made: string[]; named: string | null } {
+  if (output === null || typeof output !== 'object' || Array.isArray(output)) return { made: [], named: null };
+  const record = output as Record<string, unknown>;
+  const made: string[] = [];
+  if (typeof record.artifactId === 'string' && UUID_RE.test(record.artifactId)) made.push(record.artifactId);
+  if (Array.isArray(record.artifacts)) {
+    for (const item of record.artifacts) {
+      const id = item && typeof item === 'object' ? (item as Record<string, unknown>).id : undefined;
+      if (typeof id === 'string' && UUID_RE.test(id)) made.push(id);
+    }
+  }
+  const named = typeof record.artifactId === 'string' && UUID_RE.test(record.artifactId) ? record.artifactId
+    : typeof record.id === 'string' && UUID_RE.test(record.id) ? record.id : null;
+  return { made: [...new Set(made)], named };
+}
+
+/**
+ * Every tool result gets the files it made or opened, each with the file it
+ * is a version of, and a read of a library file says so: the canvas then
+ * keeps one tab per file and opens none for a read, without guessing from
+ * the shape of a result (a listing names files it did not make).
+ */
+async function withFiles(
+  pool: Pool,
+  messages: Array<{ blocks: ChatBlock[] }>,
+  producesFiles: (tool: string) => boolean,
+): Promise<void> {
+  const results = messages.flatMap((m) => m.blocks).filter((b): b is Extract<ChatBlock, { type: 'tool_result' }> => b.type === 'tool_result');
+  const wanted = new Set<string>();
+  for (const block of results) {
+    const { made, named } = namedIds(block.output);
+    for (const id of made) wanted.add(id);
+    if (named) wanted.add(named);
+  }
+  const rows = wanted.size === 0 ? [] : (await pool.query(
+    `select a.id, a.filename, a.mime, a.deleted_at is not null as deleted, ${fileChainKeySql('a')} as chain
+       from core.artifacts a where a.id = any($1::uuid[])`,
+    [[...wanted]],
+  )).rows;
+  const byId = new Map(rows.map((row) => [String(row.id), row]));
+  for (const block of results) {
+    const { made, named } = namedIds(block.output);
+    if (block.ok !== false && (producesFiles(block.name) || block.name === CANVAS_OPEN_TOOL)) {
+      block.files = made.flatMap((id) => {
+        const row = byId.get(id);
+        return row ? [{ artifactId: id, filename: row.filename ?? null, mime: String(row.mime), chain: String(row.chain), deleted: row.deleted === true }] : [];
+      });
+      continue;
+    }
+    block.files = [];
+    if (named && byId.has(named)) block.readsFile = true;
+  }
 }
 
 /** A delegation's state as the asking conversation's reader needs it. */

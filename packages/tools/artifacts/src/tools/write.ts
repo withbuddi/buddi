@@ -53,6 +53,11 @@ const writeInput = z.object({
     .max(MAX_FOLDER_CHARS)
     .optional()
     .describe('A short label to file it under in Files, e.g. "Taxes 2026". Shown with the file and found by search; not a folder on the owner\'s computer.'),
+  fileId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('The id of an existing file (any of its versions) to write the next version of, keeping its name. To change an existing file, pass its id as fileId; don’t create a new title.'),
   readVersion: z
     .string()
     .regex(/^[0-9a-f]{64}$/)
@@ -77,7 +82,7 @@ export interface WrittenDocument {
 export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> = {
   name: 'artifacts.write',
   description:
-    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program, and never convert it yourself (no pandoc): point them to Files and the download. Writing the same title again in this conversation saves a new version; the earlier one stays. To save a document for the owner, use this tool, never `cat > file` or a script through host.exec: only a file saved here reaches their Files and opens on the Canvas, where they can read and edit it.",
+    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program, and never convert it yourself (no pandoc): point them to Files and the download. Writing the same title again in this conversation saves a new version; the earlier one stays. To change an existing file, pass its id as fileId; don’t create a new title. To save a document for the owner, use this tool, never `cat > file` or a script through host.exec: only a file saved here reaches their Files and opens on the Canvas, where they can read and edit it.",
   tier: 'auto',
   sideEffect: true,
   producesArtifacts: true,
@@ -114,7 +119,11 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
       bytes,
       mime,
       filename: fallbackName,
-      version: { base, ext, ...(input.readVersion === undefined ? {} : { readVersion: input.readVersion }) },
+      version: {
+        base, ext,
+        ...(input.fileId === undefined ? {} : { of: input.fileId }),
+        ...(input.readVersion === undefined ? {} : { readVersion: input.readVersion }),
+      },
       ...(folder === undefined ? {} : { caption: folder }),
     });
     // The same bytes already in Files, here or in another conversation: nothing new was written.

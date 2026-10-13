@@ -20,6 +20,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState, type Keyboard
 import { api, ApiError, type FileContent } from '../../api';
 import { CsvTable } from '../../chat/ArtifactPreview';
 import { DownloadMenu } from '../../chat/DownloadMenu';
+import { FileVersionsLink } from './FileVersionsLink';
 import type { AttachmentBlock } from '../../chat/attachments';
 import { Markdown } from '../../chat/markdown';
 import { Button, Empty, Notice, Segment } from '../../ui';
@@ -339,6 +340,7 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
         {previewable ? (
           <Segment label="Show" value={mode} onChange={setMode} options={[{ value: 'preview', label: markdown ? 'Preview' : 'Table' }, { value: 'edit', label: 'Edit' }]} />
         ) : null}
+        {deleted ? null : <FileVersionsLink artifactId={file?.artifactId ?? target} revision={file?.sha256 ?? ''} />}
         {changed.length > 0 && mode === 'preview' ? <span className="muted">buddi changed {changed.length === 1 ? 'a line' : `${changed.length} lines`}</span> : null}
         <span className="ui-toolbar-spacer" />
         {deleted ? null : <DownloadMenu artifactId={file?.artifactId ?? target} filename={filename} mime={attachment.mime} />}

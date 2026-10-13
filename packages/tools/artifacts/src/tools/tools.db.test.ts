@@ -200,7 +200,8 @@ suite('artifacts tools (postgres)', () => {
       const second = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: '# Heat pumps\n\nFour models now.' }, conversationId);
       expect(second).toMatchObject({ filename: 'Heat pumps compared (v2).md', version: 2 });
       const third = await call('artifacts.write', { title: 'heat pumps compared', format: 'markdown', content: 'Five.' }, conversationId);
-      expect(third.filename).toBe('heat pumps compared (v3).md');
+      // A title differing only in case continues the file under its own name.
+      expect(third.filename).toBe('Heat pumps compared (v3).md');
       const { rows } = await pool.query(`select count(*)::int as n from core.artifacts where conversation_id = $1 and deleted_at is null`, [conversationId]);
       expect(rows[0].n).toBe(3);
       // Another conversation starts its own count.
@@ -244,6 +245,29 @@ suite('artifacts tools (postgres)', () => {
       );
       expect(outs.map((o) => o.version).sort()).toEqual([1, 2, 3, 4, 5, 6]);
       expect(new Set(outs.map((o) => o.filename)).size).toBe(6);
+    });
+
+    it('writes the next version of a file named by fileId, keeping a command output’s name', async () => {
+      const capture = await saveArtifact(pool, {
+        bytes: Buffer.from('# Packing\n'), mime: 'text/markdown', filename: 'montreal-weekend-packing-list.md', createdBy: 'finance-advisor',
+        conversationId, source: { surface: 'host', chatId: conversationId }, originPath: 'host/workspaces/x/out/montreal-weekend-packing-list.md',
+      });
+      const out = await call('artifacts.write', { title: 'Something else', format: 'markdown', content: '# Packing\n\n## Toiletries\n', fileId: capture.id }, conversationId);
+      expect(out.filename).toBe('montreal-weekend-packing-list.md');
+      const { rows } = await pool.query('select origin_path from core.artifacts where id = $1', [out.artifactId]);
+      expect(rows[0].origin_path).toBe('host/workspaces/x/out/montreal-weekend-packing-list.md');
+      // Without fileId, a title that only differs in case and spaces joins it too.
+      const joined = await call('artifacts.write', { title: 'Montreal Weekend Packing List', format: 'markdown', content: '# Packing, three\n' }, conversationId);
+      expect(joined.filename).toBe('montreal-weekend-packing-list.md');
+      expect((await pool.query('select origin_path from core.artifacts where id = $1', [joined.artifactId])).rows[0].origin_path).toBe('host/workspaces/x/out/montreal-weekend-packing-list.md');
+    });
+
+    it('joins a document whose title only differs by hyphens to its earlier versions', async () => {
+      const first = await call('artifacts.write', { title: 'Road Trip Plan', format: 'markdown', content: '# One\n' }, conversationId);
+      const second = await call('artifacts.write', { title: 'road-trip-plan', format: 'markdown', content: '# Two\n' }, conversationId);
+      expect(first.filename).toBe('Road Trip Plan.md');
+      expect(second.filename).toBe('Road Trip Plan (v2).md');
+      expect(second.version).toBe(2);
     });
 
     it('stores a JSON table as CSV', async () => {

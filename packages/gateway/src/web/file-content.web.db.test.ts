@@ -27,9 +27,10 @@ vi.mock('node:fs/promises', async (original) => {
   };
 });
 import pg from 'pg';
-import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, purgeDeletedArtifacts, replaceArtifactContent, saveArtifact, saveArtifactVersion, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, purgeDeletedArtifacts, replaceArtifactContent, saveArtifact, saveArtifactVersion, saveNextVersionOf, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { enterWorkspace, hostWorkspaceDir, hostWorkspaceKey } from '@buddi/tool-host';
 import { ownerEditLine, systemContext } from '../system-context.js';
+import { readChatTranscript } from './chat.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createApiToken } from './api-tokens.js';
 import { startWebServer, type WebServer } from './server.js';
@@ -365,6 +366,51 @@ suite('file content routes', () => {
       expect(stale.prompt).toContain('Your earlier copy (including any copy in your workspace) is out of date. You cannot read files in Files; ask the owner what changed');
     });
 
+    it('continues a command’s output by id, keeping its name and workspace path, and the owner’s save still writes back', async () => {
+      const capture = await captured('cont/packing.md', '# Packing\n');
+      const next = await saveNextVersionOf(pool, { of: capture.id, bytes: Buffer.from('# Packing\n\n## Toiletries\n'), createdBy: 'scout' }, env);
+      // Its name, as the capture had it.
+      expect(next.row.filename).toBe((await getArtifact(pool, capture.id))!.filename);
+      const { rows } = await pool.query('select origin_path, origin_sha256 from core.artifacts where id = $1', [next.row.id]);
+      expect(rows[0].origin_path).toMatch(/cont\/packing\.md$/);
+      // The workspace copy was not written: it still holds the capture.
+      expect(rows[0].origin_sha256).toBe(sha('# Packing\n'));
+      expect(await readFile(capture.onDisk, 'utf8')).toBe('# Packing\n');
+      // The owner's save of the new version writes it back over that copy.
+      const saved = await save(next.row.id, { text: '# Packing\n\n## Toiletries\n- Mine\n', base: sha('# Packing\n\n## Toiletries\n') });
+      expect(await saved.json()).toMatchObject({ workspace: { updated: true } });
+      expect(await readFile(capture.onDisk, 'utf8')).toBe('# Packing\n\n## Toiletries\n- Mine\n');
+    });
+
+    it('joins a document whose name only differs in case, spaces or hyphens to the command’s file, in Files too', async () => {
+      const capture = await captured('trip/montreal-weekend-list.md', '# List\n');
+      const doc = await saveArtifact(pool, { bytes: Buffer.from('# List, doc\n'), mime: 'text/markdown', filename: 'Montreal Weekend List.md', createdBy: 'scout', conversationId }, env);
+      const v2 = await saveArtifact(pool, { bytes: Buffer.from('# List, doc v2\n'), mime: 'text/markdown', filename: 'Montreal Weekend List (v2).md', createdBy: 'scout', conversationId }, env);
+      const listed = ((await (await fetch(`${base}/api/artifacts?q=montreal`, { headers: { authorization: `Bearer ${token}` } })).json()) as { entries: Array<{ id: string; versions: number }> }).entries;
+      expect(listed).toEqual([expect.objectContaining({ id: v2.id, versions: 3 })]);
+      expect(doc.id).not.toBe(capture.id);
+    });
+
+    it('tells the canvas which calls made which file, and which only read one', async () => {
+      const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
+      const file = await saveArtifact(pool, { bytes: Buffer.from('# Notes\n'), mime: 'text/markdown', filename: 'Notes.md', createdBy: 'scout', conversationId: other }, env);
+      const turn = (id: string, name: string, output: unknown): Array<[string, unknown]> => [
+        ['assistant', [{ type: 'tool_use', id, name, input: {} }]],
+        ['user', [{ type: 'tool_result', tool_use_id: id, content: JSON.stringify(output) }]],
+      ];
+      for (const [role, content] of [
+        ...turn('w1', 'artifacts.write', { artifactId: file.id, filename: 'Notes.md', mime: 'text/markdown' }),
+        ...turn('l1', 'artifacts.list', { artifacts: [{ id: file.id, filename: 'Notes.md', mime: 'text/markdown' }], count: 1 }),
+        ...turn('t1', 'artifacts.text', { id: file.id, sha256: sha('# Notes\n'), text: '# Notes\n' }),
+      ]) await pool.query('insert into core.messages (conversation_id, role, content) values ($1, $2, $3)', [other, role, JSON.stringify(content)]);
+      const transcript = await readChatTranscript(pool, other, new Date(), undefined, (tool) => tool === 'artifacts.write');
+      const results = transcript!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result') as Array<{ toolUseId: string; files?: Array<{ artifactId: string; chain: string }>; readsFile?: true }>;
+      const by = (id: string) => results.find((block) => block.toolUseId === id)!;
+      expect(by('w1').files).toEqual([expect.objectContaining({ artifactId: file.id, chain: expect.stringContaining('notes.md') })]);
+      expect(by('l1').files).toEqual([]);
+      expect(by('t1').readsFile).toBe(true);
+    });
+
     it('deletes a version (the one before is the newest again), the whole file, and undoes it', async () => {
       await captured('del/deleting.md', '# One\n');
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -414,7 +460,7 @@ suite('file content routes', () => {
     expect((await save(id, { text: '# List\n\n- Mine\n', base: sha('# List\n') })).status).toBe(200);
     const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
     const first = await systemContext(ctx, { agentId: 'scout', tools: ['artifacts.text', 'artifacts.write'], conversationId: other });
-    expect(first.prompt).toMatch(new RegExp(`The owner edited List\\.md at [^.]+\\. Your earlier copy \\(including any copy in your workspace\\) is out of date\\. Read the current text with artifacts\\.text \\{ id: "${id}" \\}, then save changes with artifacts\\.write \\(title "List"\\), passing readVersion = the sha256 artifacts\\.text returned\\. Don't ask the owner to paste it\\.`));
+    expect(first.prompt).toMatch(new RegExp(`The owner edited List\\.md at [^.]+\\. Your earlier copy \\(including any copy in your workspace\\) is out of date\\. Read the current text with artifacts\\.text \\{ id: "${id}" \\}, then save changes with artifacts\\.write \\{ fileId: "${id}" \\}, passing readVersion = the sha256 artifacts\\.text returned\\. Don't ask the owner to paste it\\.`));
     const next = await systemContext(ctx, { agentId: 'scout', tools: ['artifacts.text', 'artifacts.write'], conversationId: other });
     expect(next.prompt).not.toContain('The owner edited');
   });

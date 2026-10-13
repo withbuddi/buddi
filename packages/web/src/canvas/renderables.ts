@@ -43,7 +43,7 @@ import type { NotifyViewProps } from './views/NotifyView';
 import type { PreviewProps, Renderable, RendererName, TabVersion, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { delegatedFiles, familyOf, FAMILY_LABEL, type AttachmentBlock } from '../chat/attachments';
-import { fileChainName, fileTabId, isFileResult, textFilesOf } from './text-files';
+import { fileChainName, fileTabId, isFileResult, isTextFile, textFilesOf } from './text-files';
 import type { ArtifactViewProps } from './views/ArtifactView';
 import { commandResult } from './command-result';
 import { expiryOf, subjectIdentityOf, type Subject } from './tab-order';
@@ -306,16 +306,16 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
    * end with the newest version, keeping its id, so the open editor updates
    * in place rather than a second one opening beside it.
    */
-  const placeFile = (file: AttachmentBlock, at: string | null, callId: string, tool: string, speaker: string | undefined): void => {
-    // The same file is the same name from the same tool and agent, of the
-    // same type — what a document write counts versions by. A command's
-    // notes.txt and a report called Notes are two files.
+  const placeFile = (file: AttachmentBlock, at: string | null, callId: string, tool: string, speaker: string | undefined, serverChain?: string): void => {
+    // The file it is a version of, as the gateway says (`files[].chain`);
+    // without that, the same name from the same tool and agent, of the
+    // same type.
     const chain = fileChainName(file.filename);
-    const key = chain ? [tool, speaker ?? '', file.mime.toLowerCase(), chain].join('\u0000') : file.artifactId;
+    const key = serverChain ? `c:${serverChain}` : chain ? [tool, speaker ?? '', file.mime.toLowerCase(), chain].join('\u0000') : file.artifactId;
     // A numbered version ("Plan (v2).md") was counted by Files among this
     // conversation's files of that name, whichever tool made the first: it
     // continues that tab — a document written over a command's output too.
-    const numbered = /\s\(v\d+\)\.[^.]+$/i.test(file.filename ?? '');
+    const numbered = !serverChain && /\s\(v\d+\)\.[^.]+$/i.test(file.filename ?? '');
     const existing = collected.find((other) => other.source === 'artifact' && other.subjectKey === key)
       ?? (numbered && chain ? [...collected].reverse().find((other) => other.source === 'artifact'
         && other.subjectKey?.endsWith(`\u0000${file.mime.toLowerCase()}\u0000${chain}`)) : undefined);
@@ -340,11 +340,12 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
     });
   };
 
-  const openFile = (file: AttachmentBlock, at: string | null, callId: string): void => {
+  const openFile = (file: AttachmentBlock, at: string | null, callId: string, serverChain?: string): void => {
     const holds = (item: Renderable): boolean => (item.versions ?? []).some((version) =>
       (version.props as Partial<ArtifactViewProps> | null)?.attachment?.artifactId === file.artifactId);
     const chain = fileChainName(file.filename);
-    const existing = [...collected].reverse().find((item) => item.source === 'artifact' && holds(item))
+    const existing = (serverChain ? collected.find((item) => item.source === 'artifact' && item.subjectKey === `c:${serverChain}`) : undefined)
+      ?? [...collected].reverse().find((item) => item.source === 'artifact' && holds(item))
       ?? (chain ? [...collected].reverse().find((item) => item.source === 'artifact' && item.subjectKey?.endsWith(`\u0000${chain}`)) : undefined);
     if (existing) collected = collected.filter((other) => other !== existing);
     const id = existing?.id ?? fileTabId(file.artifactId);
@@ -358,7 +359,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       props,
       at,
       source: 'artifact',
-      subjectKey: existing?.subjectKey ?? `${CANVAS_OPEN}\u0000${file.artifactId}`,
+      subjectKey: existing?.subjectKey ?? (serverChain ? `c:${serverChain}` : `${CANVAS_OPEN}\u0000${file.artifactId}`),
       versions: [...(existing?.versions ?? []), { id: callId, at, title, renderer: 'artifact', props, substantial: true }],
       // The agent asked for this to be in front.
       substantial: true,
@@ -415,10 +416,14 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // version of it, else a new one — comes to the front. A failure is in
       // the row; there is nothing to open.
       if (tool === CANVAS_OPEN) {
-        const file = block.ok === false ? null : openedFile(block.output);
-        if (file) openFile(file, at, block.toolUseId);
+        const told = block.files?.[0];
+        const file = block.ok === false ? null : told ? attachmentOf(told) : openedFile(block.output);
+        if (file) openFile(file, at, block.toolUseId, told?.chain);
         continue;
       }
+      // A read of one of the owner's files (its text, its description) is
+      // for the agent: the file keeps its own tab, and a read opens none.
+      if (block.readsFile && block.ok !== false) continue;
 
       // The delegate panel is already on the canvas, drawn from the call. The
       // result does not open a second tab: it finishes the one that is there,
@@ -516,10 +521,14 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
        * left files keeps its own tab, and its files come after it — newer,
        * and what the canvas turns to.
        */
-      const produced = textFilesOf(output);
+      // What the call made, as the gateway says (`files`, with the file each is
+      // a version of); an older transcript is read by shape.
+      const told = block.files?.filter((file) => !file.deleted && isTextFile(file.mime, file.filename));
+      const produced = told ? told.map(attachmentOf) : textFilesOf(output);
+      const chainOf = (artifactId: string): string | undefined => told?.find((file) => file.artifactId === artifactId)?.chain;
       if (produced.length > 0 && isFileResult(output) && !byTool.has(tool)) {
         // The call is the file: its row in the conversation opens this tab.
-        for (const file of produced) placeFile(file, at, block.toolUseId, tool, use?.speaker ?? message.speaker);
+        for (const file of produced) placeFile(file, at, block.toolUseId, tool, use?.speaker ?? message.speaker, chainOf(file.artifactId));
         continue;
       }
       const draw = (): void => {
@@ -582,7 +591,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       };
       draw();
       // A command's row opens the command; its files are versions of their own.
-      for (const file of produced) placeFile(file, at, `${block.toolUseId}:${file.artifactId}`, tool, use?.speaker ?? message.speaker);
+      for (const file of produced) placeFile(file, at, `${block.toolUseId}:${file.artifactId}`, tool, use?.speaker ?? message.speaker, chainOf(file.artifactId));
     }
   }
 
@@ -593,7 +602,21 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       item.props = { ...(item.props as PreviewProps), changes } satisfies PreviewProps;
     }
   }
-  return capped(collected);
+  return capped(uniqueIds(collected));
+}
+
+/**
+ * One tab per id, the latest kept: two entries sharing an id would be two
+ * panels drawn in one tab.
+ */
+function uniqueIds(items: Renderable[]): Renderable[] {
+  const last = new Map(items.map((item, index) => [item.id, index]));
+  return items.filter((item, index) => last.get(item.id) === index);
+}
+
+/** A file the gateway named, as the block a message carries. */
+function attachmentOf(file: { artifactId: string; filename: string | null; mime: string }): AttachmentBlock {
+  return { type: 'attachment', artifactId: file.artifactId, filename: file.filename, mime: file.mime, kind: 'document', sizeBytes: null };
 }
 
 /** The file a `canvas.open` result names: a library id, its name and type. */

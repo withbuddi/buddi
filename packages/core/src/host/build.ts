@@ -25,6 +25,8 @@ import {
   resolveDataDir,
   saveArtifactReporting,
   saveArtifactVersion,
+  saveNextVersionOf,
+  fileNamedLike,
   type ArtifactKind,
   type ArtifactRow,
   type EnvLike,
@@ -1147,7 +1149,23 @@ function filesArea(
         createdBy: facts.agentId ?? binding.plugin,
       };
       let result: { row: ArtifactRow; existed: boolean; version?: number };
-      if (input.version !== undefined && conversationId !== null) {
+      /*
+       * The next version of an existing file: named by id (`version.of`), or
+       * a title that only differs from one of this conversation's files by
+       * case, spaces, hyphens or a `(vN)`.
+       */
+      const of = input.version?.of
+        ?? (input.version !== undefined && conversationId !== null
+          ? await fileNamedLike(pool(), conversationId, fields.createdBy, `${input.version.base}.${input.version.ext}`)
+          : null);
+      if (of !== null && of !== undefined) {
+        if ((await get(of)) === null) throw new Error(`There is no file ${of} that ${binding.plugin} can read.`);
+        result = await saveNextVersionOf(pool(), {
+          of, bytes: input.bytes, createdBy: fields.createdBy,
+          ...(input.caption === undefined ? {} : { caption: input.caption }),
+          ...(input.version?.readVersion === undefined ? {} : { readVersion: input.version.readVersion }),
+        }, env());
+      } else if (input.version !== undefined && conversationId !== null) {
         // The next version of a document in this conversation, counted and saved under one lock.
         result = await saveArtifactVersion(pool(), {
           ...fields, conversationId, base: input.version.base, ext: input.version.ext,

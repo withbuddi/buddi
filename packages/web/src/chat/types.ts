@@ -80,6 +80,10 @@ export type ChatBlock =
       type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown; approval?: { id: string; state: string };
       /** A delegation whose colleague is paused on the owner, or carrying on after a decision. */
       delegation?: { state: 'waiting'; approvalId: string | null };
+      /** The library files this call made or opened, each with the file it is a version of (the gateway's rule). */
+      files?: Array<{ artifactId: string; filename: string | null; mime: string; chain: string; deleted: boolean }>;
+      /** The call read a library file without making one: no tab. */
+      readsFile?: true;
     }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }

@@ -63,6 +63,8 @@ export interface SaveArtifactInput {
    * owner's save writes back there.
    */
   originPath?: string | null;
+  /** What the workspace copy holds, when that is not these bytes (a version written in Files, not there). */
+  originSha256?: string | null;
 }
 
 export interface ListArtifactsOptions {
@@ -269,7 +271,7 @@ export async function saveArtifactReporting(
        (kind, mime, filename, size_bytes, sha256, storage_path,
         source_surface, source_chat_id, source_message_id, caption,
         created_by, conversation_id, origin_path, origin_sha256)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, case when $13::text is null then null else $5 end)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, case when $13::text is null then null else coalesce($14::text, $5) end)
      on conflict (sha256, source_surface, source_chat_id, (coalesce(origin_path, ''))) do update
        set caption = coalesce(core.artifacts.caption, excluded.caption),
            -- The same bytes handed in again after a discard: the row comes back.
@@ -289,6 +291,7 @@ export async function saveArtifactReporting(
       input.createdBy,
       input.conversationId ?? null,
       originPath,
+      input.originSha256 ?? null,
     ],
   );
   const row = rows[0];
@@ -318,6 +321,83 @@ export function nextDocumentVersion(base: string, ext: string, existing: readonl
 /** `base.ext` for version 1, `base (vN).ext` after. */
 export function documentVersionName(base: string, ext: string, version: number): string {
   return version <= 1 ? `${base}.${ext}` : `${base} (v${version}).${ext}`;
+}
+
+/**
+ * The next version of an existing file, named by any of its versions' ids:
+ * what `artifacts.write` does with `fileId`. It joins that file's chain
+ * (`fileChainKeySql`) whatever the writer would have called it: a command's
+ * output keeps its name and the workspace path it came from (the copy there
+ * is not written; it still holds what it held, so the owner's next save
+ * writes back over it), a document gets the next `(vN)` of its name. Under a
+ * lock on the chain; refused like `saveArtifactVersion` when the owner
+ * edited the newest version and `readVersion` is not its sha256.
+ */
+export async function saveNextVersionOf(
+  pool: Pool,
+  input: { of: string; bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: string },
+  env: EnvLike = process.env,
+): Promise<{ row: ArtifactRow; existed: boolean; version: number }> {
+  const { rows: chainRows } = await pool.query(`select ${fileChainKeySql('a')} as chain from core.artifacts a where a.id = $1 and a.deleted_at is null`, [input.of]);
+  const chain = chainRows[0]?.chain as string | undefined;
+  if (!chain) throw new Error(`there is no file ${input.of} in Files; find it with artifacts.list`);
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`buddi.files.chain:${chain}`]);
+    const { rows } = await client.query(
+      `select o.id, o.filename, o.mime, o.sha256, o.conversation_id, o.source_surface, o.source_chat_id, o.origin_path, o.origin_sha256,
+              exists (select 1 from core.owner_file_edits e where e.artifact_id = o.id) as edited
+         from core.artifacts o, core.artifacts t
+        where t.id = $1 and o.deleted_at is null and ${fileChainKeySql('o')} = ${fileChainKeySql('t')}
+        order by o.created_at desc, o.id desc`,
+      [input.of],
+    );
+    const newest = rows[0];
+    if (!newest) throw new Error(`there is no file ${input.of} in Files; find it with artifacts.list`);
+    if (newest.edited && input.readVersion !== newest.sha256) throw new OwnerEditedError(String(newest.id), newest.filename ?? 'the file');
+    const versionOf = (name: string | null): number => Number(/ \(v(\d+)\)\.[^.]+$/i.exec(name ?? '')?.[1] ?? 1);
+    const version = Math.max(...rows.map((row) => versionOf(row.filename))) + 1;
+    const current = String(newest.filename ?? 'Untitled.md');
+    const plain = current.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1');
+    const dot = plain.lastIndexOf('.');
+    const filename = newest.origin_path ? current : documentVersionName(dot > 0 ? plain.slice(0, dot) : plain, dot > 0 ? plain.slice(dot + 1) : 'md', version);
+    const saved = await saveArtifactReporting(client as unknown as Pool, {
+      bytes: input.bytes,
+      mime: String(newest.mime),
+      filename,
+      createdBy: input.createdBy,
+      conversationId: newest.conversation_id ?? null,
+      ...(newest.source_surface ? { source: { surface: String(newest.source_surface), chatId: newest.source_chat_id ?? null } } : {}),
+      ...(input.caption ? { caption: input.caption } : {}),
+      ...(newest.origin_path ? { originPath: String(newest.origin_path), originSha256: newest.origin_sha256 ?? newest.sha256 } : {}),
+    }, env);
+    await client.query('commit');
+    return { ...saved, version };
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * The newest live file in a conversation, by this author, whose name is
+ * `filename` as versions compare names (`normalizedFileName`): the chain a
+ * document write by title joins when it only differs in case, spaces or
+ * hyphens, or by a `(vN)`. Null when there is none.
+ */
+export async function fileNamedLike(pool: Pool, conversationId: string, createdBy: string, filename: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `select a.id from core.artifacts a
+      where a.conversation_id = $1 and a.created_by = $2 and a.deleted_at is null and a.filename is not null
+        and (${normalizedFileNameSql('a.filename')} = $3
+          or (a.origin_path is not null and ${normalizedFileNameSql(`regexp_replace(a.origin_path, '^.*/', '')`)} = $3))
+      order by a.created_at desc, a.id desc limit 1`,
+    [conversationId, createdBy, normalizedFileName(filename)],
+  );
+  return rows[0] ? String(rows[0].id) : null;
 }
 
 /**
@@ -408,25 +488,41 @@ export function fileChainName(filename: string | null): string | null {
  *
  *  - a command's output by the workspace path it was captured from — two
  *    outputs that share a basename are two files;
- *  - an output captured before paths were recorded, by the one path of that
- *    name the same agent's later captures have, when there is exactly one;
- *  - anything else by its name less the version mark (`Plan (v2).md` is
- *    `plan.md`), type and author.
+ *  - anything else that has the name of exactly one such path among the
+ *    same agent's captures (an output captured before paths were recorded,
+ *    a document written over a command's output), by that path;
+ *  - anything else by its name (`normalizedFileName`: `Plan (v2).md` and
+ *    `plan.md` are one), type and author.
  *
  * Outside a conversation, or unnamed, a row is a file of its own.
  */
 export function fileChainKeySql(a: string): string {
-  const legacy = `from core.artifacts o
-          where o.conversation_id = ${a}.conversation_id and o.created_by = ${a}.created_by and o.origin_path is not null
-            and o.deleted_at is null and lower(regexp_replace(o.origin_path, '^.*/', '')) = lower(${a}.filename)`;
+  const name = normalizedFileNameSql(`${a}.filename`);
+  const joined = `from core.artifacts chain_o
+          where chain_o.conversation_id = ${a}.conversation_id and chain_o.created_by = ${a}.created_by and chain_o.origin_path is not null
+            and chain_o.deleted_at is null and ${normalizedFileNameSql(`regexp_replace(chain_o.origin_path, '^.*/', '')`)} = ${name}`;
   return `(case
     when ${a}.conversation_id is null or ${a}.filename is null then ${a}.id::text
     when ${a}.origin_path is not null then 'o:' || ${a}.conversation_id::text || ':' || ${a}.origin_path
-    when ${a}.source_surface = 'host' and (select count(distinct o.origin_path) ${legacy}) = 1
-      then 'o:' || ${a}.conversation_id::text || ':' || (select min(o.origin_path) ${legacy})
-    else 'n:' || ${a}.conversation_id::text || ':' || ${a}.mime || ':' || ${a}.created_by || ':'
-      || lower(regexp_replace(${a}.filename, ' \\(v[0-9]+\\)(\\.[^.]+)$', '\\1', 'i'))
+    when (select count(distinct chain_o.origin_path) ${joined}) = 1
+      then 'o:' || ${a}.conversation_id::text || ':' || (select min(chain_o.origin_path) ${joined})
+    else 'n:' || ${a}.conversation_id::text || ':' || ${a}.mime || ':' || ${a}.created_by || ':' || ${name}
   end)`;
+}
+
+/**
+ * A file name as versions compare it, in SQL: no version mark, lower case,
+ * and runs of spaces, hyphens and underscores as one hyphen —
+ * `Montreal Weekend Packing List (v2).md` and
+ * `montreal-weekend-packing-list.md` are one name. `normalizedFileName` is
+ * the same in TypeScript.
+ */
+export function normalizedFileNameSql(expr: string): string {
+  return `regexp_replace(lower(regexp_replace(${expr}, ' \\(v[0-9]+\\)(\\.[^.]+)$', '\\1', 'i')), '[[:space:]_-]+', '-', 'g')`;
+}
+
+export function normalizedFileName(filename: string): string {
+  return filename.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').toLowerCase().replace(/[\s_-]+/g, '-');
 }
 
 /** What `replaceArtifactContent` found. */
@@ -474,8 +570,8 @@ export interface WorkspaceRow {
 /**
  * The owner's edit of a file, written over it in place.
  *
- * One transaction, under the advisory lock `saveArtifactVersion` takes for
- * the same conversation and name, with the row locked: a version written at
+ * One transaction, under the file's chain lock (`saveNextVersionOf` takes
+ * it too), with the row locked: a version written at
  * the same moment either lands before (and this save is stale) or waits until
  * this one is in. Stale is the bytes not being the ones the owner opened
  * (`expectedSha256`), or a newer version of the same file — same type and
@@ -498,18 +594,12 @@ export async function replaceArtifactContent(
   env: EnvLike = process.env,
 ): Promise<ReplaceArtifactResult> {
   const peek = await pool.query(
-    `select filename, conversation_id, origin_path from core.artifacts where id = $1 and deleted_at is null`,
+    `select ${fileChainKeySql('a')} as chain from core.artifacts a where a.id = $1 and a.deleted_at is null`,
     [input.id],
   );
   if (!peek.rows[0]) return { ok: false, reason: 'gone' };
-  // A captured file's versions are the captures of the same workspace path; a document's, its name.
-  const origin: string | null = peek.rows[0].origin_path ?? null;
-  const chain = origin === null ? fileChainName(peek.rows[0].filename ?? null) : null;
-  const lockKey = origin !== null
-    ? `buddi.files.origin:${origin}`
-    : peek.rows[0].conversation_id && chain
-      ? `buddi.files.version:${peek.rows[0].conversation_id}:${chain}`
-      : `buddi.files.edit:${input.id}`;
+  // The same lock a next version of this file takes (`saveNextVersionOf`).
+  const lockKey = `buddi.files.chain:${String(peek.rows[0].chain)}`;
   const client = await pool.connect();
   let written: string | null = null;
   let staged: Extract<WorkspaceCopy, { kind: 'write' }> | null = null;

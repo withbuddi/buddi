@@ -219,7 +219,7 @@ async function fileNamed(ctx: CoreToolContext, name: string): Promise<{ id: stri
  * the transcript is the instruction, as with `canvas.show`; the tool only
  * checks the file is there.
  */
-export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; artifactId: string; filename: string | null; mime: string }> = {
+export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; artifactId: string; filename: string | null; mime: string; note: string }> = {
   name: 'canvas.open',
   description:
     'Open one of the owner’s files on the canvas, where they can read it (and edit a text file). To show the owner one of their files, find it with artifacts.list and open it with canvas.open; do not paste its contents into the chat unless they ask for the text. Give its artifactId, or its exact file name: a name opens the newest file of that name in this conversation, else in the library, and more than one is refused with the candidates to choose from.',
@@ -241,7 +241,7 @@ export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; artifac
         : `There is no file ${input.artifactId} in Files. Find it with artifacts.list.`);
     }
     // The page draws it by its type: the editor for text, the preview for the rest.
-    return { opened: true, artifactId: found.id, filename: found.filename, mime: found.mime };
+    return { opened: true, artifactId: found.id, filename: found.filename, mime: found.mime, note: `To change this file, write it with artifacts.write { fileId: "${found.id}" }.` };
   },
 };
 

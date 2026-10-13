@@ -244,7 +244,7 @@ export function Canvas({
           const shownId = picked[`${tab.id}:${versions.length}:${tab.focus ?? ''}`]
             ?? (tab.focus && versions.some((version) => version.id === tab.focus) ? tab.focus : null);
           const version = shownId ? versions.find((candidate) => candidate.id === shownId) ?? null : null;
-          const item: Renderable = version ? withVersion(tab, version) : tab;
+          const item: Renderable = version && tab.source !== 'artifact' ? withVersion(tab, version) : tab;
           return (
           <Tabs.Content
             key={tab.id}
@@ -254,7 +254,8 @@ export function Canvas({
             data-dense={DENSE.has(item.renderer) ? 'true' : undefined}
             data-page={item.source === 'browser' ? 'true' : undefined}
           >
-            {versions.length > 1 ? (
+            {/* A file shows its newest version only; its versions are on its Files page (the panel's link). */}
+            {versions.length > 1 && item.source !== 'artifact' ? (
               <VersionStepper
                 versions={versions}
                 current={item.id === tab.id && !version ? versions.at(-1)!.id : (version?.id ?? versions.at(-1)!.id)}

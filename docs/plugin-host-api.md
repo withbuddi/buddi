@@ -970,7 +970,7 @@ plugin:
 An older buddi refuses the renderers, components and fields it does not
 know, so a plugin using any of them asks for `^1.33`.
 
-1.34 adds two optional arguments to `files.save`:
+1.34 adds optional arguments to `files.save`:
 
 - **`workspacePath`**: the absolute path the bytes were read from, inside the
   plugin's own data folder (anything else is refused). When the owner edits
@@ -979,7 +979,12 @@ know, so a plugin using any of them asks for `^1.33`.
   what the copy holds now). The host plugin passes it for a command's outputs.
 - **`version.readVersion`**: once the owner has edited the newest version of
   a document, the next version is refused unless it names that version's sha256,
-  so a writer cannot drop his edit unread. An older buddi ignores both.
+  so a writer cannot drop the owner's edit unread.
+- **`version.of`**: any version's id of an existing file: the save is that
+  file's next version (a command's output keeps its name and workspace path).
+  Without it, a title that only differs from one of the conversation's files
+  by case, spaces, hyphens or a `(vN)` joins that file. An older buddi
+  ignores all three.
 
 ## 8. End to end
 

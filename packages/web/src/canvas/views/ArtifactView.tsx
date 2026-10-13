@@ -25,6 +25,7 @@ import {
 } from '../../chat/attachments';
 import { isTextFile } from '../text-files';
 import { TextFileView } from './TextFileView';
+import { FileVersionsLink } from './FileVersionsLink';
 
 export interface ArtifactViewProps {
   attachment: AttachmentBlock;
@@ -63,6 +64,7 @@ function FileCard({ attachment }: { attachment: AttachmentBlock }): JSX.Element 
         <dt>Id</dt><dd className="mono">{attachment.artifactId}</dd>
       </dl>
       <div className="ui-toolbar" data-align="end">
+        <FileVersionsLink artifactId={attachment.artifactId} />
         <DownloadMenu artifactId={attachment.artifactId} filename={attachment.filename} mime={attachment.mime} />
       </div>
     </div>

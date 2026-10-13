@@ -2790,6 +2790,8 @@ export function createWebApp(deps: WebServerDeps): Server {
           decodeURIComponent(transcript[1] as string),
           deps.now(),
           (agentId) => idleRolloverMs(deps.catalog.get(agentId)?.idleRollover),
+          // Which results made files: the canvas keeps one tab per file by what they say.
+          (tool) => deps.registry.lookup(tool)?.producesArtifacts === true,
         );
         if (!found) return sendJson(res, 404, { error: 'no such conversation' });
         return sendJson(res, 200, found);
