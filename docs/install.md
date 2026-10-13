@@ -15,7 +15,7 @@ for people working on buddi itself (§14). §13 lists what is not there yet.
 buddi runs as a background service on your machine and you reach it in the
 browser. On a Mac you can also install it as an app, on Linux with one
 command, and on Windows with one setup, with nothing else to install (§1.1,
-§1.2, §1.3; Windows is still for testing).
+§1.2, §1.3).
 
 ---
 
@@ -165,7 +165,7 @@ browser; downloads go to `~/Downloads`. GNOME needs the AppIndicator extension
 for the tray (Ubuntu and Pop!_OS ship it on). The package's name is
 `buddi-desktop`; the command stays `buddi`.
 
-### 1.3 Windows, with nothing installed first (for testing)
+### 1.3 Windows, with nothing installed first
 
 Download `buddi-<version>-windows-x64-setup.exe` from the GitHub release and
 double-click it. It installs for you only: no administrator, no Node, no
@@ -689,14 +689,15 @@ unpacked). Nothing about it is macOS-only.
   lingering on, which the installer turns on when it may). The agents' own
   browser and "Your browser" are untested there. Computer control does not
   work, and says so.
-- **Windows** is for testing, not public yet. The setup (§1.3) and the npm
-  install both work, tested on Windows 11 on Arm; the service is a Task
-  Scheduler task of your own and secrets live in the file vault. Running
-  commands on the host (`host.exec`) is refused on Windows until it is
-  written against PowerShell with the same approval. The agents' own browser
-  and "Your browser" are expected to work. The Credential Manager vault does
-  not exist yet, plugins do not yet say which platforms they support, the
-  setup is unsigned, and there is no desktop app (tray) for Windows.
+- **Windows** is early access. The setup (§1.3) and the npm install both
+  work, tested on Windows 11 on Arm; the setup includes the desktop app
+  (window and tray), the service is a Task Scheduler task of your own and
+  secrets live in the file vault. Commands on the host (`host.exec`) run in
+  Windows PowerShell 5.1 with the same approvals; skill scripts that need a
+  sandbox do not run on Windows yet. The setup is unsigned, so Windows
+  SmartScreen asks once (More info, then Run anyway). The Credential Manager
+  vault does not exist yet, and plugins do not yet say which platforms they
+  support.
 
 ---
 
