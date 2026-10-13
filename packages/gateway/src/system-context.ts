@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
 import { ASK_TOOL } from './surfaces/pending-question.js';
 import { editionOriginLine, findEditionOrigin } from './edition-origin.js';
-import { MAX_QUESTION_OPTIONS, takeOwnerFileEdits, type OwnerFileEdit, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
+import { MAX_QUESTION_OPTIONS, filesNewestByOwner, type OwnerNewestFile, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
 const clean = (value: string): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 120);
@@ -119,15 +119,14 @@ export async function systemContext(
     run ? learningContext(ctx.db, run, ctx.now()) : Promise.resolve(''),
     run && opts.isFrontDesk?.(run.agentId) ? placeLines(ctx) : Promise.resolve(''),
     run?.message ? editionLine(ctx, run, opts.handleOf) : Promise.resolve(''),
-    run?.conversationId ? ownerEditLines(ctx, run.conversationId, run.tools) : Promise.resolve(''),
+    run?.conversationId ? ownerEditLines(ctx, run.conversationId, run.agentId, run.tools) : Promise.resolve(''),
   ]);
   return { timezone: info.time.timezone, ...(profile?.language ? { language: profile.language } : {}), prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
     `\n\n${REPLY_LANGUAGE_LINE}` +
     (owner === '' ? '' : `\n\n${owner}`) + (places === '' ? '' : `\n\n${places}`) + (learning === '' ? '' : `\n\n${learning}`) +
     (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') +
-    (run?.tools.includes('canvas.open') ? `\n\n${OPEN_FILE_LINE}` : '') +
-    (run?.tools.includes('host.exec') ? `\n\n${OWN_DATA_LINE}` : '') +
+    (run && filesPolicy(run.tools) !== '' ? `\n\n${filesPolicy(run.tools)}` : '') +
     (run ? `\n\n${resourcefulLines(run.tools)}` : '') +
     (run ? `\n\n${GROUNDING_LINES}` : '') +
     (run?.tools.includes('browser.act') ? `\n\n${LIST_ANSWER_LINE}` : '') +
@@ -136,39 +135,38 @@ export async function systemContext(
 }
 
 /**
- * What the owner changed by hand since the last turn (docs/files.md, "Edited
- * by you"): a file he edited and saved on the Canvas. Each save is said once,
- * on the next turn, so the agent reads his version before changing the file
- * rather than writing over it from what it remembers. Never fails the turn.
+ * The owner's versions the agent has not built on (docs/files.md, "Edited
+ * by you"): files of this conversation it made or wrote whose newest
+ * version is his — an edit saved on the Canvas, or a Restore. Derived from
+ * the versions, so it is said on every turn until the agent writes the file
+ * again, and the agent reads his version before changing the file rather
+ * than writing over it from what it remembers. Never fails the turn.
  */
-async function ownerEditLines(ctx: CoreToolContext, conversationId: string, tools: readonly string[]): Promise<string> {
+async function ownerEditLines(ctx: CoreToolContext, conversationId: string, agentId: string, tools: readonly string[]): Promise<string> {
   try {
-    const edits = await takeOwnerFileEdits(ctx.db, conversationId, ctx.now());
-    return edits.map((edit) => ownerEditLine(edit, ctx.timezone, tools)).join('\n');
+    const files = await filesNewestByOwner(ctx.db, conversationId, agentId);
+    return files.map((file) => ownerEditLine(file, ctx.timezone, tools)).join('\n');
   } catch { return ''; }
 }
 
 /**
- * One edit, said so the agent can act on it with what it was granted (the
+ * One file, said so the agent can act on it with what it was granted (the
  * run's tools are its grant; nothing is deferred). An agent told only "read
- * it" said it could not, edited a stale workspace copy, tried the gateway with
- * curl and asked the owner to paste the text. When the save was written back
- * to the agent's workspace, that copy is current and is named; otherwise the
- * agent's copies are out of date and Files has the text.
+ * it" said it could not, edited a stale workspace copy, tried the gateway
+ * with curl and asked the owner to paste the text. When the save was written
+ * back to the agent's workspace, that copy is current and is named;
+ * otherwise Files has the text.
  */
-export function ownerEditLine(edit: OwnerFileEdit, timezone: string, tools: readonly string[] = []): string {
-  const when = edit.editedAt ? localDateTimeString(new Date(edit.editedAt), timezone) : 'just now';
-  const name = edit.filename ?? 'a file';
-  const head = `The owner edited ${name} at ${when}.`;
-  if (edit.workspacePath) {
-    return `${head} Your workspace copy at ${edit.workspacePath} already has the owner's edits: read it there before changing it, and return it in outputs again so the owner sees the new version. Don't ask the owner to paste it.`;
+export function ownerEditLine(file: OwnerNewestFile, timezone: string, tools: readonly string[] = []): string {
+  const when = file.savedAt ? localDateTimeString(new Date(file.savedAt), timezone) : 'just now';
+  const name = file.name ?? 'a file';
+  const head = `The newest version of ${name} is the owner's (v${file.version}, saved ${when})${file.yours === null ? '' : `; you last wrote v${file.yours}`}.`;
+  const write = tools.includes('artifacts.write') ? ` Save changes with artifacts.write { fileId: "${file.fileId}", readVersion: ${file.version} }.` : '';
+  if (file.workspacePath) {
+    return `${head} Your workspace copy at ${file.workspacePath} already holds it: work on that copy and return it in outputs again, so the owner sees the next version.${write} Don't ask the owner to paste it.`;
   }
-  const stale = `${head} Your earlier copy (including any copy in your workspace) is out of date.`;
-  if (!tools.includes('artifacts.text')) return `${stale} You cannot read files in Files; ask the owner what changed before changing it.`;
-  const save = tools.includes('artifacts.write')
-    ? ` then save changes with artifacts.write { fileId: "${edit.artifactId}" }, passing readVersion = the sha256 artifacts.text returned.`
-    : ' before you change anything that depends on it.';
-  return `${stale} Read the current text with artifacts.text { id: "${edit.artifactId}" },${save} Don't ask the owner to paste it.`;
+  if (!tools.includes('artifacts.text')) return `${head} Your earlier copies are out of date, and you cannot read files in Files; ask the owner what changed before changing it.`;
+  return `${head} Your earlier copies (any in your workspace too) are out of date: read it with artifacts.text { id: "${file.artifactId}" } and keep the owner's changes.${write} Don't ask the owner to paste it.`;
 }
 
 /** The edition origin line for this turn, or nothing; never fails the turn. */
@@ -184,16 +182,26 @@ async function editionLine(
 }
 
 /**
- * Showing a file is opening it, not pasting it (docs/files.md). An agent asked
- * "show me the packing list" searched the disk with find and cat and pasted
- * the whole file into the chat; Files and the Canvas already had it.
+ * How an agent works with the owner's files (docs/files.md), said once here
+ * rather than in each tool, and only for the tools it was granted. An agent
+ * asked "show me the packing list" searched the disk with find and cat and
+ * pasted the whole file into the chat; Files and the Canvas already had it.
  */
-export const OPEN_FILE_LINE =
-  "To show the owner one of their files, find it with artifacts.list and open it with canvas.open; don't paste its contents into the chat unless asked.";
-
-/** buddi's own data is read through its tools, never through the shell. */
-export const OWN_DATA_LINE =
-  "Never search or read buddi's own data directory (Files, artifacts) with shell commands, and never call buddi's own HTTP API (curl to the dashboard or gateway) from a command; use artifacts.list / artifacts.text / canvas.open.";
+export function filesPolicy(tools: readonly string[]): string {
+  const lines: string[] = [];
+  if (tools.includes('artifacts.write')) {
+    lines.push(tools.includes('host.exec')
+      ? 'To create or change a document for the owner, use artifacts.write (an existing file by its fileId), not shell redirection through host.exec: a file written in your workspace reaches the owner only when it is returned in outputs.'
+      : 'To change one of the owner\'s files, write it with artifacts.write by its fileId; a new title makes a new file.');
+  }
+  if (tools.includes('canvas.open')) {
+    lines.push("To show the owner one of their files, find it with artifacts.list and open it with canvas.open { fileId }; don't paste its contents into the chat unless asked.");
+  }
+  if (tools.includes('host.exec')) {
+    lines.push("Never search or read buddi's own data directory (Files, artifacts) with shell commands, and never call buddi's own HTTP API (curl to the dashboard or gateway) from a command; use artifacts.list / artifacts.text / canvas.open.");
+  }
+  return lines.join(' ');
+}
 
 /**
  * Answer in the owner's language (docs/system-context.md, Reply language).

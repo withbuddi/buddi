@@ -27,7 +27,7 @@
  *    describing "a cashflow chart" would be putting finance into the platform
  *    through the back door.
  */
-import { ToolRefusal, type CoreToolContext, type PluginManifest, type ToolDefinition, type ZodToolDefinition } from '@buddi/core';
+import { ToolRefusal, currentVersion, getFile, resolveFileId, type CoreToolContext, type PluginManifest, type ToolDefinition, type ZodToolDefinition } from '@buddi/core';
 import { z } from 'zod';
 
 /** Plugin family name. Three tools, no schema, no tables. */
@@ -174,74 +174,39 @@ export const canvasClear: ToolDefinition<z.infer<typeof canvasClearInput>, { cle
 
 const canvasOpenInput = z
   .object({
-    artifactId: z.string().uuid().optional().describe('The file’s id, from artifacts.list or a tool result.'),
-    name: z.string().trim().min(1).max(260).optional().describe('The file’s name as Files shows it, e.g. "packing-list.md", when you have no id.'),
+    fileId: z.string().uuid().describe('The file’s fileId, from artifacts.list, artifacts.text or a write (a version’s id names its file too).'),
   })
-  .strict()
-  .refine((input) => (input.artifactId === undefined) !== (input.name === undefined), { message: 'give exactly one of artifactId or name' });
+  .strict();
 
 export type CanvasOpenInput = z.infer<typeof canvasOpenInput>;
 
-/** How many same-named files an ambiguous name lists back. */
-const MAX_CANDIDATES = 8;
-
 /**
- * The file a name means: the newest with that name in this conversation,
- * else in the whole library. Two or more in the scope that answered (not the
- * same file twice) is ambiguous: the agent is told which, to pick by id.
+ * Open one of the owner's files on the canvas: the dashboard draws its
+ * current version in the file's own tab (the editor for a text file, the
+ * preview for anything else) and brings it to the front; on Telegram it is
+ * sent as the file. The call in the transcript is the instruction, as with
+ * `canvas.show`; the tool only checks the file is there. By id only: find
+ * it with artifacts.list first, so a name never picks the wrong file.
  */
-async function fileNamed(ctx: CoreToolContext, name: string): Promise<{ id: string; filename: string | null; mime: string }> {
-  const scopes = ctx.conversationId ? [ctx.conversationId, null] : [null];
-  for (const conversation of scopes) {
-    const { rows } = await ctx.db.query<{ id: string; filename: string | null; mime: string; created_at: Date }>(
-      `select id, filename, mime, created_at from core.artifacts
-        where deleted_at is null and lower(filename) = lower($1)
-          and ($2::uuid is null or conversation_id = $2::uuid)
-        order by created_at desc, id desc
-        limit ${MAX_CANDIDATES + 1}`,
-      [name, conversation],
-    );
-    if (rows.length === 1) return rows[0]!;
-    // Within the conversation the newest is the file: its earlier captures are its versions.
-    if (rows.length > 1 && conversation !== null) return rows[0]!;
-    if (rows.length > 1) {
-      const list = rows.slice(0, MAX_CANDIDATES).map((row) => `${row.id} (${row.filename ?? 'unnamed'}, ${new Date(row.created_at).toISOString().slice(0, 10)})`);
-      throw new ToolRefusal(`More than one file in Files is called "${name}": ${list.join('; ')}. Open one by its artifactId.`);
-    }
-  }
-  throw new ToolRefusal(`No file called "${name}" is in Files. Find it with artifacts.list, then open it by its artifactId.`);
-}
-
-/**
- * Open one of the owner's files on the canvas: the dashboard draws it in its
- * own tab (the editor for a text file, the preview for anything else) and
- * brings it to the front; on Telegram it is sent as the file. The call in
- * the transcript is the instruction, as with `canvas.show`; the tool only
- * checks the file is there.
- */
-export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; artifactId: string; filename: string | null; mime: string; note: string }> = {
+export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; fileId: string; artifactId: string; version: number; filename: string | null; mime: string; note: string }> = {
   name: 'canvas.open',
   description:
-    'Open one of the owner’s files on the canvas, where they can read it (and edit a text file). To show the owner one of their files, find it with artifacts.list and open it with canvas.open; do not paste its contents into the chat unless they ask for the text. Give its artifactId, or its exact file name: a name opens the newest file of that name in this conversation, else in the library, and more than one is refused with the candidates to choose from.',
+    'Open one of the owner’s files on the canvas, where they can read it (and edit a text file): its current version. To show the owner one of their files, find it with artifacts.list, then open it by its fileId; do not paste its contents into the chat unless they ask for the text.',
   tier: 'auto',
   input: canvasOpenInput,
   async execute(input, toolCtx) {
     // A platform tool: core runs it on its own context, with the pool.
     const ctx = toolCtx as CoreToolContext;
-    const found = input.artifactId !== undefined
-      ? (await ctx.db.query<{ id: string; filename: string | null; mime: string }>(
-        `select id, filename, mime from core.artifacts where id = $1 and deleted_at is null`, [input.artifactId],
-      )).rows[0]
-      : await fileNamed(ctx, input.name!);
-    if (!found) {
-      const gone = input.artifactId !== undefined
-        && (await ctx.db.query(`select 1 from core.artifacts where id = $1 and deleted_at is not null`, [input.artifactId])).rows.length > 0;
-      throw new ToolRefusal(gone
-        ? `File ${input.artifactId} was deleted from Files by the owner. Do not open or recreate it unless they ask.`
-        : `There is no file ${input.artifactId} in Files. Find it with artifacts.list.`);
-    }
+    const fileId = await resolveFileId(ctx.db, input.fileId);
+    const file = fileId ? await getFile(ctx.db, fileId) : null;
+    if (!file) throw new ToolRefusal(`There is no file ${input.fileId} in Files. Find it with artifacts.list.`);
+    const current = await currentVersion(ctx.db, file.id);
+    if (!current) throw new ToolRefusal(`File ${file.id} was deleted from Files by the owner. Do not open or recreate it unless they ask.`);
     // The page draws it by its type: the editor for text, the preview for the rest.
-    return { opened: true, artifactId: found.id, filename: found.filename, mime: found.mime, note: `To change this file, write it with artifacts.write { fileId: "${found.id}" }.` };
+    return {
+      opened: true, fileId: file.id, artifactId: current.id, version: current.version, filename: file.name, mime: file.mime,
+      note: `Open at v${current.version}. To change this file, write it with artifacts.write { fileId: "${file.id}", readVersion: ${current.version} } after reading it.`,
+    };
   },
 };
 

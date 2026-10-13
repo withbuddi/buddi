@@ -59,6 +59,9 @@ function row(id: string, over: Partial<ArtifactRow> = {}): ArtifactRow {
     storagePath: `a/${id}`,
     caption: null,
     createdAt: null,
+    fileId: `file-${id}`,
+    version: 1,
+    createdBy: 'owner',
     ...over,
   };
 }

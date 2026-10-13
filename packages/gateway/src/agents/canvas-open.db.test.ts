@@ -1,7 +1,8 @@
 /**
- * `canvas.open` finds the file it is asked for: by id, or by name — the
- * newest in this conversation first, then the library — and refuses a name
- * the library has twice, listing the candidates, and a file that is not there.
+ * `canvas.open` opens the file it is asked for, by id only — the file's, or
+ * any version's — at its current version, and refuses a file that is gone or
+ * was never there. (A name could pick the wrong file: an older version, or
+ * one of two outputs that share a basename.)
  *
  * Skipped unless DATABASE_URL is set.
  */
@@ -10,7 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, migrate, saveArtifact, type CoreToolContext } from '@buddi/core';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, deleteFile, ensureOwner, migrate, saveArtifact, saveVersion, type CoreToolContext } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { canvasOpen } from './canvas.js';
 
@@ -23,12 +24,13 @@ suite('canvas.open', () => {
   let pool: Pool;
   let dir: string;
   let here: string;
-  let elsewhere: string;
   const ctx = (conversationId?: string): CoreToolContext => ({
     db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC', agentId: 'scout', ...(conversationId ? { conversationId } : {}),
   });
-  const file = async (text: string, filename: string, conversationId: string | null, mime = 'text/markdown'): Promise<string> =>
-    (await saveArtifact(pool, { bytes: Buffer.from(text), mime, filename, createdBy: 'scout', conversationId }, { BUDDI_DATA_DIR: dir })).id;
+  const file = async (text: string, filename: string, conversationId: string | null, mime = 'text/markdown'): Promise<{ fileId: string; artifactId: string }> => {
+    const row = await saveArtifact(pool, { bytes: Buffer.from(text), mime, filename, createdBy: 'scout', conversationId }, { BUDDI_DATA_DIR: dir });
+    return { fileId: row.fileId, artifactId: row.id };
+  };
   const open = (input: unknown, conversationId?: string) => canvasOpen.execute(canvasOpen.input!.parse(input), ctx(conversationId));
 
   beforeAll(async () => {
@@ -41,7 +43,6 @@ suite('canvas.open', () => {
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
     await ensureOwner(pool, 'owner');
     here = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id;
-    elsewhere = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id;
     dir = await mkdtemp(path.join(tmpdir(), 'buddi-canvas-open-'));
   }, 60_000);
 
@@ -52,36 +53,30 @@ suite('canvas.open', () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
-  it('opens a file by id, saying its name and type', async () => {
-    const id = await file('# Packing\n', 'packing-list.md', here);
-    expect(await open({ artifactId: id }, here)).toEqual({ opened: true, artifactId: id, filename: 'packing-list.md', mime: 'text/markdown', note: `To change this file, write it with artifacts.write { fileId: "${id}" }.` });
+  it('opens a file by id at its current version, saying its name and type', async () => {
+    const made = await file('# Packing\n', 'packing-list.md', here);
+    expect(await open({ fileId: made.fileId }, here)).toEqual({
+      opened: true, fileId: made.fileId, artifactId: made.artifactId, version: 1, filename: 'packing-list.md', mime: 'text/markdown',
+      note: `Open at v1. To change this file, write it with artifacts.write { fileId: "${made.fileId}", readVersion: 1 } after reading it.`,
+    });
   });
 
-  it('opens a name: this conversation’s newest first, else the library’s only one', async () => {
-    await file('# Old\n', 'trip.md', here);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    const newest = await file('# New\n', 'trip.md', here);
-    await file('# Other\n', 'trip.md', elsewhere);
-    expect((await open({ name: 'Trip.md' }, here)).artifactId).toBe(newest);
-    const only = await file('a,b\n', 'budget.csv', elsewhere, 'text/csv');
-    expect((await open({ name: 'budget.csv' }, here)).artifactId).toBe(only);
+  it('opens the newest version whichever version’s id it is given', async () => {
+    // Codex P2: by name it opened "Plan.md" when "Plan (v2).md" was newer.
+    const made = await file('# Plan\n', 'Plan.md', here);
+    const v2 = await saveVersion(pool, { id: made.fileId, bytes: Buffer.from('# Plan, two\n'), createdBy: 'scout' }, { BUDDI_DATA_DIR: dir });
+    expect(await open({ fileId: made.artifactId }, here)).toMatchObject({ fileId: made.fileId, artifactId: v2.row.id, version: 2, filename: 'Plan.md' });
   });
 
-  it('refuses a name the library has twice, listing them, and a file that is not there', async () => {
-    const a = await file('# A\n', 'notes.md', elsewhere);
-    const b = await file('# B\n', 'notes.md', null);
-    const refused = open({ name: 'notes.md' }, here);
-    await expect(refused).rejects.toThrow(/More than one file in Files is called "notes.md"/);
-    await expect(open({ name: 'notes.md' }, here)).rejects.toThrow(new RegExp(`${a}.*|${b}.*`));
-    await expect(open({ name: 'nothing.md' }, here)).rejects.toThrow(/No file called "nothing.md"/);
-    await expect(open({ artifactId: '11111111-1111-4111-8111-111111111111' }, here)).rejects.toThrow(/There is no file/);
-    expect(() => canvasOpen.input!.parse({ artifactId: a, name: 'notes.md' })).toThrow(/exactly one/);
-    expect(() => canvasOpen.input!.parse({})).toThrow(/exactly one/);
+  it('takes no name, and refuses a file that is not there', async () => {
+    expect(() => canvasOpen.input!.parse({ name: 'notes.md' })).toThrow();
+    expect(() => canvasOpen.input!.parse({})).toThrow();
+    await expect(open({ fileId: '11111111-1111-4111-8111-111111111111' }, here)).rejects.toThrow(/There is no file/);
   });
 
   it('says a deleted file was deleted', async () => {
-    const id = await file('# Gone\n', 'gone.md', here);
-    await pool.query('update core.artifacts set deleted_at = now() where id = $1', [id]);
-    await expect(open({ artifactId: id }, here)).rejects.toThrow(/was deleted from Files by the owner/);
+    const made = await file('# Gone\n', 'gone.md', here);
+    await deleteFile(pool, made.fileId);
+    await expect(open({ fileId: made.fileId }, here)).rejects.toThrow(/was deleted from Files by the owner/);
   });
 });

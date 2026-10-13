@@ -604,6 +604,9 @@ describe.skipIf(process.platform === 'win32')('/attach', () => {
           storagePath: 'x/y.png',
           caption: null,
           createdAt: '2026-09-14T12:00:00Z',
+          fileId: 'file-1',
+          version: 1,
+          createdBy: input.createdBy,
         };
       },
       async load() {

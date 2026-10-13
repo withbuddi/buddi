@@ -1,42 +1,57 @@
 /**
- * A text file in Files, read whole and written back by the owner: the canvas
- * editor's two routes (`GET` and `PUT /api/artifacts/:id/content`).
+ * A file in Files as the canvas editor and the Files page work on it
+ * (docs/files.md): `/api/files/:id` — the file and its versions, its current
+ * version's text, the owner's save and Restore (each a new version), delete
+ * and undelete, and a new file of his own.
  *
- * Only a file the library holds, named by its id. Nothing in a request is a
- * path: the bytes are read from the row's own storage path and written to the
- * one their hash gives, under the data dir (`replaceArtifactContent`). Only
- * text, by the same rule the preview route uses, and at most `MAX_EDIT_BYTES`.
+ * Only a file the library holds, named by its id (or any version's). Nothing
+ * in a request is a path: bytes are read from a version's own storage path
+ * and stored at the one their hash gives, under the data dir. Only text, by
+ * the rule the dashboard opens the editor with (`@buddi/core/text-files`),
+ * and at most `MAX_EDIT_BYTES`.
  *
- * A save names the hash of the version it edited. If the file changed since —
- * its bytes, or a newer version written under the same name in the same
- * conversation — the save is refused with 409 and the version that won, so
- * the page can offer "yours or buddi's" rather than overwrite either.
+ * A save names the version it edited (`base`). A newer one saved since — by
+ * buddi, a command, another tab — refuses it with 409 and that version, so
+ * the page can offer "theirs or mine" rather than overwrite either. Every
+ * refusal has one shape: `{ error, conflict, current?, workspaceText? }`.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { holdWorkspaces, hostWorkspaceDir, hostWorkspaceKey, workspaceBusy } from '@buddi/tool-host';
+import { commandsRunning, holdWorkspaces, hostWorkspaceDir } from '@buddi/tool-host';
 import type { Pool } from 'pg';
 import {
   artifactBytesExist,
-  getArtifact,
-  recordArtifactUse,
-  saveArtifactReporting,
+  currentVersion,
+  deleteFile,
+  deleteFileVersion,
+  fileVersions,
+  getFile,
+  libraryVersions,
+  readArtifactBytes,
   readArtifactPrefix,
-  replaceArtifactContent,
+  recordArtifactUse,
   resolveDataDir,
+  resolveFileId,
+  saveArtifactReporting,
+  saveOwnerVersion,
   textPreviewable,
+  undeleteFile,
+  undeleteFileVersion,
   type ArtifactRow,
   type EnvLike,
+  type FileRecord,
+  type OwnerSaveResult,
   type WorkspaceCopy,
-  type WorkspaceRow,
+  type WorkspaceFile,
 } from '@buddi/core';
 
 /** The largest file the editor edits; a bigger one opens read-only, its start only. */
 export const MAX_EDIT_BYTES = 1024 * 1024;
 
-const SHA256 = /^[0-9a-f]{64}$/;
+/** The one phrase a refused save says, wherever it was made. */
+export const CHANGED_SINCE = 'This file changed since you opened it';
 
 function sha256Hex(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -72,12 +87,13 @@ const LINKED = 'its folder in buddi’s workspace is a link, so buddi did not wr
  *
  * A sandboxed command is confined to its workspace, so this write must never
  * reach outside one. The workspace is computed from the data dir — the one
- * trusted base — for the agent and conversation the file belongs to, never
- * read from the disk; the recorded path must lie lexically inside it, and
- * every component on the way is lstat'ed and refused if it is a link. The
- * copy is written back only while it still holds what buddi last read or
- * wrote there (or already the owner's text); a copy a command changed since
- * comes back with what it holds now, unless he chose to overwrite it.
+ * trusted base — for the agent and conversation the *file* belongs to, never
+ * read from the disk and never from who wrote a version; the recorded path
+ * must lie lexically inside it, and every component on the way is lstat'ed
+ * and refused if it is a link. The copy is written back only while it still
+ * holds what buddi last read or wrote there (or already the owner's text); a
+ * copy a command changed since comes back with what it holds now, unless he
+ * chose to overwrite it.
  *
  * The new bytes are staged in a new file beside the copy (exclusive create)
  * and renamed over it once the save is committed — a rename replaces a link
@@ -86,18 +102,18 @@ const LINKED = 'its folder in buddi’s workspace is a link, so buddi did not wr
  * the same place. A copy that is gone is left alone, and said so.
  *
  * All of it runs holding host.exec's process-wide lock (`holdWorkspaces`),
- * so no command buddi starts can swap a folder between a check and the
- * rename. What remains is a process an earlier command left running in the
- * background (host.exec ends its process tree, but a detached daemon can
- * escape that), or a command already running in another conversation with
- * its cwd here: it could still race the rename. The check after the rename
- * catches the result and reports it, loudly, rather than preventing it.
+ * and only while no command is running anywhere (`commandsRunning`): a
+ * command in another conversation may use this workspace as its cwd, and
+ * nothing buddi starts can swap a folder between a check and the rename.
+ * What remains is a process a command left running in the background (a
+ * detached daemon can escape host.exec's process tree); the check after the
+ * rename catches the result and reports it, loudly, rather than preventing it.
  */
 async function workspaceCopy(
   env: EnvLike,
   ownerId: string,
-  captured: WorkspaceRow,
-  save: { base: string; next: string; bytes: Buffer; overwrite: boolean },
+  captured: WorkspaceFile,
+  save: { bytes: Buffer; overwrite: boolean },
 ): Promise<WorkspaceCopy> {
   if (!captured.conversationId) return { kind: 'refused', reason: 'it belongs to no conversation' };
   const data = await realpath(resolveDataDir(env)).catch(() => null);
@@ -109,11 +125,11 @@ async function workspaceCopy(
   if (way === 'missing') return { kind: 'refused', reason: 'the workspace copy is gone; saved in Files only' };
   if (way !== null) return { kind: 'refused', reason: LINKED };
   if (!(await lstat(file)).isFile()) return { kind: 'refused', reason: 'it is no longer a file' };
-  const known = captured.originSha256 ?? save.base;
+  const next = sha256Hex(save.bytes);
   const holds = async (): Promise<{ ok: boolean; there: Buffer }> => {
     const there = await readFile(file);
     const hash = sha256Hex(there);
-    return { ok: save.overwrite || hash === known || hash === save.next, there };
+    return { ok: save.overwrite || hash === captured.known || hash === next, there };
   };
   const first = await holds();
   if (!first.ok) return { kind: 'changed', text: first.there.toString('utf8') };
@@ -130,7 +146,7 @@ async function workspaceCopy(
       // And once more after: the file must still be where it was, by no link.
       const after = await realpath(file).catch(() => null);
       if (after !== file || (await linkOnTheWay(data, file)) !== null) {
-        console.error(`file-content: the workspace copy of ${captured.id} no longer resolves inside its workspace after the owner's save (${file} → ${after ?? 'gone'}); refused`);
+        console.error(`file-content: the workspace copy of file ${captured.fileId} no longer resolves inside its workspace after the owner's save (${file} → ${after ?? 'gone'}); refused`);
         throw new Error('the workspace copy no longer resolves inside its workspace');
       }
     },
@@ -143,16 +159,50 @@ export interface Answer {
   body: unknown;
 }
 
-function current(row: ArtifactRow): { artifactId: string; sha256: string; filename: string | null } {
-  return { artifactId: row.id, sha256: row.sha256, filename: row.filename };
+/** A version as a refusal names it: the one to look at. */
+function versionRef(row: ArtifactRow): { fileId: string; version: number; artifactId: string; sha256: string; createdBy: string } {
+  return { fileId: row.fileId, version: row.version, artifactId: row.id, sha256: row.sha256, createdBy: row.createdBy };
 }
 
+const NOT_FOUND: Answer = { status: 404, body: { error: 'no such file' } };
+
+/** The live file an id names (its own, or any version's), or why not. */
+async function liveFile(pool: Pool, id: string): Promise<{ file: FileRecord; current: ArtifactRow } | Answer> {
+  const fileId = await resolveFileId(pool, id);
+  const file = fileId ? await getFile(pool, fileId) : null;
+  if (!file) return NOT_FOUND;
+  const current = await currentVersion(pool, file.id);
+  if (!current) return { status: 404, body: { error: 'this file was deleted from Files', deleted: true } };
+  return { file, current };
+}
+
+function isAnswer(value: unknown): value is Answer {
+  return typeof value === 'object' && value !== null && 'status' in value && 'body' in value;
+}
+
+/** `GET /api/files/:id`: the file, its current version and every live version, newest first. */
+export async function readFileView(pool: Pool, id: string): Promise<Answer> {
+  const found = await liveFile(pool, id);
+  if (isAnswer(found)) return found;
+  const { file, current } = found;
+  return {
+    status: 200,
+    body: {
+      file: { id: file.id, name: file.name, mime: file.mime, conversationId: file.conversationId, origin: file.origin, createdBy: file.createdBy },
+      current: versionRef(current),
+      versions: await libraryVersions(pool, file.id),
+    },
+  };
+}
+
+/** `GET /api/files/:id/content`: the current version's text, for the editor. */
 export async function readFileContent(pool: Pool, env: EnvLike, id: string): Promise<Answer> {
-  const row = await getArtifact(pool, id);
-  if (!row) return { status: 404, body: { error: 'no such file' } };
-  if (!textPreviewable(row.mime, row.filename)) return { status: 415, body: { error: 'this file is not text' } };
-  if (!(await artifactBytesExist(env, row).catch(() => false))) return { status: 410, body: { error: 'the file’s contents are gone from disk' } };
-  const prefix = await readArtifactPrefix(env, row, MAX_EDIT_BYTES);
+  const found = await liveFile(pool, id);
+  if (isAnswer(found)) return found;
+  const { file, current } = found;
+  if (!textPreviewable(file.mime, file.name)) return { status: 415, body: { error: 'this file is not text' } };
+  if (!(await artifactBytesExist(env, current).catch(() => false))) return { status: 410, body: { error: 'the file’s contents are gone from disk' } };
+  const prefix = await readArtifactPrefix(env, current, MAX_EDIT_BYTES);
   // Cut on a character boundary: a truncated file never ends in half a letter.
   const text = new StringDecoder('utf8').write(prefix.bytes);
   /*
@@ -163,81 +213,137 @@ export async function readFileContent(pool: Pool, env: EnvLike, id: string): Pro
   return {
     status: 200,
     body: {
-      text, sha256: row.sha256, sizeBytes: row.sizeBytes, editable: !prefix.truncated && utf8, truncated: prefix.truncated,
+      ...versionRef(current),
+      // Where a "Save as new file" of an edit lands, should the file be deleted under it.
+      conversationId: file.conversationId,
+      text, sizeBytes: current.sizeBytes, editable: !prefix.truncated && utf8, truncated: prefix.truncated,
       ...(utf8 ? {} : { note: 'encoding' }),
     },
   };
 }
 
-export async function saveFileContent(pool: Pool, env: EnvLike, id: string, body: Record<string, unknown>, ownerId: string): Promise<Answer> {
-  const { text, base } = body;
-  if (typeof text !== 'string') return { status: 400, body: { error: '`text` must be a string' } };
-  if (typeof base !== 'string' || !SHA256.test(base)) return { status: 400, body: { error: '`base` must be the sha256 of the version edited' } };
-  const row = await getArtifact(pool, id);
-  if (!row) return { status: 404, body: { error: 'no such file' } };
-  if (!textPreviewable(row.mime, row.filename)) return { status: 415, body: { error: 'this file is not text' } };
-  // Only a file the editor could open for editing: within the size, and UTF-8.
-  if (row.sizeBytes > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
-  const stored = await readArtifactPrefix(env, row, MAX_EDIT_BYTES).catch(() => null);
-  if (stored && !Buffer.from(stored.bytes.toString('utf8'), 'utf8').equals(stored.bytes)) {
-    return { status: 415, body: { error: 'this file is not UTF-8 text, so it cannot be saved from the editor' } };
+/** Why a save body is malformed, or null. */
+function badSave(body: Record<string, unknown>): string | null {
+  if (!Number.isInteger(body.base) || (body.base as number) < 1) return '`base` must be the number of the version opened';
+  const restore = body.from !== undefined;
+  if (restore && (!Number.isInteger(body.from) || (body.from as number) < 1)) return '`from` must be the number of the version to restore';
+  if (!restore && typeof body.text !== 'string') return '`text` must be a string';
+  return null;
+}
+
+/**
+ * `POST /api/files/:id/versions`: the owner's save — his edit (`text`), or a
+ * Restore (`from`: that version's bytes, copied here, never a preview) — as
+ * a new version over `base`, the one he opened.
+ *
+ * A command's output is saved holding every workspace (host.exec's lock: no
+ * command starts meanwhile) and only while none is running, in any
+ * conversation: one could be changing the very file, or have its cwd there.
+ */
+export async function saveFileVersion(pool: Pool, env: EnvLike, id: string, body: Record<string, unknown>, ownerId: string): Promise<Answer> {
+  const bad = badSave(body);
+  if (bad) return { status: 400, body: { error: bad } };
+  const found = await liveFile(pool, id);
+  if (isAnswer(found)) return found;
+  const { file } = found;
+  const base = body.base as number;
+  let bytes: Buffer;
+  let restoredFrom: number | undefined;
+  if (body.from !== undefined) {
+    restoredFrom = body.from as number;
+    const source = (await fileVersions(pool, file.id)).find((v) => v.version === restoredFrom);
+    if (!source) return { status: 404, body: { error: `there is no version ${restoredFrom} of this file` } };
+    bytes = await readArtifactBytes(env, source);
+  } else {
+    if (!textPreviewable(file.mime, file.name)) return { status: 415, body: { error: 'this file is not text' } };
+    // Only over what the editor could open for editing: within the size, and UTF-8.
+    if (found.current.sizeBytes > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
+    const stored = await readArtifactPrefix(env, found.current, MAX_EDIT_BYTES).catch(() => null);
+    if (stored && !Buffer.from(stored.bytes.toString('utf8'), 'utf8').equals(stored.bytes)) {
+      return { status: 415, body: { error: 'this file is not UTF-8 text, so it cannot be saved from the editor' } };
+    }
+    bytes = Buffer.from(body.text as string, 'utf8');
+    if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
+    if (bytes.length === 0) return { status: 400, body: { error: 'an empty file cannot be saved; delete it instead' } };
   }
-  const bytes = Buffer.from(text, 'utf8');
-  if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
   const overwrite = body.overwriteWorkspace === true;
-  const replace = (): ReturnType<typeof replaceArtifactContent> => replaceArtifactContent(pool, {
-    id, bytes, expectedSha256: base,
-    workspace: (captured) => workspaceCopy(env, ownerId, captured, { base, next: sha256Hex(bytes), bytes, overwrite }),
+  const save = (): Promise<OwnerSaveResult> => saveOwnerVersion(pool, {
+    fileId: file.id, bytes, base,
+    ...(restoredFrom === undefined ? {} : { restoredFrom }),
+    workspace: (captured) => workspaceCopy(env, ownerId, captured, { bytes, overwrite }),
   }, env);
-  /*
-   * A command's output is saved holding its workspace (host.exec's lock): no
-   * command starts meanwhile, and none may be running — it could be changing
-   * the very file.
-   */
-  const origin = await pool.query(`select origin_path, created_by, conversation_id from core.artifacts where id = $1`, [id]);
-  const captured = origin.rows[0]?.origin_path && origin.rows[0]?.conversation_id
-    ? hostWorkspaceKey(ownerId, String(origin.rows[0].created_by), String(origin.rows[0].conversation_id)) : null;
-  const result = captured
-    ? await holdWorkspaces(async () => (workspaceBusy(captured) ? 'busy' as const : replace()))
-    : await replace();
-  if (result === 'busy') return { status: 409, body: { error: 'buddi is running a command in this conversation; try again when it finishes', busy: true } };
+  const result = file.originPath
+    ? await holdWorkspaces(async () => (commandsRunning() > 0 ? 'busy' as const : save()))
+    : await save();
+  if (result === 'busy') {
+    return { status: 409, body: { error: 'buddi is running a command; try again when it finishes', conflict: 'busy' } };
+  }
   if (result.ok) {
     const copy = result.workspace;
     return {
       status: 200,
       body: {
-        sha256: result.row.sha256, sizeBytes: result.row.sizeBytes,
+        ...versionRef(result.row), sizeBytes: result.row.sizeBytes, created: result.created,
         ...(copy ? { workspace: copy } : {}),
         ...(copy && !copy.updated ? { note: `Saved in Files; the workspace copy couldn’t be updated: ${copy.reason}.` } : {}),
       },
     };
   }
-  if (result.reason === 'gone') return { status: 404, body: { error: 'no such file' } };
+  if (result.reason === 'gone') return { status: 404, body: { error: 'this file was deleted from Files', deleted: true } };
   if (result.reason === 'workspace') {
-    return { status: 409, body: { error: 'buddi changed this file in its workspace since you opened it', current: current(result.current), workspaceText: result.workspaceText } };
+    return { status: 409, body: { error: `${CHANGED_SINCE}: a command changed its copy in buddi’s workspace.`, conflict: 'workspace', current: versionRef(result.current), workspaceText: result.workspaceText } };
   }
-  if (result.reason === 'duplicate') return { status: 409, body: { error: 'these exact contents are already another file here' } };
-  return { status: 409, body: { error: 'the file changed since you opened it', current: current(result.current) } };
+  return { status: 409, body: { error: `${CHANGED_SINCE}: v${result.current.version} is newer.`, conflict: 'newer', current: versionRef(result.current) } };
+}
+
+/** `DELETE /api/files/:id[/versions/:n]`: soft, for 30 days (`undeleteFiles` undoes it). */
+export async function deleteFromFiles(pool: Pool, id: string, version: number | null, at: Date): Promise<Answer> {
+  const fileId = await resolveFileId(pool, id);
+  if (!fileId) return NOT_FOUND;
+  if (version === null) {
+    return (await deleteFile(pool, fileId, at)) ? { status: 200, body: { fileId } } : NOT_FOUND;
+  }
+  const out = await deleteFileVersion(pool, fileId, version, at);
+  return out.deleted ? { status: 200, body: { fileId, version, fileDeleted: out.fileDeleted } } : NOT_FOUND;
+}
+
+/** `POST /api/files/:id/undelete`: the file (or one version) back, unless purged. */
+export async function undeleteFiles(pool: Pool, id: string, body: Record<string, unknown>): Promise<Answer> {
+  const fileId = await resolveFileId(pool, id);
+  if (!fileId) return NOT_FOUND;
+  if (body.version !== undefined && (!Number.isInteger(body.version) || (body.version as number) < 1)) {
+    return { status: 400, body: { error: '`version` must be a version number' } };
+  }
+  const restored = body.version === undefined ? await undeleteFile(pool, fileId) : await undeleteFileVersion(pool, fileId, body.version as number);
+  return restored ? { status: 200, body: { fileId, restored: true } } : NOT_FOUND;
 }
 
 /**
- * "Save as new file": the owner's text, from an editor whose file was
- * deleted under it, kept as a file of his own — the deleted file's name and
- * type, in its conversation (so Files lists it), never the deleted row back.
+ * `POST /api/files`: a text file of the owner's own, in a conversation when
+ * one is named — what "Save as new file" makes from an editor whose file was
+ * deleted under it. An upload like any other: nothing of the deleted file is
+ * brought back, and the conversation records it as his.
  */
-export async function saveAsNewFile(pool: Pool, env: EnvLike, id: string, body: Record<string, unknown>): Promise<Answer> {
-  const { text } = body;
-  if (typeof text !== 'string' || text === '') return { status: 400, body: { error: '`text` must be the text to keep' } };
+export async function createOwnerFile(pool: Pool, env: EnvLike, body: Record<string, unknown>, ownerId: string): Promise<Answer> {
+  const { text, name, mime, conversationId } = body;
+  if (typeof text !== 'string' || text === '') return { status: 400, body: { error: '`text` must be the file’s text' } };
+  if (typeof name !== 'string' || name.trim() === '' || name.length > 260 || /[\\/\u0000]/.test(name)) return { status: 400, body: { error: '`name` must be a file name' } };
+  const type = typeof mime === 'string' && mime.trim() !== '' ? mime.trim() : 'text/plain';
+  if (!textPreviewable(type, name)) return { status: 415, body: { error: 'only a text file can be made here' } };
   const bytes = Buffer.from(text, 'utf8');
   if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
-  const { rows } = await pool.query(`select filename, mime, conversation_id from core.artifacts where id = $1`, [id]);
-  const from = rows[0];
-  if (!from) return { status: 404, body: { error: 'no such file' } };
-  if (!textPreviewable(String(from.mime), from.filename ?? null)) return { status: 415, body: { error: 'this file is not text' } };
-  const conversationId = from.conversation_id ? String(from.conversation_id) : null;
+  let conversation: string | null = null;
+  if (conversationId !== undefined && conversationId !== null) {
+    if (typeof conversationId !== 'string' || !/^[0-9a-f-]{36}$/i.test(conversationId)) return { status: 400, body: { error: '`conversationId` must be a conversation id' } };
+    const { rows } = await pool.query(`select 1 from core.conversations where id = $1`, [conversationId]);
+    if (rows.length === 0) return { status: 404, body: { error: 'no such conversation' } };
+    conversation = conversationId;
+  }
   const saved = await saveArtifactReporting(pool, {
-    bytes, mime: String(from.mime), filename: from.filename ?? 'Untitled.txt', createdBy: 'owner', conversationId,
+    bytes, mime: type, filename: name.trim(), createdBy: ownerId,
+    source: { surface: 'files', chatId: conversation, messageId: randomUUID() },
+    conversationId: conversation,
   }, env);
-  if (conversationId) await recordArtifactUse(pool, { artifactId: saved.row.id, conversationId, kind: 'uploaded' });
-  return { status: 200, body: { artifactId: saved.row.id, filename: saved.row.filename, sha256: saved.row.sha256 } };
+  if (conversation) await recordArtifactUse(pool, { artifactId: saved.row.id, conversationId: conversation, kind: 'uploaded' });
+  return { status: 200, body: { ...versionRef(saved.row), filename: saved.row.filename } };
 }

@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-346 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+349 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2817,16 +2817,19 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
 | GET | `/api/reports/audio` | Read the saved audio attached to a report link. | yes |
-| GET | `/api/artifacts` | The library: every file buddi holds, paged; one entry per file, its newest version, with how many versions it has. | yes |
-| GET | `/api/artifacts/:id` | One file: its metadata, where it was used, whether its bytes are still there, and its versions, newest first. | yes |
+| GET | `/api/artifacts` | The library: one entry per file, its newest version, paged. | yes |
+| GET | `/api/artifacts/:id` | One version of a file: its metadata, where the file was used, whether its bytes are still there, and the file’s versions, newest first. | yes |
 | GET | `/api/artifacts/:id/download` | The file, as a download. | yes |
 | GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds. | yes |
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
-| GET | `/api/artifacts/:id/content` | A text file whole, for the canvas editor, with the hash a save must name. | yes |
-| PUT | `/api/artifacts/:id/content` | Save the owner’s edit of a text file over it, if it is still the version he opened. | yes |
-| DELETE | `/api/artifacts/:id` | With scope: delete from Files — the file with all its versions (file), or one version (version; the one before it is the newest again). Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be restored for 30 days. Without scope: take back a file uploaded from the dashboard that no message carries. | yes |
-| POST | `/api/artifacts/:id/copy` | Save as new file: text from an editor whose file was deleted, kept as a file of the owner’s with its name and type, in its conversation. | yes |
-| POST | `/api/artifacts/restore` | Undo a delete from Files: the files come back, unless already purged (after 30 days). | yes |
+| DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
+| GET | `/api/files/:id` | A file (by its id, or any version’s): what it is, its current version and its versions, newest first. | yes |
+| GET | `/api/files/:id/content` | A text file’s current version whole, for the canvas editor, with the version a save names. | yes |
+| POST | `/api/files/:id/versions` | The owner’s save as a new version: his edit (text), or a Restore of an older version (from, its bytes copied server-side), over the version he opened. | yes |
+| DELETE | `/api/files/:id` | Delete a file from Files with every version. Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be undeleted for 30 days. | yes |
+| DELETE | `/api/files/:id/versions/:version` | Delete one version: the one before it is the newest again; the last one takes the file with it. | yes |
+| POST | `/api/files/:id/undelete` | Undo a delete: the file with the versions deleted with it, or one version; not once purged (after 30 days). | yes |
+| POST | `/api/files` | A new text file of the owner’s, in a conversation when one is named (the editor’s "Save as new file"). | yes |
 
 #### `GET /api/reports/audio`
 
@@ -2844,11 +2847,11 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/reports/audio"
 
 #### `GET /api/artifacts`
 
-The library: every file buddi holds, paged; one entry per file, its newest version, with how many versions it has.
+The library: one entry per file, its newest version, paged.
 
 - **Auth:** Session or API token.
-- **Query:** `q?, origin?: 'uploaded'|'produced'|'unknown', family?, limit?, cursor?, flat?: 1 (every version as its own entry)`
-- **Answer:** `{ entries (each with versions: number), nextCursor }`
+- **Query:** `q?, origin?: 'uploaded'|'produced'|'unknown', family?, limit?, cursor?`
+- **Answer:** `{ entries (each with fileId, version, versions: number), nextCursor }`
 - **Errors:** 400 a bad filter or cursor
 - **Since:** 0.1.0-pre.15
 
@@ -2858,11 +2861,11 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts"
 
 #### `GET /api/artifacts/:id`
 
-One file: its metadata, where it was used, whether its bytes are still there, and its versions, newest first.
+One version of a file: its metadata, where the file was used, whether its bytes are still there, and the file’s versions, newest first.
 
 - **Auth:** Session or API token.
 - **Query:** `contexts?: offset`
-- **Answer:** `{ entry, contexts, available: boolean, versions: Array<{ id, filename, createdAt, sizeBytes, sha256, createdBy, editedAt|null }> }`
+- **Answer:** `{ entry, contexts, available: boolean, versions: Array<{ id, version, filename, createdAt, sizeBytes, sha256, createdBy, restoredFrom|null }> }`
 - **Errors:** 404
 - **Since:** 0.1.0-pre.15
 
@@ -2912,73 +2915,111 @@ The file inline, where it is safe to show: images, PDFs, text (as text/plain, it
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/preview" -o out
 ```
 
-#### `GET /api/artifacts/:id/content`
-
-A text file whole, for the canvas editor, with the hash a save must name.
-
-- **Auth:** Session or API token.
-- **Answer:** `{ text, sha256, sizeBytes, editable: boolean (false past 1 MiB, or for text that is not UTF-8), truncated: boolean, note?: 'encoding' }`
-- **Errors:** 404; 410 contents gone from disk; 415 not a text file
-- **Since:** 0.1.0-pre.55
-
-```sh
-curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/content"
-```
-
-#### `PUT /api/artifacts/:id/content`
-
-Save the owner’s edit of a text file over it, if it is still the version he opened.
-
-- **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ text: string, base: sha256 of the version edited, overwriteWorkspace?: true }`
-- **Answer:** `{ sha256, sizeBytes, workspace?: { updated: true } | { updated: false, reason }, note?: string (saved in Files, the workspace copy not updated; saving again retries) }`
-- **Errors:** 400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }), its workspace copy changed since (also `workspaceText`; a command’s output is written back to the workspace it came from), a command is running in that workspace (`busy`), or the same contents are another file; 413 over 1 MiB; 415 not a text file, or not UTF-8
-- **Since:** 0.1.0-pre.55
-
-```sh
-curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"text":"…","base":"…"}' "$BUDDI_URL/api/artifacts/<id>/content"
-```
-
 #### `DELETE /api/artifacts/:id`
 
-With scope: delete from Files — the file with all its versions (file), or one version (version; the one before it is the newest again). Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be restored for 30 days. Without scope: take back a file uploaded from the dashboard that no message carries.
+Take back a file uploaded from the dashboard that no message carries.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Query:** `scope?: 'file'|'version'`
-- **Answer:** `{ deleted: id[] } with scope; 204 without`
-- **Errors:** 400 a bad scope; 404; 409 (without scope) already sent, or not from the dashboard
+- **Answer:** `204`
+- **Errors:** 404; 409 already sent, or not from the dashboard
 - **Since:** 0.1.0-pre.15
 
 ```sh
 curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>"
 ```
 
-#### `POST /api/artifacts/:id/copy`
+#### `GET /api/files/:id`
 
-Save as new file: text from an editor whose file was deleted, kept as a file of the owner’s with its name and type, in its conversation.
+A file (by its id, or any version’s): what it is, its current version and its versions, newest first.
 
-- **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ text: string }`
-- **Answer:** `{ artifactId, filename, sha256 }`
-- **Errors:** 400; 404; 413 over 1 MiB; 415 not a text file
+- **Auth:** Session or API token.
+- **Answer:** `{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy }, versions }`
+- **Errors:** 404 (deleted: true when it was deleted)
 - **Since:** 0.1.0-pre.55
 
 ```sh
-curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"text":"…"}' "$BUDDI_URL/api/artifacts/<id>/copy"
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>"
 ```
 
-#### `POST /api/artifacts/restore`
+#### `GET /api/files/:id/content`
 
-Undo a delete from Files: the files come back, unless already purged (after 30 days).
+A text file’s current version whole, for the canvas editor, with the version a save names.
 
-- **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ ids: id[] (what the delete returned) }`
-- **Answer:** `{ restored: id[] }`
-- **Errors:** 400
+- **Auth:** Session or API token.
+- **Answer:** `{ fileId, version, artifactId, sha256, createdBy, conversationId, text, sizeBytes, editable: boolean (false past 1 MiB, or for text that is not UTF-8), truncated: boolean, note?: 'encoding' }`
+- **Errors:** 404; 410 contents gone from disk; 415 not a text file
 - **Since:** 0.1.0-pre.55
 
 ```sh
-curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"ids":"…"}' "$BUDDI_URL/api/artifacts/restore"
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>/content"
+```
+
+#### `POST /api/files/:id/versions`
+
+The owner’s save as a new version: his edit (text), or a Restore of an older version (from, its bytes copied server-side), over the version he opened.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ base: version opened, text: string | from: version, overwriteWorkspace?: true }`
+- **Answer:** `{ fileId, version, artifactId, sha256, createdBy, sizeBytes, created: boolean, workspace?: { updated: true } | { updated: false, reason }, note?: string (saved in Files, the workspace copy not updated; saving again retries) }`
+- **Errors:** 400; 404; 409 { error, conflict: 'newer' (a newer version was saved; current), 'workspace' (a command changed the copy in its workspace; current, workspaceText) or 'busy' (a command is running) }; 413 over 1 MiB; 415 not a text file
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"base":"…","text":"…"}' "$BUDDI_URL/api/files/<id>/versions"
+```
+
+#### `DELETE /api/files/:id`
+
+Delete a file from Files with every version. Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be undeleted for 30 days.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `{ fileId }`
+- **Errors:** 404
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>"
+```
+
+#### `DELETE /api/files/:id/versions/:version`
+
+Delete one version: the one before it is the newest again; the last one takes the file with it.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `{ fileId, version, fileDeleted: boolean }`
+- **Errors:** 404
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>/versions/<version>"
+```
+
+#### `POST /api/files/:id/undelete`
+
+Undo a delete: the file with the versions deleted with it, or one version; not once purged (after 30 days).
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ version?: number }`
+- **Answer:** `{ fileId, restored: true }`
+- **Errors:** 400; 404
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/files/<id>/undelete"
+```
+
+#### `POST /api/files`
+
+A new text file of the owner’s, in a conversation when one is named (the editor’s "Save as new file").
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ name, text, mime?, conversationId? }`
+- **Answer:** `{ fileId, version, artifactId, sha256, createdBy, filename }`
+- **Errors:** 400; 404 no such conversation; 413 over 1 MiB; 415 not a text file
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/files"
 ```
 
 ### Your profile

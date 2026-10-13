@@ -129,7 +129,7 @@ import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
-import { createVault, saveArtifactReporting, recordArtifactUse, deleteFromFiles, undeleteArtifacts } from '@buddi/core';
+import { createVault, saveArtifactReporting, recordArtifactUse, versionedFileName } from '@buddi/core';
 import { captureFilename } from './browser-capture.js';
 import { beginOnboarding, completeOnboarding, getOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
@@ -316,7 +316,7 @@ import { checkProfilePatch } from '../owner-profile-edit.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentIntro, readAgentIntro } from '../agents/agent-intro.js';
 import { parseCanvasTabs, readCanvasTabs, writeCanvasTabs } from './canvas-tabs.js';
-import { MAX_EDIT_BYTES, readFileContent, saveAsNewFile, saveFileContent } from './file-content.js';
+import { MAX_EDIT_BYTES, createOwnerFile, deleteFromFiles, readFileContent, readFileView, saveFileVersion, undeleteFiles } from './file-content.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
@@ -1979,8 +1979,6 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (cursor && !decodeCursor(cursor, filterKey(filters))) return sendJson(res, 400, { error: '`cursor` is not one this listing issued for these filters' });
         const page = await listLibrary(deps.pool, {
           ...filters,
-          // One row per file by default; every version on its own with flat=1.
-          ...(q.get('flat') === '1' ? { flat: true } : {}),
           ...(limit !== undefined ? { limit } : {}),
           ...(cursor ? { cursor } : {}),
           knownAgentIds: deps.catalog.list().map((a) => a.id),
@@ -2024,16 +2022,19 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         if (!bytes) return sendJson(res, 415, { error: `this file cannot be downloaded as ${format}` });
         res.setHeader('Content-Type', EXPORT_MIME[format]);
-        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(exportName(artifact.filename, format)).replace(/'/g, '%27')}`);
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(exportName(versionedFileName(artifact.filename, artifact.version, 'document'), format)).replace(/'/g, '%27')}`);
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Cache-Control', 'no-store');
         res.end(method === 'HEAD' ? undefined : bytes);
         return;
       }
 
-      // A text file whole, for the canvas editor (web/file-content.ts).
-      const content = /^\/api\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/content$/i.exec(path);
-      if (content) return reply(res, await readFileContent(deps.pool, deps.env ?? process.env, content[1]!.toLowerCase()));
+      // A file and its versions, and its current version's text, for the canvas editor and Files (web/file-content.ts).
+      const fileView = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/content)?$/i.exec(path);
+      if (fileView) {
+        const id = fileView[1]!.toLowerCase();
+        return reply(res, fileView[2] ? await readFileContent(deps.pool, deps.env ?? process.env, id) : await readFileView(deps.pool, id));
+      }
 
       const download = /^\/api\/artifacts\/([0-9a-f-]{36})\/(download|preview)$/.exec(path);
       if (download) {
@@ -2065,7 +2066,9 @@ export function createWebApp(deps: WebServerDeps): Server {
           bytes = await readArtifactBytes(deps.env ?? process.env, artifact);
         }
         res.setHeader('Content-Type', kind === 'text' ? 'text/plain; charset=utf-8' : preview ? artifact.mime : 'application/octet-stream');
-        res.setHeader('Content-Disposition', `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(artifact.filename ?? 'download').replace(/'/g, '%27')}`);
+        // A download names its version (" (v2)"); the stored name never carries one.
+        const name = preview ? artifact.filename ?? 'download' : versionedFileName(artifact.filename, artifact.version);
+        res.setHeader('Content-Disposition', `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name).replace(/'/g, '%27')}`);
         if (preview) res.setHeader('Content-Security-Policy', kind === 'pdf' ? "default-src 'none'; sandbox allow-same-origin" : "default-src 'none'; sandbox");
         if (kind === 'text') res.setHeader('X-Preview-Truncated', truncated ? '1' : '0');
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -2967,21 +2970,12 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (await removeAvatar(deps.pool, agent.id)) deps.telegram?.pictureChanged?.(agent.id);
         return sendEmpty(res, 204);
       }
+      // Deleting from Files: the file with every version, or one version (web/file-content.ts).
+      const fileDelete = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/versions\/([1-9][0-9]{0,8}))?$/i.exec(path);
+      if (fileDelete) return reply(res, await deleteFromFiles(deps.pool, fileDelete[1]!.toLowerCase(), fileDelete[2] ? Number(fileDelete[2]) : null, deps.now()));
+      // The composer's discard: never a file a message carries.
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);
-      /*
-       * Deleting from Files: the file with all its versions, or one version.
-       * Asked for by `scope`; without it this stays the composer's discard
-       * below, which never touches a file a message carries — a file dropped
-       * in the tray may be the very bytes of one already in the library.
-       */
-      const scope = url.searchParams.get('scope');
-      if (scope !== null) {
-        if (scope !== 'file' && scope !== 'version') return sendJson(res, 400, { error: '`scope` must be file or version' });
-        const deleted = await deleteFromFiles(deps.pool, discard[1]!.toLowerCase(), scope, deps.now());
-        if (deleted.length === 0) return sendJson(res, 404, { error: 'no such file' });
-        return sendJson(res, 200, { deleted });
-      }
       const outcome = await discardUnreferencedUpload(deps.pool, discard[1]!, WEB_CHAT_SURFACE, deps.now());
       if (outcome === 'missing') return sendEmpty(res, 404);
       if (outcome === 'discarded') return sendEmpty(res, 204);
@@ -3009,18 +3003,6 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 404, { error: 'no such conversation' });
         }
         return sendJson(res, 200, parsed.value);
-      }
-      // The owner's edit of a text file, saved over it if it is still the version he opened (web/file-content.ts).
-      const contentWrite = /^\/api\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/content$/i.exec(path);
-      if (contentWrite) {
-        let body: Record<string, unknown>;
-        try {
-          body = await readJsonBody(req, MAX_EDIT_BYTES * 6 + 1024);
-        } catch (err) {
-          if (err instanceof BodyTooLargeError) return sendJson(res, 413, { error: 'a file edited here can be at most 1 MiB' });
-          return sendJson(res, 400, { error: 'request body must be JSON' });
-        }
-        return reply(res, await saveFileContent(deps.pool, deps.env ?? process.env, contentWrite[1]!.toLowerCase(), body, deps.ctx.ownerId));
       }
       const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/access/tailscale', '/api/access/cloudflare-access', '/api/notifications/settings', '/api/notifications/focus'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);
@@ -3092,9 +3074,12 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (method !== 'POST') return sendEmpty(res, 405);
-    // "Save as new file": an editor's text kept after its file was deleted (web/file-content.ts).
-    const copyAs = /^\/api\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/copy$/i.exec(path);
-    if (copyAs) {
+    /*
+     * Files (web/file-content.ts): the owner's save or Restore as a new
+     * version, undo of a delete, and a new text file of his own.
+     */
+    const fileWrite = /^\/api\/files(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(versions|undelete))?$/i.exec(path);
+    if (fileWrite) {
       let body: Record<string, unknown>;
       try {
         body = await readJsonBody(req, MAX_EDIT_BYTES * 6 + 1024);
@@ -3102,21 +3087,11 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (err instanceof BodyTooLargeError) return sendJson(res, 413, { error: 'a file edited here can be at most 1 MiB' });
         return sendJson(res, 400, { error: 'request body must be JSON' });
       }
-      return reply(res, await saveAsNewFile(deps.pool, deps.env ?? process.env, copyAs[1]!.toLowerCase(), body));
-    }
-    // Undo a delete from Files: the rows come back, unless they were purged.
-    if (path === '/api/artifacts/restore') {
-      let body: Record<string, unknown>;
-      try {
-        body = await readJsonBody(req);
-      } catch {
-        return sendJson(res, 400, { error: 'request body must be JSON' });
-      }
-      const ids = Array.isArray(body.ids) ? body.ids : null;
-      if (!ids || ids.length === 0 || ids.length > 500 || !ids.every((id) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
-        return sendJson(res, 400, { error: '`ids` must be the file ids a delete returned' });
-      }
-      return sendJson(res, 200, { restored: await undeleteArtifacts(deps.pool, ids as string[]) });
+      const env = deps.env ?? process.env;
+      const id = fileWrite[1]?.toLowerCase();
+      if (!id) return reply(res, await createOwnerFile(deps.pool, env, body, deps.ctx.ownerId));
+      if (fileWrite[2] === 'versions') return reply(res, await saveFileVersion(deps.pool, env, id, body, deps.ctx.ownerId));
+      return reply(res, await undeleteFiles(deps.pool, id, body));
     }
     /*
      * "Test my setup": fetch the team's signing keys for the domain in the

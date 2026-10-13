@@ -767,12 +767,12 @@ export const API_ROUTES: readonly ApiRoute[] = [
 
   /* ---------------- files ---------------- */
   {
-    method: 'GET', path: '/api/artifacts', area: 'files', summary: 'The library: every file buddi holds, paged; one entry per file, its newest version, with how many versions it has.',
-    query: "q?, origin?: 'uploaded'|'produced'|'unknown', family?, limit?, cursor?, flat?: 1 (every version as its own entry)", answer: '{ entries (each with versions: number), nextCursor }', errors: '400 a bad filter or cursor',
+    method: 'GET', path: '/api/artifacts', area: 'files', summary: 'The library: one entry per file, its newest version, paged.',
+    query: "q?, origin?: 'uploaded'|'produced'|'unknown', family?, limit?, cursor?", answer: '{ entries (each with fileId, version, versions: number), nextCursor }', errors: '400 a bad filter or cursor',
   },
   {
-    method: 'GET', path: '/api/artifacts/:id', area: 'files', summary: 'One file: its metadata, where it was used, whether its bytes are still there, and its versions, newest first.',
-    query: 'contexts?: offset', answer: '{ entry, contexts, available: boolean, versions: Array<{ id, filename, createdAt, sizeBytes, sha256, createdBy, editedAt|null }> }', errors: '404',
+    method: 'GET', path: '/api/artifacts/:id', area: 'files', summary: 'One version of a file: its metadata, where the file was used, whether its bytes are still there, and the file’s versions, newest first.',
+    query: 'contexts?: offset', answer: '{ entry, contexts, available: boolean, versions: Array<{ id, version, filename, createdAt, sizeBytes, sha256, createdBy, restoredFrom|null }> }', errors: '404',
   },
   { method: 'GET', path: '/api/artifacts/:id/download', area: 'files', kind: 'bytes', summary: 'The file, as a download.', errors: '404' },
   {
@@ -785,26 +785,37 @@ export const API_ROUTES: readonly ApiRoute[] = [
     summary: 'The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only).', errors: '404; 415 not previewable',
   },
   {
-    method: 'GET', path: '/api/artifacts/:id/content', area: 'files', summary: 'A text file whole, for the canvas editor, with the hash a save must name.',
-    answer: "{ text, sha256, sizeBytes, editable: boolean (false past 1 MiB, or for text that is not UTF-8), truncated: boolean, note?: 'encoding' }", errors: '404; 410 contents gone from disk; 415 not a text file',
+    method: 'DELETE', path: '/api/artifacts/:id', area: 'files', summary: 'Take back a file uploaded from the dashboard that no message carries.',
+    answer: '204', errors: '404; 409 already sent, or not from the dashboard',
   },
   {
-    method: 'PUT', path: '/api/artifacts/:id/content', area: 'files', summary: 'Save the owner’s edit of a text file over it, if it is still the version he opened.',
-    body: '{ text: string, base: sha256 of the version edited, overwriteWorkspace?: true }', answer: '{ sha256, sizeBytes, workspace?: { updated: true } | { updated: false, reason }, note?: string (saved in Files, the workspace copy not updated; saving again retries) }',
-    errors: '400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }), its workspace copy changed since (also `workspaceText`; a command’s output is written back to the workspace it came from), a command is running in that workspace (`busy`), or the same contents are another file; 413 over 1 MiB; 415 not a text file, or not UTF-8',
+    method: 'GET', path: '/api/files/:id', area: 'files', summary: 'A file (by its id, or any version’s): what it is, its current version and its versions, newest first.',
+    answer: '{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy }, versions }', errors: '404 (deleted: true when it was deleted)',
   },
   {
-    method: 'DELETE', path: '/api/artifacts/:id', area: 'files',
-    summary: "With scope: delete from Files — the file with all its versions (file), or one version (version; the one before it is the newest again). Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be restored for 30 days. Without scope: take back a file uploaded from the dashboard that no message carries.",
-    query: "scope?: 'file'|'version'", answer: '{ deleted: id[] } with scope; 204 without', errors: '400 a bad scope; 404; 409 (without scope) already sent, or not from the dashboard',
+    method: 'GET', path: '/api/files/:id/content', area: 'files', summary: 'A text file’s current version whole, for the canvas editor, with the version a save names.',
+    answer: "{ fileId, version, artifactId, sha256, createdBy, conversationId, text, sizeBytes, editable: boolean (false past 1 MiB, or for text that is not UTF-8), truncated: boolean, note?: 'encoding' }", errors: '404; 410 contents gone from disk; 415 not a text file',
   },
   {
-    method: 'POST', path: '/api/artifacts/:id/copy', area: 'files', summary: 'Save as new file: text from an editor whose file was deleted, kept as a file of the owner’s with its name and type, in its conversation.',
-    body: '{ text: string }', answer: '{ artifactId, filename, sha256 }', errors: '400; 404; 413 over 1 MiB; 415 not a text file',
+    method: 'POST', path: '/api/files/:id/versions', area: 'files', summary: 'The owner’s save as a new version: his edit (text), or a Restore of an older version (from, its bytes copied server-side), over the version he opened.',
+    body: '{ base: version opened, text: string | from: version, overwriteWorkspace?: true }', answer: '{ fileId, version, artifactId, sha256, createdBy, sizeBytes, created: boolean, workspace?: { updated: true } | { updated: false, reason }, note?: string (saved in Files, the workspace copy not updated; saving again retries) }',
+    errors: "400; 404; 409 { error, conflict: 'newer' (a newer version was saved; current), 'workspace' (a command changed the copy in its workspace; current, workspaceText) or 'busy' (a command is running) }; 413 over 1 MiB; 415 not a text file",
   },
   {
-    method: 'POST', path: '/api/artifacts/restore', area: 'files', summary: 'Undo a delete from Files: the files come back, unless already purged (after 30 days).',
-    body: '{ ids: id[] (what the delete returned) }', answer: '{ restored: id[] }', errors: '400',
+    method: 'DELETE', path: '/api/files/:id', area: 'files', summary: 'Delete a file from Files with every version. Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be undeleted for 30 days.',
+    answer: '{ fileId }', errors: '404',
+  },
+  {
+    method: 'DELETE', path: '/api/files/:id/versions/:version', area: 'files', summary: 'Delete one version: the one before it is the newest again; the last one takes the file with it.',
+    answer: '{ fileId, version, fileDeleted: boolean }', errors: '404',
+  },
+  {
+    method: 'POST', path: '/api/files/:id/undelete', area: 'files', summary: 'Undo a delete: the file with the versions deleted with it, or one version; not once purged (after 30 days).',
+    body: '{ version?: number }', answer: '{ fileId, restored: true }', errors: '400; 404',
+  },
+  {
+    method: 'POST', path: '/api/files', area: 'files', summary: 'A new text file of the owner’s, in a conversation when one is named (the editor’s "Save as new file").',
+    body: '{ name, text, mime?, conversationId? }', answer: '{ fileId, version, artifactId, sha256, createdBy, filename }', errors: '400; 404 no such conversation; 413 over 1 MiB; 415 not a text file',
   },
 
   /* ---------------- owner ---------------- */
@@ -1345,10 +1356,13 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
-  'POST /api/artifacts/restore': '0.1.0-pre.55',
-  'POST /api/artifacts/:id/copy': '0.1.0-pre.55',
-  'GET /api/artifacts/:id/content': '0.1.0-pre.55',
-  'PUT /api/artifacts/:id/content': '0.1.0-pre.55',
+  'GET /api/files/:id': '0.1.0-pre.55',
+  'GET /api/files/:id/content': '0.1.0-pre.55',
+  'POST /api/files/:id/versions': '0.1.0-pre.55',
+  'DELETE /api/files/:id': '0.1.0-pre.55',
+  'DELETE /api/files/:id/versions/:version': '0.1.0-pre.55',
+  'POST /api/files/:id/undelete': '0.1.0-pre.55',
+  'POST /api/files': '0.1.0-pre.55',
   'POST /api/secrets': '0.1.0-pre.52',
   'POST /api/secrets/request/decline': '0.1.0-pre.52',
   'POST /api/missions/:id/run': '0.1.0-pre.51',

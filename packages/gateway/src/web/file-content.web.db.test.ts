@@ -1,9 +1,12 @@
 /**
- * GET and PUT /api/artifacts/:id/content — the canvas editor's routes. A save
- * names the version it edited; a stale one is a 409 with the version that
- * won, whether the bytes changed or the agent wrote a newer version under the
- * same name. Nothing in a request is a path: what is written lands under the
- * data dir, at the place its hash gives.
+ * Files as rows (docs/files.md): `/api/files/:id` — the editor's read, the
+ * owner's save and Restore as new versions, delete and undelete — and the
+ * store under them: one file per row of core.files, its versions appended,
+ * one lock per file, blobs shared and unlinked only when nothing names them.
+ *
+ * The first test is the owner's own flow end to end: buddi writes a packing
+ * list, he edits it on the Canvas, buddi adds a section over his edit, and it
+ * is one tab, one Files row, three versions.
  *
  * Skipped unless DATABASE_URL is set.
  */
@@ -27,8 +30,13 @@ vi.mock('node:fs/promises', async (original) => {
   };
 });
 import pg from 'pg';
-import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, purgeDeletedArtifacts, replaceArtifactContent, saveArtifact, saveArtifactVersion, saveNextVersionOf, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
-import { enterWorkspace, hostWorkspaceDir, hostWorkspaceKey } from '@buddi/tool-host';
+import {
+  CORE_MIGRATIONS_DIR, CORE_SCHEMA, FileChangedError, FileGoneError, ToolRegistry, createPool, deleteFile, ensureOwner, getFile,
+  isTextFile, migrate, purgeDeletedArtifacts, saveArtifact, saveDocument, saveOwnerVersion, saveVersion, textPreviewable,
+  type AgentCatalog, type CoreToolContext,
+} from '@buddi/core';
+import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
+import { enterWorkspace, hostWorkspaceDir } from '@buddi/tool-host';
 import { ownerEditLine, systemContext } from '../system-context.js';
 import { readChatTranscript } from './chat.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -42,9 +50,9 @@ const TEST_DB = `buddi_file_content_test_${process.pid}`;
 const emptyCatalog = (): AgentCatalog =>
   ({ get: () => undefined, byHandle: () => undefined, list: () => [], agentsWithRole: () => [], defaultAgent: () => undefined, resolve: () => undefined }) as unknown as AgentCatalog;
 
-const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
+const sha = (text: string | Buffer): string => createHash('sha256').update(text).digest('hex');
 
-suite('file content routes', () => {
+suite('files as rows', () => {
   let admin: Pool;
   let pool: Pool;
   let web: WebServer;
@@ -53,6 +61,8 @@ suite('file content routes', () => {
   let token: string;
   let env: Record<string, string | undefined>;
   let conversationId: string;
+  let previousDataDir: string | undefined;
+  const registry = new ToolRegistry();
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);
@@ -63,12 +73,16 @@ suite('file content routes', () => {
     pool = createPool(url.toString());
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
     await ensureOwner(pool, 'owner');
-    conversationId = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id;
+    conversationId = await conversation();
     dir = await mkdtemp(path.join(tmpdir(), 'buddi-file-content-'));
+    // The agent's tools read the data dir from the process, as the running gateway does.
+    previousDataDir = process.env.BUDDI_DATA_DIR;
+    process.env.BUDDI_DATA_DIR = dir;
     env = { ...process.env, BUDDI_DATA_DIR: dir };
+    registry.register(artifactsManifest);
     const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
     web = await startWebServer({
-      pool, registry: new ToolRegistry(), catalog: emptyCatalog(), ctx, timezone: 'UTC', now: () => new Date(), env,
+      pool, registry, catalog: emptyCatalog(), ctx, timezone: 'UTC', now: () => new Date(), env,
       config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'a-test-dashboard-token-long-enough', openAccess: false, log: () => {},
     });
     base = `http://127.0.0.1:${web.port}`;
@@ -80,141 +94,252 @@ suite('file content routes', () => {
     await pool?.end();
     await admin?.query(`drop database if exists ${TEST_DB}`);
     await admin?.end();
+    if (previousDataDir === undefined) delete process.env.BUDDI_DATA_DIR;
+    else process.env.BUDDI_DATA_DIR = previousDataDir;
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
-  const read = (id: string): Promise<Response> =>
-    fetch(`${base}/api/artifacts/${id}/content`, { headers: { authorization: `Bearer ${token}` } });
-  const save = (id: string, body: unknown): Promise<Response> =>
-    fetch(`${base}/api/artifacts/${id}/content`, {
-      method: 'PUT',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+  async function conversation(): Promise<string> {
+    return (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
+  }
+
+  const auth = (): Record<string, string> => ({ authorization: `Bearer ${token}` });
+  const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { ...auth(), 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const read = (id: string): Promise<Response> => fetch(`${base}/api/files/${id}/content`, { headers: auth() });
+  const view = async (id: string): Promise<{ file: { id: string; name: string; createdBy: string }; current: { version: number; artifactId: string }; versions: Array<{ id: string; version: number; createdBy: string; restoredFrom: number | null; filename: string; sha256: string }> }> =>
+    (await fetch(`${base}/api/files/${id}`, { headers: auth() })).json() as never;
+  const save = (id: string, body: unknown): Promise<Response> => fetch(`${base}/api/files/${id}/versions`, json(body));
+  const list = async (q: string): Promise<Array<{ id: string; fileId: string; version: number; versions: number; filename: string }>> =>
+    ((await (await fetch(`${base}/api/artifacts?q=${encodeURIComponent(q)}`, { headers: auth() })).json()) as { entries: never[] }).entries;
+  /** A file as a plugin or a surface saves one: returns its file id. */
   const file = async (text: string | Buffer, filename: string, mime = 'text/markdown', conversation: string | null = conversationId, createdBy = 'scout'): Promise<string> =>
-    (await saveArtifact(pool, { bytes: Buffer.isBuffer(text) ? text : Buffer.from(text), mime, filename, createdBy, conversationId: conversation }, env)).id;
-  const blob = (text: string): Promise<boolean> => stat(path.join(dir, 'artifacts')).then(async () => {
+    (await saveArtifact(pool, { bytes: Buffer.isBuffer(text) ? text : Buffer.from(text), mime, filename, createdBy, conversationId: conversation }, env)).fileId;
+  const blob = async (text: string): Promise<boolean> => {
     const { readdir } = await import('node:fs/promises');
-    const names = await readdir(path.join(dir, 'artifacts'), { recursive: true });
+    const names = await readdir(path.join(dir, 'artifacts'), { recursive: true }).catch(() => [] as string[]);
     return names.some((name) => String(name).includes(sha(text)));
+  };
+  const agent = (conversation: string): CoreToolContext => ({ db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC', agentId: 'scout', conversationId: conversation });
+  const call = async (name: string, args: unknown, conversation: string): Promise<any> => {
+    const result = await registry.invoke(name, args, agent(conversation));
+    if (!result.ok) throw new Error(`${name} refused (${result.reason}): ${result.message}`);
+    return result.output;
+  };
+  /** A command's output in scout's workspace, captured as host.exec captures it. */
+  const captured = async (name: string, text: string, conversation = conversationId, who = 'scout'): Promise<{ fileId: string; artifactId: string; onDisk: string }> => {
+    const data = await realpath(dir);
+    const onDisk = path.join(hostWorkspaceDir(data, 'owner', who, conversation), name);
+    await mkdir(path.dirname(onDisk), { recursive: true });
+    await writeFile(onDisk, text);
+    const row = await saveArtifact(pool, {
+      bytes: Buffer.from(text), mime: 'text/markdown', filename: path.basename(name), createdBy: who, conversationId: conversation,
+      source: { surface: 'host', chatId: conversation }, originPath: path.relative(data, onDisk),
+    }, env);
+    return { fileId: row.fileId, artifactId: row.id, onDisk };
+  };
+
+  describe('the owner’s flow: buddi writes, he edits, buddi adds a section over his edit', () => {
+    const PACKING = '# Montreal weekend packing list\n\n## Clothes\n- Socks\n- A warm coat\n';
+    const MINE = '# Montreal weekend packing list\n\n## Clothes\n- Socks\n- A warm coat\n- Gloves (mine)\n';
+
+    /** Steps 2–4, the same whichever way the list was written. */
+    const editThenAddASection = async (conversation: string, first: { fileId: string; artifactId: string }, results: Array<{ id: string; name: string; output: unknown }>): Promise<void> => {
+      // 2. He edits it on the Canvas and saves: a new version, his.
+      const opened = (await (await read(first.fileId)).json()) as { version: number; text: string };
+      expect(opened).toMatchObject({ version: 1, text: PACKING });
+      const saved = await save(first.fileId, { base: 1, text: MINE });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({ fileId: first.fileId, version: 2, createdBy: 'owner', created: true });
+
+      // The next turn says the newest version is his, and how to build on it.
+      const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+      const told = await systemContext(ctx, { agentId: 'scout', tools: ['artifacts.text', 'artifacts.write', 'host.exec'], conversationId: conversation });
+      expect(told.prompt).toContain('is the owner\'s (v2, saved');
+      expect(told.prompt).toContain(`readVersion: 2`);
+
+      // 3. Asked to add a section, buddi writes without reading first: refused.
+      const section = '\n## Toiletries\n- Toothbrush\n';
+      const blind = await registry.invoke('artifacts.write', { title: 'Montreal weekend packing list', format: 'markdown', content: PACKING + section, fileId: first.fileId }, agent(conversation));
+      expect(blind.ok).toBe(false);
+      // It reads the owner's version, keeps his edit, and writes v3.
+      const current = await call('artifacts.text', { id: first.artifactId }, conversation);
+      // The version it named was v1; the text tool says which file, and that version.
+      expect(current).toMatchObject({ fileId: first.fileId, version: 1 });
+      const newest = await call('artifacts.text', { id: (await view(first.fileId)).current.artifactId }, conversation);
+      expect(newest).toMatchObject({ fileId: first.fileId, version: 2 });
+      expect(newest.text.trim()).toBe(MINE.trim());
+      const v3 = await call('artifacts.write', { title: 'Montreal weekend packing list', format: 'markdown', content: `${newest.text.trim()}\n${section}`, fileId: first.fileId, readVersion: 2 }, conversation);
+      expect(v3).toMatchObject({ fileId: first.fileId, version: 3 });
+      results.push({ id: 'w3', name: 'artifacts.write', output: v3 });
+
+      // 4. One file, three versions, the owner's edit kept in the newest.
+      expect((await (await read(first.fileId)).json()) as { version: number; text: string }).toMatchObject({ version: 3, text: MINE + section });
+      const page = await view(first.fileId);
+      expect(page.versions.map((v) => [v.version, v.createdBy])).toEqual([[3, 'scout'], [2, 'owner'], [1, 'scout']]);
+      // No version mark in any stored name.
+      expect(new Set(page.versions.map((v) => v.filename)).size).toBe(1);
+      expect(page.versions[0]!.filename).not.toMatch(/\(v\d+\)/);
+      const rows = (await list('packing')).filter((entry) => entry.fileId === first.fileId);
+      expect(rows).toEqual([expect.objectContaining({ fileId: first.fileId, version: 3, versions: 3 })]);
+
+      // One canvas tab: every call that made it names the same file.
+      for (const [index, result] of results.entries()) {
+        await pool.query('insert into core.messages (conversation_id, role, content) values ($1, $2, $3), ($1, $4, $5)', [
+          conversation, 'assistant', JSON.stringify([{ type: 'tool_use', id: `${result.id}-${index}`, name: result.name, input: {} }]),
+          'user', JSON.stringify([{ type: 'tool_result', tool_use_id: `${result.id}-${index}`, content: JSON.stringify(result.output) }]),
+        ]);
+      }
+      const transcript = await readChatTranscript(pool, conversation, new Date(), undefined, (tool) => tool === 'artifacts.write' || tool === 'host.exec');
+      const made = transcript!.messages.flatMap((m) => m.blocks)
+        .flatMap((b) => (b.type === 'tool_result' ? b.files ?? [] : []));
+      expect(made.length).toBe(results.length);
+      expect(new Set(made.map((f) => f.fileId))).toEqual(new Set([first.fileId]));
+    };
+
+    it('through artifacts.write', async () => {
+      const here = await conversation();
+      const v1 = await call('artifacts.write', { title: 'Montreal weekend packing list', format: 'markdown', content: PACKING }, here);
+      expect(v1).toMatchObject({ filename: 'Montreal weekend packing list.md', version: 1 });
+      await editThenAddASection(here, { fileId: v1.fileId, artifactId: v1.artifactId }, [{ id: 'w1', name: 'artifacts.write', output: v1 }]);
+    });
+
+    it('through a command’s output (cat > packing-list.md)', async () => {
+      const here = await conversation();
+      const out = await captured('packing-list.md', PACKING, here);
+      const result = { artifacts: [{ id: out.artifactId, filename: 'packing-list.md', mime: 'text/markdown' }] };
+      await editThenAddASection(here, out, [{ id: 'x1', name: 'host.exec', output: result }]);
+      // His save reached the workspace copy; buddi's v3 by fileId did not touch it.
+      expect(await readFile(out.onDisk, 'utf8')).toBe(MINE);
+      expect((await view(out.fileId)).file.name).toBe('packing-list.md');
+    });
   });
 
-  it('reads a text file whole, with the hash a save names', async () => {
+  it('reads a text file’s current version whole, with the version a save names', async () => {
     const id = await file('# Plan\n\nOne\n', 'Plan.md');
     const res = await read(id);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ text: '# Plan\n\nOne\n', sha256: sha('# Plan\n\nOne\n'), sizeBytes: 12, editable: true, truncated: false });
+    expect(await res.json()).toMatchObject({ fileId: id, version: 1, text: '# Plan\n\nOne\n', sha256: sha('# Plan\n\nOne\n'), sizeBytes: 12, editable: true, truncated: false, createdBy: 'scout' });
   });
 
-  it('saves over the version opened, and refuses a save against an older one with the version that won', async () => {
+  it('saves a new version over the one opened, and refuses a save over an older one with the version that won', async () => {
     const id = await file('alpha\n', 'notes.txt', 'text/plain');
-    const first = await save(id, { text: 'alpha\nbeta\n', base: sha('alpha\n') });
+    const first = await save(id, { base: 1, text: 'alpha\nbeta\n' });
     expect(first.status).toBe(200);
-    expect(await first.json()).toEqual({ sha256: sha('alpha\nbeta\n'), sizeBytes: 11 });
-    expect(await (await read(id)).json()).toMatchObject({ text: 'alpha\nbeta\n' });
-
-    // A second tab still holding "alpha": stale.
-    const stale = await save(id, { text: 'alpha\ngamma\n', base: sha('alpha\n') });
+    expect(await first.json()).toMatchObject({ version: 2, sha256: sha('alpha\nbeta\n'), sizeBytes: 11, created: true });
+    // A second tab still on v1: refused, one shape.
+    const stale = await save(id, { base: 1, text: 'alpha\ngamma\n' });
     expect(stale.status).toBe(409);
-    expect(await stale.json()).toMatchObject({ current: { artifactId: id, sha256: sha('alpha\nbeta\n'), filename: 'notes.txt' } });
-    expect(await (await read(id)).json()).toMatchObject({ text: 'alpha\nbeta\n' });
+    expect(await stale.json()).toMatchObject({ conflict: 'newer', error: 'This file changed since you opened it: v2 is newer.', current: { fileId: id, version: 2, createdBy: 'owner' } });
+    // Nothing was rewritten: v1 is still there, as it was.
+    expect((await view(id)).versions.map((v) => [v.version, v.sha256])).toEqual([[2, sha('alpha\nbeta\n')], [1, sha('alpha\n')]]);
   });
 
-  it('is stale when the agent wrote a newer version under the same name', async () => {
-    const v1 = await file('# Report\n\nDraft\n', 'Report.md');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    const v2 = await file('# Report\n\nFinal\n', 'Report (v2).md');
-    const res = await save(v1, { text: '# Report\n\nMine\n', base: sha('# Report\n\nDraft\n') });
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ current: { artifactId: v2, sha256: sha('# Report\n\nFinal\n') } });
-    // Keeping his own then saves onto the newest.
-    expect((await save(v2, { text: '# Report\n\nMine\n', base: sha('# Report\n\nFinal\n') })).status).toBe(200);
-  });
-
-  it('does not chain a same-named file another agent wrote', async () => {
-    const mine = await file('# Notes\n\nA\n', 'Notes.md');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await file('# Notes\n\nOther\n', 'Notes (v2).md', 'text/markdown', conversationId, 'ledger');
-    await file('a,b\r\n', 'Notes.csv', 'text/csv');
-    expect((await save(mine, { text: '# Notes\n\nB\n', base: sha('# Notes\n\nA\n') })).status).toBe(200);
-  });
-
-  it('lets one of two saves at once win, and leaves no bytes behind for the loser', async () => {
+  it('lets one of two saves at once win, and stores no bytes for the loser', async () => {
     const id = await file('race\n', 'race.txt', 'text/plain');
-    const answers = await Promise.all([
-      save(id, { text: 'race one\n', base: sha('race\n') }),
-      save(id, { text: 'race two\n', base: sha('race\n') }),
-    ]);
+    const answers = await Promise.all([save(id, { base: 1, text: 'race one\n' }), save(id, { base: 1, text: 'race two\n' })]);
     expect(answers.map((res) => res.status).sort()).toEqual([200, 409]);
     const won = (await (await read(id)).json()) as { text: string };
-    const lost = won.text === 'race one\n' ? 'race two\n' : 'race one\n';
     expect(await blob(won.text)).toBe(true);
-    expect(await blob(lost)).toBe(false);
+    expect(await blob(won.text === 'race one\n' ? 'race two\n' : 'race one\n')).toBe(false);
   });
 
-  it('shows text that is not UTF-8, and never saves over it', async () => {
+  it('shows text that is not UTF-8, and never saves over it from the editor', async () => {
     const latin1 = Buffer.from('caf\xe9\n', 'latin1');
     const id = await file(latin1, 'menu.txt', 'text/plain');
     expect(await (await read(id)).json()).toMatchObject({ editable: false, note: 'encoding' });
-    const res = await save(id, { text: 'café\n', base: createHash('sha256').update(latin1).digest('hex') });
-    expect(res.status).toBe(415);
+    expect((await save(id, { base: 1, text: 'café\n' })).status).toBe(415);
   });
 
-  it('writes only under the data dir, at the place the hash gives', async () => {
-    const id = await file('x = 1\n', 'calc.py', 'text/x-python');
-    expect((await save(id, { text: 'x = 2\n', base: sha('x = 1\n') })).status).toBe(200);
-    const row = await getArtifact(pool, id);
-    expect(row!.storagePath).toMatch(new RegExp(`^artifacts/\\d{4}/\\d{2}/${sha('x = 2\n')}\\.`));
-    expect(await readFile(path.join(dir, row!.storagePath), 'utf8')).toBe('x = 2\n');
-  });
-
-  it('refuses what is not a text file in Files, and anything that looks like a path', async () => {
+  it('refuses what is not text, ids that look like paths, and bad bodies', async () => {
     const png = await file('not really a png', 'a.png', 'image/png', null);
     expect((await read(png)).status).toBe(415);
-    expect((await save(png, { text: 'x', base: sha('not really a png') })).status).toBe(415);
+    expect((await save(png, { base: 1, text: 'x' })).status).toBe(415);
     expect((await read('11111111-1111-4111-8111-111111111111')).status).toBe(404);
-    expect((await save('11111111-1111-4111-8111-111111111111', { text: 'x', base: sha('x') })).status).toBe(404);
+    expect((await save('11111111-1111-4111-8111-111111111111', { base: 1, text: 'x' })).status).toBe(404);
     for (const probe of ['..%2F..%2Fetc%2Fpasswd', '%2Fetc%2Fhosts', 'not-an-id']) {
-      expect((await read(probe)).status).toBe(404);
-      expect([404, 405]).toContain((await save(probe, { text: 'x', base: sha('x') })).status);
+      expect([404, 405]).toContain((await read(probe)).status);
+      expect([404, 405]).toContain((await save(probe, { base: 1, text: 'x' })).status);
     }
     const id = await file('a\n', 'b.txt', 'text/plain');
     expect((await save(id, { text: 'b' })).status).toBe(400);
-    expect((await save(id, { text: 'x'.repeat(1024 * 1024 + 1), base: sha('a\n') })).status).toBe(413);
+    expect((await save(id, { base: 'sha', text: 'b' })).status).toBe(400);
+    expect((await save(id, { base: 1, text: 'x'.repeat(1024 * 1024 + 1) })).status).toBe(413);
+  });
+
+  it('classifies text with one rule, the editor’s and the server’s', async () => {
+    expect(textPreviewable).toBe(isTextFile);
+    // What the editor once opened and the server refused with 415.
+    for (const [mime, name] of [['application/yaml', 'config.yaml'], ['application/x-sh', 'run.sh'], ['application/octet-stream', 'tool.mjs'], ['application/octet-stream', 'lib.cjs'], ['application/octet-stream', 'setup.zsh']] as const) {
+      expect(isTextFile(mime, name)).toBe(true);
+      const id = await file('echo hi\n', name, mime, null);
+      expect((await read(id)).status).toBe(200);
+    }
+    expect(isTextFile('text/plain', 'sheet.xlsx')).toBe(false);
+  });
+
+  it('downloads a version under its file’s name with the version mark, which no stored name carries', async () => {
+    const id = await file('# Report\n', 'Report.md');
+    await save(id, { base: 1, text: '# Report, mine\n' });
+    const v2 = (await view(id)).current.artifactId;
+    const res = await fetch(`${base}/api/artifacts/${v2}/download`, { headers: auth() });
+    expect(res.headers.get('content-disposition')).toContain(encodeURIComponent('Report (v2).md'));
+    expect((await view(id)).versions.every((v) => v.filename === 'Report.md')).toBe(true);
+  });
+
+  describe('Restore', () => {
+    it('copies the version’s bytes — never its preview — even past 1 MiB or not UTF-8', async () => {
+      // Codex P1: Restore saved the preview text: a big file lost its end, Latin-1 its characters.
+      const big = Buffer.concat([Buffer.from('caf\xe9 ', 'latin1'), Buffer.alloc(1024 * 1024 + 10, 0x61)]);
+      const id = await file(big, 'big.txt', 'text/plain');
+      await saveVersion(pool, { id, bytes: Buffer.from('small, by buddi\n'), createdBy: 'scout' }, env);
+      const res = await save(id, { base: 2, from: 1 });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ version: 3, createdBy: 'owner', sha256: sha(big) });
+      const page = await view(id);
+      expect(page.versions[0]).toMatchObject({ version: 3, restoredFrom: 1, sha256: sha(big) });
+    });
+
+    it('restores an older capture to its workspace, though the bytes repeat an earlier version', async () => {
+      // Codex P2: the capture's dedup key made a Restore a 23505 and a 409 forever.
+      const one = await captured('restore/trip.md', '# Trip one\n');
+      const two = await captured('restore/trip.md', '# Trip two\n');
+      expect(two.fileId).toBe(one.fileId);
+      const res = await save(one.fileId, { base: 2, from: 1 });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ version: 3, workspace: { updated: true } });
+      expect(await readFile(one.onDisk, 'utf8')).toBe('# Trip one\n');
+      // A deleted version's bytes do not block one either.
+      await fetch(`${base}/api/files/${one.fileId}/versions/1`, { method: 'DELETE', headers: auth() });
+      expect((await save(one.fileId, { base: 3, from: 2 })).status).toBe(200);
+      expect((await save(one.fileId, { base: 4, from: 3 })).status).toBe(200);
+    });
+
+    it('is refused like a save when a newer version was saved meanwhile', async () => {
+      const id = await file('# A\n', 'restore-race.md');
+      await saveVersion(pool, { id, bytes: Buffer.from('# B\n'), createdBy: 'scout' }, env);
+      await saveVersion(pool, { id, bytes: Buffer.from('# C\n'), createdBy: 'scout' }, env);
+      const res = await save(id, { base: 2, from: 1 });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ conflict: 'newer', current: { version: 3 } });
+    });
   });
 
   describe('a command’s output', () => {
-    const captured = async (name: string, text: string, agent = 'scout'): Promise<{ id: string; onDisk: string }> => {
-      const data = await realpath(dir);
-      const workspace = hostWorkspaceDir(data, 'owner', agent, conversationId);
-      await mkdir(workspace, { recursive: true });
-      const onDisk = path.join(workspace, name);
-      await mkdir(path.dirname(onDisk), { recursive: true });
-      await writeFile(onDisk, text);
-      const row = await saveArtifact(pool, {
-        bytes: Buffer.from(text), mime: 'text/markdown', filename: name, createdBy: agent, conversationId,
-        source: { surface: 'host', chatId: conversationId }, originPath: path.relative(data, onDisk),
-      }, env);
-      return { id: row.id, onDisk };
-    };
-
     it('writes the owner’s save back to the workspace it came from', async () => {
-      const { id, onDisk } = await captured('packing.md', '# Packing\n\n- Socks\n');
-      const res = await save(id, { text: '# Packing\n\n- Socks\n- By buddi\n', base: sha('# Packing\n\n- Socks\n') });
+      const { fileId, onDisk } = await captured('packing.md', '# Packing\n\n- Socks\n');
+      const res = await save(fileId, { base: 1, text: '# Packing\n\n- Socks\n- Mine\n' });
       expect(res.status).toBe(200);
-      expect(await readFile(onDisk, 'utf8')).toBe('# Packing\n\n- Socks\n- By buddi\n');
+      expect(await readFile(onDisk, 'utf8')).toBe('# Packing\n\n- Socks\n- Mine\n');
     });
 
     it('refuses when the workspace copy changed since, with what it holds, until he overwrites it', async () => {
-      const { id, onDisk } = await captured('trip.md', '# Trip\n');
+      const { fileId, onDisk } = await captured('trip.md', '# Trip\n');
       await writeFile(onDisk, '# Trip\n\n## Toiletries\n');
-      const stale = await save(id, { text: '# Trip\n\nMine\n', base: sha('# Trip\n') });
+      const stale = await save(fileId, { base: 1, text: '# Trip\n\nMine\n' });
       expect(stale.status).toBe(409);
-      expect(await stale.json()).toMatchObject({ workspaceText: '# Trip\n\n## Toiletries\n', current: { artifactId: id } });
+      expect(await stale.json()).toMatchObject({ conflict: 'workspace', workspaceText: '# Trip\n\n## Toiletries\n', current: { fileId, version: 1 } });
       expect(await readFile(onDisk, 'utf8')).toBe('# Trip\n\n## Toiletries\n');
-      expect((await (await read(id)).json() as { text: string }).text).toBe('# Trip\n');
-
-      const forced = await save(id, { text: '# Trip\n\nMine\n', base: sha('# Trip\n'), overwriteWorkspace: true });
+      const forced = await save(fileId, { base: 1, text: '# Trip\n\nMine\n', overwriteWorkspace: true });
       expect(forced.status).toBe(200);
       expect(await readFile(onDisk, 'utf8')).toBe('# Trip\n\nMine\n');
     });
@@ -223,7 +348,6 @@ suite('file content routes', () => {
       const data = await realpath(dir);
       const outside = await mkdtemp(path.join(tmpdir(), 'buddi-outside-'));
       await writeFile(path.join(outside, 'f.md'), '# Outside\n');
-      // A folder in the workspace that is a link out of it.
       const workspace = hostWorkspaceDir(data, 'owner', 'scout', conversationId);
       await mkdir(workspace, { recursive: true });
       await symlink(outside, path.join(workspace, 'sub'));
@@ -231,10 +355,9 @@ suite('file content routes', () => {
         bytes: Buffer.from('# Outside\n'), mime: 'text/markdown', filename: 'f.md', createdBy: 'scout', conversationId,
         source: { surface: 'host', chatId: conversationId }, originPath: path.relative(data, path.join(workspace, 'sub', 'f.md')),
       }, env);
-      const one = await save(viaParent.id, { text: '# Escaped\n', base: sha('# Outside\n') });
+      const one = await save(viaParent.fileId, { base: 1, text: '# Escaped\n' });
       expect(one.status).toBe(200);
       expect(await one.json()).toMatchObject({ workspace: { updated: false }, note: expect.stringMatching(/^Saved in Files; the workspace copy couldn’t be updated/) });
-      // The whole workspace a link.
       const linked = hostWorkspaceDir(data, 'owner', 'linker', conversationId);
       await mkdir(path.dirname(linked), { recursive: true });
       await symlink(outside, linked);
@@ -242,310 +365,287 @@ suite('file content routes', () => {
         bytes: Buffer.from('# Outside\n'), mime: 'text/markdown', filename: 'f.md', createdBy: 'linker', conversationId,
         source: { surface: 'host', chatId: conversationId }, originPath: path.relative(data, path.join(linked, 'f.md')),
       }, env);
-      expect(await (await save(viaRoot.id, { text: '# Escaped\n', base: sha('# Outside\n') })).json()).toMatchObject({ workspace: { updated: false } });
+      expect(await (await save(viaRoot.fileId, { base: 1, text: '# Escaped\n' })).json()).toMatchObject({ workspace: { updated: false } });
       expect(await readFile(path.join(outside, 'f.md'), 'utf8')).toBe('# Outside\n');
       await rm(outside, { recursive: true, force: true });
     });
 
-    it('refuses while a command runs in the workspace, and saves once it is done', async () => {
-      const { id, onDisk } = await captured('busy.md', '# Busy\n');
-      const leave = await enterWorkspace(hostWorkspaceKey('owner', 'scout', conversationId));
-      const refused = await save(id, { text: '# Mine\n', base: sha('# Busy\n') });
+    it('refuses while a command runs in any conversation, and saves once it is done', async () => {
+      // Codex P1: a command in another conversation may have its cwd in this workspace.
+      const { fileId, onDisk } = await captured('busy.md', '# Busy\n');
+      const leave = await enterWorkspace();
+      const refused = await save(fileId, { base: 1, text: '# Mine\n' });
       expect(refused.status).toBe(409);
-      expect(await refused.json()).toMatchObject({ busy: true, error: expect.stringMatching(/running a command/) });
+      expect(await refused.json()).toMatchObject({ conflict: 'busy', error: expect.stringMatching(/running a command/) });
       leave();
-      expect((await save(id, { text: '# Mine\n', base: sha('# Busy\n') })).status).toBe(200);
+      expect((await save(fileId, { base: 1, text: '# Mine\n' })).status).toBe(200);
       expect(await readFile(onDisk, 'utf8')).toBe('# Mine\n');
     });
 
-    it('reports a copy it could not update after the save, and saving again writes it', async () => {
-      const { id, onDisk } = await captured('full.md', '# Full\n');
+    it('reports a copy it could not update after the save, and saving the same text again writes it', async () => {
+      const { fileId, onDisk } = await captured('full.md', '# Full\n');
       control.failRename = true;
-      const partial = await save(id, { text: '# Mine\n', base: sha('# Full\n') });
+      const partial = await save(fileId, { base: 1, text: '# Mine\n' });
       expect(partial.status).toBe(200);
-      expect(await partial.json()).toMatchObject({ workspace: { updated: false, reason: 'the disk is full' }, note: 'Saved in Files; the workspace copy couldn’t be updated: the disk is full.' });
-      expect((await (await read(id)).json() as { text: string }).text).toBe('# Mine\n');
+      expect(await partial.json()).toMatchObject({ version: 2, workspace: { updated: false, reason: 'the disk is full' }, note: 'Saved in Files; the workspace copy couldn’t be updated: the disk is full.' });
       expect(await readFile(onDisk, 'utf8')).toBe('# Full\n');
-      const again = await save(id, { text: '# Mine\n', base: sha('# Mine\n') });
-      expect(await again.json()).toMatchObject({ workspace: { updated: true } });
+      const again = await save(fileId, { base: 2, text: '# Mine\n' });
+      expect(await again.json()).toMatchObject({ version: 2, created: false, workspace: { updated: true } });
       expect(await readFile(onDisk, 'utf8')).toBe('# Mine\n');
-    });
-
-    it('does not take a newer output of another path with the same name for a newer version', async () => {
-      const a = await captured('one/notes.md', '# One\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await captured('two/notes.md', '# Two\n');
-      expect((await save(a.id, { text: '# One, mine\n', base: sha('# One\n') })).status).toBe(200);
-      expect(await readFile(a.onDisk, 'utf8')).toBe('# One, mine\n');
-      // The same path captured again is the newer version.
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const again = await captured('one/notes.md', '# One, by buddi\n');
-      const stale = await save(a.id, { text: '# One, mine again\n', base: sha('# One, mine\n') });
-      expect(stale.status).toBe(409);
-      expect(await stale.json()).toMatchObject({ current: { artifactId: again.id } });
     });
 
     it('says when the workspace copy is gone, and saves in Files only', async () => {
-      const { id, onDisk } = await captured('gone.md', '# Gone\n');
+      const { fileId, onDisk } = await captured('gone.md', '# Gone\n');
       await rm(onDisk);
-      expect(await (await save(id, { text: '# Mine\n', base: sha('# Gone\n') })).json())
+      expect(await (await save(fileId, { base: 1, text: '# Mine\n' })).json())
         .toMatchObject({ workspace: { updated: false, reason: 'the workspace copy is gone; saved in Files only' } });
     });
 
     it('finishes a write-through on a pool of one connection', async () => {
-      const { id, onDisk } = await captured('one-connection.md', '# One\n');
+      const { fileId, onDisk } = await captured('one-connection.md', '# One\n');
       const url = new URL(databaseUrl as string);
       url.pathname = `/${TEST_DB}`;
       const single = new pg.Pool({ connectionString: url.toString(), max: 1 });
       try {
-        const done = replaceArtifactContent(single, {
-          id, bytes: Buffer.from('# Two\n'), expectedSha256: sha('# One\n'),
+        const done = saveOwnerVersion(single, {
+          fileId, bytes: Buffer.from('# Two\n'), base: 1,
           workspace: async () => ({ kind: 'write', commit: () => writeFile(onDisk, '# Two\n'), abort: async () => {} }),
         }, env);
         const result = await Promise.race([done, new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 5_000))]);
         expect(result).toMatchObject({ ok: true, workspace: { updated: true } });
-        const { rows } = await pool.query('select origin_sha256 from core.artifacts where id = $1', [id]);
-        expect(rows[0].origin_sha256).toBe(sha('# Two\n'));
+        expect((await getFile(pool, fileId))!.originSha256).toBe(sha('# Two\n'));
       } finally {
         await single.end();
       }
     });
 
-    it('lists one row per file in Files, with its versions; two paths with one name stay two files', async () => {
-      // An output captured before paths were recorded, then the same file's later captures.
-      const legacy = await saveArtifact(pool, {
-        bytes: Buffer.from('# Trip v1\n'), mime: 'text/markdown', filename: 'grouped.md', createdBy: 'scout', conversationId,
-        source: { surface: 'host', chatId: conversationId },
-      }, env);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await captured('here/grouped.md', '# Trip v2\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const newest = await captured('here/grouped.md', '# Trip v3\n');
-      const list = async (q: string, flat = false) => ((await (await fetch(`${base}/api/artifacts?q=${q}${flat ? '&flat=1' : ''}`, { headers: { authorization: `Bearer ${token}` } })).json()) as { entries: Array<{ id: string; versions: number }> }).entries;
-      expect(await list('grouped')).toEqual([expect.objectContaining({ id: newest.id, versions: 3 })]);
-      expect(await list('grouped', true)).toHaveLength(3);
-      // Two outputs with one name, from two paths: two files.
-      await captured('left/paired.md', '# Left\n');
-      await captured('right/paired.md', '# Right\n');
-      expect((await list('paired')).map((entry) => entry.versions)).toEqual([1, 1]);
-
-      // The file page lists them, newest first, with the owner's save marked.
-      expect((await save(newest.id, { text: '# Trip v3, mine\n', base: sha('# Trip v3\n') })).status).toBe(200);
-      const page = (await (await fetch(`${base}/api/artifacts/${legacy.id}`, { headers: { authorization: `Bearer ${token}` } })).json()) as { versions: Array<{ id: string; editedAt: string | null; sha256: string }> };
-      expect(page.versions.map((version) => version.id)).toEqual([newest.id, expect.any(String), legacy.id]);
-      expect(page.versions[0]!.editedAt).not.toBeNull();
-      expect(page.versions[0]!.sha256).toBe(sha('# Trip v3, mine\n'));
-      expect(page.versions[2]!.editedAt).toBeNull();
+    it('keeps two paths with one name as two files, and the same path captured again as one', async () => {
+      const left = await captured('left/paired.md', '# Same\n');
+      const right = await captured('right/paired.md', '# Same\n');
+      expect(left.fileId).not.toBe(right.fileId);
+      const again = await captured('left/paired.md', '# Left, again\n');
+      expect(again.fileId).toBe(left.fileId);
+      expect((await list('paired')).map((entry) => entry.versions).sort()).toEqual([1, 2]);
+      expect((await save(right.fileId, { base: 1, text: '# Right\n' })).status).toBe(200);
+      expect(await readFile(right.onDisk, 'utf8')).toBe('# Right\n');
+      expect(await readFile(left.onDisk, 'utf8')).toBe('# Left, again\n');
     });
 
-    it('tells the agent its workspace copy has the owner’s edits when the save was written back, and that it is stale when not', async () => {
-      const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
-      const data = await realpath(dir);
-      const capture = async (name: string, text: string): Promise<string> => {
-        const workspace = hostWorkspaceDir(data, 'owner', 'scout', other);
-        const onDisk = path.join(workspace, 'out', name);
-        await mkdir(path.dirname(onDisk), { recursive: true });
-        await writeFile(onDisk, text);
-        return (await saveArtifact(pool, {
-          bytes: Buffer.from(text), mime: 'text/markdown', filename: name, createdBy: 'scout', conversationId: other,
-          source: { surface: 'host', chatId: other }, originPath: path.relative(data, onDisk),
-        }, env)).id;
-      };
-      const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
-      const synced = await capture('synced.md', '# Synced\n');
-      expect((await save(synced, { text: '# Synced\n\nUpdated by the owner\n', base: sha('# Synced\n') })).status).toBe(200);
-      const told = await systemContext(ctx, { agentId: 'scout', tools: ['host.exec'], conversationId: other });
-      expect(told.prompt).toContain("Your workspace copy at out/synced.md already has the owner's edits");
-      expect(told.prompt).not.toContain('out of date');
-
-      const failed = await capture('failed.md', '# Failed\n');
-      control.failRename = true;
-      expect(await (await save(failed, { text: '# Failed, mine\n', base: sha('# Failed\n') })).json()).toMatchObject({ workspace: { updated: false } });
-      const stale = await systemContext(ctx, { agentId: 'scout', tools: ['host.exec'], conversationId: other });
-      expect(stale.prompt).toContain('The owner edited failed.md at');
-      expect(stale.prompt).toContain('Your earlier copy (including any copy in your workspace) is out of date. You cannot read files in Files; ask the owner what changed');
-    });
-
-    it('continues a command’s output by id, keeping its name and workspace path, and the owner’s save still writes back', async () => {
-      const capture = await captured('cont/packing.md', '# Packing\n');
-      const next = await saveNextVersionOf(pool, { of: capture.id, bytes: Buffer.from('# Packing\n\n## Toiletries\n'), createdBy: 'scout' }, env);
-      // Its name, as the capture had it.
-      expect(next.row.filename).toBe((await getArtifact(pool, capture.id))!.filename);
-      const { rows } = await pool.query('select origin_path, origin_sha256 from core.artifacts where id = $1', [next.row.id]);
-      expect(rows[0].origin_path).toMatch(/cont\/packing\.md$/);
-      // The workspace copy was not written: it still holds the capture.
-      expect(rows[0].origin_sha256).toBe(sha('# Packing\n'));
-      expect(await readFile(capture.onDisk, 'utf8')).toBe('# Packing\n');
-      // The owner's save of the new version writes it back over that copy.
-      const saved = await save(next.row.id, { text: '# Packing\n\n## Toiletries\n- Mine\n', base: sha('# Packing\n\n## Toiletries\n') });
+    it('continues by fileId whoever writes, keeping the workspace it belongs to', async () => {
+      // Codex P2: writing a capture as another author started a new file and moved its workspace.
+      const out = await captured('cont/packing.md', '# Packing\n');
+      const next = await saveVersion(pool, { id: out.fileId, bytes: Buffer.from('# Packing\n\n## Toiletries\n'), createdBy: 'ledger' }, env).catch((err: unknown) => err);
+      // Another agent wrote over scout's newest without reading it: refused.
+      expect(next).toBeInstanceOf(FileChangedError);
+      const read2 = await saveVersion(pool, { id: out.fileId, bytes: Buffer.from('# Packing\n\n## Toiletries\n'), createdBy: 'ledger', readVersion: 1 }, env);
+      expect(read2).toMatchObject({ row: { fileId: out.fileId, version: 2, createdBy: 'ledger' } });
+      const file = (await getFile(pool, out.fileId))!;
+      expect(file).toMatchObject({ createdBy: 'scout', origin: 'capture' });
+      expect(file.originSha256).toBe(sha('# Packing\n'));
+      // The owner's save still writes back to scout's workspace copy.
+      const saved = await save(out.fileId, { base: 2, text: '# Packing\n\n## Toiletries\n- Mine\n' });
       expect(await saved.json()).toMatchObject({ workspace: { updated: true } });
-      expect(await readFile(capture.onDisk, 'utf8')).toBe('# Packing\n\n## Toiletries\n- Mine\n');
+      expect(await readFile(out.onDisk, 'utf8')).toBe('# Packing\n\n## Toiletries\n- Mine\n');
     });
 
-    it('joins a document whose name only differs in case, spaces or hyphens to the command’s file, in Files too', async () => {
-      const capture = await captured('trip/montreal-weekend-list.md', '# List\n');
-      const doc = await saveArtifact(pool, { bytes: Buffer.from('# List, doc\n'), mime: 'text/markdown', filename: 'Montreal Weekend List.md', createdBy: 'scout', conversationId }, env);
-      const v2 = await saveArtifact(pool, { bytes: Buffer.from('# List, doc v2\n'), mime: 'text/markdown', filename: 'Montreal Weekend List (v2).md', createdBy: 'scout', conversationId }, env);
-      const listed = ((await (await fetch(`${base}/api/artifacts?q=montreal`, { headers: { authorization: `Bearer ${token}` } })).json()) as { entries: Array<{ id: string; versions: number }> }).entries;
-      expect(listed).toEqual([expect.objectContaining({ id: v2.id, versions: 3 })]);
-      expect(doc.id).not.toBe(capture.id);
+    it('continues an owner upload outside any conversation by fileId', async () => {
+      const id = await file('# Mine\n', 'mine.md', 'text/markdown', null, 'owner');
+      const v2 = await saveVersion(pool, { id, bytes: Buffer.from('# Mine, tidied\n'), createdBy: 'scout', readVersion: 1 }, env);
+      expect(v2.row).toMatchObject({ fileId: id, version: 2 });
+      expect((await getFile(pool, id))!.createdBy).toBe('owner');
     });
 
-    it('tells the canvas which calls made which file, and which only read one', async () => {
-      const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
-      const file = await saveArtifact(pool, { bytes: Buffer.from('# Notes\n'), mime: 'text/markdown', filename: 'Notes.md', createdBy: 'scout', conversationId: other }, env);
-      const turn = (id: string, name: string, output: unknown): Array<[string, unknown]> => [
-        ['assistant', [{ type: 'tool_use', id, name, input: {} }]],
-        ['user', [{ type: 'tool_result', tool_use_id: id, content: JSON.stringify(output) }]],
-      ];
-      for (const [role, content] of [
-        ...turn('w1', 'artifacts.write', { artifactId: file.id, filename: 'Notes.md', mime: 'text/markdown' }),
-        ...turn('l1', 'artifacts.list', { artifacts: [{ id: file.id, filename: 'Notes.md', mime: 'text/markdown' }], count: 1 }),
-        ...turn('t1', 'artifacts.text', { id: file.id, sha256: sha('# Notes\n'), text: '# Notes\n' }),
-      ]) await pool.query('insert into core.messages (conversation_id, role, content) values ($1, $2, $3)', [other, role, JSON.stringify(content)]);
-      const transcript = await readChatTranscript(pool, other, new Date(), undefined, (tool) => tool === 'artifacts.write');
-      const results = transcript!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result') as Array<{ toolUseId: string; files?: Array<{ artifactId: string; chain: string }>; readsFile?: true }>;
-      const by = (id: string) => results.find((block) => block.toolUseId === id)!;
-      expect(by('w1').files).toEqual([expect.objectContaining({ artifactId: file.id, chain: expect.stringContaining('notes.md') })]);
-      expect(by('l1').files).toEqual([]);
-      expect(by('t1').readsFile).toBe(true);
-    });
-
-    it('deletes a version (the one before is the newest again), the whole file, and undoes it', async () => {
-      await captured('del/deleting.md', '# One\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const two = await captured('del/deleting.md', '# Two\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const three = await captured('del/deleting.md', '# Three\n');
-      const auth = { authorization: `Bearer ${token}` };
-      const list = async () => ((await (await fetch(`${base}/api/artifacts?q=deleting`, { headers: auth })).json()) as { entries: Array<{ id: string; versions: number }> }).entries;
-      const remove = (id: string, scope: string) => fetch(`${base}/api/artifacts/${id}?scope=${scope}`, { method: 'DELETE', headers: auth });
-
-      expect(await (await remove(three.id, 'version')).json()).toEqual({ deleted: [three.id] });
-      expect(await list()).toEqual([expect.objectContaining({ id: two.id, versions: 2 })]);
-      const whole = (await (await remove(two.id, 'file')).json()) as { deleted: string[] };
-      expect(whole.deleted).toHaveLength(2);
-      expect(await list()).toEqual([]);
-      expect((await remove(two.id, 'file')).status).toBe(404);
-      expect((await remove(two.id, 'everything')).status).toBe(400);
-      // The workspace copy is never touched.
-      expect(await readFile(three.onDisk, 'utf8')).toBe('# Three\n');
-
-      const undo = await fetch(`${base}/api/artifacts/restore`, { method: 'POST', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ ids: whole.deleted }) });
-      expect(((await undo.json()) as { restored: string[] }).restored.sort()).toEqual([...whole.deleted].sort());
-      expect(await list()).toEqual([expect.objectContaining({ id: two.id, versions: 2 })]);
-    });
-
-    it('keeps the same bytes from two outputs as two files, each written to its own path', async () => {
-      const a = await captured('a/same.md', '# Same\n');
-      const b = await captured('b/same.md', '# Same\n');
-      expect(a.id).not.toBe(b.id);
-      expect((await save(b.id, { text: '# B\n', base: sha('# Same\n') })).status).toBe(200);
-      expect(await readFile(b.onDisk, 'utf8')).toBe('# B\n');
-      expect(await readFile(a.onDisk, 'utf8')).toBe('# Same\n');
-    });
-
-    it('never writes outside the workspace of the agent and conversation that made it', async () => {
-      const { id, onDisk } = await captured('elsewhere.md', '# Elsewhere\n', 'ledger');
-      // The row says scout made it, but the copy is in ledger's workspace.
-      await pool.query(`update core.artifacts set created_by = 'scout' where id = $1`, [id]);
-      expect((await save(id, { text: '# Changed\n', base: sha('# Elsewhere\n') })).status).toBe(200);
+    it('never writes outside the workspace of the agent and conversation that made the file', async () => {
+      const { fileId, onDisk } = await captured('elsewhere.md', '# Elsewhere\n', conversationId, 'ledger');
+      // The file says scout made it, but the copy is in ledger's workspace.
+      await pool.query(`update core.files set created_by = 'scout' where id = $1`, [fileId]);
+      expect((await save(fileId, { base: 1, text: '# Changed\n' })).status).toBe(200);
       expect(await readFile(onDisk, 'utf8')).toBe('# Elsewhere\n');
     });
   });
 
-  it('tells the agent of an owner edit once, on its next turn', async () => {
-    const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
-    const id = await file('# List\n', 'List.md', 'text/markdown', other);
-    expect((await save(id, { text: '# List\n\n- Mine\n', base: sha('# List\n') })).status).toBe(200);
-    const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
-    const first = await systemContext(ctx, { agentId: 'scout', tools: ['artifacts.text', 'artifacts.write'], conversationId: other });
-    expect(first.prompt).toMatch(new RegExp(`The owner edited List\\.md at [^.]+\\. Your earlier copy \\(including any copy in your workspace\\) is out of date\\. Read the current text with artifacts\\.text \\{ id: "${id}" \\}, then save changes with artifacts\\.write \\{ fileId: "${id}" \\}, passing readVersion = the sha256 artifacts\\.text returned\\. Don't ask the owner to paste it\\.`));
-    const next = await systemContext(ctx, { agentId: 'scout', tools: ['artifacts.text', 'artifacts.write'], conversationId: other });
-    expect(next.prompt).not.toContain('The owner edited');
-  });
-
-  it('words the note by the tools the agent holds', () => {
-    const edit = { artifactId: '11111111-1111-4111-8111-111111111111', filename: 'List.md', editedAt: '2026-10-13T09:00:00.000Z' };
-    expect(ownerEditLine(edit, 'UTC', ['artifacts.text'])).toContain('artifacts.text { id: "11111111-1111-4111-8111-111111111111" }, before you change anything');
-    expect(ownerEditLine(edit, 'UTC', ['artifacts.text'])).not.toContain('artifacts.write');
-    expect(ownerEditLine(edit, 'UTC', [])).toMatch(/You cannot read files in Files; ask the owner what changed/);
-    expect(ownerEditLine(edit, 'UTC', [])).not.toMatch(/\b(he|his|him)\b/);
-    expect(ownerEditLine(edit, 'UTC', [])).not.toContain('artifacts.');
-  });
-
-  it('continues a command’s file as the next document version, over the owner’s edit once read', async () => {
-    const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
-    // Captured before outputs remembered their workspace path.
-    const captured = await saveArtifact(pool, {
-      bytes: Buffer.from('# Packing\n'), mime: 'text/markdown', filename: 'montreal-weekend-packing-list.md', createdBy: 'scout',
-      conversationId: other, source: { surface: 'host', chatId: other },
-    }, env);
-    expect((await save(captured.id, { text: '# Packing\n\n- By buddi\n', base: sha('# Packing\n') })).status).toBe(200);
-    const next = { bytes: Buffer.from('# Packing\n\n- By buddi\n\n## Toiletries\n'), mime: 'text/markdown', createdBy: 'scout', conversationId: other, base: 'montreal-weekend-packing-list', ext: 'md' };
-    await expect(saveArtifactVersion(pool, next, env)).rejects.toBeInstanceOf(OwnerEditedError);
-    const v2 = await saveArtifactVersion(pool, { ...next, readVersion: sha('# Packing\n\n- By buddi\n') }, env);
-    expect(v2.version).toBe(2);
-    expect(v2.row.filename).toBe('montreal-weekend-packing-list (v2).md');
-    // And the owner's next save of the captured one is stale: v2 is the file now.
-    const stale = await save(captured.id, { text: '# Old\n', base: sha('# Packing\n\n- By buddi\n') });
-    expect(stale.status).toBe(409);
-    expect(await stale.json()).toMatchObject({ current: { artifactId: v2.row.id } });
-  });
-
-  it('refuses a document write over an owner edit the writer did not read', async () => {
-    const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
-    const v1 = await saveArtifactVersion(pool, { bytes: Buffer.from('# Plan\n'), mime: 'text/markdown', createdBy: 'scout', conversationId: other, base: 'Plan', ext: 'md' }, env);
-    expect((await save(v1.row.id, { text: '# Plan\n\nMine\n', base: sha('# Plan\n') })).status).toBe(200);
-    const again = { bytes: Buffer.from('# Plan\n\nTheirs\n'), mime: 'text/markdown', createdBy: 'scout', conversationId: other, base: 'Plan', ext: 'md' };
-    await expect(saveArtifactVersion(pool, again, env)).rejects.toBeInstanceOf(OwnerEditedError);
-    // The id is not enough, nor the hash of what was there before his edit.
-    await expect(saveArtifactVersion(pool, { ...again, readVersion: sha('# Plan\n') }, env)).rejects.toBeInstanceOf(OwnerEditedError);
-    const v2 = await saveArtifactVersion(pool, { ...again, readVersion: sha('# Plan\n\nMine\n') }, env);
-    expect(v2.version).toBe(2);
-  });
-
-  it('purges a file deleted a month ago, and keeps bytes another file still stores', async () => {
-    const a = await saveArtifact(pool, { bytes: Buffer.from('# Shared bytes\n'), mime: 'text/markdown', filename: 'shared.md', createdBy: 'scout', conversationId }, env);
-    const b = await saveArtifact(pool, { bytes: Buffer.from('# Shared bytes\n'), mime: 'text/markdown', filename: 'shared.md', createdBy: 'owner', source: { surface: 'telegram', chatId: '42' } }, env);
-    expect(b.id).not.toBe(a.id);
-    expect(b.storagePath).toBe(a.storagePath);
-    const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
-    await pool.query('update core.artifacts set deleted_at = $2 where id = $1', [a.id, old]);
-    const first = await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env);
-    expect(first.rows).toBeGreaterThanOrEqual(1);
-    expect((await pool.query('select 1 from core.artifacts where id = $1', [a.id])).rows).toHaveLength(0);
-    expect(await stat(path.join(dir, b.storagePath)).then(() => true, () => false)).toBe(true);
-    // Deleted yesterday: kept, and so are its bytes.
-    await pool.query('update core.artifacts set deleted_at = now() - interval \'1 day\' where id = $1', [b.id]);
-    await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env);
-    expect((await pool.query('select 1 from core.artifacts where id = $1', [b.id])).rows).toHaveLength(1);
-    await pool.query('update core.artifacts set deleted_at = $2 where id = $1', [b.id, old]);
-    const second = await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env);
-    expect(second.blobs).toBeGreaterThanOrEqual(1);
-    expect(await stat(path.join(dir, b.storagePath)).then(() => true, () => false)).toBe(false);
-  });
-
-  it('keeps an editor’s text as a new file of the owner’s after its file was deleted', async () => {
-    const id = await file('# Draft\n', 'Draft.md');
-    await pool.query('update core.artifacts set deleted_at = now() where id = $1', [id]);
-    const res = await fetch(`${base}/api/artifacts/${id}/copy`, {
-      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ text: '# Draft, mine\n' }),
+  describe('one lock per file', () => {
+    it('makes two writes of one title at once one file', async () => {
+      // Codex P2: the first write used a lock of its own, so two could both find no file.
+      const here = await conversation();
+      const write = (text: string) => saveDocument(pool, { conversationId: here, name: 'Plan.md', mime: 'text/markdown', bytes: Buffer.from(text), createdBy: 'scout' }, env);
+      const [a, b] = await Promise.all([write('# One\n'), write('# Two\n')]);
+      expect(a.file.id).toBe(b.file.id);
+      expect([a.row.version, b.row.version].sort()).toEqual([1, 2]);
     });
+
+    it('never lets an agent’s write and the owner’s save both win', async () => {
+      for (let round = 0; round < 8; round += 1) {
+        const here = await conversation();
+        const first = await saveDocument(pool, { conversationId: here, name: 'Race.md', mime: 'text/markdown', bytes: Buffer.from('# v1\n'), createdBy: 'scout' }, env);
+        const [owner, agentWrite] = await Promise.allSettled([
+          saveOwnerVersion(pool, { fileId: first.file.id, bytes: Buffer.from('# mine\n'), base: 1 }, env),
+          saveDocument(pool, { conversationId: here, name: 'Race.md', mime: 'text/markdown', bytes: Buffer.from('# theirs\n'), createdBy: 'scout' }, env),
+        ]);
+        const ownerWon = owner.status === 'fulfilled' && owner.value.ok;
+        const agentWon = agentWrite.status === 'fulfilled';
+        expect(ownerWon !== agentWon).toBe(true);
+        if (!agentWon) expect((agentWrite as PromiseRejectedResult).reason).toBeInstanceOf(FileChangedError);
+      }
+    });
+
+    it('never leaves a live version in a deleted file, however a write and a delete interleave', async () => {
+      // Codex P2: the whole-file delete took no lock, so a version could land after it.
+      for (let round = 0; round < 8; round += 1) {
+        const id = await file(`# round ${round}\n`, `deleting-${round}.md`);
+        const [, written] = await Promise.allSettled([
+          deleteFile(pool, id),
+          saveVersion(pool, { id, bytes: Buffer.from(`# round ${round}, again\n`), createdBy: 'scout' }, env),
+        ]);
+        if (written.status === 'rejected') expect(written.reason).toBeInstanceOf(FileGoneError);
+        const { rows } = await pool.query('select count(*)::int as live from core.artifacts where file_id = $1 and deleted_at is null', [id]);
+        expect((await getFile(pool, id))!.deletedAt).not.toBeNull();
+        expect(rows[0].live).toBe(0);
+      }
+    });
+  });
+
+  it('deletes a version (the one before is the newest again), the whole file, and undoes each', async () => {
+    const id = await file('# One\n', 'deleting.md');
+    await saveVersion(pool, { id, bytes: Buffer.from('# Two\n'), createdBy: 'scout' }, env);
+    await saveVersion(pool, { id, bytes: Buffer.from('# Three\n'), createdBy: 'scout' }, env);
+    const remove = (suffix = '') => fetch(`${base}/api/files/${id}${suffix}`, { method: 'DELETE', headers: auth() });
+    const undo = (body: unknown) => fetch(`${base}/api/files/${id}/undelete`, json(body));
+
+    expect(await (await remove('/versions/3')).json()).toEqual({ fileId: id, version: 3, fileDeleted: false });
+    expect((await view(id)).current.version).toBe(2);
+    expect(await (await remove()).json()).toEqual({ fileId: id });
+    expect((await read(id)).status).toBe(404);
+    expect(await (await read(id)).json()).toMatchObject({ deleted: true });
+    expect((await list('deleting')).filter((e) => e.fileId === id)).toEqual([]);
+    expect((await remove()).status).toBe(404);
+
+    // The file comes back with what it had when deleted; v3, deleted before, stays deleted.
+    expect((await undo({})).status).toBe(200);
+    expect((await view(id)).versions.map((v) => v.version)).toEqual([2, 1]);
+    expect((await undo({ version: 3 })).status).toBe(200);
+    expect((await view(id)).current.version).toBe(3);
+    // A version written after a deleted one gets the next number, never a deleted one's.
+    await remove('/versions/3');
+    expect((await saveVersion(pool, { id, bytes: Buffer.from('# Four\n'), createdBy: 'scout' }, env)).row.version).toBe(4);
+  });
+
+  it('keeps an editor’s text as a new file of the owner’s, through the create path', async () => {
+    const here = await conversation();
+    const res = await fetch(`${base}/api/files`, json({ name: 'Draft.md', mime: 'text/markdown', text: '# Draft, mine\n', conversationId: here }));
     expect(res.status).toBe(200);
-    const made = (await res.json()) as { artifactId: string; filename: string };
-    expect(made.filename).toBe('Draft.md');
-    expect(await (await read(made.artifactId)).json()).toMatchObject({ text: '# Draft, mine\n' });
-    const { rows } = await pool.query('select created_by, deleted_at from core.artifacts where id = $1', [made.artifactId]);
-    expect(rows[0]).toMatchObject({ created_by: 'owner', deleted_at: null });
+    const made = (await res.json()) as { fileId: string; version: number; filename: string };
+    expect(made).toMatchObject({ version: 1, filename: 'Draft.md' });
+    expect(await (await read(made.fileId)).json()).toMatchObject({ text: '# Draft, mine\n', createdBy: 'owner' });
+    expect((await list('Draft')).some((e) => e.fileId === made.fileId)).toBe(true);
+    expect((await fetch(`${base}/api/files`, json({ name: 'a.png', mime: 'image/png', text: 'x' }))).status).toBe(415);
   });
 
   it('opens a file past 1 MiB read-only, its start only', async () => {
     const big = 'line\n'.repeat(250_000);
     const id = await file(big, 'big.log', 'text/plain');
     const body = (await (await read(id)).json()) as { text: string; editable: boolean; truncated: boolean };
-    expect(body.editable).toBe(false);
-    expect(body.truncated).toBe(true);
+    expect(body).toMatchObject({ editable: false, truncated: true });
     expect(body.text.length).toBe(1024 * 1024);
+  });
+
+  it('tells the canvas which calls made which file, and which only read one', async () => {
+    const here = await conversation();
+    const made = await saveArtifact(pool, { bytes: Buffer.from('# Notes\n'), mime: 'text/markdown', filename: 'Notes.md', createdBy: 'scout', conversationId: here }, env);
+    const turn = (id: string, name: string, output: unknown): Array<[string, unknown]> => [
+      ['assistant', [{ type: 'tool_use', id, name, input: {} }]],
+      ['user', [{ type: 'tool_result', tool_use_id: id, content: JSON.stringify(output) }]],
+    ];
+    for (const [role, content] of [
+      ...turn('w1', 'artifacts.write', { artifactId: made.id, fileId: made.fileId, filename: 'Notes.md', mime: 'text/markdown' }),
+      ...turn('l1', 'artifacts.list', { artifacts: [{ id: made.id, filename: 'Notes.md', mime: 'text/markdown' }], count: 1 }),
+      ...turn('t1', 'artifacts.text', { id: made.id, fileId: made.fileId, version: 1, text: '# Notes\n' }),
+    ]) await pool.query('insert into core.messages (conversation_id, role, content) values ($1, $2, $3)', [here, role, JSON.stringify(content)]);
+    await saveVersion(pool, { id: made.fileId, bytes: Buffer.from('# Notes, two\n'), createdBy: 'scout' }, env);
+    await pool.query('update core.artifacts set deleted_at = now() where id = $1', [made.id]);
+    const transcript = await readChatTranscript(pool, here, new Date(), undefined, (tool) => tool === 'artifacts.write');
+    const results = transcript!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result') as Array<{ toolUseId: string; files?: unknown[]; readsFile?: true }>;
+    const by = (id: string) => results.find((block) => block.toolUseId === id)!;
+    // The version was deleted since; the file was not, and the tab keeps its id.
+    expect(by('w1').files).toEqual([{ artifactId: made.id, fileId: made.fileId, version: 1, filename: 'Notes.md', mime: 'text/markdown', deleted: true, fileDeleted: false }]);
+    expect(by('l1').files).toEqual([]);
+    expect(by('t1').readsFile).toBe(true);
+  });
+
+  describe('the turn note', () => {
+    it('says the newest version is the owner’s until the agent writes again, and names a synced workspace copy', async () => {
+      const here = await conversation();
+      const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+      const synced = await captured('out/synced.md', '# Synced\n', here);
+      expect((await save(synced.fileId, { base: 1, text: '# Synced\n\nBy the owner\n' })).status).toBe(200);
+      const told = await systemContext(ctx, { agentId: 'scout', tools: ['host.exec'], conversationId: here });
+      expect(told.prompt).toContain("Your workspace copy at out/synced.md already holds it");
+      // Said again on the next turn: still true.
+      expect((await systemContext(ctx, { agentId: 'scout', tools: ['host.exec'], conversationId: here })).prompt).toContain('out/synced.md');
+      // Once the agent writes, it is not.
+      await saveVersion(pool, { id: synced.fileId, bytes: Buffer.from('# Synced\n\nBy the owner\n\nAnd buddi\n'), createdBy: 'scout', readVersion: 2 }, env);
+      expect((await systemContext(ctx, { agentId: 'scout', tools: ['host.exec'], conversationId: here })).prompt).not.toContain('synced.md');
+
+      const failed = await captured('out/failed.md', '# Failed\n', here);
+      control.failRename = true;
+      await save(failed.fileId, { base: 1, text: '# Failed, mine\n' });
+      const stale = await systemContext(ctx, { agentId: 'scout', tools: ['host.exec'], conversationId: here });
+      expect(stale.prompt).toContain("The newest version of failed.md is the owner's (v2, saved");
+      expect(stale.prompt).toContain('you cannot read files in Files; ask the owner what changed');
+    });
+
+    it('words the note by the tools the agent holds, and never uses pronouns', () => {
+      const note = { fileId: '22222222-2222-4222-8222-222222222222', name: 'List.md', version: 2, artifactId: '11111111-1111-4111-8111-111111111111', savedAt: '2026-10-13T09:00:00.000Z', yours: 1 };
+      expect(ownerEditLine(note, 'UTC', ['artifacts.text', 'artifacts.write'])).toContain('artifacts.write { fileId: "22222222-2222-4222-8222-222222222222", readVersion: 2 }');
+      expect(ownerEditLine(note, 'UTC', ['artifacts.text'])).not.toContain('artifacts.write');
+      expect(ownerEditLine(note, 'UTC', [])).toMatch(/you cannot read files in Files; ask the owner what changed/);
+      expect(ownerEditLine(note, 'UTC', [])).not.toMatch(/\b(he|his|him)\b/);
+      expect(ownerEditLine(note, 'UTC', [])).toContain('you last wrote v1');
+    });
+  });
+
+  describe('the purge', () => {
+    it('removes a version deleted a month ago, and keeps bytes another version still stores', async () => {
+      const a = await saveArtifact(pool, { bytes: Buffer.from('# Shared bytes\n'), mime: 'text/markdown', filename: 'shared.md', createdBy: 'scout', conversationId }, env);
+      const b = await saveArtifact(pool, { bytes: Buffer.from('# Shared bytes\n'), mime: 'text/markdown', filename: 'shared.md', createdBy: 'owner', source: { surface: 'telegram', chatId: '42' } }, env);
+      expect(b.fileId).not.toBe(a.fileId);
+      expect(b.storagePath).toBe(a.storagePath);
+      const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      const month = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      await pool.query('update core.artifacts set deleted_at = $2 where id = $1', [a.id, old]);
+      expect((await purgeDeletedArtifacts(pool, month, env)).rows).toBeGreaterThanOrEqual(1);
+      expect((await pool.query('select 1 from core.artifacts where id = $1', [a.id])).rows).toHaveLength(0);
+      // Its file went with its last version.
+      expect(await getFile(pool, a.fileId)).toBeNull();
+      expect(await stat(path.join(dir, b.storagePath)).then(() => true, () => false)).toBe(true);
+      await pool.query('update core.artifacts set deleted_at = $2 where id = $1', [b.id, old]);
+      expect((await purgeDeletedArtifacts(pool, month, env)).blobs).toBeGreaterThanOrEqual(1);
+      expect(await stat(path.join(dir, b.storagePath)).then(() => true, () => false)).toBe(false);
+    });
+
+    it('keeps a blob a save adopts while the purge is deciding', async () => {
+      // Codex P1: between the purge's reference check and its unlink, a save could adopt the path.
+      const gone = await saveArtifact(pool, { bytes: Buffer.from('# Adopted\n'), mime: 'text/markdown', filename: 'adopted.md', createdBy: 'scout', conversationId: null }, env);
+      await pool.query('update core.artifacts set deleted_at = $2 where id = $1', [gone.id, new Date(Date.now() - 31 * 24 * 60 * 60 * 1000)]);
+      const writer = await pool.connect();
+      try {
+        // A save holding the blob's lock, as the store's writers do, with its row not committed yet.
+        await writer.query('begin');
+        await writer.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`buddi.blob:${gone.storagePath}`]);
+        const purge = purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(await stat(path.join(dir, gone.storagePath)).then(() => true, () => false)).toBe(true);
+        await writer.query(
+          `insert into core.artifacts (kind, mime, filename, size_bytes, sha256, storage_path, created_by)
+           values ('document', 'text/markdown', 'adopted.md', $1, $2, $3, 'scout')`,
+          [gone.sizeBytes, gone.sha256, gone.storagePath],
+        );
+        await writer.query('commit');
+        await purge;
+      } finally {
+        writer.release();
+      }
+      expect(await stat(path.join(dir, gone.storagePath)).then(() => true, () => false)).toBe(true);
+    });
   });
 });

@@ -310,11 +310,14 @@ describe('browser dashboard endpoints', () => {
       const queries: Array<{ text: string; params: unknown[] }> = [];
       const pool = { query: async (text: string, params: unknown[] = []) => {
         queries.push({ text, params });
+        if (/insert into core\.files/.test(text)) {
+          return { rows: [{ id: 'aaaaaaaa-2222-4333-8444-555555555555', conversation_id: params[0], name: params[1], mime: params[2], created_by: params[3], origin: params[4], created_at: new Date() }], rowCount: 1 };
+        }
         if (/insert into core\.artifacts/.test(text)) {
-          return { rows: [{ id: '11111111-2222-4333-8444-555555555555', kind: 'document', mime: params[1], filename: params[2], size_bytes: params[3], sha256: params[4], storage_path: params[5], caption: params[9], created_at: new Date(), inserted: true }], rowCount: 1 };
+          return { rows: [{ id: '11111111-2222-4333-8444-555555555555', kind: 'document', mime: params[1], filename: params[2], size_bytes: params[3], sha256: params[4], storage_path: params[5], caption: params[9], created_at: new Date(), file_id: params[12], version: 1, created_by: params[10] }], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
-      } };
+      }, connect: async () => ({ query: (text: string, params: unknown[] = []) => pool.query(text, params), release: () => {} }) };
       const app = await startWebServer({ pool: pool as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
         ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(), env: { BUDDI_DATA_DIR: path.join(scratch, 'data') },
         config: { enabled: true, host: '127.0.0.1', port: 0 }, openAccess: true, token: TOKEN, browser });
@@ -365,11 +368,14 @@ describe('browser dashboard endpoints', () => {
       const queries: Array<{ text: string; params: unknown[] }> = [];
       const pool = { query: async (text: string, params: unknown[] = []) => {
         queries.push({ text, params });
+        if (/insert into core\.files/.test(text)) {
+          return { rows: [{ id: 'aaaaaaaa-2222-4333-8444-555555555555', conversation_id: params[0], name: params[1], mime: params[2], created_by: params[3], origin: params[4], created_at: new Date() }], rowCount: 1 };
+        }
         if (/insert into core\.artifacts/.test(text)) {
-          return { rows: [{ id: '11111111-2222-4333-8444-555555555555', kind: 'image', mime: params[1], filename: params[2], size_bytes: params[3], sha256: params[4], storage_path: params[5], caption: params[9], created_at: new Date(), inserted: true }], rowCount: 1 };
+          return { rows: [{ id: '11111111-2222-4333-8444-555555555555', kind: 'image', mime: params[1], filename: params[2], size_bytes: params[3], sha256: params[4], storage_path: params[5], caption: params[9], created_at: new Date(), file_id: params[12], version: 1, created_by: params[10] }], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
-      } };
+      }, connect: async () => ({ query: (text: string, params: unknown[] = []) => pool.query(text, params), release: () => {} }) };
       const app = await startWebServer({ pool: pool as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
         ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date('2026-10-07T12:32:00Z'), env: { BUDDI_DATA_DIR: path.join(scratch, 'data') },
         config: { enabled: true, host: '127.0.0.1', port: 0 }, openAccess: true, token: TOKEN, browser });

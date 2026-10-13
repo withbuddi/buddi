@@ -746,6 +746,9 @@ function fakeStore(): { store: ArtifactStore; saved: SaveArtifactInput[]; rows: 
           storagePath: `artifacts/art-${rows.length + 1}`,
           caption: input.caption ?? null,
           createdAt: new Date().toISOString(),
+          fileId: `file-${rows.length + 1}`,
+          version: 1,
+          createdBy: input.createdBy,
         };
         rows.push(row);
         return row;

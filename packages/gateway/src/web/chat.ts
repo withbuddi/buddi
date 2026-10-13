@@ -79,7 +79,6 @@ import {
   idleRolloverMs,
   feedbackForMessages,
   type MessageFeedbackView,
-  fileChainKeySql,
 } from '@buddi/core';
 import {
   BudgetExhausted,
@@ -401,15 +400,17 @@ export type ChatBlock =
       delegation?: { state: 'waiting'; approvalId: string | null };
       /**
        * The library files this call made (a tool that saves files) or opened
-       * (`canvas.open`), with the file each is a version of (`chain`, core's
-       * `fileChainKeySql`): the canvas keeps one tab per file by it. Empty
-       * for every other call, once the reader knows which tools save files.
+       * (`canvas.open`): each version, the file it is a version of and its
+       * number, and whether the version or the whole file was deleted since.
+       * The canvas keeps one tab per file, by `fileId`. Empty for every other
+       * call, once the reader knows which tools save files.
        */
-      files?: Array<{ artifactId: string; filename: string | null; mime: string; chain: string; deleted: boolean }>;
+      files?: Array<{ artifactId: string; fileId: string; version: number; filename: string | null; mime: string; deleted: boolean; fileDeleted: boolean }>;
       /** The call read a library file (its result names one) without making it: it opens no tab. */
       readsFile?: true;
     }
-  | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
+  /** A file in a message: the version it carries, and the file that is a version of (when the row is still there). */
+  | { type: 'attachment'; artifactId: string; fileId?: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }
   /**
    * A gated action, decided and come back. The turn that carries it is a user
@@ -705,12 +706,13 @@ export async function readChatTranscript(
 const CANVAS_OPEN_TOOL = 'canvas.open';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The library ids a result names: `artifactId`, `id`, and `artifacts[].id`. */
+/** The library ids a result names: `artifactId` (or `fileId`, for `canvas.open`), `id`, and `artifacts[].id`. */
 function namedIds(output: unknown): { made: string[]; named: string | null } {
   if (output === null || typeof output !== 'object' || Array.isArray(output)) return { made: [], named: null };
   const record = output as Record<string, unknown>;
   const made: string[] = [];
   if (typeof record.artifactId === 'string' && UUID_RE.test(record.artifactId)) made.push(record.artifactId);
+  else if (typeof record.fileId === 'string' && UUID_RE.test(record.fileId)) made.push(record.fileId);
   if (Array.isArray(record.artifacts)) {
     for (const item of record.artifacts) {
       const id = item && typeof item === 'object' ? (item as Record<string, unknown>).id : undefined;
@@ -740,18 +742,27 @@ async function withFiles(
     for (const id of made) wanted.add(id);
     if (named) wanted.add(named);
   }
+  // A version by its id; a file (canvas.open names one) by its current version.
   const rows = wanted.size === 0 ? [] : (await pool.query(
-    `select a.id, a.filename, a.mime, a.deleted_at is not null as deleted, ${fileChainKeySql('a')} as chain
-       from core.artifacts a where a.id = any($1::uuid[])`,
+    `select a.id::text as named, a.id, a.file_id, a.version, f.name as filename, f.mime, a.deleted_at is not null as deleted, f.deleted_at is not null as file_deleted
+       from core.artifacts a join core.files f on f.id = a.file_id where a.id = any($1::uuid[])
+     union all
+     select f.id::text, n.id, f.id, n.version, f.name, f.mime, n.deleted_at is not null, f.deleted_at is not null
+       from core.files f
+       cross join lateral (select v.id, v.version, v.deleted_at from core.artifacts v where v.file_id = f.id order by (v.deleted_at is null) desc, v.version desc limit 1) n
+      where f.id = any($1::uuid[])`,
     [[...wanted]],
   )).rows;
-  const byId = new Map(rows.map((row) => [String(row.id), row]));
+  const byId = new Map(rows.map((row) => [String(row.named), row]));
   for (const block of results) {
     const { made, named } = namedIds(block.output);
     if (block.ok !== false && (producesFiles(block.name) || block.name === CANVAS_OPEN_TOOL)) {
       block.files = made.flatMap((id) => {
         const row = byId.get(id);
-        return row ? [{ artifactId: id, filename: row.filename ?? null, mime: String(row.mime), chain: String(row.chain), deleted: row.deleted === true }] : [];
+        return row ? [{
+          artifactId: String(row.id), fileId: String(row.file_id), version: Number(row.version), filename: row.filename ?? null, mime: String(row.mime),
+          deleted: row.deleted === true, fileDeleted: row.file_deleted === true,
+        }] : [];
       });
       continue;
     }
@@ -1061,6 +1072,7 @@ function toChatBlock(
       return {
         type: 'attachment',
         artifactId,
+        ...(row ? { fileId: row.fileId } : {}),
         filename: row?.filename ?? (typeof block.filename === 'string' ? block.filename : null),
         mime: row?.mime ?? String(block.mime ?? 'application/octet-stream'),
         kind: row?.kind ?? String(block.kind ?? 'other'),
@@ -1115,7 +1127,7 @@ async function artifactsById(pool: Pool, ids: readonly string[]): Promise<Map<st
   const out = new Map<string, ArtifactRow>();
   if (ids.length === 0) return out;
   const { rows } = await pool.query(
-    `select id, kind, mime, filename, size_bytes, sha256, storage_path, caption, created_at
+    `select id, kind, mime, filename, size_bytes, sha256, storage_path, caption, created_at, file_id, version, created_by
        from core.artifacts where id = any($1::uuid[])`,
     [ids],
   );
@@ -1130,6 +1142,9 @@ async function artifactsById(pool: Pool, ids: readonly string[]): Promise<Map<st
       storagePath: row.storage_path,
       caption: row.caption ?? null,
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      fileId: String(row.file_id),
+      version: Number(row.version),
+      createdBy: String(row.created_by),
     });
   }
   return out;
