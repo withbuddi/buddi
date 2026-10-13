@@ -104,6 +104,16 @@ describe('a text file a run produced, on the canvas', () => {
     expect(files[0]!.versions?.map((version) => version.id)).toEqual(['w1', 'w2', 'o1']);
   });
 
+  it('continues a command’s file in its tab when a document write numbers the next version', () => {
+    const items = renderablesFrom({ messages: [
+      ...call('x1', 'host.exec', { exitCode: 0, stdout: '', stderr: '', state: 'exited', artifacts: [{ id: ID(1), filename: 'packing.md', mime: 'text/markdown' }] }, 1),
+      ...call('w1', 'artifacts.write', { artifactId: ID(2), filename: 'packing (v2).md', mime: 'text/markdown' }, 2),
+    ], descriptors: [] });
+    const files = items.filter((item) => item.source === 'artifact');
+    expect(files).toHaveLength(1);
+    expect((files[0]!.props as { attachment: { artifactId: string } }).attachment.artifactId).toBe(ID(2));
+  });
+
   it('keeps same-named files from different tools apart', () => {
     const items = renderablesFrom({ messages: [
       ...call('w1', 'artifacts.write', { artifactId: ID(1), filename: 'notes.md', mime: 'text/markdown' }, 1),

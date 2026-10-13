@@ -312,7 +312,13 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
     // notes.txt and a report called Notes are two files.
     const chain = fileChainName(file.filename);
     const key = chain ? [tool, speaker ?? '', file.mime.toLowerCase(), chain].join('\u0000') : file.artifactId;
-    const existing = collected.find((other) => other.source === 'artifact' && other.subjectKey === key);
+    // A numbered version ("Plan (v2).md") was counted by Files among this
+    // conversation's files of that name, whichever tool made the first: it
+    // continues that tab — a document written over a command's output too.
+    const numbered = /\s\(v\d+\)\.[^.]+$/i.test(file.filename ?? '');
+    const existing = collected.find((other) => other.source === 'artifact' && other.subjectKey === key)
+      ?? (numbered && chain ? [...collected].reverse().find((other) => other.source === 'artifact'
+        && other.subjectKey?.endsWith(`\u0000${file.mime.toLowerCase()}\u0000${chain}`)) : undefined);
     if (existing) collected = collected.filter((other) => other !== existing);
     const id = existing?.id ?? fileTabId(file.artifactId);
     const props = { attachment: file, tabId: id } satisfies ArtifactViewProps;
@@ -327,7 +333,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       props,
       at,
       source: 'artifact',
-      subjectKey: key,
+      subjectKey: existing?.subjectKey ?? key,
       versions: [...(existing?.versions ?? []), version],
       // What the run made, to read: the canvas turns to it.
       substantial: true,

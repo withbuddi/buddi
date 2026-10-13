@@ -29,7 +29,7 @@ vi.mock('node:fs/promises', async (original) => {
 import pg from 'pg';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, replaceArtifactContent, saveArtifact, saveArtifactVersion, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { enterWorkspace, hostWorkspaceDir, hostWorkspaceKey } from '@buddi/tool-host';
-import { systemContext } from '../system-context.js';
+import { ownerEditLine, systemContext } from '../system-context.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createApiToken } from './api-tokens.js';
 import { startWebServer, type WebServer } from './server.js';
@@ -333,11 +333,37 @@ suite('file content routes', () => {
     const id = await file('# List\n', 'List.md', 'text/markdown', other);
     expect((await save(id, { text: '# List\n\n- Mine\n', base: sha('# List\n') })).status).toBe(200);
     const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
-    const first = await systemContext(ctx, { agentId: 'scout', tools: [], conversationId: other });
-    expect(first.prompt).toContain(`The owner edited List.md (now version ${id}) at `);
-    expect(first.prompt).toContain('read it before changing it.');
-    const next = await systemContext(ctx, { agentId: 'scout', tools: [], conversationId: other });
+    const first = await systemContext(ctx, { agentId: 'scout', tools: ['artifacts.text', 'artifacts.write'], conversationId: other });
+    expect(first.prompt).toMatch(new RegExp(`The owner edited List\\.md at [^.]+\\. Your earlier copy \\(including any copy in your workspace\\) is out of date\\. Read the current text with artifacts\\.text \\{ id: "${id}" \\}, then save changes with artifacts\\.write \\(title "List"\\), passing readVersion = the sha256 artifacts\\.text returned\\. Don't ask the owner to paste it\\.`));
+    const next = await systemContext(ctx, { agentId: 'scout', tools: ['artifacts.text', 'artifacts.write'], conversationId: other });
     expect(next.prompt).not.toContain('The owner edited');
+  });
+
+  it('words the note by the tools the agent holds', () => {
+    const edit = { artifactId: '11111111-1111-4111-8111-111111111111', filename: 'List.md', editedAt: '2026-10-13T09:00:00.000Z' };
+    expect(ownerEditLine(edit, 'UTC', ['artifacts.text'])).toContain('artifacts.text { id: "11111111-1111-4111-8111-111111111111" }, before you change anything');
+    expect(ownerEditLine(edit, 'UTC', ['artifacts.text'])).not.toContain('artifacts.write');
+    expect(ownerEditLine(edit, 'UTC', [])).toMatch(/You cannot read files in Files; ask the owner what he changed/);
+    expect(ownerEditLine(edit, 'UTC', [])).not.toContain('artifacts.');
+  });
+
+  it('continues a command’s file as the next document version, over the owner’s edit once read', async () => {
+    const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
+    // Captured before outputs remembered their workspace path.
+    const captured = await saveArtifact(pool, {
+      bytes: Buffer.from('# Packing\n'), mime: 'text/markdown', filename: 'montreal-weekend-packing-list.md', createdBy: 'scout',
+      conversationId: other, source: { surface: 'host', chatId: other },
+    }, env);
+    expect((await save(captured.id, { text: '# Packing\n\n- By buddi\n', base: sha('# Packing\n') })).status).toBe(200);
+    const next = { bytes: Buffer.from('# Packing\n\n- By buddi\n\n## Toiletries\n'), mime: 'text/markdown', createdBy: 'scout', conversationId: other, base: 'montreal-weekend-packing-list', ext: 'md' };
+    await expect(saveArtifactVersion(pool, next, env)).rejects.toBeInstanceOf(OwnerEditedError);
+    const v2 = await saveArtifactVersion(pool, { ...next, readVersion: sha('# Packing\n\n- By buddi\n') }, env);
+    expect(v2.version).toBe(2);
+    expect(v2.row.filename).toBe('montreal-weekend-packing-list (v2).md');
+    // And the owner's next save of the captured one is stale: v2 is the file now.
+    const stale = await save(captured.id, { text: '# Old\n', base: sha('# Packing\n\n- By buddi\n') });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ current: { artifactId: v2.row.id } });
   });
 
   it('refuses a document write over an owner edit the writer did not read', async () => {

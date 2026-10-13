@@ -119,7 +119,7 @@ export async function systemContext(
     run ? learningContext(ctx.db, run, ctx.now()) : Promise.resolve(''),
     run && opts.isFrontDesk?.(run.agentId) ? placeLines(ctx) : Promise.resolve(''),
     run?.message ? editionLine(ctx, run, opts.handleOf) : Promise.resolve(''),
-    run?.conversationId ? ownerEditLines(ctx, run.conversationId) : Promise.resolve(''),
+    run?.conversationId ? ownerEditLines(ctx, run.conversationId, run.tools) : Promise.resolve(''),
   ]);
   return { timezone: info.time.timezone, ...(profile?.language ? { language: profile.language } : {}), prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
@@ -141,16 +141,29 @@ export async function systemContext(
  * on the next turn, so the agent reads his version before changing the file
  * rather than writing over it from what it remembers. Never fails the turn.
  */
-async function ownerEditLines(ctx: CoreToolContext, conversationId: string): Promise<string> {
+async function ownerEditLines(ctx: CoreToolContext, conversationId: string, tools: readonly string[]): Promise<string> {
   try {
     const edits = await takeOwnerFileEdits(ctx.db, conversationId, ctx.now());
-    return edits.map((edit) => ownerEditLine(edit, ctx.timezone)).join('\n');
+    return edits.map((edit) => ownerEditLine(edit, ctx.timezone, tools)).join('\n');
   } catch { return ''; }
 }
 
-export function ownerEditLine(edit: { artifactId: string; filename: string | null; editedAt: string }, timezone: string): string {
+/**
+ * One edit, said so the agent can act on it with what it holds: an agent
+ * told only "read it" said it could not, edited its stale workspace copy,
+ * tried the gateway with curl and asked the owner to paste his version.
+ */
+export function ownerEditLine(edit: { artifactId: string; filename: string | null; editedAt: string }, timezone: string, tools: readonly string[] = []): string {
   const when = edit.editedAt ? localDateTimeString(new Date(edit.editedAt), timezone) : 'just now';
-  return `The owner edited ${edit.filename ?? 'a file'} (now version ${edit.artifactId}) at ${when}; read it before changing it.`;
+  const name = edit.filename ?? 'a file';
+  const stale = `The owner edited ${name} at ${when}. Your earlier copy (including any copy in your workspace) is out of date.`;
+  if (!tools.includes('artifacts.text')) return `${stale} You cannot read files in Files; ask the owner what he changed before changing it.`;
+  // The title that continues this file's versions: its name, less the version mark and extension.
+  const title = name.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').replace(/\.[^.]+$/, '');
+  const save = tools.includes('artifacts.write')
+    ? ` then save changes with artifacts.write (title "${title}"), passing readVersion = the sha256 artifacts.text returned.`
+    : ' before you change anything that depends on it.';
+  return `${stale} Read the current text with artifacts.text { id: "${edit.artifactId}" },${save} Don't ask the owner to paste it.`;
 }
 
 /** The edition origin line for this turn, or nothing; never fails the turn. */
@@ -175,7 +188,7 @@ export const OPEN_FILE_LINE =
 
 /** buddi's own data is read through its tools, never through the shell. */
 export const OWN_DATA_LINE =
-  "Never search or read buddi's own data directory (Files, artifacts) with shell commands; use artifacts.list / artifacts.text / canvas.open.";
+  "Never search or read buddi's own data directory (Files, artifacts) with shell commands, and never call buddi's own HTTP API (curl to the dashboard or gateway) from a command; use artifacts.list / artifacts.text / canvas.open.";
 
 /**
  * Answer in the owner's language (docs/system-context.md, Reply language).
