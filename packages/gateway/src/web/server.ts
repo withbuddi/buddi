@@ -316,6 +316,7 @@ import { checkProfilePatch } from '../owner-profile-edit.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentIntro, readAgentIntro } from '../agents/agent-intro.js';
 import { parseCanvasTabs, readCanvasTabs, writeCanvasTabs } from './canvas-tabs.js';
+import { MAX_EDIT_BYTES, readFileContent, saveFileContent } from './file-content.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
@@ -2028,6 +2029,10 @@ export function createWebApp(deps: WebServerDeps): Server {
         return;
       }
 
+      // A text file whole, for the canvas editor (web/file-content.ts).
+      const content = /^\/api\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/content$/i.exec(path);
+      if (content) return reply(res, await readFileContent(deps.pool, deps.env ?? process.env, content[1]!.toLowerCase()));
+
       const download = /^\/api\/artifacts\/([0-9a-f-]{36})\/(download|preview)$/.exec(path);
       if (download) {
         const artifact = await getArtifact(deps.pool, download[1]!);
@@ -2987,6 +2992,18 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 404, { error: 'no such conversation' });
         }
         return sendJson(res, 200, parsed.value);
+      }
+      // The owner's edit of a text file, saved over it if it is still the version he opened (web/file-content.ts).
+      const contentWrite = /^\/api\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/content$/i.exec(path);
+      if (contentWrite) {
+        let body: Record<string, unknown>;
+        try {
+          body = await readJsonBody(req, MAX_EDIT_BYTES * 6 + 1024);
+        } catch (err) {
+          if (err instanceof BodyTooLargeError) return sendJson(res, 413, { error: 'a file edited here can be at most 1 MiB' });
+          return sendJson(res, 400, { error: 'request body must be JSON' });
+        }
+        return reply(res, await saveFileContent(deps.pool, deps.env ?? process.env, contentWrite[1]!.toLowerCase(), body));
       }
       const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/access/tailscale', '/api/access/cloudflare-access', '/api/notifications/settings', '/api/notifications/focus'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);

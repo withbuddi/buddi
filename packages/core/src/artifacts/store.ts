@@ -355,6 +355,84 @@ export async function getArtifact(pool: Pool, id: string): Promise<ArtifactRow |
   return rows[0] ? toRow(rows[0]) : null;
 }
 
+/**
+ * The name a file is known by across its versions: `Plan (v3).md` and
+ * `Plan.md` are the same file, `notes.txt` is itself. Lower-cased, as the
+ * version count compares.
+ */
+export function fileChainName(filename: string | null): string | null {
+  if (!filename) return null;
+  return filename.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').toLowerCase();
+}
+
+/** What `replaceArtifactContent` found. */
+export type ReplaceArtifactResult =
+  | { ok: true; row: ArtifactRow }
+  /** Someone wrote first: the bytes are not the ones the owner edited, or a newer version exists. */
+  | { ok: false; reason: 'stale'; current: ArtifactRow }
+  /** These exact bytes already are another file from the same place. */
+  | { ok: false; reason: 'duplicate' }
+  | { ok: false; reason: 'gone' };
+
+/**
+ * The owner's edit of a file, written over it in place.
+ *
+ * The check and the write are one statement: the row changes only while it
+ * still holds `expectedSha256`, the bytes the owner opened. A newer version
+ * of the same file in the same conversation (the agent wrote it again under
+ * the same name) is stale too, and is what comes back as `current`. The new
+ * bytes are stored content-addressed like any other — the path comes from
+ * their hash, never from the caller — and the old ones stay on disk, since
+ * another row may share them.
+ */
+export async function replaceArtifactContent(
+  pool: Pool,
+  input: { id: string; bytes: Buffer; expectedSha256: string },
+  env: EnvLike = process.env,
+): Promise<ReplaceArtifactResult> {
+  const before = await pool.query(
+    `select ${SELECT_COLUMNS}, conversation_id from core.artifacts where id = $1 and deleted_at is null`,
+    [input.id],
+  );
+  const found = before.rows[0];
+  if (!found) return { ok: false, reason: 'gone' };
+  const row = toRow(found);
+  const chain = fileChainName(row.filename);
+  if (found.conversation_id && chain) {
+    const { rows } = await pool.query(
+      `select ${SELECT_COLUMNS} from core.artifacts
+        where conversation_id = $1 and id <> $2 and deleted_at is null
+          and created_at > $3
+        order by created_at desc, id desc`,
+      [found.conversation_id, row.id, found.created_at],
+    );
+    const newer = rows.map(toRow).find((other) => fileChainName(other.filename) === chain);
+    if (newer) return { ok: false, reason: 'stale', current: newer };
+  }
+  if (row.sha256 !== input.expectedSha256) return { ok: false, reason: 'stale', current: row };
+
+  const sha256 = sha256Of(input.bytes);
+  if (sha256 === row.sha256) return { ok: true, row };
+  const relative = storagePathFor(sha256, row.mime, row.filename, new Date());
+  const absolute = path.join(resolveDataDir(env), relative);
+  await mkdir(path.dirname(absolute), { recursive: true });
+  await writeFile(absolute, input.bytes);
+  try {
+    const { rows } = await pool.query(
+      `update core.artifacts set sha256 = $2, size_bytes = $3, storage_path = $4
+        where id = $1 and sha256 = $5 and deleted_at is null
+        returning ${SELECT_COLUMNS}`,
+      [row.id, sha256, input.bytes.length, relative, input.expectedSha256],
+    );
+    if (rows[0]) return { ok: true, row: toRow(rows[0]) };
+  } catch (err) {
+    if ((err as { code?: string }).code === '23505') return { ok: false, reason: 'duplicate' };
+    throw err;
+  }
+  const now = await getArtifact(pool, row.id);
+  return now ? { ok: false, reason: 'stale', current: now } : { ok: false, reason: 'gone' };
+}
+
 /** Newest first. Bounded by `MAX_LIST_LIMIT` — a tool argument cannot widen it. */
 export async function listArtifacts(
   pool: Pool,

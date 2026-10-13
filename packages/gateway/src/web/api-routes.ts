@@ -785,6 +785,15 @@ export const API_ROUTES: readonly ApiRoute[] = [
     summary: 'The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only).', errors: '404; 415 not previewable',
   },
   {
+    method: 'GET', path: '/api/artifacts/:id/content', area: 'files', summary: 'A text file whole, for the canvas editor, with the hash a save must name.',
+    answer: '{ text, sha256, sizeBytes, editable: boolean, truncated: boolean }', errors: '404; 410 contents gone from disk; 415 not a text file',
+  },
+  {
+    method: 'PUT', path: '/api/artifacts/:id/content', area: 'files', summary: 'Save the owner’s edit of a text file over it, if it is still the version he opened.',
+    body: '{ text: string, base: sha256 of the version edited }', answer: '{ sha256, sizeBytes }',
+    errors: '400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }) or the same contents are another file; 413 over 1 MiB; 415 not a text file',
+  },
+  {
     method: 'DELETE', path: '/api/artifacts/:id', area: 'files', summary: 'Take back a file uploaded from the dashboard that no message carries.',
     answer: '204', errors: '404; 409 already sent, or not from the dashboard',
   },
@@ -1327,6 +1336,8 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'GET /api/artifacts/:id/content': '0.1.0-pre.55',
+  'PUT /api/artifacts/:id/content': '0.1.0-pre.55',
   'POST /api/secrets': '0.1.0-pre.52',
   'POST /api/secrets/request/decline': '0.1.0-pre.52',
   'POST /api/missions/:id/run': '0.1.0-pre.51',

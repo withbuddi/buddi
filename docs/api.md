@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-12
+updated: 2026-10-13
 ---
 
 # The HTTP API
@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-342 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+344 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2822,6 +2822,8 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | GET | `/api/artifacts/:id/download` | The file, as a download. | yes |
 | GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds. | yes |
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
+| GET | `/api/artifacts/:id/content` | A text file whole, for the canvas editor, with the hash a save must name. | yes |
+| PUT | `/api/artifacts/:id/content` | Save the owner’s edit of a text file over it, if it is still the version he opened. | yes |
 | DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
 
 #### `GET /api/reports/audio`
@@ -2906,6 +2908,33 @@ The file inline, where it is safe to show: images, PDFs, text (as text/plain, it
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/preview" -o out
+```
+
+#### `GET /api/artifacts/:id/content`
+
+A text file whole, for the canvas editor, with the hash a save must name.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ text, sha256, sizeBytes, editable: boolean, truncated: boolean }`
+- **Errors:** 404; 410 contents gone from disk; 415 not a text file
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/content"
+```
+
+#### `PUT /api/artifacts/:id/content`
+
+Save the owner’s edit of a text file over it, if it is still the version he opened.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ text: string, base: sha256 of the version edited }`
+- **Answer:** `{ sha256, sizeBytes }`
+- **Errors:** 400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }) or the same contents are another file; 413 over 1 MiB; 415 not a text file
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"text":"…","base":"…"}' "$BUDDI_URL/api/artifacts/<id>/content"
 ```
 
 #### `DELETE /api/artifacts/:id`
