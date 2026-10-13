@@ -246,7 +246,7 @@ export function awaitingPreviews({
 export function renderablesFrom({ messages, descriptors, awaiting, folded, served, gathered, quiet, titles }: RenderableInput): Renderable[] {
   const toolTitle = (tool: string): string => titleFor(tool, titles);
   const byTool = new Map(descriptors.map((descriptor) => [descriptor.tool, descriptor]));
-  const uses = new Map<string, { name: string; input: unknown; at: string | null }>();
+  const uses = new Map<string, { name: string; input: unknown; at: string | null; speaker?: string }>();
   let collected: Renderable[] = [];
   let changes = 0;
   /** This turn's Sources tab, once a gathered call has been made in it. */
@@ -304,8 +304,12 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
    * end with the newest version, keeping its id, so the open editor updates
    * in place rather than a second one opening beside it.
    */
-  const placeFile = (file: AttachmentBlock, at: string | null, callId: string): void => {
-    const key = fileChainName(file.filename) ?? file.artifactId;
+  const placeFile = (file: AttachmentBlock, at: string | null, callId: string, tool: string, speaker: string | undefined): void => {
+    // The same file is the same name from the same tool and agent, of the
+    // same type — what a document write counts versions by. A command's
+    // notes.txt and a report called Notes are two files.
+    const chain = fileChainName(file.filename);
+    const key = chain ? [tool, speaker ?? '', file.mime.toLowerCase(), chain].join('\u0000') : file.artifactId;
     const existing = collected.find((other) => other.source === 'artifact' && other.subjectKey === key);
     if (existing) collected = collected.filter((other) => other !== existing);
     const id = existing?.id ?? fileTabId(file.artifactId);
@@ -332,7 +336,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
     if (opensTurn(message)) sources = null;
     for (const block of message.blocks ?? []) {
       if (block.type === 'tool_use') {
-        uses.set(block.id, { name: block.name, input: block.input, at: message.at ?? null });
+        uses.set(block.id, { name: block.name, input: block.input, at: message.at ?? null, ...(message.speaker ? { speaker: message.speaker } : {}) });
         if (gathered?.has(block.name)) {
           gather({ id: block.id, tool: block.name, input: block.input, output: null, ok: null, at: message.at ?? null });
           continue;
@@ -473,7 +477,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       const produced = textFilesOf(output);
       if (produced.length > 0 && isFileResult(output) && !byTool.has(tool)) {
         // The call is the file: its row in the conversation opens this tab.
-        for (const file of produced) placeFile(file, at, block.toolUseId);
+        for (const file of produced) placeFile(file, at, block.toolUseId, tool, use?.speaker ?? message.speaker);
         continue;
       }
       const draw = (): void => {
@@ -536,7 +540,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       };
       draw();
       // A command's row opens the command; its files are versions of their own.
-      for (const file of produced) placeFile(file, at, `${block.toolUseId}:${file.artifactId}`);
+      for (const file of produced) placeFile(file, at, `${block.toolUseId}:${file.artifactId}`, tool, use?.speaker ?? message.speaker);
     }
   }
 

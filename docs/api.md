@@ -2915,7 +2915,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/prev
 A text file whole, for the canvas editor, with the hash a save must name.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ text, sha256, sizeBytes, editable: boolean, truncated: boolean }`
+- **Answer:** `{ text, sha256, sizeBytes, editable: boolean (false past 1 MiB, or for text that is not UTF-8), truncated: boolean, note?: 'encoding' }`
 - **Errors:** 404; 410 contents gone from disk; 415 not a text file
 - **Since:** 0.1.0-pre.55
 
@@ -2930,7 +2930,7 @@ Save the owner’s edit of a text file over it, if it is still the version he op
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ text: string, base: sha256 of the version edited }`
 - **Answer:** `{ sha256, sizeBytes }`
-- **Errors:** 400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }) or the same contents are another file; 413 over 1 MiB; 415 not a text file
+- **Errors:** 400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }) or the same contents are another file; 413 over 1 MiB; 415 not a text file, or not UTF-8
 - **Since:** 0.1.0-pre.55
 
 ```sh

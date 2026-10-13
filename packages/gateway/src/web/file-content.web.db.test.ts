@@ -8,7 +8,7 @@
  * Skipped unless DATABASE_URL is set.
  */
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
@@ -74,8 +74,13 @@ suite('file content routes', () => {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-  const file = async (text: string, filename: string, mime = 'text/markdown', conversation: string | null = conversationId): Promise<string> =>
-    (await saveArtifact(pool, { bytes: Buffer.from(text), mime, filename, createdBy: 'scout', conversationId: conversation }, env)).id;
+  const file = async (text: string | Buffer, filename: string, mime = 'text/markdown', conversation: string | null = conversationId, createdBy = 'scout'): Promise<string> =>
+    (await saveArtifact(pool, { bytes: Buffer.isBuffer(text) ? text : Buffer.from(text), mime, filename, createdBy, conversationId: conversation }, env)).id;
+  const blob = (text: string): Promise<boolean> => stat(path.join(dir, 'artifacts')).then(async () => {
+    const { readdir } = await import('node:fs/promises');
+    const names = await readdir(path.join(dir, 'artifacts'), { recursive: true });
+    return names.some((name) => String(name).includes(sha(text)));
+  });
 
   it('reads a text file whole, with the hash a save names', async () => {
     const id = await file('# Plan\n\nOne\n', 'Plan.md');
@@ -107,6 +112,35 @@ suite('file content routes', () => {
     expect(await res.json()).toMatchObject({ current: { artifactId: v2, sha256: sha('# Report\n\nFinal\n') } });
     // Keeping his own then saves onto the newest.
     expect((await save(v2, { text: '# Report\n\nMine\n', base: sha('# Report\n\nFinal\n') })).status).toBe(200);
+  });
+
+  it('does not chain a same-named file another agent wrote', async () => {
+    const mine = await file('# Notes\n\nA\n', 'Notes.md');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await file('# Notes\n\nOther\n', 'Notes (v2).md', 'text/markdown', conversationId, 'ledger');
+    await file('a,b\r\n', 'Notes.csv', 'text/csv');
+    expect((await save(mine, { text: '# Notes\n\nB\n', base: sha('# Notes\n\nA\n') })).status).toBe(200);
+  });
+
+  it('lets one of two saves at once win, and leaves no bytes behind for the loser', async () => {
+    const id = await file('race\n', 'race.txt', 'text/plain');
+    const answers = await Promise.all([
+      save(id, { text: 'race one\n', base: sha('race\n') }),
+      save(id, { text: 'race two\n', base: sha('race\n') }),
+    ]);
+    expect(answers.map((res) => res.status).sort()).toEqual([200, 409]);
+    const won = (await (await read(id)).json()) as { text: string };
+    const lost = won.text === 'race one\n' ? 'race two\n' : 'race one\n';
+    expect(await blob(won.text)).toBe(true);
+    expect(await blob(lost)).toBe(false);
+  });
+
+  it('shows text that is not UTF-8, and never saves over it', async () => {
+    const latin1 = Buffer.from('caf\xe9\n', 'latin1');
+    const id = await file(latin1, 'menu.txt', 'text/plain');
+    expect(await (await read(id)).json()).toMatchObject({ editable: false, note: 'encoding' });
+    const res = await save(id, { text: 'café\n', base: createHash('sha256').update(latin1).digest('hex') });
+    expect(res.status).toBe(415);
   });
 
   it('writes only under the data dir, at the place the hash gives', async () => {

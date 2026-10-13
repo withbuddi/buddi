@@ -786,12 +786,12 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'GET', path: '/api/artifacts/:id/content', area: 'files', summary: 'A text file whole, for the canvas editor, with the hash a save must name.',
-    answer: '{ text, sha256, sizeBytes, editable: boolean, truncated: boolean }', errors: '404; 410 contents gone from disk; 415 not a text file',
+    answer: "{ text, sha256, sizeBytes, editable: boolean (false past 1 MiB, or for text that is not UTF-8), truncated: boolean, note?: 'encoding' }", errors: '404; 410 contents gone from disk; 415 not a text file',
   },
   {
     method: 'PUT', path: '/api/artifacts/:id/content', area: 'files', summary: 'Save the owner’s edit of a text file over it, if it is still the version he opened.',
     body: '{ text: string, base: sha256 of the version edited }', answer: '{ sha256, sizeBytes }',
-    errors: '400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }) or the same contents are another file; 413 over 1 MiB; 415 not a text file',
+    errors: '400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }) or the same contents are another file; 413 over 1 MiB; 415 not a text file, or not UTF-8',
   },
   {
     method: 'DELETE', path: '/api/artifacts/:id', area: 'files', summary: 'Take back a file uploaded from the dashboard that no message carries.',

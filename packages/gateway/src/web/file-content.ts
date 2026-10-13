@@ -46,9 +46,17 @@ export async function readFileContent(pool: Pool, env: EnvLike, id: string): Pro
   const prefix = await readArtifactPrefix(env, row, MAX_EDIT_BYTES);
   // Cut on a character boundary: a truncated file never ends in half a letter.
   const text = new StringDecoder('utf8').write(prefix.bytes);
+  /*
+   * Text that is not UTF-8 (Latin-1, UTF-16) would come back from the editor
+   * as different bytes: such a file is shown, never saved over.
+   */
+  const utf8 = prefix.truncated || Buffer.from(text, 'utf8').equals(prefix.bytes);
   return {
     status: 200,
-    body: { text, sha256: row.sha256, sizeBytes: row.sizeBytes, editable: !prefix.truncated, truncated: prefix.truncated },
+    body: {
+      text, sha256: row.sha256, sizeBytes: row.sizeBytes, editable: !prefix.truncated && utf8, truncated: prefix.truncated,
+      ...(utf8 ? {} : { note: 'encoding' }),
+    },
   };
 }
 
@@ -59,6 +67,12 @@ export async function saveFileContent(pool: Pool, env: EnvLike, id: string, body
   const row = await getArtifact(pool, id);
   if (!row) return { status: 404, body: { error: 'no such file' } };
   if (!textPreviewable(row.mime, row.filename)) return { status: 415, body: { error: 'this file is not text' } };
+  // Only a file the editor could open for editing: within the size, and UTF-8.
+  if (row.sizeBytes > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
+  const stored = await readArtifactPrefix(env, row, MAX_EDIT_BYTES).catch(() => null);
+  if (stored && !Buffer.from(stored.bytes.toString('utf8'), 'utf8').equals(stored.bytes)) {
+    return { status: 415, body: { error: 'this file is not UTF-8 text, so it cannot be saved from the editor' } };
+  }
   const bytes = Buffer.from(text, 'utf8');
   if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
   const result = await replaceArtifactContent(pool, { id, bytes, expectedSha256: base }, env);

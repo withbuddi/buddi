@@ -15,7 +15,7 @@
  * or a run, and those references must stay explicable after the owner forgets
  * the file. The bytes are left in place in v1; only the row is tombstoned.
  */
-import { mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
@@ -358,7 +358,7 @@ export async function getArtifact(pool: Pool, id: string): Promise<ArtifactRow |
 /**
  * The name a file is known by across its versions: `Plan (v3).md` and
  * `Plan.md` are the same file, `notes.txt` is itself. Lower-cased, as the
- * version count compares.
+ * version count compares — the same `base.ext` `saveArtifactVersion` locks on.
  */
 export function fileChainName(filename: string | null): string | null {
   if (!filename) return null;
@@ -377,60 +377,89 @@ export type ReplaceArtifactResult =
 /**
  * The owner's edit of a file, written over it in place.
  *
- * The check and the write are one statement: the row changes only while it
- * still holds `expectedSha256`, the bytes the owner opened. A newer version
- * of the same file in the same conversation (the agent wrote it again under
- * the same name) is stale too, and is what comes back as `current`. The new
- * bytes are stored content-addressed like any other — the path comes from
- * their hash, never from the caller — and the old ones stay on disk, since
- * another row may share them.
+ * One transaction, under the advisory lock `saveArtifactVersion` takes for
+ * the same conversation and name, with the row locked: a version written at
+ * the same moment either lands before (and this save is stale) or waits until
+ * this one is in. Stale is the bytes not being the ones the owner opened
+ * (`expectedSha256`), or a newer version of the same file — same name, type
+ * and author, in the same conversation — and that version comes back as
+ * `current`. The new bytes are stored content-addressed like any other (the
+ * path comes from their hash, never from the caller), written only once the
+ * row is known to take them and removed again if it does not; the old bytes
+ * stay on disk, since another row may share them.
  */
 export async function replaceArtifactContent(
   pool: Pool,
   input: { id: string; bytes: Buffer; expectedSha256: string },
   env: EnvLike = process.env,
 ): Promise<ReplaceArtifactResult> {
-  const before = await pool.query(
-    `select ${SELECT_COLUMNS}, conversation_id from core.artifacts where id = $1 and deleted_at is null`,
+  const peek = await pool.query(
+    `select filename, conversation_id from core.artifacts where id = $1 and deleted_at is null`,
     [input.id],
   );
-  const found = before.rows[0];
-  if (!found) return { ok: false, reason: 'gone' };
-  const row = toRow(found);
-  const chain = fileChainName(row.filename);
-  if (found.conversation_id && chain) {
-    const { rows } = await pool.query(
-      `select ${SELECT_COLUMNS} from core.artifacts
-        where conversation_id = $1 and id <> $2 and deleted_at is null
-          and created_at > $3
-        order by created_at desc, id desc`,
-      [found.conversation_id, row.id, found.created_at],
-    );
-    const newer = rows.map(toRow).find((other) => fileChainName(other.filename) === chain);
-    if (newer) return { ok: false, reason: 'stale', current: newer };
-  }
-  if (row.sha256 !== input.expectedSha256) return { ok: false, reason: 'stale', current: row };
-
-  const sha256 = sha256Of(input.bytes);
-  if (sha256 === row.sha256) return { ok: true, row };
-  const relative = storagePathFor(sha256, row.mime, row.filename, new Date());
-  const absolute = path.join(resolveDataDir(env), relative);
-  await mkdir(path.dirname(absolute), { recursive: true });
-  await writeFile(absolute, input.bytes);
+  if (!peek.rows[0]) return { ok: false, reason: 'gone' };
+  const chain = fileChainName(peek.rows[0].filename ?? null);
+  const lockKey = peek.rows[0].conversation_id && chain
+    ? `buddi.files.version:${peek.rows[0].conversation_id}:${chain}`
+    : `buddi.files.edit:${input.id}`;
+  const client = await pool.connect();
+  let written: string | null = null;
   try {
-    const { rows } = await pool.query(
-      `update core.artifacts set sha256 = $2, size_bytes = $3, storage_path = $4
-        where id = $1 and sha256 = $5 and deleted_at is null
-        returning ${SELECT_COLUMNS}`,
-      [row.id, sha256, input.bytes.length, relative, input.expectedSha256],
+    await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
+    const locked = await client.query(
+      `select ${SELECT_COLUMNS}, conversation_id, created_by from core.artifacts
+        where id = $1 and deleted_at is null for update`,
+      [input.id],
     );
-    if (rows[0]) return { ok: true, row: toRow(rows[0]) };
+    const found = locked.rows[0];
+    if (!found) { await client.query('rollback'); return { ok: false, reason: 'gone' }; }
+    const row = toRow(found);
+    if (found.conversation_id && chain) {
+      const { rows } = await client.query(
+        `select ${SELECT_COLUMNS}, created_by from core.artifacts
+          where conversation_id = $1 and id <> $2 and deleted_at is null
+            and created_at > $3 and mime = $4 and created_by = $5
+          order by created_at desc, id desc`,
+        [found.conversation_id, row.id, found.created_at, row.mime, found.created_by],
+      );
+      const newer = rows.find((other) => fileChainName(other.filename ?? null) === chain);
+      if (newer) { await client.query('rollback'); return { ok: false, reason: 'stale', current: toRow(newer) }; }
+    }
+    if (row.sha256 !== input.expectedSha256) { await client.query('rollback'); return { ok: false, reason: 'stale', current: row }; }
+
+    const sha256 = sha256Of(input.bytes);
+    if (sha256 === row.sha256) { await client.query('rollback'); return { ok: true, row }; }
+    const relative = storagePathFor(sha256, row.mime, row.filename, new Date());
+    const absolute = path.join(resolveDataDir(env), relative);
+    // Content-addressed: bytes already there are these bytes, and may be another row's.
+    if (!(await stat(absolute).then(() => true, () => false))) {
+      await mkdir(path.dirname(absolute), { recursive: true });
+      await writeFile(absolute, input.bytes);
+      written = absolute;
+    }
+    let updated;
+    try {
+      updated = await client.query(
+        `update core.artifacts set sha256 = $2, size_bytes = $3, storage_path = $4
+          where id = $1 returning ${SELECT_COLUMNS}`,
+        [row.id, sha256, input.bytes.length, relative],
+      );
+    } catch (err) {
+      if ((err as { code?: string }).code !== '23505') throw err;
+      await client.query('rollback');
+      return { ok: false, reason: 'duplicate' };
+    }
+    await client.query('commit');
+    written = null;
+    return { ok: true, row: toRow(updated.rows[0]) };
   } catch (err) {
-    if ((err as { code?: string }).code === '23505') return { ok: false, reason: 'duplicate' };
+    await client.query('rollback').catch(() => {});
     throw err;
+  } finally {
+    client.release();
+    if (written) await unlink(written).catch(() => {});
   }
-  const now = await getArtifact(pool, row.id);
-  return now ? { ok: false, reason: 'stale', current: now } : { ok: false, reason: 'gone' };
 }
 
 /** Newest first. Bounded by `MAX_LIST_LIMIT` — a tool argument cannot widen it. */

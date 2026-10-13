@@ -8,7 +8,8 @@ import '@testing-library/jest-dom/vitest';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, chatApi, type BrowserStatus } from '../api';
-import { resetDrafts } from '../canvas/file-drafts';
+import { isDirty, resetDrafts } from '../canvas/file-drafts';
+import { fileTabId } from '../canvas/text-files';
 import type { CodeEditorProps } from '../canvas/views/CodeEditor';
 import { ChatPage, type ChatPageProps } from './ChatPage';
 import type { ChatEvent, ChatMessage } from './types';
@@ -32,6 +33,7 @@ const props: ChatPageProps = {
 };
 
 const FILE = '00000005-0000-4000-8000-000000000000';
+const FILE_TAB = fileTabId(FILE);
 const at = (seconds: number): string => new Date(Date.now() - 600_000 + seconds * 1000).toISOString();
 const exec = (id: string, when: number): ChatMessage[] => [
   { id: `${id}-use`, role: 'assistant', at: at(when), blocks: [{ type: 'tool_use', id, name: 'host.exec', input: { command: 'python3 sum.py', outputs: ['summary.md'] } }] },
@@ -85,6 +87,28 @@ describe('a generated text file on the Canvas', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Edit' }));
     fireEvent.change(await screen.findByRole('textbox', { name: 'Edit summary.md' }), { target: { value: '# Summary\n\nMine\n' } });
     await waitFor(() => expect(within(file).getByRole('img', { name: 'Unsaved changes' })).toBeInTheDocument());
+  });
+
+  it('asks before closing a tab with an unsaved edit, and discards it only when told', async () => {
+    transcript = [said('Summarise the run', 0)];
+    page();
+    await loaded();
+    await lands(exec('x1', 1), 'x1');
+    await screen.findByRole('heading', { name: 'Summary' });
+    fireEvent.click(screen.getByRole('radio', { name: 'Edit' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Edit summary.md' }), { target: { value: '# Summary\n\nMine\n' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Close .*summary\.md tab/ }));
+    const prompt = await screen.findByRole('alertdialog', { name: 'Discard unsaved changes?' });
+    fireEvent.click(within(prompt).getByRole('button', { name: 'Keep editing' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(screen.getByRole('tab', { name: /summary\.md/ })).toBeInTheDocument();
+    expect(isDirty(FILE_TAB)).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /Close .*summary\.md tab/ }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard and close' }));
+    await waitFor(() => expect(screen.queryByRole('tab', { name: /summary\.md/ })).toBeNull());
+    expect(isDirty(FILE_TAB)).toBe(false);
   });
 
   it('only counts on the Canvas button when the owner closed the canvas', async () => {

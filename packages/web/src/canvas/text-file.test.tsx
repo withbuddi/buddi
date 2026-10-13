@@ -90,6 +90,15 @@ describe('a text file a run produced, on the canvas', () => {
     expect(both[0]!.versions?.map((version) => version.id)).toEqual(['w1', 'w2']);
   });
 
+  it('keeps same-named files from different tools apart', () => {
+    const items = renderablesFrom({ messages: [
+      ...call('w1', 'artifacts.write', { artifactId: ID(1), filename: 'notes.md', mime: 'text/markdown' }, 1),
+      ...call('x1', 'host.exec', { exitCode: 0, stdout: '', stderr: '', state: 'exited', artifacts: [{ id: ID(2), filename: 'notes.md', mime: 'text/markdown' }] }, 2),
+      ...call('x2', 'host.exec', { exitCode: 0, stdout: '', stderr: '', state: 'exited', artifacts: [{ id: ID(3), filename: 'notes.md', mime: 'text/plain' }] }, 3),
+    ], descriptors: [] });
+    expect(items.filter((item) => item.source === 'artifact')).toHaveLength(3);
+  });
+
   it('puts a command’s generated text file after the command, so the canvas turns to it', () => {
     const items = renderablesFrom({ messages: call('x1', 'host.exec', {
       exitCode: 0, stdout: 'done', stderr: '', state: 'exited',
@@ -168,7 +177,7 @@ describe('the file view', () => {
     expect(screen.queryByText('buddi changed this file')).toBeNull();
   });
 
-  it('saves with Cmd/Ctrl+S, and a stale save offers the same choice, keeping his saves again', async () => {
+  it('saves with Cmd/Ctrl+S; a save refused for another file offers the choice and waits for Save', async () => {
     files.set(ID(1), content('a\n', 1));
     files.set(ID(2), content('a\nb\n', 2));
     const save = vi.spyOn(api, 'saveFileContent')
@@ -181,10 +190,68 @@ describe('the file view', () => {
     await waitFor(() => expect(save).toHaveBeenCalledWith(ID(1), { text: 'a\nmine\n', base: sha(1) }));
     expect(await screen.findByText('buddi changed this file')).toBeInTheDocument();
     expect(save).toHaveBeenCalledTimes(1);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Keep mine' })); });
+    fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }));
+    await act(async () => { await Promise.resolve(); });
+    expect(save).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith(ID(2), { text: 'a\nmine\n', base: sha(2) }));
     await waitFor(() => expect(getDraft('t')).toBeNull());
-    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it('saves again at once when Keep mine answers a refusal of the same file', async () => {
+    files.set(ID(1), content('a\n', 1));
+    const save = vi.spyOn(api, 'saveFileContent')
+      .mockImplementationOnce(async () => { files.set(ID(1), content('a\nnew\n', 5)); throw new ApiError(409, 'changed', { current: { artifactId: ID(1), sha256: sha(5), filename: 'notes.txt' } }); })
+      .mockResolvedValueOnce({ sha256: sha(6), sizeBytes: 7 });
+    render(<TextFileView attachment={attachment(1, 'notes.txt', 'text/plain')} tabId="t" />);
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'a\nmine\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep mine' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith(ID(1), { text: 'a\nmine\n', base: sha(5) }));
+  });
+
+  it('keeps what he typed while a save was out, over the version saved — mounted or not', async () => {
+    files.set(ID(1), content('a\n', 1));
+    let finish: (value: { sha256: string; sizeBytes: number }) => void = () => {};
+    vi.spyOn(api, 'saveFileContent').mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const view = render(<TextFileView attachment={attachment(1, 'notes.txt', 'text/plain')} tabId="t" />);
+    const box = await screen.findByRole('textbox');
+    fireEvent.change(box, { target: { value: 'a\nA\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(box, { target: { value: 'a\nA\nB\n' } });
+    view.unmount();
+    await act(async () => { finish({ sha256: sha(7), sizeBytes: 4 }); });
+    expect(getDraft('t')).toEqual({ artifactId: ID(1), base: sha(7), baseText: 'a\nA\n', text: 'a\nA\nB\n', crlf: false });
+  });
+
+  it('opens on the version he settled on when the tab comes forward again', async () => {
+    files.set(ID(1), content('a\n', 1));
+    files.set(ID(2), content('a\ntheirs\n', 2));
+    vi.spyOn(api, 'saveFileContent').mockRejectedValueOnce(new ApiError(409, 'changed', { current: { artifactId: ID(2), sha256: sha(2), filename: 'notes (v2).txt' } }));
+    const first = render(<TextFileView attachment={attachment(1, 'notes.txt', 'text/plain')} tabId="t" />);
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'a\nmine\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show theirs' }));
+    first.unmount();
+    render(<TextFileView attachment={attachment(1, 'notes.txt', 'text/plain')} tabId="t" />);
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue('a\ntheirs\n'));
+    expect(screen.queryByText('buddi changed this file')).toBeNull();
+  });
+
+  it('writes a CRLF file back with its line endings, and shows text that is not UTF-8 read-only', async () => {
+    files.set(ID(1), content('a,b\r\n1,2\r\n', 1));
+    const save = vi.spyOn(api, 'saveFileContent').mockResolvedValue({ sha256: sha(8), sizeBytes: 15 });
+    render(<TextFileView attachment={attachment(1, 'data.txt', 'text/plain')} tabId="t" />);
+    const box = await screen.findByRole('textbox');
+    expect(box).toHaveValue('a,b\n1,2\n');
+    fireEvent.change(box, { target: { value: 'a,b\n1,2\n3,4\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(ID(1), { text: 'a,b\r\n1,2\r\n3,4\r\n', base: sha(1) }));
+    cleanup();
+    files.set(ID(2), { ...content('caf\ufffd\n', 2, false), truncated: false, note: 'encoding' });
+    render(<TextFileView attachment={attachment(2, 'menu.txt', 'text/plain')} tabId="u" />);
+    expect(await screen.findByText(/not UTF-8 text, so it opens read-only/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
   it('opens a file past 1 MB read-only, and says so', async () => {

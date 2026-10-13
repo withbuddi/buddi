@@ -321,6 +321,8 @@ export interface FileContent {
   sizeBytes: number;
   editable: boolean;
   truncated: boolean;
+  /** Why it is read-only besides its size: the bytes are not UTF-8. */
+  note?: 'encoding';
 }
 
 /* ------------------------------------------------------------------ *

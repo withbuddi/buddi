@@ -31,7 +31,7 @@ import { profileRenderable, profileTabId } from './properties';
 import { useAsync } from '../ui';
 import { BrowserMenu, BrowserView } from '../canvas/views/BrowserView';
 import { HostControls } from '../views/HostControls';
-import { ErrorBanner, Notice } from '../ui';
+import { Button, ErrorBanner, Modal, Notice } from '../ui';
 import { BROWSER_TOOLS, conversationBrowser, endedBrowser, pausedBrowser, stepFor } from './browser';
 import { BrowserAsk, browserCardOf } from './BrowserAsk';
 import { expandedRequestOf, SecretRequestDock, secretRequestOf } from './SecretRequest';
@@ -41,6 +41,7 @@ import { ConversationHistory } from './ConversationHistory';
 import { useCanvasTabs } from './canvas-tabs';
 import { useCanvasOpen } from './canvas-open';
 import { selfClosed, tabStamp, versionHolding } from '../canvas/tab-order';
+import { isDirty as isFileDirty, setDraft as setFileDraft, setPin as setFilePin } from '../canvas/file-drafts';
 import { agentRoute, chatRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
@@ -1315,7 +1316,15 @@ export function ChatPage({
     </GradientField>
   ) : null;
 
-  const closeTabs = (ids: readonly string[]): void => {
+  /*
+   * Tabs whose close waits on the owner: a file among them holds an edit he
+   * has not saved. Closing discards it, so it is asked first, in the page.
+   */
+  const [closing, setClosing] = useState<readonly string[] | null>(null);
+  const closeTabs = (ids: readonly string[], discard = false): void => {
+    const unsaved = ids.filter(isFileDirty);
+    if (unsaved.length > 0 && !discard) { setClosing(ids); return; }
+    for (const id of unsaved) { setFileDraft(id, null); setFilePin(id, null); }
     const stamps: string[] = [];
     for (const id of ids) {
       if (profile && id === profileTabId(profile.id)) setProfile(null);
@@ -1328,6 +1337,17 @@ export function ChatPage({
     if (stamps.length > 0) canvasTabs.close(stamps);
     if (activeTab !== null && (ids.includes(activeTab) || ids.includes(shownTab ?? ''))) setActiveTab(null);
   };
+
+  const unsavedNames = closing ? renderables.filter(item => closing.includes(item.id) && isFileDirty(item.id)).map(item => item.title) : [];
+  const discardPrompt = closing ? (
+    <Modal
+      title="Discard unsaved changes?"
+      onClose={() => setClosing(null)}
+      foot={<><Button variant="ghost" onClick={() => setClosing(null)}>Keep editing</Button><Button variant="danger" onClick={() => { const ids = closing; setClosing(null); closeTabs(ids, true); }}>Discard and close</Button></>}
+    >
+      <p>{unsavedNames.length === 1 ? `${unsavedNames[0]} has` : `${unsavedNames.length} files have`} changes you have not saved. Closing the tab discards them.</p>
+    </Modal>
+  ) : null;
 
   const canvas = (
     <Canvas
@@ -1809,6 +1829,7 @@ export function ChatPage({
           {canvas}
         </>
       )}
+      {discardPrompt}
     </>
   );
 }
