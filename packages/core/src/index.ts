@@ -16,6 +16,7 @@ export * from './json-schema.js';
 export * from './agent.js';
 export * from './agents/index.js';
 export * from './artifacts/index.js';
+export * from './text-files.js';
 export * from './actions/index.js';
 export * from './vault/index.js';
 export * from './db.js';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_DOCUMENT_CHARS, MAX_TABLE_COLUMNS, nextVersion, parseJsonTable, safeName, toCsv, versionedName } from './document.js';
+import { MAX_DOCUMENT_CHARS, MAX_TABLE_COLUMNS, parseJsonTable, safeName, toCsv } from './document.js';
 
 describe('document names', () => {
   it('keeps a title readable and makes it safe as a file name', () => {
@@ -12,16 +12,6 @@ describe('document names', () => {
     expect(safeName('CON', 100, 'Document')).toBe('CON-file');
     expect(safeName('word '.repeat(40), 30, 'Document').length).toBeLessThanOrEqual(30);
     expect(safeName('   ', 100, 'Document')).toBe('Document');
-  });
-
-  it('counts versions per base name, ignoring case and other titles', () => {
-    expect(nextVersion('Report', 'md', [])).toBe(1);
-    expect(nextVersion('Report', 'md', ['Report.md'])).toBe(2);
-    expect(nextVersion('Report', 'md', ['report.md', 'Report (v3).md', 'Other.md', null])).toBe(4);
-    expect(nextVersion('Report', 'md', ['Report.csv', 'Report (draft).md'])).toBe(1);
-    expect(nextVersion('A (b)', 'md', ['A (b).md'])).toBe(2);
-    expect(versionedName('Report', 'md', 1)).toBe('Report.md');
-    expect(versionedName('Report', 'md', 2)).toBe('Report (v2).md');
   });
 });
 

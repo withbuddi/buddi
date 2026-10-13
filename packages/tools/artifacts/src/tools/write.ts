@@ -6,10 +6,12 @@
  * buddi itself turns it into PDF, Word or Excel when the owner downloads it.
  * The model never produces a binary format.
  *
- * Tier `auto`, like the memory writes: the only effect is a new file in the
- * owner's own library, credited to the agent and its conversation, never an
- * overwrite and never anything outside buddi. A file the owner does not want
- * is one Delete away.
+ * Tier `auto`, like the memory writes: the only effect is a new file, or a
+ * new version of one, in the owner's own library, credited to the agent and
+ * its conversation, never an overwrite and never anything outside buddi. A
+ * file the owner does not want is one Delete away. Writing over a version
+ * someone else wrote (the owner's edit on the Canvas) is refused until the
+ * agent has read it (`readVersion`).
  *
  * Nothing in the input reaches the disk as a path. The title becomes the
  * file's *name* only; the bytes are stored content-addressed by the host
@@ -23,11 +25,9 @@ import {
   MAX_DOCUMENT_CHARS,
   MAX_FOLDER_CHARS,
   MAX_TITLE_CHARS,
-  nextVersion,
   parseJsonTable,
   safeName,
   toCsv,
-  versionedName,
   type DocumentFormat,
 } from '../document.js';
 
@@ -57,16 +57,20 @@ const writeInput = z.object({
     .string()
     .uuid()
     .optional()
-    .describe('The id of an existing file (any of its versions) to write the next version of, keeping its name. To change an existing file, pass its id as fileId; don’t create a new title.'),
+    .describe('The fileId of an existing file (from artifacts.list, artifacts.text or an earlier write) to save the next version of; it keeps its name and the title is ignored.'),
   readVersion: z
-    .string()
-    .regex(/^[0-9a-f]{64}$/)
+    .number()
+    .int()
+    .positive()
     .optional()
-    .describe('The sha256 artifacts.text returned for the newest version. Needed only when the owner edited the document since it was written: read it first, keep their changes, then pass it.'),
+    .describe('The version you read (artifacts.text returns it). Required when the newest version is not yours — the owner edited the file: read it, keep their changes, then pass its version.'),
 }).strict();
 
 export interface WrittenDocument {
+  /** This version's id. */
   artifactId: string;
+  /** The file it is a version of: what a later write names as `fileId`. */
+  fileId: string;
   filename: string;
   title: string;
   format: DocumentFormat;
@@ -82,7 +86,7 @@ export interface WrittenDocument {
 export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> = {
   name: 'artifacts.write',
   description:
-    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program, and never convert it yourself (no pandoc): point them to Files and the download. Writing the same title again in this conversation saves a new version; the earlier one stays. To change an existing file, pass its id as fileId; don’t create a new title. To save a document for the owner, use this tool, never `cat > file` or a script through host.exec: only a file saved here reaches their Files and opens on the Canvas, where they can read and edit it.",
+    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program, and never convert it yourself (no pandoc): point them to Files and the download. Writing the same title again in this conversation saves its next version; the earlier ones stay. To change an existing file, pass its fileId.",
   tier: 'auto',
   sideEffect: true,
   producesArtifacts: true,
@@ -111,10 +115,9 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
       throw new Error(`the document is ${Math.ceil(bytes.length / 1024)} KiB once saved; at most ${MAX_DOCUMENT_BYTES / 1024} KiB. Split it into parts.`);
     }
 
-    // Files gives the next version among every file this conversation ever
-    // had, counted and saved under one lock: two writes at once get two
-    // versions. Outside a conversation (a mission, a test) it is version 1.
-    const fallbackName = versionedName(base, ext, 1);
+    // The next version of the file named by fileId, else of this title's file in
+    // the conversation, else a new file: resolved and saved by Files under one lock.
+    const fallbackName = `${base}.${ext}`;
     const saved = await files.save({
       bytes,
       mime,
@@ -126,14 +129,14 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
       },
       ...(folder === undefined ? {} : { caption: folder }),
     });
-    // The same bytes already in Files, here or in another conversation: nothing new was written.
+    // The newest version already holds these bytes: nothing new was written.
     const unchanged = saved.existed === true;
     const filename = saved.filename ?? fallbackName;
-    // A file that already held these bytes keeps its own version number.
-    const version = saved.version ?? Math.max(1, nextVersion(base, ext, [saved.filename]) - 1);
+    const version = saved.version;
     const kind = input.format === 'markdown' ? 'PDF or Word' : 'Excel or CSV';
     return {
       artifactId: saved.id,
+      fileId: saved.fileId,
       filename,
       title,
       format: input.format,
@@ -143,8 +146,8 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
       ...(folder === undefined ? {} : { folder }),
       ...(unchanged ? { unchanged: true } : {}),
       note: unchanged
-        ? `These exact contents are already in Files as ${saved.filename ?? 'an earlier file'}; nothing new was saved.`
-        : `Saved to Files${folder === undefined ? '' : ` under "${folder}"`} as ${filename} (buddi's Files, not the computer's desktop or disk). The owner can open it there and download it as ${kind}; no conversion needed.`,
+        ? `These exact contents are already v${version} of ${filename} in Files; nothing new was saved.`
+        : `Saved to Files${folder === undefined ? '' : ` under "${folder}"`} as ${filename}, v${version} (buddi's Files, not the computer's desktop or disk). The owner can open it there and download it as ${kind}; no conversion needed. To change it later, write with fileId "${saved.fileId}".`,
     };
   },
 };

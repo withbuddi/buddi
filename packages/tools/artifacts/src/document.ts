@@ -53,30 +53,6 @@ export function safeName(raw: string, max: number, fallback: string): string {
   return name === '' ? fallback : name;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * The version a new write of `base` gets, given the file names already in the
- * conversation: one past the highest of `base.ext` (version 1) and
- * `base (vN).ext`. Comparison ignores case, as the owner's file system may.
- */
-export function nextVersion(base: string, ext: string, existing: readonly (string | null)[]): number {
-  const pattern = new RegExp(`^${escapeRegExp(base)}(?: \\(v(\\d+)\\))?\\.${escapeRegExp(ext)}$`, 'i');
-  let highest = 0;
-  for (const name of existing) {
-    const match = name ? pattern.exec(name) : null;
-    if (!match) continue;
-    highest = Math.max(highest, match[1] ? Number(match[1]) : 1);
-  }
-  return highest + 1;
-}
-
-export function versionedName(base: string, ext: string, version: number): string {
-  return version <= 1 ? `${base}.${ext}` : `${base} (v${version}).${ext}`;
-}
-
 function csvCell(value: unknown): string {
   if (value === null || value === undefined) return '';
   const text = typeof value === 'object' ? JSON.stringify(value) : String(value);

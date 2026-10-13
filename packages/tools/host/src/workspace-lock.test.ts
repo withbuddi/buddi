@@ -1,27 +1,28 @@
 /**
  * The owner's save into a workspace holds every workspace: a command in any
- * conversation, whatever its cwd, waits until the save is done.
+ * conversation, whatever its cwd, waits until the save is done; and a save
+ * can tell that a command is running anywhere, to refuse while one is.
  */
 import { describe, expect, it } from 'vitest';
-import { enterWorkspace, holdWorkspaces, hostWorkspaceKey, workspaceBusy } from './service.js';
+import { commandsRunning, enterWorkspace, holdWorkspaces } from './service.js';
 
 describe('the workspace lock', () => {
-  it('makes a command from another conversation wait for a save, then lets it in', async () => {
-    const here = hostWorkspaceKey('owner', 'scout', 'conversation-a');
-    const there = hostWorkspaceKey('owner', 'ledger', 'conversation-b');
+  it('makes a command from any conversation wait for a save, then counts it as running', async () => {
     let entered = false;
     let leave: (() => void) | null = null;
     await holdWorkspaces(async () => {
-      void enterWorkspace(there).then((out) => { entered = true; leave = out; });
+      void enterWorkspace().then((out) => { entered = true; leave = out; });
       for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 2));
       expect(entered).toBe(false);
-      expect(workspaceBusy(here)).toBe(false);
+      expect(commandsRunning()).toBe(0);
     });
     await new Promise((resolve) => setTimeout(resolve, 2));
     expect(entered).toBe(true);
-    expect(workspaceBusy(there)).toBe(true);
+    expect(commandsRunning()).toBe(1);
     leave!();
-    expect(workspaceBusy(there)).toBe(false);
+    // Leaving twice counts once.
+    leave!();
+    expect(commandsRunning()).toBe(0);
   });
 
   it('lets a second save wait for the first', async () => {

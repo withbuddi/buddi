@@ -110,7 +110,7 @@ suite('artifacts tools (postgres)', () => {
     expect(out.count).toBeGreaterThanOrEqual(2);
     const first = out.artifacts[0];
     expect(Object.keys(first).sort()).toEqual(
-      ['caption', 'createdAt', 'filename', 'id', 'kind', 'mime', 'sizeBytes'].sort(),
+      ['caption', 'createdAt', 'fileId', 'filename', 'id', 'kind', 'mime', 'sizeBytes', 'version'].sort(),
     );
     const images = await call('artifacts.list', { kind: 'image' });
     expect(images.artifacts.map((a: any) => a.id)).toEqual([imageId]);
@@ -198,10 +198,10 @@ suite('artifacts tools (postgres)', () => {
 
     it('writing the same title again in the conversation makes a new version, keeping the first', async () => {
       const second = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: '# Heat pumps\n\nFour models now.' }, conversationId);
-      expect(second).toMatchObject({ filename: 'Heat pumps compared (v2).md', version: 2 });
+      expect(second).toMatchObject({ filename: 'Heat pumps compared.md', version: 2 });
       const third = await call('artifacts.write', { title: 'heat pumps compared', format: 'markdown', content: 'Five.' }, conversationId);
-      // A title differing only in case continues the file under its own name.
-      expect(third.filename).toBe('Heat pumps compared (v3).md');
+      // A title differing only in case continues the file under its own name; no name carries a version.
+      expect(third).toMatchObject({ filename: 'Heat pumps compared.md', version: 3, fileId: second.fileId });
       const { rows } = await pool.query(`select count(*)::int as n from core.artifacts where conversation_id = $1 and deleted_at is null`, [conversationId]);
       expect(rows[0].n).toBe(3);
       // Another conversation starts its own count.
@@ -210,18 +210,18 @@ suite('artifacts tools (postgres)', () => {
     });
 
     it('the same bytes again are not a silent copy: it says nothing new was saved', async () => {
-      const again = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: '# Heat pumps\n\nFour models now.' }, conversationId);
+      const again = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: 'Five.' }, conversationId);
       expect(again.unchanged).toBe(true);
-      expect(again.filename).toBe('Heat pumps compared (v2).md');
-      expect(again.version).toBe(2);
+      expect(again.filename).toBe('Heat pumps compared.md');
+      expect(again.version).toBe(3);
     });
 
-    it('the same bytes from another conversation are reported as already there, not as saved', async () => {
+    it('the same title in another conversation is a file of its own', async () => {
       const { rows } = await pool.query(`insert into core.conversations (agent_id) values ('finance-advisor') returning id`);
       const other = String(rows[0].id);
       const out = await call('artifacts.write', { title: 'Heat pumps compared', format: 'markdown', content: '# Heat pumps\n\nThree models.' }, other);
-      expect(out.unchanged).toBe(true);
-      expect(out.note).toMatch(/already in Files/);
+      expect(out).toMatchObject({ version: 1 });
+      expect(out.unchanged).toBeUndefined();
     });
 
     it('counts versions over the whole conversation, not the newest 100 files', async () => {
@@ -234,7 +234,7 @@ suite('artifacts tools (postgres)', () => {
         await saveArtifact(pool, { bytes: Buffer.from(`note ${i}`), mime: 'text/plain', filename: `n${i}.txt`, createdBy: 'owner', conversationId: conv });
       }
       const third = await call('artifacts.write', { title: 'Old report', format: 'markdown', content: 'three' }, conv);
-      expect(third).toMatchObject({ filename: 'Old report (v3).md', version: 3 });
+      expect(third).toMatchObject({ filename: 'Old report.md', version: 3 });
     });
 
     it('two writes at once get two versions', async () => {
@@ -244,30 +244,48 @@ suite('artifacts tools (postgres)', () => {
         Array.from({ length: 6 }, (_, i) => call('artifacts.write', { title: 'Race', format: 'markdown', content: `draft ${i}` }, conv)),
       );
       expect(outs.map((o) => o.version).sort()).toEqual([1, 2, 3, 4, 5, 6]);
-      expect(new Set(outs.map((o) => o.filename)).size).toBe(6);
+      // One file, six versions.
+      expect(new Set(outs.map((o) => o.fileId)).size).toBe(1);
     });
 
-    it('writes the next version of a file named by fileId, keeping a command output’s name', async () => {
+    it('writes the next version of a file named by fileId, keeping a command output’s name and workspace', async () => {
       const capture = await saveArtifact(pool, {
         bytes: Buffer.from('# Packing\n'), mime: 'text/markdown', filename: 'montreal-weekend-packing-list.md', createdBy: 'finance-advisor',
         conversationId, source: { surface: 'host', chatId: conversationId }, originPath: 'host/workspaces/x/out/montreal-weekend-packing-list.md',
       });
-      const out = await call('artifacts.write', { title: 'Something else', format: 'markdown', content: '# Packing\n\n## Toiletries\n', fileId: capture.id }, conversationId);
-      expect(out.filename).toBe('montreal-weekend-packing-list.md');
-      const { rows } = await pool.query('select origin_path from core.artifacts where id = $1', [out.artifactId]);
+      const out = await call('artifacts.write', { title: 'Something else', format: 'markdown', content: '# Packing\n\n## Toiletries\n', fileId: capture.fileId }, conversationId);
+      expect(out).toMatchObject({ filename: 'montreal-weekend-packing-list.md', fileId: capture.fileId, version: 2 });
+      const { rows } = await pool.query('select origin_path from core.files where id = $1', [capture.fileId]);
       expect(rows[0].origin_path).toBe('host/workspaces/x/out/montreal-weekend-packing-list.md');
-      // Without fileId, a title that only differs in case and spaces joins it too.
-      const joined = await call('artifacts.write', { title: 'Montreal Weekend Packing List', format: 'markdown', content: '# Packing, three\n' }, conversationId);
-      expect(joined.filename).toBe('montreal-weekend-packing-list.md');
-      expect((await pool.query('select origin_path from core.artifacts where id = $1', [joined.artifactId])).rows[0].origin_path).toBe('host/workspaces/x/out/montreal-weekend-packing-list.md');
+      // A version's id names its file too.
+      expect((await call('artifacts.write', { title: 'x', format: 'markdown', content: '# Packing, three\n', fileId: capture.id }, conversationId)).version).toBe(3);
+      // Without fileId, the file's own name (any case) is the same file.
+      const joined = await call('artifacts.write', { title: 'Montreal-Weekend-Packing-List', format: 'markdown', content: '# Packing, four\n' }, conversationId);
+      expect(joined).toMatchObject({ fileId: capture.fileId, version: 4 });
     });
 
-    it('joins a document whose title only differs by hyphens to its earlier versions', async () => {
+    it('a title that differs by more than case is a new file', async () => {
       const first = await call('artifacts.write', { title: 'Road Trip Plan', format: 'markdown', content: '# One\n' }, conversationId);
       const second = await call('artifacts.write', { title: 'road-trip-plan', format: 'markdown', content: '# Two\n' }, conversationId);
       expect(first.filename).toBe('Road Trip Plan.md');
-      expect(second.filename).toBe('Road Trip Plan (v2).md');
-      expect(second.version).toBe(2);
+      expect(second).toMatchObject({ filename: 'road-trip-plan.md', version: 1 });
+      expect(second.fileId).not.toBe(first.fileId);
+    });
+
+    it('refuses a write over the owner’s newest version until it was read', async () => {
+      const first = await call('artifacts.write', { title: 'Shopping', format: 'markdown', content: '# Shopping\n' }, conversationId);
+      await pool.query(
+        `insert into core.artifacts (kind, mime, filename, size_bytes, sha256, storage_path, created_by, conversation_id, file_id, version)
+         select kind, mime, filename, size_bytes, sha256, storage_path, 'owner', conversation_id, file_id, 2 from core.artifacts where id = $1`,
+        [first.artifactId],
+      );
+      const refused = await registry.invoke('artifacts.write', { title: 'Shopping', format: 'markdown', content: '# Shopping\n- Milk\n' }, ctx(conversationId));
+      expect(refused.ok).toBe(false);
+      expect(refused.ok ? '' : refused.message).toMatch(/newest version of Shopping\.md \(v2\) is by the owner.*readVersion 2/);
+      const stale = await registry.invoke('artifacts.write', { title: 'Shopping', format: 'markdown', content: '# Shopping\n- Milk\n', readVersion: 1 }, ctx(conversationId));
+      expect(stale.ok).toBe(false);
+      const ok = await call('artifacts.write', { title: 'Shopping', format: 'markdown', content: '# Shopping\n- Milk\n', readVersion: 2 }, conversationId);
+      expect(ok.version).toBe(3);
     });
 
     it('stores a JSON table as CSV', async () => {

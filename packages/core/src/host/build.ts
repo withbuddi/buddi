@@ -24,9 +24,9 @@ import {
   readArtifactBytes,
   resolveDataDir,
   saveArtifactReporting,
-  saveArtifactVersion,
-  saveNextVersionOf,
-  fileNamedLike,
+  saveDocument,
+  saveVersion,
+  resolveFileId,
   type ArtifactKind,
   type ArtifactRow,
   type EnvLike,
@@ -326,7 +326,7 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
-const FILE_COLUMNS = `a.id, a.kind, a.mime, a.filename, a.size_bytes, a.sha256, a.caption, a.created_at, a.conversation_id`;
+const FILE_COLUMNS = `a.id, a.kind, a.mime, a.filename, a.size_bytes, a.sha256, a.caption, a.created_at, a.conversation_id, a.file_id, a.version, a.created_by`;
 
 function toFileRow(row: Record<string, any>): FileRow {
   return {
@@ -337,6 +337,9 @@ function toFileRow(row: Record<string, any>): FileRow {
     sizeBytes: Number(row.size_bytes),
     sha256: row.sha256,
     caption: row.caption ?? null,
+    fileId: String(row.file_id),
+    version: Number(row.version),
+    createdBy: String(row.created_by),
     conversationId: row.conversation_id === null || row.conversation_id === undefined ? null : String(row.conversation_id),
     createdAt:
       row.created_at === null || row.created_at === undefined
@@ -1107,6 +1110,15 @@ function filesArea(
       params: [binding.plugin, facts.conversationId ?? null],
     };
   };
+  /** Some live version of the file is in scope. */
+  const fileInScope = async (fileId: string): Promise<boolean> => {
+    const where = scope(2);
+    const { rows } = await pool().query(
+      `select 1 from core.artifacts a where a.file_id = $1 and a.deleted_at is null and ${where.sql} limit 1`,
+      [fileId, ...where.params],
+    );
+    return rows.length > 0;
+  };
   const get = async (id: string): Promise<(FileRow & { storagePath: string }) | null> => {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
     const where = scope(2);
@@ -1148,33 +1160,27 @@ function filesArea(
         ...(input.caption === undefined ? {} : { caption: input.caption }),
         createdBy: facts.agentId ?? binding.plugin,
       };
-      let result: { row: ArtifactRow; existed: boolean; version?: number };
-      /*
-       * The next version of an existing file: named by id (`version.of`), or
-       * a title that only differs from one of this conversation's files by
-       * case, spaces, hyphens or a `(vN)`.
-       */
-      const of = input.version?.of
-        ?? (input.version !== undefined && conversationId !== null
-          ? await fileNamedLike(pool(), conversationId, fields.createdBy, `${input.version.base}.${input.version.ext}`)
-          : null);
-      if (of !== null && of !== undefined) {
-        if ((await get(of)) === null) throw new Error(`There is no file ${of} that ${binding.plugin} can read.`);
-        result = await saveNextVersionOf(pool(), {
-          of, bytes: input.bytes, createdBy: fields.createdBy,
+      let result: { row: ArtifactRow; existed: boolean };
+      const readVersion = input.version?.readVersion;
+      if (input.version?.of !== undefined) {
+        // The next version of a file named by id (its own, or any version's).
+        const of = input.version.of;
+        const fileId = await resolveFileId(pool(), of);
+        if (fileId === null || !(await fileInScope(fileId))) throw new Error(`There is no file ${of} that ${binding.plugin} can read.`);
+        result = await saveVersion(pool(), {
+          id: fileId, bytes: input.bytes, createdBy: fields.createdBy,
           ...(input.caption === undefined ? {} : { caption: input.caption }),
-          ...(input.version?.readVersion === undefined ? {} : { readVersion: input.version.readVersion }),
+          ...(readVersion === undefined ? {} : { readVersion }),
         }, env());
-      } else if (input.version !== undefined && conversationId !== null) {
-        // The next version of a document in this conversation, counted and saved under one lock.
-        result = await saveArtifactVersion(pool(), {
-          ...fields, conversationId, base: input.version.base, ext: input.version.ext,
-          ...(input.version.readVersion === undefined ? {} : { readVersion: input.version.readVersion }),
+      } else if (input.version !== undefined) {
+        // A document by title: the next version of that name in this conversation, else a new file.
+        result = await saveDocument(pool(), {
+          conversationId, name: `${input.version.base}.${input.version.ext}`, mime: input.mime, bytes: input.bytes, createdBy: fields.createdBy,
+          ...(input.caption === undefined ? {} : { caption: input.caption }),
+          ...(readVersion === undefined ? {} : { readVersion }),
         }, env());
       } else {
-        const filename = input.filename ?? (input.version === undefined ? undefined : `${input.version.base}.${input.version.ext}`);
-        result = await saveArtifactReporting(pool(), { ...fields, ...(filename === undefined ? {} : { filename }), conversationId }, env());
-        if (input.version !== undefined) result.version = 1;
+        result = await saveArtifactReporting(pool(), { ...fields, ...(input.filename === undefined ? {} : { filename: input.filename }), conversationId }, env());
       }
       const saved = result.row;
       await pool().query(
@@ -1186,7 +1192,6 @@ function filesArea(
         ...row,
         conversationId,
         ...(result.existed ? { existed: true } : {}),
-        ...(result.version !== undefined && !result.existed ? { version: result.version } : {}),
       };
     },
     async get(id) {
@@ -1222,6 +1227,10 @@ function filesArea(
       if (opts.surface !== undefined) {
         params.push(opts.surface);
         where.push(`a.source_surface = $${params.length}`);
+      }
+      if (opts.latest === true) {
+        // Each file once: its current version.
+        where.push(`a.version = (select max(v.version) from core.artifacts v where v.file_id = a.file_id and v.deleted_at is null)`);
       }
       const scoped = scope(params.length + 1);
       params.push(...scoped.params);

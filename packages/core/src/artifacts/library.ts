@@ -9,27 +9,17 @@
  */
 import { createHash } from 'node:crypto';
 import { OWNER_ID } from '../owner.js';
-import { fileChainKeySql } from './store.js';
+import { isTextFile } from '../text-files.js';
+import { fileVersions } from './store.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * What may be previewed as text: genuinely textual formats, by mime or by
- * extension, and nothing that is a binary container however it is named.
- * Display family is a different question — a .docx is a Document to look at
- * and download-only to preview.
+ * What may be previewed as text: the one rule the dashboard's editor applies
+ * too (`text-files.ts`). Display family is a different question — a .docx is
+ * a Document to look at and download-only to preview.
  */
-const TEXT_MIMES = new Set(['application/json', 'application/xml', 'application/javascript', 'application/x-yaml', 'application/toml', 'application/sql']);
-const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'toml', 'sql', 'html', 'htm', 'css', 'js', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'swift', 'sh', 'log', 'ini', 'conf', 'env']);
-const NEVER_TEXT_EXTS = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'numbers', 'pages', 'key', 'rtf', 'odt', 'ods', 'odp']);
-export function textPreviewable(mime: string, filename?: string | null): boolean {
-  const value = (mime || '').toLowerCase().split(';')[0]!.trim();
-  const ext = (filename ?? '').toLowerCase().split('.').pop() ?? '';
-  if (NEVER_TEXT_EXTS.has(ext)) return false;
-  if (value.startsWith('text/')) return true;
-  if (TEXT_MIMES.has(value)) return true;
-  return (value === 'application/octet-stream' || value === '') && TEXT_EXTS.has(ext);
-}
+export const textPreviewable = isTextFile;
 
 type Queryable = { query(sql: string, params?: any[]): Promise<{ rows: any[] }> };
 
@@ -73,12 +63,17 @@ function familySql(m: string, e: string): string {
     when ${m} like 'text/%' or ${e} in (${inList(TEXT_EXT)}) then 'text'
     else 'file' end`;
 }
-const FAMILY_EXPR = familySql('lower(a.mime)', "lower(coalesce(substring(a.filename from '\\.([A-Za-z0-9]+)$'), ''))");
+const FAMILY_EXPR = familySql('lower(f.mime)', "lower(coalesce(substring(f.name from '\\.([A-Za-z0-9]+)$'), ''))");
 
 export type FileOrigin = 'uploaded' | 'produced' | 'unknown';
 
 export interface LibraryEntry {
+  /** The version this entry shows: in a listing, the file's newest. */
   id: string;
+  /** The file it is a version of. */
+  fileId: string;
+  /** That version's number. */
+  version: number;
   filename: string | null;
   /** What the file was handed in with, or the label an agent filed a document under. */
   caption: string | null;
@@ -95,21 +90,36 @@ export interface LibraryEntry {
   contexts: number;
   /** The first conversation it was part of: the agent, or the group, it was with. */
   context: { agentId: string | null; groupName: string | null } | null;
-  /** How many versions the file has (`fileChainKeySql`); this entry is the newest. 1 in a flat listing. */
+  /** How many live versions the file has. */
   versions: number;
 }
 
-/** One version of a file, newest first, for the file page. */
+/** One version of a file, newest first, for the file page and the canvas alike. */
 export interface LibraryVersion {
   id: string;
+  version: number;
   filename: string | null;
   createdAt: string;
   sizeBytes: number;
   sha256: string;
-  /** Who wrote it: the agent (or `owner` for an upload). */
+  /** Who wrote it: an agent, or `owner` for an upload, a save or a Restore. */
   createdBy: string;
-  /** When the owner last saved his edit over it, if he did: its bytes are then his. */
-  editedAt: string | null;
+  /** A Restore: the version whose bytes it copies. */
+  restoredFrom: number | null;
+}
+
+/** A file's versions as both the Files page and the canvas read them. */
+export async function libraryVersions(pool: Queryable, fileId: string): Promise<LibraryVersion[]> {
+  return (await fileVersions(pool, fileId)).map((v) => ({
+    id: v.id,
+    version: v.version,
+    filename: v.filename,
+    createdAt: v.createdAt ?? '',
+    sizeBytes: v.sizeBytes,
+    sha256: v.sha256,
+    createdBy: v.createdBy,
+    restoredFrom: v.restoredFrom,
+  }));
 }
 
 export interface LibraryContext {
@@ -124,8 +134,6 @@ export interface LibraryContext {
 }
 
 export interface ListLibraryOptions {
-  /** Every row on its own, versions and all, rather than one row per file. */
-  flat?: boolean;
   q?: string;
   origin?: FileOrigin;
   family?: FileFamily;
@@ -157,31 +165,36 @@ export function decodeCursor(cursor: string, filters?: string): { createdAt: str
   }
 }
 
+/** The versions of the file `f`, for what was recorded about any of them. */
+const VERSION_IDS = `(select v.id from core.artifacts v where v.file_id = f.id)`;
+
 /**
- * Origin, from what the row says and what a trusted use recorded: the owner's
- * id is an upload; an agent the catalog knows, or a recorded production by
- * any agent, is produced — so a retired agent's outputs stay produced; anything
- * else is unknown, never guessed from a filename or a missing surface.
+ * Origin, from what the file says and what a trusted use recorded: made by
+ * the owner is an upload; made by an agent the catalog knows, or recorded as
+ * produced by any agent, is produced — so a retired agent's outputs stay
+ * produced; anything else is unknown, never guessed from a filename or a
+ * missing surface. Who made the file decides, not who wrote its newest
+ * version: the owner's edit of a report keeps it buddi's.
  */
-function originSql(createdBy: string, knownAgents: string): string {
+function originSql(knownAgents: string): string {
   return `case
-    when ${createdBy} in ('owner', '${OWNER_ID}') then 'uploaded'
-    when ${createdBy} = any(${knownAgents}) then 'produced'
-    when exists (select 1 from core.artifact_uses pu where pu.artifact_id = a.id and pu.kind = 'produced') then 'produced'
+    when f.created_by in ('owner', '${OWNER_ID}') then 'uploaded'
+    when f.created_by = any(${knownAgents}) then 'produced'
+    when exists (select 1 from core.artifact_uses pu where pu.artifact_id in ${VERSION_IDS} and pu.kind = 'produced') then 'produced'
     else 'unknown' end`;
 }
 
 /**
- * What is in the library at all, for the list and the detail alike: a live
- * row, and — when the owner uploaded it — one that a message carries or a
- * surface other than the dashboard's own tray accepted. A draft in a tray is
- * not a file yet.
+ * What is in the library at all, for the list and the detail alike: a file
+ * not deleted, with a live version, and — when the owner uploaded it — one
+ * that a message carries or a surface other than the dashboard's own tray
+ * accepted. A draft in a tray is not a file yet.
  */
 function membershipSql(knownAgents: string): string {
-  return `a.deleted_at is null and not (
-    (${originSql('a.created_by', knownAgents)}) = 'uploaded'
-    and not exists (select 1 from core.artifact_uses u where u.artifact_id = a.id)
-    and not exists (select 1 from core.surface_attachments sa where sa.artifact_id = a.id::text and sa.surface <> 'web')
+  return `f.deleted_at is null and not (
+    (${originSql(knownAgents)}) = 'uploaded'
+    and not exists (select 1 from core.artifact_uses u where u.artifact_id in ${VERSION_IDS})
+    and not exists (select 1 from core.surface_attachments sa where sa.artifact_id in (select v.id::text from core.artifacts v where v.file_id = f.id) and sa.surface <> 'web')
   )`;
 }
 
@@ -196,9 +209,9 @@ export async function listLibrary(
   if (input.q && input.q.trim() !== '') {
     params.push(`%${input.q.trim().replace(/[%_\\]/g, (c) => `\\${c}`)}%`);
     // The caption is searched too: it holds the label a document was filed under.
-    where.push(`(a.filename ilike $${params.length} escape '\\' or a.caption ilike $${params.length} escape '\\')`);
+    where.push(`(f.name ilike $${params.length} escape '\\' or a.caption ilike $${params.length} escape '\\')`);
   }
-  const origin = originSql('a.created_by', '$1::text[]');
+  const origin = originSql('$1::text[]');
   if (input.origin) {
     params.push(input.origin);
     where.push(`(${origin}) = $${params.length}`);
@@ -214,25 +227,17 @@ export async function listLibrary(
     where.push(`(a.created_at, a.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
   }
   params.push(limit + 1);
-  /*
-   * One row per file: its newest version, with how many there are. The
-   * search and the filters then apply to files, not to every version of one.
-   */
-  const source = input.flat
-    ? `(select a.*, 1 as versions from core.artifacts a where ${where[0]}) a`
-    : `(select distinct on (k.chain) a.*, count(*) over (partition by k.chain)::int as versions
-          from core.artifacts a cross join lateral (select ${fileChainKeySql('a')} as chain) k
-         where ${where[0]}
-         order by k.chain, a.created_at desc, a.id desc) a`;
+  // One row per file: its newest live version, with how many there are.
   const { rows } = await pool.query(
-    `select a.id, a.filename, a.caption, a.mime, a.size_bytes, a.created_at, a.created_at::text as created_at_exact, a.created_by, a.deleted_at, a.versions,
+    `select a.id, f.id as file_id, a.version, f.name as filename, a.caption, f.mime, a.size_bytes, a.created_at, a.created_at::text as created_at_exact,
+            f.created_by, f.deleted_at, n.versions,
             (${origin}) as origin,
             (${FAMILY_EXPR}) as family,
-            (select count(distinct u.conversation_id)::int from core.artifact_uses u where u.artifact_id = a.id) as contexts,
-            (select u.agent_id from core.artifact_uses u where u.artifact_id = a.id and u.agent_id is not null order by u.created_at asc limit 1) as use_agent,
-            ${CONTEXT_EXPR}
-       from ${source}
-      where ${['true', ...where.slice(1)].join(' and ')}
+            ${USE_EXPR}
+       from core.files f
+       cross join lateral (select * from core.artifacts a where a.file_id = f.id and a.deleted_at is null order by a.version desc limit 1) a
+       cross join lateral (select count(*)::int as versions from core.artifacts v where v.file_id = f.id and v.deleted_at is null) n
+      where ${where.join(' and ')}
       order by a.created_at desc, a.id desc
       limit $${params.length}`,
     params,
@@ -250,6 +255,11 @@ export async function listLibrary(
 
 export const CONTEXTS_PAGE = 50;
 
+/**
+ * One version of a file (`id`, a version's id; the file's newest when it is
+ * the file's id), with the file's versions and the conversations any of them
+ * was used in.
+ */
 export async function getLibraryEntry(
   pool: Queryable,
   id: string,
@@ -258,48 +268,37 @@ export async function getLibraryEntry(
 ): Promise<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; versions: LibraryVersion[] } | null> {
   if (!UUID.test(id)) return null;
   const { rows } = await pool.query(
-    `select a.id, a.filename, a.caption, a.mime, a.size_bytes, a.created_at, a.created_by, a.deleted_at,
-            (${originSql('a.created_by', '$2::text[]')}) as origin,
+    `select a.id, f.id as file_id, a.version, f.name as filename, a.caption, f.mime, a.size_bytes, a.created_at, f.created_by, f.deleted_at,
+            (select count(*)::int from core.artifacts v where v.file_id = f.id and v.deleted_at is null) as versions,
+            (${originSql('$2::text[]')}) as origin,
             (${FAMILY_EXPR}) as family,
-            (select count(distinct u.conversation_id)::int from core.artifact_uses u where u.artifact_id = a.id) as contexts,
-            (select u.agent_id from core.artifact_uses u where u.artifact_id = a.id and u.agent_id is not null order by u.created_at asc limit 1) as use_agent,
-            ${CONTEXT_EXPR}
-       from core.artifacts a
-      where a.id = $1::uuid and ${membershipSql('$2::text[]')}`,
+            ${USE_EXPR}
+       from core.files f
+       join core.artifacts a on a.file_id = f.id
+      where a.deleted_at is null and ${membershipSql('$2::text[]')}
+        and (a.id = $1::uuid or (f.id = $1::uuid and a.version = (select max(v.version) from core.artifacts v where v.file_id = f.id and v.deleted_at is null)))`,
     [id, knownAgentIds],
   );
   if (!rows[0]) return null;
-  const { rows: versionRows } = await pool.query(
-    `select v.id, v.filename, v.created_at, v.size_bytes, v.sha256, v.created_by,
-            (select max(e.edited_at) from core.owner_file_edits e where e.artifact_id = v.id) as edited_at
-       from core.artifacts v, core.artifacts t
-      where t.id = $1::uuid and v.deleted_at is null and ${fileChainKeySql('v')} = ${fileChainKeySql('t')}
-      order by v.created_at desc, v.id desc`,
-    [id],
-  );
-  const versions: LibraryVersion[] = versionRows.map((v) => ({
-    id: String(v.id),
-    filename: v.filename ?? null,
-    createdAt: new Date(v.created_at).toISOString(),
-    sizeBytes: Number(v.size_bytes ?? 0),
-    sha256: String(v.sha256),
-    createdBy: String(v.created_by),
-    editedAt: v.edited_at ? new Date(v.edited_at).toISOString() : null,
-  }));
+  const fileId = String(rows[0].file_id);
+  const versions = await libraryVersions(pool, fileId);
   const offset = Math.max(0, Math.trunc(contextsOffset));
   const { rows: uses } = await pool.query(
-    `select u.conversation_id, u.kind, u.agent_id, u.created_at, c.agent_id as conversation_agent, c.group_id, g.name as group_name,
+    `select u.conversation_id, u.kind, min(u.agent_id) as agent_id, min(u.created_at) as created_at,
+            c.agent_id as conversation_agent, c.group_id, g.name as group_name,
             count(*) over () as total
        from core.artifact_uses u
+       join core.artifacts v on v.id = u.artifact_id
        join core.conversations c on c.id = u.conversation_id
        left join core.groups g on g.id = c.group_id
-      where u.artifact_id = $1::uuid
-      order by u.created_at desc, u.conversation_id, u.kind
+      where v.file_id = $1::uuid
+      group by u.conversation_id, u.kind, c.agent_id, c.group_id, g.name
+      order by min(u.created_at) desc, u.conversation_id, u.kind
       limit $2 offset $3`,
-    [id, CONTEXTS_PAGE, offset],
+    [fileId, CONTEXTS_PAGE, offset],
   );
   return {
-    entry: { ...toEntry(rows[0]), versions: Math.max(1, versions.length) },
+    entry: toEntry(rows[0]),
     versions,
     contextsTotal: Number(uses[0]?.total ?? 0),
     contextsOffset: offset,
@@ -331,13 +330,17 @@ export async function recordArtifactUse(
   );
 }
 
-/** The earliest conversation a file was part of: who it was with. */
-const CONTEXT_EXPR = `(select c.agent_id from core.artifact_uses u join core.conversations c on c.id = u.conversation_id where u.artifact_id = a.id order by u.created_at asc limit 1) as context_agent,
-            (select g.name from core.artifact_uses u join core.conversations c on c.id = u.conversation_id join core.groups g on g.id = c.group_id where u.artifact_id = a.id order by u.created_at asc limit 1) as context_group`;
+/** How many conversations used any version of the file `f`, the agent that first did, and who the first was with. */
+const USE_EXPR = `(select count(distinct u.conversation_id)::int from core.artifact_uses u where u.artifact_id in ${VERSION_IDS}) as contexts,
+            (select u.agent_id from core.artifact_uses u where u.artifact_id in ${VERSION_IDS} and u.agent_id is not null order by u.created_at asc limit 1) as use_agent,
+            (select c.agent_id from core.artifact_uses u join core.conversations c on c.id = u.conversation_id where u.artifact_id in ${VERSION_IDS} order by u.created_at asc limit 1) as context_agent,
+            (select g.name from core.artifact_uses u join core.conversations c on c.id = u.conversation_id join core.groups g on g.id = c.group_id where u.artifact_id in ${VERSION_IDS} order by u.created_at asc limit 1) as context_group`;
 
 function toEntry(row: any): LibraryEntry {
   return {
     id: String(row.id),
+    fileId: String(row.file_id),
+    version: Number(row.version ?? 1),
     filename: row.filename ?? null,
     caption: row.caption ?? null,
     mime: String(row.mime),

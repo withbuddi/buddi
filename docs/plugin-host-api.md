@@ -429,10 +429,13 @@ interface FilesArea {
 
 `createdBy` and the data directory are filled in by core. Bytes already in
 Files come back as the file that held them, with `existed: true`; nothing new
-is written. `version` (1.25) names a document by its title: the host gives it
-the next version among every file of the calling conversation (`base.ext`,
-then `base (v2).ext`, …), counted and saved under one lock so two writes at
-once never share a name. `FileRow` has no
+is written. `version` (1.25) names a document by its title: the save is the
+next version of the conversation's file named `base.ext` (ignoring case), or
+a new file, resolved and saved under one lock so two writes at once never
+make two files. Since 1.34 every `FileRow` says its `fileId` and `version`
+(and `createdBy`, the version's author), and stored names carry no version
+mark (before 1.34 a second version was named `base (v2).ext`; a download
+still is). `FileRow` has no
 `storagePath`, and says its `conversationId` only when that conversation
 exists. Scope: a plugin sees files it saved and files handed into a
 conversation its tool is running in. A manifest that declares
@@ -970,21 +973,25 @@ plugin:
 An older buddi refuses the renderers, components and fields it does not
 know, so a plugin using any of them asks for `^1.33`.
 
-1.34 adds optional arguments to `files.save`:
+1.34 makes a file a row with numbered versions (docs/files.md, "Versions"):
+`FileRow` gains `fileId`, `version` and `createdBy`, a document's versions
+keep its name (no `(vN)` in stored names), and `files.list` takes `latest`
+(each file once, as its current version). `files.save` takes:
 
 - **`workspacePath`**: the absolute path the bytes were read from, inside the
-  plugin's own data folder (anything else is refused). When the owner edits
-  the file on the Canvas and saves, buddi writes his version back there too,
-  if that copy is still the one he opened (otherwise his save is refused with
-  what the copy holds now). The host plugin passes it for a command's outputs.
-- **`version.readVersion`**: once the owner has edited the newest version of
-  a document, the next version is refused unless it names that version's sha256,
-  so a writer cannot drop the owner's edit unread.
-- **`version.of`**: any version's id of an existing file: the save is that
-  file's next version (a command's output keeps its name and workspace path).
-  Without it, a title that only differs from one of the conversation's files
-  by case, spaces, hyphens or a `(vN)` joins that file. An older buddi
-  ignores all three.
+  plugin's own data folder (anything else is refused). The save is a version
+  of the file captured from that path in this conversation; when the owner
+  edits it on the Canvas and saves, buddi writes his version back there too,
+  while that copy is still the one buddi last read or wrote (otherwise his
+  save is refused with what the copy holds now). The host plugin passes it
+  for a command's outputs.
+- **`version.of`**: an existing file's id (or any version's): the save is that
+  file's next version, whatever `base` says; the file keeps its name and
+  workspace.
+- **`version.readVersion`**: the number of the version the writer read. A save
+  over a newest version someone else wrote (the owner's edit) is refused
+  without it, and with an older one, so a writer cannot drop that version
+  unread. An older buddi ignores all three.
 
 ## 8. End to end
 

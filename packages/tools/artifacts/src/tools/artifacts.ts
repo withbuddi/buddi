@@ -38,7 +38,12 @@ const listInput = z.object({
 
 /** What a tool result says about one artifact. Metadata only — never bytes. */
 export interface ArtifactSummary {
+  /** This version's id. */
   id: string;
+  /** The file it is a version of: what artifacts.write and canvas.open name. */
+  fileId: string;
+  /** Its number among the file's versions. */
+  version: number;
   kind: string;
   mime: string;
   filename: string | null;
@@ -50,6 +55,8 @@ export interface ArtifactSummary {
 function summarize(row: FileRow): ArtifactSummary {
   return {
     id: row.id,
+    fileId: row.fileId,
+    version: row.version,
     kind: row.kind,
     mime: row.mime,
     filename: row.filename,
@@ -65,11 +72,12 @@ export const list: ToolDefinition<
 > = {
   name: 'artifacts.list',
   description:
-    'List the files the owner has sent you or that a run produced — statements, photos, documents — newest first. Metadata only: id, kind, mime, filename, size, caption. Use it to find the id of something the owner refers to ("the statement I sent yesterday"), then read it with artifacts.describe.',
+    'List the files the owner has sent you or that a run produced — statements, photos, documents — newest first, each file once as its current version. Metadata only: id (that version), fileId, version, kind, mime, filename, size, caption. Use it to find something the owner refers to ("the statement I sent yesterday"), then read it with artifacts.describe or artifacts.text.',
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {
     const rows = await ctx.buddi!.files!.list({
+      latest: true,
       ...(input.limit === undefined ? {} : { limit: input.limit }),
       ...(input.kind === undefined ? {} : { kind: input.kind }),
     });
@@ -175,7 +183,7 @@ function cutBytes(text: string, limit: number): string {
 
 export const text: ToolDefinition<
   z.infer<typeof textInput>,
-  { id: string; sha256: string; text: string; pages?: number; truncated: boolean; chars: number; note?: string }
+  { id: string; fileId: string; version: number; text: string; pages?: number; truncated: boolean; chars: number; note?: string }
 > = {
   name: 'artifacts.text',
   untrusted: 'file',
@@ -198,8 +206,9 @@ export const text: ToolDefinition<
     const capped = out.length < asked.length;
     return {
       id: row.id,
-      // What a document write over the owner's edit names as `readVersion`.
-      sha256: row.sha256,
+      // What a write of the next version names: fileId, and this as readVersion.
+      fileId: row.fileId,
+      version: row.version,
       text: out,
       ...(extracted.pages === undefined ? {} : { pages: extracted.pages }),
       truncated: extracted.truncated || out.length < extracted.text.length,

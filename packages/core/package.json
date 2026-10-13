@@ -41,6 +41,10 @@
       "types": "./dist/connection-config.d.ts",
       "default": "./dist/connection-config.js"
     },
+    "./text-files": {
+      "types": "./dist/text-files.d.ts",
+      "default": "./dist/text-files.js"
+    },
     "./uninstall": {
       "types": "./dist/uninstall.d.ts",
       "default": "./dist/uninstall.js"

@@ -456,23 +456,22 @@ export interface FilesArea {
    * Save bytes into Files. The same bytes again are the file that already
    * held them: it comes back with `existed: true` and nothing new is written.
    *
-   * `version` (since 1.25) names a document by its title: the host gives it
-   * the next version among every file of the calling conversation —
-   * `base.ext`, then `base (v2).ext`, … — counted and saved under one lock, so
-   * two writes at once never share a name. `filename` is then ignored inside a
-   * conversation; outside one the name is `base.ext`. Once the owner edited
-   * the newest version (1.34), the next is refused unless `readVersion` is
-   * that version's sha256: the writer read his edit first.
+   * `version` (since 1.25) names a document by its title: inside a
+   * conversation, the save is the next version of the live file of that name
+   * (`base.ext`, compared ignoring case), else a new file; outside one it is
+   * a new file. Since 1.34 a file's name never carries a version mark
+   * (versions are numbered: `FileRow.version`), and a save is refused when
+   * someone else wrote the newest version unless `readVersion` is that
+   * version's number — the writer read it first.
    *
-   * `version.of` (1.34) names any version of an existing file by id: the
-   * save is that file's next version, whatever `base` says — a command's
-   * output keeps its name. Without it, a title that only differs from one of
-   * the conversation's files by case, spaces, hyphens or a `(vN)` joins that
-   * file too.
+   * `version.of` (1.34) names an existing file by its id (or any version's):
+   * the save is that file's next version, whatever `base` says — a command's
+   * output keeps its name and workspace path.
    *
    * `workspacePath` (1.34) is the absolute path the bytes were read from,
    * inside this plugin's own data folder (`dir.path`, or `dir.legacyPath`):
-   * the owner's save of the file on the Canvas writes back there.
+   * the save is a version of the file captured from that path in this
+   * conversation, and the owner's save of it on the Canvas writes back there.
    */
   save(input: {
     bytes: Buffer;
@@ -480,9 +479,9 @@ export interface FilesArea {
     filename?: string;
     caption?: string;
     source?: ArtifactSource;
-    version?: { base: string; ext: string; readVersion?: string; of?: string };
+    version?: { base: string; ext: string; readVersion?: number; of?: string };
     workspacePath?: string;
-  }): Promise<FileRow & { existed?: boolean; version?: number }>;
+  }): Promise<FileRow & { existed?: boolean }>;
   get(id: string): Promise<FileRow | null>;
   read(id: string): Promise<Buffer>;
   list(opts?: {
@@ -493,6 +492,8 @@ export interface FilesArea {
     sha256?: string;
     /** Only files handed in by this surface (`email`, `telegram`, …). */
     surface?: string;
+    /** Each file once, as its current version (1.34). */
+    latest?: boolean;
     limit?: number;
   }): Promise<FileRow[]>;
 }

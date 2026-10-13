@@ -1,24 +1,39 @@
 /**
- * The artifact store: metadata in `core.artifacts`, bytes on disk.
+ * The artifact store: files in `core.files`, their versions in
+ * `core.artifacts`, bytes on disk (docs/files.md).
  *
- * Two rules shape this module.
+ * Four rules shape this module.
  *
  * 1. **Bytes never live in the database.** A Telegram photo or a bank statement
  *    would otherwise sit base64-encoded inside `core.messages` forever, bloating
- *    every history replay. The row holds a relative `storage_path`; the file
- *    lives under `BUDDI_DATA_DIR` (gitignored).
- * 2. **Content addressing, so re-sending is free.** The same file dropped twice
- *    into the same chat is the same artifact: dedup is `(sha256, source)`, and
- *    `saveArtifact` returns the existing row instead of writing a duplicate.
+ *    every history replay. A version holds a relative `storage_path`; the bytes
+ *    live under `BUDDI_DATA_DIR` (gitignored), content-addressed.
+ * 2. **A file is a row; its versions are appended, never rewritten.** Each
+ *    version has a number and an author (`created_by`: the owner for his
+ *    saves and restores). What a file *is* — its name, its conversation, the
+ *    workspace path a command's output came from and whose workspace that is —
+ *    lives on the file, so writing a version never changes it. The current
+ *    version is the highest-numbered live one.
+ * 3. **Re-sending is free.** The same attachment dropped twice into the same
+ *    chat is the same file: `saveArtifact` returns the version that holds it.
+ *    That is about what was handed in, not about versions: two versions of
+ *    one file may hold the same bytes (a Restore does).
+ * 4. **One lock per file.** Every change to a file — a version, a delete, an
+ *    undelete — runs in one transaction holding that file's lock; creating a
+ *    file holds the lock on what names it (its title in the conversation, its
+ *    workspace path, or its bytes and source), so two writers never make two
+ *    files of one. A blob is written and unlinked under a lock on its path,
+ *    held until the row that names it is committed.
  *
- * Deletion is soft — an artifact can be referenced by a transcript, an approval
+ * Deletion is soft — a version can be referenced by a transcript, an approval
  * or a run, and those references must stay explicable after the owner forgets
- * the file. The bytes are left in place in v1; only the row is tombstoned.
+ * the file. A month later `purgeDeletedArtifacts` removes the rows, and the
+ * bytes no remaining version stores.
  */
 import { mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { sha256Of } from '../plugin/hash.js';
 
 /** The four kinds `core.artifacts.kind` allows. */
@@ -39,6 +54,12 @@ export interface ArtifactRow {
   storagePath: string;
   caption: string | null;
   createdAt: string | null;
+  /** The file this is a version of (`core.files`). */
+  fileId: string;
+  /** Its number among the file's versions, from 1. */
+  version: number;
+  /** Who wrote this version: `'owner'` or an agent id. */
+  createdBy: string;
 }
 
 /** Where an attachment came from, when a surface handed it in. */
@@ -59,12 +80,11 @@ export interface SaveArtifactInput {
   conversationId?: string | null;
   /**
    * Where the bytes were read from, relative to the data dir, when that is a
-   * workspace the file may be edited in again (a command's output). The
+   * workspace the file may be edited in again (a command's output): the
+   * file is the one captured from that path in this conversation, and the
    * owner's save writes back there.
    */
   originPath?: string | null;
-  /** What the workspace copy holds, when that is not these bytes (a version written in Files, not there). */
-  originSha256?: string | null;
 }
 
 export interface ListArtifactsOptions {
@@ -192,24 +212,177 @@ function toRow(row: Record<string, any>): ArtifactRow {
     storagePath: row.storage_path,
     caption: row.caption ?? null,
     createdAt: toIso(row.created_at),
+    fileId: String(row.file_id),
+    version: Number(row.version),
+    createdBy: String(row.created_by),
   };
 }
 
 const SELECT_COLUMNS = `id, kind, mime, filename, size_bytes, sha256, storage_path,
-       caption, created_at`;
+       caption, created_at, file_id, version, created_by`;
+/** The same columns of the version alias `a`. */
+const A_COLUMNS = SELECT_COLUMNS.split(',').map((column) => `a.${column.trim()}`).join(', ');
+
+/** How a file came to be: written by title, captured from a workspace, or handed in. */
+export type StoredFileOrigin = 'document' | 'capture' | 'upload';
+
+/** One file, across its versions. */
+export interface FileRecord {
+  id: string;
+  conversationId: string | null;
+  /** Its name, never with a version mark (a download adds one). */
+  name: string | null;
+  mime: string;
+  /** Who made it: `'owner'` or an agent id. A capture belongs to that agent's workspace. */
+  createdBy: string;
+  origin: StoredFileOrigin;
+  /** A command's output: the path it was read from, relative to the data dir. */
+  originPath: string | null;
+  /** That copy's hash as buddi last read or wrote it. */
+  originSha256: string | null;
+  createdAt: string | null;
+  deletedAt: string | null;
+}
+
+const FILE_COLUMNS = `f.id, f.conversation_id, f.name, f.mime, f.created_by, f.origin, f.origin_path, f.origin_sha256, f.created_at, f.deleted_at`;
+
+function toFile(row: Record<string, any>): FileRecord {
+  return {
+    id: String(row.id),
+    conversationId: row.conversation_id ? String(row.conversation_id) : null,
+    name: row.name ?? null,
+    mime: String(row.mime),
+    createdBy: String(row.created_by),
+    origin: row.origin as StoredFileOrigin,
+    originPath: row.origin_path ?? null,
+    originSha256: row.origin_sha256 ?? null,
+    createdAt: toIso(row.created_at),
+    deletedAt: toIso(row.deleted_at),
+  };
+}
+
+type Queryable = { query(text: string, values?: unknown[]): Promise<{ rows: any[] }> };
+
+/** One transaction on one connection: every lock below is held until it ends. */
+async function transaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const out = await fn(client);
+    await client.query('commit');
+    return out;
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function lock(client: Queryable, key: string): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [key]);
+}
+
+/** The one lock every change to a file takes: versions, deletes and undeletes are serialised by it. */
+function lockFile(client: Queryable, fileId: string): Promise<void> {
+  return lock(client, `buddi.file:${fileId}`);
+}
 
 /**
- * Store bytes and record the artifact.
+ * Put bytes on disk at the path their hash gives, under that path's lock —
+ * held until the caller's transaction ends, so a purge that would unlink the
+ * blob either ran before (and the bytes are written again here) or sees the
+ * row this transaction commits.
+ */
+async function storeBlob(client: Queryable, env: EnvLike, bytes: Buffer, mime: string, filename: string | null): Promise<{ sha256: string; relative: string }> {
+  const sha256 = sha256Of(bytes);
+  const relative = storagePathFor(sha256, mime, filename, new Date());
+  await lock(client, `buddi.blob:${relative}`);
+  const absolute = path.join(resolveDataDir(env), relative);
+  // Content-addressed: bytes already there are these bytes.
+  if (!(await stat(absolute).then((info) => info.isFile(), () => false))) {
+    await mkdir(path.dirname(absolute), { recursive: true });
+    await writeFile(absolute, bytes);
+  }
+  return { sha256, relative };
+}
+
+async function loadFile(client: Queryable, fileId: string): Promise<FileRecord | null> {
+  const { rows } = await client.query(`select ${FILE_COLUMNS} from core.files f where f.id = $1`, [fileId]);
+  return rows[0] ? toFile(rows[0]) : null;
+}
+
+async function newestOf(client: Queryable, fileId: string): Promise<ArtifactRow | null> {
+  const { rows } = await client.query(
+    `select ${A_COLUMNS} from core.artifacts a where a.file_id = $1 and a.deleted_at is null order by a.version desc limit 1`,
+    [fileId],
+  );
+  return rows[0] ? toRow(rows[0]) : null;
+}
+
+async function createFile(
+  client: Queryable,
+  input: { conversationId: string | null; name: string | null; mime: string; createdBy: string; origin: StoredFileOrigin; originPath?: string | null; originSha256?: string | null },
+): Promise<FileRecord> {
+  const { rows } = await client.query(
+    `insert into core.files (conversation_id, name, mime, created_by, origin, origin_path, origin_sha256)
+     values ($1, $2, $3, $4, $5, $6, $7)
+     returning ${FILE_COLUMNS.replace(/f\./g, '')}`,
+    [input.conversationId, input.name, input.mime, input.createdBy, input.origin, input.originPath ?? null, input.originSha256 ?? null],
+  );
+  return toFile(rows[0]);
+}
+
+/** The next version of `file`, numbered past every one it ever had (deleted ones keep theirs). */
+async function insertVersion(
+  client: Queryable,
+  env: EnvLike,
+  file: FileRecord,
+  input: { bytes: Buffer; mime?: string; createdBy: string; caption?: string | null; source?: ArtifactSource | null; restoredFrom?: number },
+): Promise<ArtifactRow> {
+  const mime = input.mime ?? file.mime;
+  const blob = await storeBlob(client, env, input.bytes, mime, file.name);
+  const { rows } = await client.query(
+    `insert into core.artifacts
+       (kind, mime, filename, size_bytes, sha256, storage_path, source_surface, source_chat_id, source_message_id,
+        caption, created_by, conversation_id, file_id, version, restored_from)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+             (select coalesce(max(v.version), 0) + 1 from core.artifacts v where v.file_id = $13), $14)
+     returning ${SELECT_COLUMNS}`,
+    [
+      kindForMime(mime), mime, file.name, input.bytes.length, blob.sha256, blob.relative,
+      input.source?.surface ?? null, input.source?.chatId ?? null, input.source?.messageId ?? null,
+      input.caption?.trim() || null, input.createdBy, file.conversationId, file.id, input.restoredFrom ?? null,
+    ],
+  );
+  return toRow(rows[0]);
+}
+
+function checkInput(input: { bytes: Buffer; createdBy: string }, mime?: string): void {
+  if (!Buffer.isBuffer(input.bytes) || input.bytes.length === 0) {
+    throw new Error('saveArtifact: bytes must be a non-empty Buffer');
+  }
+  if (mime !== undefined && (!mime || mime.trim() === '')) {
+    throw new Error('saveArtifact: mime is required');
+  }
+  if (!input.createdBy || input.createdBy.trim() === '') {
+    throw new Error('saveArtifact: createdBy is required (owner id or agent id)');
+  }
+}
+
+/**
+ * Store bytes as a file: an attachment handed in, a file a plugin saved, or
+ * — with `originPath` — a command's output.
  *
- * Dedup is by `(sha256, source_surface, source_chat_id, origin_path)`: the same statement
- * forwarded twice in the same chat returns the row that already exists. Postgres
- * counts NULLs as distinct, so source-less artifacts (what an agent produced)
- * are matched here with `is not distinct from` rather than left to the
- * constraint — the constraint still guards the surface case, which is the one
- * a retrying poller can actually hit.
+ * An output is a version of the file captured from that path in this
+ * conversation (a new one when it changed, the current one when it did not);
+ * the copy's hash is recorded on the file, as what buddi last read there.
  *
- * The file is written before the row is inserted: an orphan file wastes disk, an
- * orphan row would be a broken reference.
+ * Anything else is a file of its own, unless these bytes already came in
+ * from the same place — `(sha256, source_surface, source_chat_id)`, the
+ * first version of a file handed in: then that version comes back (brought
+ * back if it was discarded) and `existed` says so. Checked under a lock on
+ * that key, so a retrying poller never makes two.
  */
 export async function saveArtifact(
   pool: Pool,
@@ -219,250 +392,174 @@ export async function saveArtifact(
   return (await saveArtifactReporting(pool, input, env)).row;
 }
 
-/**
- * `saveArtifact`, saying whether the bytes were already in Files (`existed`):
- * then nothing new was written and the row is the one that held them, with
- * its own name and conversation.
- */
+/** `saveArtifact`, saying whether the bytes were already there (`existed`): then nothing new was written. */
 export async function saveArtifactReporting(
   pool: Pool,
   input: SaveArtifactInput,
   env: EnvLike = process.env,
 ): Promise<{ row: ArtifactRow; existed: boolean }> {
-  if (!Buffer.isBuffer(input.bytes) || input.bytes.length === 0) {
-    throw new Error('saveArtifact: bytes must be a non-empty Buffer');
-  }
-  if (!input.mime || input.mime.trim() === '') {
-    throw new Error('saveArtifact: mime is required');
-  }
-  if (!input.createdBy || input.createdBy.trim() === '') {
-    throw new Error('saveArtifact: createdBy is required (owner id or agent id)');
-  }
-
+  checkInput(input, input.mime);
   const mime = input.mime.trim();
   const filename = input.filename?.trim() || null;
+  const conversationId = input.conversationId ?? null;
   const sha256 = sha256Of(input.bytes);
-  const surface = input.source?.surface ?? null;
-  const chatId = input.source?.chatId ?? null;
+  const source = input.source ?? null;
+  const version = { bytes: input.bytes, mime, createdBy: input.createdBy, caption: input.caption ?? null, source };
 
-  const originPath = input.originPath ?? null;
-  const existing = await pool.query(
-    `select ${SELECT_COLUMNS} from core.artifacts
-      where sha256 = $1
-        and source_surface is not distinct from $2
-        and source_chat_id is not distinct from $3
-        and origin_path is not distinct from $4
-        and deleted_at is null
-      order by created_at asc
-      limit 1`,
-    [sha256, surface, chatId, originPath],
-  );
-  if (existing.rows[0]) return { row: toRow(existing.rows[0]), existed: true };
-
-  const now = new Date();
-  const relative = storagePathFor(sha256, mime, filename, now);
-  const absolute = path.join(resolveDataDir(env), relative);
-  await mkdir(path.dirname(absolute), { recursive: true });
-  // Content-addressed: if the file is already there it is byte-identical.
-  await writeFile(absolute, input.bytes);
-
-  const { rows } = await pool.query(
-    `insert into core.artifacts
-       (kind, mime, filename, size_bytes, sha256, storage_path,
-        source_surface, source_chat_id, source_message_id, caption,
-        created_by, conversation_id, origin_path, origin_sha256)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, case when $13::text is null then null else coalesce($14::text, $5) end)
-     on conflict (sha256, source_surface, source_chat_id, (coalesce(origin_path, ''))) do update
-       set caption = coalesce(core.artifacts.caption, excluded.caption),
-           -- The same bytes handed in again after a discard: the row comes back.
-           deleted_at = null
-     returning ${SELECT_COLUMNS}, (xmax = 0) as inserted`,
-    [
-      kindForMime(mime),
-      mime,
-      filename,
-      input.bytes.length,
-      sha256,
-      relative,
-      surface,
-      chatId,
-      input.source?.messageId ?? null,
-      input.caption?.trim() || null,
-      input.createdBy,
-      input.conversationId ?? null,
-      originPath,
-      input.originSha256 ?? null,
-    ],
-  );
-  const row = rows[0];
-  if (!row) throw new Error('saveArtifact: insert returned no row');
-  return { row: toRow(row), existed: row.inserted !== true };
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * The version a new write of `base.ext` gets among `existing` names: one past
- * the highest of `base.ext` (version 1) and `base (vN).ext`, ignoring case.
- */
-export function nextDocumentVersion(base: string, ext: string, existing: readonly (string | null)[]): number {
-  const pattern = new RegExp(`^${escapeRegExp(base)}(?: \\(v(\\d+)\\))?\\.${escapeRegExp(ext)}$`, 'i');
-  let highest = 0;
-  for (const name of existing) {
-    const match = name ? pattern.exec(name) : null;
-    if (!match) continue;
-    highest = Math.max(highest, match[1] ? Number(match[1]) : 1);
-  }
-  return highest + 1;
-}
-
-/** `base.ext` for version 1, `base (vN).ext` after. */
-export function documentVersionName(base: string, ext: string, version: number): string {
-  return version <= 1 ? `${base}.${ext}` : `${base} (v${version}).${ext}`;
-}
-
-/**
- * The next version of an existing file, named by any of its versions' ids:
- * what `artifacts.write` does with `fileId`. It joins that file's chain
- * (`fileChainKeySql`) whatever the writer would have called it: a command's
- * output keeps its name and the workspace path it came from (the copy there
- * is not written; it still holds what it held, so the owner's next save
- * writes back over it), a document gets the next `(vN)` of its name. Under a
- * lock on the chain; refused like `saveArtifactVersion` when the owner
- * edited the newest version and `readVersion` is not its sha256.
- */
-export async function saveNextVersionOf(
-  pool: Pool,
-  input: { of: string; bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: string },
-  env: EnvLike = process.env,
-): Promise<{ row: ArtifactRow; existed: boolean; version: number }> {
-  const { rows: chainRows } = await pool.query(`select ${fileChainKeySql('a')} as chain from core.artifacts a where a.id = $1 and a.deleted_at is null`, [input.of]);
-  const chain = chainRows[0]?.chain as string | undefined;
-  if (!chain) throw new Error(`there is no file ${input.of} in Files; find it with artifacts.list`);
-  const client = await pool.connect();
-  try {
-    await client.query('begin');
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`buddi.files.chain:${chain}`]);
-    const { rows } = await client.query(
-      `select o.id, o.filename, o.mime, o.sha256, o.conversation_id, o.source_surface, o.source_chat_id, o.origin_path, o.origin_sha256,
-              exists (select 1 from core.owner_file_edits e where e.artifact_id = o.id) as edited
-         from core.artifacts o, core.artifacts t
-        where t.id = $1 and o.deleted_at is null and ${fileChainKeySql('o')} = ${fileChainKeySql('t')}
-        order by o.created_at desc, o.id desc`,
-      [input.of],
-    );
-    const newest = rows[0];
-    if (!newest) throw new Error(`there is no file ${input.of} in Files; find it with artifacts.list`);
-    if (newest.edited && input.readVersion !== newest.sha256) throw new OwnerEditedError(String(newest.id), newest.filename ?? 'the file');
-    const versionOf = (name: string | null): number => Number(/ \(v(\d+)\)\.[^.]+$/i.exec(name ?? '')?.[1] ?? 1);
-    const version = Math.max(...rows.map((row) => versionOf(row.filename))) + 1;
-    const current = String(newest.filename ?? 'Untitled.md');
-    const plain = current.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1');
-    const dot = plain.lastIndexOf('.');
-    const filename = newest.origin_path ? current : documentVersionName(dot > 0 ? plain.slice(0, dot) : plain, dot > 0 ? plain.slice(dot + 1) : 'md', version);
-    const saved = await saveArtifactReporting(client as unknown as Pool, {
-      bytes: input.bytes,
-      mime: String(newest.mime),
-      filename,
-      createdBy: input.createdBy,
-      conversationId: newest.conversation_id ?? null,
-      ...(newest.source_surface ? { source: { surface: String(newest.source_surface), chatId: newest.source_chat_id ?? null } } : {}),
-      ...(input.caption ? { caption: input.caption } : {}),
-      ...(newest.origin_path ? { originPath: String(newest.origin_path), originSha256: newest.origin_sha256 ?? newest.sha256 } : {}),
-    }, env);
-    await client.query('commit');
-    return { ...saved, version };
-  } catch (err) {
-    await client.query('rollback').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-/**
- * The newest live file in a conversation, by this author, whose name is
- * `filename` as versions compare names (`normalizedFileName`): the chain a
- * document write by title joins when it only differs in case, spaces or
- * hyphens, or by a `(vN)`. Null when there is none.
- */
-export async function fileNamedLike(pool: Pool, conversationId: string, createdBy: string, filename: string): Promise<string | null> {
-  const { rows } = await pool.query(
-    `select a.id from core.artifacts a
-      where a.conversation_id = $1 and a.created_by = $2 and a.deleted_at is null and a.filename is not null
-        and (${normalizedFileNameSql('a.filename')} = $3
-          or (a.origin_path is not null and ${normalizedFileNameSql(`regexp_replace(a.origin_path, '^.*/', '')`)} = $3))
-      order by a.created_at desc, a.id desc limit 1`,
-    [conversationId, createdBy, normalizedFileName(filename)],
-  );
-  return rows[0] ? String(rows[0].id) : null;
-}
-
-/**
- * The owner edited the newest version of a document since it was written,
- * and the writer did not say it read that version: writing the next one
- * would silently drop his edit.
- */
-export class OwnerEditedError extends Error {
-  override readonly name = 'OwnerEditedError';
-  constructor(readonly artifactId: string, readonly filename: string) {
-    super(`The owner edited ${filename} (file ${artifactId}) after it was written. Read it first (artifacts.text with id "${artifactId}"), keep their changes, and write again with readVersion set to the sha256 that artifacts.text returned.`);
-  }
-}
-
-/**
- * Save the next version of the document `base.ext` in a conversation: the
- * version is counted over every file the conversation ever had (not a page of
- * the library), under an advisory lock on the conversation and the name, held
- * until the row is in — two writes at once get two versions.
- */
-export async function saveArtifactVersion(
-  pool: Pool,
-  input: Omit<SaveArtifactInput, 'filename' | 'conversationId'> & {
-    conversationId: string;
-    base: string;
-    ext: string;
-    /**
-     * The sha256 of the version the writer read: required once the owner
-     * edited the newest one, and compared with it under the lock, so an edit
-     * he made after that read is refused again.
-     */
-    readVersion?: string;
-  },
-  env: EnvLike = process.env,
-): Promise<{ row: ArtifactRow; existed: boolean; version: number }> {
-  const { base, ext, readVersion, ...rest } = input;
-  const client = await pool.connect();
-  const lockKey = `buddi.files.version:${input.conversationId}:${base.toLowerCase()}.${ext.toLowerCase()}`;
-  try {
-    await client.query('select pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
-    try {
-      const { rows } = await client.query<{ id: string; filename: string | null; sha256: string; edited: boolean }>(
-        `select a.id, a.filename, a.sha256,
-                exists (select 1 from core.owner_file_edits e where e.artifact_id = a.id) as edited
-           from core.artifacts a
-          where a.conversation_id = $1 and lower(a.filename) like $2 escape '\\'`,
-        [input.conversationId, `${base.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`],
+  if (input.originPath) {
+    const originPath = input.originPath;
+    return transaction(pool, async (client) => {
+      await lock(client, `buddi.files.origin:${conversationId ?? ''}:${originPath}`);
+      const { rows } = await client.query(
+        `select ${FILE_COLUMNS} from core.files f
+          where f.conversation_id is not distinct from $1 and f.origin_path = $2 and f.deleted_at is null
+          order by f.created_at desc limit 1`,
+        [conversationId, originPath],
       );
-      const version = nextDocumentVersion(base, ext, rows.map((r) => r.filename));
-      // The newest version, if the owner edited it: written over only by a writer that read it.
-      const newest = version > 1 && rows.find((r) => r.filename !== null && nextDocumentVersion(base, ext, [r.filename]) === version);
-      if (newest && newest.edited && readVersion !== newest.sha256) throw new OwnerEditedError(newest.id, newest.filename ?? `${base}.${ext}`);
-      // On the locking connection: a waiter holding a pool slot must never starve the holder of one.
-      const saved = await saveArtifactReporting(client as unknown as Pool, { ...rest, filename: documentVersionName(base, ext, version) }, env);
-      return { ...saved, version };
-    } finally {
-      await client.query('select pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]).catch(() => {});
+      if (!rows[0]) {
+        const file = await createFile(client, { conversationId, name: filename, mime, createdBy: input.createdBy, origin: 'capture', originPath, originSha256: sha256 });
+        return { row: await insertVersion(client, env, file, version), existed: false };
+      }
+      const file = toFile(rows[0]);
+      await lockFile(client, file.id);
+      // The copy holds these bytes: what buddi last read there.
+      await client.query(`update core.files set origin_sha256 = $2 where id = $1`, [file.id, sha256]);
+      const newest = await newestOf(client, file.id);
+      if (newest && newest.sha256 === sha256) return { row: newest, existed: true };
+      return { row: await insertVersion(client, env, file, version), existed: false };
+    });
+  }
+
+  return transaction(pool, async (client) => {
+    await lock(client, `buddi.files.received:${sha256}:${source?.surface ?? ''}:${source?.chatId ?? ''}`);
+    const { rows } = await client.query(
+      `select ${A_COLUMNS}, a.deleted_at from core.artifacts a join core.files f on f.id = a.file_id
+        where a.sha256 = $1 and a.source_surface is not distinct from $2 and a.source_chat_id is not distinct from $3
+          and a.version = 1 and f.origin = 'upload' and f.deleted_at is null
+        order by a.created_at asc, a.id asc limit 1`,
+      [sha256, source?.surface ?? null, source?.chatId ?? null],
+    );
+    const found = rows[0];
+    if (found) {
+      // The same bytes handed in again after a discard: the version comes back.
+      await client.query(
+        `update core.artifacts set deleted_at = null, caption = coalesce(caption, $2) where id = $1`,
+        [found.id, input.caption?.trim() || null],
+      );
+      return { row: toRow(found), existed: true };
     }
-  } finally {
-    client.release();
+    const file = await createFile(client, { conversationId, name: filename, mime, createdBy: input.createdBy, origin: 'upload' });
+    return { row: await insertVersion(client, env, file, version), existed: false };
+  });
+}
+
+/**
+ * Someone else's version is the newest: the writer did not say it read it
+ * (`readVersion`), or read an older one. Writing would drop that version's
+ * changes, so it is refused, with what to read.
+ */
+export class FileChangedError extends Error {
+  override readonly name = 'FileChangedError';
+  constructor(readonly file: FileRecord, readonly newest: ArtifactRow, readonly readVersion?: number) {
+    const name = file.name ?? 'the file';
+    const by = newest.createdBy === 'owner' ? 'the owner' : newest.createdBy;
+    const read = `Read it with artifacts.text { id: "${newest.id}" }, keep its changes, and write again with fileId "${file.id}" and readVersion ${newest.version}.`;
+    super(readVersion === undefined
+      ? `The newest version of ${name} (v${newest.version}) is by ${by}, not you. ${read}`
+      : `${name} has a newer version (v${newest.version}, by ${by}) than the v${readVersion} you read. ${read}`);
   }
 }
 
-/** One artifact by id. `null` when it does not exist or was deleted. */
-export async function getArtifact(pool: Pool, id: string): Promise<ArtifactRow | null> {
+/** The file was deleted from Files: nothing more is written to it. */
+export class FileGoneError extends Error {
+  override readonly name = 'FileGoneError';
+  constructor(readonly fileId: string) {
+    super(`File ${fileId} was deleted from Files by the owner. Do not write or recreate it unless they ask.`);
+  }
+}
+
+/** A title names more than one file in the conversation: the writer picks one by id. */
+export class AmbiguousFileError extends Error {
+  override readonly name = 'AmbiguousFileError';
+  constructor(readonly title: string, readonly fileIds: readonly string[]) {
+    super(`More than one file in this conversation is called "${title}" (${fileIds.join(', ')}). Write the one you mean with its fileId.`);
+  }
+}
+
+/**
+ * A writer's next version of `file`, under its lock: refused when someone
+ * else wrote the newest and the writer did not read it (`FileChangedError`),
+ * and nothing new when the bytes are the newest's.
+ */
+async function appendWriterVersion(
+  client: PoolClient,
+  env: EnvLike,
+  fileId: string,
+  input: { bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: number },
+): Promise<{ row: ArtifactRow; existed: boolean; file: FileRecord }> {
+  await lockFile(client, fileId);
+  const file = await loadFile(client, fileId);
+  if (!file || file.deletedAt !== null) throw new FileGoneError(fileId);
+  const newest = await newestOf(client, file.id);
+  if (newest) {
+    const stale = input.readVersion !== undefined ? newest.version > input.readVersion : newest.createdBy !== input.createdBy;
+    if (stale) throw new FileChangedError(file, newest, input.readVersion);
+    if (newest.sha256 === sha256Of(input.bytes)) return { row: newest, existed: true, file };
+  }
+  return { row: await insertVersion(client, env, file, input), existed: false, file };
+}
+
+/**
+ * The next version of a file named by id: what `artifacts.write { fileId }`
+ * and a plugin's `version.of` do. The file keeps its name and, for a
+ * command's output, its workspace path (the copy there is not written; it
+ * still holds what it held). `id` may be the file's or any version's.
+ */
+export async function saveVersion(
+  pool: Pool,
+  input: { id: string; bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: number },
+  env: EnvLike = process.env,
+): Promise<{ row: ArtifactRow; existed: boolean; file: FileRecord }> {
+  checkInput(input);
+  const fileId = await resolveFileId(pool, input.id);
+  if (!fileId) throw new Error(`there is no file ${input.id} in Files; find it with artifacts.list`);
+  return transaction(pool, (client) => appendWriterVersion(client, env, fileId, input));
+}
+
+/**
+ * A document written by title (`artifacts.write { title }`): the next
+ * version of the live file of that name in the conversation (names compared
+ * ignoring case), else a new file. Resolved and written under one lock on
+ * the conversation and the name, then the file's own: two writes at once
+ * never make two files, and a write never slips past an owner's save.
+ * Outside a conversation it is always a new file.
+ */
+export async function saveDocument(
+  pool: Pool,
+  input: { conversationId: string | null; name: string; mime: string; bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: number },
+  env: EnvLike = process.env,
+): Promise<{ row: ArtifactRow; existed: boolean; file: FileRecord }> {
+  checkInput(input, input.mime);
+  return transaction(pool, async (client) => {
+    if (input.conversationId) {
+      await lock(client, `buddi.files.name:${input.conversationId}:${input.name.toLowerCase()}`);
+      const { rows } = await client.query<{ id: string }>(
+        `select f.id from core.files f
+          where f.conversation_id = $1 and lower(f.name) = lower($2) and f.deleted_at is null
+            and exists (select 1 from core.artifacts a where a.file_id = f.id and a.deleted_at is null)
+          order by f.created_at asc, f.id asc`,
+        [input.conversationId, input.name],
+      );
+      if (rows.length > 1) throw new AmbiguousFileError(input.name, rows.map((row) => String(row.id)));
+      if (rows[0]) return appendWriterVersion(client, env, String(rows[0].id), input);
+    }
+    const file = await createFile(client, { conversationId: input.conversationId, name: input.name, mime: input.mime.trim(), createdBy: input.createdBy, origin: 'document' });
+    return { row: await insertVersion(client, env, file, input), existed: false, file };
+  });
+}
+
+/** One version by id. `null` when it does not exist or was deleted. */
+export async function getArtifact(pool: Queryable, id: string): Promise<ArtifactRow | null> {
   const { rows } = await pool.query(
     `select ${SELECT_COLUMNS} from core.artifacts
       where id = $1 and deleted_at is null`,
@@ -471,79 +568,58 @@ export async function getArtifact(pool: Pool, id: string): Promise<ArtifactRow |
   return rows[0] ? toRow(rows[0]) : null;
 }
 
-/**
- * The name a file is known by across its versions: `Plan (v3).md` and
- * `Plan.md` are the same file, `notes.txt` is itself. Lower-cased, as the
- * version count compares — the same `base.ext` `saveArtifactVersion` locks on.
- */
-export function fileChainName(filename: string | null): string | null {
-  if (!filename) return null;
-  return filename.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').toLowerCase();
+/** The file an id names: a file's own id, or any of its versions'. Null when neither. */
+export async function resolveFileId(pool: Queryable, id: string): Promise<string | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  const { rows } = await pool.query(
+    `select coalesce((select f.id from core.files f where f.id = $1::uuid), (select a.file_id from core.artifacts a where a.id = $1::uuid)) as id`,
+    [id],
+  );
+  return rows[0]?.id ? String(rows[0].id) : null;
 }
 
-/**
- * Which file a row is a version of, as SQL over the row `a` (an alias): the
- * one rule Files groups by and an owner's save checks for a newer version
- * with. Within a conversation:
- *
- *  - a command's output by the workspace path it was captured from — two
- *    outputs that share a basename are two files;
- *  - anything else that has the name of exactly one such path among the
- *    same agent's captures (an output captured before paths were recorded,
- *    a document written over a command's output), by that path;
- *  - anything else by its name (`normalizedFileName`: `Plan (v2).md` and
- *    `plan.md` are one), type and author.
- *
- * Outside a conversation, or unnamed, a row is a file of its own.
- */
-export function fileChainKeySql(a: string): string {
-  const name = normalizedFileNameSql(`${a}.filename`);
-  const joined = `from core.artifacts chain_o
-          where chain_o.conversation_id = ${a}.conversation_id and chain_o.created_by = ${a}.created_by and chain_o.origin_path is not null
-            and chain_o.deleted_at is null and ${normalizedFileNameSql(`regexp_replace(chain_o.origin_path, '^.*/', '')`)} = ${name}`;
-  return `(case
-    when ${a}.conversation_id is null or ${a}.filename is null then ${a}.id::text
-    when ${a}.origin_path is not null then 'o:' || ${a}.conversation_id::text || ':' || ${a}.origin_path
-    when (select count(distinct chain_o.origin_path) ${joined}) = 1
-      then 'o:' || ${a}.conversation_id::text || ':' || (select min(chain_o.origin_path) ${joined})
-    else 'n:' || ${a}.conversation_id::text || ':' || ${a}.mime || ':' || ${a}.created_by || ':' || ${name}
-  end)`;
+/** One file, deleted or not. */
+export async function getFile(pool: Queryable, fileId: string): Promise<FileRecord | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId)) return null;
+  return loadFile(pool, fileId);
 }
 
-/**
- * A file name as versions compare it, in SQL: no version mark, lower case,
- * and runs of spaces, hyphens and underscores as one hyphen —
- * `Montreal Weekend Packing List (v2).md` and
- * `montreal-weekend-packing-list.md` are one name. `normalizedFileName` is
- * the same in TypeScript.
- */
-export function normalizedFileNameSql(expr: string): string {
-  return `regexp_replace(lower(regexp_replace(${expr}, ' \\(v[0-9]+\\)(\\.[^.]+)$', '\\1', 'i')), '[[:space:]_-]+', '-', 'g')`;
+/** A file's current version: its highest-numbered live one. Null when the file is deleted or has none. */
+export async function currentVersion(pool: Queryable, fileId: string): Promise<ArtifactRow | null> {
+  const file = await getFile(pool, fileId);
+  if (!file || file.deletedAt !== null) return null;
+  return newestOf(pool, fileId);
 }
 
-export function normalizedFileName(filename: string): string {
-  return filename.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').toLowerCase().replace(/[\s_-]+/g, '-');
+/** A file's live versions, newest first, each saying which version it restored, if any. */
+export async function fileVersions(pool: Queryable, fileId: string): Promise<Array<ArtifactRow & { restoredFrom: number | null }>> {
+  const { rows } = await pool.query(
+    `select ${A_COLUMNS}, a.restored_from from core.artifacts a
+      where a.file_id = $1 and a.deleted_at is null
+      order by a.version desc`,
+    [fileId],
+  );
+  return rows.map((row) => ({ ...toRow(row), restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : Number(row.restored_from) }));
 }
 
-/** What `replaceArtifactContent` found. */
-export type ReplaceArtifactResult =
+/** What `saveOwnerVersion` found. */
+export type OwnerSaveResult =
   /**
-   * Saved in Files. `workspace` says what became of the workspace copy, for a
-   * captured file: written, or not, and why (a save to retry).
+   * Saved: the new version (or, when the bytes were already the newest's,
+   * that one: `created` false). `workspace` says what became of the
+   * workspace copy, for a command's output: written, or not and why.
    */
-  | { ok: true; row: ArtifactRow; workspace?: { updated: true } | { updated: false; reason: string } }
-  /** Someone wrote first: the bytes are not the ones the owner edited, or a newer version exists. */
-  | { ok: false; reason: 'stale'; current: ArtifactRow }
-  /** These exact bytes already are another file from the same place. */
-  | { ok: false; reason: 'duplicate' }
+  | { ok: true; row: ArtifactRow; file: FileRecord; created: boolean; workspace?: { updated: true } | { updated: false; reason: string } }
+  /** A version newer than the one he opened was saved meanwhile; `current` is it. */
+  | { ok: false; reason: 'newer'; current: ArtifactRow }
   /** The workspace copy it was captured from changed since; `workspaceText` is what is there now. */
   | { ok: false; reason: 'workspace'; current: ArtifactRow; workspaceText: string }
   | { ok: false; reason: 'gone' };
 
 /**
- * The workspace a captured file came from, as the caller judges it: nothing
- * to write back to, changed since (with what it holds now), or a write to
- * make once the save is in.
+ * The workspace a command's output came from, as the caller judges it:
+ * nothing to write back to, changed since (with what it holds now), or a
+ * write to make once the save is in.
  */
 export type WorkspaceCopy =
   | { kind: 'none' }
@@ -557,201 +633,138 @@ export type WorkspaceCopy =
    */
   | { kind: 'write'; commit: () => Promise<void>; abort: () => Promise<void> };
 
-/** What `replaceArtifactContent` tells a workspace check about the row. */
-export interface WorkspaceRow {
-  id: string;
+/** What `saveOwnerVersion` tells a workspace check: the file, and the hash its copy should still hold. */
+export interface WorkspaceFile {
+  fileId: string;
   originPath: string;
   /** The copy's hash as buddi last read or wrote it. */
-  originSha256: string | null;
+  known: string;
   conversationId: string | null;
+  /** The agent whose workspace it is. */
   createdBy: string;
 }
 
 /**
- * The owner's edit of a file, written over it in place.
+ * The owner's save of a file — his edit on the Canvas, or a Restore of an
+ * older version (`restoredFrom`, its bytes copied by the caller from that
+ * version, never from a preview) — appended as a new version by `owner`.
  *
- * One transaction, under the file's chain lock (`saveNextVersionOf` takes
- * it too), with the row locked: a version written at
- * the same moment either lands before (and this save is stale) or waits until
- * this one is in. Stale is the bytes not being the ones the owner opened
- * (`expectedSha256`), or a newer version of the same file — same type and
- * author in the same conversation, and the same name for a document or the
- * same workspace path for a command's output (two outputs that share a
- * basename are two files) — and that version comes back as `current`. The new bytes are stored content-addressed like any other (the
- * path comes from their hash, never from the caller), written only once the
- * row is known to take them and removed again if it does not; the old bytes
- * stay on disk, since another row may share them.
+ * One transaction under the file's lock: `base` is the version he opened,
+ * and a newer one saved meanwhile (by an agent, a command, another tab)
+ * refuses the save with it. For a command's output, `workspace` checks the
+ * copy and stages the write; the copy is put in place only once the save is
+ * committed, and a copy that cannot be is reported, not undone — the save is
+ * in Files, and saving again retries it.
  */
-export async function replaceArtifactContent(
+export async function saveOwnerVersion(
   pool: Pool,
   input: {
-    id: string;
+    fileId: string;
     bytes: Buffer;
-    expectedSha256: string;
-    /** For a file captured from a workspace: check that copy, and write it once the save is in. */
-    workspace?: (row: WorkspaceRow) => Promise<WorkspaceCopy>;
+    base: number;
+    restoredFrom?: number;
+    workspace?: (file: WorkspaceFile) => Promise<WorkspaceCopy>;
   },
   env: EnvLike = process.env,
-): Promise<ReplaceArtifactResult> {
-  const peek = await pool.query(
-    `select ${fileChainKeySql('a')} as chain from core.artifacts a where a.id = $1 and a.deleted_at is null`,
-    [input.id],
-  );
-  if (!peek.rows[0]) return { ok: false, reason: 'gone' };
-  // The same lock a next version of this file takes (`saveNextVersionOf`).
-  const lockKey = `buddi.files.chain:${String(peek.rows[0].chain)}`;
+): Promise<OwnerSaveResult> {
+  checkInput({ bytes: input.bytes, createdBy: 'owner' });
   const client = await pool.connect();
-  let written: string | null = null;
   let staged: Extract<WorkspaceCopy, { kind: 'write' }> | null = null;
   try {
     await client.query('begin');
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
-    const locked = await client.query(
-      `select ${SELECT_COLUMNS}, conversation_id, created_by, origin_path, origin_sha256 from core.artifacts
-        where id = $1 and deleted_at is null for update`,
-      [input.id],
-    );
-    const found = locked.rows[0];
-    if (!found) { await client.query('rollback'); return { ok: false, reason: 'gone' }; }
-    const row = toRow(found);
-    if (found.conversation_id && found.filename) {
-      // A newer version of the same file, by the one rule Files groups by.
-      const { rows } = await client.query(
-        `select ${SELECT_COLUMNS.split(',').map((c) => `o.${c.trim()}`).join(', ')}
-           from core.artifacts o, core.artifacts t
-          where t.id = $1 and o.id <> t.id and o.deleted_at is null and o.created_at > t.created_at
-            and ${fileChainKeySql('o')} = ${fileChainKeySql('t')}
-          order by o.created_at desc, o.id desc limit 1`,
-        [row.id],
-      );
-      const newer = rows[0];
-      if (newer) { await client.query('rollback'); return { ok: false, reason: 'stale', current: toRow(newer) }; }
-    }
-    if (row.sha256 !== input.expectedSha256) { await client.query('rollback'); return { ok: false, reason: 'stale', current: row }; }
+    await lockFile(client, input.fileId);
+    const file = await loadFile(client, input.fileId);
+    const newest = file && file.deletedAt === null ? await newestOf(client, file.id) : null;
+    if (!file || !newest) { await client.query('rollback'); return { ok: false, reason: 'gone' }; }
+    if (newest.version !== input.base) { await client.query('rollback'); return { ok: false, reason: 'newer', current: newest }; }
 
-    const sha256 = sha256Of(input.bytes);
     let notWritten: string | null = null;
-    if (found.origin_path && input.workspace) {
+    if (file.originPath && input.workspace) {
       const copy = await input.workspace({
-        id: row.id, originPath: found.origin_path, originSha256: found.origin_sha256 ?? null,
-        conversationId: found.conversation_id ?? null, createdBy: found.created_by,
+        fileId: file.id, originPath: file.originPath, known: file.originSha256 ?? newest.sha256,
+        conversationId: file.conversationId, createdBy: file.createdBy,
       });
-      if (copy.kind === 'changed') { await client.query('rollback'); return { ok: false, reason: 'workspace', current: row, workspaceText: copy.text }; }
+      if (copy.kind === 'changed') { await client.query('rollback'); return { ok: false, reason: 'workspace', current: newest, workspaceText: copy.text }; }
       if (copy.kind === 'refused') notWritten = copy.reason;
       if (copy.kind === 'write') staged = copy;
     }
-    /*
-     * The order is staged copy and checks, then the commit, then the copy in
-     * place: a commit that fails leaves the copy as it was, and a copy that
-     * cannot be put in place after the commit is reported, not undone — the
-     * save is in Files, and saving again retries the copy.
-     */
-    const finish = async (saved: ArtifactRow): Promise<ReplaceArtifactResult> => {
-      if (notWritten !== null) return { ok: true, row: saved, workspace: { updated: false, reason: notWritten } };
-      if (!staged) return { ok: true, row: saved };
-      try {
-        await staged.commit();
-      } catch (err) {
-        await staged.abort().catch(() => {});
-        return { ok: true, row: saved, workspace: { updated: false, reason: err instanceof Error ? err.message : String(err) } };
-      }
-      // On the connection already held: a second one from the pool could wait on this one forever.
-      await client.query(`update core.artifacts set origin_sha256 = $2 where id = $1`, [saved.id, saved.sha256]).catch(() => {});
-      return { ok: true, row: saved, workspace: { updated: true } };
-    };
-    if (sha256 === row.sha256) {
-      await client.query('rollback');
-      return finish(row);
-    }
-    const relative = storagePathFor(sha256, row.mime, row.filename, new Date());
-    const absolute = path.join(resolveDataDir(env), relative);
-    // Content-addressed: bytes already there are these bytes, and may be another row's.
-    if (!(await stat(absolute).then(() => true, () => false))) {
-      await mkdir(path.dirname(absolute), { recursive: true });
-      await writeFile(absolute, input.bytes);
-      written = absolute;
-    }
-    let updated;
+    const same = newest.sha256 === sha256Of(input.bytes);
+    const row = same ? newest : await insertVersion(client, env, file, {
+      bytes: input.bytes, createdBy: 'owner',
+      ...(input.restoredFrom === undefined ? {} : { restoredFrom: input.restoredFrom }),
+    });
+    await client.query('commit');
+
+    const done = { ok: true as const, row, file, created: !same };
+    if (notWritten !== null) return { ...done, workspace: { updated: false, reason: notWritten } };
+    if (!staged) return done;
+    const write = staged;
+    staged = null;
     try {
-      updated = await client.query(
-        `update core.artifacts set sha256 = $2, size_bytes = $3, storage_path = $4
-          where id = $1 returning ${SELECT_COLUMNS}`,
-        [row.id, sha256, input.bytes.length, relative],
-      );
+      await write.commit();
     } catch (err) {
-      await staged?.abort().catch(() => {});
-      staged = null;
-      if ((err as { code?: string }).code !== '23505') throw err;
-      await client.query('rollback');
-      return { ok: false, reason: 'duplicate' };
+      await write.abort().catch(() => {});
+      return { ...done, workspace: { updated: false, reason: err instanceof Error ? err.message : String(err) } };
     }
-    // Told to the agent on its next turn, and guarding the next document write.
-    await client.query(
-      `insert into core.owner_file_edits (artifact_id, conversation_id, filename) values ($1, $2, $3)`,
-      [row.id, found.conversation_id ?? null, row.filename],
-    );
-    try {
-      await client.query('commit');
-    } catch (err) {
-      await staged?.abort().catch(() => {});
-      throw err;
-    }
-    written = null;
-    return await finish(toRow(updated.rows[0]));
+    // On the connection already held: a second one from the pool could wait on this one forever.
+    await client.query(`update core.files set origin_sha256 = $2 where id = $1`, [file.id, row.sha256]).catch(() => {});
+    return { ...done, file: { ...file, originSha256: row.sha256 }, workspace: { updated: true } };
   } catch (err) {
     await client.query('rollback').catch(() => {});
     await staged?.abort().catch(() => {});
     throw err;
   } finally {
     client.release();
-    if (written) await unlink(written).catch(() => {});
   }
 }
 
-/** One owner edit, as the next turn's context tells it. */
-export interface OwnerFileEdit {
+/** A file in a conversation whose newest version is the owner's, as the next turn's context tells it. */
+export interface OwnerNewestFile {
+  fileId: string;
+  name: string | null;
+  /** The owner's version: the newest. */
+  version: number;
   artifactId: string;
-  filename: string | null;
-  editedAt: string;
+  savedAt: string;
+  /** The newest version this agent wrote, if it wrote one. */
+  yours: number | null;
   /**
-   * The command output's path in the agent's workspace, when the save was
-   * written back there and the copy still holds it: that copy is current.
+   * A command's output whose workspace copy holds the owner's version (his
+   * save was written back there): its path in the workspace.
    */
   workspacePath?: string;
 }
 
 /**
- * The owner's file edits in a conversation the agent has not been told of,
- * marked told as they are read: each save is said once, on the next turn.
- * The newest save per file, oldest file first.
+ * The files of a conversation an agent made or wrote whose newest version
+ * is the owner's: derived from the versions, so it stays true until the
+ * agent writes again (newest first, at most `limit`).
  */
-export async function takeOwnerFileEdits(
-  pool: Pool,
-  conversationId: string,
-  at: Date = new Date(),
-): Promise<OwnerFileEdit[]> {
+export async function filesNewestByOwner(pool: Queryable, conversationId: string, agentId: string, limit = 5): Promise<OwnerNewestFile[]> {
   const { rows } = await pool.query(
-    `with noted as (
-       update core.owner_file_edits set noted_at = $2
-        where conversation_id = $1 and noted_at is null
-        returning artifact_id, filename, edited_at
-     )
-     select n.artifact_id, n.filename, n.edited_at, a.origin_path,
-            (a.origin_path is not null and a.origin_sha256 = a.sha256) as in_sync
-       from noted n left join core.artifacts a on a.id = n.artifact_id`,
-    [conversationId, at],
+    `select f.id, f.name, f.origin_path, f.origin_sha256, n.id as artifact_id, n.version, n.created_at, n.sha256,
+            (select max(v.version) from core.artifacts v where v.file_id = f.id and v.created_by = $2 and v.deleted_at is null) as yours
+       from core.files f
+       cross join lateral (
+         select a.id, a.version, a.created_at, a.sha256, a.created_by from core.artifacts a
+          where a.file_id = f.id and a.deleted_at is null order by a.version desc limit 1
+       ) n
+      where f.conversation_id = $1 and f.deleted_at is null and n.created_by = 'owner'
+        and (f.created_by = $2 or exists (select 1 from core.artifacts v where v.file_id = f.id and v.created_by = $2))
+      order by n.created_at desc
+      limit $3`,
+    [conversationId, agentId, limit],
   );
-  const newest = new Map<string, OwnerFileEdit>();
-  for (const row of rows) {
-    const edit: OwnerFileEdit = {
-      artifactId: String(row.artifact_id), filename: row.filename ?? null, editedAt: toIso(row.edited_at) ?? '',
-      // The workspace copy holds the owner's version: the save was written back there.
-      ...(row.origin_path && row.in_sync === true ? { workspacePath: String(row.origin_path).split('/').slice(3).join('/') } : {}),
-    };
-    const before = newest.get(edit.artifactId);
-    if (!before || before.editedAt < edit.editedAt) newest.set(edit.artifactId, edit);
-  }
-  return [...newest.values()].sort((a, b) => a.editedAt.localeCompare(b.editedAt));
+  return rows.map((row) => ({
+    fileId: String(row.id),
+    name: row.name ?? null,
+    version: Number(row.version),
+    artifactId: String(row.artifact_id),
+    savedAt: toIso(row.created_at) ?? '',
+    yours: row.yours === null || row.yours === undefined ? null : Number(row.yours),
+    // host/workspaces/<key>/<path>: the path inside the workspace.
+    ...(row.origin_path && row.origin_sha256 === row.sha256 ? { workspacePath: String(row.origin_path).split('/').slice(3).join('/') } : {}),
+  }));
 }
 
 /** Newest first. Bounded by `MAX_LIST_LIMIT` — a tool argument cannot widen it. */
@@ -842,50 +855,81 @@ export async function artifactBytesExist(
 }
 
 /**
- * The owner deleting from Files: one version (`version`), or the file with
- * every version it has (`file`, by `fileChainKeySql`). Soft, like
- * `deleteArtifact`: the rows are tombstoned and a conversation that carried
- * one shows it as deleted; nothing on disk changes, and nothing in a
- * workspace. With a version gone the one before it is the newest again,
- * since the newest is simply the latest live row. Returns the ids tombstoned.
+ * The owner deleting a file from Files, with every version it has. Soft, like
+ * `deleteArtifact`: the file and its live versions are tombstoned at one
+ * moment (so `undeleteFile` brings back exactly those), a conversation that
+ * carried one shows it as deleted, and nothing on disk or in a workspace
+ * changes. Under the file's lock: a version being written waits, then finds
+ * the file gone. False when there was nothing live to delete.
  */
-export async function deleteFromFiles(
-  pool: Pool,
-  id: string,
-  scope: 'file' | 'version',
-  at: Date = new Date(),
-): Promise<string[]> {
-  const { rows } = scope === 'version'
-    ? await pool.query(`update core.artifacts set deleted_at = $2 where id = $1 and deleted_at is null returning id`, [id, at])
-    : await pool.query(
-      `update core.artifacts o set deleted_at = $2
-         from core.artifacts t
-        where t.id = $1 and t.deleted_at is null and o.deleted_at is null
-          and ${fileChainKeySql('o')} = ${fileChainKeySql('t')}
-        returning o.id`,
-      [id, at],
+export async function deleteFile(pool: Pool, fileId: string, at: Date = new Date()): Promise<boolean> {
+  return transaction(pool, async (client) => {
+    await lockFile(client, fileId);
+    const { rows } = await client.query(`update core.files set deleted_at = $2 where id = $1 and deleted_at is null returning id`, [fileId, at]);
+    if (rows.length === 0) return false;
+    await client.query(`update core.artifacts set deleted_at = $2 where file_id = $1 and deleted_at is null`, [fileId, at]);
+    return true;
+  });
+}
+
+/**
+ * One version deleted: the one before it is the newest again. The last live
+ * version takes its file with it. Under the file's lock.
+ */
+export async function deleteFileVersion(pool: Pool, fileId: string, version: number, at: Date = new Date()): Promise<{ deleted: boolean; fileDeleted: boolean }> {
+  return transaction(pool, async (client) => {
+    await lockFile(client, fileId);
+    const { rows } = await client.query(
+      `update core.artifacts set deleted_at = $3 where file_id = $1 and version = $2 and deleted_at is null returning id`,
+      [fileId, version, at],
     );
-  return rows.map((row) => String(row.id));
+    if (rows.length === 0) return { deleted: false, fileDeleted: false };
+    const { rows: gone } = await client.query(
+      `update core.files set deleted_at = $2 where id = $1 and deleted_at is null
+         and not exists (select 1 from core.artifacts a where a.file_id = $1 and a.deleted_at is null)
+       returning id`,
+      [fileId, at],
+    );
+    return { deleted: true, fileDeleted: gone.length > 0 };
+  });
 }
 
-/** Undo: the rows come back, as long as they were not purged. Returns the ids restored. */
-export async function undeleteArtifacts(pool: Pool, ids: readonly string[]): Promise<string[]> {
-  if (ids.length === 0) return [];
-  const { rows } = await pool.query(
-    `update core.artifacts set deleted_at = null where id = any($1::uuid[]) and deleted_at is not null returning id`,
-    [ids],
-  );
-  return rows.map((row) => String(row.id));
+/** Undo a file's delete: it comes back with the versions deleted with it, unless purged. */
+export async function undeleteFile(pool: Pool, fileId: string): Promise<boolean> {
+  return transaction(pool, async (client) => {
+    await lockFile(client, fileId);
+    const { rows } = await client.query(`select deleted_at from core.files where id = $1 and deleted_at is not null`, [fileId]);
+    if (!rows[0]) return false;
+    await client.query(`update core.artifacts set deleted_at = null where file_id = $1 and deleted_at = $2`, [fileId, rows[0].deleted_at]);
+    await client.query(`update core.files set deleted_at = null where id = $1`, [fileId]);
+    return true;
+  });
 }
 
-/** How long a deleted file can still be brought back before its row goes for good. */
+/** Undo a version's delete (and its file's, when it was the last one). */
+export async function undeleteFileVersion(pool: Pool, fileId: string, version: number): Promise<boolean> {
+  return transaction(pool, async (client) => {
+    await lockFile(client, fileId);
+    const { rows } = await client.query(
+      `update core.artifacts set deleted_at = null where file_id = $1 and version = $2 and deleted_at is not null returning id`,
+      [fileId, version],
+    );
+    if (rows.length === 0) return false;
+    await client.query(`update core.files set deleted_at = null where id = $1`, [fileId]);
+    return true;
+  });
+}
+
+/** How long a deleted file can still be brought back before its rows go for good. */
 export const DELETED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Rows tombstoned before `olderThan` go for good, and with them the bytes
- * that no remaining row stores: blobs are content-addressed, so the same
- * file may be another row's too, and stays while any row names its path.
- * Run from the hourly artifact sweep. Returns the rows and blobs removed.
+ * Versions tombstoned before `olderThan` go for good, files left with none
+ * go with them, and so do the bytes no remaining version stores: blobs are
+ * content-addressed, so the same bytes may be another version's too. Each
+ * blob is checked and unlinked under its lock, the one a writer holds until
+ * its row is in, so a save that adopts the blob meanwhile keeps it. Run from
+ * the hourly artifact sweep. Returns the rows and blobs removed.
  */
 export async function purgeDeletedArtifacts(
   pool: Pool,
@@ -896,33 +940,35 @@ export async function purgeDeletedArtifacts(
     `delete from core.artifacts where deleted_at is not null and deleted_at < $1 returning storage_path`,
     [olderThan],
   );
+  await pool.query(`delete from core.files f where not exists (select 1 from core.artifacts a where a.file_id = f.id)`);
   const paths = [...new Set(rows.map((row) => row.storage_path))];
   let blobs = 0;
   for (const relative of paths) {
-    const { rows: still } = await pool.query(`select 1 from core.artifacts where storage_path = $1 limit 1`, [relative]);
-    if (still.length > 0) continue;
     // Only ever a path under the data dir's artifacts folder, as the store wrote it.
     if (!/^artifacts\/\d{4}\/\d{2}\/[0-9a-f]{64}\.[a-z0-9]{1,8}$/.test(relative)) continue;
-    if (await unlink(path.join(resolveDataDir(env), relative)).then(() => true, () => false)) blobs += 1;
+    const removed = await transaction(pool, async (client) => {
+      await lock(client, `buddi.blob:${relative}`);
+      const { rows: still } = await client.query(`select 1 from core.artifacts where storage_path = $1 limit 1`, [relative]);
+      if (still.length > 0) return false;
+      return unlink(path.join(resolveDataDir(env), relative)).then(() => true, () => false);
+    });
+    if (removed) blobs += 1;
   }
   return { rows: rows.length, blobs };
 }
 
 /**
- * Soft delete. The row is tombstoned so references stay explicable; the bytes
- * stay on disk in v1 (another artifact may be content-addressed to the same
- * file). Returns false when there was nothing live to delete.
+ * Soft delete of one version by id (a discarded upload): tombstoned so
+ * references stay explicable; the last live version takes its file with it.
+ * The bytes stay on disk until the purge. False when there was nothing live
+ * to delete.
  */
 export async function deleteArtifact(
   pool: Pool,
   id: string,
   at: Date = new Date(),
 ): Promise<boolean> {
-  const { rows } = await pool.query(
-    `update core.artifacts set deleted_at = $2
-      where id = $1 and deleted_at is null
-      returning id`,
-    [id, at],
-  );
-  return rows.length > 0;
+  const { rows } = await pool.query(`select file_id, version from core.artifacts where id = $1 and deleted_at is null`, [id]);
+  if (!rows[0]) return false;
+  return (await deleteFileVersion(pool, String(rows[0].file_id), Number(rows[0].version), at)).deleted;
 }
