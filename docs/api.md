@@ -2823,13 +2823,13 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds. | yes |
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
 | DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
-| GET | `/api/files/:id` | A file (by its id, or any version’s): what it is, its current version and its versions, newest first. | yes |
+| GET | `/api/files/:id` | A file (by its id, or any version’s): what it is, its newest version and its versions, newest first, and the library’s entry for the version shown, where it was used and whether its bytes are there. | yes |
 | GET | `/api/files/:id/content` | A text file’s current version whole, for the canvas editor, with the version a save names. | yes |
 | POST | `/api/files/:id/versions` | The owner’s save as a new version: his edit (text), or a Restore of an older version (from, its bytes copied server-side), over the version he opened. | yes |
 | DELETE | `/api/files/:id` | Delete a file from Files with every version. Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be undeleted for 30 days. | yes |
 | DELETE | `/api/files/:id/versions/:version` | Delete one version: the one before it is the newest again; the last one takes the file with it. | yes |
 | POST | `/api/files/:id/undelete` | Undo a delete: the file with the versions deleted with it, or one version; not once purged (after 30 days). | yes |
-| POST | `/api/files` | A new text file of the owner’s, in a conversation when one is named (the editor’s "Save as new file"). | yes |
+| POST | `/api/files` | A new text file of the owner’s, always a new file (bytes another file holds are shared, never that file), listed in Files, and in a conversation when one is named (the editor’s "Save as new file"). | yes |
 
 #### `GET /api/reports/audio`
 
@@ -2930,11 +2930,12 @@ curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts
 
 #### `GET /api/files/:id`
 
-A file (by its id, or any version’s): what it is, its current version and its versions, newest first.
+A file (by its id, or any version’s): what it is, its newest version and its versions, newest first, and the library’s entry for the version shown, where it was used and whether its bytes are there.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy }, versions }`
-- **Errors:** 404 (deleted: true when it was deleted)
+- **Query:** `version?: n (an older version to show), contexts?: offset`
+- **Answer:** `{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy }, versions, entry|null, contexts, contextsTotal, contextsOffset, available }`
+- **Errors:** 400 a bad version; 404 (deleted: true when it was deleted, or no such version)
 - **Since:** 0.1.0-pre.55
 
 ```sh
@@ -3010,7 +3011,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `POST /api/files`
 
-A new text file of the owner’s, in a conversation when one is named (the editor’s "Save as new file").
+A new text file of the owner’s, always a new file (bytes another file holds are shared, never that file), listed in Files, and in a conversation when one is named (the editor’s "Save as new file").
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ name, text, mime?, conversationId? }`

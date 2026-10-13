@@ -43,7 +43,7 @@ import type { NotifyViewProps } from './views/NotifyView';
 import type { PreviewProps, Renderable, RendererName, TabVersion, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { delegatedFiles, familyOf, FAMILY_LABEL, type AttachmentBlock } from '../chat/attachments';
-import { fileTabId, isFileResult, isTextFile, textFilesOf } from './text-files';
+import { fileTabId, isTextFile } from './text-files';
 import type { ArtifactViewProps } from './views/ArtifactView';
 import { commandResult } from './command-result';
 import { expiryOf, subjectIdentityOf, type Subject } from './tab-order';
@@ -390,7 +390,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // the row; there is nothing to open.
       if (tool === CANVAS_OPEN) {
         const told = toldFiles(block);
-        const file = block.ok === false ? null : told ? told[0] ?? null : openedFile(block.output);
+        const file = block.ok === false ? null : told?.[0] ?? null;
         if (file) placeFile(file, at, block.toolUseId);
         continue;
       }
@@ -494,14 +494,12 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
        * left files keeps its own tab, and its files come after it — newer,
        * and what the canvas turns to.
        */
-      // What the call made, as the gateway says (`files`, each with its
-      // file); a transcript read without it is read by shape.
-      const told = toldFiles(block)?.filter((file) => isTextFile(file.mime, file.filename));
-      const produced = told ?? textFilesOf(output);
+      // What the call made, as the gateway says (`files`, each with its file).
+      const produced = toldFiles(block)?.filter((file) => isTextFile(file.mime, file.filename)) ?? [];
       // A document write whose file was deleted since draws nothing: its row says so.
       const gone = (block.files?.length ?? 0) > 0 && toldFiles(block)?.length === 0;
-      if (gone && isFileResult(output) && !byTool.has(tool)) continue;
-      if (produced.length > 0 && isFileResult(output) && !byTool.has(tool)) {
+      if (gone && block.fileResult && !byTool.has(tool)) continue;
+      if (produced.length > 0 && block.fileResult && !byTool.has(tool)) {
         // The call is the file: its row in the conversation opens this tab.
         for (const file of produced) placeFile(file, at, block.toolUseId);
         continue;
@@ -592,22 +590,6 @@ function uniqueIds(items: Renderable[]): Renderable[] {
 /** A file the gateway named, as the block a message carries. */
 function attachmentOf(file: { artifactId: string; fileId: string; filename: string | null; mime: string }): AttachmentBlock {
   return { type: 'attachment', artifactId: file.artifactId, fileId: file.fileId, filename: file.filename, mime: file.mime, kind: 'document', sizeBytes: null };
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** The file a `canvas.open` result names: its version, its file, its name and type. */
-function openedFile(output: unknown): AttachmentBlock | null {
-  if (output === null || typeof output !== 'object') return null;
-  const { artifactId, fileId, filename, mime } = output as Record<string, unknown>;
-  if (typeof artifactId !== 'string' || !UUID.test(artifactId)) return null;
-  return {
-    type: 'attachment', artifactId,
-    ...(typeof fileId === 'string' && UUID.test(fileId) ? { fileId } : {}),
-    filename: typeof filename === 'string' ? filename : null,
-    mime: typeof mime === 'string' ? mime : 'application/octet-stream',
-    kind: 'document', sizeBytes: null,
-  };
 }
 
 /**

@@ -93,6 +93,7 @@ import {
   DELEGATION_WAITING,
   MAX_NESTED_TURNS,
   projectTranscript,
+  producedArtifactIds,
   runAgent,
   type AttachmentRef,
   type RunResult,
@@ -408,6 +409,8 @@ export type ChatBlock =
       files?: Array<{ artifactId: string; fileId: string; version: number; filename: string | null; mime: string; deleted: boolean; fileDeleted: boolean }>;
       /** The call read a library file (its result names one) without making it: it opens no tab. */
       readsFile?: true;
+      /** The result is the file it made or opened (a document write, `canvas.open`), not a command that left files. */
+      fileResult?: true;
     }
   /** A file in a message: the version it carries, and the file that is a version of (when the row is still there). */
   | { type: 'attachment'; artifactId: string; fileId?: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
@@ -706,22 +709,17 @@ export async function readChatTranscript(
 const CANVAS_OPEN_TOOL = 'canvas.open';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The library ids a result names: `artifactId` (or `fileId`, for `canvas.open`), `id`, and `artifacts[].id`. */
+/**
+ * The library ids a result names: the files it made, by the runtime's own
+ * rule (`producedArtifactIds`, what Files records as produced), and the one
+ * it is about (`artifactId`, else `id`: a read names the file it read).
+ */
 function namedIds(output: unknown): { made: string[]; named: string | null } {
   if (output === null || typeof output !== 'object' || Array.isArray(output)) return { made: [], named: null };
   const record = output as Record<string, unknown>;
-  const made: string[] = [];
-  if (typeof record.artifactId === 'string' && UUID_RE.test(record.artifactId)) made.push(record.artifactId);
-  else if (typeof record.fileId === 'string' && UUID_RE.test(record.fileId)) made.push(record.fileId);
-  if (Array.isArray(record.artifacts)) {
-    for (const item of record.artifacts) {
-      const id = item && typeof item === 'object' ? (item as Record<string, unknown>).id : undefined;
-      if (typeof id === 'string' && UUID_RE.test(id)) made.push(id);
-    }
-  }
   const named = typeof record.artifactId === 'string' && UUID_RE.test(record.artifactId) ? record.artifactId
     : typeof record.id === 'string' && UUID_RE.test(record.id) ? record.id : null;
-  return { made: [...new Set(made)], named };
+  return { made: producedArtifactIds(output), named };
 }
 
 /**
@@ -742,18 +740,12 @@ async function withFiles(
     for (const id of made) wanted.add(id);
     if (named) wanted.add(named);
   }
-  // A version by its id; a file (canvas.open names one) by its current version.
   const rows = wanted.size === 0 ? [] : (await pool.query(
-    `select a.id::text as named, a.id, a.file_id, a.version, f.name as filename, f.mime, a.deleted_at is not null as deleted, f.deleted_at is not null as file_deleted
-       from core.artifacts a join core.files f on f.id = a.file_id where a.id = any($1::uuid[])
-     union all
-     select f.id::text, n.id, f.id, n.version, f.name, f.mime, n.deleted_at is not null, f.deleted_at is not null
-       from core.files f
-       cross join lateral (select v.id, v.version, v.deleted_at from core.artifacts v where v.file_id = f.id order by (v.deleted_at is null) desc, v.version desc limit 1) n
-      where f.id = any($1::uuid[])`,
+    `select a.id, a.file_id, a.version, f.name as filename, f.mime, a.deleted_at is not null as deleted, f.deleted_at is not null as file_deleted
+       from core.artifacts a join core.files f on f.id = a.file_id where a.id = any($1::uuid[])`,
     [[...wanted]],
   )).rows;
-  const byId = new Map(rows.map((row) => [String(row.named), row]));
+  const byId = new Map(rows.map((row) => [String(row.id), row]));
   for (const block of results) {
     const { made, named } = namedIds(block.output);
     if (block.ok !== false && (producesFiles(block.name) || block.name === CANVAS_OPEN_TOOL)) {
@@ -764,6 +756,8 @@ async function withFiles(
           deleted: row.deleted === true, fileDeleted: row.file_deleted === true,
         }] : [];
       });
+      // The result is the file itself (a document write, an open), not a command that left some.
+      if (named && made.includes(named) && block.files.some((file) => file.artifactId === named)) block.fileResult = true;
       continue;
     }
     block.files = [];

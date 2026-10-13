@@ -14,7 +14,7 @@ import { api, ApiError, type FileContent } from '../api';
 import type { ChatMessage } from '../chat/types';
 import { getDraft, resetDrafts, setDraft } from './file-drafts';
 import { renderablesFrom } from './renderables';
-import { changedLines, fileTabId, isTextFile, textFilesOf } from './text-files';
+import { changedLines, fileTabId, isTextFile } from './text-files';
 import { TextFileView } from './views/TextFileView';
 import { Canvas } from './Canvas';
 import type { CodeEditorProps } from './views/CodeEditor';
@@ -62,14 +62,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('which results are text files', () => {
-  it('reads a document write and a command’s generated files by shape, text only, by the server’s own rule', () => {
-    expect(textFilesOf({ artifactId: ID(1), filename: 'Plan.md', mime: 'text/markdown', note: 'Saved' })).toHaveLength(1);
-    expect(textFilesOf({ exitCode: 0, artifacts: [
-      { id: ID(2), filename: 'out.json', mime: 'application/json' },
-      { id: ID(3), filename: 'chart.png', mime: 'image/png' },
-      { id: ID(4), filename: 'run.log', mime: 'application/octet-stream' },
-      { id: '../../etc/passwd', filename: 'passwd', mime: 'text/plain' },
-    ] }).map((file) => file.filename)).toEqual(['out.json', 'run.log']);
+  it('classifies text by the server’s own rule', () => {
     expect(isTextFile('application/octet-stream', 'report.docx')).toBe(false);
     expect(isTextFile('text/x-python', 'calc.py')).toBe(true);
     // What the page once opened and the server refused: one rule now, core's.
@@ -87,12 +80,14 @@ describe('a text file a run produced, on the canvas', () => {
   const at = (s: number): string => new Date(Date.UTC(2026, 9, 13, 9, 0, s)).toISOString();
   type Told = { artifactId: string; fileId: string; version: number; filename: string; deleted?: boolean; fileDeleted?: boolean };
   /** A call and its result, with the files the gateway says it made or opened. */
+  /** A call is the file it made when it wrote or opened one (the gateway's `fileResult`); a command only leaves files. */
   const call = (id: string, name: string, output: unknown, s: number, files?: Told[], readsFile = false): ChatMessage[] => [
     { id: `${id}-use`, role: 'assistant', at: at(s), blocks: [{ type: 'tool_use', id, name, input: {} }] },
     { id: `${id}-result`, role: 'user', at: at(s), blocks: [{
       type: 'tool_result', toolUseId: id, name, ok: true, output,
       ...(files ? { files: files.map((file) => ({ mime: 'text/markdown', deleted: false, fileDeleted: false, ...file })) } : {}),
       ...(readsFile ? { readsFile: true as const } : {}),
+      ...(files?.length && name !== 'host.exec' ? { fileResult: true as const } : {}),
     }] },
   ];
   const told = (n: number, filename = 'Plan.md', fileId = FILE, extra: Partial<Told> = {}): Told[] => [{ artifactId: ID(n), fileId, version: n, filename, ...extra }];
@@ -138,6 +133,14 @@ describe('a text file a run produced, on the canvas', () => {
     expect(renderablesFrom({ messages: messages(true), descriptors: [] })).toEqual([]);
     const kept = renderablesFrom({ messages: messages(true), descriptors: [], keep: (id) => id === fileTabId(FILE) });
     expect(kept.map((item) => item.id)).toEqual([fileTabId(FILE)]);
+  });
+
+  it('opens nothing from the shape of a result: only the files the gateway names', () => {
+    const items = renderablesFrom({ messages: [
+      ...call('w1', 'artifacts.write', { artifactId: ID(1), filename: 'Plan.md', mime: 'text/markdown' }, 1),
+      ...call('o1', 'canvas.open', { opened: true, artifactId: ID(1), filename: 'Plan.md', mime: 'text/markdown' }, 2, []),
+    ], descriptors: [] });
+    expect(items.filter((item) => item.source === 'artifact')).toEqual([]);
   });
 
   it('puts a command’s generated text file after the command, so the canvas turns to it', () => {
@@ -345,6 +348,23 @@ describe('the file view', () => {
     await waitFor(() => expect(made).toHaveBeenCalledWith({ name: 'notes.txt', mime: 'text/plain', text: 'a\nmine\n', conversationId: CONVERSATION }));
     expect(await screen.findByText('Saved as a new file, notes.txt, in Files.')).toBeInTheDocument();
     expect(getDraft('t')).toBeNull();
+  });
+
+  it('Save as new file keeps what he typed while it was being made', async () => {
+    // Codex P2: the success cleared the whole draft, edits typed meanwhile included.
+    let finish: (value: { fileId: string; version: number; artifactId: string; sha256: string; createdBy: string; filename: string }) => void = () => {};
+    vi.spyOn(api, 'createFile').mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    files.set(FILE, content('a\n', 1));
+    const first = render(<TextFileView attachment={attachment(1, 'notes.txt', 'text/plain')} tabId="t" />);
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'a\nmine\n' } });
+    first.unmount();
+    files.delete(FILE);
+    render(<TextFileView attachment={attachment(1, 'notes.txt', 'text/plain')} tabId="t" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save as new file' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'a\nmine\nmore\n' } });
+    await act(async () => { finish({ fileId: OTHER, version: 1, artifactId: ID(8), sha256: sha(8), createdBy: 'owner', filename: 'notes.txt' }); });
+    expect(getDraft('t')?.text).toBe('a\nmine\nmore\n');
+    expect(screen.getByRole('textbox')).toHaveValue('a\nmine\nmore\n');
   });
 
   it('opens a file past 1 MB read-only, and says so', async () => {

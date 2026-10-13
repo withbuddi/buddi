@@ -47,10 +47,10 @@ function FileCard({ attachment }: { attachment: AttachmentBlock }): JSX.Element 
   useEffect(() => {
     let cancelled = false;
     setDeleted(false);
-    api.libraryEntry(attachment.artifactId)
+    api.file(attachment.fileId ?? attachment.artifactId)
       .catch((err: unknown) => { if (!cancelled && err instanceof ApiError && err.status === 404) setDeleted(true); });
     return () => { cancelled = true; };
-  }, [attachment.artifactId]);
+  }, [attachment.artifactId, attachment.fileId]);
   if (deleted) {
     return <div className="wb-artifact" data-testid="artifact-view"><Notice role="status">This file was deleted from Files.</Notice></div>;
   }

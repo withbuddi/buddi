@@ -57,7 +57,7 @@ suite('canvas.open', () => {
     const made = await file('# Packing\n', 'packing-list.md', here);
     expect(await open({ fileId: made.fileId }, here)).toEqual({
       opened: true, fileId: made.fileId, artifactId: made.artifactId, version: 1, filename: 'packing-list.md', mime: 'text/markdown',
-      note: `Open at v1. To change this file, write it with artifacts.write { fileId: "${made.fileId}", readVersion: 1 } after reading it.`,
+      note: 'Open at v1, its newest version.',
     });
   });
 

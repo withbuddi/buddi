@@ -336,11 +336,20 @@ export interface FileContent extends FileVersionRef {
   note?: 'encoding';
 }
 
-/** `GET /api/files/:id`: the file, its current version, and its versions newest first. */
+/**
+ * `GET /api/files/:id`: the file, its newest version, its versions newest
+ * first, and the library's entry for the version shown (`entry` is null for
+ * a file the library does not list, an upload still in a tray).
+ */
 export interface FileView {
   file: { id: string; name: string | null; mime: string; conversationId: string | null; origin: 'document' | 'capture' | 'upload'; createdBy: string };
   current: FileVersionRef;
   versions: LibraryVersion[];
+  entry: LibraryEntry | null;
+  contexts: LibraryContext[];
+  contextsTotal: number;
+  contextsOffset: number;
+  available: boolean;
 }
 
 /** A save the server refused (409): one shape for the editor and Restore alike. */
@@ -2916,14 +2925,18 @@ export const api = {
   libraryEntry: (id: string, contextsOffset = 0) =>
     get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean; versions?: LibraryVersion[] }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
   /** A file (by its id, or any version's): its current version and its versions. */
-  file: (id: string) => get<FileView>(`/files/${encodeURIComponent(id)}`),
+  file: (id: string, opts: { version?: number; contexts?: number } = {}) =>
+    get<FileView>(`/files/${encodeURIComponent(id)}`, {
+      ...(opts.version === undefined ? {} : { version: opts.version }),
+      ...(opts.contexts ? { contexts: opts.contexts } : {}),
+    }),
   /** A text file's current version whole, for the canvas editor, with the version a save names. */
   fileContent: (id: string) => get<FileContent>(`/files/${encodeURIComponent(id)}/content`),
   /**
    * The owner's save as a new version over `base`, the one he opened: his
    * text, or a Restore (`from`). A 409 carries a `FileConflict`.
    */
-  saveFileVersion: (id: string, body: { base: number; text: string; overwriteWorkspace?: true } | { base: number; from: number }) =>
+  saveFileVersion: (id: string, body: { base: number; text: string; overwriteWorkspace?: true } | { base: number; from: number; overwriteWorkspace?: true }) =>
     post<FileVersionRef & { sizeBytes: number; created: boolean; note?: string }>(`/files/${encodeURIComponent(id)}/versions`, body),
   /** Delete from Files: the file with its versions, or one version. Soft; `undeleteFile` undoes it. */
   deleteFile: (id: string, version?: number) =>

@@ -1,11 +1,7 @@
 /**
- * Text files a run produced, as the canvas knows them.
- *
- * A file is read by shape, never by tool name: a result that *is* a stored
- * file (`{ artifactId, filename, mime }`, what a document write returns) or
- * one that names the files it left (`{ artifacts: [{ id, filename, mime }] }`,
- * what a command returns as "Generated files"). Only library ids count;
- * nothing a result says is used as a link.
+ * Text files a run produced, as the canvas knows them: only what the gateway
+ * says a call made or opened (`files` on a tool result, each with its file's
+ * id), never read from the shape of a result.
  *
  * A file is known across its versions by its `fileId` (the gateway says
  * which file each version is of): writing it again updates the tab that has
@@ -13,11 +9,9 @@
  * the one the server's routes apply (`@buddi/core/text-files`).
  */
 import { isTextFile } from '@buddi/core/text-files';
-import type { AttachmentBlock } from '../chat/attachments';
 
 export { isTextFile };
 
-const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function extOf(filename: string | null | undefined): string {
   const name = (filename ?? '').toLowerCase();
@@ -50,35 +44,6 @@ export function languageOf(filename: string | null | undefined, mime = ''): Edit
   if (mime.startsWith('text/markdown')) return 'markdown';
   if (mime === 'application/json') return 'json';
   return null;
-}
-
-/** The text files a result stored, oldest first, as the blocks a message carries. */
-export function textFilesOf(output: unknown): AttachmentBlock[] {
-  if (output === null || typeof output !== 'object' || Array.isArray(output)) return [];
-  const record = output as Record<string, unknown>;
-  const found: AttachmentBlock[] = [];
-  const take = (id: unknown, filename: unknown, mime: unknown, size: unknown): void => {
-    if (typeof id !== 'string' || !ARTIFACT_ID.test(id) || typeof filename !== 'string' || filename === '') return;
-    const type = typeof mime === 'string' ? mime : 'application/octet-stream';
-    if (!isTextFile(type, filename)) return;
-    found.push({ type: 'attachment', artifactId: id, filename, mime: type, kind: 'document', sizeBytes: typeof size === 'number' ? size : null });
-  };
-  take(record['artifactId'], record['filename'], record['mime'], record['sizeBytes']);
-  if (Array.isArray(record['artifacts'])) {
-    for (const item of record['artifacts']) {
-      if (item === null || typeof item !== 'object') continue;
-      const file = item as Record<string, unknown>;
-      take(file['id'], file['filename'], file['mime'], file['sizeBytes']);
-    }
-  }
-  return found;
-}
-
-/** Is the result itself the file (a document write), rather than a command that left some? */
-export function isFileResult(output: unknown): boolean {
-  if (output === null || typeof output !== 'object' || Array.isArray(output)) return false;
-  const id = (output as Record<string, unknown>)['artifactId'];
-  return typeof id === 'string' && ARTIFACT_ID.test(id);
 }
 
 /** The tab id a file is known by: its file id, prefixed (a version's id for a transcript that names no file). */

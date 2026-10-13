@@ -38,15 +38,21 @@ export function parseWelcomeRoute(hash: string): { step: string | null } | null 
 
 /** One file in the library, by id. Authenticated dashboard links, never sharing links. */
 export interface FileFilters { q?: string; origin?: string; family?: string }
-export function fileRoute(artifactId?: string | null, filters: FileFilters = {}): string {
+/**
+ * A file's page: `#/files/<fileId>`, the same address across its versions
+ * (a Restore keeps it); `?v=<n>` shows an older version. A version's id in
+ * place of the file's still opens its file (the page replaces the address).
+ */
+export function fileRoute(fileId?: string | null, filters: FileFilters = {}, version?: number): string {
   const params = new URLSearchParams();
   if (filters.q) params.set('q', filters.q);
   if (filters.origin) params.set('origin', filters.origin);
   if (filters.family) params.set('family', filters.family);
+  if (fileId && version !== undefined) params.set('v', String(version));
   const query = params.toString();
-  return `${FILES_ROUTE}${artifactId ? `/${encodeURIComponent(artifactId)}` : ''}${query ? `?${query}` : ''}`;
+  return `${FILES_ROUTE}${fileId ? `/${encodeURIComponent(fileId)}` : ''}${query ? `?${query}` : ''}`;
 }
-export function parseFileRoute(hash: string): { artifactId?: string; filters: FileFilters } | null {
+export function parseFileRoute(hash: string): { fileId?: string; version?: number; filters: FileFilters } | null {
   const match = /^#\/files(?:\/([^/?]+))?(?:\?(.*))?$/.exec(hash);
   if (!match) return null;
   try {
@@ -55,7 +61,8 @@ export function parseFileRoute(hash: string): { artifactId?: string; filters: Fi
     if (params.get('q')) filters.q = params.get('q')!;
     if (params.get('origin')) filters.origin = params.get('origin')!;
     if (params.get('family')) filters.family = params.get('family')!;
-    return { ...(match[1] ? { artifactId: decodeURIComponent(match[1]) } : {}), filters };
+    const v = Number(params.get('v'));
+    return { ...(match[1] ? { fileId: decodeURIComponent(match[1]) } : {}), ...(match[1] && Number.isInteger(v) && v > 0 ? { version: v } : {}), filters };
   } catch { return null; }
 }
 

@@ -19,7 +19,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { commandsRunning, holdWorkspaces, hostWorkspaceDir } from '@buddi/tool-host';
+import { commandsRunning, holdWorkspaces, hostWorkspaceDir, workspaceRanConfined } from '@buddi/tool-host';
 import type { Pool } from 'pg';
 import {
   artifactBytesExist,
@@ -34,9 +34,11 @@ import {
   recordArtifactUse,
   resolveDataDir,
   resolveFileId,
-  saveArtifactReporting,
+  saveNewFile,
+  getLibraryEntry,
+  CHANGED_SINCE,
   saveOwnerVersion,
-  textPreviewable,
+  isTextFile,
   undeleteFile,
   undeleteFileVersion,
   type ArtifactRow,
@@ -50,8 +52,7 @@ import {
 /** The largest file the editor edits; a bigger one opens read-only, its start only. */
 export const MAX_EDIT_BYTES = 1024 * 1024;
 
-/** The one phrase a refused save says, wherever it was made. */
-export const CHANGED_SINCE = 'This file changed since you opened it';
+export { CHANGED_SINCE };
 
 function sha256Hex(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -85,8 +86,16 @@ const LINKED = 'its folder in buddi’s workspace is a link, so buddi did not wr
  * The workspace copy a command's output was captured from (host.exec's
  * outputs), judged for the owner's save.
  *
- * A sandboxed command is confined to its workspace, so this write must never
- * reach outside one. The workspace is computed from the data dir — the one
+ * Only an unconfined workspace is written. A workspace where a sandboxed run
+ * (a skill bundle's script) ever ran is marked (host's `workspaceRanConfined`)
+ * and gets the owner's save in Files only: a process that run left behind
+ * could swap a folder between these path checks and the rename — Node has
+ * no openat — and so write outside its sandbox through the save. Where only
+ * unconfined commands ran, every process there already runs as the owner's
+ * own user and can write anywhere he can, so no escape exists; the checks
+ * below guard against accidents, not against an adversary.
+ *
+ * The write must never reach outside the workspace. The workspace is computed from the data dir — the one
  * trusted base — for the agent and conversation the *file* belongs to, never
  * read from the disk and never from who wrote a version; the recorded path
  * must lie lexically inside it, and every component on the way is lstat'ed
@@ -105,9 +114,9 @@ const LINKED = 'its folder in buddi’s workspace is a link, so buddi did not wr
  * and only while no command is running anywhere (`commandsRunning`): a
  * command in another conversation may use this workspace as its cwd, and
  * nothing buddi starts can swap a folder between a check and the rename.
- * What remains is a process a command left running in the background (a
- * detached daemon can escape host.exec's process tree); the check after the
- * rename catches the result and reports it, loudly, rather than preventing it.
+ * What remains is a process an unconfined command left running in the
+ * background, which is the owner's own; the check after the rename catches a
+ * moved folder and reports it, loudly.
  */
 async function workspaceCopy(
   env: EnvLike,
@@ -118,6 +127,9 @@ async function workspaceCopy(
   if (!captured.conversationId) return { kind: 'refused', reason: 'it belongs to no conversation' };
   const data = await realpath(resolveDataDir(env)).catch(() => null);
   if (!data) return { kind: 'none' };
+  if (await workspaceRanConfined(data, ownerId, captured.createdBy, captured.conversationId)) {
+    return { kind: 'refused', reason: 'this agent’s workspace ran sandboxed scripts, so buddi does not write into it; saved in Files only' };
+  }
   const root = hostWorkspaceDir(data, ownerId, captured.createdBy, captured.conversationId);
   const file = path.join(data, captured.originPath);
   if (!inside(root, file)) return { kind: 'refused', reason: 'it is not in this agent’s workspace for this conversation' };
@@ -180,17 +192,33 @@ function isAnswer(value: unknown): value is Answer {
   return typeof value === 'object' && value !== null && 'status' in value && 'body' in value;
 }
 
-/** `GET /api/files/:id`: the file, its current version and every live version, newest first. */
-export async function readFileView(pool: Pool, id: string): Promise<Answer> {
+/**
+ * `GET /api/files/:id`: the file, its newest version and every live version,
+ * newest first — and, for the Files page, the library's entry for the version
+ * shown (`version`, else the newest), where the file was used and whether the
+ * bytes are there. One read for the canvas and Files alike.
+ */
+export async function readFileView(pool: Pool, env: EnvLike, id: string, opts: { knownAgentIds?: readonly string[]; version?: number; contextsOffset?: number } = {}): Promise<Answer> {
   const found = await liveFile(pool, id);
   if (isAnswer(found)) return found;
   const { file, current } = found;
+  const versions = await libraryVersions(pool, file.id);
+  const shown = opts.version === undefined ? null : versions.find((v) => v.version === opts.version) ?? null;
+  if (opts.version !== undefined && !shown) return { status: 404, body: { error: `there is no version ${opts.version} of this file` } };
+  const library = await getLibraryEntry(pool, shown?.id ?? current.id, opts.knownAgentIds ?? [], opts.contextsOffset ?? 0);
+  const row = (await fileVersions(pool, file.id)).find((v) => v.id === (shown?.id ?? current.id));
   return {
     status: 200,
     body: {
       file: { id: file.id, name: file.name, mime: file.mime, conversationId: file.conversationId, origin: file.origin, createdBy: file.createdBy },
       current: versionRef(current),
-      versions: await libraryVersions(pool, file.id),
+      versions,
+      // Null when the file is not one the library lists (an upload still in a tray).
+      entry: library?.entry ?? null,
+      contexts: library?.contexts ?? [],
+      contextsTotal: library?.contextsTotal ?? 0,
+      contextsOffset: library?.contextsOffset ?? 0,
+      available: row ? await artifactBytesExist(env, row).catch(() => false) : false,
     },
   };
 }
@@ -200,7 +228,7 @@ export async function readFileContent(pool: Pool, env: EnvLike, id: string): Pro
   const found = await liveFile(pool, id);
   if (isAnswer(found)) return found;
   const { file, current } = found;
-  if (!textPreviewable(file.mime, file.name)) return { status: 415, body: { error: 'this file is not text' } };
+  if (!isTextFile(file.mime, file.name)) return { status: 415, body: { error: 'this file is not text' } };
   if (!(await artifactBytesExist(env, current).catch(() => false))) return { status: 410, body: { error: 'the file’s contents are gone from disk' } };
   const prefix = await readArtifactPrefix(env, current, MAX_EDIT_BYTES);
   // Cut on a character boundary: a truncated file never ends in half a letter.
@@ -255,7 +283,7 @@ export async function saveFileVersion(pool: Pool, env: EnvLike, id: string, body
     if (!source) return { status: 404, body: { error: `there is no version ${restoredFrom} of this file` } };
     bytes = await readArtifactBytes(env, source);
   } else {
-    if (!textPreviewable(file.mime, file.name)) return { status: 415, body: { error: 'this file is not text' } };
+    if (!isTextFile(file.mime, file.name)) return { status: 415, body: { error: 'this file is not text' } };
     // Only over what the editor could open for editing: within the size, and UTF-8.
     if (found.current.sizeBytes > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
     const stored = await readArtifactPrefix(env, found.current, MAX_EDIT_BYTES).catch(() => null);
@@ -329,7 +357,7 @@ export async function createOwnerFile(pool: Pool, env: EnvLike, body: Record<str
   if (typeof text !== 'string' || text === '') return { status: 400, body: { error: '`text` must be the file’s text' } };
   if (typeof name !== 'string' || name.trim() === '' || name.length > 260 || /[\\/\u0000]/.test(name)) return { status: 400, body: { error: '`name` must be a file name' } };
   const type = typeof mime === 'string' && mime.trim() !== '' ? mime.trim() : 'text/plain';
-  if (!textPreviewable(type, name)) return { status: 415, body: { error: 'only a text file can be made here' } };
+  if (!isTextFile(type, name)) return { status: 415, body: { error: 'only a text file can be made here' } };
   const bytes = Buffer.from(text, 'utf8');
   if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
   let conversation: string | null = null;
@@ -339,10 +367,10 @@ export async function createOwnerFile(pool: Pool, env: EnvLike, body: Record<str
     if (rows.length === 0) return { status: 404, body: { error: 'no such conversation' } };
     conversation = conversationId;
   }
-  const saved = await saveArtifactReporting(pool, {
-    bytes, mime: type, filename: name.trim(), createdBy: ownerId,
+  // Always a new file: bytes another file holds are shared on disk, never that file.
+  const saved = await saveNewFile(pool, {
+    bytes, mime: type, name: name.trim(), createdBy: ownerId, conversationId: conversation,
     source: { surface: 'files', chatId: conversation, messageId: randomUUID() },
-    conversationId: conversation,
   }, env);
   if (conversation) await recordArtifactUse(pool, { artifactId: saved.row.id, conversationId: conversation, kind: 'uploaded' });
   return { status: 200, body: { ...versionRef(saved.row), filename: saved.row.filename } };

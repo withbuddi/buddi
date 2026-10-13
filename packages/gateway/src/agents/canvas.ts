@@ -191,7 +191,7 @@ export type CanvasOpenInput = z.infer<typeof canvasOpenInput>;
 export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; fileId: string; artifactId: string; version: number; filename: string | null; mime: string; note: string }> = {
   name: 'canvas.open',
   description:
-    'Open one of the owner’s files on the canvas, where they can read it (and edit a text file): its current version. To show the owner one of their files, find it with artifacts.list, then open it by its fileId; do not paste its contents into the chat unless they ask for the text.',
+    'Open one of the owner’s files on the canvas by its fileId (from artifacts.list), at its newest version: they can read it there, and edit a text file.',
   tier: 'auto',
   input: canvasOpenInput,
   async execute(input, toolCtx) {
@@ -205,7 +205,7 @@ export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; fileId:
     // The page draws it by its type: the editor for text, the preview for the rest.
     return {
       opened: true, fileId: file.id, artifactId: current.id, version: current.version, filename: file.name, mime: file.mime,
-      note: `Open at v${current.version}. To change this file, write it with artifacts.write { fileId: "${file.id}", readVersion: ${current.version} } after reading it.`,
+      note: `Open at v${current.version}, its newest version.`,
     };
   },
 };

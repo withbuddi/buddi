@@ -84,6 +84,8 @@ export type ChatBlock =
       files?: Array<{ artifactId: string; fileId: string; version: number; filename: string | null; mime: string; deleted: boolean; fileDeleted: boolean }>;
       /** The call read a library file without making one: no tab. */
       readsFile?: true;
+      /** The result is the file itself (a document write, an open), not a command that left files. */
+      fileResult?: true;
     }
   | { type: 'attachment'; artifactId: string; fileId?: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }

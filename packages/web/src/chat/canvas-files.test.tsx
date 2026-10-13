@@ -40,12 +40,13 @@ const exec = (id: string, when: number): ChatMessage[] => [
   { id: `${id}-result`, role: 'user', at: at(when), blocks: [{ type: 'tool_result', toolUseId: id, name: 'host.exec', ok: true, output: {
     exitCode: 0, state: 'exited', stdout: 'wrote summary.md\n', stderr: '',
     artifacts: [{ id: FILE, filename: 'summary.md', mime: 'text/markdown', sizeBytes: 12 }],
-  } }] },
+  }, files: [{ artifactId: FILE, fileId: FILE, version: 1, filename: 'summary.md', mime: 'text/markdown', deleted: false, fileDeleted: false }] }] },
 ];
 const PICTURE = '00000006-0000-4000-8000-000000000000';
 const opened = (id: string, artifactId: string, filename: string, mime: string, when: number): ChatMessage[] => [
   { id: `${id}-use`, role: 'assistant', at: at(when), blocks: [{ type: 'tool_use', id, name: 'canvas.open', input: { name: filename } }] },
-  { id: `${id}-result`, role: 'user', at: at(when), blocks: [{ type: 'tool_result', toolUseId: id, name: 'canvas.open', ok: true, output: { opened: true, artifactId, filename, mime } }] },
+  { id: `${id}-result`, role: 'user', at: at(when), blocks: [{ type: 'tool_result', toolUseId: id, name: 'canvas.open', ok: true, output: { opened: true, fileId: artifactId, artifactId, filename, mime },
+    files: [{ artifactId, fileId: artifactId, version: 1, filename, mime, deleted: false, fileDeleted: false }], fileResult: true }] },
 ];
 const said = (text: string, when: number): ChatMessage => ({ id: `said-${when}`, role: 'user', at: at(when), blocks: [{ type: 'text', text }] });
 

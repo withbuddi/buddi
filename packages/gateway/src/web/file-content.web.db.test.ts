@@ -24,7 +24,8 @@ vi.mock('node:fs/promises', async (original) => {
   return {
     ...real,
     rename: async (from: string, to: string) => {
-      if (control.failRename) { control.failRename = false; throw new Error('the disk is full'); }
+      // Only the write-through's rename into the workspace (its staged copy is `.<name>.buddi-<uuid>`), not a blob's.
+      if (control.failRename && String(from).split(/[\\/]/).pop()!.includes('.buddi-')) { control.failRename = false; throw new Error('the disk is full'); }
       return real.rename(from, to);
     },
   };
@@ -32,11 +33,11 @@ vi.mock('node:fs/promises', async (original) => {
 import pg from 'pg';
 import {
   CORE_MIGRATIONS_DIR, CORE_SCHEMA, FileChangedError, FileGoneError, ToolRegistry, createPool, deleteFile, ensureOwner, getFile,
-  isTextFile, migrate, purgeDeletedArtifacts, saveArtifact, saveDocument, saveOwnerVersion, saveVersion, textPreviewable,
+  isTextFile, migrate, purgeDeletedArtifacts, saveArtifact, saveDocument, saveOwnerVersion, saveVersion, storagePathFor,
   type AgentCatalog, type CoreToolContext,
 } from '@buddi/core';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
-import { enterWorkspace, hostWorkspaceDir } from '@buddi/tool-host';
+import { confinedMarkPath, enterWorkspace, hostWorkspaceDir } from '@buddi/tool-host';
 import { ownerEditLine, systemContext } from '../system-context.js';
 import { readChatTranscript } from './chat.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -267,7 +268,6 @@ suite('files as rows', () => {
   });
 
   it('classifies text with one rule, the editor’s and the server’s', async () => {
-    expect(textPreviewable).toBe(isTextFile);
     // What the editor once opened and the server refused with 415.
     for (const [mime, name] of [['application/yaml', 'config.yaml'], ['application/x-sh', 'run.sh'], ['application/octet-stream', 'tool.mjs'], ['application/octet-stream', 'lib.cjs'], ['application/octet-stream', 'setup.zsh']] as const) {
       expect(isTextFile(mime, name)).toBe(true);
@@ -541,6 +541,30 @@ suite('files as rows', () => {
     expect((await fetch(`${base}/api/files`, json({ name: 'a.png', mime: 'image/png', text: 'x' }))).status).toBe(415);
   });
 
+  it('makes a new file every time, even of bytes another file holds, and lists one made with no conversation', async () => {
+    // Codex P2: the same text twice returned the first file; one with no conversation was not in Files.
+    const here = await conversation();
+    const made = async (body: unknown) => (await (await fetch(`${base}/api/files`, json(body))).json()) as { fileId: string; artifactId: string; filename: string };
+    const a = await made({ name: 'Twin.md', mime: 'text/markdown', text: '# Twin\n', conversationId: here });
+    const b = await made({ name: 'Other twin.md', mime: 'text/markdown', text: '# Twin\n', conversationId: here });
+    expect(b.fileId).not.toBe(a.fileId);
+    expect(b.filename).toBe('Other twin.md');
+    const loose = await made({ name: 'Loose.md', mime: 'text/markdown', text: '# Loose\n' });
+    expect((await list('Loose')).map((e) => e.fileId)).toContain(loose.fileId);
+  });
+
+  it('serves the Files page from the file: its entry, an older version on request, and a version’s id names its file', async () => {
+    const id = await file('# Page one\n', 'page.md');
+    await saveVersion(pool, { id, bytes: Buffer.from('# Page two\n'), createdBy: 'scout' }, env);
+    const newest = (await (await fetch(`${base}/api/files/${id}`, { headers: auth() })).json()) as { entry: { version: number }; available: boolean; versions: Array<{ id: string }> };
+    expect(newest).toMatchObject({ entry: { version: 2 }, available: true });
+    const older = (await (await fetch(`${base}/api/files/${id}?version=1`, { headers: auth() })).json()) as { entry: { version: number } };
+    expect(older.entry.version).toBe(1);
+    const byVersionId = (await (await fetch(`${base}/api/files/${newest.versions[1]!.id}`, { headers: auth() })).json()) as { file: { id: string } };
+    expect(byVersionId.file.id).toBe(id);
+    expect((await fetch(`${base}/api/files/${id}?version=9`, { headers: auth() })).status).toBe(404);
+  });
+
   it('opens a file past 1 MiB read-only, its start only', async () => {
     const big = 'line\n'.repeat(250_000);
     const id = await file(big, 'big.log', 'text/plain');
@@ -601,6 +625,123 @@ suite('files as rows', () => {
       expect(ownerEditLine(note, 'UTC', [])).toMatch(/you cannot read files in Files; ask the owner what changed/);
       expect(ownerEditLine(note, 'UTC', [])).not.toMatch(/\b(he|his|him)\b/);
       expect(ownerEditLine(note, 'UTC', [])).toContain('you last wrote v1');
+    });
+  });
+
+  describe('a sandboxed workspace', () => {
+    it('gets the owner’s save in Files only, and the agent is told its copy is out of date', async () => {
+      // Codex P1: a process a sandboxed run left behind could swap a folder under the save's checks.
+      const here = await conversation();
+      const out = await captured('out/confined.md', '# Confined\n', here);
+      const data = await realpath(dir);
+      const mark = confinedMarkPath(data, 'owner', 'scout', here);
+      await mkdir(path.dirname(mark), { recursive: true });
+      await writeFile(mark, 'now\n');
+      const res = await save(out.fileId, { base: 1, text: '# Confined, mine\n' });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ version: 2, workspace: { updated: false, reason: expect.stringMatching(/ran sandboxed scripts/) } });
+      expect(await readFile(out.onDisk, 'utf8')).toBe('# Confined\n');
+      const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+      const told = await systemContext(ctx, { agentId: 'scout', tools: ['artifacts.text', 'artifacts.write', 'host.exec'], conversationId: here });
+      expect(told.prompt).toContain('Your earlier copies (any in your workspace too) are out of date');
+      expect(told.prompt).not.toContain('already holds it');
+    });
+
+    it('writes through where only unconfined commands ran', async () => {
+      const here = await conversation();
+      const out = await captured('out/free.md', '# Free\n', here);
+      expect(await (await save(out.fileId, { base: 1, text: '# Free, mine\n' })).json()).toMatchObject({ workspace: { updated: true } });
+      expect(await readFile(out.onDisk, 'utf8')).toBe('# Free, mine\n');
+    });
+  });
+
+  describe('the store under races and failures', () => {
+    it('rewrites a blob a cut-short write left, rather than trusting its path', async () => {
+      // Codex P1: a partial blob was reused because its path existed.
+      const bytes = Buffer.from('# Whole bytes, every one of them\n');
+      const relative = storagePathFor(sha(bytes), 'text/markdown', 'whole.md', new Date());
+      await mkdir(path.dirname(path.join(dir, relative)), { recursive: true });
+      await writeFile(path.join(dir, relative), bytes.subarray(0, 7));
+      const row = await saveArtifact(pool, { bytes, mime: 'text/markdown', filename: 'whole.md', createdBy: 'scout', conversationId }, env);
+      expect(row.storagePath).toBe(relative);
+      expect((await readFile(path.join(dir, relative))).equals(bytes)).toBe(true);
+      // Same size, wrong bytes: checked by hash too.
+      const other = Buffer.from('# Whole bytes, every one of them\n'.replace('W', 'X'));
+      const otherPath = storagePathFor(sha(Buffer.from('# Same size, other bytes here.  \n')), 'text/markdown', 'x.md', new Date());
+      await writeFile(path.join(dir, otherPath), other);
+      const second = await saveArtifact(pool, { bytes: Buffer.from('# Same size, other bytes here.  \n'), mime: 'text/markdown', filename: 'x.md', createdBy: 'scout', conversationId }, env);
+      expect(await readFile(path.join(dir, second.storagePath), 'utf8')).toBe('# Same size, other bytes here.  \n');
+    });
+
+    it('captures into a new file when the file it found was deleted while it waited', async () => {
+      // Codex P2: a capture appended to a file deleted under it.
+      const here = await conversation();
+      const first = await captured('out/race.md', '# One\n', here);
+      const holder = await pool.connect();
+      try {
+        await holder.query('begin');
+        await holder.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`buddi.file:${first.fileId}`]);
+        await holder.query('update core.files set deleted_at = now() where id = $1', [first.fileId]);
+        await holder.query('update core.artifacts set deleted_at = now() where file_id = $1', [first.fileId]);
+        const again = captured('out/race.md', '# Two\n', here);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        await holder.query('commit');
+        expect((await again).fileId).not.toBe(first.fileId);
+      } finally {
+        holder.release();
+      }
+      const { rows } = await pool.query('select count(*)::int as live from core.artifacts where file_id = $1 and deleted_at is null', [first.fileId]);
+      expect(rows[0].live).toBe(0);
+    });
+
+    it('makes a new file of a re-sent upload whose file was deleted while it waited', async () => {
+      // Codex P2: the dedup brought a version back inside a deleted file.
+      const source = { surface: 'telegram', chatId: 'race-chat' };
+      const first = await saveArtifact(pool, { bytes: Buffer.from('statement'), mime: 'application/pdf', filename: 's.pdf', createdBy: 'owner', source }, env);
+      const holder = await pool.connect();
+      let again: Awaited<ReturnType<typeof saveArtifact>>;
+      try {
+        await holder.query('begin');
+        await holder.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`buddi.file:${first.fileId}`]);
+        await holder.query('update core.files set deleted_at = now() where id = $1', [first.fileId]);
+        await holder.query('update core.artifacts set deleted_at = now() where file_id = $1', [first.fileId]);
+        const pending = saveArtifact(pool, { bytes: Buffer.from('statement'), mime: 'application/pdf', filename: 's.pdf', createdBy: 'owner', source }, env);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        await holder.query('commit');
+        again = await pending;
+      } finally {
+        holder.release();
+      }
+      expect(again.fileId).not.toBe(first.fileId);
+      expect((await getFile(pool, first.fileId))!.deletedAt).not.toBeNull();
+      expect((await pool.query('select deleted_at from core.artifacts where id = $1', [first.id])).rows[0].deleted_at).not.toBeNull();
+    });
+
+    it('never gives a purged version’s number to a new one', async () => {
+      // Codex P2: v3 deleted, purged, and the next save was v3 again.
+      const id = await file('# n1\n', 'numbers.md');
+      await saveVersion(pool, { id, bytes: Buffer.from('# n2\n'), createdBy: 'scout' }, env);
+      await saveVersion(pool, { id, bytes: Buffer.from('# n3\n'), createdBy: 'scout' }, env);
+      await pool.query('update core.artifacts set deleted_at = $2 where file_id = $1 and version = 3', [id, new Date(Date.now() - 31 * 24 * 60 * 60 * 1000)]);
+      await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env);
+      expect((await pool.query('select max(version)::int as top from core.artifacts where file_id = $1', [id])).rows[0].top).toBe(2);
+      // An editor still holding v3 as its base is refused, not taken for the new v3.
+      expect((await saveVersion(pool, { id, bytes: Buffer.from('# n4\n'), createdBy: 'scout' }, env)).row.version).toBe(4);
+      expect((await save(id, { base: 3, text: '# stale\n' })).status).toBe(409);
+    });
+
+    it('stops telling the agent once it has read the owner’s newest version', async () => {
+      const here = await conversation();
+      const v1 = await call('artifacts.write', { title: 'Read me', format: 'markdown', content: '# Read me\n' }, here);
+      expect((await save(v1.fileId, { base: 1, text: '# Read me, mine\n' })).status).toBe(200);
+      const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+      const tools = ['artifacts.text', 'artifacts.write'];
+      expect((await systemContext(ctx, { agentId: 'scout', tools, conversationId: here })).prompt).toContain('The newest version of Read me.md');
+      // Reading the older version does not count.
+      await call('artifacts.text', { id: v1.artifactId }, here);
+      expect((await systemContext(ctx, { agentId: 'scout', tools, conversationId: here })).prompt).toContain('The newest version of Read me.md');
+      await call('artifacts.text', { id: (await view(v1.fileId)).current.artifactId }, here);
+      expect((await systemContext(ctx, { agentId: 'scout', tools, conversationId: here })).prompt).not.toContain('Read me.md');
     });
   });
 

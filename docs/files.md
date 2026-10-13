@@ -63,7 +63,9 @@ Files is the sixth primary dashboard destination, beside Chat, rather than
 buried in Settings. Its icon must read as files at a glance at the rail's
 icon-only width: use a recognisable file or stacked-documents shape from the
 existing visual vocabulary, with a Files tooltip and accessible name.
-Routes are `#/files` and `#/files/<artifactId>`. Filters can accompany
+Routes are `#/files` and `#/files/<fileId>`, the same address across a
+file's versions and after a Restore (`?v=<n>` shows an older version); an
+older link naming a version's id opens its file. Filters can accompany
 either route; browser back restores the previous list and scroll position.
 These are authenticated dashboard links, not public sharing links.
 
@@ -244,7 +246,9 @@ workspace path it was captured from. Every row of `core.artifacts` is one of
 its **versions**: a number from 1, the bytes (content-addressed on disk), and
 who wrote that version (`created_by`: the agent, or `owner` for an upload, a
 save on the Canvas or a Restore). Versions are appended and never rewritten;
-the **current** version is the highest-numbered live one.
+the **newest** version is the highest-numbered live one. A file's counter
+(`next_version`) only goes up, so a number is never given twice, even after a
+deleted version is purged.
 
 What makes a new version:
 
@@ -253,24 +257,28 @@ What makes a new version:
   `version: { base, ext }` the same way (host API 1.34).
 - A command's output captured again from the same workspace path in the same
   conversation (`host.exec` `outputs`): two paths that share a name are two
-  files. Unchanged bytes are the current version again, not a new one.
+  files. Unchanged bytes are the newest version again, not a new one.
 - The owner's save on the Canvas, and **Restore as newest** in Files.
 
 Two versions may hold the same bytes (a Restore does); re-sending an
 attachment into the same chat is still the same file, not a new version.
+Bytes are written beside their path and renamed into it, so a path only ever
+names whole bytes, and a blob is checked (size and hash) before it is reused
+and written again if it is not those bytes.
 
 One lock per file serialises every change to it — a version, a delete, an
 undelete — and the title or workspace path that names a file is locked while
 it is looked up or created, so two writes at once never make two files.
 
-Files lists each file once, as its current version, with "N versions" beside
+Files lists each file once, as its newest version, with "N versions" beside
 its date. A file's page lists its versions, newest first, with who wrote each
 ("You, restored v2" for a Restore), View, **Restore as newest** and Delete
 version. A download names its version: the second version of `Plan.md` is
 `Plan (v2).md` when downloaded (`/download` and `/export/…`), never in Files.
 
 `GET /api/files/<id>` is the one view of a file the Canvas and Files read: the
-file, its current version, and its versions. Any version's id names its file
+file, its newest version, and its versions (and, for the Files page, where it
+was used). Any version's id names its file
 there, in `canvas.open`, and in `artifacts.write`'s `fileId`.
 
 ### Conflicts
@@ -291,7 +299,7 @@ what to read.
 ## The editor
 
 A text file on the Canvas opens in an editor — one tab per file, kept by its
-file id across every version, write and open. The tab shows the current
+file id across every version, write and open. The tab shows the newest
 version; when buddi writes a newer one, an unchanged view updates in place
 and marks the changed lines, and an unsaved edit is never replaced (the bar
 above). Save (⌘S/Ctrl+S) is `POST /api/files/<id>/versions { base, text }`:
@@ -308,9 +316,19 @@ over the version just saved.
 
 Three things keep the agent from dropping the owner's version afterwards:
 
-- **Back into the workspace.** A command's output belongs to the workspace of
-  the agent that made the file, in its conversation; whoever writes later
-  versions does not change that. The owner's save writes there too — only
+- **Back into the workspace — unconfined workspaces only.** A command's
+  output belongs to the workspace of the agent that made the file, in its
+  conversation; whoever writes later versions does not change that. The
+  owner's save writes there too only while every command that ever ran in
+  that workspace ran unconfined, as the owner's own user (a plain
+  `host.exec`): such a process can already write anywhere he can, so a save
+  racing it opens no escape. Once a sandboxed run (a skill bundle's script)
+  has used the workspace, it is marked — outside the workspace, where nothing
+  it runs can remove the mark — and the owner's saves stay in Files only: a
+  process that run left behind could swap a folder under the save's path
+  checks (Node cannot open relative to a directory handle) and reach outside
+  its sandbox through the save. The agent is then told its workspace copy is
+  out of date. Where it does write, it writes only
   inside that workspace, only while the copy still holds what buddi last read
   or wrote there (a copy a command changed since is the `workspace` conflict),
   never through a link (every folder on the way is checked before and after),
@@ -325,7 +343,9 @@ Three things keep the agent from dropping the owner's version afterwards:
   <time>); you last wrote vM" — and how to build on it with the tools the
   agent holds: the workspace copy when the save was written back there,
   otherwise `artifacts.text` then `artifacts.write { fileId, readVersion }`.
-  Once the agent writes the file again, it is not said.
+  Once the agent has read his version (`artifacts.text`, `artifacts.describe`
+  or a plugin's `files.read` record the version read) or written the file
+  again, it is not said.
 - **Refused unread.** As above: a write over the owner's newest version
   without `readVersion` is refused.
 
@@ -338,7 +358,7 @@ or call its HTTP API from a command.
 ## Deletion
 
 A file's ⋯ menu has **Delete file** (all its versions, after a confirm), and
-each version **Delete version** (the one before becomes current; the last one
+each version **Delete version** (the one before becomes the newest; the last one
 takes the file with it). Both are soft and serialised with writes by the
 file's lock: a conversation that carried the file shows it as deleted,
 nothing on disk or in a workspace changes, and **Undo**
@@ -354,7 +374,10 @@ a save adopting the same bytes meanwhile keeps them.
 
 On the Canvas a deleted file's tab goes, unless it holds an unsaved edit:
 then the edit stays on screen with **Save as new file**, which makes a new
-file of the owner's in the conversation (`POST /api/files`), like any upload.
+file of the owner's in the conversation (`POST /api/files`) — always a new
+file, listed in Files whether or not a conversation is named, sharing bytes
+on disk with any file that holds the same ones but never becoming that file.
+What he types while it is being made stays as an edit.
 
 ## Files agents download
 
@@ -374,12 +397,12 @@ the owning plugin's import tool by id, never into the reply.
 
 Owner-authenticated library endpoints (writes are the owner's, never an agent's):
 
-- `GET /api/artifacts`: one entry per file (its current version) with search
+- `GET /api/artifacts`: one entry per file (its newest version) with search
   (name and caption), origin and family filters; default 50 entries and
   maximum 100 per page.
 - `GET /api/artifacts/<id>`: one version's detail, the file's versions and its
   paginated conversation links.
-- `/api/files/<id>`: the file and its versions, its current text, a new
+- `/api/files/<id>`: the file and its versions, its newest text, a new
   version (save or Restore), delete, undelete; `POST /api/files` for a new
   text file. See **Versions**, **The editor** and **Deletion**.
 - Reuse `/api/artifacts/<id>/download` and `/preview` for their supported

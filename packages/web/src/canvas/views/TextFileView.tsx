@@ -16,6 +16,7 @@
  * Unsaved edits live in `file-drafts`, not here: a tab in the back is not
  * mounted, and the strip draws a dot for one.
  */
+import { CHANGED_SINCE } from '@buddi/core/text-files';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { api, ApiError, type FileConflict, type FileContent } from '../../api';
 import { CsvTable } from '../../chat/ArtifactPreview';
@@ -32,8 +33,8 @@ const CodeEditor = lazy(() => import('./CodeEditor'));
 /** How long buddi's changed lines stay marked. */
 export const MARK_MS = 2_500;
 
-/** What the bar says whenever the file moved on under an edit. */
-export const CHANGED_SINCE = 'This file changed since you opened it';
+/** What the bar says whenever the file moved on under an edit: the server's own phrase. */
+export { CHANGED_SINCE };
 
 export interface TextFileViewProps {
   attachment: AttachmentBlock;
@@ -244,7 +245,10 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
         name: filename ?? 'Untitled.txt', mime: attachment.mime, text: onDisk(draft.text, draft.crlf),
         ...(draft.conversationId ? { conversationId: draft.conversationId } : {}),
       });
-      setDraft(tabId, null);
+      // Only the text that was kept: what he typed while it was out is still his edit.
+      const now = getEdit(tabId);
+      if (now && now.text === draft.text) setDraft(tabId, null);
+      else if (now) setDraft(tabId, { ...now, baseText: draft.text });
       if (mounted.current) setKeptAs(made.filename ?? 'a new file');
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : String(err));

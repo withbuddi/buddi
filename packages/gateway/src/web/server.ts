@@ -126,7 +126,7 @@ import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
 import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, isTextFile, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
 import { createVault, saveArtifactReporting, recordArtifactUse, versionedFileName } from '@buddi/core';
@@ -567,7 +567,7 @@ const PREVIEW_TEXT_BYTES = 100_000;
 function previewKind(mime: string, filename: string | null): 'image' | 'pdf' | 'text' | null {
   if (['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) return 'image';
   if (mime === 'application/pdf') return 'pdf';
-  if (textPreviewable(mime, filename)) return 'text';
+  if (isTextFile(mime, filename)) return 'text';
   return null;
 }
 
@@ -2033,7 +2033,15 @@ export function createWebApp(deps: WebServerDeps): Server {
       const fileView = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/content)?$/i.exec(path);
       if (fileView) {
         const id = fileView[1]!.toLowerCase();
-        return reply(res, fileView[2] ? await readFileContent(deps.pool, deps.env ?? process.env, id) : await readFileView(deps.pool, id));
+        if (fileView[2]) return reply(res, await readFileContent(deps.pool, deps.env ?? process.env, id));
+        const version = q.get('version');
+        if (version !== null && !/^[1-9][0-9]{0,8}$/.test(version)) return sendJson(res, 400, { error: '`version` must be a version number' });
+        const contexts = Number(q.get('contexts') ?? '0');
+        return reply(res, await readFileView(deps.pool, deps.env ?? process.env, id, {
+          knownAgentIds: deps.catalog.list().map((a) => a.id),
+          ...(version === null ? {} : { version: Number(version) }),
+          ...(Number.isInteger(contexts) && contexts > 0 ? { contextsOffset: contexts } : {}),
+        }));
       }
 
       const download = /^\/api\/artifacts\/([0-9a-f-]{36})\/(download|preview)$/.exec(path);

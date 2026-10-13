@@ -789,8 +789,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
     answer: '204', errors: '404; 409 already sent, or not from the dashboard',
   },
   {
-    method: 'GET', path: '/api/files/:id', area: 'files', summary: 'A file (by its id, or any version’s): what it is, its current version and its versions, newest first.',
-    answer: '{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy }, versions }', errors: '404 (deleted: true when it was deleted)',
+    method: 'GET', path: '/api/files/:id', area: 'files', summary: 'A file (by its id, or any version’s): what it is, its newest version and its versions, newest first, and the library’s entry for the version shown, where it was used and whether its bytes are there.',
+    query: 'version?: n (an older version to show), contexts?: offset', answer: '{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy }, versions, entry|null, contexts, contextsTotal, contextsOffset, available }', errors: '400 a bad version; 404 (deleted: true when it was deleted, or no such version)',
   },
   {
     method: 'GET', path: '/api/files/:id/content', area: 'files', summary: 'A text file’s current version whole, for the canvas editor, with the version a save names.',
@@ -814,7 +814,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
     body: '{ version?: number }', answer: '{ fileId, restored: true }', errors: '400; 404',
   },
   {
-    method: 'POST', path: '/api/files', area: 'files', summary: 'A new text file of the owner’s, in a conversation when one is named (the editor’s "Save as new file").',
+    method: 'POST', path: '/api/files', area: 'files', summary: 'A new text file of the owner’s, always a new file (bytes another file holds are shared, never that file), listed in Files, and in a conversation when one is named (the editor’s "Save as new file").',
     body: '{ name, text, mime?, conversationId? }', answer: '{ fileId, version, artifactId, sha256, createdBy, filename }', errors: '400; 404 no such conversation; 413 over 1 MiB; 415 not a text file',
   },
 

@@ -18,7 +18,8 @@
 export { parseDelimited } from '../chat/ArtifactPreview';
 import { useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
-import { ApiError, api, type FileConflict, type LibraryContext, type LibraryEntry, type LibraryVersion } from '../api';
+import { CHANGED_SINCE } from '@buddi/core/text-files';
+import { ApiError, api, type FileConflict, type FileView, type LibraryEntry, type LibraryVersion } from '../api';
 import { ArtifactPreview } from '../chat/ArtifactPreview';
 import { FAMILY_LABEL, formatBytes, previewUrl } from '../chat/attachments';
 import { FamilyMark } from '../chat/FileTile';
@@ -40,7 +41,8 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
   // link carries them. The search box is typed locally and written through
   // after a pause.
   const route = parseFileRoute(hash);
-  const selectedId = route?.artifactId ?? null;
+  const selectedId = route?.fileId ?? null;
+  const selectedVersion = route?.version;
   const origin = route?.filters.origin ?? '';
   const family = route?.filters.family ?? '';
   const q = route?.filters.q ?? '';
@@ -119,9 +121,9 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
           {entries.map((entry) => (
             <PickRow
               key={entry.id}
-              href={fileRoute(entry.id, { q, origin, family })}
-              current={entry.id === selectedId}
-              onClick={() => navigate(fileRoute(entry.id, { q, origin, family }))}
+              href={fileRoute(entry.fileId, { q, origin, family })}
+              current={entry.fileId === selectedId}
+              onClick={() => navigate(fileRoute(entry.fileId, { q, origin, family }))}
               lead={
                 <span className="files-row-visual" data-family={entry.family}>
                   {entry.family === 'image' && !entry.deleted ? <img src={previewUrl(entry.id)} alt="" loading="lazy" /> : <FamilyMark family={entry.family} />}
@@ -193,7 +195,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
             list={list}
             detail={
               selectedId ? (
-                <FileDetail key={`${selectedId}:${listRevision}`} id={selectedId} timezone={timezone} agents={agents} navigate={navigate} onBack={() => navigate(fileRoute(null, { q, origin, family }))} onDeleted={onDeleted} />
+                <FileDetail key={`${selectedId}:${selectedVersion ?? ''}:${listRevision}`} id={selectedId} {...(selectedVersion === undefined ? {} : { version: selectedVersion })} timezone={timezone} agents={agents} navigate={navigate} onBack={() => navigate(fileRoute(null, { q, origin, family }))} onDeleted={onDeleted} />
               ) : undefined
             }
             empty="Choose a file to see it here."
@@ -229,31 +231,45 @@ function originLabel(entry: LibraryEntry, nameOf: (id: string | null) => string)
  * One file
  * ------------------------------------------------------------------ */
 
-function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
-  id: string; timezone: string; agents: PlaceProps['agents']; navigate: (r: string) => void; onBack: () => void;
+function FileDetail({ id, version: shownVersion, timezone, agents, navigate, onBack, onDeleted }: {
+  /** The file's id (an older link may name a version's: the address is replaced with its file's). */
+  id: string;
+  /** An older version to show; the newest when absent. */
+  version?: number;
+  timezone: string; agents: PlaceProps['agents']; navigate: (r: string, replace?: boolean) => void; onBack: () => void;
   /** Something was deleted: the toast's title, and what Undo brings back. */
   onDeleted: (title: string, fileId: string, version?: number) => void;
 }): JSX.Element {
   const [confirming, setConfirming] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [data, setData] = useState<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; available: boolean; versions?: LibraryVersion[] } | null>(null);
+  const [data, setData] = useState<(FileView & { entry: LibraryEntry }) | null>(null);
   /** Read again after a restore: the newest version changed. */
   const [revision, setRevision] = useState(0);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
-  /** A Restore refused because a newer version was saved: the same choice as the editor's. */
-  const [restoreConflict, setRestoreConflict] = useState<{ from: LibraryVersion; current: number } | null>(null);
+  /** A Restore refused — a newer version, or the workspace copy changed: the same choice as the editor's. */
+  const [restoreConflict, setRestoreConflict] = useState<{ from: LibraryVersion; current: number; workspace: boolean } | null>(null);
   const [moreContexts, setMoreContexts] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     setData(null);
     setError(null);
-    api.libraryEntry(id)
-      .then((found) => { if (!cancelled) setData(found); })
+    api.file(id, shownVersion === undefined ? {} : { version: shownVersion })
+      .then((found) => {
+        if (cancelled) return;
+        if (!found.entry) { setError('This file is no longer in the library.'); return; }
+        // An address naming a version's id: the file's own address, at that version unless it is the newest.
+        if (found.file.id !== id) {
+          const named = found.versions.find((v) => v.id === id);
+          navigate(fileRoute(found.file.id, {}, named && named.version !== found.current.version ? named.version : shownVersion), true);
+          return;
+        }
+        setData({ ...found, entry: found.entry });
+      })
       .catch((err: unknown) => { if (!cancelled) setError(err instanceof ApiError && err.status === 404 ? 'This file is no longer in the library.' : err instanceof ApiError ? err.message : String(err)); });
     return () => { cancelled = true; };
-  }, [id, revision]);
+  }, [id, shownVersion, revision]);
   const nameOf = (agentId: string | null): string => (agentId ? agents.find((a) => a.id === agentId)?.name ?? agentId : '');
 
   if (error) return <div className="files-detail-body"><Button size="sm" onClick={onBack} className="files-back">Back to Files</Button><Notice tone="critical">{error}</Notice></div>;
@@ -263,23 +279,26 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   const versions = data.versions ?? [];
   const latest = versions[0] ?? null;
   const notNewest = latest !== null && latest.id !== entry.id;
+  const fileId = data.file.id;
   /*
    * Restore as newest: the server copies that version's bytes into a new
    * version, over the newest he is looking at — the editor's version check,
    * and a command's output written back to its workspace.
    */
-  const restore = async (version: LibraryVersion, base: number): Promise<void> => {
+  const restore = async (version: LibraryVersion, base: number, overwriteWorkspace = false): Promise<void> => {
     setRestoring(version.id);
     setRestoreError(null);
     setRestoreConflict(null);
     try {
-      const saved = await api.saveFileVersion(entry.fileId, { base, from: version.version });
-      if (entry.id !== saved.artifactId) navigate(fileRoute(saved.artifactId));
+      await api.saveFileVersion(fileId, { base, from: version.version, ...(overwriteWorkspace ? { overwriteWorkspace: true as const } : {}) });
+      // The address is the file's: it shows the newest, which the Restore just made.
+      if (shownVersion !== undefined) navigate(fileRoute(fileId));
       else setRevision((n) => n + 1);
     } catch (err) {
       const conflict = err instanceof ApiError && err.status === 409 ? err.detail as FileConflict | null : null;
-      if (conflict?.conflict === 'newer' && conflict.current) setRestoreConflict({ from: version, current: conflict.current.version });
-      else setRestoreError(conflict?.error ?? (err instanceof Error ? err.message : String(err)));
+      if ((conflict?.conflict === 'newer' || conflict?.conflict === 'workspace') && conflict.current) {
+        setRestoreConflict({ from: version, current: conflict.current.version, workspace: conflict.conflict === 'workspace' });
+      } else setRestoreError(conflict?.error ?? (err instanceof Error ? err.message : String(err)));
     } finally {
       setRestoring(null);
     }
@@ -288,8 +307,8 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   const deleteFile = async (): Promise<void> => {
     setConfirming(false);
     try {
-      await api.deleteFile(entry.fileId);
-      onDeleted(`Deleted ${name}`, entry.fileId);
+      await api.deleteFile(fileId);
+      onDeleted(`Deleted ${name}`, fileId);
       onBack();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : String(err));
@@ -298,11 +317,10 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   /** One version: the one before it is the newest again. */
   const deleteVersion = async (version: LibraryVersion): Promise<void> => {
     try {
-      const gone = await api.deleteFile(entry.fileId, version.version);
-      const left = versions.filter((v) => v.id !== version.id);
-      onDeleted(gone.fileDeleted ? `Deleted ${name}` : `Deleted v${version.version} of ${name}`, entry.fileId, version.version);
+      const gone = await api.deleteFile(fileId, version.version);
+      onDeleted(gone.fileDeleted ? `Deleted ${name}` : `Deleted v${version.version} of ${name}`, fileId, version.version);
       if (gone.fileDeleted) onBack();
-      else if (version.id === entry.id) navigate(fileRoute(left[0]?.id ?? null));
+      else if (version.id === entry.id) navigate(fileRoute(fileId));
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : String(err));
     }
@@ -313,7 +331,7 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   };
   const loadMoreContexts = (): void => {
     setMoreContexts(true);
-    api.libraryEntry(id, contexts.length)
+    api.file(fileId, { ...(shownVersion === undefined ? {} : { version: shownVersion }), contexts: contexts.length })
       .then((page) => setData((current) => current ? { ...current, contexts: [...current.contexts, ...page.contexts], contextsTotal: page.contextsTotal } : current))
       .catch(() => undefined)
       .finally(() => setMoreContexts(false));
@@ -344,7 +362,7 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
         </Modal>
       ) : null}
       {notNewest ? (
-        <Notice tone="warning" action={<Button size="sm" onClick={() => navigate(fileRoute(latest.id))}>Open newest</Button>}>v{entry.version} is not the newest version (v{latest.version} is).</Notice>
+        <Notice tone="warning" action={<Button size="sm" onClick={() => navigate(fileRoute(fileId))}>Open newest</Button>}>v{entry.version} is not the newest version (v{latest.version} is).</Notice>
       ) : null}
       {!available ? <Notice tone="warning">The file's bytes are no longer on this machine. What is known about it stays here; the download will not work.</Notice> : null}
       <ArtifactPreview artifactId={entry.id} filename={entry.filename} mime={entry.mime} family={entry.family} available={available} />
@@ -363,10 +381,10 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
             <Notice tone="warning" role="status" action={
               <span className="ui-toolbar">
                 <Button size="sm" onClick={() => { setRestoreConflict(null); setRevision((n) => n + 1); }}>Show theirs</Button>
-                <Button size="sm" variant="accent" onClick={() => { void restore(restoreConflict.from, restoreConflict.current); }}>Keep mine</Button>
+                <Button size="sm" variant="accent" onClick={() => { void restore(restoreConflict.from, restoreConflict.current, restoreConflict.workspace); }}>Keep mine</Button>
               </span>
             }>
-              This file changed since you opened it (v{restoreConflict.current} is newer). Keep mine restores v{restoreConflict.from.version} over it.
+              {CHANGED_SINCE}{restoreConflict.workspace ? ': a command changed its copy in buddi’s workspace.' : ` (v${restoreConflict.current} is newer).`} Keep mine restores v{restoreConflict.from.version} over it.
             </Notice>
           ) : null}
           <ul className="files-ctx" role="list">
@@ -377,7 +395,7 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
                   <span className="muted"> · {madeBy(version)} · {formatBytes(version.sizeBytes)}</span>
                 </span>
                 <span className="ui-toolbar">
-                  {version.id !== entry.id ? <a className="ui-btn" data-size="sm" href={fileRoute(version.id)} onClick={(e) => { e.preventDefault(); navigate(fileRoute(version.id)); }}>View</a> : null}
+                  {version.id !== entry.id ? <a className="ui-btn" data-size="sm" href={fileRoute(fileId, {}, index === 0 ? undefined : version.version)} onClick={(e) => { e.preventDefault(); navigate(fileRoute(fileId, {}, index === 0 ? undefined : version.version)); }}>View</a> : null}
                   {index > 0 && latest ? (
                     <Button size="sm" disabled={restoring !== null} onClick={() => { void restore(version, latest.version); }}>{restoring === version.id ? 'Restoring…' : 'Restore as newest'}</Button>
                   ) : null}
