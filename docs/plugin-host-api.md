@@ -580,7 +580,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.33`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.34`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -969,6 +969,17 @@ plugin:
 
 An older buddi refuses the renderers, components and fields it does not
 know, so a plugin using any of them asks for `^1.33`.
+
+1.34 adds two optional arguments to `files.save`:
+
+- **`workspacePath`**: the absolute path the bytes were read from, inside the
+  plugin's own data folder (anything else is refused). When the owner edits
+  the file on the Canvas and saves, buddi writes his version back there too,
+  if that copy is still the one he opened (otherwise his save is refused with
+  what the copy holds now). The host plugin passes it for a command's outputs.
+- **`version.readVersion`**: once the owner has edited the newest version of
+  a document, the next version is refused unless it names that version's id,
+  so a writer cannot drop his edit unread. An older buddi ignores both.
 
 ## 8. End to end
 

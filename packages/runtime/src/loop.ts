@@ -948,6 +948,8 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
     agentId: agent.id,
     tools: tools.map((t) => t.name),
     ...(userMessage !== undefined ? { message: userMessage } : {}),
+    // So the context can say what the owner changed here since the last turn.
+    conversationId,
   });
   const system = composeSystem(
     agent.systemPrompt,

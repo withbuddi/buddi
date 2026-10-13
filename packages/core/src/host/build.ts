@@ -15,7 +15,7 @@
  * through `configurePluginHost`. A process that never does (a unit test) gets
  * areas that say so when called, not areas that are missing.
  */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { Pool, PoolClient } from 'pg';
 import { assertApprovedEffect } from '../actions/effect.js';
@@ -1126,9 +1126,22 @@ function filesArea(
         const { rows } = await pool().query(`select 1 from core.conversations where id = $1`, [facts.conversationId]);
         if (rows.length > 0) conversationId = facts.conversationId;
       }
+      // Where the bytes were read from, kept only inside this plugin's own data folder.
+      let originPath: string | undefined;
+      if (input.workspacePath !== undefined) {
+        // Compared as real paths: a data dir under a symlink (macOS's /var) is the same folder.
+        const real = (p: string): string => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+        const data = real(resolveDataDir(env()));
+        const roots = [path.join(data, 'plugins-data', binding.plugin), ...(LEGACY_DIRS.has(binding.plugin) ? [path.join(data, binding.plugin)] : [])];
+        const absolute = real(input.workspacePath);
+        const within = roots.some((root) => { const rel = path.relative(root, absolute); return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel); });
+        if (!within) throw new Error(`files.save: workspacePath must be inside ${binding.plugin}'s own data folder`);
+        originPath = path.relative(data, absolute).split(path.sep).join('/');
+      }
       const fields = {
         bytes: input.bytes,
         mime: input.mime,
+        ...(originPath === undefined ? {} : { originPath }),
         ...(input.source === undefined ? {} : { source: input.source }),
         ...(input.caption === undefined ? {} : { caption: input.caption }),
         createdBy: facts.agentId ?? binding.plugin,
@@ -1136,7 +1149,10 @@ function filesArea(
       let result: { row: ArtifactRow; existed: boolean; version?: number };
       if (input.version !== undefined && conversationId !== null) {
         // The next version of a document in this conversation, counted and saved under one lock.
-        result = await saveArtifactVersion(pool(), { ...fields, conversationId, base: input.version.base, ext: input.version.ext }, env());
+        result = await saveArtifactVersion(pool(), {
+          ...fields, conversationId, base: input.version.base, ext: input.version.ext,
+          ...(input.version.readVersion === undefined ? {} : { readVersion: input.version.readVersion }),
+        }, env());
       } else {
         const filename = input.filename ?? (input.version === undefined ? undefined : `${input.version.base}.${input.version.ext}`);
         result = await saveArtifactReporting(pool(), { ...fields, ...(filename === undefined ? {} : { filename }), conversationId }, env());

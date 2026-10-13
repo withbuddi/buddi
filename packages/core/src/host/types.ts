@@ -460,7 +460,13 @@ export interface FilesArea {
    * the next version among every file of the calling conversation —
    * `base.ext`, then `base (v2).ext`, … — counted and saved under one lock, so
    * two writes at once never share a name. `filename` is then ignored inside a
-   * conversation; outside one the name is `base.ext`.
+   * conversation; outside one the name is `base.ext`. Once the owner edited
+   * the newest version (1.34), the next is refused unless `readVersion` names
+   * that version's id: the writer read his edit first.
+   *
+   * `workspacePath` (1.34) is the absolute path the bytes were read from,
+   * inside this plugin's own data folder (`dir.path`, or `dir.legacyPath`):
+   * the owner's save of the file on the Canvas writes back there.
    */
   save(input: {
     bytes: Buffer;
@@ -468,7 +474,8 @@ export interface FilesArea {
     filename?: string;
     caption?: string;
     source?: ArtifactSource;
-    version?: { base: string; ext: string };
+    version?: { base: string; ext: string; readVersion?: string };
+    workspacePath?: string;
   }): Promise<FileRow & { existed?: boolean; version?: number }>;
   get(id: string): Promise<FileRow | null>;
   read(id: string): Promise<Buffer>;

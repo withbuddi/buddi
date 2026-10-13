@@ -41,6 +41,17 @@ interface HostEnvelope {
   skillRun?: SkillRunView;
 }
 const LIMIT = 20 * 1024 * 1024;
+/** The folder name of one agent's workspace in one conversation. */
+export function hostWorkspaceKey(ownerId: string, agentId: string, conversationId: string): string {
+  return sha256Of(Buffer.from(JSON.stringify([ownerId, agentId, conversationId])));
+}
+/**
+ * That workspace under a data dir, for the gateway, which writes the owner's
+ * edit of a captured output back there (web/file-content.ts).
+ */
+export function hostWorkspaceDir(dataDir: string, ownerId: string, agentId: string, conversationId: string): string {
+  return path.join(dataDir, 'host', 'workspaces', hostWorkspaceKey(ownerId, agentId, conversationId));
+}
 let processBundles: SkillBundles | null = null;
 /** The gateway's bundles for every host service in this process (set once at start). */
 export function useSkillBundles(skills: SkillBundles | null): void { processBundles = skills; }
@@ -57,10 +68,9 @@ export class HostService {
   #bundles(): SkillBundles | null { return this.skills ?? processBundles; }
   workspace(ctx: Pick<ToolContext, 'buddi' | 'agentId' | 'conversationId'>): string {
     if (!ctx.agentId || !ctx.conversationId) throw new Error('Host tools require an agent and conversation.');
-    const key = sha256Of(Buffer.from(JSON.stringify([ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId])));
     // <data>/host/workspaces, where the owner's running and finished work
     // already is: dir.legacyPath, not dir.path (<data>/plugins-data/host).
-    return path.join(ctx.buddi!.dir.legacyPath!, 'workspaces', key);
+    return path.join(ctx.buddi!.dir.legacyPath!, 'workspaces', hostWorkspaceKey(ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId));
   }
   runs(ownerId: string, agentId?: string, conversationId?: string): HostRun[] {
     return [...this.#runs.values()].map(({ view }) => view).filter(v => v.ownerId === ownerId &&
@@ -261,8 +271,9 @@ export class HostService {
             const meta = await stat(file);
             total += meta.size;
             if (!meta.isFile() || meta.size === 0 || total > LIMIT) throw new Error('Outputs must be nonempty files, at most 20 MiB total.');
+            // Where it was read from: the owner's edit on the Canvas is written back there.
             const row = await ctx.buddi!.files!.save({ bytes: await readFile(file), mime: mimeFor(file),
-              filename: path.basename(output), source: { surface: 'host', chatId: ctx.conversationId } });
+              filename: path.basename(output), source: { surface: 'host', chatId: ctx.conversationId }, workspacePath: file });
             artifacts.push({ id: row.id, filename: row.filename, mime: row.mime, sizeBytes: row.sizeBytes,
               downloadUrl: `${this.env.BUDDI_WEB_PUBLIC_ORIGIN ?? `http://127.0.0.1:${this.env.BUDDI_WEB_PORT ?? '4317'}`}/api/artifacts/${row.id}/download` });
           } catch (error) { outputErrors.push(`${output}: ${error instanceof Error ? error.message : String(error)}`); }

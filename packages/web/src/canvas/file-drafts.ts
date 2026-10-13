@@ -26,6 +26,8 @@ export interface FileDraft {
   text: string;
   /** The file had Windows line endings: the save puts them back. */
   crlf?: boolean;
+  /** He chose his version over a copy buddi changed in its workspace: the save writes over it. */
+  overwriteWorkspace?: boolean;
 }
 
 export interface FilePin {

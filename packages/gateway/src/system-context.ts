@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
 import { ASK_TOOL } from './surfaces/pending-question.js';
 import { editionOriginLine, findEditionOrigin } from './edition-origin.js';
-import { MAX_QUESTION_OPTIONS, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
+import { MAX_QUESTION_OPTIONS, takeOwnerFileEdits, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
 const clean = (value: string): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 120);
@@ -109,16 +109,17 @@ export async function systemInfo(ctx: CoreToolContext) {
 
 export async function systemContext(
   ctx: CoreToolContext,
-  run?: { agentId: string; tools: readonly string[]; message?: string },
+  run?: { agentId: string; tools: readonly string[]; message?: string; conversationId?: string },
   opts: { isFrontDesk?: (agentId: string) => boolean; handleOf?: (agentId: string) => string | null } = {},
 ): Promise<SystemContext> {
   const profile = await getOwnerProfile(ctx.db).catch(() => null);
-  const [info, owner, learning, places, edition] = await Promise.all([
+  const [info, owner, learning, places, edition, edits] = await Promise.all([
     systemInfo(ctx),
     profile ? ownerLines(ctx, profile) : Promise.resolve(''),
     run ? learningContext(ctx.db, run, ctx.now()) : Promise.resolve(''),
     run && opts.isFrontDesk?.(run.agentId) ? placeLines(ctx) : Promise.resolve(''),
     run?.message ? editionLine(ctx, run, opts.handleOf) : Promise.resolve(''),
+    run?.conversationId ? ownerEditLines(ctx, run.conversationId) : Promise.resolve(''),
   ]);
   return { timezone: info.time.timezone, ...(profile?.language ? { language: profile.language } : {}), prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
@@ -129,7 +130,25 @@ export async function systemContext(
     (run ? `\n\n${GROUNDING_LINES}` : '') +
     (run?.tools.includes('browser.act') ? `\n\n${LIST_ANSWER_LINE}` : '') +
     (run ? `\n\n${DECISION_LINES}` : '') +
-    (edition === '' ? '' : `\n\n${edition}`) };
+    (edition === '' ? '' : `\n\n${edition}`) + (edits === '' ? '' : `\n\n${edits}`) };
+}
+
+/**
+ * What the owner changed by hand since the last turn (docs/files.md, "Edited
+ * by you"): a file he edited and saved on the Canvas. Each save is said once,
+ * on the next turn, so the agent reads his version before changing the file
+ * rather than writing over it from what it remembers. Never fails the turn.
+ */
+async function ownerEditLines(ctx: CoreToolContext, conversationId: string): Promise<string> {
+  try {
+    const edits = await takeOwnerFileEdits(ctx.db, conversationId, ctx.now());
+    return edits.map((edit) => ownerEditLine(edit, ctx.timezone)).join('\n');
+  } catch { return ''; }
+}
+
+export function ownerEditLine(edit: { artifactId: string; filename: string | null; editedAt: string }, timezone: string): string {
+  const when = edit.editedAt ? localDateTimeString(new Date(edit.editedAt), timezone) : 'just now';
+  return `The owner edited ${edit.filename ?? 'a file'} (now version ${edit.artifactId}) at ${when}; read it before changing it.`;
 }
 
 /** The edition origin line for this turn, or nothing; never fails the turn. */

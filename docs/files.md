@@ -233,6 +233,25 @@ The shipped skill `examples/skills/writing-a-document.md` tells an agent with
 the tool when a file beats a chat answer and how to shape one: title and date
 first, the answer up front, tables only for comparisons, sources last.
 
+### Edited by you
+
+A text file on the Canvas opens in an editor, and Save writes the owner's
+edit over that file in Files (`PUT /api/artifacts/<id>/content`, naming the
+version he opened; a stale save is a 409 with the version that won). Three
+things keep the agent from dropping his edit afterwards:
+
+- **Back into the workspace.** A command's output (`host.exec` `outputs`)
+  remembers the workspace file it was read from. The owner's save writes
+  there too, inside that agent's workspace for that conversation only, and
+  only while the copy still holds what he opened; a copy a command changed
+  since is a 409 carrying its text, and the owner chooses.
+- **Told on the next turn.** The next turn's context says, once per save,
+  "The owner edited <file> (now version <id>) at <time>; read it before
+  changing it."
+- **Refused unread.** `artifacts.write` over a document whose newest version
+  the owner edited is refused until the agent reads it and passes
+  `readVersion` with that version's id.
+
 ## Files agents download
 
 A file a page hands an agent in the browser (a transactions CSV, a statement)

@@ -2873,7 +2873,7 @@ export const api = {
   /** A text file whole, for the canvas editor, with the hash a save names. */
   fileContent: (id: string) => get<FileContent>(`/artifacts/${encodeURIComponent(id)}/content`),
   /** The owner's edit, saved over the version he opened; a 409 carries the one that won. */
-  saveFileContent: (id: string, body: { text: string; base: string }) =>
+  saveFileContent: (id: string, body: { text: string; base: string; overwriteWorkspace?: true }) =>
     put<{ sha256: string; sizeBytes: number }>(`/artifacts/${encodeURIComponent(id)}/content`, body),
   /* ---- first run ---- */
   onboarding: () => get<OnboardingView>('/onboarding'),

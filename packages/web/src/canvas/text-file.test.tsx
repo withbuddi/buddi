@@ -254,6 +254,19 @@ describe('the file view', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
+  it('offers buddi’s workspace copy when a command changed it, and Keep mine writes over it', async () => {
+    files.set(ID(1), content('a\n', 1));
+    const save = vi.spyOn(api, 'saveFileContent')
+      .mockRejectedValueOnce(new ApiError(409, 'changed in its workspace', { current: { artifactId: ID(1), sha256: sha(1) }, workspaceText: 'a\nToiletries\n' }))
+      .mockResolvedValueOnce({ sha256: sha(9), sizeBytes: 7 });
+    render(<TextFileView attachment={attachment(1, 'list.txt', 'text/plain')} tabId="t" />);
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'a\nmine\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep mine' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith(ID(1), { text: 'a\nmine\n', base: sha(1), overwriteWorkspace: true }));
+    await waitFor(() => expect(getDraft('t')).toBeNull());
+  });
+
   it('opens a file past 1 MB read-only, and says so', async () => {
     files.set(ID(1), content('x'.repeat(100), 1, false));
     render(<TextFileView attachment={attachment(1, 'big.log', 'text/plain')} tabId="t" />);

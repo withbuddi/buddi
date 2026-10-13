@@ -2417,7 +2417,7 @@ describe('provenance for a tool call', () => {
     await runAgent({ agent: { ...agent, tools: ['page.probe'] }, provider, registry: registryWithPage(seen), ctx: runCtx, pool: db,
       conversationId: await createConversation(db, agent.id), userMessage: 'hello' });
     expect(seen).toEqual([{ runId: null, turn: 1, step: 1, sources: [], texts: [] }]);
-    expect(asked).toEqual([{ agentId: 'finance', tools: ['page.probe'], message: 'hello' }]);
+    expect(asked).toEqual([{ agentId: 'finance', tools: ['page.probe'], message: 'hello', conversationId: expect.any(String) }]);
   });
 });
 

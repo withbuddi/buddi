@@ -3003,7 +3003,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           if (err instanceof BodyTooLargeError) return sendJson(res, 413, { error: 'a file edited here can be at most 1 MiB' });
           return sendJson(res, 400, { error: 'request body must be JSON' });
         }
-        return reply(res, await saveFileContent(deps.pool, deps.env ?? process.env, contentWrite[1]!.toLowerCase(), body));
+        return reply(res, await saveFileContent(deps.pool, deps.env ?? process.env, contentWrite[1]!.toLowerCase(), body, deps.ctx.ownerId));
       }
       const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/access/tailscale', '/api/access/cloudflare-access', '/api/notifications/settings', '/api/notifications/focus'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);

@@ -6,7 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
-- Text files open in an editor on the Canvas: a document an agent saved with `artifacts.write` or a text file a command left (Markdown, CSV, JSON, YAML, logs, code) opens in front of the command that made it, Markdown and tables as they read with Edit beside them. When the agent writes the file again the open view updates in place and marks the changed lines; an unsaved edit of yours is never replaced (a bar offers "Show theirs" or "Keep mine"). Save (or ⌘S/Ctrl+S) writes your edit back into Files, refused with the same choice if the file changed since you opened it; a dot on the tab means unsaved. Files over 1 MB open read-only.
+- Text files open in an editor on the Canvas: a document an agent saved with `artifacts.write` or a text file a command left (Markdown, CSV, JSON, YAML, logs, code) opens in front of the command that made it, Markdown and tables as they read with Edit beside them. When the agent writes the file again the open view updates in place and marks the changed lines; an unsaved edit of yours is never replaced (a bar offers "Show theirs" or "Keep mine"). Save (or ⌘S/Ctrl+S) writes your edit back into Files, refused with the same choice if the file changed since you opened it; a dot on the tab means unsaved. Files over 1 MB open read-only. A file a command produced gets your saved edit in its workspace too, so the agent's next command builds on your version; the agent is told on its next turn that you edited the file, and `artifacts.write` refuses to write a new version over your edit until the agent has read it.
 
 ### Changed
 

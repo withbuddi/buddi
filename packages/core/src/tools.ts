@@ -67,7 +67,7 @@ export interface ToolContext {
    * `message` is the turn's opening words when they are the owner's (or a
    * delegating colleague's), so the context can name what they are about.
    */
-  systemContext?: (run?: { agentId: string; tools: readonly string[]; message?: string }) => Promise<SystemContext>;
+  systemContext?: (run?: { agentId: string; tools: readonly string[]; message?: string; conversationId?: string }) => Promise<SystemContext>;
   /** Issued by an authenticated interactive surface, never by a model/tool. */
   ownerRequest?: { id: string; text: string; expiresAt: number };
   /**

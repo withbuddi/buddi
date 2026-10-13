@@ -8,12 +8,14 @@
  * Skipped unless DATABASE_URL is set.
  */
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, saveArtifact, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, saveArtifact, saveArtifactVersion, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import { hostWorkspaceDir } from '@buddi/tool-host';
+import { systemContext } from '../system-context.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createApiToken } from './api-tokens.js';
 import { startWebServer, type WebServer } from './server.js';
@@ -164,6 +166,72 @@ suite('file content routes', () => {
     const id = await file('a\n', 'b.txt', 'text/plain');
     expect((await save(id, { text: 'b' })).status).toBe(400);
     expect((await save(id, { text: 'x'.repeat(1024 * 1024 + 1), base: sha('a\n') })).status).toBe(413);
+  });
+
+  describe('a command’s output', () => {
+    const captured = async (name: string, text: string, agent = 'scout'): Promise<{ id: string; onDisk: string }> => {
+      const data = await realpath(dir);
+      const workspace = hostWorkspaceDir(data, 'owner', agent, conversationId);
+      await mkdir(workspace, { recursive: true });
+      const onDisk = path.join(workspace, name);
+      await writeFile(onDisk, text);
+      const row = await saveArtifact(pool, {
+        bytes: Buffer.from(text), mime: 'text/markdown', filename: name, createdBy: agent, conversationId,
+        source: { surface: 'host', chatId: conversationId }, originPath: path.relative(data, onDisk),
+      }, env);
+      return { id: row.id, onDisk };
+    };
+
+    it('writes the owner’s save back to the workspace it came from', async () => {
+      const { id, onDisk } = await captured('packing.md', '# Packing\n\n- Socks\n');
+      const res = await save(id, { text: '# Packing\n\n- Socks\n- By buddi\n', base: sha('# Packing\n\n- Socks\n') });
+      expect(res.status).toBe(200);
+      expect(await readFile(onDisk, 'utf8')).toBe('# Packing\n\n- Socks\n- By buddi\n');
+    });
+
+    it('refuses when the workspace copy changed since, with what it holds, until he overwrites it', async () => {
+      const { id, onDisk } = await captured('trip.md', '# Trip\n');
+      await writeFile(onDisk, '# Trip\n\n## Toiletries\n');
+      const stale = await save(id, { text: '# Trip\n\nMine\n', base: sha('# Trip\n') });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toMatchObject({ workspaceText: '# Trip\n\n## Toiletries\n', current: { artifactId: id } });
+      expect(await readFile(onDisk, 'utf8')).toBe('# Trip\n\n## Toiletries\n');
+      expect((await (await read(id)).json() as { text: string }).text).toBe('# Trip\n');
+
+      const forced = await save(id, { text: '# Trip\n\nMine\n', base: sha('# Trip\n'), overwriteWorkspace: true });
+      expect(forced.status).toBe(200);
+      expect(await readFile(onDisk, 'utf8')).toBe('# Trip\n\nMine\n');
+    });
+
+    it('never writes outside the workspace of the agent and conversation that made it', async () => {
+      const { id, onDisk } = await captured('elsewhere.md', '# Elsewhere\n', 'ledger');
+      // The row says scout made it, but the copy is in ledger's workspace.
+      await pool.query(`update core.artifacts set created_by = 'scout' where id = $1`, [id]);
+      expect((await save(id, { text: '# Changed\n', base: sha('# Elsewhere\n') })).status).toBe(200);
+      expect(await readFile(onDisk, 'utf8')).toBe('# Elsewhere\n');
+    });
+  });
+
+  it('tells the agent of an owner edit once, on its next turn', async () => {
+    const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
+    const id = await file('# List\n', 'List.md', 'text/markdown', other);
+    expect((await save(id, { text: '# List\n\n- Mine\n', base: sha('# List\n') })).status).toBe(200);
+    const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+    const first = await systemContext(ctx, { agentId: 'scout', tools: [], conversationId: other });
+    expect(first.prompt).toContain(`The owner edited List.md (now version ${id}) at `);
+    expect(first.prompt).toContain('read it before changing it.');
+    const next = await systemContext(ctx, { agentId: 'scout', tools: [], conversationId: other });
+    expect(next.prompt).not.toContain('The owner edited');
+  });
+
+  it('refuses a document write over an owner edit the writer did not read', async () => {
+    const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
+    const v1 = await saveArtifactVersion(pool, { bytes: Buffer.from('# Plan\n'), mime: 'text/markdown', createdBy: 'scout', conversationId: other, base: 'Plan', ext: 'md' }, env);
+    expect((await save(v1.row.id, { text: '# Plan\n\nMine\n', base: sha('# Plan\n') })).status).toBe(200);
+    const again = { bytes: Buffer.from('# Plan\n\nTheirs\n'), mime: 'text/markdown', createdBy: 'scout', conversationId: other, base: 'Plan', ext: 'md' };
+    await expect(saveArtifactVersion(pool, again, env)).rejects.toBeInstanceOf(OwnerEditedError);
+    const v2 = await saveArtifactVersion(pool, { ...again, readVersion: v1.row.id }, env);
+    expect(v2.version).toBe(2);
   });
 
   it('opens a file past 1 MiB read-only, its start only', async () => {

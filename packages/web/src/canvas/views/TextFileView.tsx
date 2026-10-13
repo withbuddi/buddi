@@ -52,6 +52,11 @@ interface Version {
 /** buddi's version, waiting on the owner's choice. `retry` when his save of the same file was refused. */
 interface Theirs extends Version {
   retry: boolean;
+  /**
+   * The copy in buddi's workspace changed, not the file in Files: a command
+   * edited it there. Its text is shown; Keep mine writes over that copy.
+   */
+  workspace?: boolean;
 }
 
 function versionOf(artifactId: string, content: FileContent): Version {
@@ -148,7 +153,9 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
     setSaving(true);
     setError(null);
     try {
-      const saved = await api.saveFileContent(sent.artifactId, { text: onDisk(sent.text, sent.crlf), base: sent.base });
+      const saved = await api.saveFileContent(sent.artifactId, {
+        text: onDisk(sent.text, sent.crlf), base: sent.base, ...(sent.overwriteWorkspace ? { overwriteWorkspace: true } : {}),
+      });
       const version: Version = { artifactId: sent.artifactId, sha256: saved.sha256, text: sent.text, editable: true, crlf: sent.crlf === true };
       setPin(tabId, { target, artifactId: sent.artifactId });
       /*
@@ -158,7 +165,8 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
        */
       const now = getDraft(tabId);
       if (now && now.base === sent.base && now.artifactId === sent.artifactId) {
-        setDraft(tabId, { ...now, base: saved.sha256, baseText: sent.text });
+        const { overwriteWorkspace: _done, ...rest } = now;
+        setDraft(tabId, { ...rest, base: saved.sha256, baseText: sent.text });
       }
       if (mounted.current && (!now || (now.base === sent.base && now.artifactId === sent.artifactId))) {
         shown.current = version.text;
@@ -167,10 +175,19 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
       }
     } catch (err) {
       if (!mounted.current) return;
-      const current = err instanceof ApiError && err.status === 409
-        ? (err.detail as { current?: { artifactId?: unknown } } | null)?.current
-        : undefined;
-      if (current && typeof current.artifactId === 'string') {
+      const detail = err instanceof ApiError && err.status === 409
+        ? err.detail as { current?: { artifactId?: unknown }; workspaceText?: unknown } | null
+        : null;
+      const current = detail?.current;
+      if (typeof detail?.workspaceText === 'string') {
+        // buddi changed its own copy (a command), not Files: that copy is theirs.
+        const there = detail.workspaceText;
+        const crlf = there.includes('\r\n');
+        setTheirs({
+          artifactId: sent.artifactId, sha256: sent.base, text: crlf ? there.replace(/\r\n/g, '\n') : there,
+          editable: true, crlf, retry: true, workspace: true,
+        });
+      } else if (current && typeof current.artifactId === 'string') {
         const id = current.artifactId;
         const content = await api.fileContent(id).catch(() => null);
         // Saved again at once only onto the same file; another file is his to look at first.
@@ -188,7 +205,15 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
   const showTheirs = (): void => {
     if (!theirs) return;
     const mine = text;
-    const { retry: _retry, ...version } = theirs;
+    if (theirs.workspace) {
+      // Not in Files yet: his view becomes buddi's copy, to save over Files as it is.
+      setText(theirs.text);
+      if (file) setDraft(tabId, { artifactId: file.artifactId, base: file.sha256, baseText: file.text, text: theirs.text, crlf: theirs.crlf });
+      setTheirs(null);
+      mark(changedLines(mine, theirs.text));
+      return;
+    }
+    const { retry: _retry, workspace: _workspace, ...version } = theirs;
     setDraft(tabId, null);
     setPin(tabId, { target, artifactId: version.artifactId });
     shown.current = version.text;
@@ -201,7 +226,15 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
   /** Keep the edit, now over buddi's version; saved at once only when his save of that file was refused. */
   const keepMine = (): void => {
     if (!theirs) return;
-    const { retry, ...version } = theirs;
+    if (theirs.workspace) {
+      // His version over buddi's copy too, as he was saving.
+      const draft = getDraft(tabId);
+      if (draft) setDraft(tabId, { ...draft, overwriteWorkspace: true });
+      setTheirs(null);
+      void save();
+      return;
+    }
+    const { retry, workspace: _workspace, ...version } = theirs;
     setFile(version);
     setPin(tabId, { target, artifactId: version.artifactId });
     setDraft(tabId, { artifactId: version.artifactId, base: version.sha256, baseText: version.text, text, crlf: version.crlf });

@@ -53,6 +53,11 @@ const writeInput = z.object({
     .max(MAX_FOLDER_CHARS)
     .optional()
     .describe('A short label to file it under in Files, e.g. "Taxes 2026". Shown with the file and found by search; not a folder on the owner\'s computer.'),
+  readVersion: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('The id of the newest version you read. Needed only when the owner edited the document since it was written: read it first (artifacts.text), keep their changes, then pass its id.'),
 }).strict();
 
 export interface WrittenDocument {
@@ -109,7 +114,7 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
       bytes,
       mime,
       filename: fallbackName,
-      version: { base, ext },
+      version: { base, ext, ...(input.readVersion === undefined ? {} : { readVersion: input.readVersion }) },
       ...(folder === undefined ? {} : { caption: folder }),
     });
     // The same bytes already in Files, here or in another conversation: nothing new was written.

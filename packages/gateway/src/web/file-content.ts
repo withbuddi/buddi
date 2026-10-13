@@ -12,22 +12,65 @@
  * conversation — the save is refused with 409 and the version that won, so
  * the page can offer "yours or buddi's" rather than overwrite either.
  */
+import { createHash } from 'node:crypto';
+import { readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { hostWorkspaceDir } from '@buddi/tool-host';
 import type { Pool } from 'pg';
 import {
   artifactBytesExist,
   getArtifact,
   readArtifactPrefix,
   replaceArtifactContent,
+  resolveDataDir,
   textPreviewable,
   type ArtifactRow,
   type EnvLike,
+  type WorkspaceCopy,
+  type WorkspaceRow,
 } from '@buddi/core';
 
 /** The largest file the editor edits; a bigger one opens read-only, its start only. */
 export const MAX_EDIT_BYTES = 1024 * 1024;
 
 const SHA256 = /^[0-9a-f]{64}$/;
+
+function sha256Hex(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function inside(root: string, file: string): boolean {
+  const relative = path.relative(root, file);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+/**
+ * The workspace copy a command's output was captured from (host.exec's
+ * outputs), judged for the owner's save. Written back only inside the
+ * workspace of the agent and conversation that made it, and only while it
+ * still holds what the owner opened (or already his text); a copy changed
+ * since comes back with what it holds now, unless he chose to overwrite it.
+ * A copy that is gone, or anywhere else, is left alone: Files is saved.
+ */
+async function workspaceCopy(
+  env: EnvLike,
+  ownerId: string,
+  captured: WorkspaceRow,
+  save: { base: string; next: string; bytes: Buffer; overwrite: boolean },
+): Promise<WorkspaceCopy> {
+  if (!captured.conversationId) return { kind: 'none' };
+  const data = await realpath(resolveDataDir(env)).catch(() => null);
+  if (!data) return { kind: 'none' };
+  const root = await realpath(hostWorkspaceDir(data, ownerId, captured.createdBy, captured.conversationId)).catch(() => null);
+  const file = await realpath(path.join(data, captured.originPath)).catch(() => null);
+  if (!root || !file || !inside(root, file)) return { kind: 'none' };
+  if (!(await stat(file)).isFile()) return { kind: 'none' };
+  const there = await readFile(file);
+  const hash = sha256Hex(there);
+  if (hash !== save.base && hash !== save.next && !save.overwrite) return { kind: 'changed', text: there.toString('utf8') };
+  return { kind: 'write', write: () => writeFile(file, save.bytes) };
+}
 
 export interface Answer {
   status: number;
@@ -60,7 +103,7 @@ export async function readFileContent(pool: Pool, env: EnvLike, id: string): Pro
   };
 }
 
-export async function saveFileContent(pool: Pool, env: EnvLike, id: string, body: Record<string, unknown>): Promise<Answer> {
+export async function saveFileContent(pool: Pool, env: EnvLike, id: string, body: Record<string, unknown>, ownerId: string): Promise<Answer> {
   const { text, base } = body;
   if (typeof text !== 'string') return { status: 400, body: { error: '`text` must be a string' } };
   if (typeof base !== 'string' || !SHA256.test(base)) return { status: 400, body: { error: '`base` must be the sha256 of the version edited' } };
@@ -75,9 +118,16 @@ export async function saveFileContent(pool: Pool, env: EnvLike, id: string, body
   }
   const bytes = Buffer.from(text, 'utf8');
   if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
-  const result = await replaceArtifactContent(pool, { id, bytes, expectedSha256: base }, env);
+  const overwrite = body.overwriteWorkspace === true;
+  const result = await replaceArtifactContent(pool, {
+    id, bytes, expectedSha256: base,
+    workspace: (captured) => workspaceCopy(env, ownerId, captured, { base, next: sha256Hex(bytes), bytes, overwrite }),
+  }, env);
   if (result.ok) return { status: 200, body: { sha256: result.row.sha256, sizeBytes: result.row.sizeBytes } };
   if (result.reason === 'gone') return { status: 404, body: { error: 'no such file' } };
+  if (result.reason === 'workspace') {
+    return { status: 409, body: { error: 'buddi changed this file in its workspace since you opened it', current: current(result.current), workspaceText: result.workspaceText } };
+  }
   if (result.reason === 'duplicate') return { status: 409, body: { error: 'these exact contents are already another file here' } };
   return { status: 409, body: { error: 'the file changed since you opened it', current: current(result.current) } };
 }
