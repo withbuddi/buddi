@@ -978,7 +978,7 @@ know, so a plugin using any of them asks for `^1.33`.
   if that copy is still the one he opened (otherwise his save is refused with
   what the copy holds now). The host plugin passes it for a command's outputs.
 - **`version.readVersion`**: once the owner has edited the newest version of
-  a document, the next version is refused unless it names that version's id,
+  a document, the next version is refused unless it names that version's sha256,
   so a writer cannot drop his edit unread. An older buddi ignores both.
 
 ## 8. End to end

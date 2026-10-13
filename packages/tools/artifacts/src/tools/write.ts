@@ -55,9 +55,9 @@ const writeInput = z.object({
     .describe('A short label to file it under in Files, e.g. "Taxes 2026". Shown with the file and found by search; not a folder on the owner\'s computer.'),
   readVersion: z
     .string()
-    .uuid()
+    .regex(/^[0-9a-f]{64}$/)
     .optional()
-    .describe('The id of the newest version you read. Needed only when the owner edited the document since it was written: read it first (artifacts.text), keep their changes, then pass its id.'),
+    .describe('The sha256 artifacts.text returned for the newest version. Needed only when the owner edited the document since it was written: read it first, keep their changes, then pass it.'),
 }).strict();
 
 export interface WrittenDocument {

@@ -461,8 +461,8 @@ export interface FilesArea {
    * `base.ext`, then `base (v2).ext`, … — counted and saved under one lock, so
    * two writes at once never share a name. `filename` is then ignored inside a
    * conversation; outside one the name is `base.ext`. Once the owner edited
-   * the newest version (1.34), the next is refused unless `readVersion` names
-   * that version's id: the writer read his edit first.
+   * the newest version (1.34), the next is refused unless `readVersion` is
+   * that version's sha256: the writer read his edit first.
    *
    * `workspacePath` (1.34) is the absolute path the bytes were read from,
    * inside this plugin's own data folder (`dir.path`, or `dir.legacyPath`):

@@ -175,7 +175,7 @@ function cutBytes(text: string, limit: number): string {
 
 export const text: ToolDefinition<
   z.infer<typeof textInput>,
-  { id: string; text: string; pages?: number; truncated: boolean; chars: number; note?: string }
+  { id: string; sha256: string; text: string; pages?: number; truncated: boolean; chars: number; note?: string }
 > = {
   name: 'artifacts.text',
   untrusted: 'file',
@@ -198,6 +198,8 @@ export const text: ToolDefinition<
     const capped = out.length < asked.length;
     return {
       id: row.id,
+      // What a document write over the owner's edit names as `readVersion`.
+      sha256: row.sha256,
       text: out,
       ...(extracted.pages === undefined ? {} : { pages: extracted.pages }),
       truncated: extracted.truncated || out.length < extracted.text.length,

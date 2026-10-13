@@ -199,7 +199,7 @@ const SELECT_COLUMNS = `id, kind, mime, filename, size_bytes, sha256, storage_pa
 /**
  * Store bytes and record the artifact.
  *
- * Dedup is by `(sha256, source_surface, source_chat_id)`: the same statement
+ * Dedup is by `(sha256, source_surface, source_chat_id, origin_path)`: the same statement
  * forwarded twice in the same chat returns the row that already exists. Postgres
  * counts NULLs as distinct, so source-less artifacts (what an agent produced)
  * are matched here with `is not distinct from` rather than left to the
@@ -243,15 +243,17 @@ export async function saveArtifactReporting(
   const surface = input.source?.surface ?? null;
   const chatId = input.source?.chatId ?? null;
 
+  const originPath = input.originPath ?? null;
   const existing = await pool.query(
     `select ${SELECT_COLUMNS} from core.artifacts
       where sha256 = $1
         and source_surface is not distinct from $2
         and source_chat_id is not distinct from $3
+        and origin_path is not distinct from $4
         and deleted_at is null
       order by created_at asc
       limit 1`,
-    [sha256, surface, chatId],
+    [sha256, surface, chatId, originPath],
   );
   if (existing.rows[0]) return { row: toRow(existing.rows[0]), existed: true };
 
@@ -266,9 +268,9 @@ export async function saveArtifactReporting(
     `insert into core.artifacts
        (kind, mime, filename, size_bytes, sha256, storage_path,
         source_surface, source_chat_id, source_message_id, caption,
-        created_by, conversation_id, origin_path)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     on conflict on constraint artifacts_source_sha_key do update
+        created_by, conversation_id, origin_path, origin_sha256)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, case when $13::text is null then null else $5 end)
+     on conflict (sha256, source_surface, source_chat_id, (coalesce(origin_path, ''))) do update
        set caption = coalesce(core.artifacts.caption, excluded.caption),
            -- The same bytes handed in again after a discard: the row comes back.
            deleted_at = null
@@ -286,7 +288,7 @@ export async function saveArtifactReporting(
       input.caption?.trim() || null,
       input.createdBy,
       input.conversationId ?? null,
-      input.originPath ?? null,
+      originPath,
     ],
   );
   const row = rows[0];
@@ -326,7 +328,7 @@ export function documentVersionName(base: string, ext: string, version: number):
 export class OwnerEditedError extends Error {
   override readonly name = 'OwnerEditedError';
   constructor(readonly artifactId: string, readonly filename: string) {
-    super(`The owner edited ${filename} (file ${artifactId}) after it was written. Read it first (artifacts.text with that id), keep their changes, and write again with readVersion: "${artifactId}".`);
+    super(`The owner edited ${filename} (file ${artifactId}) after it was written. Read it first (artifacts.text with id "${artifactId}"), keep their changes, and write again with readVersion set to the sha256 that artifacts.text returned.`);
   }
 }
 
@@ -342,7 +344,11 @@ export async function saveArtifactVersion(
     conversationId: string;
     base: string;
     ext: string;
-    /** The id of the version the writer read: required once the owner edited the newest one. */
+    /**
+     * The sha256 of the version the writer read: required once the owner
+     * edited the newest one, and compared with it under the lock, so an edit
+     * he made after that read is refused again.
+     */
     readVersion?: string;
   },
   env: EnvLike = process.env,
@@ -353,8 +359,8 @@ export async function saveArtifactVersion(
   try {
     await client.query('select pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
     try {
-      const { rows } = await client.query<{ id: string; filename: string | null; edited: boolean }>(
-        `select a.id, a.filename,
+      const { rows } = await client.query<{ id: string; filename: string | null; sha256: string; edited: boolean }>(
+        `select a.id, a.filename, a.sha256,
                 exists (select 1 from core.owner_file_edits e where e.artifact_id = a.id) as edited
            from core.artifacts a
           where a.conversation_id = $1 and lower(a.filename) like $2 escape '\\'`,
@@ -363,7 +369,7 @@ export async function saveArtifactVersion(
       const version = nextDocumentVersion(base, ext, rows.map((r) => r.filename));
       // The newest version, if the owner edited it: written over only by a writer that read it.
       const newest = version > 1 && rows.find((r) => r.filename !== null && nextDocumentVersion(base, ext, [r.filename]) === version);
-      if (newest && newest.edited && readVersion !== newest.id) throw new OwnerEditedError(newest.id, newest.filename ?? `${base}.${ext}`);
+      if (newest && newest.edited && readVersion !== newest.sha256) throw new OwnerEditedError(newest.id, newest.filename ?? `${base}.${ext}`);
       // On the locking connection: a waiter holding a pool slot must never starve the holder of one.
       const saved = await saveArtifactReporting(client as unknown as Pool, { ...rest, filename: documentVersionName(base, ext, version) }, env);
       return { ...saved, version };
@@ -397,7 +403,11 @@ export function fileChainName(filename: string | null): string | null {
 
 /** What `replaceArtifactContent` found. */
 export type ReplaceArtifactResult =
-  | { ok: true; row: ArtifactRow }
+  /**
+   * Saved in Files. `workspace` says what became of the workspace copy, for a
+   * captured file: written, or not, and why (a save to retry).
+   */
+  | { ok: true; row: ArtifactRow; workspace?: { updated: true } | { updated: false; reason: string } }
   /** Someone wrote first: the bytes are not the ones the owner edited, or a newer version exists. */
   | { ok: false; reason: 'stale'; current: ArtifactRow }
   /** These exact bytes already are another file from the same place. */
@@ -414,12 +424,21 @@ export type ReplaceArtifactResult =
 export type WorkspaceCopy =
   | { kind: 'none' }
   | { kind: 'changed'; text: string }
-  | { kind: 'write'; write: () => Promise<void> };
+  /** Not written back, and why: Files is saved and says so. */
+  | { kind: 'refused'; reason: string }
+  /**
+   * The new bytes are staged beside the copy. `commit` puts them in place
+   * once the save is in (checking again first); `abort` removes them when
+   * it is not.
+   */
+  | { kind: 'write'; commit: () => Promise<void>; abort: () => Promise<void> };
 
 /** What `replaceArtifactContent` tells a workspace check about the row. */
 export interface WorkspaceRow {
   id: string;
   originPath: string;
+  /** The copy's hash as buddi last read or wrote it. */
+  originSha256: string | null;
   conversationId: string | null;
   createdBy: string;
 }
@@ -460,11 +479,12 @@ export async function replaceArtifactContent(
     : `buddi.files.edit:${input.id}`;
   const client = await pool.connect();
   let written: string | null = null;
+  let staged: Extract<WorkspaceCopy, { kind: 'write' }> | null = null;
   try {
     await client.query('begin');
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
     const locked = await client.query(
-      `select ${SELECT_COLUMNS}, conversation_id, created_by, origin_path from core.artifacts
+      `select ${SELECT_COLUMNS}, conversation_id, created_by, origin_path, origin_sha256 from core.artifacts
         where id = $1 and deleted_at is null for update`,
       [input.id],
     );
@@ -485,16 +505,37 @@ export async function replaceArtifactContent(
     if (row.sha256 !== input.expectedSha256) { await client.query('rollback'); return { ok: false, reason: 'stale', current: row }; }
 
     const sha256 = sha256Of(input.bytes);
-    let workspaceWrite: (() => Promise<void>) | null = null;
+    let notWritten: string | null = null;
     if (found.origin_path && input.workspace) {
-      const copy = await input.workspace({ id: row.id, originPath: found.origin_path, conversationId: found.conversation_id ?? null, createdBy: found.created_by });
+      const copy = await input.workspace({
+        id: row.id, originPath: found.origin_path, originSha256: found.origin_sha256 ?? null,
+        conversationId: found.conversation_id ?? null, createdBy: found.created_by,
+      });
       if (copy.kind === 'changed') { await client.query('rollback'); return { ok: false, reason: 'workspace', current: row, workspaceText: copy.text }; }
-      if (copy.kind === 'write') workspaceWrite = copy.write;
+      if (copy.kind === 'refused') notWritten = copy.reason;
+      if (copy.kind === 'write') staged = copy;
     }
+    /*
+     * The order is staged copy and checks, then the commit, then the copy in
+     * place: a commit that fails leaves the copy as it was, and a copy that
+     * cannot be put in place after the commit is reported, not undone — the
+     * save is in Files, and saving again retries the copy.
+     */
+    const finish = async (saved: ArtifactRow): Promise<ReplaceArtifactResult> => {
+      if (notWritten !== null) return { ok: true, row: saved, workspace: { updated: false, reason: notWritten } };
+      if (!staged) return { ok: true, row: saved };
+      try {
+        await staged.commit();
+      } catch (err) {
+        await staged.abort().catch(() => {});
+        return { ok: true, row: saved, workspace: { updated: false, reason: err instanceof Error ? err.message : String(err) } };
+      }
+      await pool.query(`update core.artifacts set origin_sha256 = $2 where id = $1`, [saved.id, saved.sha256]).catch(() => {});
+      return { ok: true, row: saved, workspace: { updated: true } };
+    };
     if (sha256 === row.sha256) {
       await client.query('rollback');
-      if (workspaceWrite) await workspaceWrite();
-      return { ok: true, row };
+      return finish(row);
     }
     const relative = storagePathFor(sha256, row.mime, row.filename, new Date());
     const absolute = path.join(resolveDataDir(env), relative);
@@ -512,6 +553,8 @@ export async function replaceArtifactContent(
         [row.id, sha256, input.bytes.length, relative],
       );
     } catch (err) {
+      await staged?.abort().catch(() => {});
+      staged = null;
       if ((err as { code?: string }).code !== '23505') throw err;
       await client.query('rollback');
       return { ok: false, reason: 'duplicate' };
@@ -521,12 +564,17 @@ export async function replaceArtifactContent(
       `insert into core.owner_file_edits (artifact_id, conversation_id, filename) values ($1, $2, $3)`,
       [row.id, found.conversation_id ?? null, row.filename],
     );
-    await client.query('commit');
+    try {
+      await client.query('commit');
+    } catch (err) {
+      await staged?.abort().catch(() => {});
+      throw err;
+    }
     written = null;
-    if (workspaceWrite) await workspaceWrite();
-    return { ok: true, row: toRow(updated.rows[0]) };
+    return await finish(toRow(updated.rows[0]));
   } catch (err) {
     await client.query('rollback').catch(() => {});
+    await staged?.abort().catch(() => {});
     throw err;
   } finally {
     client.release();

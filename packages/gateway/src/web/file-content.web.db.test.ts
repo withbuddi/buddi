@@ -8,13 +8,26 @@
  * Skipped unless DATABASE_URL is set.
  */
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// A rename that fails once, on demand: the write-through after the commit.
+const control = vi.hoisted(() => ({ failRename: false }));
+vi.mock('node:fs/promises', async (original) => {
+  const real = await original<typeof import('node:fs/promises')>();
+  return {
+    ...real,
+    rename: async (from: string, to: string) => {
+      if (control.failRename) { control.failRename = false; throw new Error('the disk is full'); }
+      return real.rename(from, to);
+    },
+  };
+});
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, saveArtifact, saveArtifactVersion, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
-import { hostWorkspaceDir } from '@buddi/tool-host';
+import { enterWorkspace, hostWorkspaceDir, hostWorkspaceKey } from '@buddi/tool-host';
 import { systemContext } from '../system-context.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createApiToken } from './api-tokens.js';
@@ -174,6 +187,7 @@ suite('file content routes', () => {
       const workspace = hostWorkspaceDir(data, 'owner', agent, conversationId);
       await mkdir(workspace, { recursive: true });
       const onDisk = path.join(workspace, name);
+      await mkdir(path.dirname(onDisk), { recursive: true });
       await writeFile(onDisk, text);
       const row = await saveArtifact(pool, {
         bytes: Buffer.from(text), mime: 'text/markdown', filename: name, createdBy: agent, conversationId,
@@ -203,6 +217,67 @@ suite('file content routes', () => {
       expect(await readFile(onDisk, 'utf8')).toBe('# Trip\n\nMine\n');
     });
 
+    it('never writes through a linked folder, or a linked workspace', async () => {
+      const data = await realpath(dir);
+      const outside = await mkdtemp(path.join(tmpdir(), 'buddi-outside-'));
+      await writeFile(path.join(outside, 'f.md'), '# Outside\n');
+      // A folder in the workspace that is a link out of it.
+      const workspace = hostWorkspaceDir(data, 'owner', 'scout', conversationId);
+      await mkdir(workspace, { recursive: true });
+      await symlink(outside, path.join(workspace, 'sub'));
+      const viaParent = await saveArtifact(pool, {
+        bytes: Buffer.from('# Outside\n'), mime: 'text/markdown', filename: 'f.md', createdBy: 'scout', conversationId,
+        source: { surface: 'host', chatId: conversationId }, originPath: path.relative(data, path.join(workspace, 'sub', 'f.md')),
+      }, env);
+      const one = await save(viaParent.id, { text: '# Escaped\n', base: sha('# Outside\n') });
+      expect(one.status).toBe(200);
+      expect(await one.json()).toMatchObject({ workspace: { updated: false }, note: expect.stringMatching(/^Saved in Files; the workspace copy couldn’t be updated/) });
+      // The whole workspace a link.
+      const linked = hostWorkspaceDir(data, 'owner', 'linker', conversationId);
+      await mkdir(path.dirname(linked), { recursive: true });
+      await symlink(outside, linked);
+      const viaRoot = await saveArtifact(pool, {
+        bytes: Buffer.from('# Outside\n'), mime: 'text/markdown', filename: 'f.md', createdBy: 'linker', conversationId,
+        source: { surface: 'host', chatId: conversationId }, originPath: path.relative(data, path.join(linked, 'f.md')),
+      }, env);
+      expect(await (await save(viaRoot.id, { text: '# Escaped\n', base: sha('# Outside\n') })).json()).toMatchObject({ workspace: { updated: false } });
+      expect(await readFile(path.join(outside, 'f.md'), 'utf8')).toBe('# Outside\n');
+      await rm(outside, { recursive: true, force: true });
+    });
+
+    it('refuses while a command runs in the workspace, and saves once it is done', async () => {
+      const { id, onDisk } = await captured('busy.md', '# Busy\n');
+      const leave = await enterWorkspace(hostWorkspaceKey('owner', 'scout', conversationId));
+      const refused = await save(id, { text: '# Mine\n', base: sha('# Busy\n') });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ busy: true, error: expect.stringMatching(/running a command/) });
+      leave();
+      expect((await save(id, { text: '# Mine\n', base: sha('# Busy\n') })).status).toBe(200);
+      expect(await readFile(onDisk, 'utf8')).toBe('# Mine\n');
+    });
+
+    it('reports a copy it could not update after the save, and saving again writes it', async () => {
+      const { id, onDisk } = await captured('full.md', '# Full\n');
+      control.failRename = true;
+      const partial = await save(id, { text: '# Mine\n', base: sha('# Full\n') });
+      expect(partial.status).toBe(200);
+      expect(await partial.json()).toMatchObject({ workspace: { updated: false, reason: 'the disk is full' }, note: 'Saved in Files; the workspace copy couldn’t be updated: the disk is full.' });
+      expect((await (await read(id)).json() as { text: string }).text).toBe('# Mine\n');
+      expect(await readFile(onDisk, 'utf8')).toBe('# Full\n');
+      const again = await save(id, { text: '# Mine\n', base: sha('# Mine\n') });
+      expect(await again.json()).toMatchObject({ workspace: { updated: true } });
+      expect(await readFile(onDisk, 'utf8')).toBe('# Mine\n');
+    });
+
+    it('keeps the same bytes from two outputs as two files, each written to its own path', async () => {
+      const a = await captured('a/same.md', '# Same\n');
+      const b = await captured('b/same.md', '# Same\n');
+      expect(a.id).not.toBe(b.id);
+      expect((await save(b.id, { text: '# B\n', base: sha('# Same\n') })).status).toBe(200);
+      expect(await readFile(b.onDisk, 'utf8')).toBe('# B\n');
+      expect(await readFile(a.onDisk, 'utf8')).toBe('# Same\n');
+    });
+
     it('never writes outside the workspace of the agent and conversation that made it', async () => {
       const { id, onDisk } = await captured('elsewhere.md', '# Elsewhere\n', 'ledger');
       // The row says scout made it, but the copy is in ledger's workspace.
@@ -230,7 +305,9 @@ suite('file content routes', () => {
     expect((await save(v1.row.id, { text: '# Plan\n\nMine\n', base: sha('# Plan\n') })).status).toBe(200);
     const again = { bytes: Buffer.from('# Plan\n\nTheirs\n'), mime: 'text/markdown', createdBy: 'scout', conversationId: other, base: 'Plan', ext: 'md' };
     await expect(saveArtifactVersion(pool, again, env)).rejects.toBeInstanceOf(OwnerEditedError);
-    const v2 = await saveArtifactVersion(pool, { ...again, readVersion: v1.row.id }, env);
+    // The id is not enough, nor the hash of what was there before his edit.
+    await expect(saveArtifactVersion(pool, { ...again, readVersion: sha('# Plan\n') }, env)).rejects.toBeInstanceOf(OwnerEditedError);
+    const v2 = await saveArtifactVersion(pool, { ...again, readVersion: sha('# Plan\n\nMine\n') }, env);
     expect(v2.version).toBe(2);
   });
 

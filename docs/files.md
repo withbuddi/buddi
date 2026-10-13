@@ -250,7 +250,7 @@ things keep the agent from dropping his edit afterwards:
   changing it."
 - **Refused unread.** `artifacts.write` over a document whose newest version
   the owner edited is refused until the agent reads it and passes
-  `readVersion` with that version's id.
+  `readVersion`, the sha256 `artifacts.text` returned for it.
 
 ## Files agents download
 

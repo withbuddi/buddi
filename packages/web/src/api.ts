@@ -2874,7 +2874,7 @@ export const api = {
   fileContent: (id: string) => get<FileContent>(`/artifacts/${encodeURIComponent(id)}/content`),
   /** The owner's edit, saved over the version he opened; a 409 carries the one that won. */
   saveFileContent: (id: string, body: { text: string; base: string; overwriteWorkspace?: true }) =>
-    put<{ sha256: string; sizeBytes: number }>(`/artifacts/${encodeURIComponent(id)}/content`, body),
+    put<{ sha256: string; sizeBytes: number; note?: string }>(`/artifacts/${encodeURIComponent(id)}/content`, body),
   /* ---- first run ---- */
   onboarding: () => get<OnboardingView>('/onboarding'),
   onboardingStep: (step: string, learned: { conversationId?: string; accountId?: string; reach?: OnboardingReach } = {}) =>

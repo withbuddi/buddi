@@ -92,6 +92,8 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
   const [changed, setChanged] = useState<readonly number[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Saved, with something to say: the workspace copy could not be updated. */
+  const [savedNote, setSavedNote] = useState<string | null>(null);
   const dirty = useDirtyTabs().has(tabId);
   const markTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** The text last read from the server and shown as it was: what a new version is compared with. */
@@ -152,12 +154,14 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
     if (!sent || saving) return;
     setSaving(true);
     setError(null);
+    setSavedNote(null);
     try {
       const saved = await api.saveFileContent(sent.artifactId, {
         text: onDisk(sent.text, sent.crlf), base: sent.base, ...(sent.overwriteWorkspace ? { overwriteWorkspace: true } : {}),
       });
       const version: Version = { artifactId: sent.artifactId, sha256: saved.sha256, text: sent.text, editable: true, crlf: sent.crlf === true };
       setPin(tabId, { target, artifactId: sent.artifactId });
+      if (saved.note && mounted.current) setSavedNote(saved.note);
       /*
        * What he typed while the save was out stays, now over the version just
        * saved. A draft that moved to another base meanwhile (he chose theirs,
@@ -200,6 +204,17 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
       if (mounted.current) setSaving(false);
     }
   }, [tabId, saving, target]);
+
+  /** The save is in Files; write the workspace copy again (the same text over the same version). */
+  const retryCopy = async (): Promise<void> => {
+    if (!file) return;
+    try {
+      const again = await api.saveFileContent(file.artifactId, { text: onDisk(file.text, file.crlf), base: file.sha256 });
+      if (mounted.current) setSavedNote(again.note ?? null);
+    } catch (err) {
+      if (mounted.current) setSavedNote(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   /** Drop the edit and take buddi's version, its changes marked against his. */
   const showTheirs = (): void => {
@@ -269,6 +284,7 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
         ? 'This file is not UTF-8 text, so it opens read-only: saving it from here would change its characters.'
         : 'This file is over 1 MB, so it opens read-only and shows its start. Download it for the whole file.'}</Notice> : null}
       {error ? <Notice tone="critical" role="alert">{error}</Notice> : null}
+      {savedNote ? <Notice tone="warning" role="status" action={<Button size="sm" onClick={() => { void retryCopy(); }}>Try again</Button>}>{savedNote}</Notice> : null}
       {loadFailed ? <Notice>{loadFailed} Download it to open it.</Notice>
         : file === null ? <div className="file-preview"><Empty>Loading…</Empty></div>
         : previewable && mode === 'preview' ? (

@@ -12,11 +12,11 @@
  * conversation — the save is refused with 409 and the version that won, so
  * the page can offer "yours or buddi's" rather than overwrite either.
  */
-import { createHash } from 'node:crypto';
-import { readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { hostWorkspaceDir } from '@buddi/tool-host';
+import { holdWorkspace, hostWorkspaceDir, hostWorkspaceKey, workspaceBusy } from '@buddi/tool-host';
 import type { Pool } from 'pg';
 import {
   artifactBytesExist,
@@ -46,12 +46,41 @@ function inside(root: string, file: string): boolean {
 }
 
 /**
+ * Why the way from `base` down to `file` cannot be trusted, or null: every
+ * component is looked at with lstat, and none may be a symbolic link or a
+ * junction (Node reports both as links). `missing` when a component is gone.
+ */
+async function linkOnTheWay(base: string, file: string): Promise<'outside' | 'missing' | 'link' | null> {
+  if (!inside(base, file)) return 'outside';
+  let at = base;
+  for (const part of path.relative(base, file).split(path.sep)) {
+    at = path.join(at, part);
+    const info = await lstat(at).catch(() => null);
+    if (!info) return 'missing';
+    if (info.isSymbolicLink()) return 'link';
+  }
+  return null;
+}
+
+const LINKED = 'its folder in buddi’s workspace is a link, so buddi did not write through it';
+
+/**
  * The workspace copy a command's output was captured from (host.exec's
- * outputs), judged for the owner's save. Written back only inside the
- * workspace of the agent and conversation that made it, and only while it
- * still holds what the owner opened (or already his text); a copy changed
- * since comes back with what it holds now, unless he chose to overwrite it.
- * A copy that is gone, or anywhere else, is left alone: Files is saved.
+ * outputs), judged for the owner's save.
+ *
+ * A sandboxed command is confined to its workspace, so this write must never
+ * reach outside one. The workspace is computed from the data dir — the one
+ * trusted base — for the agent and conversation the file belongs to, never
+ * read from the disk; the recorded path must lie lexically inside it, and
+ * every component on the way is lstat'ed and refused if it is a link. The
+ * copy is written back only while it still holds what buddi last read or
+ * wrote there (or already the owner's text); a copy a command changed since
+ * comes back with what it holds now, unless he chose to overwrite it.
+ *
+ * The new bytes are staged in a new file beside the copy (exclusive create)
+ * and renamed over it once the save is committed — a rename replaces a link
+ * at the leaf rather than following it — after the folders and the copy's
+ * hash are checked once more. A copy that is gone is left alone.
  */
 async function workspaceCopy(
   env: EnvLike,
@@ -59,17 +88,37 @@ async function workspaceCopy(
   captured: WorkspaceRow,
   save: { base: string; next: string; bytes: Buffer; overwrite: boolean },
 ): Promise<WorkspaceCopy> {
-  if (!captured.conversationId) return { kind: 'none' };
+  if (!captured.conversationId) return { kind: 'refused', reason: 'it belongs to no conversation' };
   const data = await realpath(resolveDataDir(env)).catch(() => null);
   if (!data) return { kind: 'none' };
-  const root = await realpath(hostWorkspaceDir(data, ownerId, captured.createdBy, captured.conversationId)).catch(() => null);
-  const file = await realpath(path.join(data, captured.originPath)).catch(() => null);
-  if (!root || !file || !inside(root, file)) return { kind: 'none' };
-  if (!(await stat(file)).isFile()) return { kind: 'none' };
-  const there = await readFile(file);
-  const hash = sha256Hex(there);
-  if (hash !== save.base && hash !== save.next && !save.overwrite) return { kind: 'changed', text: there.toString('utf8') };
-  return { kind: 'write', write: () => writeFile(file, save.bytes) };
+  const root = hostWorkspaceDir(data, ownerId, captured.createdBy, captured.conversationId);
+  const file = path.join(data, captured.originPath);
+  if (!inside(root, file)) return { kind: 'refused', reason: 'it is not in this agent’s workspace for this conversation' };
+  const way = await linkOnTheWay(data, file);
+  if (way === 'missing') return { kind: 'none' };
+  if (way !== null) return { kind: 'refused', reason: LINKED };
+  if (!(await lstat(file)).isFile()) return { kind: 'refused', reason: 'it is no longer a file' };
+  const known = captured.originSha256 ?? save.base;
+  const holds = async (): Promise<{ ok: boolean; there: Buffer }> => {
+    const there = await readFile(file);
+    const hash = sha256Hex(there);
+    return { ok: save.overwrite || hash === known || hash === save.next, there };
+  };
+  const first = await holds();
+  if (!first.ok) return { kind: 'changed', text: first.there.toString('utf8') };
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.buddi-${randomUUID()}`);
+  await writeFile(temp, save.bytes, { flag: 'wx', mode: 0o644 });
+  return {
+    kind: 'write',
+    commit: async () => {
+      if ((await linkOnTheWay(data, path.dirname(file))) !== null) throw new Error(LINKED);
+      const leaf = await lstat(file).catch(() => null);
+      if (leaf?.isSymbolicLink()) throw new Error(LINKED);
+      if (leaf && !(await holds()).ok) throw new Error('a command changed it meanwhile');
+      await rename(temp, file);
+    },
+    abort: () => unlink(temp).catch(() => {}),
+  };
 }
 
 export interface Answer {
@@ -119,11 +168,33 @@ export async function saveFileContent(pool: Pool, env: EnvLike, id: string, body
   const bytes = Buffer.from(text, 'utf8');
   if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
   const overwrite = body.overwriteWorkspace === true;
-  const result = await replaceArtifactContent(pool, {
+  const replace = (): ReturnType<typeof replaceArtifactContent> => replaceArtifactContent(pool, {
     id, bytes, expectedSha256: base,
     workspace: (captured) => workspaceCopy(env, ownerId, captured, { base, next: sha256Hex(bytes), bytes, overwrite }),
   }, env);
-  if (result.ok) return { status: 200, body: { sha256: result.row.sha256, sizeBytes: result.row.sizeBytes } };
+  /*
+   * A command's output is saved holding its workspace (host.exec's lock): no
+   * command starts meanwhile, and none may be running — it could be changing
+   * the very file.
+   */
+  const origin = await pool.query(`select origin_path, created_by, conversation_id from core.artifacts where id = $1`, [id]);
+  const captured = origin.rows[0]?.origin_path && origin.rows[0]?.conversation_id
+    ? hostWorkspaceKey(ownerId, String(origin.rows[0].created_by), String(origin.rows[0].conversation_id)) : null;
+  const result = captured
+    ? await holdWorkspace(captured, async () => (workspaceBusy(captured) ? 'busy' as const : replace()))
+    : await replace();
+  if (result === 'busy') return { status: 409, body: { error: 'buddi is running a command in this conversation; try again when it finishes', busy: true } };
+  if (result.ok) {
+    const copy = result.workspace;
+    return {
+      status: 200,
+      body: {
+        sha256: result.row.sha256, sizeBytes: result.row.sizeBytes,
+        ...(copy ? { workspace: copy } : {}),
+        ...(copy && !copy.updated ? { note: `Saved in Files; the workspace copy couldn’t be updated: ${copy.reason}.` } : {}),
+      },
+    };
+  }
   if (result.reason === 'gone') return { status: 404, body: { error: 'no such file' } };
   if (result.reason === 'workspace') {
     return { status: 409, body: { error: 'buddi changed this file in its workspace since you opened it', current: current(result.current), workspaceText: result.workspaceText } };
