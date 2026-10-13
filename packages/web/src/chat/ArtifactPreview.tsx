@@ -109,7 +109,7 @@ export function parseDelimited(text: string, delimiter: string, maxRows: number,
   return { rows, truncatedRows, truncatedCols };
 }
 
-function CsvTable({ text, delimiter }: { text: string; delimiter: string }): JSX.Element {
+export function CsvTable({ text, delimiter }: { text: string; delimiter: string }): JSX.Element {
   const parsed = useMemo(() => parseDelimited(text, delimiter, TABLE_ROWS + 1, TABLE_COLS), [text, delimiter]);
   const [head, ...body] = parsed.rows;
   if (!head) return <p className="muted">The file is empty.</p>;

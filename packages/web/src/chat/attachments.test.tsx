@@ -45,10 +45,11 @@ describe('files in the thread', () => {
     expect((document.querySelector('.file-preview-image img') as HTMLImageElement).getAttribute('src')).toBe('/api/artifacts/a-img/preview');
     expect((screen.getByText('Download') as HTMLAnchorElement).getAttribute('href')).toBe('/api/artifacts/a-img/download');
     unmount();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('a,b\n1,2', { status: 200, headers: { 'X-Preview-Truncated': '0' } })));
+    // A table is text: it opens in the file view, as its table first.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ text: 'a,b\n1,2', sha256: 'f'.repeat(64), sizeBytes: 7, editable: true, truncated: false }), { status: 200 })));
     render(<ArtifactView attachment={sent.blocks[2] as never} />);
     expect(document.querySelector('.file-preview-image')).toBeNull();
-    expect(screen.getByText('Spreadsheet')).toBeDefined();
+    expect(screen.getByRole('radio', { name: 'Table' }).getAttribute('aria-checked')).toBe('true');
     return waitFor(() => expect(document.querySelector('.file-preview-table')).not.toBeNull()).finally(() => vi.unstubAllGlobals());
   });
 

@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Text files open in an editor on the Canvas: a document an agent saved with `artifacts.write` or a text file a command left (Markdown, CSV, JSON, YAML, logs, code) opens in front of the command that made it, Markdown and tables as they read with Edit beside them. When the agent writes the file again the open view updates in place and marks the changed lines; an unsaved edit of yours is never replaced (a bar offers "Show theirs" or "Keep mine"). Save (or ⌘S/Ctrl+S) writes your edit back into Files, refused with the same choice if the file changed since you opened it; a dot on the tab means unsaved. Files over 1 MB open read-only.
+
 ### Changed
 
 - On a desktop a conversation starts with the chat alone: the Canvas opens the first time something lands on it, and once you close it (the × in its header) it stays closed for that conversation; what arrives later counts up on the Canvas button in the chat header, which opens it at any time.

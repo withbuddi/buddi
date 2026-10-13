@@ -42,7 +42,9 @@ import { NOTIFY_TOOL } from '../chat/notify';
 import type { NotifyViewProps } from './views/NotifyView';
 import type { PreviewProps, Renderable, RendererName, TabVersion, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
-import { delegatedFiles, type AttachmentBlock } from '../chat/attachments';
+import { delegatedFiles, familyOf, FAMILY_LABEL, type AttachmentBlock } from '../chat/attachments';
+import { fileChainName, fileTabId, isFileResult, textFilesOf } from './text-files';
+import type { ArtifactViewProps } from './views/ArtifactView';
 import { commandResult } from './command-result';
 import { expiryOf, subjectIdentityOf, type Subject } from './tab-order';
 import { opensTab, rowOnlyTool } from './tab-worthy';
@@ -296,6 +298,36 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
     collected.push(merged);
   };
 
+  /*
+   * A text file a run stored, open in the editor: one tab per file across
+   * its versions (`text-files.ts`). Writing it again moves the tab to the
+   * end with the newest version, keeping its id, so the open editor updates
+   * in place rather than a second one opening beside it.
+   */
+  const placeFile = (file: AttachmentBlock, at: string | null, callId: string): void => {
+    const key = fileChainName(file.filename) ?? file.artifactId;
+    const existing = collected.find((other) => other.source === 'artifact' && other.subjectKey === key);
+    if (existing) collected = collected.filter((other) => other !== existing);
+    const id = existing?.id ?? fileTabId(file.artifactId);
+    const props = { attachment: file, tabId: id } satisfies ArtifactViewProps;
+    const title = file.filename ?? 'Untitled file';
+    // Each write is a version of the tab, so writing again is news (`tabStamp`).
+    const version: TabVersion = { id: callId, at, title, renderer: 'artifact', props, substantial: true };
+    collected.push({
+      id,
+      tool: FAMILY_LABEL[familyOf(file.mime, file.filename)],
+      title,
+      renderer: 'artifact',
+      props,
+      at,
+      source: 'artifact',
+      subjectKey: key,
+      versions: [...(existing?.versions ?? []), version],
+      // What the run made, to read: the canvas turns to it.
+      substantial: true,
+    });
+  };
+
   for (const message of messages) {
     if (opensTurn(message)) sources = null;
     for (const block of message.blocks ?? []) {
@@ -432,62 +464,79 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
 
       if (isChange(output)) changes += 1;
 
-      const descriptor = byTool.get(tool);
-      if (descriptor) {
-        const applied = applyDescriptor(descriptor, output);
-        const { renderer } = applied;
-        let { props } = applied;
-        if (renderer === 'preview') {
-          const preview = props as PreviewProps;
-          // A process that was not listening yet opens its tab once the
-          // dashboard says it is being served; a preview with nothing to
-          // point at is a box, and draws no tab at all.
-          const target = preview.target
-            ?? (preview.awaiting && served?.has(previewKey(preview.awaiting)) ? preview.awaiting : null);
-          if (target === null) continue;
-          props = { ...preview, target, awaiting: null } satisfies PreviewProps;
-          // One tab per process: a later preview of the same one replaces
-          // the earlier, rather than framing it twice.
-          const key = previewKey(target);
-          collected = collected.filter((item) => !(item.source === 'descriptor'
-            && item.renderer === 'preview'
-            && (item.props as PreviewProps).target !== null
-            && previewKey((item.props as PreviewProps).target!) === key));
-        }
-        // A declared view is the plugin author's judgement that this result is
-        // worth looking at. It keeps its tab even when it came back empty —
-        // "no rows this month" is an answer, drawn the way its author meant.
-        // A descriptor that resolves to the generic card is held to the same
-        // test as a result with none: real content, or the row keeps it.
-        if (!opensTab({ tool, renderer, substantial: hasSubstance(renderer, props) })) continue;
-        const item: Renderable = {
-          id: block.toolUseId,
-          tool,
-          title: descriptor.title ?? toolTitle(tool),
-          renderer,
-          props,
-          at,
-          source: 'descriptor',
-          substantial: hasSubstance(renderer, props),
-        };
-        // A preview is one tab per process already, keyed above.
-        if (renderer === 'preview') collected.push(item);
-        else place(item, subject, expiryOf(output));
+      /*
+       * A text file the result stored opens as itself, in the editor: a
+       * document write *is* its file and draws nothing else; a command that
+       * left files keeps its own tab, and its files come after it — newer,
+       * and what the canvas turns to.
+       */
+      const produced = textFilesOf(output);
+      if (produced.length > 0 && isFileResult(output) && !byTool.has(tool)) {
+        // The call is the file: its row in the conversation opens this tab.
+        for (const file of produced) placeFile(file, at, block.toolUseId);
         continue;
       }
+      const draw = (): void => {
+        const descriptor = byTool.get(tool);
+        if (descriptor) {
+          const applied = applyDescriptor(descriptor, output);
+          const { renderer } = applied;
+          let { props } = applied;
+          if (renderer === 'preview') {
+            const preview = props as PreviewProps;
+            // A process that was not listening yet opens its tab once the
+            // dashboard says it is being served; a preview with nothing to
+            // point at is a box, and draws no tab at all.
+            const target = preview.target
+              ?? (preview.awaiting && served?.has(previewKey(preview.awaiting)) ? preview.awaiting : null);
+            if (target === null) return;
+            props = { ...preview, target, awaiting: null } satisfies PreviewProps;
+            // One tab per process: a later preview of the same one replaces
+            // the earlier, rather than framing it twice.
+            const key = previewKey(target);
+            collected = collected.filter((item) => !(item.source === 'descriptor'
+              && item.renderer === 'preview'
+              && (item.props as PreviewProps).target !== null
+              && previewKey((item.props as PreviewProps).target!) === key));
+          }
+          // A declared view is the plugin author's judgement that this result is
+          // worth looking at. It keeps its tab even when it came back empty —
+          // "no rows this month" is an answer, drawn the way its author meant.
+          // A descriptor that resolves to the generic card is held to the same
+          // test as a result with none: real content, or the row keeps it.
+          if (!opensTab({ tool, renderer, substantial: hasSubstance(renderer, props) })) return;
+          const item: Renderable = {
+            id: block.toolUseId,
+            tool,
+            title: descriptor.title ?? toolTitle(tool),
+            renderer,
+            props,
+            at,
+            source: 'descriptor',
+            substantial: hasSubstance(renderer, props),
+          };
+          // A preview is one tab per process already, keyed above.
+          if (renderer === 'preview') collected.push(item);
+          else place(item, subject, expiryOf(output));
+          return;
+        }
 
-      const props = { value: commandResult(output) ? { input: use?.input, output: output } : output };
-      if (!earnsTab('structured', props)) continue;
-      place({
-        id: block.toolUseId,
-        tool,
-        title: toolTitle(tool),
-        renderer: 'structured',
-        props,
-        at,
-        source: 'fallback',
-        substantial: hasSubstance('structured', props),
-      }, subject, expiryOf(output));
+        const props = { value: commandResult(output) ? { input: use?.input, output: output } : output };
+        if (!earnsTab('structured', props)) return;
+        place({
+          id: block.toolUseId,
+          tool,
+          title: toolTitle(tool),
+          renderer: 'structured',
+          props,
+          at,
+          source: 'fallback',
+          substantial: hasSubstance('structured', props),
+        }, subject, expiryOf(output));
+      };
+      draw();
+      // A command's row opens the command; its files are versions of their own.
+      for (const file of produced) placeFile(file, at, `${block.toolUseId}:${file.artifactId}`);
     }
   }
 

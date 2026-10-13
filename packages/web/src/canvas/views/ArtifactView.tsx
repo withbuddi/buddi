@@ -7,22 +7,33 @@
  * thing you can do with it — take a copy — as the panel's only button: a menu
  * for a document buddi converts (PDF and Word, Excel), one button otherwise. The
  * agent reads the same file through its tools; this panel is for you.
+ *
+ * A text file — Markdown, a table as CSV, JSON, code, a log — opens in the
+ * editor instead (`TextFileView`): read it, change it, save it back.
  */
 import { ArtifactPreview } from '../../chat/ArtifactPreview';
 import { DownloadMenu } from '../../chat/DownloadMenu';
 import {
+  artifactTabId,
   FAMILY_LABEL,
   familyOf,
   formatBytes,
   type AttachmentBlock,
 } from '../../chat/attachments';
+import { isTextFile } from '../text-files';
+import { TextFileView } from './TextFileView';
 
 export interface ArtifactViewProps {
   attachment: AttachmentBlock;
+  /** The tab it is open in, when that is not the file's own (a file a run produced). */
+  tabId?: string;
 }
 
-export function ArtifactView({ attachment }: ArtifactViewProps): JSX.Element {
+export function ArtifactView({ attachment, tabId }: ArtifactViewProps): JSX.Element {
   const family = familyOf(attachment.mime, attachment.filename);
+  if (isTextFile(attachment.mime, attachment.filename)) {
+    return <TextFileView attachment={attachment} tabId={tabId ?? artifactTabId(attachment.artifactId)} />;
+  }
 
   return (
     <div className="wb-artifact" data-family={family} data-testid="artifact-view">

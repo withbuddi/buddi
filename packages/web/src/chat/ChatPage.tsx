@@ -969,6 +969,14 @@ export function ChatPage({
 
   /** A file, from the thread or the tray, onto the canvas. */
   const openFile = (file: AttachmentBlock): void => {
+    // A file the run made is already open in its own tab, with its newer versions: go there.
+    const held = renderables.find(item => item.source === 'artifact' && (item.versions ?? []).some(version =>
+      (version.props as { attachment?: AttachmentBlock } | null)?.attachment?.artifactId === file.artifactId));
+    if (held) {
+      openTab(held.id);
+      revealCanvas();
+      return;
+    }
     setOpenedFiles(current => current.some(item => item.artifactId === file.artifactId) ? current : [...current, file]);
     openTab(artifactTabId(file.artifactId));
     revealCanvas();

@@ -314,6 +314,15 @@ export function put<T>(path: string, body: unknown = {}): Promise<T> {
   });
 }
 
+/** `GET /api/artifacts/:id/content`: the text, and whether it may be edited (at most 1 MiB). */
+export interface FileContent {
+  text: string;
+  sha256: string;
+  sizeBytes: number;
+  editable: boolean;
+  truncated: boolean;
+}
+
 /* ------------------------------------------------------------------ *
  * Shapes — exactly what packages/gateway/src/web/read.ts returns.
  * ------------------------------------------------------------------ */
@@ -2859,6 +2868,11 @@ export const api = {
     get<{ entries: LibraryEntry[]; next: string | null }>('/artifacts', query),
   libraryEntry: (id: string, contextsOffset = 0) =>
     get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
+  /** A text file whole, for the canvas editor, with the hash a save names. */
+  fileContent: (id: string) => get<FileContent>(`/artifacts/${encodeURIComponent(id)}/content`),
+  /** The owner's edit, saved over the version he opened; a 409 carries the one that won. */
+  saveFileContent: (id: string, body: { text: string; base: string }) =>
+    put<{ sha256: string; sizeBytes: number }>(`/artifacts/${encodeURIComponent(id)}/content`, body),
   /* ---- first run ---- */
   onboarding: () => get<OnboardingView>('/onboarding'),
   onboardingStep: (step: string, learned: { conversationId?: string; accountId?: string; reach?: OnboardingReach } = {}) =>

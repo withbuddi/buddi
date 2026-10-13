@@ -29,6 +29,7 @@ import type { Renderable, RendererName, StructuredProps, ViewDescriptor } from '
 import { ToolResult } from './views/ToolResult';
 import { Profile, type ProfileProps } from './views/Profile';
 import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
+import { useDirtyTabs } from './file-drafts';
 import { DelegateView, type DelegateViewProps } from './views/DelegateView';
 import { FilesView, type FilesViewProps } from './views/FilesView';
 import { NotifyView, type NotifyViewProps } from './views/NotifyView';
@@ -165,6 +166,8 @@ export function Canvas({
   /** The version the owner stepped to, per tab, until a newer one arrives. */
   const [picked, setPicked] = useState<Record<string, string>>({});
   const labels = useMemo(() => labelsOf(renderables, timezone), [renderables, timezone]);
+  /** Files with an edit not saved yet: a dot on their tab. */
+  const drafts = useDirtyTabs();
   const hide = onHide ? (
     <button type="button" className="ui-icon-btn wb-canvas-hide" data-size="sm" aria-label="Close the canvas" title="Close the canvas; what arrives later waits on the Canvas button" onClick={onHide}>
       <Icon name="close" size={16} />
@@ -209,7 +212,8 @@ export function Canvas({
                 onKeyDown={event => { if (event.key === 'Delete' && onClose && closeable(item)) { event.preventDefault(); onClose(item.id); } }}>
                 {item.tone === 'warning' || item.tone === 'critical' ? (
                   <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
-                ) : isUnread(item) ? <span className="wb-tab-dot" data-tone="unread" aria-hidden="true" /> : null}
+                ) : drafts.has(item.id) ? <span className="wb-tab-dot" data-tone="dirty" role="img" aria-label="Unsaved changes" title="Unsaved changes" />
+                  : isUnread(item) ? <span className="wb-tab-dot" data-tone="unread" aria-hidden="true" /> : null}
                 <span className="wb-tab-text">{labels.get(item.id) ?? item.title}</span>
                 {item.count ? <span className="wb-tab-count">{item.count}</span> : null}
               </Tabs.Trigger>
