@@ -49,3 +49,9 @@ export function versionedFileName(name: string | null | undefined, version: numb
   const dot = plain.lastIndexOf('.');
   return dot > 0 ? `${plain.slice(0, dot)} (v${version})${plain.slice(dot)}` : `${plain} (v${version})`;
 }
+
+/**
+ * What every refused save says, wherever it was made — the editor, Restore,
+ * the server's 409: one phrase for "a newer version was saved meanwhile".
+ */
+export const CHANGED_SINCE = 'This file changed since you opened it';

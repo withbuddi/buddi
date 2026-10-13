@@ -9,17 +9,9 @@
  */
 import { createHash } from 'node:crypto';
 import { OWNER_ID } from '../owner.js';
-import { isTextFile } from '../text-files.js';
 import { fileVersions } from './store.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * What may be previewed as text: the one rule the dashboard's editor applies
- * too (`text-files.ts`). Display family is a different question — a .docx is
- * a Document to look at and download-only to preview.
- */
-export const textPreviewable = isTextFile;
 
 type Queryable = { query(sql: string, params?: any[]): Promise<{ rows: any[] }> };
 
@@ -187,12 +179,14 @@ function originSql(knownAgents: string): string {
 /**
  * What is in the library at all, for the list and the detail alike: a file
  * not deleted, with a live version, and — when the owner uploaded it — one
- * that a message carries or a surface other than the dashboard's own tray
+ * he made in Files itself (`POST /api/files`, surface `files`), one that a
+ * message carries, or one a surface other than the dashboard's own tray
  * accepted. A draft in a tray is not a file yet.
  */
 function membershipSql(knownAgents: string): string {
   return `f.deleted_at is null and not (
     (${originSql(knownAgents)}) = 'uploaded'
+    and not exists (select 1 from core.artifacts v where v.file_id = f.id and v.version = 1 and v.source_surface = 'files')
     and not exists (select 1 from core.artifact_uses u where u.artifact_id in ${VERSION_IDS})
     and not exists (select 1 from core.surface_attachments sa where sa.artifact_id in (select v.id::text from core.artifacts v where v.file_id = f.id) and sa.surface <> 'web')
   )`;

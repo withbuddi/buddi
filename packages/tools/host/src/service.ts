@@ -84,6 +84,25 @@ export async function enterWorkspace(): Promise<() => void> {
     running -= 1;
   };
 }
+/*
+ * Write-through and confinement (docs/files.md, "Edited by you"). The owner's
+ * save writes into a workspace only while every command that ever ran there
+ * ran unconfined, as the owner's own user: such a process can already write
+ * anywhere he can, so a save racing it opens no escape. A sandboxed run (a
+ * skill bundle's script) could leave a process that swaps a folder under the
+ * save's path checks — Node cannot open relative to a directory handle — and
+ * reach outside its sandbox through the save. So before a confined run the
+ * workspace is marked, outside the workspace where nothing it runs can
+ * remove the mark, and a marked workspace gets the owner's saves in Files only.
+ */
+/** Where the mark for one workspace lives: `<data>/host/confined/<key>`. */
+export function confinedMarkPath(dataDir: string, ownerId: string, agentId: string, conversationId: string): string {
+  return path.join(dataDir, 'host', 'confined', hostWorkspaceKey(ownerId, agentId, conversationId));
+}
+/** Has a confined (sandboxed) run ever used this workspace? */
+export async function workspaceRanConfined(dataDir: string, ownerId: string, agentId: string, conversationId: string): Promise<boolean> {
+  return stat(confinedMarkPath(dataDir, ownerId, agentId, conversationId)).then(() => true, () => false);
+}
 /** One agent's workspace in one conversation, under a data dir. */
 export function hostWorkspaceDir(dataDir: string, ownerId: string, agentId: string, conversationId: string): string {
   return path.join(dataDir, 'host', 'workspaces', hostWorkspaceKey(ownerId, agentId, conversationId));
@@ -287,6 +306,10 @@ export class HostService {
           throw new ToolRefusal(`${skillRun.script} in ${skillRun.title} changed after it was approved, so nothing ran. Ask again to run the script as it is now.`);
         }
         const work = await realpath(envelope.workspace);
+        // Marked before it runs: from now on the owner's saves stay out of this workspace.
+        const mark = path.join(ctx.buddi!.dir.legacyPath!, 'confined', hostWorkspaceKey(ctx.buddi!.owner.id, ctx.agentId!, ctx.conversationId!));
+        await mkdir(path.dirname(mark), { recursive: true, mode: 0o700 });
+        await writeFile(mark, `${new Date().toISOString()}\n`, { mode: 0o600 });
         const tmp = path.join(work, '.tmp');
         await mkdir(tmp, { recursive: true, mode: 0o700 });
         confined = { wrap: confinementArgv(skillRun.confinement, work, { bundle: skillRun.reads, interpreter: skillRun.interpreter, network: skillRun.network === true }),

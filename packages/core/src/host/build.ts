@@ -27,6 +27,7 @@ import {
   saveDocument,
   saveVersion,
   resolveFileId,
+  recordFileRead,
   type ArtifactKind,
   type ArtifactRow,
   type EnvLike,
@@ -1203,7 +1204,10 @@ function filesArea(
     async read(id) {
       const row = await get(id);
       if (row === null) throw new Error(`There is no file ${id} that ${binding.plugin} can read.`);
-      return readArtifactBytes(env(), row);
+      const bytes = await readArtifactBytes(env(), row);
+      // The agent has read this version: the turn's note about the owner's newest stops once it has read that one.
+      if (facts.agentId) await recordFileRead(pool(), { fileId: row.fileId, agentId: facts.agentId, version: row.version }).catch(() => {});
+      return bytes;
     },
     async list(opts = {}) {
       const params: unknown[] = [];

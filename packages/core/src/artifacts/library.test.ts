@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { decodeCursor, encodeCursor, familyOf, filterKey, listLibrary, textPreviewable } from './library.js';
+import { decodeCursor, encodeCursor, familyOf, filterKey, listLibrary } from './library.js';
+import { isTextFile as textPreviewable } from '../text-files.js';
 
 describe('the library', () => {
   it('classifies families from the mime first and the extension second', () => {

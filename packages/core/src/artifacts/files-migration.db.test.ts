@@ -83,6 +83,8 @@ suite('migration 083: files as rows', () => {
     // The deleted version stays deleted, and keeps its number.
     expect(three.deleted).toBe(true);
     expect(await file('plan1')).toMatchObject({ name: 'Plan.md', created_by: 'scout', origin: 'document', deleted_at: null, conversation_id: conversation });
+    // 084: the counter sits past every version the file ever had, the deleted v3 included.
+    expect((await file('plan1')).next_version).toBe(4);
   });
 
   it('gives the owner the version he edited in place, and keeps the file the agent’s', async () => {
@@ -129,6 +131,6 @@ suite('migration 083: files as rows', () => {
       ['f'.repeat(64)],
     );
     expect(rows[0].version).toBe(1);
-    expect((await pool.query('select name, origin from core.files where id = $1', [rows[0].file_id])).rows[0]).toEqual({ name: 'direct.txt', origin: 'upload' });
+    expect((await pool.query('select name, origin, next_version from core.files where id = $1', [rows[0].file_id])).rows[0]).toEqual({ name: 'direct.txt', origin: 'upload', next_version: 2 });
   });
 });

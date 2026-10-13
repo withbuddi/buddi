@@ -72,7 +72,7 @@ export const list: ToolDefinition<
 > = {
   name: 'artifacts.list',
   description:
-    'List the files the owner has sent you or that a run produced — statements, photos, documents — newest first, each file once as its current version. Metadata only: id (that version), fileId, version, kind, mime, filename, size, caption. Use it to find something the owner refers to ("the statement I sent yesterday"), then read it with artifacts.describe or artifacts.text.',
+    'List the files the owner has sent you or that a run produced — statements, photos, documents — newest first, each file once as its newest version. Metadata only: id (that version), fileId, version, kind, mime, filename, size, caption. Use it to find something the owner refers to ("the statement I sent yesterday"), then read it with artifacts.describe or artifacts.text.',
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {

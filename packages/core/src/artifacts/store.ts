@@ -30,7 +30,7 @@
  * the file. A month later `purgeDeletedArtifacts` removes the rows, and the
  * bytes no remaining version stores.
  */
-import { mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool, PoolClient } from 'pg';
@@ -299,12 +299,28 @@ async function storeBlob(client: Queryable, env: EnvLike, bytes: Buffer, mime: s
   const relative = storagePathFor(sha256, mime, filename, new Date());
   await lock(client, `buddi.blob:${relative}`);
   const absolute = path.join(resolveDataDir(env), relative);
-  // Content-addressed: bytes already there are these bytes.
-  if (!(await stat(absolute).then((info) => info.isFile(), () => false))) {
+  // Content-addressed, so bytes already there are these bytes — once checked:
+  // a write cut short (a full disk, a crash) leaves a blob that is not.
+  if (!(await blobHolds(absolute, bytes.length, sha256))) {
     await mkdir(path.dirname(absolute), { recursive: true });
-    await writeFile(absolute, bytes);
+    // Written beside and renamed over: the path only ever names whole bytes.
+    const temp = `${absolute}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+    try {
+      await writeFile(temp, bytes, { flag: 'wx' });
+      await rename(temp, absolute);
+    } catch (err) {
+      await unlink(temp).catch(() => {});
+      throw err;
+    }
   }
   return { sha256, relative };
+}
+
+/** Is the blob at `absolute` exactly these bytes (their size, then their hash)? */
+async function blobHolds(absolute: string, size: number, sha256: string): Promise<boolean> {
+  const info = await stat(absolute).catch(() => null);
+  if (!info?.isFile() || info.size !== size) return false;
+  return sha256Of(await readFile(absolute)) === sha256;
 }
 
 async function loadFile(client: Queryable, fileId: string): Promise<FileRecord | null> {
@@ -347,7 +363,7 @@ async function insertVersion(
        (kind, mime, filename, size_bytes, sha256, storage_path, source_surface, source_chat_id, source_message_id,
         caption, created_by, conversation_id, file_id, version, restored_from)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-             (select coalesce(max(v.version), 0) + 1 from core.artifacts v where v.file_id = $13), $14)
+             (select f.next_version from core.files f where f.id = $13), $14)
      returning ${SELECT_COLUMNS}`,
     [
       kindForMime(mime), mime, file.name, input.bytes.length, blob.sha256, blob.relative,
@@ -416,12 +432,12 @@ export async function saveArtifactReporting(
           order by f.created_at desc limit 1`,
         [conversationId, originPath],
       );
-      if (!rows[0]) {
-        const file = await createFile(client, { conversationId, name: filename, mime, createdBy: input.createdBy, origin: 'capture', originPath, originSha256: sha256 });
-        return { row: await insertVersion(client, env, file, version), existed: false };
+      // Under the file's lock, read again: a delete may have committed while this waited.
+      const file = rows[0] ? await lockFile(client, String(rows[0].id)).then(() => loadFile(client, String(rows[0].id))) : null;
+      if (!file || file.deletedAt !== null) {
+        const made = await createFile(client, { conversationId, name: filename, mime, createdBy: input.createdBy, origin: 'capture', originPath, originSha256: sha256 });
+        return { row: await insertVersion(client, env, made, version), existed: false };
       }
-      const file = toFile(rows[0]);
-      await lockFile(client, file.id);
       // The copy holds these bytes: what buddi last read there.
       await client.query(`update core.files set origin_sha256 = $2 where id = $1`, [file.id, sha256]);
       const newest = await newestOf(client, file.id);
@@ -441,15 +457,40 @@ export async function saveArtifactReporting(
     );
     const found = rows[0];
     if (found) {
-      // The same bytes handed in again after a discard: the version comes back.
-      await client.query(
-        `update core.artifacts set deleted_at = null, caption = coalesce(caption, $2) where id = $1`,
+      /*
+       * Under the file's lock, as a delete or the purge takes it: the version
+       * is still there and its file not deleted, or it is a new file after all.
+       * The same bytes handed in again after a discard: the version comes back.
+       */
+      await lockFile(client, String(found.file_id));
+      const { rows: kept } = await client.query(
+        `update core.artifacts a set deleted_at = null, caption = coalesce(a.caption, $2)
+           from core.files f
+          where a.id = $1 and f.id = a.file_id and f.deleted_at is null
+          returning ${A_COLUMNS}`,
         [found.id, input.caption?.trim() || null],
       );
-      return { row: toRow(found), existed: true };
+      if (kept[0]) return { row: toRow(kept[0]), existed: true };
     }
     const file = await createFile(client, { conversationId, name: filename, mime, createdBy: input.createdBy, origin: 'upload' });
     return { row: await insertVersion(client, env, file, version), existed: false };
+  });
+}
+
+/**
+ * A new file, always: the owner's "Save as new file" (`POST /api/files`).
+ * Never the file that already holds these bytes — the bytes on disk are
+ * shared, the file is not.
+ */
+export async function saveNewFile(
+  pool: Pool,
+  input: { bytes: Buffer; mime: string; name: string; createdBy: string; conversationId: string | null; source?: ArtifactSource | null },
+  env: EnvLike = process.env,
+): Promise<{ row: ArtifactRow; file: FileRecord }> {
+  checkInput(input, input.mime);
+  return transaction(pool, async (client) => {
+    const file = await createFile(client, { conversationId: input.conversationId, name: input.name, mime: input.mime.trim(), createdBy: input.createdBy, origin: 'upload' });
+    return { row: await insertVersion(client, env, file, { bytes: input.bytes, createdBy: input.createdBy, source: input.source ?? null }), file };
   });
 }
 
@@ -718,6 +759,15 @@ export async function saveOwnerVersion(
   }
 }
 
+/** An agent read a version of a file (its text, its description, its bytes): the newest it read is kept. */
+export async function recordFileRead(pool: Queryable, input: { fileId: string; agentId: string; version: number }): Promise<void> {
+  await pool.query(
+    `insert into core.file_reads (file_id, agent_id, version) values ($1, $2, $3)
+     on conflict (file_id, agent_id) do update set version = greatest(core.file_reads.version, excluded.version), read_at = now()`,
+    [input.fileId, input.agentId, input.version],
+  );
+}
+
 /** A file in a conversation whose newest version is the owner's, as the next turn's context tells it. */
 export interface OwnerNewestFile {
   fileId: string;
@@ -737,8 +787,9 @@ export interface OwnerNewestFile {
 
 /**
  * The files of a conversation an agent made or wrote whose newest version
- * is the owner's: derived from the versions, so it stays true until the
- * agent writes again (newest first, at most `limit`).
+ * is the owner's and the agent has not read (`recordFileRead`): derived from
+ * the versions, so it stays true until the agent reads or writes the file
+ * again (newest first, at most `limit`).
  */
 export async function filesNewestByOwner(pool: Queryable, conversationId: string, agentId: string, limit = 5): Promise<OwnerNewestFile[]> {
   const { rows } = await pool.query(
@@ -751,6 +802,8 @@ export async function filesNewestByOwner(pool: Queryable, conversationId: string
        ) n
       where f.conversation_id = $1 and f.deleted_at is null and n.created_by = 'owner'
         and (f.created_by = $2 or exists (select 1 from core.artifacts v where v.file_id = f.id and v.created_by = $2))
+        -- Once the agent has read his version, it knows.
+        and not exists (select 1 from core.file_reads r where r.file_id = f.id and r.agent_id = $2 and r.version >= n.version)
       order by n.created_at desc
       limit $3`,
     [conversationId, agentId, limit],
@@ -936,25 +989,38 @@ export async function purgeDeletedArtifacts(
   olderThan: Date,
   env: EnvLike = process.env,
 ): Promise<{ rows: number; blobs: number }> {
-  const { rows } = await pool.query<{ storage_path: string }>(
-    `delete from core.artifacts where deleted_at is not null and deleted_at < $1 returning storage_path`,
+  const { rows: due } = await pool.query<{ file_id: string }>(
+    `select distinct file_id from core.artifacts where deleted_at is not null and deleted_at < $1`,
     [olderThan],
   );
-  await pool.query(`delete from core.files f where not exists (select 1 from core.artifacts a where a.file_id = f.id)`);
-  const paths = [...new Set(rows.map((row) => row.storage_path))];
+  const paths = new Set<string>();
+  let removed = 0;
+  // File by file, under the file's lock: a save, a dedup or an undelete of it waits, then sees what is left.
+  for (const { file_id: fileId } of due) {
+    await transaction(pool, async (client) => {
+      await lockFile(client, String(fileId));
+      const { rows } = await client.query<{ storage_path: string }>(
+        `delete from core.artifacts where file_id = $1 and deleted_at is not null and deleted_at < $2 returning storage_path`,
+        [fileId, olderThan],
+      );
+      removed += rows.length;
+      for (const row of rows) paths.add(row.storage_path);
+      await client.query(`delete from core.files f where f.id = $1 and not exists (select 1 from core.artifacts a where a.file_id = f.id)`, [fileId]);
+    });
+  }
   let blobs = 0;
   for (const relative of paths) {
     // Only ever a path under the data dir's artifacts folder, as the store wrote it.
     if (!/^artifacts\/\d{4}\/\d{2}\/[0-9a-f]{64}\.[a-z0-9]{1,8}$/.test(relative)) continue;
-    const removed = await transaction(pool, async (client) => {
+    const gone = await transaction(pool, async (client) => {
       await lock(client, `buddi.blob:${relative}`);
       const { rows: still } = await client.query(`select 1 from core.artifacts where storage_path = $1 limit 1`, [relative]);
       if (still.length > 0) return false;
       return unlink(path.join(resolveDataDir(env), relative)).then(() => true, () => false);
     });
-    if (removed) blobs += 1;
+    if (gone) blobs += 1;
   }
-  return { rows: rows.length, blobs };
+  return { rows: removed, blobs };
 }
 
 /**
