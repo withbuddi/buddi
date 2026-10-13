@@ -1,7 +1,7 @@
 ---
 title: "Files: uploads and agent outputs in one library"
 status: reference
-updated: 2026-09-25
+updated: 2026-10-13
 ---
 
 # Files: uploads and agent outputs in one library
@@ -171,9 +171,9 @@ so the library never lags the transcript. Where there is no transaction today,
 make the reference and association one atomic write operation rather than
 relying on a later indexing job.
 
-One list item represents one artifact id; reuse can give it several conversation
-links. Identical bytes with distinct existing artifact ids remain distinct
-entries. Do not introduce cross-context hash merging as part of this feature.
+One list item represents one file (`core.files`), across its versions; reuse
+can give it several conversation links, gathered from all its versions.
+Identical bytes in distinct files remain distinct entries. Do not introduce cross-context hash merging as part of this feature.
 When saving returns a deduplicated row, still record the current use and its
 provenance; do not overwrite the original creator with the latest agent.
 
@@ -194,8 +194,8 @@ An agent granted `artifacts.write` saves a document into Files itself, so the
 owner never has to paste an answer into Word:
 
 ```
-artifacts.write { title, format: 'markdown' | 'csv' | 'json', content, folder? }
-  → { artifactId, filename, title, format, version, mime, sizeBytes, folder?, unchanged?, note }
+artifacts.write { title, format: 'markdown' | 'csv' | 'json', content, folder?, fileId?, readVersion? }
+  → { artifactId, fileId, filename, title, format, version, mime, sizeBytes, folder?, unchanged?, note }
 ```
 
 - **What is stored.** Markdown as a `.md` file; a table as a `.csv` (`json`
@@ -209,14 +209,17 @@ artifacts.write { title, format: 'markdown' | 'csv' | 'json', content, folder? }
 - **Provenance.** The file is credited to the agent and the conversation the
   call ran in, the same as any file a run produced, and appears under the
   answer in the chat.
-- **Versions.** Writing the same title again in the same conversation saves a
-  new file, `Title (v2).md`, then `(v3)`; the earlier ones stay. Exactly the
-  same bytes again are not a copy: the tool says nothing new was saved. Outside a
-  conversation (a mission) every write is version 1.
-- **Tier `auto`.** Its only effect is a new file in the owner's own library,
-  never an overwrite and nothing outside buddi, like the memory writes. It is
-  granted per agent like any tool; the catalogue's Researcher, Writer, Chief of
-  Staff and CFO come with it.
+- **Versions.** `fileId` writes the next version of that file (the title is
+  then ignored; the file keeps its name). Without it, the title names the file
+  of that name in this conversation, compared ignoring case, and a new file
+  when there is none; a title that differs by more than case is a new file.
+  Exactly the same bytes as the newest version are not a copy: the tool says
+  nothing new was saved. Outside a conversation (a mission) every write is a new
+  file. See **Versions** below.
+- **Tier `auto`.** Its only effect is a new file, or a new version of one, in
+  the owner's own library — never an overwrite and nothing outside buddi, like
+  the memory writes. It is granted per agent like any tool; the catalogue's
+  Researcher, Writer, Chief of Staff and CFO come with it.
 
 **Downloads are made by buddi, not the model.** A Markdown file's Download in
 Files and on its canvas card is a menu: PDF, Word (.docx), then the `.md` as
@@ -233,24 +236,125 @@ The shipped skill `examples/skills/writing-a-document.md` tells an agent with
 the tool when a file beats a chat answer and how to shape one: title and date
 first, the answer up front, tables only for comparisons, sources last.
 
+## Versions
+
+A file is a row of `core.files`: its name (never with a version mark), its
+type, its conversation, who made it, and — for a command's output — the
+workspace path it was captured from. Every row of `core.artifacts` is one of
+its **versions**: a number from 1, the bytes (content-addressed on disk), and
+who wrote that version (`created_by`: the agent, or `owner` for an upload, a
+save on the Canvas or a Restore). Versions are appended and never rewritten;
+the **current** version is the highest-numbered live one.
+
+What makes a new version:
+
+- `artifacts.write` by `fileId`, or by a title that names an existing file in
+  the conversation (above); a plugin's `files.save` with `version.of`, or with
+  `version: { base, ext }` the same way (host API 1.34).
+- A command's output captured again from the same workspace path in the same
+  conversation (`host.exec` `outputs`): two paths that share a name are two
+  files. Unchanged bytes are the current version again, not a new one.
+- The owner's save on the Canvas, and **Restore as newest** in Files.
+
+Two versions may hold the same bytes (a Restore does); re-sending an
+attachment into the same chat is still the same file, not a new version.
+
+One lock per file serialises every change to it — a version, a delete, an
+undelete — and the title or workspace path that names a file is locked while
+it is looked up or created, so two writes at once never make two files.
+
+Files lists each file once, as its current version, with "N versions" beside
+its date. A file's page lists its versions, newest first, with who wrote each
+("You, restored v2" for a Restore), View, **Restore as newest** and Delete
+version. A download names its version: the second version of `Plan.md` is
+`Plan (v2).md` when downloaded (`/download` and `/export/…`), never in Files.
+
+`GET /api/files/<id>` is the one view of a file the Canvas and Files read: the
+file, its current version, and its versions. Any version's id names its file
+there, in `canvas.open`, and in `artifacts.write`'s `fileId`.
+
+### Conflicts
+
+Every save names the version it started from. A version saved since — by
+buddi, a command, another tab — refuses it, with one shape everywhere:
+`409 { error, conflict, current?, workspaceText? }`, where `conflict` is
+`newer` (with `current`, the version that won), `workspace` (a command changed
+the copy in its workspace since; `workspaceText` is what it holds) or `busy`.
+The editor and Restore answer it the same way, under one phrase: "This file
+changed since you opened it", with **Show theirs** and **Keep mine**.
+
+An agent's write is refused the same way when the newest version is not its
+own and it did not say it read it: `readVersion` is the version it read
+(`artifacts.text` returns it), and a newer one than that is refused too, with
+what to read.
+
+## The editor
+
+A text file on the Canvas opens in an editor — one tab per file, kept by its
+file id across every version, write and open. The tab shows the current
+version; when buddi writes a newer one, an unchanged view updates in place
+and marks the changed lines, and an unsaved edit is never replaced (the bar
+above). Save (⌘S/Ctrl+S) is `POST /api/files/<id>/versions { base, text }`:
+a new version by `owner`. Files over 1 MB, and text that is not UTF-8, open
+read-only. Which files are text is one rule, `@buddi/core/text-files`, applied
+by the page and the server alike.
+
+An edit lives in the page while the tab is open, even when it goes to the
+back; closing the tab, or the page, asks first. What the owner typed while a
+save was out — even an edit undone back to the old text — stays as an edit
+over the version just saved.
+
 ### Edited by you
 
-A text file on the Canvas opens in an editor, and Save writes the owner's
-edit over that file in Files (`PUT /api/artifacts/<id>/content`, naming the
-version he opened; a stale save is a 409 with the version that won). Three
-things keep the agent from dropping his edit afterwards:
+Three things keep the agent from dropping the owner's version afterwards:
 
-- **Back into the workspace.** A command's output (`host.exec` `outputs`)
-  remembers the workspace file it was read from. The owner's save writes
-  there too, inside that agent's workspace for that conversation only, and
-  only while the copy still holds what he opened; a copy a command changed
-  since is a 409 carrying its text, and the owner chooses.
-- **Told on the next turn.** The next turn's context says, once per save,
-  "The owner edited <file> (now version <id>) at <time>; read it before
-  changing it."
-- **Refused unread.** `artifacts.write` over a document whose newest version
-  the owner edited is refused until the agent reads it and passes
-  `readVersion`, the sha256 `artifacts.text` returned for it.
+- **Back into the workspace.** A command's output belongs to the workspace of
+  the agent that made the file, in its conversation; whoever writes later
+  versions does not change that. The owner's save writes there too — only
+  inside that workspace, only while the copy still holds what buddi last read
+  or wrote there (a copy a command changed since is the `workspace` conflict),
+  never through a link (every folder on the way is checked before and after),
+  staged beside the copy and renamed over it once the save is committed, and
+  only while no `host.exec` command is running in any conversation (`busy`):
+  a command elsewhere may use any workspace as its cwd, and none starts while
+  the save holds the lock. A copy that cannot be written is reported ("Saved
+  in Files; the workspace copy couldn't be updated"), and saving again retries.
+- **Said on every turn while it is true.** For the files of the conversation
+  an agent made or wrote whose newest version is the owner's, the turn's
+  context says so — "The newest version of <file> is the owner's (vN, saved
+  <time>); you last wrote vM" — and how to build on it with the tools the
+  agent holds: the workspace copy when the save was written back there,
+  otherwise `artifacts.text` then `artifacts.write { fileId, readVersion }`.
+  Once the agent writes the file again, it is not said.
+- **Refused unread.** As above: a write over the owner's newest version
+  without `readVersion` is refused.
+
+How agents work with files is said once, in the turn's context, for the tools
+they hold: change a file by its `fileId` rather than a new title, prefer
+`artifacts.write` to shell redirection, show a file with `canvas.open
+{ fileId }` rather than pasting it, and never read buddi's own data directory
+or call its HTTP API from a command.
+
+## Deletion
+
+A file's ⋯ menu has **Delete file** (all its versions, after a confirm), and
+each version **Delete version** (the one before becomes current; the last one
+takes the file with it). Both are soft and serialised with writes by the
+file's lock: a conversation that carried the file shows it as deleted,
+nothing on disk or in a workspace changes, and **Undo**
+(`POST /api/files/<id>/undelete`) brings back exactly what was deleted. A
+version written after a deleted one gets the next number, never a deleted
+one's. An agent asked to write or open a deleted file is told the owner
+deleted it.
+
+After 30 days the hourly artifact sweep removes deleted versions, files left
+with none, and the bytes no remaining version stores; each blob is checked
+and unlinked under its own lock, the one a save holds until its row is in, so
+a save adopting the same bytes meanwhile keeps them.
+
+On the Canvas a deleted file's tab goes, unless it holds an unsaved edit:
+then the edit stays on screen with **Save as new file**, which makes a new
+file of the owner's in the conversation (`POST /api/files`), like any upload.
 
 ## Files agents download
 
@@ -268,11 +372,16 @@ the owning plugin's import tool by id, never into the reply.
 
 ## API and access boundaries
 
-Add owner-authenticated, read-only library endpoints:
+Owner-authenticated library endpoints (writes are the owner's, never an agent's):
 
-- `GET /api/artifacts`: metadata with search (filename and caption), origin and family filters;
-  simple page-based pagination, default 50 entries and maximum 100 per page.
-- `GET /api/artifacts/<id>`: detail metadata and paginated conversation links.
+- `GET /api/artifacts`: one entry per file (its current version) with search
+  (name and caption), origin and family filters; default 50 entries and
+  maximum 100 per page.
+- `GET /api/artifacts/<id>`: one version's detail, the file's versions and its
+  paginated conversation links.
+- `/api/files/<id>`: the file and its versions, its current text, a new
+  version (save or Restore), delete, undelete; `POST /api/files` for a new
+  text file. See **Versions**, **The editor** and **Deletion**.
 - Reuse `/api/artifacts/<id>/download` and `/preview` for their supported
   formats; add bounded text/table preview data and the PDF-specific inline path
   described above. Do not turn the passive-image endpoint into an arbitrary embed.
@@ -352,10 +461,9 @@ the owner's timezone, translated to inclusive-start/exclusive-end UTC bounds.
 Filter-bound cursor pagination can follow if actual library size warrants it.
 
 Postponed: Office parsing, application-bundled PDF rendering, folders, tags,
-renaming, file-content search, versioning, inferred
-lineage, bulk actions, public sharing, cloud-drive sync, host-folder browsing,
-an in-browser editor and automatic file analysis. Standalone uploads directly
-to Files and attaching a library file to a new chat are later additions; v1
-collects what existing conversations and agent runs already save. Deletion,
-trash/restore and permanent byte cleanup need their own lifecycle design; the
-existing draft-discard endpoint must not be repurposed as library deletion.
+renaming, file-content search, inferred lineage, bulk actions, public
+sharing, cloud-drive sync, host-folder browsing and automatic file analysis.
+Standalone uploads directly to Files and attaching a library file to a new
+chat are later additions. Versions, the editor and deletion are above; the
+composer's draft-discard endpoint (`DELETE /api/artifacts/<id>`) stays the
+composer's, separate from deleting from Files.
