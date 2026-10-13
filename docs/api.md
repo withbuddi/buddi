@@ -4806,7 +4806,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$B
 Remove buddi from this Mac: what goes, and a confirmation token for the next two calls.
 
 - **Auth:** Dashboard session only; from the computer buddi runs on. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
-- **Answer:** `{ available, data, keychain?, service?, app?, backups, appFinishes, token } or { available: false, reason }`
+- **Answer:** `{ available, data, keychain?, service?, app?, backups, appFinishes, desktopApp?, token } or { available: false, reason }`
 - **Errors:** 403 not this computer
 - **Since:** 0.1.0-pre.41
 
