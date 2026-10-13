@@ -565,6 +565,26 @@ suite('files as rows', () => {
     expect((await fetch(`${base}/api/files/${id}?version=9`, { headers: auth() })).status).toBe(404);
   });
 
+  it('serves an Office file’s bytes to the page’s previewer, inline and sandboxed, up to 20 MB', async () => {
+    const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const bytes = Buffer.from('PK\u0003\u0004 a small docx');
+    const row = await saveArtifact(pool, { bytes, mime: DOCX, filename: 'Letter.docx', createdBy: 'scout', conversationId }, env);
+    const res = await fetch(`${base}/api/artifacts/${row.id}/preview`, { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toMatch(/^inline/);
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes);
+    // By name when the type was not given.
+    const unnamed = await saveArtifact(pool, { bytes: Buffer.from('PK deck'), mime: 'application/octet-stream', filename: 'Deck.pptx', createdBy: 'scout', conversationId }, env);
+    expect((await fetch(`${base}/api/artifacts/${unnamed.id}/preview`, { headers: auth() })).status).toBe(200);
+    // Past the cap: Download only.
+    await pool.query(`update core.artifacts set size_bytes = $2 where id = $1`, [row.id, 21 * 1024 * 1024]);
+    expect((await fetch(`${base}/api/artifacts/${row.id}/preview`, { headers: auth() })).status).toBe(413);
+    // A legacy .doc is still download only.
+    const legacy = await saveArtifact(pool, { bytes: Buffer.from('old'), mime: 'application/msword', filename: 'Old.doc', createdBy: 'scout', conversationId }, env);
+    expect((await fetch(`${base}/api/artifacts/${legacy.id}/preview`, { headers: auth() })).status).toBe(415);
+  });
+
   it('opens a file past 1 MiB read-only, its start only', async () => {
     const big = 'line\n'.repeat(250_000);
     const id = await file(big, 'big.log', 'text/plain');

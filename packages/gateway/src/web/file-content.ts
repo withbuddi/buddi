@@ -58,7 +58,7 @@ function sha256Hex(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function inside(root: string, file: string): boolean {
+export function inside(root: string, file: string): boolean {
   const relative = path.relative(root, file);
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
@@ -68,7 +68,7 @@ function inside(root: string, file: string): boolean {
  * component is looked at with lstat, and none may be a symbolic link or a
  * junction (Node reports both as links). `missing` when a component is gone.
  */
-async function linkOnTheWay(base: string, file: string): Promise<'outside' | 'missing' | 'link' | null> {
+export async function linkOnTheWay(base: string, file: string): Promise<'outside' | 'missing' | 'link' | null> {
   if (!inside(base, file)) return 'outside';
   let at = base;
   for (const part of path.relative(base, file).split(path.sep)) {
@@ -172,14 +172,14 @@ export interface Answer {
 }
 
 /** A version as a refusal names it: the one to look at. */
-function versionRef(row: ArtifactRow): { fileId: string; version: number; artifactId: string; sha256: string; createdBy: string } {
+export function versionRef(row: ArtifactRow): { fileId: string; version: number; artifactId: string; sha256: string; createdBy: string } {
   return { fileId: row.fileId, version: row.version, artifactId: row.id, sha256: row.sha256, createdBy: row.createdBy };
 }
 
 const NOT_FOUND: Answer = { status: 404, body: { error: 'no such file' } };
 
 /** The live file an id names (its own, or any version's), or why not. */
-async function liveFile(pool: Pool, id: string): Promise<{ file: FileRecord; current: ArtifactRow } | Answer> {
+export async function liveFile(pool: Pool, id: string): Promise<{ file: FileRecord; current: ArtifactRow } | Answer> {
   const fileId = await resolveFileId(pool, id);
   const file = fileId ? await getFile(pool, fileId) : null;
   if (!file) return NOT_FOUND;
@@ -188,7 +188,7 @@ async function liveFile(pool: Pool, id: string): Promise<{ file: FileRecord; cur
   return { file, current };
 }
 
-function isAnswer(value: unknown): value is Answer {
+export function isAnswer(value: unknown): value is Answer {
   return typeof value === 'object' && value !== null && 'status' in value && 'body' in value;
 }
 
@@ -294,7 +294,27 @@ export async function saveFileVersion(pool: Pool, env: EnvLike, id: string, body
     if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
     if (bytes.length === 0) return { status: 400, body: { error: 'an empty file cannot be saved; delete it instead' } };
   }
-  const overwrite = body.overwriteWorkspace === true;
+  return saveOwnerBytes(pool, env, file, {
+    bytes, base, overwriteWorkspace: body.overwriteWorkspace === true,
+    ...(restoredFrom === undefined ? {} : { restoredFrom }),
+  }, ownerId);
+}
+
+/**
+ * The one way an owner's bytes become a new version, whatever made them —
+ * his edit, a Restore, a save in his own app (Open in app): under the file's
+ * lock, over `base`, the version he started from; a command's output also
+ * into its workspace (above). Every refusal has the one shape.
+ */
+export async function saveOwnerBytes(
+  pool: Pool,
+  env: EnvLike,
+  file: FileRecord,
+  input: { bytes: Buffer; base: number; restoredFrom?: number; overwriteWorkspace?: boolean },
+  ownerId: string,
+): Promise<Answer> {
+  const { bytes, base, restoredFrom } = input;
+  const overwrite = input.overwriteWorkspace === true;
   const save = (): Promise<OwnerSaveResult> => saveOwnerVersion(pool, {
     fileId: file.id, bytes, base,
     ...(restoredFrom === undefined ? {} : { restoredFrom }),

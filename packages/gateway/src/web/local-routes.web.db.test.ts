@@ -1,7 +1,7 @@
 /**
  * The routes that are "this computer only" (docs/api.md), over the wire: the
- * command line tool, Remove buddi (plan, backup, job, removal) and Home's
- * passphrase card. A session signed in off this machine (a ticket exchanged
+ * command line tool, Remove buddi (plan, backup, job, removal), Home's
+ * passphrase card and Open in app. A session signed in off this machine (a ticket exchanged
  * through a proxy) and an owner API token are refused; the card holds the
  * words back behind the PIN when one is set; and the generic job routes never
  * hand out an uninstall's job or a report's words.
@@ -63,6 +63,9 @@ const LOCAL_ONLY: Array<[string, string, unknown?]> = [
   ['GET', `/api/system/uninstall/jobs/${UNINSTALL_JOB}`],
   ['POST', '/api/system/uninstall', { token: 'x', wroteItDown: true }],
   ['GET', '/api/backups/passphrase/notice'],
+  ['POST', `/api/files/${UNINSTALL_JOB}/open`, {}],
+  ['GET', `/api/files/${UNINSTALL_JOB}/open`],
+  ['POST', `/api/files/${UNINSTALL_JOB}/open/resolve`, { keep: 'mine' }],
 ];
 
 suite('this computer only', () => {

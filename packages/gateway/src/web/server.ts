@@ -126,7 +126,7 @@ import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
 import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, isTextFile, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, isTextFile, officeKindOf, OFFICE_PREVIEW_BYTES, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
 import { createVault, saveArtifactReporting, recordArtifactUse, versionedFileName } from '@buddi/core';
@@ -316,6 +316,7 @@ import { checkProfilePatch } from '../owner-profile-edit.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentIntro, readAgentIntro } from '../agents/agent-intro.js';
 import { parseCanvasTabs, readCanvasTabs, writeCanvasTabs } from './canvas-tabs.js';
+import { OpenInApp, type OpenInAppOptions } from './open-in-app.js';
 import { MAX_EDIT_BYTES, createOwnerFile, deleteFromFiles, readFileContent, readFileView, saveFileVersion, undeleteFiles } from './file-content.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
@@ -482,6 +483,11 @@ export interface WebServerDeps {
     /** The supervisor's connector (a test's fake); by default the control socket when one is set, else none. */
     connector?: ConnectorControl | null | undefined;
   } | undefined;
+  /**
+   * Open in app (web/open-in-app.ts): how a working copy is handed to the
+   * owner's app, and the watch's pace. A test passes its own opener.
+   */
+  openInApp?: Omit<OpenInAppOptions, 'pool' | 'env' | 'ownerId'> | undefined;
 }
 
 export interface WebServer {
@@ -564,10 +570,12 @@ const PREVIEW_TEXT_BYTES = 100_000;
  * however it is named; HTML and SVG count as text and are served as
  * text/plain, so they are read and never rendered.
  */
-function previewKind(mime: string, filename: string | null): 'image' | 'pdf' | 'text' | null {
+function previewKind(mime: string, filename: string | null): 'image' | 'pdf' | 'text' | 'office' | null {
   if (['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) return 'image';
   if (mime === 'application/pdf') return 'pdf';
   if (isTextFile(mime, filename)) return 'text';
+  // The bytes, for the dashboard's own Office previewer to parse (docs/files.md, "Office documents").
+  if (officeKindOf(mime, filename) !== null) return 'office';
   return null;
 }
 
@@ -682,6 +690,7 @@ export function createWebApp(deps: WebServerDeps): Server {
    * and nothing of it is served here.
    */
   const previewTickets = new PreviewTickets(deps.now);
+  const openInApp = new OpenInApp({ ...deps.openInApp, pool: deps.pool, env: deps.env ?? process.env, ownerId: deps.ctx.ownerId });
   /*
    * How often one session may ask for a preview link.
    *
@@ -1281,7 +1290,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
   extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
-  server.once('close', () => { extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); clearInterval(ingressResync); setupRun?.abort.abort(); void ingress.close(); });
+  server.once('close', () => { openInApp.close(); extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); clearInterval(ingressResync); setupRun?.abort.abort(); void ingress.close(); });
   server.once('close', () => offGiveBack?.());
   return server;
 
@@ -2029,6 +2038,12 @@ export function createWebApp(deps: WebServerDeps): Server {
         return;
       }
 
+      // Whether a file is open in the owner's app, and what came back from it (web/open-in-app.ts). This computer only.
+      const openState = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/open$/i.exec(path);
+      if (openState) {
+        if (session.via !== 'local') return sendJson(res, 403, { error: 'Open in app works on the computer buddi runs on.' });
+        return reply(res, await openInApp.status(openState[1]!.toLowerCase()));
+      }
       // A file and its versions, and its current version's text, for the canvas editor and Files (web/file-content.ts).
       const fileView = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/content)?$/i.exec(path);
       if (fileView) {
@@ -2056,11 +2071,15 @@ export function createWebApp(deps: WebServerDeps): Server {
          *    the sandbox directive here withholds scripts and plugins from any
          *    document content all the same;
          *  - text families, always as text/plain, so nothing in them is ever
-         *    parsed as markup, and bounded to what a preview shows.
+         *    parsed as markup, and bounded to what a preview shows;
+         *  - Word, Excel and PowerPoint files, at most 20 MB, as bytes for the
+         *    page's own previewer, which parses them into inert markup or a
+         *    canvas; opened directly they are sandboxed and never rendered.
          * Everything else stays a download.
          */
         const kind = preview ? previewKind(artifact.mime, artifact.filename) : null;
         if (preview && kind === null) return sendEmpty(res, 415);
+        if (kind === 'office' && artifact.sizeBytes > OFFICE_PREVIEW_BYTES) return sendJson(res, 413, { error: 'this file is too large to preview; download it to open it' });
         // A text preview reads only its prefix from disk, on a character
         // boundary, and says whether the file went on; nothing else is loaded.
         let bytes: Buffer;
@@ -3086,6 +3105,23 @@ export function createWebApp(deps: WebServerDeps): Server {
      * Files (web/file-content.ts): the owner's save or Restore as a new
      * version, undo of a delete, and a new text file of his own.
      */
+    /*
+     * Open in app (web/open-in-app.ts): the newest version as a working copy
+     * in the owner's own app, and his choice after a refused import. From
+     * this computer only: the app opens on the machine buddi runs on.
+     */
+    const openWrite = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/open(\/resolve)?$/i.exec(path);
+    if (openWrite) {
+      if (session.via !== 'local') return sendJson(res, 403, { error: 'Open in app works on the computer buddi runs on.' });
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, { error: 'request body must be JSON' });
+      }
+      const id = openWrite[1]!.toLowerCase();
+      return reply(res, openWrite[2] ? await openInApp.resolve(id, body) : await openInApp.open(id));
+    }
     const fileWrite = /^\/api\/files(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(versions|undelete))?$/i.exec(path);
     if (fileWrite) {
       let body: Record<string, unknown>;

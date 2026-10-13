@@ -25,6 +25,8 @@ const TYPES: Record<string, string> = {
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
+  // The Office previewer's parser, compiled as it streams in.
+  '.wasm': 'application/wasm',
   '.map': 'application/json; charset=utf-8',
   '.webmanifest': 'application/manifest+json',
 };

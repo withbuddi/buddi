@@ -782,7 +782,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'GET', path: '/api/artifacts/:id/preview', area: 'files', kind: 'bytes',
-    summary: 'The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only).', errors: '404; 415 not previewable',
+    summary: 'The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only), and Word, Excel and PowerPoint files as bytes for the dashboard\'s own previewer (at most 20 MB).', errors: '404; 413 an Office file over 20 MB; 415 not previewable',
   },
   {
     method: 'DELETE', path: '/api/artifacts/:id', area: 'files', summary: 'Take back a file uploaded from the dashboard that no message carries.',
@@ -812,6 +812,23 @@ export const API_ROUTES: readonly ApiRoute[] = [
   {
     method: 'POST', path: '/api/files/:id/undelete', area: 'files', summary: 'Undo a delete: the file with the versions deleted with it, or one version; not once purged (after 30 days).',
     body: '{ version?: number }', answer: '{ fileId, restored: true }', errors: '400; 404',
+  },
+  {
+    method: 'POST', path: '/api/files/:id/open', area: 'files', localOnly: true,
+    summary: 'Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer\'s default app. Saves there come back as the owner\'s next versions, over the version exported; open already, the same copy again.',
+    body: '{}', answer: '{ open: true, fileId, name, base: version the copy is based on, savedVersion?, savedAt?, conflict?, current? }',
+    errors: '403 not this computer; 404 (deleted: true when it was deleted); 409 its folder is a link; 415 not an Office document; 502 no app opened it',
+  },
+  {
+    method: 'GET', path: '/api/files/:id/open', area: 'files', localOnly: true,
+    summary: 'Whether a file is open in an app, the last version a save there brought back, and a save refused because a newer version was saved meanwhile.',
+    answer: "{ open: false } or { open: true, fileId, name, base, savedVersion?, savedAt?, conflict?: 'newer'|'workspace', current?: { fileId, version, artifactId, sha256, createdBy }, error?, deleted? }",
+    errors: '403 not this computer',
+  },
+  {
+    method: 'POST', path: '/api/files/:id/open/resolve', area: 'files', localOnly: true,
+    summary: 'After a save in the app was refused: keep mine (the copy saved over the version that won) or theirs (the copy is closed; the newest version stays).',
+    body: "{ keep: 'mine'|'theirs' }", answer: 'as GET, or { open: false, closed: true }', errors: '400; 403 not this computer; 404 not open in an app',
   },
   {
     method: 'POST', path: '/api/files', area: 'files', summary: 'A new text file of the owner’s, always a new file (bytes another file holds are shared, never that file), listed in Files, and in a conversation when one is named (the editor’s "Save as new file").',
@@ -1357,6 +1374,9 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
   'GET /api/files/:id': '0.1.0-pre.55',
+  'POST /api/files/:id/open': '0.1.0-pre.55',
+  'GET /api/files/:id/open': '0.1.0-pre.55',
+  'POST /api/files/:id/open/resolve': '0.1.0-pre.55',
   'GET /api/files/:id/content': '0.1.0-pre.55',
   'POST /api/files/:id/versions': '0.1.0-pre.55',
   'DELETE /api/files/:id': '0.1.0-pre.55',

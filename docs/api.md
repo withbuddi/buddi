@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-349 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+352 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2821,7 +2821,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | GET | `/api/artifacts/:id` | One version of a file: its metadata, where the file was used, whether its bytes are still there, and the file’s versions, newest first. | yes |
 | GET | `/api/artifacts/:id/download` | The file, as a download. | yes |
 | GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds. | yes |
-| GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
+| GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only), and Word, Excel and PowerPoint files as bytes for the dashboard's own previewer (at most 20 MB). | yes |
 | DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
 | GET | `/api/files/:id` | A file (by its id, or any version’s): what it is, its newest version and its versions, newest first, and the library’s entry for the version shown, where it was used and whether its bytes are there. | yes |
 | GET | `/api/files/:id/content` | A text file’s current version whole, for the canvas editor, with the version a save names. | yes |
@@ -2829,6 +2829,9 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | DELETE | `/api/files/:id` | Delete a file from Files with every version. Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be undeleted for 30 days. | yes |
 | DELETE | `/api/files/:id/versions/:version` | Delete one version: the one before it is the newest again; the last one takes the file with it. | yes |
 | POST | `/api/files/:id/undelete` | Undo a delete: the file with the versions deleted with it, or one version; not once purged (after 30 days). | yes |
+| POST | `/api/files/:id/open` | Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer's default app. Saves there come back as the owner's next versions, over the version exported; open already, the same copy again. | yes |
+| GET | `/api/files/:id/open` | Whether a file is open in an app, the last version a save there brought back, and a save refused because a newer version was saved meanwhile. | yes |
+| POST | `/api/files/:id/open/resolve` | After a save in the app was refused: keep mine (the copy saved over the version that won) or theirs (the copy is closed; the newest version stays). | yes |
 | POST | `/api/files` | A new text file of the owner’s, always a new file (bytes another file holds are shared, never that file), listed in Files, and in a conversation when one is named (the editor’s "Save as new file"). | yes |
 
 #### `GET /api/reports/audio`
@@ -2903,12 +2906,12 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>/expo
 
 #### `GET /api/artifacts/:id/preview`
 
-The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only).
+The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only), and Word, Excel and PowerPoint files as bytes for the dashboard's own previewer (at most 20 MB).
 
 - **Auth:** Session or API token.
 - **Kind:** bytes, not JSON
 - **Answer:** JSON
-- **Errors:** 404; 415 not previewable
+- **Errors:** 404; 413 an Office file over 20 MB; 415 not previewable
 - **Since:** 0.1.0-pre.15
 
 ```sh
@@ -3007,6 +3010,47 @@ Undo a delete: the file with the versions deleted with it, or one version; not o
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/files/<id>/undelete"
+```
+
+#### `POST /api/files/:id/open`
+
+Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer's default app. Saves there come back as the owner's next versions, over the version exported; open already, the same copy again.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin); from the computer buddi runs on.
+- **Body:** `{}`
+- **Answer:** `{ open: true, fileId, name, base: version the copy is based on, savedVersion?, savedAt?, conflict?, current? }`
+- **Errors:** 403 not this computer; 404 (deleted: true when it was deleted); 409 its folder is a link; 415 not an Office document; 502 no app opened it
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/files/<id>/open"
+```
+
+#### `GET /api/files/:id/open`
+
+Whether a file is open in an app, the last version a save there brought back, and a save refused because a newer version was saved meanwhile.
+
+- **Auth:** Session or API token; from the computer buddi runs on.
+- **Answer:** `{ open: false } or { open: true, fileId, name, base, savedVersion?, savedAt?, conflict?: 'newer'|'workspace', current?: { fileId, version, artifactId, sha256, createdBy }, error?, deleted? }`
+- **Errors:** 403 not this computer
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>/open"
+```
+
+#### `POST /api/files/:id/open/resolve`
+
+After a save in the app was refused: keep mine (the copy saved over the version that won) or theirs (the copy is closed; the newest version stays).
+
+- **Auth:** Session or API token (a session adds CSRF + Origin); from the computer buddi runs on.
+- **Body:** `{ keep: 'mine'|'theirs' }`
+- **Answer:** `as GET, or { open: false, closed: true }`
+- **Errors:** 400; 403 not this computer; 404 not open in an app
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"keep":"mine"}' "$BUDDI_URL/api/files/<id>/open/resolve"
 ```
 
 #### `POST /api/files`
