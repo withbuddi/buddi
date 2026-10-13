@@ -337,6 +337,34 @@ suite('file content routes', () => {
       expect(page.versions[2]!.editedAt).toBeNull();
     });
 
+    it('tells the agent its workspace copy has the owner’s edits when the save was written back, and that it is stale when not', async () => {
+      const other = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id as string;
+      const data = await realpath(dir);
+      const capture = async (name: string, text: string): Promise<string> => {
+        const workspace = hostWorkspaceDir(data, 'owner', 'scout', other);
+        const onDisk = path.join(workspace, 'out', name);
+        await mkdir(path.dirname(onDisk), { recursive: true });
+        await writeFile(onDisk, text);
+        return (await saveArtifact(pool, {
+          bytes: Buffer.from(text), mime: 'text/markdown', filename: name, createdBy: 'scout', conversationId: other,
+          source: { surface: 'host', chatId: other }, originPath: path.relative(data, onDisk),
+        }, env)).id;
+      };
+      const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+      const synced = await capture('synced.md', '# Synced\n');
+      expect((await save(synced, { text: '# Synced\n\nUpdated by the owner\n', base: sha('# Synced\n') })).status).toBe(200);
+      const told = await systemContext(ctx, { agentId: 'scout', tools: ['host.exec'], conversationId: other });
+      expect(told.prompt).toContain("Your workspace copy at out/synced.md already has the owner's edits");
+      expect(told.prompt).not.toContain('out of date');
+
+      const failed = await capture('failed.md', '# Failed\n');
+      control.failRename = true;
+      expect(await (await save(failed, { text: '# Failed, mine\n', base: sha('# Failed\n') })).json()).toMatchObject({ workspace: { updated: false } });
+      const stale = await systemContext(ctx, { agentId: 'scout', tools: ['host.exec'], conversationId: other });
+      expect(stale.prompt).toContain('The owner edited failed.md at');
+      expect(stale.prompt).toContain('Your earlier copy (including any copy in your workspace) is out of date. You cannot read files in Files; ask the owner what changed');
+    });
+
     it('deletes a version (the one before is the newest again), the whole file, and undoes it', async () => {
       await captured('del/deleting.md', '# One\n');
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -395,7 +423,8 @@ suite('file content routes', () => {
     const edit = { artifactId: '11111111-1111-4111-8111-111111111111', filename: 'List.md', editedAt: '2026-10-13T09:00:00.000Z' };
     expect(ownerEditLine(edit, 'UTC', ['artifacts.text'])).toContain('artifacts.text { id: "11111111-1111-4111-8111-111111111111" }, before you change anything');
     expect(ownerEditLine(edit, 'UTC', ['artifacts.text'])).not.toContain('artifacts.write');
-    expect(ownerEditLine(edit, 'UTC', [])).toMatch(/You cannot read files in Files; ask the owner what he changed/);
+    expect(ownerEditLine(edit, 'UTC', [])).toMatch(/You cannot read files in Files; ask the owner what changed/);
+    expect(ownerEditLine(edit, 'UTC', [])).not.toMatch(/\b(he|his|him)\b/);
     expect(ownerEditLine(edit, 'UTC', [])).not.toContain('artifacts.');
   });
 

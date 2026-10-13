@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
 import { ASK_TOOL } from './surfaces/pending-question.js';
 import { editionOriginLine, findEditionOrigin } from './edition-origin.js';
-import { MAX_QUESTION_OPTIONS, takeOwnerFileEdits, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
+import { MAX_QUESTION_OPTIONS, takeOwnerFileEdits, type OwnerFileEdit, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
 const clean = (value: string): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 120);
@@ -149,15 +149,22 @@ async function ownerEditLines(ctx: CoreToolContext, conversationId: string, tool
 }
 
 /**
- * One edit, said so the agent can act on it with what it holds: an agent
- * told only "read it" said it could not, edited its stale workspace copy,
- * tried the gateway with curl and asked the owner to paste his version.
+ * One edit, said so the agent can act on it with what it was granted (the
+ * run's tools are its grant; nothing is deferred). An agent told only "read
+ * it" said it could not, edited a stale workspace copy, tried the gateway with
+ * curl and asked the owner to paste the text. When the save was written back
+ * to the agent's workspace, that copy is current and is named; otherwise the
+ * agent's copies are out of date and Files has the text.
  */
-export function ownerEditLine(edit: { artifactId: string; filename: string | null; editedAt: string }, timezone: string, tools: readonly string[] = []): string {
+export function ownerEditLine(edit: OwnerFileEdit, timezone: string, tools: readonly string[] = []): string {
   const when = edit.editedAt ? localDateTimeString(new Date(edit.editedAt), timezone) : 'just now';
   const name = edit.filename ?? 'a file';
-  const stale = `The owner edited ${name} at ${when}. Your earlier copy (including any copy in your workspace) is out of date.`;
-  if (!tools.includes('artifacts.text')) return `${stale} You cannot read files in Files; ask the owner what he changed before changing it.`;
+  const head = `The owner edited ${name} at ${when}.`;
+  if (edit.workspacePath) {
+    return `${head} Your workspace copy at ${edit.workspacePath} already has the owner's edits: read it there before changing it, and return it in outputs again so the owner sees the new version. Don't ask the owner to paste it.`;
+  }
+  const stale = `${head} Your earlier copy (including any copy in your workspace) is out of date.`;
+  if (!tools.includes('artifacts.text')) return `${stale} You cannot read files in Files; ask the owner what changed before changing it.`;
   // The title that continues this file's versions: its name, less the version mark and extension.
   const title = name.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').replace(/\.[^.]+$/, '');
   const save = tools.includes('artifacts.write')

@@ -618,6 +618,18 @@ export async function replaceArtifactContent(
   }
 }
 
+/** One owner edit, as the next turn's context tells it. */
+export interface OwnerFileEdit {
+  artifactId: string;
+  filename: string | null;
+  editedAt: string;
+  /**
+   * The command output's path in the agent's workspace, when the save was
+   * written back there and the copy still holds it: that copy is current.
+   */
+  workspacePath?: string;
+}
+
 /**
  * The owner's file edits in a conversation the agent has not been told of,
  * marked told as they are read: each save is said once, on the next turn.
@@ -627,16 +639,25 @@ export async function takeOwnerFileEdits(
   pool: Pool,
   conversationId: string,
   at: Date = new Date(),
-): Promise<Array<{ artifactId: string; filename: string | null; editedAt: string }>> {
+): Promise<OwnerFileEdit[]> {
   const { rows } = await pool.query(
-    `update core.owner_file_edits set noted_at = $2
-      where conversation_id = $1 and noted_at is null
-      returning artifact_id, filename, edited_at`,
+    `with noted as (
+       update core.owner_file_edits set noted_at = $2
+        where conversation_id = $1 and noted_at is null
+        returning artifact_id, filename, edited_at
+     )
+     select n.artifact_id, n.filename, n.edited_at, a.origin_path,
+            (a.origin_path is not null and a.origin_sha256 = a.sha256) as in_sync
+       from noted n left join core.artifacts a on a.id = n.artifact_id`,
     [conversationId, at],
   );
-  const newest = new Map<string, { artifactId: string; filename: string | null; editedAt: string }>();
+  const newest = new Map<string, OwnerFileEdit>();
   for (const row of rows) {
-    const edit = { artifactId: String(row.artifact_id), filename: row.filename ?? null, editedAt: toIso(row.edited_at) ?? '' };
+    const edit: OwnerFileEdit = {
+      artifactId: String(row.artifact_id), filename: row.filename ?? null, editedAt: toIso(row.edited_at) ?? '',
+      // The workspace copy holds the owner's version: the save was written back there.
+      ...(row.origin_path && row.in_sync === true ? { workspacePath: String(row.origin_path).split('/').slice(3).join('/') } : {}),
+    };
     const before = newest.get(edit.artifactId);
     if (!before || before.editedAt < edit.editedAt) newest.set(edit.artifactId, edit);
   }
