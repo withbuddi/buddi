@@ -8,18 +8,17 @@
  * and the conversations it was part of, each one a link back.
  *
  * The preview is the one the canvas uses (chat/ArtifactPreview), so a file
- * looks the same wherever it is opened. A file's versions are one row, the
- * newest, and its page lists them; the one edit made here is Restore, which
- * saves an older version's text over the newest through the editor's own
- * save. A file, or one version, can be deleted (soft, with Undo; it can
- * come back for 30 days). Nothing here runs an agent or fetches off this
- * origin.
+ * looks the same wherever it is opened. A file is one row, its newest
+ * version, and its page lists every version; the one edit made here is
+ * Restore as newest, which copies an older version's bytes into a new
+ * version on the server, under the same version check as the editor's save.
+ * A file, or one version, can be deleted (soft, with Undo; it can come back
+ * for 30 days). Nothing here runs an agent or fetches off this origin.
  */
 export { parseDelimited } from '../chat/ArtifactPreview';
 import { useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
-import { ApiError, api, type LibraryContext, type LibraryEntry, type LibraryVersion } from '../api';
-import { isTextFile } from '../canvas/text-files';
+import { ApiError, api, type FileConflict, type LibraryContext, type LibraryEntry, type LibraryVersion } from '../api';
 import { ArtifactPreview } from '../chat/ArtifactPreview';
 import { FAMILY_LABEL, formatBytes, previewUrl } from '../chat/attachments';
 import { FamilyMark } from '../chat/FileTile';
@@ -62,15 +61,16 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
   /** Read the list again: a file was deleted or brought back. */
   const [listRevision, setListRevision] = useState(0);
   /** What was just deleted, for Undo. */
-  const [deleted, setDeleted] = useState<{ title: string; ids: string[]; key: number } | null>(null);
-  const onDeleted = (title: string, ids: string[]): void => {
-    setDeleted({ title, ids, key: Date.now() });
+  const [deleted, setDeleted] = useState<{ title: string; fileId: string; version?: number; key: number } | null>(null);
+  const onDeleted = (title: string, fileId: string, version?: number): void => {
+    setDeleted({ title, fileId, ...(version === undefined ? {} : { version }), key: Date.now() });
     setListRevision((n) => n + 1);
   };
   const undo = (): void => {
-    const ids = deleted?.ids ?? [];
+    const gone = deleted;
     setDeleted(null);
-    api.restoreFiles(ids).then(() => setListRevision((n) => n + 1)).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+    if (!gone) return;
+    api.undeleteFile(gone.fileId, gone.version).then(() => setListRevision((n) => n + 1)).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   };
   const nameOf = (id: string | null): string => (id ? agents.find((a) => a.id === id)?.name ?? id : '');
 
@@ -231,8 +231,8 @@ function originLabel(entry: LibraryEntry, nameOf: (id: string | null) => string)
 
 function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   id: string; timezone: string; agents: PlaceProps['agents']; navigate: (r: string) => void; onBack: () => void;
-  /** Something was deleted: the toast's title, and the ids Undo brings back. */
-  onDeleted: (title: string, ids: string[]) => void;
+  /** Something was deleted: the toast's title, and what Undo brings back. */
+  onDeleted: (title: string, fileId: string, version?: number) => void;
 }): JSX.Element {
   const [confirming, setConfirming] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -241,6 +241,8 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   const [revision, setRevision] = useState(0);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  /** A Restore refused because a newer version was saved: the same choice as the editor's. */
+  const [restoreConflict, setRestoreConflict] = useState<{ from: LibraryVersion; current: number } | null>(null);
   const [moreContexts, setMoreContexts] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -260,24 +262,24 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   const name = entry.filename ?? 'Untitled file';
   const versions = data.versions ?? [];
   const latest = versions[0] ?? null;
-  const notLatest = latest !== null && latest.id !== entry.id;
-  const restorable = isTextFile(entry.mime, entry.filename);
+  const notNewest = latest !== null && latest.id !== entry.id;
   /*
-   * Restore: that version's text saved over the newest, through the same save
-   * the editor uses — the version check, and a command's output written back
-   * to its workspace.
+   * Restore as newest: the server copies that version's bytes into a new
+   * version, over the newest he is looking at — the editor's version check,
+   * and a command's output written back to its workspace.
    */
-  const restore = async (version: LibraryVersion): Promise<void> => {
-    if (!latest) return;
+  const restore = async (version: LibraryVersion, base: number): Promise<void> => {
     setRestoring(version.id);
     setRestoreError(null);
+    setRestoreConflict(null);
     try {
-      const content = await api.fileContent(version.id);
-      await api.saveFileContent(latest.id, { text: content.text, base: latest.sha256 });
-      if (entry.id !== latest.id) navigate(fileRoute(latest.id));
+      const saved = await api.saveFileVersion(entry.fileId, { base, from: version.version });
+      if (entry.id !== saved.artifactId) navigate(fileRoute(saved.artifactId));
       else setRevision((n) => n + 1);
     } catch (err) {
-      setRestoreError(err instanceof ApiError && err.status === 409 ? 'The file changed meanwhile. Look at the newest version, then restore again.' : err instanceof Error ? err.message : String(err));
+      const conflict = err instanceof ApiError && err.status === 409 ? err.detail as FileConflict | null : null;
+      if (conflict?.conflict === 'newer' && conflict.current) setRestoreConflict({ from: version, current: conflict.current.version });
+      else setRestoreError(conflict?.error ?? (err instanceof Error ? err.message : String(err)));
     } finally {
       setRestoring(null);
     }
@@ -286,8 +288,8 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   const deleteFile = async (): Promise<void> => {
     setConfirming(false);
     try {
-      const gone = await api.deleteFile(entry.id, 'file');
-      onDeleted(`Deleted ${name}`, gone.deleted);
+      await api.deleteFile(entry.fileId);
+      onDeleted(`Deleted ${name}`, entry.fileId);
       onBack();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : String(err));
@@ -296,17 +298,18 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
   /** One version: the one before it is the newest again. */
   const deleteVersion = async (version: LibraryVersion): Promise<void> => {
     try {
-      const gone = await api.deleteFile(version.id, 'version');
+      const gone = await api.deleteFile(entry.fileId, version.version);
       const left = versions.filter((v) => v.id !== version.id);
-      onDeleted(`Deleted a version of ${name}`, gone.deleted);
-      if (version.id === entry.id) navigate(fileRoute(left[0]?.id ?? null));
+      onDeleted(gone.fileDeleted ? `Deleted ${name}` : `Deleted v${version.version} of ${name}`, entry.fileId, version.version);
+      if (gone.fileDeleted) onBack();
+      else if (version.id === entry.id) navigate(fileRoute(left[0]?.id ?? null));
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : String(err));
     }
   };
   const madeBy = (version: LibraryVersion): string => {
     const maker = version.createdBy === 'owner' ? 'You' : nameOf(version.createdBy) || 'buddi';
-    return version.editedAt ? `${maker}, edited by you ${fmtRelative(version.editedAt)}` : maker;
+    return version.restoredFrom !== null ? `${maker}, restored v${version.restoredFrom}` : maker;
   };
   const loadMoreContexts = (): void => {
     setMoreContexts(true);
@@ -340,8 +343,8 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
           <p>{versions.length > 1 ? `Delete ${name} and its ${versions.length} versions?` : `Delete ${name}?`} Conversations that used it will show it as deleted.</p>
         </Modal>
       ) : null}
-      {notLatest ? (
-        <Notice tone="warning" action={<Button size="sm" onClick={() => navigate(fileRoute(latest.id))}>Open latest</Button>}>Not the latest version.</Notice>
+      {notNewest ? (
+        <Notice tone="warning" action={<Button size="sm" onClick={() => navigate(fileRoute(latest.id))}>Open newest</Button>}>v{entry.version} is not the newest version (v{latest.version} is).</Notice>
       ) : null}
       {!available ? <Notice tone="warning">The file's bytes are no longer on this machine. What is known about it stays here; the download will not work.</Notice> : null}
       <ArtifactPreview artifactId={entry.id} filename={entry.filename} mime={entry.mime} family={entry.family} available={available} />
@@ -356,17 +359,27 @@ function FileDetail({ id, timezone, agents, navigate, onBack, onDeleted }: {
         <section className="files-conversations" aria-label="Versions">
           <h4 className="ui-section-title">Versions</h4>
           {restoreError ? <Notice tone="critical" role="alert">{restoreError}</Notice> : null}
+          {restoreConflict ? (
+            <Notice tone="warning" role="status" action={
+              <span className="ui-toolbar">
+                <Button size="sm" onClick={() => { setRestoreConflict(null); setRevision((n) => n + 1); }}>Show theirs</Button>
+                <Button size="sm" variant="accent" onClick={() => { void restore(restoreConflict.from, restoreConflict.current); }}>Keep mine</Button>
+              </span>
+            }>
+              This file changed since you opened it (v{restoreConflict.current} is newer). Keep mine restores v{restoreConflict.from.version} over it.
+            </Notice>
+          ) : null}
           <ul className="files-ctx" role="list">
             {versions.map((version, index) => (
               <li key={version.id} className="files-ctx-row" aria-current={version.id === entry.id ? 'true' : undefined}>
                 <span className="files-ctx-text">
-                  <span title={fmtTime(version.createdAt, timezone)}>{index === 0 ? 'Latest · ' : ''}{fmtTime(version.createdAt, timezone)}</span>
+                  <span title={fmtTime(version.createdAt, timezone)}>v{version.version}{index === 0 ? ' · Newest' : ''} · {fmtTime(version.createdAt, timezone)}</span>
                   <span className="muted"> · {madeBy(version)} · {formatBytes(version.sizeBytes)}</span>
                 </span>
                 <span className="ui-toolbar">
                   {version.id !== entry.id ? <a className="ui-btn" data-size="sm" href={fileRoute(version.id)} onClick={(e) => { e.preventDefault(); navigate(fileRoute(version.id)); }}>View</a> : null}
-                  {index > 0 && restorable ? (
-                    <Button size="sm" disabled={restoring !== null} onClick={() => { void restore(version); }}>{restoring === version.id ? 'Restoring…' : 'Restore'}</Button>
+                  {index > 0 && latest ? (
+                    <Button size="sm" disabled={restoring !== null} onClick={() => { void restore(version, latest.version); }}>{restoring === version.id ? 'Restoring…' : 'Restore as newest'}</Button>
                   ) : null}
                   <Button size="sm" variant="danger-ghost" onClick={() => { void deleteVersion(version); }}>Delete version</Button>
                 </span>

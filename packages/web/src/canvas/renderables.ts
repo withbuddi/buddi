@@ -43,7 +43,7 @@ import type { NotifyViewProps } from './views/NotifyView';
 import type { PreviewProps, Renderable, RendererName, TabVersion, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { delegatedFiles, familyOf, FAMILY_LABEL, type AttachmentBlock } from '../chat/attachments';
-import { fileChainName, fileTabId, isFileResult, isTextFile, textFilesOf } from './text-files';
+import { fileTabId, isFileResult, isTextFile, textFilesOf } from './text-files';
 import type { ArtifactViewProps } from './views/ArtifactView';
 import { commandResult } from './command-result';
 import { expiryOf, subjectIdentityOf, type Subject } from './tab-order';
@@ -155,6 +155,12 @@ export interface RenderableInput {
    * title is its name turned back into words.
    */
   titles?: ReadonlyMap<string, string>;
+  /**
+   * Tabs to keep although their file was deleted since: the ones holding an
+   * edit the owner has not saved (`file-drafts`), so his text stays on
+   * screen with "Save as new file" rather than vanishing with the file.
+   */
+  keep?: (tabId: string) => boolean;
 }
 
 /** One gathered call: what was asked, and how it came back (null while out). */
@@ -245,10 +251,10 @@ export function awaitingPreviews({
  * The canvas contents for a conversation, oldest first, capped at the last
  * few. `canvas.clear` empties what came before it and nothing after.
  */
-export function renderablesFrom({ messages, descriptors, awaiting, folded, served, gathered, quiet, titles }: RenderableInput): Renderable[] {
+export function renderablesFrom({ messages, descriptors, awaiting, folded, served, gathered, quiet, titles, keep }: RenderableInput): Renderable[] {
   const toolTitle = (tool: string): string => titleFor(tool, titles);
   const byTool = new Map(descriptors.map((descriptor) => [descriptor.tool, descriptor]));
-  const uses = new Map<string, { name: string; input: unknown; at: string | null; speaker?: string }>();
+  const uses = new Map<string, { name: string; input: unknown; at: string | null }>();
   let collected: Renderable[] = [];
   let changes = 0;
   /** This turn's Sources tab, once a gathered call has been made in it. */
@@ -301,26 +307,16 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
   };
 
   /*
-   * A text file a run stored, open in the editor: one tab per file across
-   * its versions (`text-files.ts`). Writing it again moves the tab to the
-   * end with the newest version, keeping its id, so the open editor updates
-   * in place rather than a second one opening beside it.
+   * A file a run stored or the agent opened: one tab per file (`fileId`,
+   * from the gateway), across its versions. Writing it again moves the tab to
+   * the end with the newest version, keeping its id, so the open editor
+   * updates in place rather than a second one opening beside it. The editor
+   * itself always shows the file's current version.
    */
-  const placeFile = (file: AttachmentBlock, at: string | null, callId: string, tool: string, speaker: string | undefined, serverChain?: string): void => {
-    // The file it is a version of, as the gateway says (`files[].chain`);
-    // without that, the same name from the same tool and agent, of the
-    // same type.
-    const chain = fileChainName(file.filename);
-    const key = serverChain ? `c:${serverChain}` : chain ? [tool, speaker ?? '', file.mime.toLowerCase(), chain].join('\u0000') : file.artifactId;
-    // A numbered version ("Plan (v2).md") was counted by Files among this
-    // conversation's files of that name, whichever tool made the first: it
-    // continues that tab — a document written over a command's output too.
-    const numbered = !serverChain && /\s\(v\d+\)\.[^.]+$/i.test(file.filename ?? '');
-    const existing = collected.find((other) => other.source === 'artifact' && other.subjectKey === key)
-      ?? (numbered && chain ? [...collected].reverse().find((other) => other.source === 'artifact'
-        && other.subjectKey?.endsWith(`\u0000${file.mime.toLowerCase()}\u0000${chain}`)) : undefined);
+  const placeFile = (file: AttachmentBlock, at: string | null, callId: string): void => {
+    const id = fileTabId(file.fileId ?? file.artifactId);
+    const existing = collected.find((other) => other.id === id);
     if (existing) collected = collected.filter((other) => other !== existing);
-    const id = existing?.id ?? fileTabId(file.artifactId);
     const props = { attachment: file, tabId: id } satisfies ArtifactViewProps;
     const title = file.filename ?? 'Untitled file';
     // Each write is a version of the tab, so writing again is news (`tabStamp`).
@@ -333,44 +329,21 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       props,
       at,
       source: 'artifact',
-      subjectKey: existing?.subjectKey ?? key,
       versions: [...(existing?.versions ?? []), version],
-      // What the run made, to read: the canvas turns to it.
+      // What the run made, or what the agent asked to be in front: the canvas turns to it.
       substantial: true,
     });
   };
-
-  const openFile = (file: AttachmentBlock, at: string | null, callId: string, serverChain?: string): void => {
-    const holds = (item: Renderable): boolean => (item.versions ?? []).some((version) =>
-      (version.props as Partial<ArtifactViewProps> | null)?.attachment?.artifactId === file.artifactId);
-    const chain = fileChainName(file.filename);
-    const existing = (serverChain ? collected.find((item) => item.source === 'artifact' && item.subjectKey === `c:${serverChain}`) : undefined)
-      ?? [...collected].reverse().find((item) => item.source === 'artifact' && holds(item))
-      ?? (chain ? [...collected].reverse().find((item) => item.source === 'artifact' && item.subjectKey?.endsWith(`\u0000${chain}`)) : undefined);
-    if (existing) collected = collected.filter((other) => other !== existing);
-    const id = existing?.id ?? fileTabId(file.artifactId);
-    const props = { attachment: file, tabId: id } satisfies ArtifactViewProps;
-    const title = file.filename ?? 'Untitled file';
-    collected.push({
-      id,
-      tool: FAMILY_LABEL[familyOf(file.mime, file.filename)],
-      title,
-      renderer: 'artifact',
-      props,
-      at,
-      source: 'artifact',
-      subjectKey: existing?.subjectKey ?? (serverChain ? `c:${serverChain}` : `${CANVAS_OPEN}\u0000${file.artifactId}`),
-      versions: [...(existing?.versions ?? []), { id: callId, at, title, renderer: 'artifact', props, substantial: true }],
-      // The agent asked for this to be in front.
-      substantial: true,
-    });
-  };
+  /** The files the gateway says a call made or opened; a deleted file only while its tab holds an edit. */
+  const toldFiles = (block: Extract<ChatBlock, { type: 'tool_result' }>): AttachmentBlock[] | undefined => block.files
+    ?.filter((file) => !file.fileDeleted || keep?.(fileTabId(file.fileId)) === true)
+    .map(attachmentOf);
 
   for (const message of messages) {
     if (opensTurn(message)) sources = null;
     for (const block of message.blocks ?? []) {
       if (block.type === 'tool_use') {
-        uses.set(block.id, { name: block.name, input: block.input, at: message.at ?? null, ...(message.speaker ? { speaker: message.speaker } : {}) });
+        uses.set(block.id, { name: block.name, input: block.input, at: message.at ?? null });
         if (gathered?.has(block.name)) {
           gather({ id: block.id, tool: block.name, input: block.input, output: null, ok: null, at: message.at ?? null });
           continue;
@@ -416,9 +389,9 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // version of it, else a new one — comes to the front. A failure is in
       // the row; there is nothing to open.
       if (tool === CANVAS_OPEN) {
-        const told = block.files?.[0];
-        const file = block.ok === false ? null : told ? attachmentOf(told) : openedFile(block.output);
-        if (file) openFile(file, at, block.toolUseId, told?.chain);
+        const told = toldFiles(block);
+        const file = block.ok === false ? null : told ? told[0] ?? null : openedFile(block.output);
+        if (file) placeFile(file, at, block.toolUseId);
         continue;
       }
       // A read of one of the owner's files (its text, its description) is
@@ -521,14 +494,16 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
        * left files keeps its own tab, and its files come after it — newer,
        * and what the canvas turns to.
        */
-      // What the call made, as the gateway says (`files`, with the file each is
-      // a version of); an older transcript is read by shape.
-      const told = block.files?.filter((file) => !file.deleted && isTextFile(file.mime, file.filename));
-      const produced = told ? told.map(attachmentOf) : textFilesOf(output);
-      const chainOf = (artifactId: string): string | undefined => told?.find((file) => file.artifactId === artifactId)?.chain;
+      // What the call made, as the gateway says (`files`, each with its
+      // file); a transcript read without it is read by shape.
+      const told = toldFiles(block)?.filter((file) => isTextFile(file.mime, file.filename));
+      const produced = told ?? textFilesOf(output);
+      // A document write whose file was deleted since draws nothing: its row says so.
+      const gone = (block.files?.length ?? 0) > 0 && toldFiles(block)?.length === 0;
+      if (gone && isFileResult(output) && !byTool.has(tool)) continue;
       if (produced.length > 0 && isFileResult(output) && !byTool.has(tool)) {
         // The call is the file: its row in the conversation opens this tab.
-        for (const file of produced) placeFile(file, at, block.toolUseId, tool, use?.speaker ?? message.speaker, chainOf(file.artifactId));
+        for (const file of produced) placeFile(file, at, block.toolUseId);
         continue;
       }
       const draw = (): void => {
@@ -591,7 +566,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       };
       draw();
       // A command's row opens the command; its files are versions of their own.
-      for (const file of produced) placeFile(file, at, `${block.toolUseId}:${file.artifactId}`, tool, use?.speaker ?? message.speaker, chainOf(file.artifactId));
+      for (const file of produced) placeFile(file, at, `${block.toolUseId}:${file.artifactId}`);
     }
   }
 
@@ -615,17 +590,20 @@ function uniqueIds(items: Renderable[]): Renderable[] {
 }
 
 /** A file the gateway named, as the block a message carries. */
-function attachmentOf(file: { artifactId: string; filename: string | null; mime: string }): AttachmentBlock {
-  return { type: 'attachment', artifactId: file.artifactId, filename: file.filename, mime: file.mime, kind: 'document', sizeBytes: null };
+function attachmentOf(file: { artifactId: string; fileId: string; filename: string | null; mime: string }): AttachmentBlock {
+  return { type: 'attachment', artifactId: file.artifactId, fileId: file.fileId, filename: file.filename, mime: file.mime, kind: 'document', sizeBytes: null };
 }
 
-/** The file a `canvas.open` result names: a library id, its name and type. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The file a `canvas.open` result names: its version, its file, its name and type. */
 function openedFile(output: unknown): AttachmentBlock | null {
   if (output === null || typeof output !== 'object') return null;
-  const { artifactId, filename, mime } = output as Record<string, unknown>;
-  if (typeof artifactId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(artifactId)) return null;
+  const { artifactId, fileId, filename, mime } = output as Record<string, unknown>;
+  if (typeof artifactId !== 'string' || !UUID.test(artifactId)) return null;
   return {
     type: 'attachment', artifactId,
+    ...(typeof fileId === 'string' && UUID.test(fileId) ? { fileId } : {}),
     filename: typeof filename === 'string' ? filename : null,
     mime: typeof mime === 'string' ? mime : 'application/octet-stream',
     kind: 'document', sizeBytes: null,

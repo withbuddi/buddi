@@ -45,8 +45,8 @@ describe('the table parser', () => {
 describe('the library page', () => {
   it('lists files newest first with origin and kind, and opens one by its route', async () => {
     const entries = [
-      { id: 'f1', filename: 'report.pdf', mime: 'application/pdf', family: 'pdf', sizeBytes: 2048, createdAt: '2026-09-20T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 2, context: { agentId: 'ledger', groupName: null } },
-      { id: 'f2', filename: 'photo.png', mime: 'image/png', family: 'image', sizeBytes: 100, createdAt: '2026-09-19T10:00:00Z', origin: 'uploaded', agentId: null, deleted: false, contexts: 1, context: null },
+      { id: 'f1', fileId: 'file-1', version: 1, versions: 1, filename: 'report.pdf', mime: 'application/pdf', family: 'pdf', sizeBytes: 2048, createdAt: '2026-09-20T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 2, context: { agentId: 'ledger', groupName: null } },
+      { id: 'f2', fileId: 'file-2', version: 1, versions: 1, filename: 'photo.png', mime: 'image/png', family: 'image', sizeBytes: 100, createdAt: '2026-09-19T10:00:00Z', origin: 'uploaded', agentId: null, deleted: false, contexts: 1, context: null },
     ];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -68,67 +68,89 @@ describe('the library page', () => {
 
 describe('a file with versions', () => {
   const V = (n: number): string => `0000000${n}-0000-4000-8000-000000000000`;
-  const entry = (id: string) => ({ id, filename: 'packing.md', mime: 'text/markdown', family: 'text', sizeBytes: 20, createdAt: '2026-10-13T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 1, context: null, versions: 3 });
+  const FILE = 'f0000000-0000-4000-8000-000000000000';
+  const entry = (id: string) => ({ id, fileId: FILE, version: Number(id[7]), filename: 'packing.md', mime: 'text/markdown', family: 'text', sizeBytes: 20, createdAt: '2026-10-13T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 1, context: null, versions: 3 });
   const versions = [
-    { id: V(3), filename: 'packing.md', createdAt: '2026-10-13T10:00:00Z', sizeBytes: 30, sha256: '3'.repeat(64), createdBy: 'ledger', editedAt: '2026-10-13T11:00:00Z' },
-    { id: V(2), filename: 'packing.md', createdAt: '2026-10-13T09:00:00Z', sizeBytes: 20, sha256: '2'.repeat(64), createdBy: 'ledger', editedAt: null },
-    { id: V(1), filename: 'packing.md', createdAt: '2026-10-13T08:00:00Z', sizeBytes: 10, sha256: '1'.repeat(64), createdBy: 'ledger', editedAt: null },
+    { id: V(3), version: 3, filename: 'packing.md', createdAt: '2026-10-13T10:00:00Z', sizeBytes: 30, sha256: '3'.repeat(64), createdBy: 'owner', restoredFrom: null },
+    { id: V(2), version: 2, filename: 'packing.md', createdAt: '2026-10-13T09:00:00Z', sizeBytes: 20, sha256: '2'.repeat(64), createdBy: 'ledger', restoredFrom: null },
+    { id: V(1), version: 1, filename: 'packing.md', createdAt: '2026-10-13T08:00:00Z', sizeBytes: 10, sha256: '1'.repeat(64), createdBy: 'ledger', restoredFrom: null },
   ];
   const agents = [{ id: 'ledger', handle: 'ledger', name: 'Ledger', description: '', available: true, roles: [], provider: 'openai', model: 'm' }];
-  const serve = (calls: Array<{ url: string; init?: RequestInit }>) => vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const serve = (calls: Array<{ url: string; init?: RequestInit }>, versionsAnswer: (body: unknown) => Response = () => new Response(JSON.stringify({ fileId: FILE, version: 4, artifactId: V(4), sha256: '4'.repeat(64), createdBy: 'owner', sizeBytes: 10, created: true }), { status: 200 })) => vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, ...(init ? { init } : {}) });
     const one = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(url);
     if (one) return new Response(JSON.stringify({ entry: entry(one[1]!), contexts: [], contextsTotal: 0, contextsOffset: 0, available: true, versions }), { status: 200 });
-    if (url.endsWith(`/${V(1)}/content`) && !init?.method) return new Response(JSON.stringify({ text: '# v1\n', sha256: '1'.repeat(64), sizeBytes: 5, editable: true, truncated: false }), { status: 200 });
-    if (url.endsWith('/content') && init?.method === 'PUT') return new Response(JSON.stringify({ sha256: '4'.repeat(64), sizeBytes: 5 }), { status: 200 });
-    if (url.includes('/preview') || url.endsWith('/content')) return new Response(JSON.stringify({ text: '# now\n', sha256: '3'.repeat(64), sizeBytes: 6, editable: true, truncated: false }), { status: 200 });
+    if (url === `/api/files/${FILE}/versions`) return versionsAnswer(JSON.parse(String(init!.body)));
+    if (url.includes('/preview')) return new Response('# now', { status: 200 });
     return new Response(JSON.stringify({ entries: [entry(V(3))], next: null }), { status: 200 });
   });
 
-  it('lists as one row with its version count, and its page lists the versions', async () => {
+  it('lists as one row with its version count, and its page lists the versions with their authors', async () => {
     vi.stubGlobal('fetch', serve([]));
     render(<Tooltip.Provider><Files hash={`#/files/${V(3)}`} timezone="UTC" navigate={vi.fn()} agents={agents} attention={{} as never} /></Tooltip.Provider>);
     expect(await screen.findByText(/· 3 versions/)).toBeDefined();
     const section = await screen.findByRole('region', { name: 'Versions' });
     expect(section.querySelectorAll('li')).toHaveLength(3);
-    expect(section.textContent).toContain('Ledger, edited by you');
-    expect(screen.queryByText('Not the latest version.')).toBeNull();
+    expect(section.textContent).toContain('v3 · Newest');
+    expect(section.textContent).toContain('You');
+    expect(section.textContent).toContain('Ledger');
+    expect(screen.queryByText(/is not the newest version/)).toBeNull();
   });
 
-  it('says an older version is not the latest, and Restore saves its text over the newest', async () => {
+  it('says an older version is not the newest, and Restore as newest copies it on the server', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     vi.stubGlobal('fetch', serve(calls));
     const navigate = vi.fn();
     render(<Tooltip.Provider><Files hash={`#/files/${V(2)}`} timezone="UTC" navigate={navigate} agents={agents} attention={{} as never} /></Tooltip.Provider>);
-    expect(await screen.findByText('Not the latest version.')).toBeDefined();
-    screen.getByRole('button', { name: 'Open latest' }).click();
+    expect(await screen.findByText('v2 is not the newest version (v3 is).')).toBeDefined();
+    screen.getByRole('button', { name: 'Open newest' }).click();
     expect(navigate).toHaveBeenCalledWith(`#/files/${V(3)}`);
     const section = await screen.findByRole('region', { name: 'Versions' });
     const oldest = [...section.querySelectorAll('li')].at(-1)!;
-    (oldest.querySelector('button') as HTMLButtonElement).click();
-    await waitFor(() => expect(calls.some((call) => call.init?.method === 'PUT')).toBe(true));
-    const put = calls.find((call) => call.init?.method === 'PUT')!;
-    expect(put.url).toBe(`/api/artifacts/${V(3)}/content`);
-    expect(JSON.parse(String(put.init!.body))).toEqual({ text: '# v1\n', base: '3'.repeat(64) });
-    await waitFor(() => expect(navigate).toHaveBeenLastCalledWith(`#/files/${V(3)}`));
+    fireEvent.click([...oldest.querySelectorAll('button')].find((button) => button.textContent === 'Restore as newest')!);
+    await waitFor(() => expect(calls.some((call) => call.url === `/api/files/${FILE}/versions`)).toBe(true));
+    const post = calls.find((call) => call.url === `/api/files/${FILE}/versions`)!;
+    // Its bytes, by number: never a preview's text.
+    expect(JSON.parse(String(post.init!.body))).toEqual({ base: 3, from: 1 });
+    await waitFor(() => expect(navigate).toHaveBeenLastCalledWith(`#/files/${V(4)}`));
+  });
+
+  it('offers the editor’s choice when a newer version was saved before the Restore', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    let first = true;
+    vi.stubGlobal('fetch', serve(calls, () => {
+      if (!first) return new Response(JSON.stringify({ fileId: FILE, version: 5, artifactId: V(5), sha256: '5'.repeat(64), createdBy: 'owner', sizeBytes: 10, created: true }), { status: 200 });
+      first = false;
+      return new Response(JSON.stringify({ error: 'This file changed since you opened it: v4 is newer.', conflict: 'newer', current: { fileId: FILE, version: 4, artifactId: V(4), sha256: '4'.repeat(64), createdBy: 'ledger' } }), { status: 409 });
+    }));
+    const navigate = vi.fn();
+    render(<Tooltip.Provider><Files hash={`#/files/${V(3)}`} timezone="UTC" navigate={navigate} agents={agents} attention={{} as never} /></Tooltip.Provider>);
+    const section = await screen.findByRole('region', { name: 'Versions' });
+    fireEvent.click([...[...section.querySelectorAll('li')].at(-1)!.querySelectorAll('button')].find((button) => button.textContent === 'Restore as newest')!);
+    expect(await screen.findByText(/This file changed since you opened it \(v4 is newer\)/)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }));
+    await waitFor(() => expect(navigate).toHaveBeenLastCalledWith(`#/files/${V(5)}`));
+    const posts = calls.filter((call) => call.url === `/api/files/${FILE}/versions`).map((call) => JSON.parse(String(call.init!.body)));
+    expect(posts).toEqual([{ base: 3, from: 1 }, { base: 4, from: 1 }]);
   });
 });
 
 describe('deleting a file', () => {
   const V = (n: number): string => `0000000${n}-0000-4000-8000-000000000000`;
-  const entry = { id: V(2), filename: 'packing.md', mime: 'text/markdown', family: 'text', sizeBytes: 20, createdAt: '2026-10-13T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 1, context: null, versions: 2 };
+  const FILE = 'f0000000-0000-4000-8000-000000000000';
+  const entry = { id: V(2), fileId: FILE, version: 2, filename: 'packing.md', mime: 'text/markdown', family: 'text', sizeBytes: 20, createdAt: '2026-10-13T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 1, context: null, versions: 2 };
   const versions = [
-    { id: V(2), filename: 'packing.md', createdAt: '2026-10-13T10:00:00Z', sizeBytes: 20, sha256: '2'.repeat(64), createdBy: 'ledger', editedAt: null },
-    { id: V(1), filename: 'packing.md', createdAt: '2026-10-13T09:00:00Z', sizeBytes: 10, sha256: '1'.repeat(64), createdBy: 'ledger', editedAt: null },
+    { id: V(2), version: 2, filename: 'packing.md', createdAt: '2026-10-13T10:00:00Z', sizeBytes: 20, sha256: '2'.repeat(64), createdBy: 'ledger', restoredFrom: null },
+    { id: V(1), version: 1, filename: 'packing.md', createdAt: '2026-10-13T09:00:00Z', sizeBytes: 10, sha256: '1'.repeat(64), createdBy: 'ledger', restoredFrom: null },
   ];
   it('asks first, deletes every version, goes back to the list and offers Undo', async () => {
     const calls: Array<{ url: string; method: string; body?: string }> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, method: init?.method ?? 'GET', ...(init?.body ? { body: String(init.body) } : {}) });
-      if (init?.method === 'DELETE') return new Response(JSON.stringify({ deleted: [V(2), V(1)] }), { status: 200 });
-      if (url === '/api/artifacts/restore') return new Response(JSON.stringify({ restored: [V(2), V(1)] }), { status: 200 });
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ fileId: FILE }), { status: 200 });
+      if (url === `/api/files/${FILE}/undelete`) return new Response(JSON.stringify({ fileId: FILE, restored: true }), { status: 200 });
       if (/^\/api\/artifacts\/[0-9a-f-]{36}$/.test(url)) return new Response(JSON.stringify({ entry, contexts: [], contextsTotal: 0, contextsOffset: 0, available: true, versions }), { status: 200 });
       if (url.includes('/preview')) return new Response('# packing', { status: 200 });
       return new Response(JSON.stringify({ entries: [entry], next: null }), { status: 200 });
@@ -142,17 +164,17 @@ describe('deleting a file', () => {
     const prompt = await screen.findByRole('alertdialog', { name: 'Delete this file?' });
     expect(prompt.textContent).toContain('Delete packing.md and its 2 versions? Conversations that used it will show it as deleted.');
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    await waitFor(() => expect(calls.some((call) => call.method === 'DELETE' && call.url === `/api/artifacts/${V(2)}?scope=file`)).toBe(true));
+    await waitFor(() => expect(calls.some((call) => call.method === 'DELETE' && call.url === `/api/files/${FILE}`)).toBe(true));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/files'));
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
-    await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts/restore' && call.body === JSON.stringify({ ids: [V(2), V(1)] }))).toBe(true));
+    await waitFor(() => expect(calls.some((call) => call.url === `/api/files/${FILE}/undelete` && call.body === '{}')).toBe(true));
   }, 30_000);
 
   it('deletes one version from the list of versions', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (init?.method === 'DELETE') { calls.push(url); return new Response(JSON.stringify({ deleted: [V(1)] }), { status: 200 }); }
+      if (init?.method === 'DELETE') { calls.push(url); return new Response(JSON.stringify({ fileId: FILE, version: 1, fileDeleted: false }), { status: 200 }); }
       if (/^\/api\/artifacts\/[0-9a-f-]{36}$/.test(url)) return new Response(JSON.stringify({ entry, contexts: [], contextsTotal: 0, contextsOffset: 0, available: true, versions }), { status: 200 });
       if (url.includes('/preview')) return new Response('# packing', { status: 200 });
       return new Response(JSON.stringify({ entries: [entry], next: null }), { status: 200 });
@@ -161,6 +183,6 @@ describe('deleting a file', () => {
     const section = await screen.findByRole('region', { name: 'Versions' });
     const older = [...section.querySelectorAll('li')].at(-1)!;
     fireEvent.click([...older.querySelectorAll('button')].find((button) => button.textContent === 'Delete version')!);
-    await waitFor(() => expect(calls).toEqual([`/api/artifacts/${V(1)}?scope=version`]));
+    await waitFor(() => expect(calls).toEqual([`/api/files/${FILE}/versions/1`]));
   });
 });

@@ -56,7 +56,7 @@ beforeEach(() => {
   resetDrafts();
   window.sessionStorage.clear();
   vi.spyOn(api, 'browser').mockResolvedValue(idle);
-  vi.spyOn(api, 'fileContent').mockResolvedValue({ text: '# Summary\n\nAll good\n', sha256: 'a'.repeat(64), sizeBytes: 20, editable: true, truncated: false });
+  vi.spyOn(api, 'fileContent').mockResolvedValue({ fileId: 'f0000000-0000-4000-8000-000000000000', version: 1, artifactId: '00000001-0000-4000-8000-000000000000', createdBy: 'scout', conversationId: null, text: '# Summary\n\nAll good\n', sha256: 'a'.repeat(64), sizeBytes: 20, editable: true, truncated: false });
   vi.spyOn(chatApi, 'views').mockResolvedValue({ views: [] });
   vi.spyOn(chatApi, 'canvasTabs').mockResolvedValue({ closed: [], touched: {} });
   vi.spyOn(chatApi, 'saveCanvasTabs').mockResolvedValue(undefined as never);

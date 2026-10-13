@@ -1,6 +1,6 @@
 /**
- * The owner's unsaved edits to files on the canvas, by tab, and the version
- * each tab settled on.
+ * The owner's edits to files on the canvas, by tab: what the editor holds,
+ * and on which version of the file it started.
  *
  * Held outside the editor because a canvas tab in the back is not mounted:
  * switching to a chart and back must find the edit where it was left. The
@@ -9,18 +9,20 @@
  * it is closed with one still unsaved. Kept for the page's lifetime only — a
  * draft is not a save, and nothing here reaches the server.
  *
- * A tab's *pin* is the version the owner settled on — the one he saved,
- * took ("Show theirs") or kept his edit over ("Keep mine") — while the
- * conversation still names the same newest file (`target`). Coming forward
- * again, the tab opens that version rather than asking the same question.
+ * An edit is kept even while it equals its base (typed, then undone): it is
+ * still what the editor holds, so a save that comes back meanwhile can tell
+ * that the text on screen is no longer what it saved, and keep it as the
+ * next edit over the new version. Only an edit that differs is a draft.
  */
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 
 export interface FileDraft {
   /** The file the edit will be saved onto. */
-  artifactId: string;
-  /** The hash of the version the edit started from: what a save names. */
-  base: string;
+  fileId: string;
+  /** Its conversation: where "Save as new file" keeps the edit if the file is deleted. */
+  conversationId?: string | null;
+  /** The version the edit started from: what a save names. */
+  base: number;
   /** That version's text, to tell an edit from a file left as it was. */
   baseText: string;
   text: string;
@@ -30,36 +32,41 @@ export interface FileDraft {
   overwriteWorkspace?: boolean;
 }
 
-export interface FilePin {
-  /** The file the conversation named when he settled. */
-  target: string;
-  /** The version he settled on. */
-  artifactId: string;
-}
-
-let drafts: ReadonlyMap<string, FileDraft> = new Map();
-const pins = new Map<string, FilePin>();
+/** Every tab's edit, clean or not. */
+const edits = new Map<string, FileDraft>();
+/** The tabs whose edit differs from its base: a fresh map on each change, for React. */
+let dirty: ReadonlyMap<string, FileDraft> = new Map();
 const listeners = new Set<() => void>();
 
 function emit(): void {
+  const next = new Map<string, FileDraft>();
+  for (const [tab, edit] of edits) if (edit.text !== edit.baseText) next.set(tab, edit);
+  const same = next.size === dirty.size && [...next].every(([tab, edit]) => dirty.get(tab) === edit);
+  if (same) return;
+  dirty = next;
   for (const listener of listeners) listener();
 }
 
+/** A tab's unsaved edit: null when there is none, or it equals its base. */
 export function getDraft(tabId: string): FileDraft | null {
-  return drafts.get(tabId) ?? null;
+  const edit = edits.get(tabId);
+  return edit && edit.text !== edit.baseText ? edit : null;
 }
 
-/** Set or drop (null) a tab's draft. A draft equal to its base is no draft. */
+/** What the editor of a tab holds, an edit equal to its base included. */
+export function getEdit(tabId: string): FileDraft | null {
+  return edits.get(tabId) ?? null;
+}
+
+/** Set (or forget, with null) what a tab's editor holds. */
 export function setDraft(tabId: string, draft: FileDraft | null): void {
-  const next = new Map(drafts);
-  if (draft && draft.text !== draft.baseText) next.set(tabId, draft);
-  else if (!next.delete(tabId)) return;
-  drafts = next;
+  if (draft) edits.set(tabId, draft);
+  else if (!edits.delete(tabId)) return;
   emit();
 }
 
 export function isDirty(tabId: string): boolean {
-  return drafts.has(tabId);
+  return dirty.has(tabId);
 }
 
 function subscribe(listener: () => void): () => void {
@@ -69,29 +76,29 @@ function subscribe(listener: () => void): () => void {
 
 /** The tabs holding an unsaved edit, live. */
 export function useDirtyTabs(): ReadonlyMap<string, FileDraft> {
-  return useSyncExternalStore(subscribe, () => drafts, () => drafts);
+  return useSyncExternalStore(subscribe, () => dirty, () => dirty);
 }
 
-export function getPin(tabId: string): FilePin | null {
-  return pins.get(tabId) ?? null;
+/** Which tabs hold an unsaved edit, changing only when that set does (not on every keystroke). */
+export function useDirtyTabIds(): ReadonlySet<string> {
+  const key = useSyncExternalStore(subscribe, dirtyKey, dirtyKey);
+  return useMemo(() => new Set(key === '' ? [] : key.split('\n')), [key]);
 }
 
-export function setPin(tabId: string, pin: FilePin | null): void {
-  if (pin) pins.set(tabId, pin);
-  else pins.delete(tabId);
+function dirtyKey(): string {
+  return [...dirty.keys()].sort().join('\n');
 }
 
-/** For tests: every draft and pin forgotten. */
+/** For tests: every edit forgotten. */
 export function resetDrafts(): void {
-  drafts = new Map();
-  pins.clear();
+  edits.clear();
   emit();
 }
 
 // Leaving the page with an edit unsaved asks first, as any editor does.
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', (event) => {
-    if (drafts.size === 0) return;
+    if (dirty.size === 0) return;
     event.preventDefault();
     event.returnValue = '';
   });

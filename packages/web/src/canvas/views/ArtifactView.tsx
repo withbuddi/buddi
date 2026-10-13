@@ -64,7 +64,7 @@ function FileCard({ attachment }: { attachment: AttachmentBlock }): JSX.Element 
         <dt>Id</dt><dd className="mono">{attachment.artifactId}</dd>
       </dl>
       <div className="ui-toolbar" data-align="end">
-        <FileVersionsLink artifactId={attachment.artifactId} />
+        <FileVersionsLink fileId={attachment.fileId ?? attachment.artifactId} />
         <DownloadMenu artifactId={attachment.artifactId} filename={attachment.filename} mime={attachment.mime} />
       </div>
     </div>

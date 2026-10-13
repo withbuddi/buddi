@@ -314,15 +314,42 @@ export function put<T>(path: string, body: unknown = {}): Promise<T> {
   });
 }
 
-/** `GET /api/artifacts/:id/content`: the text, and whether it may be edited (at most 1 MiB). */
-export interface FileContent {
-  text: string;
+/** A version as the file routes name it: what a save is based on, and what a refusal points at. */
+export interface FileVersionRef {
+  fileId: string;
+  version: number;
+  artifactId: string;
   sha256: string;
+  /** `owner`, or the agent that wrote it. */
+  createdBy: string;
+}
+
+/** `GET /api/files/:id/content`: the current version's text, and whether it may be edited (at most 1 MiB). */
+export interface FileContent extends FileVersionRef {
+  /** The file's conversation, where a copy of an edit is kept if the file is deleted. */
+  conversationId: string | null;
+  text: string;
   sizeBytes: number;
   editable: boolean;
   truncated: boolean;
   /** Why it is read-only besides its size: the bytes are not UTF-8. */
   note?: 'encoding';
+}
+
+/** `GET /api/files/:id`: the file, its current version, and its versions newest first. */
+export interface FileView {
+  file: { id: string; name: string | null; mime: string; conversationId: string | null; origin: 'document' | 'capture' | 'upload'; createdBy: string };
+  current: FileVersionRef;
+  versions: LibraryVersion[];
+}
+
+/** A save the server refused (409): one shape for the editor and Restore alike. */
+export interface FileConflict {
+  error: string;
+  conflict: 'newer' | 'workspace' | 'busy';
+  current?: FileVersionRef;
+  /** `workspace`: what the copy in buddi's workspace holds now. */
+  workspaceText?: string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1691,7 +1718,10 @@ export interface AgentProfile {
 
 /** One file in the library (docs/files.md). */
 export interface LibraryEntry {
+  /** The version this entry shows: in the list, the file's newest. */
   id: string;
+  fileId: string;
+  version: number;
   filename: string | null;
   /** What the file was handed in with, or the label an agent filed a document under. */
   caption: string | null;
@@ -1704,20 +1734,21 @@ export interface LibraryEntry {
   deleted: boolean;
   contexts: number;
   context: { agentId: string | null; groupName: string | null } | null;
-  /** How many versions the file has; the entry is the newest. */
-  versions?: number;
+  /** How many versions the file has. */
+  versions: number;
 }
-/** One version of a file, newest first (`GET /api/artifacts/:id`). */
+/** One version of a file, newest first (`GET /api/artifacts/:id`, `GET /api/files/:id`). */
 export interface LibraryVersion {
   id: string;
+  version: number;
   filename: string | null;
   createdAt: string;
   sizeBytes: number;
   sha256: string;
-  /** The agent that wrote it, or `owner` for an upload. */
+  /** The agent that wrote it, or `owner` for an upload, a save or a Restore. */
   createdBy: string;
-  /** When the owner saved his edit over it, if he did. */
-  editedAt: string | null;
+  /** A Restore: the version whose bytes it copies. */
+  restoredFrom: number | null;
 }
 export interface LibraryContext {
   conversationId: string;
@@ -2884,18 +2915,24 @@ export const api = {
     get<{ entries: LibraryEntry[]; next: string | null }>('/artifacts', query),
   libraryEntry: (id: string, contextsOffset = 0) =>
     get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean; versions?: LibraryVersion[] }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
-  /** Delete from Files: the file with its versions, or one version. Soft; `restoreFiles` undoes it. */
-  deleteFile: (id: string, scope: 'file' | 'version') =>
-    del<{ deleted: string[] }>(`/artifacts/${encodeURIComponent(id)}?scope=${scope}`),
-  restoreFiles: (ids: readonly string[]) => post<{ restored: string[] }>('/artifacts/restore', { ids }),
-  /** An editor's text kept as a new file of the owner's, after its file was deleted. */
-  saveAsNewFile: (id: string, text: string) =>
-    post<{ artifactId: string; filename: string | null; sha256: string }>(`/artifacts/${encodeURIComponent(id)}/copy`, { text }),
-  /** A text file whole, for the canvas editor, with the hash a save names. */
-  fileContent: (id: string) => get<FileContent>(`/artifacts/${encodeURIComponent(id)}/content`),
-  /** The owner's edit, saved over the version he opened; a 409 carries the one that won. */
-  saveFileContent: (id: string, body: { text: string; base: string; overwriteWorkspace?: true }) =>
-    put<{ sha256: string; sizeBytes: number; note?: string }>(`/artifacts/${encodeURIComponent(id)}/content`, body),
+  /** A file (by its id, or any version's): its current version and its versions. */
+  file: (id: string) => get<FileView>(`/files/${encodeURIComponent(id)}`),
+  /** A text file's current version whole, for the canvas editor, with the version a save names. */
+  fileContent: (id: string) => get<FileContent>(`/files/${encodeURIComponent(id)}/content`),
+  /**
+   * The owner's save as a new version over `base`, the one he opened: his
+   * text, or a Restore (`from`). A 409 carries a `FileConflict`.
+   */
+  saveFileVersion: (id: string, body: { base: number; text: string; overwriteWorkspace?: true } | { base: number; from: number }) =>
+    post<FileVersionRef & { sizeBytes: number; created: boolean; note?: string }>(`/files/${encodeURIComponent(id)}/versions`, body),
+  /** Delete from Files: the file with its versions, or one version. Soft; `undeleteFile` undoes it. */
+  deleteFile: (id: string, version?: number) =>
+    del<{ fileId: string; version?: number; fileDeleted?: boolean }>(`/files/${encodeURIComponent(id)}${version === undefined ? '' : `/versions/${version}`}`),
+  undeleteFile: (id: string, version?: number) =>
+    post<{ fileId: string; restored: true }>(`/files/${encodeURIComponent(id)}/undelete`, version === undefined ? {} : { version }),
+  /** A new text file of the owner's ("Save as new file"). */
+  createFile: (body: { name: string; text: string; mime?: string; conversationId?: string | null }) =>
+    post<FileVersionRef & { filename: string | null }>('/files', body),
   /* ---- first run ---- */
   onboarding: () => get<OnboardingView>('/onboarding'),
   onboardingStep: (step: string, learned: { conversationId?: string; accountId?: string; reach?: OnboardingReach } = {}) =>

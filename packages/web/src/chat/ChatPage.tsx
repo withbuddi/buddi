@@ -41,7 +41,8 @@ import { ConversationHistory } from './ConversationHistory';
 import { useCanvasTabs } from './canvas-tabs';
 import { useCanvasOpen } from './canvas-open';
 import { selfClosed, tabStamp, versionHolding } from '../canvas/tab-order';
-import { isDirty as isFileDirty, setDraft as setFileDraft, setPin as setFilePin } from '../canvas/file-drafts';
+import { isDirty as isFileDirty, setDraft as setFileDraft, useDirtyTabIds } from '../canvas/file-drafts';
+import { fileTabId } from '../canvas/text-files';
 import { agentRoute, chatRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
@@ -632,6 +633,11 @@ export function ChatPage({
 
   /** The transcript's tabs before closing, for a chat row reopening one by any call it holds. */
   const transcriptTabs = useRef<Renderable[]>([]);
+  /**
+   * Tabs holding an unsaved edit: kept although their file was deleted since.
+   * By membership only, so typing in an editor does not redraw the canvas.
+   */
+  const dirtyIds = useDirtyTabIds();
   const renderables: Renderable[] = useMemo(() => {
     const fromTranscript = renderablesFrom({
       messages: conversation?.messages ?? [],
@@ -647,6 +653,7 @@ export function ChatPage({
       // What an agent reads to know its owner opens no tab of its own.
       quiet: QUIET_TOOLS,
       titles: OWN_TOOL_TITLES,
+      keep: (id) => dirtyIds.has(id),
     });
     transcriptTabs.current = fromTranscript;
     /*
@@ -681,7 +688,7 @@ export function ChatPage({
     for (const file of openedFiles) items.push(artifactRenderable(file));
     if (workspace) items.unshift(filesRenderable(workspace, fileChanges));
     return profile ? [...items, profileRenderable(profile)] : items;
-  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, canvasTabs.closed, canvasTabs.ready, minute, conversationId, openedFiles, servedPreviews.served, workspace, fileChanges]);
+  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, canvasTabs.closed, canvasTabs.ready, minute, conversationId, openedFiles, servedPreviews.served, workspace, fileChanges, dirtyIds]);
 
   /*
    * Whether the canvas is beside the conversation (desktop; `canvas-open.ts`).
@@ -971,8 +978,8 @@ export function ChatPage({
   /** A file, from the thread or the tray, onto the canvas. */
   const openFile = (file: AttachmentBlock): void => {
     // A file the run made is already open in its own tab, with its newer versions: go there.
-    const held = renderables.find(item => item.source === 'artifact' && (item.versions ?? []).some(version =>
-      (version.props as { attachment?: AttachmentBlock } | null)?.attachment?.artifactId === file.artifactId));
+    const held = renderables.find(item => item.source === 'artifact' && ((file.fileId !== undefined && item.id === fileTabId(file.fileId))
+      || (item.versions ?? []).some(version => (version.props as { attachment?: AttachmentBlock } | null)?.attachment?.artifactId === file.artifactId)));
     if (held) {
       openTab(held.id);
       revealCanvas();
@@ -1324,7 +1331,8 @@ export function ChatPage({
   const closeTabs = (ids: readonly string[], discard = false): void => {
     const unsaved = ids.filter(isFileDirty);
     if (unsaved.length > 0 && !discard) { setClosing(ids); return; }
-    for (const id of unsaved) { setFileDraft(id, null); setFilePin(id, null); }
+    // A closed tab's edit goes with it, saved or not.
+    for (const id of ids) setFileDraft(id, null);
     const stamps: string[] = [];
     for (const id of ids) {
       if (profile && id === profileTabId(profile.id)) setProfile(null);

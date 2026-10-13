@@ -7,36 +7,22 @@
  * what a command returns as "Generated files"). Only library ids count;
  * nothing a result says is used as a link.
  *
- * A file is known across its versions by its name less the version mark
- * (`Plan (v2).md` is `Plan.md`), within the conversation: writing it again
- * updates the tab that has it open rather than opening another.
+ * A file is known across its versions by its `fileId` (the gateway says
+ * which file each version is of): writing it again updates the tab that has
+ * it open rather than opening another. Which files are text is core's rule,
+ * the one the server's routes apply (`@buddi/core/text-files`).
  */
+import { isTextFile } from '@buddi/core/text-files';
 import type { AttachmentBlock } from '../chat/attachments';
 
-const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export { isTextFile };
 
-/** Extensions the editor opens as text, whatever the stored type says. */
-const TEXT_EXTS = new Set([
-  'txt', 'md', 'markdown', 'json', 'yaml', 'yml', 'csv', 'tsv', 'log', 'toml', 'ini', 'conf', 'env', 'xml', 'sql',
-  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'rs', 'swift', 'sh', 'bash', 'zsh', 'html', 'htm', 'css',
-]);
-/** Containers that are never text, however they are named. */
-const NEVER_TEXT_EXTS = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'numbers', 'pages', 'key', 'rtf', 'odt', 'ods', 'odp', 'pdf']);
-const TEXT_MIMES = new Set(['application/json', 'application/xml', 'application/javascript', 'application/x-yaml', 'application/yaml', 'application/toml', 'application/sql', 'application/x-sh']);
+const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function extOf(filename: string | null | undefined): string {
   const name = (filename ?? '').toLowerCase();
   const dot = name.lastIndexOf('.');
   return dot < 0 ? '' : name.slice(dot + 1);
-}
-
-/** Does the editor open this file? The gateway's own text rule, from the page's side. */
-export function isTextFile(mime: string, filename: string | null | undefined): boolean {
-  const ext = extOf(filename);
-  if (NEVER_TEXT_EXTS.has(ext)) return false;
-  const value = (mime || '').toLowerCase().split(';')[0]!.trim();
-  if (value.startsWith('text/') || TEXT_MIMES.has(value)) return true;
-  return (value === '' || value === 'application/octet-stream') && TEXT_EXTS.has(ext);
 }
 
 /** Markdown gets a Preview beside its Edit. */
@@ -64,12 +50,6 @@ export function languageOf(filename: string | null | undefined, mime = ''): Edit
   if (mime.startsWith('text/markdown')) return 'markdown';
   if (mime === 'application/json') return 'json';
   return null;
-}
-
-/** The name a file keeps across its versions, lower-cased: the gateway's rule too. */
-export function fileChainName(filename: string | null | undefined): string | null {
-  if (!filename) return null;
-  return filename.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').toLowerCase();
 }
 
 /** The text files a result stored, oldest first, as the blocks a message carries. */
@@ -101,9 +81,9 @@ export function isFileResult(output: unknown): boolean {
   return typeof id === 'string' && ARTIFACT_ID.test(id);
 }
 
-/** The tab id a file is known by: its first version's, prefixed. */
-export function fileTabId(firstArtifactId: string): string {
-  return `file:${firstArtifactId}`;
+/** The tab id a file is known by: its file id, prefixed (a version's id for a transcript that names no file). */
+export function fileTabId(fileId: string): string {
+  return `file:${fileId}`;
 }
 
 /**
