@@ -36,11 +36,12 @@ describe('the shell', () => {
       render(<App />);
     });
 
-    // Chat on the left, canvas on the right — both present with no data.
-    expect(screen.getByTestId('chat-column')).toBeDefined();
+    // The conversation alone: the canvas is mounted but closed until something lands on it.
+    expect(screen.getByTestId('chat-column')).toHaveAttribute('data-solo', 'true');
     expect(screen.getByTestId('composer')).toBeDefined();
-    expect(screen.getByTestId('canvas')).toBeDefined();
-    expect(screen.getByLabelText('Resize the conversation column')).toBeDefined();
+    expect(screen.getByTestId('canvas')).not.toBeVisible();
+    expect(screen.queryByLabelText('Resize the conversation column')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open the canvas' })).toBeDefined();
     vi.unstubAllGlobals();
   });
 

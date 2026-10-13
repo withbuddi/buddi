@@ -39,6 +39,7 @@ import { WEB_SOURCE_TOOLS } from './sources';
 import { OWN_TOOL_TITLES, QUIET_TOOLS } from './own-tools';
 import { ConversationHistory } from './ConversationHistory';
 import { useCanvasTabs } from './canvas-tabs';
+import { useCanvasOpen } from './canvas-open';
 import { selfClosed, tabStamp, versionHolding } from '../canvas/tab-order';
 import { agentRoute, chatRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
@@ -682,6 +683,41 @@ export function ChatPage({
   }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, canvasTabs.closed, canvasTabs.ready, minute, conversationId, openedFiles, servedPreviews.served, workspace, fileChanges]);
 
   /*
+   * Whether the canvas is beside the conversation (desktop; `canvas-open.ts`).
+   *
+   * Used means something landed that is worth the room: not the Files tab,
+   * which every conversation with a workspace has, and not an approval, which
+   * the dock under the conversation already shows in full. Read only once the
+   * transcript on screen is this conversation's, so a thread being left
+   * cannot open the canvas of the one being opened.
+   *
+   * After the owner closes it nothing the agent does reopens it — not a new
+   * result, not a live page, not even an explicit `canvas.show`: he said
+   * closed, and a pane springing back is the surprise this is here to end.
+   * Those arrivals count up on the header's Canvas button instead. What does
+   * open it is the owner himself: the button, a chat row or a file clicked,
+   * the Properties, "See the full request on the Canvas", and taking over a
+   * live page (the dock's "Sign in myself", or Telegram's Take over link) —
+   * he cannot take the controls of a screen he cannot see.
+   */
+  const canvasUsed = conversation !== null && conversation.conversationId === conversationId
+    && renderables.some((item) => item.id !== FILES_TAB_ID && item.source !== 'approval' && item.source !== 'profile');
+  const sideCanvas = useCanvasOpen(conversationId ?? null, canvasUsed);
+  const sideCanvasOpen = !narrow && sideCanvas.open;
+  const setSideCanvas = sideCanvas.setMode;
+  /** Bring the canvas into view for something the owner asked to see: the sheet on a phone, the pane on a desk. */
+  const revealCanvas = (): void => {
+    if (narrow) onOpenCanvas?.();
+    else setSideCanvas('open');
+  };
+  /** What arrived on the canvas while it was closed, for the Canvas button's count. */
+  const [missed, setMissed] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (sideCanvasOpen) setMissed((current) => (current.size === 0 ? current : new Set()));
+  }, [sideCanvasOpen]);
+  const missedCount = renderables.filter((item) => missed.has(item.id)).length;
+
+  /*
    * What the owner has said here, newest first, for the composer's Up key.
    *
    * Only their own words: a tool result travels as a user message with no
@@ -825,13 +861,16 @@ export function ChatPage({
     if (seenKey === null || seen.current.key !== seenKey) {
       seen.current = { key: seenKey, stamps };
       setUnread((current) => (current.size === 0 ? current : new Set()));
+      setMissed((current) => (current.size === 0 ? current : new Set()));
       return;
     }
     const before = seen.current.stamps;
     seen.current.stamps = stamps;
-    const arrived = renderables.filter((item) => before.get(item.id) !== stamps.get(item.id)
-      && item.at !== null
-      && item.id !== shownTab
+    const changed = renderables.filter((item) => before.get(item.id) !== stamps.get(item.id) && item.at !== null);
+    // Behind a closed canvas everything new is missed, the one it would have turned to included.
+    const behindClosed = narrow || sideCanvasOpen ? [] : changed.filter((item) => item.id !== FILES_TAB_ID);
+    if (behindClosed.length > 0) setMissed((current) => new Set([...current, ...behindClosed.map((item) => item.id)]));
+    const arrived = changed.filter((item) => item.id !== shownTab
       && !(tabStamp(item) === focusId && takesFront(item)));
     if (arrived.length === 0) return;
     setUnread((current) => new Set([...current, ...arrived.map((item) => item.id)]));
@@ -883,7 +922,9 @@ export function ChatPage({
     if (!requestedBrowserTab || honouredTab.current === requestedBrowserTab) return;
     honouredTab.current = requestedBrowserTab;
     setActiveTab(requestedBrowserTab);
-  }, [requestedBrowserTab]);
+    // The owner followed a Take over link: the page has to be in view, closed canvas or not.
+    if (!narrow) setSideCanvas('open');
+  }, [requestedBrowserTab, narrow, setSideCanvas]);
 
   /*
    * A browser call the owner had open before the panel appeared.
@@ -908,7 +949,7 @@ export function ChatPage({
   const openFile = (file: AttachmentBlock): void => {
     setOpenedFiles(current => current.some(item => item.artifactId === file.artifactId) ? current : [...current, file]);
     openTab(artifactTabId(file.artifactId));
-    if (narrow) onOpenCanvas?.();
+    revealCanvas();
   };
 
   /**
@@ -1094,7 +1135,7 @@ export function ChatPage({
       .then((loaded) => {
         setProfile(loaded);
         openTab(profileTabId(loaded.id));
-        if (narrow) onOpenCanvas?.();
+        revealCanvas();
       })
       .catch((err: unknown) => setError(message(err)))
       .finally(() => setLoadingProfile(false));
@@ -1286,6 +1327,7 @@ export function ChatPage({
       grantedTools={group ? members.flatMap((member) => member.tools ?? []) : agent?.tools ?? []}
       {...(agent ? { agentName: agent.name } : {})}
       loading={threadLoading}
+      {...(narrow ? {} : { onHide: () => setSideCanvas('closed'), folded: !sideCanvasOpen })}
       {...(!group && agent ? { face: <AgentAvatar agents={everyone} id={agent.id} size="xl" />, cardFace: <AgentAvatar agents={everyone} id={agent.id} size="sm" /> } : {})}
     />
   );
@@ -1315,8 +1357,9 @@ export function ChatPage({
       <section
         className="wb-chat"
         ref={columnRef}
-        style={{ ...(narrow || width === null ? {} : { [WIDTH_VAR]: `${width}px` }), "--chat-text-scale": textSize / 13 } as CSSProperties}
-        data-sized={!narrow && width !== null ? 'true' : undefined}
+        style={{ ...(!sideCanvasOpen || width === null ? {} : { [WIDTH_VAR]: `${width}px` }), "--chat-text-scale": textSize / 13 } as CSSProperties}
+        data-sized={sideCanvasOpen && width !== null ? 'true' : undefined}
+        data-solo={!narrow && !sideCanvasOpen ? 'true' : undefined}
         data-testid="chat-column"
         data-dropping={dropping || undefined}
         onDragEnter={(event) => {
@@ -1404,6 +1447,19 @@ export function ChatPage({
             {narrow ? (
               <button className="ui-btn" onClick={onOpenCanvas} disabled={renderables.length === 0}>
                 Canvas{renderables.length > 0 ? ` (${renderables.length})` : ''}
+              </button>
+            ) : !sideCanvasOpen ? (
+              /* The way back to a closed canvas, open even when it is empty
+                 (the Files tab is still worth a look). What arrived behind it
+                 is counted on the button, never opened by itself. */
+              <button
+                type="button"
+                className="ui-btn wb-canvas-reopen"
+                aria-label={missedCount > 0 ? `Open the canvas, ${missedCount} new` : 'Open the canvas'}
+                onClick={() => setSideCanvas('open')}
+              >
+                Canvas
+                {missedCount > 0 ? <span className="ui-badge" aria-hidden="true">{missedCount}</span> : null}
               </button>
             ) : null}
             {/*
@@ -1537,14 +1593,14 @@ export function ChatPage({
               if (step) {
                 setFocusedStep(step);
                 openTab(browserTab.id);
-                if (narrow) onOpenCanvas?.();
+                revealCanvas();
                 return;
               }
             }
             const holding = transcriptTabs.current.find(item => item.id === toolUseId || (item.versions ?? []).some(version => version.id === toolUseId));
             canvasTabs.reopen(holding ? [toolUseId, tabStamp(holding)] : [toolUseId]);
             openTab(toolUseId);
-            if (narrow) onOpenCanvas?.();
+            revealCanvas();
           }}
           {...(agent ? { agentName: agent.name, agentId: agent.id } : {})}
           {...(opening ? { empty: opening } : {})}
@@ -1635,13 +1691,15 @@ export function ChatPage({
             version={conversation}
             onDecided={onDecided}
             onSay={(text) => send(text, [])}
-            onOpenFull={(toolUseId) => { openTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
+            onOpenFull={(toolUseId) => { openTab(toolUseId); revealCanvas(); }}
             phone={narrow}
             onSecretSet={setSecretSetShown}
             {...(ownStatus?.page?.title ? { pageTitle: ownStatus.page.title } : {})}
             onSignInMyself={() => {
               const sessionId = ownStatus?.session?.id;
               if (sessionId) void api.browserControl('takeover', sessionId).catch(() => undefined).finally(browser.reload);
+              // Taking the controls of a page needs the page in view.
+              if (!narrow) setSideCanvas('open');
             }}
           />
         ) : null}
@@ -1710,7 +1768,8 @@ export function ChatPage({
         ) : null
       ) : (
         <>
-          <Splitter columnRef={columnRef} width={width} onChange={setWidth} />
+          {/* Kept mounted while closed: the tab in front and a live page's panel are where they were when it opens again. */}
+          {sideCanvasOpen ? <Splitter columnRef={columnRef} width={width} onChange={setWidth} /> : null}
           {canvas}
         </>
       )}

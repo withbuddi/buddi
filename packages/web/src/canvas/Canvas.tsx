@@ -89,6 +89,8 @@ export function Canvas({
   unread,
   now = Date.now,
   loading = false,
+  onHide,
+  folded = false,
 }: {
   renderables: Renderable[];
   activeId: string | null;
@@ -144,16 +146,32 @@ export function Canvas({
    * than introducing an agent whose tabs may be a moment from arriving.
    */
   loading?: boolean;
+  /**
+   * Fold the canvas away (desktop): the strip's last control. The phone's
+   * sheet has its own Close in its head, so it passes nothing here.
+   */
+  onHide?: () => void;
+  /**
+   * Folded away but kept mounted, so the tab in front, a version stepped to
+   * and a live page's panel are all where the owner left them when it opens.
+   */
+  folded?: boolean;
 }): JSX.Element {
   const [strip, fits] = useTabsThatFit(maxTabs);
   /** The version the owner stepped to, per tab, until a newer one arrives. */
   const [picked, setPicked] = useState<Record<string, string>>({});
   const labels = useMemo(() => labelsOf(renderables, timezone), [renderables, timezone]);
+  const hide = onHide ? (
+    <button type="button" className="ui-icon-btn wb-canvas-hide" data-size="sm" aria-label="Close the canvas" title="Close the canvas; what arrives later waits on the Canvas button" onClick={onHide}>
+      <Icon name="close" size={16} />
+    </button>
+  ) : null;
   if (renderables.length === 0) {
     return (
-      <div className="wb-canvas" data-testid="canvas">
-        <div className="wb-canvas-tabs" ref={strip} aria-hidden="true">
-          <span className="wb-canvas-label">Canvas</span>
+      <div className="wb-canvas" data-testid="canvas" hidden={folded}>
+        <div className="wb-canvas-tabs" ref={strip}>
+          <span className="wb-canvas-label" aria-hidden="true">Canvas</span>
+          {hide ? <span className="wb-canvas-end">{hide}</span> : null}
         </div>
         <div className="wb-canvas-body wb-canvas-body-empty">
           {/* The kit's empty canvas: the agent's face, and one line that
@@ -176,7 +194,7 @@ export function Canvas({
   const closeableIds = renderables.filter(closeable).map((item) => item.id);
 
   return (
-    <div className="wb-canvas" data-testid="canvas">
+    <div className="wb-canvas" data-testid="canvas" hidden={folded}>
       <Tabs.Root value={active} onValueChange={onActivate} className="contents">
         <div className="wb-canvas-tabs" ref={strip}>
           <span className="wb-canvas-label" aria-hidden="true">Canvas</span>
@@ -207,7 +225,11 @@ export function Canvas({
               onCloseOthers: closeableIds.some((id) => id !== active) ? () => onCloseMany(closeableIds.filter((id) => id !== active)) : undefined,
             } : {})}
           />
-          {browserMenu && renderables.find((item) => item.id === active)?.source === 'browser' ? <span className="wb-canvas-menu">{browserMenu}</span> : null}
+          {/* One group at the strip's end, so the Page's menu and the close sit together on the right. */}
+          <span className="wb-canvas-end">
+            {browserMenu && renderables.find((item) => item.id === active)?.source === 'browser' ? <span className="wb-canvas-menu">{browserMenu}</span> : null}
+            {hide}
+          </span>
         </div>
         {renderables.map((tab) => {
           const versions = tab.versions ?? [];

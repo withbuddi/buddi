@@ -1939,6 +1939,36 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 /* A table or a diff is dense: the plain surface, no wash behind the data. */
 .wb-canvas-body[data-dense='true'] { background: var(--surface); }
 
+/* ---- the canvas closed: the conversation alone (chat/canvas-open.ts) ---- */
+
+/* The conversation takes the room, its thread and composer held to a reading
+   measure in the middle rather than running the width of the window. The
+   gutter grows from the edges, so the scrollbar stays at the window's edge. */
+.wb-chat[data-solo='true'] {
+  --wb-read: calc(var(--space-10) * 19);
+  flex: 1 1 auto;
+  max-width: none;
+  border-right: 0;
+}
+.wb-chat[data-solo='true'] > :not(.wb-chat-head):not(.wb-drop) {
+  padding-inline: max(var(--space-4), calc((100% - var(--wb-read)) / 2));
+}
+
+/* Opening slides the canvas in from the side it lives on; closing is immediate,
+   since the owner is already looking at the conversation he made room for. */
+.wb-canvas:not([hidden]) { animation: wb-canvas-in var(--dur-slow) var(--ease); }
+@keyframes wb-canvas-in {
+  from { opacity: 0; transform: translateX(var(--space-6)); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .wb-canvas:not([hidden]) { animation: none; } }
+
+/* The strip's end: the Page's menu and the close, together on the right. */
+.wb-canvas-end { margin-left: auto; display: inline-flex; align-items: center; gap: var(--space-1); flex: 0 0 auto; }
+
+/* The header's way back to a closed canvas, with what arrived behind it. */
+.wb-canvas-reopen { display: inline-flex; align-items: center; gap: var(--space-1); }
+
 .wb-canvas-tabs {
   display: flex;
   align-items: center;

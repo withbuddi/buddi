@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Changed
+
+- On a desktop a conversation starts with the chat alone: the Canvas opens the first time something lands on it, and once you close it (the × in its header) it stays closed for that conversation; what arrives later counts up on the Canvas button in the chat header, which opens it at any time.
+
 ## 0.1.0-pre.54 — 2026-10-13
 
 ### Added
