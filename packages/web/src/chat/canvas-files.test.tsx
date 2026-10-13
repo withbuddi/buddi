@@ -42,6 +42,11 @@ const exec = (id: string, when: number): ChatMessage[] => [
     artifacts: [{ id: FILE, filename: 'summary.md', mime: 'text/markdown', sizeBytes: 12 }],
   } }] },
 ];
+const PICTURE = '00000006-0000-4000-8000-000000000000';
+const opened = (id: string, artifactId: string, filename: string, mime: string, when: number): ChatMessage[] => [
+  { id: `${id}-use`, role: 'assistant', at: at(when), blocks: [{ type: 'tool_use', id, name: 'canvas.open', input: { name: filename } }] },
+  { id: `${id}-result`, role: 'user', at: at(when), blocks: [{ type: 'tool_result', toolUseId: id, name: 'canvas.open', ok: true, output: { opened: true, artifactId, filename, mime } }] },
+];
 const said = (text: string, when: number): ChatMessage => ({ id: `said-${when}`, role: 'user', at: at(when), blocks: [{ type: 'text', text }] });
 
 let transcript: ChatMessage[] = [];
@@ -109,6 +114,38 @@ describe('a generated text file on the Canvas', () => {
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard and close' }));
     await waitFor(() => expect(screen.queryByRole('tab', { name: /summary\.md/ })).toBeNull());
     expect(isDirty(FILE_TAB)).toBe(false);
+  });
+
+  it('brings a file the agent opened to the front, in the tab that already holds it', async () => {
+    transcript = [said('Summarise the run', 0), ...exec('x1', 1), said('Compare, then show me the summary', 2), {
+      id: 'show', role: 'assistant', at: at(3), blocks: [{ type: 'tool_use', id: 'show1', name: 'canvas.show', input: { renderer: 'keyvalue', title: 'Compared', data: { pairs: [{ label: 'Days', value: 3 }] } } }],
+    }];
+    page();
+    await loaded();
+    // Something else is in front.
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Compared' })).toHaveAttribute('data-state', 'active'));
+    await lands(opened('o1', FILE, 'summary.md', 'text/markdown', 4), 'o1');
+    await waitFor(() => expect(screen.getByRole('tab', { name: /summary\.md/ })).toHaveAttribute('data-state', 'active'));
+    expect(screen.getAllByRole('tab', { name: /summary\.md/ })).toHaveLength(1);
+  });
+
+  it('opens a file that is not text in its preview', async () => {
+    transcript = [said('Summarise the run', 0)];
+    page();
+    await loaded();
+    await lands(opened('o2', PICTURE, 'chart.png', 'image/png', 1), 'o2');
+    await waitFor(() => expect(screen.getByRole('tab', { name: /chart\.png/ })).toHaveAttribute('data-state', 'active'));
+    expect(document.querySelector('.file-preview-image img')).toHaveAttribute('src', `/api/artifacts/${PICTURE}/preview`);
+  });
+
+  it('counts an opened file on the button when the owner closed the canvas', async () => {
+    transcript = [said('Summarise the run', 0)];
+    window.sessionStorage.setItem('buddi.canvas.c1', 'closed');
+    page();
+    await loaded();
+    await lands(opened('o3', FILE, 'summary.md', 'text/markdown', 1), 'o3');
+    await screen.findByRole('button', { name: 'Open the canvas, 1 new' });
+    expect(screen.getByTestId('canvas')).not.toBeVisible();
   });
 
   it('only counts on the Canvas button when the owner closed the canvas', async () => {

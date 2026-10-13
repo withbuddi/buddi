@@ -103,6 +103,8 @@ function delegateText(value: unknown): string | null {
 /** The tool family the agent uses to drive the canvas on purpose. */
 export const CANVAS_SHOW = 'canvas.show';
 export const CANVAS_CLEAR = 'canvas.clear';
+/** The agent opening one of the owner's files on purpose: drawn from its result, which names the file it found. */
+export const CANVAS_OPEN = 'canvas.open';
 
 /**
  * How many renderables the canvas keeps. Only the last few are on the strip;
@@ -332,6 +334,31 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
     });
   };
 
+  const openFile = (file: AttachmentBlock, at: string | null, callId: string): void => {
+    const holds = (item: Renderable): boolean => (item.versions ?? []).some((version) =>
+      (version.props as Partial<ArtifactViewProps> | null)?.attachment?.artifactId === file.artifactId);
+    const chain = fileChainName(file.filename);
+    const existing = [...collected].reverse().find((item) => item.source === 'artifact' && holds(item))
+      ?? (chain ? [...collected].reverse().find((item) => item.source === 'artifact' && item.subjectKey?.endsWith(`\u0000${chain}`)) : undefined);
+    if (existing) collected = collected.filter((other) => other !== existing);
+    const id = existing?.id ?? fileTabId(file.artifactId);
+    const props = { attachment: file, tabId: id } satisfies ArtifactViewProps;
+    const title = file.filename ?? 'Untitled file';
+    collected.push({
+      id,
+      tool: FAMILY_LABEL[familyOf(file.mime, file.filename)],
+      title,
+      renderer: 'artifact',
+      props,
+      at,
+      source: 'artifact',
+      subjectKey: existing?.subjectKey ?? `${CANVAS_OPEN}\u0000${file.artifactId}`,
+      versions: [...(existing?.versions ?? []), { id: callId, at, title, renderer: 'artifact', props, substantial: true }],
+      // The agent asked for this to be in front.
+      substantial: true,
+    });
+  };
+
   for (const message of messages) {
     if (opensTurn(message)) sources = null;
     for (const block of message.blocks ?? []) {
@@ -377,6 +404,15 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       const use = uses.get(block.toolUseId);
       const at = message.at ?? use?.at ?? null;
       const tool = block.name || use?.name || 'tool';
+
+      // A file the agent opened: its tab — the one already holding it or a
+      // version of it, else a new one — comes to the front. A failure is in
+      // the row; there is nothing to open.
+      if (tool === CANVAS_OPEN) {
+        const file = block.ok === false ? null : openedFile(block.output);
+        if (file) openFile(file, at, block.toolUseId);
+        continue;
+      }
 
       // The delegate panel is already on the canvas, drawn from the call. The
       // result does not open a second tab: it finishes the one that is there,
@@ -552,6 +588,19 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
     }
   }
   return capped(collected);
+}
+
+/** The file a `canvas.open` result names: a library id, its name and type. */
+function openedFile(output: unknown): AttachmentBlock | null {
+  if (output === null || typeof output !== 'object') return null;
+  const { artifactId, filename, mime } = output as Record<string, unknown>;
+  if (typeof artifactId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(artifactId)) return null;
+  return {
+    type: 'attachment', artifactId,
+    filename: typeof filename === 'string' ? filename : null,
+    mime: typeof mime === 'string' ? mime : 'application/octet-stream',
+    kind: 'document', sizeBytes: null,
+  };
 }
 
 /**

@@ -90,6 +90,20 @@ describe('a text file a run produced, on the canvas', () => {
     expect(both[0]!.versions?.map((version) => version.id)).toEqual(['w1', 'w2']);
   });
 
+  it('opens a file the agent asked for in the tab that holds it, at the end', () => {
+    const items = renderablesFrom({ messages: [
+      ...call('w1', 'artifacts.write', { artifactId: ID(1), filename: 'Plan.md', mime: 'text/markdown' }, 1),
+      ...call('w2', 'artifacts.write', { artifactId: ID(2), filename: 'Plan (v2).md', mime: 'text/markdown' }, 2),
+      ...call('x1', 'host.exec', { exitCode: 0, stdout: 'a\nb\nc\nd\ne\nf', stderr: '', state: 'exited' }, 3),
+      ...call('o1', 'canvas.open', { opened: true, artifactId: ID(1), filename: 'Plan.md', mime: 'text/markdown' }, 4),
+    ], descriptors: [] });
+    const files = items.filter((item) => item.source === 'artifact');
+    expect(files).toHaveLength(1);
+    expect(items.at(-1)).toBe(files[0]);
+    expect((files[0]!.props as { attachment: { artifactId: string } }).attachment.artifactId).toBe(ID(1));
+    expect(files[0]!.versions?.map((version) => version.id)).toEqual(['w1', 'w2', 'o1']);
+  });
+
   it('keeps same-named files from different tools apart', () => {
     const items = renderablesFrom({ messages: [
       ...call('w1', 'artifacts.write', { artifactId: ID(1), filename: 'notes.md', mime: 'text/markdown' }, 1),

@@ -126,6 +126,8 @@ export async function systemContext(
     `\n\n${REPLY_LANGUAGE_LINE}` +
     (owner === '' ? '' : `\n\n${owner}`) + (places === '' ? '' : `\n\n${places}`) + (learning === '' ? '' : `\n\n${learning}`) +
     (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') +
+    (run?.tools.includes('canvas.open') ? `\n\n${OPEN_FILE_LINE}` : '') +
+    (run?.tools.includes('host.exec') ? `\n\n${OWN_DATA_LINE}` : '') +
     (run ? `\n\n${resourcefulLines(run.tools)}` : '') +
     (run ? `\n\n${GROUNDING_LINES}` : '') +
     (run?.tools.includes('browser.act') ? `\n\n${LIST_ANSWER_LINE}` : '') +
@@ -162,6 +164,18 @@ async function editionLine(
     return origin ? editionOriginLine(origin, run, handleOf) : '';
   } catch { return ''; }
 }
+
+/**
+ * Showing a file is opening it, not pasting it (docs/files.md). An agent asked
+ * "show me the packing list" searched the disk with find and cat and pasted
+ * the whole file into the chat; Files and the Canvas already had it.
+ */
+export const OPEN_FILE_LINE =
+  "To show the owner one of their files, find it with artifacts.list and open it with canvas.open; don't paste its contents into the chat unless asked.";
+
+/** buddi's own data is read through its tools, never through the shell. */
+export const OWN_DATA_LINE =
+  "Never search or read buddi's own data directory (Files, artifacts) with shell commands; use artifacts.list / artifacts.text / canvas.open.";
 
 /**
  * Answer in the owner's language (docs/system-context.md, Reply language).

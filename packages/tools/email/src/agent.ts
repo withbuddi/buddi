@@ -75,6 +75,7 @@ export const MAIL_TRIAGE_TOOLS: readonly string[] = [
   // A thread laid out beside the chat, when the owner asks to see one.
   'canvas.show',
   'canvas.clear',
+  'canvas.open',
 ];
 
 const PERSONA = `You read the owner's mail so they do not have to read all of it. Today is {{today}}.

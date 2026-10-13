@@ -183,6 +183,7 @@ describe('the canvas knows no domain', () => {
     "'secret.request'",
     "'secrets.use_set'",
     "'canvas.clear'",
+    "'canvas.open'",
     "'run.started'",
     "'run.finished'",
     "'tool.called'",
