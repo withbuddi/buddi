@@ -2817,8 +2817,8 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
 | GET | `/api/reports/audio` | Read the saved audio attached to a report link. | yes |
-| GET | `/api/artifacts` | The library: every file buddi holds, paged. | yes |
-| GET | `/api/artifacts/:id` | One file: its metadata, where it was used, whether its bytes are still there. | yes |
+| GET | `/api/artifacts` | The library: every file buddi holds, paged; one entry per file, its newest version, with how many versions it has. | yes |
+| GET | `/api/artifacts/:id` | One file: its metadata, where it was used, whether its bytes are still there, and its versions, newest first. | yes |
 | GET | `/api/artifacts/:id/download` | The file, as a download. | yes |
 | GET | `/api/artifacts/:id/export/:format` | A document converted by buddi, as a download: Markdown as md, pdf or docx; a CSV table as csv or xlsx. The stored format (md, csv) comes back as written, at any size; a conversion takes at most 512 KiB, runs one at a time, and is stopped after 15 seconds. | yes |
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
@@ -2842,11 +2842,11 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/reports/audio"
 
 #### `GET /api/artifacts`
 
-The library: every file buddi holds, paged.
+The library: every file buddi holds, paged; one entry per file, its newest version, with how many versions it has.
 
 - **Auth:** Session or API token.
-- **Query:** `q?, origin?: 'uploaded'|'produced'|'unknown', family?, limit?, cursor?`
-- **Answer:** `{ entries, nextCursor }`
+- **Query:** `q?, origin?: 'uploaded'|'produced'|'unknown', family?, limit?, cursor?, flat?: 1 (every version as its own entry)`
+- **Answer:** `{ entries (each with versions: number), nextCursor }`
 - **Errors:** 400 a bad filter or cursor
 - **Since:** 0.1.0-pre.15
 
@@ -2856,11 +2856,11 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts"
 
 #### `GET /api/artifacts/:id`
 
-One file: its metadata, where it was used, whether its bytes are still there.
+One file: its metadata, where it was used, whether its bytes are still there, and its versions, newest first.
 
 - **Auth:** Session or API token.
 - **Query:** `contexts?: offset`
-- **Answer:** `{ entry, contexts, available: boolean }`
+- **Answer:** `{ entry, contexts, available: boolean, versions: Array<{ id, filename, createdAt, sizeBytes, sha256, createdBy, editedAt|null }> }`
 - **Errors:** 404
 - **Since:** 0.1.0-pre.15
 

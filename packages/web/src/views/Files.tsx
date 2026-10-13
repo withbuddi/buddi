@@ -8,13 +8,16 @@
  * and the conversations it was part of, each one a link back.
  *
  * The preview is the one the canvas uses (chat/ArtifactPreview), so a file
- * looks the same wherever it is opened. Nothing here edits, runs an agent,
- * or fetches off this origin.
+ * looks the same wherever it is opened. A file's versions are one row, the
+ * newest, and its page lists them; the one edit made here is Restore, which
+ * saves an older version's text over the newest through the editor's own
+ * save. Nothing here runs an agent or fetches off this origin.
  */
 export { parseDelimited } from '../chat/ArtifactPreview';
 import { useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
-import { ApiError, api, type LibraryContext, type LibraryEntry } from '../api';
+import { ApiError, api, type LibraryContext, type LibraryEntry, type LibraryVersion } from '../api';
+import { isTextFile } from '../canvas/text-files';
 import { ArtifactPreview } from '../chat/ArtifactPreview';
 import { FAMILY_LABEL, formatBytes, previewUrl } from '../chat/attachments';
 import { FamilyMark } from '../chat/FileTile';
@@ -109,7 +112,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
                 </span>
               }
               title={entry.filename ?? 'Untitled file'}
-              meta={<span title={fmtTime(entry.createdAt, timezone)}>{fmtRelative(entry.createdAt)}</span>}
+              meta={<span title={fmtTime(entry.createdAt, timezone)}>{fmtRelative(entry.createdAt)}{(entry.versions ?? 1) > 1 ? ` · ${entry.versions} versions` : ''}</span>}
               sub={`${entry.caption && entry.origin === 'produced' ? `${entry.caption} · ` : ''}${FAMILY_LABEL[entry.family]} · ${formatBytes(entry.sizeBytes)} · ${originLabel(entry, nameOf)}${contextLabel(entry, nameOf)}`}
             />
           ))}
@@ -207,7 +210,11 @@ function originLabel(entry: LibraryEntry, nameOf: (id: string | null) => string)
 function FileDetail({ id, timezone, agents, navigate, onBack }: {
   id: string; timezone: string; agents: PlaceProps['agents']; navigate: (r: string) => void; onBack: () => void;
 }): JSX.Element {
-  const [data, setData] = useState<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; available: boolean } | null>(null);
+  const [data, setData] = useState<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; available: boolean; versions?: LibraryVersion[] } | null>(null);
+  /** Read again after a restore: the newest version changed. */
+  const [revision, setRevision] = useState(0);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const [moreContexts, setMoreContexts] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -218,13 +225,41 @@ function FileDetail({ id, timezone, agents, navigate, onBack }: {
       .then((found) => { if (!cancelled) setData(found); })
       .catch((err: unknown) => { if (!cancelled) setError(err instanceof ApiError && err.status === 404 ? 'This file is no longer in the library.' : err instanceof ApiError ? err.message : String(err)); });
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, revision]);
   const nameOf = (agentId: string | null): string => (agentId ? agents.find((a) => a.id === agentId)?.name ?? agentId : '');
 
   if (error) return <div className="files-detail-body"><Button size="sm" onClick={onBack} className="files-back">Back to Files</Button><Notice tone="critical">{error}</Notice></div>;
   if (!data) return <div className="files-detail-body"><Empty>Loading…</Empty></div>;
   const { entry, contexts, contextsTotal, available } = data;
   const name = entry.filename ?? 'Untitled file';
+  const versions = data.versions ?? [];
+  const latest = versions[0] ?? null;
+  const notLatest = latest !== null && latest.id !== entry.id;
+  const restorable = isTextFile(entry.mime, entry.filename);
+  /*
+   * Restore: that version's text saved over the newest, through the same save
+   * the editor uses — the version check, and a command's output written back
+   * to its workspace.
+   */
+  const restore = async (version: LibraryVersion): Promise<void> => {
+    if (!latest) return;
+    setRestoring(version.id);
+    setRestoreError(null);
+    try {
+      const content = await api.fileContent(version.id);
+      await api.saveFileContent(latest.id, { text: content.text, base: latest.sha256 });
+      if (entry.id !== latest.id) navigate(fileRoute(latest.id));
+      else setRevision((n) => n + 1);
+    } catch (err) {
+      setRestoreError(err instanceof ApiError && err.status === 409 ? 'The file changed meanwhile. Look at the newest version, then restore again.' : err instanceof Error ? err.message : String(err));
+    } finally {
+      setRestoring(null);
+    }
+  };
+  const madeBy = (version: LibraryVersion): string => {
+    const maker = version.createdBy === 'owner' ? 'You' : nameOf(version.createdBy) || 'buddi';
+    return version.editedAt ? `${maker}, edited by you ${fmtRelative(version.editedAt)}` : maker;
+  };
   const loadMoreContexts = (): void => {
     setMoreContexts(true);
     api.libraryEntry(id, contexts.length)
@@ -244,6 +279,9 @@ function FileDetail({ id, timezone, agents, navigate, onBack }: {
         </div>
         {available ? <DownloadMenu artifactId={entry.id} filename={entry.filename} mime={entry.mime} /> : null}
       </header>
+      {notLatest ? (
+        <Notice tone="warning" action={<Button size="sm" onClick={() => navigate(fileRoute(latest.id))}>Open latest</Button>}>Not the latest version.</Notice>
+      ) : null}
       {!available ? <Notice tone="warning">The file's bytes are no longer on this machine. What is known about it stays here; the download will not work.</Notice> : null}
       <ArtifactPreview artifactId={entry.id} filename={entry.filename} mime={entry.mime} family={entry.family} available={available} />
       <KV items={[
@@ -253,6 +291,28 @@ function FileDetail({ id, timezone, agents, navigate, onBack }: {
         { label: 'Type', value: <span className="mono">{entry.mime}</span> },
         { label: 'Id', value: <span className="mono">{entry.id}</span> },
       ]} />
+      {versions.length > 1 ? (
+        <section className="files-conversations" aria-label="Versions">
+          <h4 className="ui-section-title">Versions</h4>
+          {restoreError ? <Notice tone="critical" role="alert">{restoreError}</Notice> : null}
+          <ul className="files-ctx" role="list">
+            {versions.map((version, index) => (
+              <li key={version.id} className="files-ctx-row" aria-current={version.id === entry.id ? 'true' : undefined}>
+                <span className="files-ctx-text">
+                  <span title={fmtTime(version.createdAt, timezone)}>{index === 0 ? 'Latest · ' : ''}{fmtTime(version.createdAt, timezone)}</span>
+                  <span className="muted"> · {madeBy(version)} · {formatBytes(version.sizeBytes)}</span>
+                </span>
+                <span className="ui-toolbar">
+                  {version.id !== entry.id ? <a className="ui-btn" data-size="sm" href={fileRoute(version.id)} onClick={(e) => { e.preventDefault(); navigate(fileRoute(version.id)); }}>View</a> : null}
+                  {index > 0 && restorable ? (
+                    <Button size="sm" disabled={restoring !== null} onClick={() => { void restore(version); }}>{restoring === version.id ? 'Restoring…' : 'Restore'}</Button>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <section className="files-conversations">
         <h4 className="ui-section-title">Conversations</h4>
         {contexts.length === 0 ? (

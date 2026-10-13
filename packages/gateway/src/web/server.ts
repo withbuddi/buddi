@@ -1979,6 +1979,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (cursor && !decodeCursor(cursor, filterKey(filters))) return sendJson(res, 400, { error: '`cursor` is not one this listing issued for these filters' });
         const page = await listLibrary(deps.pool, {
           ...filters,
+          // One row per file by default; every version on its own with flat=1.
+          ...(q.get('flat') === '1' ? { flat: true } : {}),
           ...(limit !== undefined ? { limit } : {}),
           ...(cursor ? { cursor } : {}),
           knownAgentIds: deps.catalog.list().map((a) => a.id),

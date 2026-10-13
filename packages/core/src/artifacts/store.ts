@@ -401,6 +401,34 @@ export function fileChainName(filename: string | null): string | null {
   return filename.replace(/ \(v\d+\)(\.[^.]+)$/i, '$1').toLowerCase();
 }
 
+/**
+ * Which file a row is a version of, as SQL over the row `a` (an alias): the
+ * one rule Files groups by and an owner's save checks for a newer version
+ * with. Within a conversation:
+ *
+ *  - a command's output by the workspace path it was captured from — two
+ *    outputs that share a basename are two files;
+ *  - an output captured before paths were recorded, by the one path of that
+ *    name the same agent's later captures have, when there is exactly one;
+ *  - anything else by its name less the version mark (`Plan (v2).md` is
+ *    `plan.md`), type and author.
+ *
+ * Outside a conversation, or unnamed, a row is a file of its own.
+ */
+export function fileChainKeySql(a: string): string {
+  const legacy = `from core.artifacts o
+          where o.conversation_id = ${a}.conversation_id and o.created_by = ${a}.created_by and o.origin_path is not null
+            and o.deleted_at is null and lower(regexp_replace(o.origin_path, '^.*/', '')) = lower(${a}.filename)`;
+  return `(case
+    when ${a}.conversation_id is null or ${a}.filename is null then ${a}.id::text
+    when ${a}.origin_path is not null then 'o:' || ${a}.conversation_id::text || ':' || ${a}.origin_path
+    when ${a}.source_surface = 'host' and (select count(distinct o.origin_path) ${legacy}) = 1
+      then 'o:' || ${a}.conversation_id::text || ':' || (select min(o.origin_path) ${legacy})
+    else 'n:' || ${a}.conversation_id::text || ':' || ${a}.mime || ':' || ${a}.created_by || ':'
+      || lower(regexp_replace(${a}.filename, ' \\(v[0-9]+\\)(\\.[^.]+)$', '\\1', 'i'))
+  end)`;
+}
+
 /** What `replaceArtifactContent` found. */
 export type ReplaceArtifactResult =
   /**
@@ -496,17 +524,17 @@ export async function replaceArtifactContent(
     const found = locked.rows[0];
     if (!found) { await client.query('rollback'); return { ok: false, reason: 'gone' }; }
     const row = toRow(found);
-    if (found.conversation_id && (chain || found.origin_path)) {
+    if (found.conversation_id && found.filename) {
+      // A newer version of the same file, by the one rule Files groups by.
       const { rows } = await client.query(
-        `select ${SELECT_COLUMNS}, created_by, origin_path from core.artifacts
-          where conversation_id = $1 and id <> $2 and deleted_at is null
-            and created_at > $3 and mime = $4 and created_by = $5
-          order by created_at desc, id desc`,
-        [found.conversation_id, row.id, found.created_at, row.mime, found.created_by],
+        `select ${SELECT_COLUMNS.split(',').map((c) => `o.${c.trim()}`).join(', ')}
+           from core.artifacts o, core.artifacts t
+          where t.id = $1 and o.id <> t.id and o.deleted_at is null and o.created_at > t.created_at
+            and ${fileChainKeySql('o')} = ${fileChainKeySql('t')}
+          order by o.created_at desc, o.id desc limit 1`,
+        [row.id],
       );
-      const newer = rows.find((other) => (found.origin_path
-        ? other.origin_path === found.origin_path
-        : other.origin_path == null && fileChainName(other.filename ?? null) === chain));
+      const newer = rows[0];
       if (newer) { await client.query('rollback'); return { ok: false, reason: 'stale', current: toRow(newer) }; }
     }
     if (row.sha256 !== input.expectedSha256) { await client.query('rollback'); return { ok: false, reason: 'stale', current: row }; }

@@ -1704,6 +1704,20 @@ export interface LibraryEntry {
   deleted: boolean;
   contexts: number;
   context: { agentId: string | null; groupName: string | null } | null;
+  /** How many versions the file has; the entry is the newest. */
+  versions?: number;
+}
+/** One version of a file, newest first (`GET /api/artifacts/:id`). */
+export interface LibraryVersion {
+  id: string;
+  filename: string | null;
+  createdAt: string;
+  sizeBytes: number;
+  sha256: string;
+  /** The agent that wrote it, or `owner` for an upload. */
+  createdBy: string;
+  /** When the owner saved his edit over it, if he did. */
+  editedAt: string | null;
 }
 export interface LibraryContext {
   conversationId: string;
@@ -2869,7 +2883,7 @@ export const api = {
   library: (query: { q?: string; origin?: string; family?: string; cursor?: string; limit?: number }) =>
     get<{ entries: LibraryEntry[]; next: string | null }>('/artifacts', query),
   libraryEntry: (id: string, contextsOffset = 0) =>
-    get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
+    get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean; versions?: LibraryVersion[] }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
   /** A text file whole, for the canvas editor, with the hash a save names. */
   fileContent: (id: string) => get<FileContent>(`/artifacts/${encodeURIComponent(id)}/content`),
   /** The owner's edit, saved over the version he opened; a 409 carries the one that won. */

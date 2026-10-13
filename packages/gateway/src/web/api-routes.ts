@@ -767,12 +767,12 @@ export const API_ROUTES: readonly ApiRoute[] = [
 
   /* ---------------- files ---------------- */
   {
-    method: 'GET', path: '/api/artifacts', area: 'files', summary: 'The library: every file buddi holds, paged.',
-    query: "q?, origin?: 'uploaded'|'produced'|'unknown', family?, limit?, cursor?", answer: '{ entries, nextCursor }', errors: '400 a bad filter or cursor',
+    method: 'GET', path: '/api/artifacts', area: 'files', summary: 'The library: every file buddi holds, paged; one entry per file, its newest version, with how many versions it has.',
+    query: "q?, origin?: 'uploaded'|'produced'|'unknown', family?, limit?, cursor?, flat?: 1 (every version as its own entry)", answer: '{ entries (each with versions: number), nextCursor }', errors: '400 a bad filter or cursor',
   },
   {
-    method: 'GET', path: '/api/artifacts/:id', area: 'files', summary: 'One file: its metadata, where it was used, whether its bytes are still there.',
-    query: 'contexts?: offset', answer: '{ entry, contexts, available: boolean }', errors: '404',
+    method: 'GET', path: '/api/artifacts/:id', area: 'files', summary: 'One file: its metadata, where it was used, whether its bytes are still there, and its versions, newest first.',
+    query: 'contexts?: offset', answer: '{ entry, contexts, available: boolean, versions: Array<{ id, filename, createdAt, sizeBytes, sha256, createdBy, editedAt|null }> }', errors: '404',
   },
   { method: 'GET', path: '/api/artifacts/:id/download', area: 'files', kind: 'bytes', summary: 'The file, as a download.', errors: '404' },
   {

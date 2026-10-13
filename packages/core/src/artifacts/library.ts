@@ -9,6 +9,7 @@
  */
 import { createHash } from 'node:crypto';
 import { OWNER_ID } from '../owner.js';
+import { fileChainKeySql } from './store.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -94,6 +95,21 @@ export interface LibraryEntry {
   contexts: number;
   /** The first conversation it was part of: the agent, or the group, it was with. */
   context: { agentId: string | null; groupName: string | null } | null;
+  /** How many versions the file has (`fileChainKeySql`); this entry is the newest. 1 in a flat listing. */
+  versions: number;
+}
+
+/** One version of a file, newest first, for the file page. */
+export interface LibraryVersion {
+  id: string;
+  filename: string | null;
+  createdAt: string;
+  sizeBytes: number;
+  sha256: string;
+  /** Who wrote it: the agent (or `owner` for an upload). */
+  createdBy: string;
+  /** When the owner last saved his edit over it, if he did: its bytes are then his. */
+  editedAt: string | null;
 }
 
 export interface LibraryContext {
@@ -108,6 +124,8 @@ export interface LibraryContext {
 }
 
 export interface ListLibraryOptions {
+  /** Every row on its own, versions and all, rather than one row per file. */
+  flat?: boolean;
   q?: string;
   origin?: FileOrigin;
   family?: FileFamily;
@@ -196,15 +214,25 @@ export async function listLibrary(
     where.push(`(a.created_at, a.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
   }
   params.push(limit + 1);
+  /*
+   * One row per file: its newest version, with how many there are. The
+   * search and the filters then apply to files, not to every version of one.
+   */
+  const source = input.flat
+    ? `(select a.*, 1 as versions from core.artifacts a where ${where[0]}) a`
+    : `(select distinct on (k.chain) a.*, count(*) over (partition by k.chain)::int as versions
+          from core.artifacts a cross join lateral (select ${fileChainKeySql('a')} as chain) k
+         where ${where[0]}
+         order by k.chain, a.created_at desc, a.id desc) a`;
   const { rows } = await pool.query(
-    `select a.id, a.filename, a.caption, a.mime, a.size_bytes, a.created_at, a.created_at::text as created_at_exact, a.created_by, a.deleted_at,
+    `select a.id, a.filename, a.caption, a.mime, a.size_bytes, a.created_at, a.created_at::text as created_at_exact, a.created_by, a.deleted_at, a.versions,
             (${origin}) as origin,
             (${FAMILY_EXPR}) as family,
             (select count(distinct u.conversation_id)::int from core.artifact_uses u where u.artifact_id = a.id) as contexts,
             (select u.agent_id from core.artifact_uses u where u.artifact_id = a.id and u.agent_id is not null order by u.created_at asc limit 1) as use_agent,
             ${CONTEXT_EXPR}
-       from core.artifacts a
-      where ${where.join(' and ')}
+       from ${source}
+      where ${['true', ...where.slice(1)].join(' and ')}
       order by a.created_at desc, a.id desc
       limit $${params.length}`,
     params,
@@ -227,7 +255,7 @@ export async function getLibraryEntry(
   id: string,
   knownAgentIds: readonly string[],
   contextsOffset = 0,
-): Promise<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number } | null> {
+): Promise<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; versions: LibraryVersion[] } | null> {
   if (!UUID.test(id)) return null;
   const { rows } = await pool.query(
     `select a.id, a.filename, a.caption, a.mime, a.size_bytes, a.created_at, a.created_by, a.deleted_at,
@@ -241,6 +269,23 @@ export async function getLibraryEntry(
     [id, knownAgentIds],
   );
   if (!rows[0]) return null;
+  const { rows: versionRows } = await pool.query(
+    `select v.id, v.filename, v.created_at, v.size_bytes, v.sha256, v.created_by,
+            (select max(e.edited_at) from core.owner_file_edits e where e.artifact_id = v.id) as edited_at
+       from core.artifacts v, core.artifacts t
+      where t.id = $1::uuid and v.deleted_at is null and ${fileChainKeySql('v')} = ${fileChainKeySql('t')}
+      order by v.created_at desc, v.id desc`,
+    [id],
+  );
+  const versions: LibraryVersion[] = versionRows.map((v) => ({
+    id: String(v.id),
+    filename: v.filename ?? null,
+    createdAt: new Date(v.created_at).toISOString(),
+    sizeBytes: Number(v.size_bytes ?? 0),
+    sha256: String(v.sha256),
+    createdBy: String(v.created_by),
+    editedAt: v.edited_at ? new Date(v.edited_at).toISOString() : null,
+  }));
   const offset = Math.max(0, Math.trunc(contextsOffset));
   const { rows: uses } = await pool.query(
     `select u.conversation_id, u.kind, u.agent_id, u.created_at, c.agent_id as conversation_agent, c.group_id, g.name as group_name,
@@ -254,7 +299,8 @@ export async function getLibraryEntry(
     [id, CONTEXTS_PAGE, offset],
   );
   return {
-    entry: toEntry(rows[0]),
+    entry: { ...toEntry(rows[0]), versions: Math.max(1, versions.length) },
+    versions,
     contextsTotal: Number(uses[0]?.total ?? 0),
     contextsOffset: offset,
     contexts: uses.map((u) => ({
@@ -303,5 +349,6 @@ function toEntry(row: any): LibraryEntry {
     deleted: row.deleted_at !== null && row.deleted_at !== undefined,
     contexts: Number(row.contexts ?? 0),
     context: row.context_agent || row.context_group ? { agentId: row.context_agent ?? null, groupName: row.context_group ?? null } : null,
+    versions: Number(row.versions ?? 1) || 1,
   };
 }

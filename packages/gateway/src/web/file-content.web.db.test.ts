@@ -310,6 +310,33 @@ suite('file content routes', () => {
       }
     });
 
+    it('lists one row per file in Files, with its versions; two paths with one name stay two files', async () => {
+      // An output captured before paths were recorded, then the same file's later captures.
+      const legacy = await saveArtifact(pool, {
+        bytes: Buffer.from('# Trip v1\n'), mime: 'text/markdown', filename: 'grouped.md', createdBy: 'scout', conversationId,
+        source: { surface: 'host', chatId: conversationId },
+      }, env);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await captured('here/grouped.md', '# Trip v2\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const newest = await captured('here/grouped.md', '# Trip v3\n');
+      const list = async (q: string, flat = false) => ((await (await fetch(`${base}/api/artifacts?q=${q}${flat ? '&flat=1' : ''}`, { headers: { authorization: `Bearer ${token}` } })).json()) as { entries: Array<{ id: string; versions: number }> }).entries;
+      expect(await list('grouped')).toEqual([expect.objectContaining({ id: newest.id, versions: 3 })]);
+      expect(await list('grouped', true)).toHaveLength(3);
+      // Two outputs with one name, from two paths: two files.
+      await captured('left/paired.md', '# Left\n');
+      await captured('right/paired.md', '# Right\n');
+      expect((await list('paired')).map((entry) => entry.versions)).toEqual([1, 1]);
+
+      // The file page lists them, newest first, with the owner's save marked.
+      expect((await save(newest.id, { text: '# Trip v3, mine\n', base: sha('# Trip v3\n') })).status).toBe(200);
+      const page = (await (await fetch(`${base}/api/artifacts/${legacy.id}`, { headers: { authorization: `Bearer ${token}` } })).json()) as { versions: Array<{ id: string; editedAt: string | null; sha256: string }> };
+      expect(page.versions.map((version) => version.id)).toEqual([newest.id, expect.any(String), legacy.id]);
+      expect(page.versions[0]!.editedAt).not.toBeNull();
+      expect(page.versions[0]!.sha256).toBe(sha('# Trip v3, mine\n'));
+      expect(page.versions[2]!.editedAt).toBeNull();
+    });
+
     it('keeps the same bytes from two outputs as two files, each written to its own path', async () => {
       const a = await captured('a/same.md', '# Same\n');
       const b = await captured('b/same.md', '# Same\n');
