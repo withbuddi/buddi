@@ -3,6 +3,9 @@
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import * as Toast from '@radix-ui/react-toast';
+import { fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Files, parseDelimited } from './Files';
 import { fileRoute, parseFileRoute, placeOf, FILES_ROUTE } from '../routes';
@@ -109,5 +112,55 @@ describe('a file with versions', () => {
     expect(put.url).toBe(`/api/artifacts/${V(3)}/content`);
     expect(JSON.parse(String(put.init!.body))).toEqual({ text: '# v1\n', base: '3'.repeat(64) });
     await waitFor(() => expect(navigate).toHaveBeenLastCalledWith(`#/files/${V(3)}`));
+  });
+});
+
+describe('deleting a file', () => {
+  const V = (n: number): string => `0000000${n}-0000-4000-8000-000000000000`;
+  const entry = { id: V(2), filename: 'packing.md', mime: 'text/markdown', family: 'text', sizeBytes: 20, createdAt: '2026-10-13T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 1, context: null, versions: 2 };
+  const versions = [
+    { id: V(2), filename: 'packing.md', createdAt: '2026-10-13T10:00:00Z', sizeBytes: 20, sha256: '2'.repeat(64), createdBy: 'ledger', editedAt: null },
+    { id: V(1), filename: 'packing.md', createdAt: '2026-10-13T09:00:00Z', sizeBytes: 10, sha256: '1'.repeat(64), createdBy: 'ledger', editedAt: null },
+  ];
+  it('asks first, deletes every version, goes back to the list and offers Undo', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method ?? 'GET', ...(init?.body ? { body: String(init.body) } : {}) });
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ deleted: [V(2), V(1)] }), { status: 200 });
+      if (url === '/api/artifacts/restore') return new Response(JSON.stringify({ restored: [V(2), V(1)] }), { status: 200 });
+      if (/^\/api\/artifacts\/[0-9a-f-]{36}$/.test(url)) return new Response(JSON.stringify({ entry, contexts: [], contextsTotal: 0, contextsOffset: 0, available: true, versions }), { status: 200 });
+      if (url.includes('/preview')) return new Response('# packing', { status: 200 });
+      return new Response(JSON.stringify({ entries: [entry], next: null }), { status: 200 });
+    }));
+    const navigate = vi.fn();
+    const agents = [{ id: 'ledger', handle: 'ledger', name: 'Ledger', description: '', available: true, roles: [], provider: 'openai', model: 'm' }];
+    render(<Toast.Provider><Tooltip.Provider><Files hash={`#/files/${V(2)}`} timezone="UTC" navigate={navigate} agents={agents} attention={{} as never} /></Tooltip.Provider><Toast.Viewport /></Toast.Provider>);
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole('button', { name: 'More for packing.md' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Delete file/ }));
+    const prompt = await screen.findByRole('alertdialog', { name: 'Delete this file?' });
+    expect(prompt.textContent).toContain('Delete packing.md and its 2 versions? Conversations that used it will show it as deleted.');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(calls.some((call) => call.method === 'DELETE' && call.url === `/api/artifacts/${V(2)}?scope=file`)).toBe(true));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/files'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/artifacts/restore' && call.body === JSON.stringify({ ids: [V(2), V(1)] }))).toBe(true));
+  }, 30_000);
+
+  it('deletes one version from the list of versions', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'DELETE') { calls.push(url); return new Response(JSON.stringify({ deleted: [V(1)] }), { status: 200 }); }
+      if (/^\/api\/artifacts\/[0-9a-f-]{36}$/.test(url)) return new Response(JSON.stringify({ entry, contexts: [], contextsTotal: 0, contextsOffset: 0, available: true, versions }), { status: 200 });
+      if (url.includes('/preview')) return new Response('# packing', { status: 200 });
+      return new Response(JSON.stringify({ entries: [entry], next: null }), { status: 200 });
+    }));
+    render(<Toast.Provider><Tooltip.Provider><Files hash={`#/files/${V(2)}`} timezone="UTC" navigate={vi.fn()} agents={[]} attention={{} as never} /></Tooltip.Provider><Toast.Viewport /></Toast.Provider>);
+    const section = await screen.findByRole('region', { name: 'Versions' });
+    const older = [...section.querySelectorAll('li')].at(-1)!;
+    fireEvent.click([...older.querySelectorAll('button')].find((button) => button.textContent === 'Delete version')!);
+    await waitFor(() => expect(calls).toEqual([`/api/artifacts/${V(1)}?scope=version`]));
   });
 });

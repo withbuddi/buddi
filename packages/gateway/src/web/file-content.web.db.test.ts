@@ -27,7 +27,7 @@ vi.mock('node:fs/promises', async (original) => {
   };
 });
 import pg from 'pg';
-import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, replaceArtifactContent, saveArtifact, saveArtifactVersion, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, ensureOwner, getArtifact, migrate, OwnerEditedError, purgeDeletedArtifacts, replaceArtifactContent, saveArtifact, saveArtifactVersion, ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { enterWorkspace, hostWorkspaceDir, hostWorkspaceKey } from '@buddi/tool-host';
 import { ownerEditLine, systemContext } from '../system-context.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -337,6 +337,31 @@ suite('file content routes', () => {
       expect(page.versions[2]!.editedAt).toBeNull();
     });
 
+    it('deletes a version (the one before is the newest again), the whole file, and undoes it', async () => {
+      await captured('del/deleting.md', '# One\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const two = await captured('del/deleting.md', '# Two\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const three = await captured('del/deleting.md', '# Three\n');
+      const auth = { authorization: `Bearer ${token}` };
+      const list = async () => ((await (await fetch(`${base}/api/artifacts?q=deleting`, { headers: auth })).json()) as { entries: Array<{ id: string; versions: number }> }).entries;
+      const remove = (id: string, scope: string) => fetch(`${base}/api/artifacts/${id}?scope=${scope}`, { method: 'DELETE', headers: auth });
+
+      expect(await (await remove(three.id, 'version')).json()).toEqual({ deleted: [three.id] });
+      expect(await list()).toEqual([expect.objectContaining({ id: two.id, versions: 2 })]);
+      const whole = (await (await remove(two.id, 'file')).json()) as { deleted: string[] };
+      expect(whole.deleted).toHaveLength(2);
+      expect(await list()).toEqual([]);
+      expect((await remove(two.id, 'file')).status).toBe(404);
+      expect((await remove(two.id, 'everything')).status).toBe(400);
+      // The workspace copy is never touched.
+      expect(await readFile(three.onDisk, 'utf8')).toBe('# Three\n');
+
+      const undo = await fetch(`${base}/api/artifacts/restore`, { method: 'POST', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ ids: whole.deleted }) });
+      expect(((await undo.json()) as { restored: string[] }).restored.sort()).toEqual([...whole.deleted].sort());
+      expect(await list()).toEqual([expect.objectContaining({ id: two.id, versions: 2 })]);
+    });
+
     it('keeps the same bytes from two outputs as two files, each written to its own path', async () => {
       const a = await captured('a/same.md', '# Same\n');
       const b = await captured('b/same.md', '# Same\n');
@@ -403,6 +428,41 @@ suite('file content routes', () => {
     await expect(saveArtifactVersion(pool, { ...again, readVersion: sha('# Plan\n') }, env)).rejects.toBeInstanceOf(OwnerEditedError);
     const v2 = await saveArtifactVersion(pool, { ...again, readVersion: sha('# Plan\n\nMine\n') }, env);
     expect(v2.version).toBe(2);
+  });
+
+  it('purges a file deleted a month ago, and keeps bytes another file still stores', async () => {
+    const a = await saveArtifact(pool, { bytes: Buffer.from('# Shared bytes\n'), mime: 'text/markdown', filename: 'shared.md', createdBy: 'scout', conversationId }, env);
+    const b = await saveArtifact(pool, { bytes: Buffer.from('# Shared bytes\n'), mime: 'text/markdown', filename: 'shared.md', createdBy: 'owner', source: { surface: 'telegram', chatId: '42' } }, env);
+    expect(b.id).not.toBe(a.id);
+    expect(b.storagePath).toBe(a.storagePath);
+    const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    await pool.query('update core.artifacts set deleted_at = $2 where id = $1', [a.id, old]);
+    const first = await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env);
+    expect(first.rows).toBeGreaterThanOrEqual(1);
+    expect((await pool.query('select 1 from core.artifacts where id = $1', [a.id])).rows).toHaveLength(0);
+    expect(await stat(path.join(dir, b.storagePath)).then(() => true, () => false)).toBe(true);
+    // Deleted yesterday: kept, and so are its bytes.
+    await pool.query('update core.artifacts set deleted_at = now() - interval \'1 day\' where id = $1', [b.id]);
+    await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env);
+    expect((await pool.query('select 1 from core.artifacts where id = $1', [b.id])).rows).toHaveLength(1);
+    await pool.query('update core.artifacts set deleted_at = $2 where id = $1', [b.id, old]);
+    const second = await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env);
+    expect(second.blobs).toBeGreaterThanOrEqual(1);
+    expect(await stat(path.join(dir, b.storagePath)).then(() => true, () => false)).toBe(false);
+  });
+
+  it('keeps an editor’s text as a new file of the owner’s after its file was deleted', async () => {
+    const id = await file('# Draft\n', 'Draft.md');
+    await pool.query('update core.artifacts set deleted_at = now() where id = $1', [id]);
+    const res = await fetch(`${base}/api/artifacts/${id}/copy`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ text: '# Draft, mine\n' }),
+    });
+    expect(res.status).toBe(200);
+    const made = (await res.json()) as { artifactId: string; filename: string };
+    expect(made.filename).toBe('Draft.md');
+    expect(await (await read(made.artifactId)).json()).toMatchObject({ text: '# Draft, mine\n' });
+    const { rows } = await pool.query('select created_by, deleted_at from core.artifacts where id = $1', [made.artifactId]);
+    expect(rows[0]).toMatchObject({ created_by: 'owner', deleted_at: null });
   });
 
   it('opens a file past 1 MiB read-only, its start only', async () => {

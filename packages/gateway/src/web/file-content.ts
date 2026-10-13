@@ -21,6 +21,8 @@ import type { Pool } from 'pg';
 import {
   artifactBytesExist,
   getArtifact,
+  recordArtifactUse,
+  saveArtifactReporting,
   readArtifactPrefix,
   replaceArtifactContent,
   resolveDataDir,
@@ -216,4 +218,26 @@ export async function saveFileContent(pool: Pool, env: EnvLike, id: string, body
   }
   if (result.reason === 'duplicate') return { status: 409, body: { error: 'these exact contents are already another file here' } };
   return { status: 409, body: { error: 'the file changed since you opened it', current: current(result.current) } };
+}
+
+/**
+ * "Save as new file": the owner's text, from an editor whose file was
+ * deleted under it, kept as a file of his own — the deleted file's name and
+ * type, in its conversation (so Files lists it), never the deleted row back.
+ */
+export async function saveAsNewFile(pool: Pool, env: EnvLike, id: string, body: Record<string, unknown>): Promise<Answer> {
+  const { text } = body;
+  if (typeof text !== 'string' || text === '') return { status: 400, body: { error: '`text` must be the text to keep' } };
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length > MAX_EDIT_BYTES) return { status: 413, body: { error: 'a file edited here can be at most 1 MiB' } };
+  const { rows } = await pool.query(`select filename, mime, conversation_id from core.artifacts where id = $1`, [id]);
+  const from = rows[0];
+  if (!from) return { status: 404, body: { error: 'no such file' } };
+  if (!textPreviewable(String(from.mime), from.filename ?? null)) return { status: 415, body: { error: 'this file is not text' } };
+  const conversationId = from.conversation_id ? String(from.conversation_id) : null;
+  const saved = await saveArtifactReporting(pool, {
+    bytes, mime: String(from.mime), filename: from.filename ?? 'Untitled.txt', createdBy: 'owner', conversationId,
+  }, env);
+  if (conversationId) await recordArtifactUse(pool, { artifactId: saved.row.id, conversationId, kind: 'uploaded' });
+  return { status: 200, body: { artifactId: saved.row.id, filename: saved.row.filename, sha256: saved.row.sha256 } };
 }

@@ -794,8 +794,17 @@ export const API_ROUTES: readonly ApiRoute[] = [
     errors: '400; 404; 409 changed since (body: { current: { artifactId, sha256, filename } }), its workspace copy changed since (also `workspaceText`; a command’s output is written back to the workspace it came from), a command is running in that workspace (`busy`), or the same contents are another file; 413 over 1 MiB; 415 not a text file, or not UTF-8',
   },
   {
-    method: 'DELETE', path: '/api/artifacts/:id', area: 'files', summary: 'Take back a file uploaded from the dashboard that no message carries.',
-    answer: '204', errors: '404; 409 already sent, or not from the dashboard',
+    method: 'DELETE', path: '/api/artifacts/:id', area: 'files',
+    summary: "With scope: delete from Files — the file with all its versions (file), or one version (version; the one before it is the newest again). Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be restored for 30 days. Without scope: take back a file uploaded from the dashboard that no message carries.",
+    query: "scope?: 'file'|'version'", answer: '{ deleted: id[] } with scope; 204 without', errors: '400 a bad scope; 404; 409 (without scope) already sent, or not from the dashboard',
+  },
+  {
+    method: 'POST', path: '/api/artifacts/:id/copy', area: 'files', summary: 'Save as new file: text from an editor whose file was deleted, kept as a file of the owner’s with its name and type, in its conversation.',
+    body: '{ text: string }', answer: '{ artifactId, filename, sha256 }', errors: '400; 404; 413 over 1 MiB; 415 not a text file',
+  },
+  {
+    method: 'POST', path: '/api/artifacts/restore', area: 'files', summary: 'Undo a delete from Files: the files come back, unless already purged (after 30 days).',
+    body: '{ ids: id[] (what the delete returned) }', answer: '{ restored: id[] }', errors: '400',
   },
 
   /* ---------------- owner ---------------- */
@@ -1336,6 +1345,8 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  * (the test holds both directions).
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
+  'POST /api/artifacts/restore': '0.1.0-pre.55',
+  'POST /api/artifacts/:id/copy': '0.1.0-pre.55',
   'GET /api/artifacts/:id/content': '0.1.0-pre.55',
   'PUT /api/artifacts/:id/content': '0.1.0-pre.55',
   'POST /api/secrets': '0.1.0-pre.52',

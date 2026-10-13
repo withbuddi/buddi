@@ -233,7 +233,13 @@ export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; artifac
         `select id, filename, mime from core.artifacts where id = $1 and deleted_at is null`, [input.artifactId],
       )).rows[0]
       : await fileNamed(ctx, input.name!);
-    if (!found) throw new ToolRefusal(`There is no file ${input.artifactId} in Files. Find it with artifacts.list.`);
+    if (!found) {
+      const gone = input.artifactId !== undefined
+        && (await ctx.db.query(`select 1 from core.artifacts where id = $1 and deleted_at is not null`, [input.artifactId])).rows.length > 0;
+      throw new ToolRefusal(gone
+        ? `File ${input.artifactId} was deleted from Files by the owner. Do not open or recreate it unless they ask.`
+        : `There is no file ${input.artifactId} in Files. Find it with artifacts.list.`);
+    }
     // The page draws it by its type: the editor for text, the preview for the rest.
     return { opened: true, artifactId: found.id, filename: found.filename, mime: found.mime };
   },

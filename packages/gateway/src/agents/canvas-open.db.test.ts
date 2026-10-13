@@ -78,4 +78,10 @@ suite('canvas.open', () => {
     expect(() => canvasOpen.input!.parse({ artifactId: a, name: 'notes.md' })).toThrow(/exactly one/);
     expect(() => canvasOpen.input!.parse({})).toThrow(/exactly one/);
   });
+
+  it('says a deleted file was deleted', async () => {
+    const id = await file('# Gone\n', 'gone.md', here);
+    await pool.query('update core.artifacts set deleted_at = now() where id = $1', [id]);
+    await expect(open({ artifactId: id }, here)).rejects.toThrow(/was deleted from Files by the owner/);
+  });
 });

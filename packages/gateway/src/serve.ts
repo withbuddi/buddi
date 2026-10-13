@@ -45,6 +45,8 @@ import {
   INTERRUPTED_REASON,
   sweepLapsedOffers,
   sweepOrphanUploads,
+  purgeDeletedArtifacts,
+  DELETED_KEEP_MS,
   resumeJob,
   runScheduler,
   runSentinels,
@@ -947,9 +949,13 @@ export async function main(): Promise<void> {
 
     // Uploads the dashboard stored eagerly and nobody sent: tombstoned once a
     // day old, at start and then hourly. Anything a message carries is kept.
+    // The same sweep purges what was deleted from Files a month ago.
     const sweepOrphans = async (): Promise<void> => {
       const gone = await sweepOrphanUploads(pool, { surface: 'web', olderThan: new Date(now().getTime() - ORPHAN_UPLOAD_MS), at: now() });
       if (gone > 0) console.error(`artifacts: discarded ${gone} unsent upload(s)`);
+      // Files deleted more than thirty days ago go for good, with the bytes no other file shares.
+      const purged = await purgeDeletedArtifacts(pool, new Date(now().getTime() - DELETED_KEEP_MS));
+      if (purged.rows > 0) console.error(`artifacts: purged ${purged.rows} deleted file(s), ${purged.blobs} blob(s)`);
     };
     // In recovery this would tombstone uploads that came back in the archive
     // and are a day old by definition, before the owner has looked at any of

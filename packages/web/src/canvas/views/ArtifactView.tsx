@@ -11,7 +11,10 @@
  * A text file — Markdown, a table as CSV, JSON, code, a log — opens in the
  * editor instead (`TextFileView`): read it, change it, save it back.
  */
+import { useEffect, useState } from 'react';
+import { api, ApiError } from '../../api';
 import { ArtifactPreview } from '../../chat/ArtifactPreview';
+import { Notice } from '../../ui';
 import { DownloadMenu } from '../../chat/DownloadMenu';
 import {
   artifactTabId,
@@ -30,9 +33,25 @@ export interface ArtifactViewProps {
 }
 
 export function ArtifactView({ attachment, tabId }: ArtifactViewProps): JSX.Element {
-  const family = familyOf(attachment.mime, attachment.filename);
   if (isTextFile(attachment.mime, attachment.filename)) {
     return <TextFileView attachment={attachment} tabId={tabId ?? artifactTabId(attachment.artifactId)} />;
+  }
+  return <FileCard attachment={attachment} />;
+}
+
+function FileCard({ attachment }: { attachment: AttachmentBlock }): JSX.Element {
+  const family = familyOf(attachment.mime, attachment.filename);
+  // A file deleted from Files says so, rather than a preview that fails to load.
+  const [deleted, setDeleted] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setDeleted(false);
+    api.libraryEntry(attachment.artifactId)
+      .catch((err: unknown) => { if (!cancelled && err instanceof ApiError && err.status === 404) setDeleted(true); });
+    return () => { cancelled = true; };
+  }, [attachment.artifactId]);
+  if (deleted) {
+    return <div className="wb-artifact" data-testid="artifact-view"><Notice role="status">This file was deleted from Files.</Notice></div>;
   }
 
   return (

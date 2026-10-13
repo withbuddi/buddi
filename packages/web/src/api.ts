@@ -2884,6 +2884,13 @@ export const api = {
     get<{ entries: LibraryEntry[]; next: string | null }>('/artifacts', query),
   libraryEntry: (id: string, contextsOffset = 0) =>
     get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean; versions?: LibraryVersion[] }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
+  /** Delete from Files: the file with its versions, or one version. Soft; `restoreFiles` undoes it. */
+  deleteFile: (id: string, scope: 'file' | 'version') =>
+    del<{ deleted: string[] }>(`/artifacts/${encodeURIComponent(id)}?scope=${scope}`),
+  restoreFiles: (ids: readonly string[]) => post<{ restored: string[] }>('/artifacts/restore', { ids }),
+  /** An editor's text kept as a new file of the owner's, after its file was deleted. */
+  saveAsNewFile: (id: string, text: string) =>
+    post<{ artifactId: string; filename: string | null; sha256: string }>(`/artifacts/${encodeURIComponent(id)}/copy`, { text }),
   /** A text file whole, for the canvas editor, with the hash a save names. */
   fileContent: (id: string) => get<FileContent>(`/artifacts/${encodeURIComponent(id)}/content`),
   /** The owner's edit, saved over the version he opened; a 409 carries the one that won. */

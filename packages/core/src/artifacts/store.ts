@@ -731,6 +731,73 @@ export async function artifactBytesExist(
 }
 
 /**
+ * The owner deleting from Files: one version (`version`), or the file with
+ * every version it has (`file`, by `fileChainKeySql`). Soft, like
+ * `deleteArtifact`: the rows are tombstoned and a conversation that carried
+ * one shows it as deleted; nothing on disk changes, and nothing in a
+ * workspace. With a version gone the one before it is the newest again,
+ * since the newest is simply the latest live row. Returns the ids tombstoned.
+ */
+export async function deleteFromFiles(
+  pool: Pool,
+  id: string,
+  scope: 'file' | 'version',
+  at: Date = new Date(),
+): Promise<string[]> {
+  const { rows } = scope === 'version'
+    ? await pool.query(`update core.artifacts set deleted_at = $2 where id = $1 and deleted_at is null returning id`, [id, at])
+    : await pool.query(
+      `update core.artifacts o set deleted_at = $2
+         from core.artifacts t
+        where t.id = $1 and t.deleted_at is null and o.deleted_at is null
+          and ${fileChainKeySql('o')} = ${fileChainKeySql('t')}
+        returning o.id`,
+      [id, at],
+    );
+  return rows.map((row) => String(row.id));
+}
+
+/** Undo: the rows come back, as long as they were not purged. Returns the ids restored. */
+export async function undeleteArtifacts(pool: Pool, ids: readonly string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const { rows } = await pool.query(
+    `update core.artifacts set deleted_at = null where id = any($1::uuid[]) and deleted_at is not null returning id`,
+    [ids],
+  );
+  return rows.map((row) => String(row.id));
+}
+
+/** How long a deleted file can still be brought back before its row goes for good. */
+export const DELETED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Rows tombstoned before `olderThan` go for good, and with them the bytes
+ * that no remaining row stores: blobs are content-addressed, so the same
+ * file may be another row's too, and stays while any row names its path.
+ * Run from the hourly artifact sweep. Returns the rows and blobs removed.
+ */
+export async function purgeDeletedArtifacts(
+  pool: Pool,
+  olderThan: Date,
+  env: EnvLike = process.env,
+): Promise<{ rows: number; blobs: number }> {
+  const { rows } = await pool.query<{ storage_path: string }>(
+    `delete from core.artifacts where deleted_at is not null and deleted_at < $1 returning storage_path`,
+    [olderThan],
+  );
+  const paths = [...new Set(rows.map((row) => row.storage_path))];
+  let blobs = 0;
+  for (const relative of paths) {
+    const { rows: still } = await pool.query(`select 1 from core.artifacts where storage_path = $1 limit 1`, [relative]);
+    if (still.length > 0) continue;
+    // Only ever a path under the data dir's artifacts folder, as the store wrote it.
+    if (!/^artifacts\/\d{4}\/\d{2}\/[0-9a-f]{64}\.[a-z0-9]{1,8}$/.test(relative)) continue;
+    if (await unlink(path.join(resolveDataDir(env), relative)).then(() => true, () => false)) blobs += 1;
+  }
+  return { rows: rows.length, blobs };
+}
+
+/**
  * Soft delete. The row is tombstoned so references stay explicable; the bytes
  * stay on disk in v1 (another artifact may be content-addressed to the same
  * file). Returns false when there was nothing live to delete.

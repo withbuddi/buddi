@@ -129,7 +129,7 @@ import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
-import { createVault, saveArtifactReporting, recordArtifactUse } from '@buddi/core';
+import { createVault, saveArtifactReporting, recordArtifactUse, deleteFromFiles, undeleteArtifacts } from '@buddi/core';
 import { captureFilename } from './browser-capture.js';
 import { beginOnboarding, completeOnboarding, getOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting, isAssetKey, readPluginAsset } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
@@ -316,7 +316,7 @@ import { checkProfilePatch } from '../owner-profile-edit.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentIntro, readAgentIntro } from '../agents/agent-intro.js';
 import { parseCanvasTabs, readCanvasTabs, writeCanvasTabs } from './canvas-tabs.js';
-import { MAX_EDIT_BYTES, readFileContent, saveFileContent } from './file-content.js';
+import { MAX_EDIT_BYTES, readFileContent, saveAsNewFile, saveFileContent } from './file-content.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
@@ -2967,6 +2967,19 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);
+      /*
+       * Deleting from Files: the file with all its versions, or one version.
+       * Asked for by `scope`; without it this stays the composer's discard
+       * below, which never touches a file a message carries — a file dropped
+       * in the tray may be the very bytes of one already in the library.
+       */
+      const scope = url.searchParams.get('scope');
+      if (scope !== null) {
+        if (scope !== 'file' && scope !== 'version') return sendJson(res, 400, { error: '`scope` must be file or version' });
+        const deleted = await deleteFromFiles(deps.pool, discard[1]!.toLowerCase(), scope, deps.now());
+        if (deleted.length === 0) return sendJson(res, 404, { error: 'no such file' });
+        return sendJson(res, 200, { deleted });
+      }
       const outcome = await discardUnreferencedUpload(deps.pool, discard[1]!, WEB_CHAT_SURFACE, deps.now());
       if (outcome === 'missing') return sendEmpty(res, 404);
       if (outcome === 'discarded') return sendEmpty(res, 204);
@@ -3077,6 +3090,32 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (method !== 'POST') return sendEmpty(res, 405);
+    // "Save as new file": an editor's text kept after its file was deleted (web/file-content.ts).
+    const copyAs = /^\/api\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/copy$/i.exec(path);
+    if (copyAs) {
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody(req, MAX_EDIT_BYTES * 6 + 1024);
+      } catch (err) {
+        if (err instanceof BodyTooLargeError) return sendJson(res, 413, { error: 'a file edited here can be at most 1 MiB' });
+        return sendJson(res, 400, { error: 'request body must be JSON' });
+      }
+      return reply(res, await saveAsNewFile(deps.pool, deps.env ?? process.env, copyAs[1]!.toLowerCase(), body));
+    }
+    // Undo a delete from Files: the rows come back, unless they were purged.
+    if (path === '/api/artifacts/restore') {
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, { error: 'request body must be JSON' });
+      }
+      const ids = Array.isArray(body.ids) ? body.ids : null;
+      if (!ids || ids.length === 0 || ids.length > 500 || !ids.every((id) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
+        return sendJson(res, 400, { error: '`ids` must be the file ids a delete returned' });
+      }
+      return sendJson(res, 200, { restored: await undeleteArtifacts(deps.pool, ids as string[]) });
+    }
     /*
      * "Test my setup": fetch the team's signing keys for the domain in the
      * form (saved or not) and say what came back. Nothing is stored. From

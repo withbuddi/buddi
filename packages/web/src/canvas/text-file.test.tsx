@@ -291,6 +291,27 @@ describe('the file view', () => {
     await waitFor(() => expect(getDraft('t')).toBeNull());
   });
 
+  it('says a file was deleted, and keeps an unsaved edit with Save as new file', async () => {
+    render(<TextFileView attachment={attachment(7, 'gone.txt', 'text/plain')} tabId="g" />);
+    expect(await screen.findByText('This file was deleted from Files.')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    cleanup();
+
+    files.set(ID(1), content('a\n', 1));
+    const made = vi.spyOn(api, 'saveAsNewFile').mockResolvedValue({ artifactId: ID(8), filename: 'notes.txt', sha256: sha(8) });
+    const first = render(<TextFileView attachment={attachment(1, 'notes.txt', 'text/plain')} tabId="t" />);
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'a\nmine\n' } });
+    first.unmount();
+    files.delete(ID(1));
+    render(<TextFileView attachment={attachment(1, 'notes.txt', 'text/plain')} tabId="t" />);
+    expect(await screen.findByText(/This file was deleted from Files\. Your changes are still here\./)).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveValue('a\nmine\n');
+    fireEvent.click(screen.getByRole('button', { name: 'Save as new file' }));
+    await waitFor(() => expect(made).toHaveBeenCalledWith(ID(1), 'a\nmine\n'));
+    expect(await screen.findByText('Saved as a new file, notes.txt, in Files.')).toBeInTheDocument();
+    expect(getDraft('t')).toBeNull();
+  });
+
   it('opens a file past 1 MB read-only, and says so', async () => {
     files.set(ID(1), content('x'.repeat(100), 1, false));
     render(<TextFileView attachment={attachment(1, 'big.log', 'text/plain')} tabId="t" />);

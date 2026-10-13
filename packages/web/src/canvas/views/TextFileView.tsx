@@ -88,6 +88,10 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
   const [file, setFile] = useState<Version | null>(null);
   const [text, setText] = useState('');
   const [loadFailed, setLoadFailed] = useState<string | null>(null);
+  /** The file was deleted from Files: shown as such, and an unsaved edit can still be kept. */
+  const [deleted, setDeleted] = useState(false);
+  /** The new file his text was kept as. */
+  const [keptAs, setKeptAs] = useState<string | null>(null);
   const [theirs, setTheirs] = useState<Theirs | null>(null);
   const [changed, setChanged] = useState<readonly number[]>([]);
   const [saving, setSaving] = useState(false);
@@ -114,6 +118,7 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
   useEffect(() => {
     let cancelled = false;
     setLoadFailed(null);
+    setDeleted(false);
     const pin = getPin(tabId);
     if (pin && pin.target !== target) setPin(tabId, null);
     const open = pin && pin.target === target ? pin.artifactId : target;
@@ -138,7 +143,18 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
         if (before !== null && before !== arrived.text) mark(changedLines(before, arrived.text));
       })
       .catch((err: unknown) => {
-        if (!cancelled) setLoadFailed(err instanceof ApiError && err.status === 410 ? 'The file’s contents are gone from disk.' : 'The file could not be loaded.');
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) {
+          // Deleted from Files. His unsaved edit, if any, stays on screen.
+          setDeleted(true);
+          const draft = getDraft(tabId);
+          if (draft) {
+            setText(draft.text);
+            setFile((current) => current ?? { artifactId: draft.artifactId, sha256: draft.base, text: draft.baseText, editable: true, crlf: draft.crlf === true });
+          }
+          return;
+        }
+        setLoadFailed(err instanceof ApiError && err.status === 410 ? 'The file’s contents are gone from disk.' : 'The file could not be loaded.');
       });
     return () => { cancelled = true; };
   }, [target, tabId, mark]);
@@ -197,6 +213,8 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
         // Saved again at once only onto the same file; another file is his to look at first.
         if (content) setTheirs({ ...versionOf(id, content), retry: id === sent.artifactId });
         else setError('buddi changed this file, and its version could not be loaded. Try again.');
+      } else if (err instanceof ApiError && err.status === 404) {
+        setDeleted(true);
       } else {
         setError(err instanceof Error ? err.message : String(err));
       }
@@ -204,6 +222,19 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
       if (mounted.current) setSaving(false);
     }
   }, [tabId, saving, target]);
+
+  /** His text, from a deleted file's editor, kept as a new file of his own. */
+  const saveAsNew = async (): Promise<void> => {
+    const draft = getDraft(tabId);
+    if (!draft) return;
+    try {
+      const made = await api.saveAsNewFile(draft.artifactId, onDisk(draft.text, draft.crlf));
+      setDraft(tabId, null);
+      if (mounted.current) setKeptAs(made.filename ?? 'a new file');
+    } catch (err) {
+      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   /** The save is in Files; write the workspace copy again (the same text over the same version). */
   const retryCopy = async (): Promise<void> => {
@@ -285,7 +316,15 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
         : 'This file is over 1 MB, so it opens read-only and shows its start. Download it for the whole file.'}</Notice> : null}
       {error ? <Notice tone="critical" role="alert">{error}</Notice> : null}
       {savedNote ? <Notice tone="warning" role="status" action={<Button size="sm" onClick={() => { void retryCopy(); }}>Try again</Button>}>{savedNote}</Notice> : null}
+      {deleted ? (
+        dirty ? (
+          <Notice tone="warning" role="status" action={<Button size="sm" variant="accent" onClick={() => { void saveAsNew(); }}>Save as new file</Button>}>
+            This file was deleted from Files. Your changes are still here.
+          </Notice>
+        ) : <Notice role="status">{keptAs ? `Saved as a new file, ${keptAs}, in Files.` : 'This file was deleted from Files.'}</Notice>
+      ) : null}
       {loadFailed ? <Notice>{loadFailed} Download it to open it.</Notice>
+        : deleted && !dirty ? null
         : file === null ? <div className="file-preview"><Empty>Loading…</Empty></div>
         : previewable && mode === 'preview' ? (
           <div className="wb-textfile-preview" data-testid="text-file-preview">
@@ -302,8 +341,8 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
         ) : null}
         {changed.length > 0 && mode === 'preview' ? <span className="muted">buddi changed {changed.length === 1 ? 'a line' : `${changed.length} lines`}</span> : null}
         <span className="ui-toolbar-spacer" />
-        <DownloadMenu artifactId={file?.artifactId ?? target} filename={filename} mime={attachment.mime} />
-        <Button variant="accent" disabled={!dirty || saving || readOnly} onClick={() => { void save(); }} title="Save (⌘S)">
+        {deleted ? null : <DownloadMenu artifactId={file?.artifactId ?? target} filename={filename} mime={attachment.mime} />}
+        <Button variant="accent" disabled={!dirty || saving || readOnly || deleted} onClick={() => { void save(); }} title="Save (⌘S)">
           {saving ? 'Saving…' : 'Save'}
         </Button>
       </div>

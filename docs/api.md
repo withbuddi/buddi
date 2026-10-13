@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-344 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+346 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2824,7 +2824,9 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only). | yes |
 | GET | `/api/artifacts/:id/content` | A text file whole, for the canvas editor, with the hash a save must name. | yes |
 | PUT | `/api/artifacts/:id/content` | Save the owner’s edit of a text file over it, if it is still the version he opened. | yes |
-| DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
+| DELETE | `/api/artifacts/:id` | With scope: delete from Files — the file with all its versions (file), or one version (version; the one before it is the newest again). Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be restored for 30 days. Without scope: take back a file uploaded from the dashboard that no message carries. | yes |
+| POST | `/api/artifacts/:id/copy` | Save as new file: text from an editor whose file was deleted, kept as a file of the owner’s with its name and type, in its conversation. | yes |
+| POST | `/api/artifacts/restore` | Undo a delete from Files: the files come back, unless already purged (after 30 days). | yes |
 
 #### `GET /api/reports/audio`
 
@@ -2939,15 +2941,44 @@ curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicatio
 
 #### `DELETE /api/artifacts/:id`
 
-Take back a file uploaded from the dashboard that no message carries.
+With scope: delete from Files — the file with all its versions (file), or one version (version; the one before it is the newest again). Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be restored for 30 days. Without scope: take back a file uploaded from the dashboard that no message carries.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Answer:** `204`
-- **Errors:** 404; 409 already sent, or not from the dashboard
+- **Query:** `scope?: 'file'|'version'`
+- **Answer:** `{ deleted: id[] } with scope; 204 without`
+- **Errors:** 400 a bad scope; 404; 409 (without scope) already sent, or not from the dashboard
 - **Since:** 0.1.0-pre.15
 
 ```sh
 curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/artifacts/<id>"
+```
+
+#### `POST /api/artifacts/:id/copy`
+
+Save as new file: text from an editor whose file was deleted, kept as a file of the owner’s with its name and type, in its conversation.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ text: string }`
+- **Answer:** `{ artifactId, filename, sha256 }`
+- **Errors:** 400; 404; 413 over 1 MiB; 415 not a text file
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"text":"…"}' "$BUDDI_URL/api/artifacts/<id>/copy"
+```
+
+#### `POST /api/artifacts/restore`
+
+Undo a delete from Files: the files come back, unless already purged (after 30 days).
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ ids: id[] (what the delete returned) }`
+- **Answer:** `{ restored: id[] }`
+- **Errors:** 400
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"ids":"…"}' "$BUDDI_URL/api/artifacts/restore"
 ```
 
 ### Your profile
