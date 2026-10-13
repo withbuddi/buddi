@@ -32,7 +32,10 @@ suite('artifacts tools (postgres)', () => {
     timezone: 'UTC',
     agentId: 'finance-advisor',
     ...(conversation ? { conversationId: conversation } : {}),
+    // The gateway passes its exporter; here a stand-in that says what it was given.
+    convertDocument: async (source, to) => { converted.push({ to, mime: source.mime, filename: source.filename }); return Buffer.from(`${to}:${source.bytes.toString('utf8')}`); },
   });
+  const converted: Array<{ to: string; mime: string; filename: string }> = [];
 
   const call = async (name: string, args: unknown, conversation?: string): Promise<any> => {
     const result = await registry.invoke(name, args, ctx(conversation));
@@ -300,6 +303,52 @@ suite('artifacts tools (postgres)', () => {
       expect(out.filename).toBe('etc-passwd.csv');
       const { rows } = await pool.query('select storage_path from core.artifacts where id = $1', [out.artifactId]);
       expect(rows[0].storage_path).not.toContain('..');
+    });
+
+    describe('onto an Office file', () => {
+      const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      const office = (mime: string, filename: string, createdBy: string): Promise<{ id: string; fileId: string }> => saveArtifact(pool, {
+        bytes: Buffer.from(`${filename} ${createdBy} ${Math.random()}`), mime, filename, createdBy, conversationId,
+        source: { surface: createdBy === 'owner' ? 'web' : 'files', chatId: conversationId },
+      });
+
+      it('rebuilds a .docx buddi made from Markdown, as its next version, and says the formatting was not kept', async () => {
+        const made = await office(DOCX, 'Plan.docx', 'writer');
+        converted.length = 0;
+        const out = await call('artifacts.write', { title: 'x', format: 'markdown', content: '# Plan\n', fileId: made.fileId, readVersion: 1 }, conversationId);
+        expect(out).toMatchObject({ fileId: made.fileId, version: 2, filename: 'Plan.docx', mime: DOCX, rebuilt: true });
+        expect(out.note).toMatch(/formatting was not preserved from v1/);
+        expect(converted).toEqual([{ to: 'docx', mime: 'text/markdown', filename: 'Plan.md' }]);
+        const { rows } = await pool.query(`select mime from core.files where id = $1`, [made.fileId]);
+        expect(rows[0].mime).toBe(DOCX);
+      });
+
+      it('rebuilds a .xlsx from a table, and refuses Markdown for it', async () => {
+        const made = await office(XLSX, 'Budget.xlsx', 'writer');
+        const out = await call('artifacts.write', { title: 'x', format: 'csv', content: 'a,b\n1,2', fileId: made.fileId, readVersion: 1 }, conversationId);
+        expect(out).toMatchObject({ version: 2, rebuilt: true });
+        const wrong = await registry.invoke('artifacts.write', { title: 'x', format: 'markdown', content: '# no', fileId: made.fileId }, ctx(conversationId));
+        expect(wrong.ok ? '' : wrong.message).toMatch(/spreadsheet: write it as a table/);
+      });
+
+      it('refuses the owner’s own .docx until he agreed, telling the agent to ask him first', async () => {
+        const upload = await office(DOCX, 'Contract.docx', 'owner');
+        const refused = await registry.invoke('artifacts.write', { title: 'x', format: 'markdown', content: '# Contract\n', fileId: upload.fileId, readVersion: 1 }, ctx(conversationId));
+        expect(refused.ok).toBe(false);
+        expect(refused.ok ? '' : refused.message).toMatch(/owner's own Word document.*Ask the owner first.*confirmedRebuild: true/);
+        const { rows } = await pool.query(`select count(*)::int as n from core.artifacts where file_id = $1`, [upload.fileId]);
+        expect(rows[0].n).toBe(1);
+        const agreed = await call('artifacts.write', { title: 'x', format: 'markdown', content: '# Contract\n', fileId: upload.fileId, readVersion: 1, confirmedRebuild: true }, conversationId);
+        expect(agreed).toMatchObject({ version: 2, rebuilt: true });
+      });
+
+      it('never writes a presentation', async () => {
+        const deck = await office(PPTX, 'Deck.pptx', 'writer');
+        const refused = await registry.invoke('artifacts.write', { title: 'x', format: 'markdown', content: '# Deck', fileId: deck.fileId, confirmedRebuild: true }, ctx(conversationId));
+        expect(refused.ok ? '' : refused.message).toMatch(/presentation; agents can read it/);
+      });
     });
 
     it('refuses bad input before writing anything', async () => {

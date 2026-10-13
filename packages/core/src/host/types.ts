@@ -472,6 +472,13 @@ export interface FilesArea {
    * inside this plugin's own data folder (`dir.path`, or `dir.legacyPath`):
    * the save is a version of the file captured from that path in this
    * conversation, and the owner's save of it on the Canvas writes back there.
+   *
+   * Onto an Office file (1.34), `version.of` with Markdown (a .docx) or a
+   * CSV (a .xlsx) is rebuilt into that format by buddi's exporter, and the
+   * row says `rebuilt: true`: the formatting of the version before is not
+   * kept. Refused for a presentation, and for a file the owner made or
+   * handed in unless `version.confirmedRebuild` is true — passed only once
+   * the owner agreed.
    */
   save(input: {
     bytes: Buffer;
@@ -479,9 +486,9 @@ export interface FilesArea {
     filename?: string;
     caption?: string;
     source?: ArtifactSource;
-    version?: { base: string; ext: string; readVersion?: number; of?: string };
+    version?: { base: string; ext: string; readVersion?: number; of?: string; confirmedRebuild?: boolean };
     workspacePath?: string;
-  }): Promise<FileRow & { existed?: boolean }>;
+  }): Promise<FileRow & { existed?: boolean; rebuilt?: true }>;
   get(id: string): Promise<FileRow | null>;
   read(id: string): Promise<Buffer>;
   list(opts?: {

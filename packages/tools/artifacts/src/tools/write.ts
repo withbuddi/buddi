@@ -64,6 +64,10 @@ const writeInput = z.object({
     .positive()
     .optional()
     .describe('The version you read (artifacts.text returns it). Required when the newest version is not yours — the owner edited the file: read it, keep their changes, then pass its version.'),
+  confirmedRebuild: z
+    .boolean()
+    .optional()
+    .describe("Only for a Word (.docx) or Excel (.xlsx) file the owner made or sent: writing it rebuilds it from your text and loses its formatting, so ask the owner first and pass true only once they agreed. Not needed for a file buddi made."),
 }).strict();
 
 export interface WrittenDocument {
@@ -80,13 +84,15 @@ export interface WrittenDocument {
   folder?: string;
   /** True when these exact bytes were already in Files: nothing new was written. */
   unchanged?: boolean;
+  /** An Office file rebuilt from the text: its formatting was not kept. */
+  rebuilt?: boolean;
   note: string;
 }
 
 export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> = {
   name: 'artifacts.write',
   description:
-    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program, and never convert it yourself (no pandoc): point them to Files and the download. Writing the same title again in this conversation saves its next version; the earlier ones stay. To change an existing file, pass its fileId.",
+    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program, and never convert it yourself (no pandoc): point them to Files and the download. Writing the same title again in this conversation saves its next version; the earlier ones stay. To change an existing file, pass its fileId. A Word (.docx) or Excel (.xlsx) file named by fileId takes Markdown or a table and is rebuilt from it in its own format (its formatting is not kept; for one the owner made or sent, ask them first and pass confirmedRebuild); a PowerPoint is read-only.",
   tier: 'auto',
   sideEffect: true,
   producesArtifacts: true,
@@ -126,6 +132,7 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
         base, ext,
         ...(input.fileId === undefined ? {} : { of: input.fileId }),
         ...(input.readVersion === undefined ? {} : { readVersion: input.readVersion }),
+        ...(input.confirmedRebuild === true ? { confirmedRebuild: true } : {}),
       },
       ...(folder === undefined ? {} : { caption: folder }),
     });
@@ -134,6 +141,7 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
     const filename = saved.filename ?? fallbackName;
     const version = saved.version;
     const kind = input.format === 'markdown' ? 'PDF or Word' : 'Excel or CSV';
+    const rebuilt = saved.rebuilt === true;
     return {
       artifactId: saved.id,
       fileId: saved.fileId,
@@ -145,8 +153,11 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
       sizeBytes: saved.sizeBytes,
       ...(folder === undefined ? {} : { folder }),
       ...(unchanged ? { unchanged: true } : {}),
+      ...(rebuilt ? { rebuilt: true } : {}),
       note: unchanged
         ? `These exact contents are already v${version} of ${filename} in Files; nothing new was saved.`
+        : rebuilt
+        ? `Saved ${filename} v${version} in Files, rebuilt from your text: its formatting was not preserved from v${version - 1}. Tell the owner so. To change it again, write with fileId "${saved.fileId}".`
         : `Saved to Files${folder === undefined ? '' : ` under "${folder}"`} as ${filename}, v${version} (buddi's Files, not the computer's desktop or disk). The owner can open it there and download it as ${kind}; no conversion needed. To change it later, write with fileId "${saved.fileId}".`,
     };
   },

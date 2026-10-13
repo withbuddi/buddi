@@ -5,10 +5,22 @@
  * model as real multimodal blocks. Extraction exists for the other case: a
  * forty-page bank statement that would cost more to look at than to read, and
  * which the agent wants to search rather than see. So this module is
- * deliberately narrow — text out of PDFs and text files, dimensions out of
- * images from their header bytes — and it never shells out to a converter.
+ * deliberately narrow — text out of PDFs, text files and the three Office
+ * formats, dimensions out of images from their header bytes — and it never
+ * shells out to a converter.
+ *
+ * Office files are read in this process, in pure JS: a Word document's text
+ * with mammoth (BSD-2-Clause), a spreadsheet's cells with read-excel-file
+ * (MIT; each sheet as CSV under a `## Sheet` heading), a presentation's slide
+ * text from its slide XML (fflate, MIT; one `## Slide n` per slide). Which
+ * files those are is core's one rule (`@buddi/core/office-files`).
  */
+import { officeKindOf, type OfficeKind } from '@buddi/core/office-files';
+import { unzipSync } from 'fflate';
+import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import readExcelFile from 'read-excel-file/node';
+import { toCsv } from './document.js';
 
 /** How much text `artifacts.describe` shows before it truncates. */
 export const DESCRIBE_TEXT_CHARS = 20_000;
@@ -25,8 +37,15 @@ export interface ExtractedText {
   text: string;
   /** PDFs only. */
   pages?: number;
+  /** Spreadsheets only. */
+  sheets?: number;
+  /** Presentations only. */
+  slides?: number;
   truncated: boolean;
 }
+
+/** The most an Office file's unpacked part may be before it is refused as too large to read. */
+export const MAX_OFFICE_PART_BYTES = 64 * 1024 * 1024;
 
 const TEXTUAL_MIMES = new Set([
   'application/json',
@@ -36,9 +55,9 @@ const TEXTUAL_MIMES = new Set([
 ]);
 
 /** Whether this plugin can turn the bytes into text at all. */
-export function isExtractable(mime: string): boolean {
+export function isExtractable(mime: string, filename?: string | null): boolean {
   const m = normalize(mime);
-  return m === 'application/pdf' || m.startsWith('text/') || TEXTUAL_MIMES.has(m);
+  return m === 'application/pdf' || m.startsWith('text/') || TEXTUAL_MIMES.has(m) || officeKindOf(mime, filename) !== null;
 }
 
 function normalize(mime: string): string {
@@ -68,8 +87,24 @@ export async function extractText(
   bytes: Buffer,
   mime: string,
   limit: number,
+  filename?: string | null,
 ): Promise<ExtractedText> {
   const m = normalize(mime);
+  const office = officeKindOf(mime, filename);
+  if (office) {
+    let read: { text: string; sheets?: number; slides?: number };
+    try {
+      read = await officeText(bytes, office);
+    } catch (err) {
+      throw new Error(
+        `this ${OFFICE_NAME[office]} could not be read (${err instanceof Error ? err.message : String(err)}); ` +
+          'ask the owner to re-save or re-send it',
+        { cause: err },
+      );
+    }
+    const { text, truncated } = clamp(tidy(read.text), limit);
+    return { text, truncated, ...(read.sheets === undefined ? {} : { sheets: read.sheets }), ...(read.slides === undefined ? {} : { slides: read.slides }) };
+  }
   if (m === 'application/pdf') {
     let parsed;
     try {
@@ -91,9 +126,80 @@ export async function extractText(
     return { text, truncated };
   }
   throw new Error(
-    `cannot extract text from ${mime}; only PDFs and text files are readable this way` +
+    `cannot extract text from ${mime}; only PDFs, text files and Word, Excel and PowerPoint files are readable this way` +
       (m.startsWith('image/') ? ' — an image is shown to you directly instead' : ''),
   );
+}
+
+const OFFICE_NAME: Record<OfficeKind, string> = { docx: 'Word document', xlsx: 'spreadsheet', pptx: 'presentation' };
+
+/** The text of an Office file: a document's paragraphs, a workbook's sheets as CSV, a deck's slides. */
+async function officeText(bytes: Buffer, kind: OfficeKind): Promise<{ text: string; sheets?: number; slides?: number }> {
+  if (kind === 'docx') {
+    const out = await mammoth.extractRawText({ buffer: bytes });
+    return { text: out.value };
+  }
+  if (kind === 'xlsx') {
+    const sheets = await readExcelFile(bytes);
+    const text = sheets.map(({ sheet, data }) => {
+      const rows = data.map((row) => row.map(cellText));
+      const width = rows.reduce((w, row) => Math.max(w, row.length), 0);
+      if (rows.length === 0 || width === 0) return `## ${sheet}\n\n(empty)`;
+      const [head, ...body] = rows.map((row) => [...row, ...Array<string>(width - row.length).fill('')]);
+      return `## ${sheet}\n\n${toCsv(head!, body).replace(/\r\n/g, '\n')}`;
+    }).join('\n\n');
+    return { text, sheets: sheets.length };
+  }
+  return slideText(bytes);
+}
+
+/** A cell as text: a date as its ISO day (or moment), everything else as written. */
+function cellText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) {
+    const iso = value.toISOString();
+    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso;
+  }
+  return String(value);
+}
+
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+function decodeXml(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_all, code: string) => {
+    if (code[0] === '#') {
+      const n = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+      return Number.isFinite(n) && n <= 0x10ffff ? String.fromCodePoint(n) : '';
+    }
+    return ENTITIES[code.toLowerCase()] ?? '';
+  });
+}
+
+/**
+ * A presentation's text, slide by slide: the runs (`<a:t>`) of each
+ * paragraph (`<a:p>`) of `ppt/slides/slideN.xml`, in slide order. Only the
+ * slide parts are unpacked, each at most `MAX_OFFICE_PART_BYTES`.
+ */
+function slideText(bytes: Buffer): { text: string; slides: number } {
+  const SLIDE = /^ppt\/slides\/slide(\d+)\.xml$/;
+  const parts = unzipSync(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), {
+    filter: (file) => {
+      if (!SLIDE.test(file.name)) return false;
+      if (file.originalSize > MAX_OFFICE_PART_BYTES) throw new Error(`${file.name} is too large to read`);
+      return true;
+    },
+  });
+  const slides = Object.keys(parts)
+    .map((name) => ({ name, n: Number(SLIDE.exec(name)![1]) }))
+    .sort((a, b) => a.n - b.n);
+  const text = slides.map(({ name }, i) => {
+    const xml = Buffer.from(parts[name]!).toString('utf8');
+    const paragraphs = [...xml.matchAll(/<a:p[\s>][\s\S]*?<\/a:p>/g)]
+      .map((p) => [...p[0].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((t) => decodeXml(t[1]!)).join(''))
+      .filter((line) => line.trim() !== '');
+    return `## Slide ${i + 1}\n\n${paragraphs.join('\n')}`;
+  }).join('\n\n');
+  return { text, slides: slides.length };
 }
 
 export interface ImageDimensions {

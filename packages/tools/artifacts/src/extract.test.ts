@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { clamp, extractText, imageDimensions, isExtractable, tidy } from './extract.js';
 
@@ -87,5 +89,44 @@ describe('imageDimensions', () => {
   it('returns null rather than guessing at an unknown format', () => {
     expect(imageDimensions(Buffer.alloc(4))).toBeNull();
     expect(imageDimensions(Buffer.from('not an image at all, really', 'utf8'))).toBeNull();
+  });
+});
+
+describe('Office files', () => {
+  const fixture = (name: string): Buffer => readFileSync(fileURLToPath(new URL(`../../../core/src/__fixtures__/office/${name}`, import.meta.url)));
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+  it('are extractable by mime, or by name when the type is unnamed', () => {
+    expect(isExtractable(DOCX)).toBe(true);
+    expect(isExtractable('application/octet-stream', 'deck.pptx')).toBe(true);
+    expect(isExtractable('application/octet-stream', 'old.doc')).toBe(false);
+  });
+
+  it('reads a Word document’s text', async () => {
+    const out = await extractText(fixture('letter.docx'), DOCX, 10_000);
+    expect(out.text).toContain('Quarterly letter');
+    expect(out.text).toContain('Revenue grew 12% this quarter.');
+  });
+
+  it('reads each sheet as CSV under its name', async () => {
+    const out = await extractText(fixture('budget.xlsx'), XLSX, 10_000);
+    expect(out.sheets).toBe(2);
+    expect(out.text).toContain('## Budget\n\nMonth,Total\nJan,120\nFeb,95.5');
+    expect(out.text).toContain('## Notes\n\nNote\nPaid in full');
+  });
+
+  it('reads each slide’s text in order', async () => {
+    const out = await extractText(fixture('deck.pptx'), 'application/octet-stream', 10_000, 'deck.pptx');
+    expect(out.slides).toBe(2);
+    expect(out.text).toBe('## Slide 1\n\nRoadmap & goals\nShip Office previews\n\n## Slide 2\n\nNext\nRound-trip editing');
+  });
+
+  it('caps the text, and says a broken file plainly', async () => {
+    const out = await extractText(fixture('letter.docx'), DOCX, 10);
+    expect(out.truncated).toBe(true);
+    expect(out.text.length).toBe(10);
+    await expect(extractText(Buffer.from('not a zip'), XLSX, 100)).rejects.toThrow(/spreadsheet could not be read/);
   });
 });

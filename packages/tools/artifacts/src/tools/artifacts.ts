@@ -90,9 +90,13 @@ const idInput = z.object({
 });
 
 export interface ArtifactDescription extends ArtifactSummary {
-  /** Extracted text for PDFs and text files, truncated. Absent otherwise. */
+  /** Extracted text for PDFs, text files and Word, Excel and PowerPoint files, truncated. Absent otherwise. */
   text?: string;
   pages?: number;
+  /** A spreadsheet's sheet count. */
+  sheets?: number;
+  /** A presentation's slide count. */
+  slides?: number;
   truncated?: boolean;
   /** Pixel size for the image formats whose header says so cheaply. */
   width?: number;
@@ -114,23 +118,25 @@ export const describe: ToolDefinition<z.infer<typeof idInput>, ArtifactDescripti
   name: 'artifacts.describe',
   untrusted: 'file',
   description:
-    `Look inside one artifact: its metadata plus, for a PDF or a text file, the first ${DESCRIBE_TEXT_CHARS.toLocaleString('en-US')} characters of its text. This is how you read a long statement — cheaper and more searchable than looking at the pages. For an image you are shown the picture itself, so this returns only metadata and, where it is cheap to tell, the pixel size. A statement or CSV to import goes to the owning plugin's import tool by its id, not into your reply.`,
+    `Look inside one artifact: its metadata plus, for a PDF, a text file or a Word, Excel or PowerPoint file (each sheet as CSV, each slide's text), the first ${DESCRIBE_TEXT_CHARS.toLocaleString('en-US')} characters of its text. This is how you read a long statement — cheaper and more searchable than looking at the pages. For an image you are shown the picture itself, so this returns only metadata and, where it is cheap to tell, the pixel size. A statement or CSV to import goes to the owning plugin's import tool by its id, not into your reply.`,
   tier: 'auto',
   input: idInput,
   async execute(input, ctx) {
     const row = await requireArtifact(input.id, ctx);
     const out: ArtifactDescription = summarize(row);
 
-    if (isExtractable(row.mime)) {
+    if (isExtractable(row.mime, row.filename)) {
       const bytes = await ctx.buddi!.files!.read(row.id);
-      const extracted = await extractText(bytes, row.mime, DESCRIBE_TEXT_CHARS);
+      const extracted = await extractText(bytes, row.mime, DESCRIBE_TEXT_CHARS, row.filename);
       out.text = extracted.text;
       out.truncated = extracted.truncated;
       if (extracted.pages !== undefined) out.pages = extracted.pages;
+      if (extracted.sheets !== undefined) out.sheets = extracted.sheets;
+      if (extracted.slides !== undefined) out.slides = extracted.slides;
       if (extracted.truncated) {
         out.note = `Text truncated at ${DESCRIBE_TEXT_CHARS} characters; artifacts.text returns more.`;
       }
-      if (extracted.text.trim() === '') {
+      if (extracted.text.trim() === '' && row.mime.toLowerCase().startsWith('application/pdf')) {
         out.note =
           'This document has no text layer (it is probably a scan). Ask the owner to send it as an image if you need to read it.';
       }
@@ -183,23 +189,23 @@ function cutBytes(text: string, limit: number): string {
 
 export const text: ToolDefinition<
   z.infer<typeof textInput>,
-  { id: string; fileId: string; version: number; text: string; pages?: number; truncated: boolean; chars: number; note?: string }
+  { id: string; fileId: string; version: number; text: string; pages?: number; sheets?: number; slides?: number; truncated: boolean; chars: number; note?: string }
 > = {
   name: 'artifacts.text',
   untrusted: 'file',
   description:
-    `Return the extracted text of a PDF or text artifact, at most ${TEXT_REPLY_BYTES / 1024} KB of it, for when artifacts.describe truncated what you needed to read or quote. A bank statement, a transactions CSV or an export is not for reading into your reply: hand its artifact id to the owning plugin's import tool (finance imports statements), and tell the owner the result in a sentence or two. Never paste a file's contents into your reply.`,
+    `Return the extracted text of a PDF, a text file or a Word, Excel or PowerPoint file, at most ${TEXT_REPLY_BYTES / 1024} KB of it, for when artifacts.describe truncated what you needed to read or quote. A bank statement, a transactions CSV or an export is not for reading into your reply: hand its artifact id to the owning plugin's import tool (finance imports statements), and tell the owner the result in a sentence or two. Never paste a file's contents into your reply.`,
   tier: 'auto',
   input: textInput,
   async execute(input, ctx) {
     const row = await requireArtifact(input.id, ctx);
-    if (!isExtractable(row.mime)) {
+    if (!isExtractable(row.mime, row.filename)) {
       throw new Error(
-        `artifact ${row.id} is ${row.mime}; text can only be extracted from PDFs and text files`,
+        `artifact ${row.id} is ${row.mime}; text can only be extracted from PDFs, text files and Word, Excel and PowerPoint files`,
       );
     }
     const bytes = await ctx.buddi!.files!.read(row.id);
-    const extracted = await extractText(bytes, row.mime, MAX_TEXT_CHARS);
+    const extracted = await extractText(bytes, row.mime, MAX_TEXT_CHARS, row.filename);
     const asked = input.maxChars === undefined ? extracted.text : extracted.text.slice(0, input.maxChars);
     const out = cutBytes(asked, TEXT_REPLY_BYTES);
     const whole = Buffer.byteLength(extracted.text, 'utf8');
@@ -211,6 +217,8 @@ export const text: ToolDefinition<
       version: row.version,
       text: out,
       ...(extracted.pages === undefined ? {} : { pages: extracted.pages }),
+      ...(extracted.sheets === undefined ? {} : { sheets: extracted.sheets }),
+      ...(extracted.slides === undefined ? {} : { slides: extracted.slides }),
       truncated: extracted.truncated || out.length < extracted.text.length,
       chars: out.length,
       ...(capped

@@ -992,6 +992,13 @@ keep its name (no `(vN)` in stored names), and `files.list` takes `latest`
   over a newest version someone else wrote (the owner's edit) is refused
   without it, and with an older one, so a writer cannot drop that version
   unread. An older buddi ignores all three.
+- **Onto an Office file** (`version.of` naming a .docx or .xlsx): Markdown
+  (a .docx) or a CSV (a .xlsx) is rebuilt into the file's own format by
+  buddi's exporter, and the row says `rebuilt: true` — the formatting of the
+  version before is not kept. A file the owner made or handed in is refused
+  unless `version.confirmedRebuild` is true, which a writer passes only once
+  the owner agreed; a .pptx is never written (docs/files.md, "Office
+  documents").
 
 ## 8. End to end
 

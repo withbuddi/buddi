@@ -67,6 +67,7 @@ import { loadPluginsOnce } from './plugins/load.js';
 import { sweepIncoming, sweepStages } from './plugins/stage.js';
 import { sweepPluginDirs } from './plugins/paths.js';
 import { ROLE_FRONT_DESK } from './agents/roles.js';
+import { runExport } from './export/convert.js';
 
 export { REPO_ROOT };
 
@@ -561,6 +562,12 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     ctx: { db: pool, ownerId: OWNER_ID, now,
       get timezone() { return zone(); },
       protectedPaths: protectedWritePaths(),
+      // A new version of an Office file written from text: the download's own exporter, queued.
+      convertDocument: async (source, to) => {
+        const bytes = await runExport(source, to, { wait: true });
+        if (!bytes) throw new Error(`buddi cannot make a ${to} file from this`);
+        return bytes;
+      },
       /*
        * Stable, and late-bound like the getter below: the account service is
        * attached after this object is built (and spread), so each call asks

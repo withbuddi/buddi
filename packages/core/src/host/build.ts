@@ -28,6 +28,7 @@ import {
   saveVersion,
   resolveFileId,
   recordFileRead,
+  getFile,
   type ArtifactKind,
   type ArtifactRow,
   type EnvLike,
@@ -40,6 +41,7 @@ import { notifyOwner } from '../notifications/notify.js';
 import { AGENT_ACTION_MAX } from '../notifications/agent.js';
 import type { DeliverableMessage } from '../notifications/types.js';
 import { OWNER_ID } from '../owner.js';
+import { officeKindOf, officeRebuildRefusal } from '../office-files.js';
 import { getOwnerProfile } from '../onboarding/store.js';
 import { languageTag } from '../onboarding/language-tag.js';
 import { OWNER_AGENT_ID } from '../pages.js';
@@ -1131,6 +1133,29 @@ function filesArea(
     const row = rows[0];
     return row === undefined ? null : { ...toFileRow(row), storagePath: row.storage_path };
   };
+  /**
+   * The bytes of a new version of an Office file, made from the text a
+   * writer sent — Markdown onto a .docx, a CSV onto a .xlsx — by buddi's own
+   * exporter, or null when the file is not an Office file. Refused when the
+   * text does not fit the format, for a presentation, and for the owner's
+   * own file until he agreed (`officeRebuildRefusal`).
+   */
+  const officeBytes = async (fileId: string, mime: string, bytes: Buffer, confirmedRebuild: boolean): Promise<Buffer | null> => {
+    const file = await getFile(pool(), fileId);
+    if (!file) return null;
+    const kind = officeKindOf(file.mime, file.name);
+    if (kind === null) return null;
+    const refusal = officeRebuildRefusal(file, { confirmedRebuild, ...(facts.ownerId ? { ownerId: facts.ownerId } : {}) });
+    if (refusal || kind === 'pptx') throw new Error(refusal ?? 'agents cannot write a presentation');
+    const sent = mime.toLowerCase().split(';')[0]!.trim();
+    const wants = kind === 'docx' ? 'text/markdown' : 'text/csv';
+    if (sent !== wants) {
+      throw new Error(`${file.name ?? 'This file'} is ${kind === 'docx' ? 'a Word document: write it as Markdown' : 'a spreadsheet: write it as a table (csv or json)'}.`);
+    }
+    if (!facts.convertDocument) throw new Error('buddi cannot write Office files in this process.');
+    const base = (file.name ?? 'Document').replace(/\.[a-z0-9]{1,8}$/i, '');
+    return facts.convertDocument({ bytes, mime: wants, filename: `${base}.${kind === 'docx' ? 'md' : 'csv'}` }, kind);
+  };
   return {
     async save(input) {
       // The file belongs to the conversation the call runs in only when that
@@ -1162,14 +1187,18 @@ function filesArea(
         createdBy: facts.agentId ?? binding.plugin,
       };
       let result: { row: ArtifactRow; existed: boolean };
+      let rebuilt = false;
       const readVersion = input.version?.readVersion;
       if (input.version?.of !== undefined) {
         // The next version of a file named by id (its own, or any version's).
         const of = input.version.of;
         const fileId = await resolveFileId(pool(), of);
         if (fileId === null || !(await fileInScope(fileId))) throw new Error(`There is no file ${of} that ${binding.plugin} can read.`);
+        // An Office file stays one: text written onto it is rebuilt into its format (docs/files.md, "Office documents").
+        const office = await officeBytes(fileId, input.mime, input.bytes, input.version.confirmedRebuild === true);
+        if (office) rebuilt = true;
         result = await saveVersion(pool(), {
-          id: fileId, bytes: input.bytes, createdBy: fields.createdBy,
+          id: fileId, bytes: office ?? input.bytes, createdBy: fields.createdBy,
           ...(input.caption === undefined ? {} : { caption: input.caption }),
           ...(readVersion === undefined ? {} : { readVersion }),
         }, env());
@@ -1193,6 +1222,7 @@ function filesArea(
         ...row,
         conversationId,
         ...(result.existed ? { existed: true } : {}),
+        ...(rebuilt ? { rebuilt: true as const } : {}),
       };
     },
     async get(id) {

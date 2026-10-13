@@ -45,6 +45,10 @@
       "types": "./dist/text-files.d.ts",
       "default": "./dist/text-files.js"
     },
+    "./office-files": {
+      "types": "./dist/office-files.d.ts",
+      "default": "./dist/office-files.js"
+    },
     "./uninstall": {
       "types": "./dist/uninstall.d.ts",
       "default": "./dist/uninstall.js"
