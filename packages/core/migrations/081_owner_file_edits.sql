@@ -5,16 +5,6 @@
 -- command works on his version. Relative to BUDDI_DATA_DIR, like
 -- storage_path; null for everything that was not read from a workspace.
 alter table core.artifacts add column if not exists origin_path text null;
--- The workspace copy's hash as buddi last read or wrote it: the owner's save
--- writes back only while the copy still holds it (a command did not change it).
-alter table core.artifacts add column if not exists origin_sha256 text null;
-
--- A captured file is known by where it came from as well as by its bytes:
--- the same bytes from two outputs are two files, each written back to its
--- own path. The bytes on disk are shared either way (content-addressed).
-alter table core.artifacts drop constraint if exists artifacts_source_sha_key;
-create unique index if not exists artifacts_source_sha_origin_key
-  on core.artifacts (sha256, source_surface, source_chat_id, (coalesce(origin_path, '')));
 
 -- Each save the owner made, so the agent is told once, on its next turn, and
 -- a document write over an edit it has not read is refused.
