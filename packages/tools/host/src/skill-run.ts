@@ -80,12 +80,22 @@ const MACOS_DENIED_LOOKUP = [
   'com.apple.coreservices.launchservicesd', 'com.apple.coreservices.quarantine-resolver',
   'com.apple.lsd.mapdb', 'com.apple.lsd.modifydb', 'com.apple.coreservices.appleevents',
 ];
-/** What a confined macOS run may read: the system and the usual interpreter homes, nothing of the user's. */
+/**
+ * What a confined macOS run may read: the system and the usual interpreter
+ * homes, nothing of the user's — and of Homebrew and MacPorts only the
+ * programs, libraries and certificates, never their `var` (databases, logs)
+ * or the rest of `etc`. Of `/Library/Preferences` only the global defaults
+ * an interpreter's locale and TLS stack consult.
+ */
 const MACOS_READABLE = [
   '/usr', '/bin', '/sbin', '/System', '/Library/Developer/CommandLineTools', '/Library/Frameworks', '/Library/Apple',
-  '/Library/Preferences', '/Applications/Xcode.app/Contents', '/private/var/select', '/private/etc',
-  '/private/var/db/timezone', '/private/var/db/dyld', '/opt/homebrew', '/opt/local', '/dev',
+  '/Applications/Xcode.app/Contents', '/private/var/select', '/private/etc',
+  '/private/var/db/timezone', '/private/var/db/dyld', '/dev',
+  ...['bin', 'sbin', 'lib', 'libexec', 'Cellar', 'opt', 'Frameworks', 'etc/openssl@3', 'etc/ca-certificates'].map((d) => `/opt/homebrew/${d}`),
+  ...['bin', 'sbin', 'lib', 'libexec', 'Library/Frameworks', 'etc/openssl'].map((d) => `/opt/local/${d}`),
 ];
+/** Single files a confined macOS run may read. */
+const MACOS_READABLE_FILES = ['/Library/Preferences/.GlobalPreferences.plist', '/Library/Preferences/com.apple.security.plist'];
 /** What a confined Linux run sees of the system, read-only; everything else is absent. */
 const LINUX_SYSTEM = ['/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/etc', '/opt'];
 
@@ -146,13 +156,18 @@ export function confinementArgv(kind: Confinement, work: string, opts: ConfineOp
       '(deny file-read*)',
       // Seeing that a path exists (stat) is needed to walk to anything; reading it is not allowed.
       '(allow file-read-metadata)',
-      `(allow file-read* (literal "/") ${readable.map((p) => `(subpath ${q(p)})`).join(' ')} (subpath ${q(work)}))`,
+      `(allow file-read* (literal "/") ${MACOS_READABLE_FILES.map((p) => `(literal ${q(p)})`).join(' ')} ${readable.map((p) => `(subpath ${q(p)})`).join(' ')} (subpath ${q(work)}))`,
       '(deny file-write*)',
       `(allow file-write* (subpath ${q(work)}) (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`,
       `(deny process-exec ${MACOS_DENIED_EXEC.map((p) => `(literal ${q(p)})`).join(' ')})`,
       `(deny mach-lookup ${MACOS_DENIED_LOOKUP.map((n) => `(global-name ${q(n)})`).join(' ')})`,
       ...(opts.network ? [] : ['(deny network*)']),
-      ...(opts.fork === false ? ['(deny process-fork)'] : []),
+      // Signals: Node's permission model does not gate process.kill, and the run's parent is buddi. A run may
+      // signal itself and, when it may start processes, its own children; never its parent or anyone else.
+      // (`(deny signal (target others))` is ignored by sandbox-exec, so deny all and allow back.)
+      '(deny signal)',
+      '(allow signal (target self))',
+      ...(opts.fork === false ? ['(deny process-fork)'] : ['(allow signal (target children))']),
     ].join('');
     return ['/usr/bin/sandbox-exec', '-p', profile];
   }

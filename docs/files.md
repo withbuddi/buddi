@@ -577,8 +577,10 @@ checks), so it is one layer of several, not the wall.
 
 - **The OS sandbox**, the one skill scripts run under, handed to every
   plugin as `ctx.buddi.confinement` (host API 1.35): `sandbox-exec` on macOS
-  (network, writes outside the work folder and `process-fork` denied, only
-  the system, Node, the libraries and the work folder readable), bubblewrap
+  (network, writes outside the work folder, `process-fork` and every signal
+  but to itself denied — it cannot kill or poke buddi, its parent — and only
+  the system, Node, the libraries and the work folder readable; of Homebrew
+  only its programs, libraries and certificates), bubblewrap
   `--unshare-all` on Linux (its own namespaces, nothing of the owner's
   bound). Without one compose does not run.
 - **Node's permission model**: `node --permission --allow-fs-read=<work>
@@ -591,7 +593,9 @@ checks), so it is one layer of several, not the wall.
   Readable: the run's own folder (`<data>/plugins-data/artifacts/compose/run-<id>/`,
   removed after the run) and the real folders of `docx`, `pptxgenjs` and
   their dependencies, each `realpath`ed so no granted folder holds a link.
-- **The runner** resolves every import itself: the program may import only
+- **The runner** resolves every import itself, and loads code only from a
+  file in the work folder or a granted library (never a `data:` or `blob:`
+  URL, which would be `eval` by another name): the program may import only
   its library, and a program or library only the built-ins `buffer`,
   `events`, `path`, `stream`, `string_decoder`, `url` and `util` (what docx
   and pptxgenjs were traced to use). Every other built-in — `fs`, `net`,
@@ -599,7 +603,9 @@ checks), so it is one layer of several, not the wall.
   — is refused; pptxgenjs's own `fs` and `https` imports get a module that
   refuses when used. Before the program runs it removes
   `process.getBuiltinModule`, `binding`, `dlopen` and `report`, and the
-  network globals (`fetch`, `WebSocket`…).
+  network globals (`fetch`, `WebSocket`…). Where the libraries are installed
+  reaches it on fd 4, read and closed before the program runs, never as a
+  file the program could read.
 - **Limits**: 20 s on the clock (then the whole process group is killed),
   30 s of CPU (`ulimit -t`), 384 MB of heap, and — because the heap limit
   does not count Buffers — the group's resident memory sampled every 100 ms

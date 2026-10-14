@@ -184,6 +184,7 @@ const ATTEMPT: Record<string, string> = {
   Addon: 'load a native addon',
   WASI: 'use WASI',
   Builtin: 'load a part of Node it may not use',
+  Code: 'load code from somewhere other than its library (a data: URL, say)',
 };
 
 /**
@@ -292,9 +293,10 @@ async function runIn(
   await Promise.all(input.attachments.map((a, i) => writeFile(path.join(work, `attachment-${i + 1}`), a.bytes)));
   await writeFile(path.join(work, 'program.mjs'), input.program);
   await writeFile(path.join(work, 'run.mjs'), RUNNER_SOURCE);
-  await writeFile(path.join(work, 'plan.json'), JSON.stringify({
+  // The plan goes on fd 4, never into the work folder: it names buddi's install paths.
+  const plan = JSON.stringify({
     kind: input.kind, top: closure.top, deps: closure.deps, attachments, maxBytes: COMPOSE_LIMITS.outputBytes, builtins: COMPOSE_BUILTINS,
-  }));
+  });
 
   const timeoutMs = input.limits?.timeoutMs ?? COMPOSE_LIMITS.timeoutMs;
   const heapMb = input.limits?.heapMb ?? COMPOSE_LIMITS.heapMb;
@@ -312,7 +314,7 @@ async function runIn(
     const child = spawn(argv[0]!, argv.slice(1), {
       cwd: work,
       env: { PATH: process.env.PATH ?? '', NODE_OPTIONS: '' },
-      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'],
       detached: true,
       windowsHide: true,
     });
@@ -337,6 +339,9 @@ async function runIn(
     void watch();
     child.stdout!.on('data', (chunk: Buffer) => stdout.push(chunk));
     child.stderr!.on('data', (chunk: Buffer) => stderr.push(chunk));
+    const planIn = child.stdio[4] as NodeJS.WritableStream;
+    planIn.on('error', () => {});
+    planIn.end(plan);
     const out = child.stdio[3] as NodeJS.ReadableStream;
     out.on('data', (chunk: Buffer) => {
       received += chunk.length;

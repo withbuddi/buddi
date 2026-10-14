@@ -196,6 +196,17 @@ describe.skipIf(detectConfinement() === null)('the confinement a bundle script r
         expect((await run(`/usr/bin/osascript -e 'return 1'; echo "rc=$?"`)).stdout).toContain('rc=126');
         expect((await run(`/usr/bin/open -g -a Calculator; echo "rc=$?"`)).stdout).toContain('rc=126');
       }
+      if (kind === 'macos-sandbox') {
+        // Signals: its own children yes, its parent (buddi) and anyone else no.
+        const signals = (await run(`sleep 5 & kill $! && echo child-killed; kill -0 $PPID 2>/dev/null && echo parent-reached || echo parent-refused; kill -0 1 2>/dev/null && echo launchd-reached || echo launchd-refused`)).stdout;
+        expect(signals).toContain('child-killed');
+        expect(signals).toContain('parent-refused');
+        expect(signals).toContain('launchd-refused');
+        // Homebrew's databases and logs, and the system's network preferences, stay unread.
+        const reads = (await run(`ls /opt/homebrew/var >/dev/null 2>&1 && echo var-read || echo var-refused; cat /Library/Preferences/SystemConfiguration/preferences.plist >/dev/null 2>&1 && echo prefs-read || echo prefs-refused`)).stdout;
+        expect(reads).toContain('var-refused');
+        expect(reads).toContain('prefs-refused');
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

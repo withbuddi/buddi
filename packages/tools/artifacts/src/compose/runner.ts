@@ -1,7 +1,8 @@
 /**
  * `run.mjs`: what the confined child Node runs (docs/files.md, "Composed
  * documents"). Written into each run's work folder beside `program.mjs`,
- * the attachments and `plan.json`.
+ * and the attachments. The plan — where the libraries are — comes on fd 4
+ * and is never a file the program could read.
  *
  * It resolves every bare import itself — a program's `docx` or
  * `pptxgenjs`, and their own dependencies — to the real folders buddi
@@ -14,11 +15,13 @@
 export const RUNNER_SOURCE = String.raw`// buddi's compose runner. The program is program.mjs; this file is buddi's.
 import { registerHooks, isBuiltin } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { readFileSync, writeSync } from 'node:fs';
+import { closeSync, readFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
 const work = path.dirname(fileURLToPath(import.meta.url));
-const plan = JSON.parse(readFileSync(path.join(work, 'plan.json'), 'utf8'));
+// The plan comes on fd 4, read whole and closed: it names buddi's install paths, which the program never sees.
+const plan = JSON.parse(readFileSync(4, 'utf8'));
+closeSync(4);
 const OUT = 3;
 
 function writeAll(buffer) {
@@ -70,8 +73,29 @@ function refusedBuiltin(name) {
   err.builtin = name;
   return err;
 }
+// Where code may come from: a file inside the work folder or a granted library, or an allowed built-in.
+// Never a data: or blob: URL (code from a string, past --disallow-code-generation-from-strings), never anything else.
+const roots = [work, ...Object.keys(plan.deps)];
+function allowedURL(url) {
+  if (url.startsWith('node:')) return BUILTINS.has(url.slice(5).split('/')[0]);
+  if (!url.startsWith('file:')) return false;
+  let file;
+  try { file = fileURLToPath(url); } catch { return false; }
+  return roots.some((root) => file === root || file.startsWith(root + path.sep));
+}
+function refusedURL(url) {
+  const err = new Error('a compose program may load code only from its library, not from ' + (url.split(':')[0] || 'there') + ': URLs');
+  err.code = 'ERR_ACCESS_DENIED';
+  err.permission = 'Code';
+  return err;
+}
+function checked(result) {
+  if (!result || typeof result.url !== 'string' || !allowedURL(result.url)) throw refusedURL(result && result.url || '');
+  return result;
+}
 registerHooks({
-  resolve(specifier, context, next) {
+  resolve(specifier, context, nextResolve) {
+    const next = (spec, ctx) => checked(nextResolve(spec, ctx));
     if (isBuiltin(specifier)) {
       const name = specifier.replace(/^node:/, '');
       const root = name.split('/')[0];
@@ -99,6 +123,7 @@ registerHooks({
     return next(specifier, { ...context, parentURL: pathToFileURL(path.join(dir, 'package.json')).href });
   },
   load(url, context, next) {
+    if (!url.startsWith(STUB) && !allowedURL(url)) throw refusedURL(url);
     if (url.startsWith(STUB)) {
       const name = url.slice(STUB.length);
       return {

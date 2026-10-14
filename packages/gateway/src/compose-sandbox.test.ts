@@ -81,6 +81,24 @@ describe.skipIf(!availability.available)(`a compose program inside ${area.kind ?
     expect((await refused(`export default async () => Buffer.from(String(new Function('return 2')()));`)).code).toBe('forbidden');
   });
 
+  it('cannot signal its parent — buddi — or anyone else', async () => {
+    const out = await run(`export default async () => { const tried = []; for (const sig of ['SIGKILL', 'SIGUSR1', 0]) { try { process.kill(process.ppid, sig); tried.push('sent'); } catch (e) { tried.push(e.code); } } return Buffer.from(JSON.stringify(tried)); };`);
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(JSON.parse(out.bytes.toString('utf8'))).toEqual(['EPERM', 'EPERM', 'EPERM']);
+  });
+
+  it('loads no code from a data: URL, which would be eval by another name', async () => {
+    const out = await refused(`export default async () => { const m = await import('data:text/javascript,export default 41 + 1'); return Buffer.from(String(m.default)); };`);
+    expect(out).toMatchObject({ code: 'forbidden', message: expect.stringMatching(/load code from somewhere other than its library/) });
+  });
+
+  it('never sees the plan that names buddi’s install paths', async () => {
+    const out = await run(`export default async () => { try { await import('./plan.json', { with: { type: 'json' } }); return Buffer.from('read'); } catch (e) { return Buffer.from(String(e.code ?? e.name)); } };`);
+    expect(out.ok).toBe(true);
+    // There is no plan file: it came on fd 4, which the runner read and closed.
+    if (out.ok) expect(out.bytes.toString('utf8')).toBe('ERR_MODULE_NOT_FOUND');
+  });
+
   it('refuses any package but its library', async () => {
     const out = await refused(`import pako from 'pako'; export default async () => Buffer.from('x');`);
     expect(out).toMatchObject({ code: 'program_error', message: expect.stringMatching(/can import only docx or pptxgenjs/) });
