@@ -18,6 +18,7 @@
 export { parseDelimited } from '../chat/ArtifactPreview';
 import { useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
+import { FILE_FAMILIES } from '@buddi/core/file-families';
 import { CHANGED_SINCE } from '@buddi/core/text-files';
 import { ApiError, api, type FileConflict, type FileView, type LibraryEntry, type LibraryVersion } from '../api';
 import { ArtifactPreview } from '../chat/ArtifactPreview';
@@ -35,7 +36,7 @@ const ORIGINS = [
   { id: 'produced', label: 'Created by agents' },
   { id: 'uploaded', label: 'Uploaded by you' },
 ] as const;
-const FAMILIES: Array<LibraryEntry['family'] | ''> = ['', 'image', 'pdf', 'table', 'text', 'code', 'audio', 'video', 'archive', 'file'];
+const FAMILIES: Array<LibraryEntry['family'] | ''> = ['', ...FILE_FAMILIES];
 
 export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Element {
   // Search and filters live in the address, so Back brings them back and a

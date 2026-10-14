@@ -85,6 +85,22 @@ describe('exports', () => {
     expect(rels).not.toContain('javascript:');
   });
 
+  it('gives the Word file document-level spacing, font and one-inch margins', async () => {
+    const files = unzipSync(new Uint8Array(await markdownToDocx('12 October 2026\n\nDear Rachid,\n\n# Congratulations\n\nWell done.\n', 'Letter.md')));
+    const styles = strFromU8(files['word/styles.xml']!);
+    const defaults = styles.slice(styles.indexOf('<w:docDefaults>'), styles.indexOf('</w:docDefaults>'));
+    expect(defaults).toMatch(/<w:rFonts [^>]*w:ascii="Calibri"/);
+    expect(defaults).toContain('<w:sz w:val="22"/>');
+    expect(defaults).toMatch(/<w:spacing [^>]*w:after="160"/);
+    expect(defaults).toMatch(/<w:spacing [^>]*w:line="276"/);
+    const heading1 = styles.slice(styles.indexOf('w:styleId="Heading1"'));
+    expect(heading1.slice(0, heading1.indexOf('</w:style>'))).toMatch(/<w:spacing [^>]*w:before="360"[^>]*w:after="120"|<w:spacing [^>]*w:after="120"[^>]*w:before="360"/);
+    const document = strFromU8(files['word/document.xml']!);
+    expect(document).toMatch(/<w:pgMar [^>]*w:top="1440"[^>]*w:right="1440"[^>]*w:bottom="1440"[^>]*w:left="1440"/);
+    // No per-run spacing hacks: the body's paragraphs carry none of their own.
+    expect(document).not.toContain('w:after="160"');
+  });
+
   it('makes a spreadsheet that reads back with numbers as numbers', async () => {
     const csv = 'Item,Amount,Code\r\nRent,1200,007\r\n"Food, misc",400.5,12\r\n';
     const rows = await readSheet(await csvToXlsx(csv, 'Budget.csv'));

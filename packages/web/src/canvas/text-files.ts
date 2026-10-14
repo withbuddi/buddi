@@ -8,9 +8,19 @@
  * it open rather than opening another. Which files are text is core's rule,
  * the one the server's routes apply (`@buddi/core/text-files`).
  */
+import { madeDocumentOf, officeKindOf } from '@buddi/core/office-files';
 import { isTextFile } from '@buddi/core/text-files';
 
 export { isTextFile };
+
+/**
+ * Which files a call that made them opens as their own tab: a text file (in
+ * the editor), a Word, Excel or PowerPoint file and a PDF (in their preview).
+ * The one rule the canvas applies to what the gateway says a call made.
+ */
+export function opensAsFileTab(mime: string, filename?: string | null): boolean {
+  return isTextFile(mime, filename) || officeKindOf(mime, filename) !== null || madeDocumentOf(mime, filename) !== null;
+}
 
 
 function extOf(filename: string | null | undefined): string {

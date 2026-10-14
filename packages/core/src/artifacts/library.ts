@@ -10,51 +10,15 @@
 import { createHash } from 'node:crypto';
 import { OWNER_ID } from '../owner.js';
 import { fileVersions } from './store.js';
+// The families a person tells apart: one rule for the page and the server.
+import { familyOf, familySql, FILE_FAMILIES, type FileFamily } from '../file-families.js';
+
+export { familyOf, FILE_FAMILIES, type FileFamily };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Queryable = { query(sql: string, params?: any[]): Promise<{ rows: any[] }> };
 
-/** The families a person tells apart at a glance. The same list as the page draws. */
-export type FileFamily = 'image' | 'pdf' | 'table' | 'text' | 'code' | 'audio' | 'video' | 'archive' | 'file';
-export const FILE_FAMILIES: readonly FileFamily[] = ['image', 'pdf', 'table', 'text', 'code', 'audio', 'video', 'archive', 'file'];
-
-const TABLE_EXT = ['csv', 'tsv', 'xls', 'xlsx', 'numbers'];
-const ARCHIVE_EXT = ['zip', 'gz', 'tgz', 'rar', '7z'];
-const CODE_EXT = ['ts', 'tsx', 'js', 'py', 'rb', 'go', 'rs', 'swift', 'json', 'yaml', 'yml', 'toml', 'sh', 'sql', 'html', 'css'];
-const TEXT_EXT = ['md', 'txt', 'rtf', 'doc', 'docx'];
-
-export function familyOf(mime: string, filename?: string | null): FileFamily {
-  const value = (mime || '').toLowerCase();
-  const ext = (filename ?? '').toLowerCase().split('.').pop() ?? '';
-  if (value.startsWith('image/')) return 'image';
-  if (value === 'application/pdf') return 'pdf';
-  if (value.startsWith('audio/')) return 'audio';
-  if (value.startsWith('video/')) return 'video';
-  if (value === 'text/csv' || value === 'text/tab-separated-values' || value.includes('spreadsheet') || value.includes('excel') || TABLE_EXT.includes(ext)) return 'table';
-  if (value.includes('zip') || value.includes('tar') || value.includes('compressed') || ARCHIVE_EXT.includes(ext)) return 'archive';
-  if (value === 'application/json' || value.includes('javascript') || value.includes('xml') || CODE_EXT.includes(ext)) return 'code';
-  if (value.startsWith('text/') || TEXT_EXT.includes(ext)) return 'text';
-  return 'file';
-}
-
-/**
- * The same classification as SQL, so a family filter runs in the database.
- * `$m` is the lower-cased mime, `$e` the lower-cased extension.
- */
-function familySql(m: string, e: string): string {
-  const inList = (xs: string[]): string => xs.map((x) => `'${x}'`).join(', ');
-  return `case
-    when ${m} like 'image/%' then 'image'
-    when ${m} = 'application/pdf' then 'pdf'
-    when ${m} like 'audio/%' then 'audio'
-    when ${m} like 'video/%' then 'video'
-    when ${m} in ('text/csv', 'text/tab-separated-values') or ${m} like '%spreadsheet%' or ${m} like '%excel%' or ${e} in (${inList(TABLE_EXT)}) then 'table'
-    when ${m} like '%zip%' or ${m} like '%tar%' or ${m} like '%compressed%' or ${e} in (${inList(ARCHIVE_EXT)}) then 'archive'
-    when ${m} = 'application/json' or ${m} like '%javascript%' or ${m} like '%xml%' or ${e} in (${inList(CODE_EXT)}) then 'code'
-    when ${m} like 'text/%' or ${e} in (${inList(TEXT_EXT)}) then 'text'
-    else 'file' end`;
-}
 const FAMILY_EXPR = familySql('lower(f.mime)', "lower(coalesce(substring(f.name from '\\.([A-Za-z0-9]+)$'), ''))");
 
 export type FileOrigin = 'uploaded' | 'produced' | 'unknown';

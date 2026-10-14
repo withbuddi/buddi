@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { decodeCursor, encodeCursor, familyOf, filterKey, listLibrary } from './library.js';
 import { isTextFile as textPreviewable } from '../text-files.js';
+import { FAMILY_LABEL, familySql } from '../file-families.js';
+import { OFFICE_MIME } from '../office-files.js';
 
 describe('the library', () => {
   it('classifies families from the mime first and the extension second', () => {
@@ -11,6 +13,21 @@ describe('the library', () => {
     expect(familyOf('text/html', 'page.html')).toBe('code');
     expect(familyOf('application/zip')).toBe('archive');
     expect(familyOf('application/octet-stream', 'blob')).toBe('file');
+  });
+
+  it('classifies Office files by core’s Office rule, never as code or an archive', () => {
+    // Owner's test on b9a8fe77: a .docx listed as "Code · 10 KB" (its mime says "xml").
+    expect(familyOf(OFFICE_MIME.docx, 'Letter.docx')).toBe('text');
+    expect(familyOf(OFFICE_MIME.xlsx, 'Budget.xlsx')).toBe('table');
+    expect(familyOf(OFFICE_MIME.pptx, 'Deck.pptx')).toBe('presentation');
+    expect(familyOf('application/octet-stream', 'Deck.pptx')).toBe('presentation');
+    expect(familyOf('application/zip', 'Letter.docx')).toBe('text');
+    expect(familyOf('application/vnd.ms-powerpoint', 'old.ppt')).toBe('presentation');
+    expect([FAMILY_LABEL.text, FAMILY_LABEL.table, FAMILY_LABEL.presentation]).toEqual(['Document', 'Spreadsheet', 'Presentation']);
+    // The database's filter says the same.
+    const sql = familySql('m', 'e');
+    expect(sql.indexOf(`'${OFFICE_MIME.docx}' or`)).toBeLessThan(sql.indexOf("like '%xml%'"));
+    expect(sql).toContain(`then 'presentation'`);
   });
 
   it('previews as text only what is genuinely text, never an Office container', () => {

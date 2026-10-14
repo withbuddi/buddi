@@ -18,6 +18,7 @@ What changes in buddi from one release to the next, newest first.
 ### Fixed
 
 - A document an agent names with punctuation between words gets a readable file name: "List: Two" is saved as "List - Two.md", no longer "List- Two.md". One rule in core names every file buddi makes from a title.
+- A Word, Excel, PowerPoint or PDF file an agent made — with `artifacts.write { format }` or a command such as python-docx — opens on the Canvas as its own file tab in its preview, after the command that made it, instead of the tool's result card. Files, the Canvas and chat tiles call Office files a Document, Spreadsheet or Presentation with their own icon, no longer "Code" (one family rule in core, also behind the Kind filter, which gains Presentation). Word files buddi makes have proper spacing: Calibri 11 pt, 8 pt after each paragraph, 1.15 lines, spaced headings and one-inch margins.
 
 ### Changed
 

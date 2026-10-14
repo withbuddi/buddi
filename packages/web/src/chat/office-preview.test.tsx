@@ -125,4 +125,35 @@ describe('a Word document an agent wrote, on the Canvas', () => {
     expect(screen.getByText('v1, by Writer')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Download/ })).toBeInTheDocument();
   });
+
+  it('opens a format-docx write as the file’s own tab, labelled a Document, not the tool’s result card', async () => {
+    // Owner's test on b9a8fe77: the tab read "Artifacts · Write" with the key-value result.
+    const { api } = await import('../api');
+    const { renderablesFrom } = await import('../canvas/renderables');
+    const { fileTabId } = await import('../canvas/text-files');
+    const { ArtifactView } = await import('../canvas/views/ArtifactView');
+    const FILE = 'df3f04e4-0000-4000-8000-000000000000';
+    const V1 = '33333333-3333-4333-8333-333333333333';
+    const name = 'Congratulations Dr. Rachid AYOUBA.docx';
+    const at = new Date().toISOString();
+    const items = renderablesFrom({ descriptors: [], messages: [
+      { id: 'u', role: 'assistant', at, blocks: [{ type: 'tool_use', id: 'w1', name: 'artifacts.write', input: { title: 'Congratulations Dr. Rachid AYOUBA', format: 'docx', content: '# Hi' } }] },
+      { id: 'r', role: 'user', at, blocks: [{ type: 'tool_result', toolUseId: 'w1', name: 'artifacts.write', ok: true,
+        output: { title: name, artifactId: V1, fileId: FILE, version: 1, mime: OFFICE_MIME.docx, sizeBytes: 10_331 },
+        files: [{ artifactId: V1, fileId: FILE, version: 1, filename: name, mime: OFFICE_MIME.docx, deleted: false, fileDeleted: false }], fileResult: true }] },
+    ] });
+    expect(items.map((item) => [item.id, item.renderer, item.tool, item.title])).toEqual([[fileTabId(FILE), 'artifact', 'Document', name]]);
+
+    vi.spyOn(api, 'session').mockResolvedValue({ timezone: 'UTC', platform: 'darwin', signedInThrough: 'local' } as never);
+    vi.spyOn(api, 'openInAppState').mockResolvedValue({ open: false });
+    vi.spyOn(api, 'file').mockResolvedValue({
+      file: { id: FILE, name, mime: OFFICE_MIME.docx, conversationId: null, origin: 'document', createdBy: 'writer' },
+      current: { fileId: FILE, version: 1, artifactId: V1, sha256: 'x', createdBy: 'writer', createdByName: 'Writer' },
+      versions: [], entry: null, contexts: [], contextsTotal: 0, contextsOffset: 0, available: true,
+    } as never);
+    serve(fixture('letter.docx'));
+    render(<ArtifactView {...(items[0]!.props as Parameters<typeof ArtifactView>[0])} />);
+    expect(await screen.findByTestId('office-docx')).toBeInTheDocument();
+    expect(screen.getByText('Document')).toBeInTheDocument();
+  });
 });

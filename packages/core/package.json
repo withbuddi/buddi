@@ -45,6 +45,10 @@
       "types": "./dist/text-files.d.ts",
       "default": "./dist/text-files.js"
     },
+    "./file-families": {
+      "types": "./dist/file-families.d.ts",
+      "default": "./dist/file-families.js"
+    },
     "./office-files": {
       "types": "./dist/office-files.d.ts",
       "default": "./dist/office-files.js"

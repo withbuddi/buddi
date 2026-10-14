@@ -87,6 +87,8 @@ export function FamilyMark({ family }: { family: FileFamily }): JSX.Element {
       return <svg {...common}><rect x="3" y="4" width="14" height="12" rx="1.5" /><path d="M3 8.5h14M3 12.5h14M8 4v12M13 4v12" /></svg>;
     case 'text':
       return <svg {...common}><path d="M6 2.5h5.5L16 7v9.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z" /><path d="M11.5 2.5V7H16" /><path d="M7.5 10.5h5M7.5 13.5h3.5" /></svg>;
+    case 'presentation':
+      return <svg {...common}><rect x="3" y="3.5" width="14" height="10" rx="1.5" /><path d="M10 13.5v3M7 16.5h6M6.5 10.5l2.5-3 2 2 2.5-3" /></svg>;
     case 'code':
       return <svg {...common}><path d="M7 6l-4 4 4 4M13 6l4 4-4 4M11.5 4l-3 12" /></svg>;
     case 'audio':

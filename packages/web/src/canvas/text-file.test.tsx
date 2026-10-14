@@ -78,7 +78,7 @@ describe('which results are text files', () => {
 
 describe('a text file a run produced, on the canvas', () => {
   const at = (s: number): string => new Date(Date.UTC(2026, 9, 13, 9, 0, s)).toISOString();
-  type Told = { artifactId: string; fileId: string; version: number; filename: string; deleted?: boolean; fileDeleted?: boolean };
+  type Told = { artifactId: string; fileId: string; version: number; filename: string; mime?: string; deleted?: boolean; fileDeleted?: boolean };
   /** A call and its result, with the files the gateway says it made or opened. */
   /** A call is the file it made when it wrote or opened one (the gateway's `fileResult`); a command only leaves files. */
   const call = (id: string, name: string, output: unknown, s: number, files?: Told[], readsFile = false): ChatMessage[] => [
@@ -149,6 +149,25 @@ describe('a text file a run produced, on the canvas', () => {
       artifacts: [{ id: ID(5), filename: 'summary.md', mime: 'text/markdown' }],
     }, 1, told(5, 'summary.md')), descriptors: [] });
     expect(items.map((item) => item.source)).toEqual(['fallback', 'artifact']);
+    expect(items.at(-1)!.substantial).toBe(true);
+  });
+
+  it('puts a command’s generated Office file or PDF after the command too, as its file tab', () => {
+    // Owner's test on b9a8fe77: python-docx under host.exec left a .docx; the canvas showed only Host·Exec tabs.
+    const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const items = renderablesFrom({ messages: call('x1', 'host.exec', {
+      exitCode: 0, stdout: 'saved', stderr: '', state: 'exited',
+      artifacts: [{ id: ID(5), filename: 'Letter.docx', mime: DOCX }, { id: ID(6), filename: 'Letter.pdf', mime: 'application/pdf' }, { id: ID(7), filename: 'chart.png', mime: 'image/png' }],
+    }, 1, [
+      { artifactId: ID(5), fileId: FILE, version: 1, filename: 'Letter.docx', mime: DOCX },
+      { artifactId: ID(6), fileId: OTHER, version: 1, filename: 'Letter.pdf', mime: 'application/pdf' },
+      { artifactId: ID(7), fileId: ID(9), version: 1, filename: 'chart.png', mime: 'image/png' },
+    ] as Told[]), descriptors: [] });
+    expect(items.map((item) => [item.id, item.source, item.tool])).toEqual([
+      [items[0]!.id, 'fallback', 'host.exec'],
+      [fileTabId(FILE), 'artifact', 'Document'],
+      [fileTabId(OTHER), 'artifact', 'PDF'],
+    ]);
     expect(items.at(-1)!.substantial).toBe(true);
   });
 });

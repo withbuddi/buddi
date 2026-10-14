@@ -79,8 +79,11 @@ Start with a compact list, newest first. Each entry shows:
 
 The first version has case-insensitive filename search and combinable filters
 for origin and file family only. It does not search file contents. Family means Image, PDF,
-Spreadsheet, Document, Code, Audio, Video, Archive or File; reuse the existing
-family classification rather than exposing only the store's four broad kinds.
+Spreadsheet, Document, Presentation, Code, Audio, Video, Archive or File:
+one rule, `@buddi/core/file-families` (`familyOf`, and the same as SQL for the
+filter), which classifies Office files by `officeKindOf` first (a .docx is a
+Document, a .xlsx a Spreadsheet, a .pptx a Presentation), never by the "xml"
+or "zip" in their mime.
 
 Agent, group and date filters are a follow-up, not part of the first-version
 query surface. The associations and conversation links still ship in v1.
@@ -413,6 +416,11 @@ dashboard's bundle, never kept by the offline worker:
 | .docx | docx-preview (Apache-2.0), into an `<iframe sandbox="allow-same-origin">` with no scripts | its pages, images inlined; comments, tracked changes and embedded HTML left out |
 | .xlsx | read-excel-file (MIT) and buddi's own table | a tab per sheet, the first 1,000 rows and 50 columns of each as values (text, numbers, dates); styles, number formats and charts not drawn |
 | .pptx | @silurus/ooxml (MIT; Rust/WASM parser, Canvas 2D), about 1.4 MB gzipped with its parser and worker | slide by slide on a canvas, Previous and Next; its Google Fonts option stays off |
+
+An Office file or a PDF a call made — `artifacts.write { format }` or a
+command's output — opens as its file's tab (`file:<fileId>`) in this preview,
+the same rule as a text file (`opensAsFileTab`, on the canvas): a write is the
+file, a command's files come after its own tab.
 
 A render is made in the browser from the version's bytes and thrown away
 with the tab: nothing derived is stored. The Canvas card shows the file's

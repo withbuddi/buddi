@@ -43,7 +43,7 @@ import type { NotifyViewProps } from './views/NotifyView';
 import type { PreviewProps, Renderable, RendererName, TabVersion, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { delegatedFiles, familyOf, FAMILY_LABEL, type AttachmentBlock } from '../chat/attachments';
-import { fileTabId, isTextFile } from './text-files';
+import { fileTabId, opensAsFileTab } from './text-files';
 import type { ArtifactViewProps } from './views/ArtifactView';
 import { commandResult } from './command-result';
 import { expiryOf, subjectIdentityOf, type Subject } from './tab-order';
@@ -489,13 +489,14 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       if (isChange(output)) changes += 1;
 
       /*
-       * A text file the result stored opens as itself, in the editor: a
+       * A file the result stored opens as itself — a text file in the editor,
+       * an Office document or a PDF in its preview (`opensAsFileTab`): a
        * document write *is* its file and draws nothing else; a command that
        * left files keeps its own tab, and its files come after it — newer,
        * and what the canvas turns to.
        */
       // What the call made, as the gateway says (`files`, each with its file).
-      const produced = toldFiles(block)?.filter((file) => isTextFile(file.mime, file.filename)) ?? [];
+      const produced = toldFiles(block)?.filter((file) => opensAsFileTab(file.mime, file.filename)) ?? [];
       // A document write whose file was deleted since draws nothing: its row says so.
       const gone = (block.files?.length ?? 0) > 0 && toldFiles(block)?.length === 0;
       if (gone && block.fileResult && !byTool.has(tool)) continue;

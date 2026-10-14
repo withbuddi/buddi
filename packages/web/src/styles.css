@@ -1625,6 +1625,7 @@ button.wb-file-open:focus-visible { outline: 2px solid var(--accent); outline-of
 .wb-file-visual[data-family='pdf'] { color: var(--critical); }
 .wb-file-visual[data-family='table'] { color: var(--good); }
 .wb-file-visual[data-family='code'] { color: var(--accent); }
+.wb-file-visual[data-family='presentation'] { color: var(--warning); }
 .wb-file-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .wb-file-name {
   font-size: var(--text-md);
@@ -3367,6 +3368,7 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .files-row-visual[data-family='pdf'] { color: var(--critical); }
 .files-row-visual[data-family='table'] { color: var(--good); }
 .files-row-visual[data-family='code'] { color: var(--accent); }
+.files-row-visual[data-family='presentation'] { color: var(--warning); }
 .files-split .ui-pick { align-items: center; }
 .files-more { display: flex; justify-content: flex-end; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
 .files-detail-body { display: flex; flex-direction: column; gap: var(--space-4); }

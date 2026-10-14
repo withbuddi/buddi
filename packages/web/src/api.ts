@@ -6,6 +6,7 @@
  * header — the double-submit half of the protection; the server checks the
  * Origin for the other half. Nothing here ever touches a third-party host.
  */
+import type { FileFamily } from '@buddi/core/file-families';
 import { displayFormats, usesTwelveHours, type TokenUsage } from './format';
 import type { ViewDescriptor } from './canvas/types';
 import type { PageActResult, PluginPageDescriptor, PluginWorkspaceFiles } from './pages/types';
@@ -1762,7 +1763,7 @@ export interface LibraryEntry {
   /** What the file was handed in with, or the label an agent filed a document under. */
   caption: string | null;
   mime: string;
-  family: 'image' | 'pdf' | 'table' | 'text' | 'code' | 'audio' | 'video' | 'archive' | 'file';
+  family: FileFamily;
   sizeBytes: number;
   createdAt: string;
   origin: 'uploaded' | 'produced' | 'unknown';

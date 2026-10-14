@@ -22,6 +22,7 @@ import {
   Document,
   ExternalHyperlink,
   HeadingLevel,
+  LineRuleType,
   LevelFormat,
   Packer,
   Paragraph,
@@ -261,6 +262,7 @@ function docxBlocks(blocks: readonly Block[], state: DocxState, level = 0, quote
             borders: { top: CELL_BORDER, bottom: CELL_BORDER, left: CELL_BORDER, right: CELL_BORDER },
             ...(header ? { shading: { type: ShadingType.CLEAR, fill: 'F6F8FA', color: 'auto' } } : {}),
             children: [new Paragraph({
+              style: 'TableText',
               alignment: ALIGN[block.align[i] ?? 'left'],
               children: docxRuns((cells[i] ?? []).map((r) => (header ? { ...r, bold: true } : r))),
             })],
@@ -287,6 +289,49 @@ function docxBlocks(blocks: readonly Block[], state: DocxState, level = 0, quote
   return out;
 }
 
+/** Points as Word's units: twentieths of a point for spacing, half points for sizes. */
+const pt = (points: number): number => Math.round(points * 20);
+const half = (points: number): number => Math.round(points * 2);
+/** Spacing before and after, and size, of each heading level (H1 first). */
+const HEADING_SPACING: ReadonlyArray<{ before: number; after: number; size: number }> = [
+  { before: 18, after: 6, size: 16 },
+  { before: 14, after: 4, size: 13 },
+  { before: 12, after: 4, size: 12 },
+  { before: 10, after: 2, size: 11 },
+  { before: 10, after: 2, size: 11 },
+  { before: 10, after: 2, size: 11 },
+];
+const heading = (level: number) => ({
+  run: { font: 'Calibri', size: half(HEADING_SPACING[level]!.size), bold: true, color: '1F2328' },
+  paragraph: { keepNext: true, keepLines: true, spacing: { before: pt(HEADING_SPACING[level]!.before), after: pt(HEADING_SPACING[level]!.after) } },
+});
+
+/**
+ * The document's styles, set once on the document rather than on each run:
+ * Calibri 11 pt (Word's own default, which Pages and LibreOffice substitute
+ * with a metric match), 8 pt after each paragraph and 1.15 lines, headings
+ * spaced before and after and kept with what follows, list items close
+ * together (contextual spacing), table text single-spaced.
+ */
+const DOCX_STYLES = {
+  default: {
+    document: {
+      run: { font: { ascii: 'Calibri', hAnsi: 'Calibri', cs: 'Calibri', eastAsia: 'Calibri' }, size: half(11) },
+      // `line` is in 240ths of a line: 276 is 1.15.
+      paragraph: { spacing: { after: pt(8), line: 276, lineRule: LineRuleType.AUTO } },
+    },
+    heading1: heading(0),
+    heading2: heading(1),
+    heading3: heading(2),
+    heading4: heading(3),
+    heading5: heading(4),
+    heading6: heading(5),
+    listParagraph: { paragraph: { contextualSpacing: true, spacing: { after: pt(4) } } },
+  },
+  // A table cell's text: single-spaced, with a little air top and bottom.
+  paragraphStyles: [{ id: 'TableText', name: 'Table Text', basedOn: 'Normal', quickFormat: true, paragraph: { spacing: { before: pt(2), after: pt(2), line: 240, lineRule: LineRuleType.AUTO } } }],
+};
+
 /** A Markdown document as a Word file, with Word's own heading and list styles. */
 export async function markdownToDocx(markdown: string, filename: string | null): Promise<Buffer> {
   const blocks = parseMarkdown(markdown);
@@ -295,14 +340,15 @@ export async function markdownToDocx(markdown: string, filename: string | null):
   const doc = new Document({
     creator: 'buddi',
     title: documentTitle(blocks, filename),
-    styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } },
+    styles: DOCX_STYLES,
     numbering: {
       config: [
         { reference: 'bullets', levels: levels(LevelFormat.BULLET, (i) => ['•', '◦', '▪'][i % 3]!) },
         { reference: 'ordered', levels: levels(LevelFormat.DECIMAL, (i) => `%${i + 1}.`) },
       ],
     },
-    sections: [{ children: docxBlocks(blocks, { ordered: 0 }) }],
+    // One-inch margins all round (1440 twips).
+    sections: [{ properties: { page: { margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } } }, children: docxBlocks(blocks, { ordered: 0 }) }],
   });
   return Packer.toBuffer(doc);
 }

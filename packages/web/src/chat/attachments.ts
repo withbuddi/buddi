@@ -67,37 +67,13 @@ export function formatBytes(bytes: number | null | undefined): string {
 }
 
 /**
- * The family a file belongs to, for the icon and the word under it. Coarse on
- * purpose: the owner needs to tell a spreadsheet from a photo at a glance, not
- * to learn the difference between two zip flavours.
+ * The family a file belongs to, for the icon and the word under it: core's
+ * one rule (`@buddi/core/file-families`), the same the Files list and its
+ * filter apply on the server.
  */
-export type FileFamily = 'image' | 'pdf' | 'table' | 'text' | 'code' | 'audio' | 'video' | 'archive' | 'file';
+import { FAMILY_LABEL, familyOf, type FileFamily } from '@buddi/core/file-families';
 
-export function familyOf(mime: string, filename?: string | null): FileFamily {
-  const value = mime.toLowerCase();
-  const ext = (filename ?? '').toLowerCase().split('.').pop() ?? '';
-  if (value.startsWith('image/')) return 'image';
-  if (value === 'application/pdf') return 'pdf';
-  if (value.startsWith('audio/')) return 'audio';
-  if (value.startsWith('video/')) return 'video';
-  if (value === 'text/csv' || value === 'text/tab-separated-values' || value.includes('spreadsheet') || value.includes('excel') || ['csv', 'tsv', 'xls', 'xlsx', 'numbers'].includes(ext)) return 'table';
-  if (value.includes('zip') || value.includes('tar') || value.includes('compressed') || ['zip', 'gz', 'tgz', 'rar', '7z'].includes(ext)) return 'archive';
-  if (value === 'application/json' || value.includes('javascript') || value.includes('xml') || ['ts', 'tsx', 'js', 'py', 'rb', 'go', 'rs', 'swift', 'json', 'yaml', 'yml', 'toml', 'sh', 'sql', 'html', 'css'].includes(ext)) return 'code';
-  if (value.startsWith('text/') || ['md', 'txt', 'rtf', 'doc', 'docx'].includes(ext)) return 'text';
-  return 'file';
-}
-
-export const FAMILY_LABEL: Record<FileFamily, string> = {
-  image: 'Image',
-  pdf: 'PDF',
-  table: 'Spreadsheet',
-  text: 'Document',
-  code: 'Code',
-  audio: 'Audio',
-  video: 'Video',
-  archive: 'Archive',
-  file: 'File',
-};
+export { FAMILY_LABEL, familyOf, type FileFamily };
 
 /** The tab id for one artifact on the canvas. Its own namespace, stable across refreshes. */
 export function artifactTabId(artifactId: string): string {
