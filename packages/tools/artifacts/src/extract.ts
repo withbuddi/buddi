@@ -5,7 +5,8 @@
  * model as real multimodal blocks. Extraction exists for the other case: a
  * forty-page bank statement that would cost more to look at than to read, and
  * which the agent wants to search rather than see. So this module is
- * deliberately narrow — text out of PDFs, text files and the three Office
+ * deliberately narrow — text out of PDFs (unpdf, MIT: a current pdf.js build
+ * that needs no worker or canvas), text files and the three Office
  * formats, dimensions out of images from their header bytes — and it never
  * shells out to a converter.
  *
@@ -19,7 +20,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { officeKindOf, officePackageProblem, type OfficeKind } from '@buddi/core/plugin';
-import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { extractText as pdfText, getDocumentProxy } from 'unpdf';
 import { officeText } from './office-text.js';
 
 /** How much text `artifacts.describe` shows before it truncates. */
@@ -108,9 +109,15 @@ export async function extractText(
     return { text, truncated, ...(read.sheets === undefined ? {} : { sheets: read.sheets }), ...(read.slides === undefined ? {} : { slides: read.slides }) };
   }
   if (m === 'application/pdf') {
-    let parsed;
+    let parsed: { totalPages: number; text: string };
     try {
-      parsed = await pdfParse(bytes);
+      // A copy: pdf.js takes ownership of (and may detach) the buffer it reads.
+      const doc = await getDocumentProxy(new Uint8Array(bytes));
+      try {
+        parsed = await pdfText(doc, { mergePages: true });
+      } finally {
+        await doc.loadingTask.destroy();
+      }
     } catch (err) {
       // A malformed or unsupported PDF is a fact about the file, not a defect
       // here — say so plainly so the agent can ask the owner for another copy.
@@ -120,8 +127,8 @@ export async function extractText(
         { cause: err },
       );
     }
-    const { text, truncated } = clamp(tidy(parsed.text ?? ''), limit);
-    return { text, pages: parsed.numpages, truncated };
+    const { text, truncated } = clamp(tidy(parsed.text), limit);
+    return { text, pages: parsed.totalPages, truncated };
   }
   if (m.startsWith('text/') || TEXTUAL_MIMES.has(m)) {
     const { text, truncated } = clamp(tidy(bytes.toString('utf8')), limit);
