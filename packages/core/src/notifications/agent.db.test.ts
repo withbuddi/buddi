@@ -266,7 +266,8 @@ suite('an agent tells the owner', () => {
     expect((await listOpenAsks(pool)).map((r) => r.action)).toEqual(['Confirm with the bank?']);
 
     // A month old and still unresolved: it waits, in the count and the list.
-    await pool.query(`update core.owner_notifications set created_at = now() - interval '30 days' where id = $1`, [ask.id]);
+    // On the test's clock, not the wall's: from 2026-10-14 `now()` minus a month passed T0 and put it after the next one.
+    await pool.query(`update core.owner_notifications set created_at = $2::timestamptz - interval '30 days' where id = $1`, [ask.id, clock]);
     expect(await countOpenAsks(pool)).toBe(1);
     expect((await listOpenAsks(pool)).map((r) => r.id)).toEqual([ask.id]);
     // The list pages; the count stays the total.

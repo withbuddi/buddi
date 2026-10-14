@@ -44,7 +44,9 @@ function openpyxlBook(sheets: Array<{ name: string; data: string; before?: strin
     parts[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(`<?xml version="1.0"?><worksheet ${NS}>${s.before ?? ''}<sheetData>${s.data}</sheetData>${s.after ?? ''}</worksheet>`);
   });
   // A fixed time, so the same workbook is the same bytes: the page's tests read it as `trip.xlsx`.
-  return zipSync(parts, { mtime: new Date('2026-10-13T12:00:00Z') });
+  // fflate writes the zip's DOS time from the Date's local fields, so build it from local fields:
+  // an instant (a `Z` time) would be other bytes in every other time zone, CI's UTC among them.
+  return zipSync(parts, { mtime: new Date(2026, 9, 13, 12, 0, 0) });
 }
 
 const S = (ref: string, i: number, s = 0): string => `<c r="${ref}" t="s"${s ? ` s="${s}"` : ''}><v>${i}</v></c>`;

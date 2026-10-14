@@ -126,6 +126,8 @@ suite('files as rows', () => {
     if (!result.ok) throw new Error(`${name} refused (${result.reason}): ${result.message}`);
     return result.output;
   };
+  /** A path under the data folder as `files.save` stores it: relative, with forward slashes on every platform. */
+  const stored = (data: string, absolute: string): string => path.relative(data, absolute).split(path.sep).join('/');
   /** A command's output in scout's workspace, captured as host.exec captures it. */
   const captured = async (name: string, text: string, conversation = conversationId, who = 'scout'): Promise<{ fileId: string; artifactId: string; onDisk: string }> => {
     const data = await realpath(dir);
@@ -134,7 +136,7 @@ suite('files as rows', () => {
     await writeFile(onDisk, text);
     const row = await saveArtifact(pool, {
       bytes: Buffer.from(text), mime: 'text/markdown', filename: path.basename(name), createdBy: who, conversationId: conversation,
-      source: { surface: 'host', chatId: conversation }, originPath: path.relative(data, onDisk),
+      source: { surface: 'host', chatId: conversation }, originPath: stored(data, onDisk),
     }, env);
     return { fileId: row.fileId, artifactId: row.id, onDisk };
   };
@@ -353,7 +355,7 @@ suite('files as rows', () => {
       await symlink(outside, path.join(workspace, 'sub'));
       const viaParent = await saveArtifact(pool, {
         bytes: Buffer.from('# Outside\n'), mime: 'text/markdown', filename: 'f.md', createdBy: 'scout', conversationId,
-        source: { surface: 'host', chatId: conversationId }, originPath: path.relative(data, path.join(workspace, 'sub', 'f.md')),
+        source: { surface: 'host', chatId: conversationId }, originPath: stored(data, path.join(workspace, 'sub', 'f.md')),
       }, env);
       const one = await save(viaParent.fileId, { base: 1, text: '# Escaped\n' });
       expect(one.status).toBe(200);
@@ -363,7 +365,7 @@ suite('files as rows', () => {
       await symlink(outside, linked);
       const viaRoot = await saveArtifact(pool, {
         bytes: Buffer.from('# Outside\n'), mime: 'text/markdown', filename: 'f.md', createdBy: 'linker', conversationId,
-        source: { surface: 'host', chatId: conversationId }, originPath: path.relative(data, path.join(linked, 'f.md')),
+        source: { surface: 'host', chatId: conversationId }, originPath: stored(data, path.join(linked, 'f.md')),
       }, env);
       expect(await (await save(viaRoot.fileId, { base: 1, text: '# Escaped\n' })).json()).toMatchObject({ workspace: { updated: false } });
       expect(await readFile(path.join(outside, 'f.md'), 'utf8')).toBe('# Outside\n');
