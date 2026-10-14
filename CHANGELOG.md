@@ -24,6 +24,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A composed spreadsheet about a place abroad keeps amounts in your own currency and adds the local one from a rate cell that names its date and source (read with a tool, never guessed), with the local amounts as formulas on it; days between two dates read as a number in Numbers, not "10d".
 - A dashboard tab left open across an update no longer says a file's preview could not be loaded. When a part of the page fails to load, it checks whether buddi was updated: if so it reloads once onto the new version, keeping your place, or, while you are writing a message or editing a file, waits and offers "Reload to update" from your avatar. The preview then says "buddi was updated. Reload to see the preview." A failure without an update keeps the old message and never reloads. The automatic reload onto a new version now also waits for an unsaved file edit on the canvas, and the server answers a missing build file with "not found" instead of the page itself, which the browser could keep for a year.
 - A composed Excel budget keeps its over-budget colour in Apple Numbers: the guide now colours a computed Difference column with a value rule instead of a formula rule, which Numbers drops on open.
 - An upgrade relinks the installed plugins to the new release's own `@buddi/core`, never to one found in a folder above the release (a checkout or another install).

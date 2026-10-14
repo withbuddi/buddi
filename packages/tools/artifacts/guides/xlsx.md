@@ -75,10 +75,32 @@ Give every number a format; a bare `0.3333333` is never right.
 | Percent | `'0%'` or `'0.0%'` (store 0.25, not 25) |
 | A date | `'d mmm yyyy'` (13 Oct 2026), or `'mm/dd/yyyy'` in the US |
 | A month | `'mmm yyyy'` |
-| Count | `'0'` |
+| Count | `'0'` (also the days between two dates: `=C3-C2` with format `'0'`, or Numbers shows "10d") |
 
 A date cell is `{ value: new Date(Date.UTC(2026, 9, 13)), type: Date, format: 'd mmm yyyy' }`.
-Use the owner's currency and his way of writing dates.
+Write dates the way the owner does.
+
+## Currency
+
+Amounts are in the owner's own currency: the one their Money settings or
+profile name, else the one of the country their timezone is in. Say which in
+the column headers ("Estimated (USD)").
+
+When the sheet is about a place that pays in another currency (a trip, a
+purchase abroad), keep the owner's currency and add the local one beside it,
+honestly:
+
+- One input cell for the rate, labelled with both currencies, its date and
+  where it came from: "1 USD = 605.4 XOF · 14 Oct 2026 · ECB". Read the rate
+  with a tool you have (a web search or a rates tool). Never write a rate
+  from memory; if no tool gives you one, leave the cell yellow and empty and
+  tell the owner.
+- The local amounts are formulas on that cell (`=D5*$C$3`), never typed, so
+  changing the rate updates them all.
+- A note under the table: "Converted at the rate above; the real rate on the
+  day will differ."
+
+Tell the owner in your reply which rate you used and that it moves.
 
 ## Colour and type
 
