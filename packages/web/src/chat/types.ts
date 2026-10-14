@@ -86,6 +86,8 @@ export type ChatBlock =
       readsFile?: true;
       /** The result is the file itself (a document write, an open), not a command that left files. */
       fileResult?: true;
+      /** A document tool's call that saved no file — the agent checking its own work: no tab, the row is all. */
+      rowOnly?: true;
     }
   | { type: 'attachment'; artifactId: string; fileId?: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }

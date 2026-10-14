@@ -47,7 +47,7 @@ import { fileTabId, opensAsFileTab } from './file-tabs';
 import type { ArtifactViewProps } from './views/ArtifactView';
 import { commandResult } from './command-result';
 import { expiryOf, subjectIdentityOf, type Subject } from './tab-order';
-import { fileOnlyTool, opensTab, rowOnlyTool } from './tab-worthy';
+import { opensTab, rowOnlyTool } from './tab-worthy';
 
 /**
  * One agent asking another. Its call is drawn as the colleague's own run —
@@ -505,8 +505,9 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         for (const file of produced) placeFile(file, at, block.toolUseId);
         continue;
       }
-      // A file tool's other results (a dry run, a guide, a program read back) stay in the row (`tab-worthy.ts`).
-      if (fileOnlyTool(tool)) continue;
+      // A document tool's call that saved nothing — a dry run, a guide, a program read back — is the agent
+      // checking its own work: the gateway says so (`rowOnly`), and it stays in its row.
+      if (block.rowOnly) continue;
       const draw = (): void => {
         const descriptor = byTool.get(tool);
         if (descriptor) {

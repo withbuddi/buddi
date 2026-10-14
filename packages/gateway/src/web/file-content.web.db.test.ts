@@ -604,16 +604,22 @@ suite('files as rows', () => {
       ...turn('w1', 'artifacts.write', { artifactId: made.id, fileId: made.fileId, filename: 'Notes.md', mime: 'text/markdown' }),
       ...turn('l1', 'artifacts.list', { artifacts: [{ id: made.id, filename: 'Notes.md', mime: 'text/markdown' }], count: 1 }),
       ...turn('t1', 'artifacts.text', { id: made.id, fileId: made.fileId, version: 1, text: '# Notes\n' }),
+      ...turn('d1', 'artifacts.compose', { dryRun: true, kind: 'docx', sizeBytes: 9000, render: { kind: 'docx' }, note: 'Nothing was saved' }),
+      ...turn('g1', 'artifacts.compose', { guide: 'docx', text: '# Composing a Word document' }),
     ]) await pool.query('insert into core.messages (conversation_id, role, content) values ($1, $2, $3)', [here, role, JSON.stringify(content)]);
     await saveVersion(pool, { id: made.fileId, bytes: Buffer.from('# Notes, two\n'), createdBy: 'scout' }, env);
     await pool.query('update core.artifacts set deleted_at = now() where id = $1', [made.id]);
-    const transcript = await readChatTranscript(pool, here, new Date(), undefined, (tool) => tool === 'artifacts.write');
-    const results = transcript!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result') as Array<{ toolUseId: string; files?: unknown[]; readsFile?: true }>;
+    const transcript = await readChatTranscript(pool, here, new Date(), undefined, (tool) => tool === 'artifacts.write' || tool === 'artifacts.compose');
+    const results = transcript!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result') as Array<{ toolUseId: string; files?: unknown[]; readsFile?: true; rowOnly?: true }>;
     const by = (id: string) => results.find((block) => block.toolUseId === id)!;
     // The version was deleted since; the file was not, and the tab keeps its id.
     expect(by('w1').files).toEqual([{ artifactId: made.id, fileId: made.fileId, version: 1, filename: 'Notes.md', mime: 'text/markdown', deleted: true, fileDeleted: false }]);
     expect(by('l1').files).toEqual([]);
     expect(by('t1').readsFile).toBe(true);
+    // A document tool that saved nothing — a dry run, a guide — is the agent checking its work: its row, no tab.
+    expect(by('d1').rowOnly).toBe(true);
+    expect(by('g1').rowOnly).toBe(true);
+    expect(by('w1').rowOnly).toBeUndefined();
   });
 
   describe('the turn note', () => {

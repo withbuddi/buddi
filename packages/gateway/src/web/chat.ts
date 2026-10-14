@@ -411,6 +411,8 @@ export type ChatBlock =
       readsFile?: true;
       /** The result is the file it made or opened (a document write, `canvas.open`), not a command that left files. */
       fileResult?: true;
+      /** A document tool's call that saved no file (a dry run, a guide, a program read back): the row is all. */
+      rowOnly?: true;
     }
   /** A file in a message: the version it carries, and the file that is a version of (when the row is still there). */
   | { type: 'attachment'; artifactId: string; fileId?: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
@@ -707,6 +709,13 @@ export async function readChatTranscript(
 
 /** The canvas's file-opening tool: what it names is opened, not made. */
 const CANVAS_OPEN_TOOL = 'canvas.open';
+/**
+ * The tools whose result is a document they saved. Any other result of
+ * theirs — a compose dry run, `{ guide }`, `{ fileId, source: true }` — is
+ * the agent checking its own work: it opens no canvas tab and never takes
+ * the front; only a save opens or updates the file's tab.
+ */
+const DOCUMENT_TOOLS: ReadonlySet<string> = new Set(['artifacts.write', 'artifacts.compose']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -758,6 +767,7 @@ async function withFiles(
       });
       // The result is the file itself (a document write, an open), not a command that left some.
       if (named && made.includes(named) && block.files.some((file) => file.artifactId === named)) block.fileResult = true;
+      else if (DOCUMENT_TOOLS.has(block.name) && made.length === 0) block.rowOnly = true;
       continue;
     }
     block.files = [];

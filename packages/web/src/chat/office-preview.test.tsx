@@ -188,9 +188,11 @@ describe('a Word document an agent wrote, on the Canvas', () => {
     const FILE = 'c1c1c1c1-0000-4000-8000-000000000000';
     const V1 = '66666666-6666-4666-8666-666666666666';
     const at = new Date().toISOString();
-    const call = (id: string, input: Record<string, unknown>, output: Record<string, unknown>, files: unknown[] = []) => [
+    type File = { artifactId: string; fileId: string; version: number; filename: string; mime: string; deleted: boolean; fileDeleted: boolean };
+    // As the gateway marks them: a save is its file (`fileResult`), anything else of a document tool's is `rowOnly`.
+    const call = (id: string, input: Record<string, unknown>, output: Record<string, unknown>, files: File[] = []) => [
       { id: `u${id}`, role: 'assistant' as const, at, blocks: [{ type: 'tool_use' as const, id, name: 'artifacts.compose', input }] },
-      { id: `r${id}`, role: 'user' as const, at, blocks: [{ type: 'tool_result' as const, toolUseId: id, name: 'artifacts.compose', ok: true, output, files, ...(files.length ? { fileResult: true as const } : {}) }] },
+      { id: `r${id}`, role: 'user' as const, at, blocks: [{ type: 'tool_result' as const, toolUseId: id, name: 'artifacts.compose', ok: true, output, files, ...(files.length ? { fileResult: true as const } : { rowOnly: true as const }) }] },
     ];
     const checking = [
       ...call('g', { guide: 'docx' }, { guide: 'docx', text: '# Composing a Word document\n\nYou write one ES module.' }),
