@@ -9,7 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, chatApi, type BrowserStatus } from '../api';
 import { isDirty, resetDrafts } from '../canvas/file-drafts';
-import { fileTabId } from '../canvas/text-files';
+import { fileTabId } from '../canvas/file-tabs';
 import type { CodeEditorProps } from '../canvas/views/CodeEditor';
 import { ChatPage, type ChatPageProps } from './ChatPage';
 import type { ChatEvent, ChatMessage } from './types';

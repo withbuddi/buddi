@@ -1,44 +1,25 @@
 /**
- * Text files a run produced, as the canvas knows them: only what the gateway
- * says a call made or opened (`files` on a tool result, each with its file's
- * id), never read from the shape of a result.
- *
- * A file is known across its versions by its `fileId` (the gateway says
- * which file each version is of): writing it again updates the tab that has
- * it open rather than opening another. Which files are text is core's rule,
- * the one the server's routes apply (`@buddi/core/text-files`).
+ * Text files in the canvas's editor: which files are text (core's rule, the
+ * one the server's routes apply: `@buddi/core/text-files`), which language
+ * the editor reads one as, and which lines a newer version changed. Which
+ * files a call opens as a tab is `file-tabs.ts`.
  */
-import { madeDocumentOf, officeKindOf } from '@buddi/core/office-files';
+import { extensionOf } from '@buddi/core/office-files';
 import { isTextFile } from '@buddi/core/text-files';
 
 export { isTextFile };
 
-/**
- * Which files a call that made them opens as their own tab: a text file (in
- * the editor), a Word, Excel or PowerPoint file and a PDF (in their preview).
- * The one rule the canvas applies to what the gateway says a call made.
- */
-export function opensAsFileTab(mime: string, filename?: string | null): boolean {
-  return isTextFile(mime, filename) || officeKindOf(mime, filename) !== null || madeDocumentOf(mime, filename) !== null;
-}
-
-
-function extOf(filename: string | null | undefined): string {
-  const name = (filename ?? '').toLowerCase();
-  const dot = name.lastIndexOf('.');
-  return dot < 0 ? '' : name.slice(dot + 1);
-}
 
 /** Markdown gets a Preview beside its Edit. */
 export function isMarkdown(filename: string | null | undefined, mime = ''): boolean {
-  const ext = extOf(filename);
+  const ext = extensionOf(filename);
   return ext === 'md' || ext === 'markdown' || mime.toLowerCase().startsWith('text/markdown');
 }
 
 /** The editor's language for a file, by extension; null is plain text. */
 export type EditorLanguage = 'markdown' | 'json' | 'javascript' | 'typescript' | 'python' | 'yaml' | 'html' | 'css' | 'shell';
 export function languageOf(filename: string | null | undefined, mime = ''): EditorLanguage | null {
-  const ext = extOf(filename);
+  const ext = extensionOf(filename);
   switch (ext) {
     case 'md': case 'markdown': return 'markdown';
     case 'json': return 'json';
@@ -56,10 +37,6 @@ export function languageOf(filename: string | null | undefined, mime = ''): Edit
   return null;
 }
 
-/** The tab id a file is known by: its file id, prefixed (a version's id for a transcript that names no file). */
-export function fileTabId(fileId: string): string {
-  return `file:${fileId}`;
-}
 
 /**
  * The lines of `after` that are new or changed since `before`, 1-based: what

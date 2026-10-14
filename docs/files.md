@@ -419,8 +419,13 @@ dashboard's bundle, never kept by the offline worker:
 
 An Office file or a PDF a call made — `artifacts.write { format }` or a
 command's output — opens as its file's tab (`file:<fileId>`) in this preview,
-the same rule as a text file (`opensAsFileTab`, on the canvas): a write is the
-file, a command's files come after its own tab.
+the same rule as a text file (`opensAsFileTab`, `canvas/file-tabs.ts`): a
+write is the file, a command's files come after its own tab. A PDF is one
+rule too, `isPdf` in `office-files`: its mime, or `.pdf` on an untyped file
+(`UNTYPED_MIMES`), for its family, its tab and the server's preview alike.
+The Word preview maps Office font names to what the computer has (Calibri to
+Carlito, Helvetica Neue, Arial; Cambria to Caladea, Georgia; and so on) with
+`@font-face` `local()` rules in its frame, the real font first.
 
 A render is made in the browser from the version's bytes and thrown away
 with the tab: nothing derived is stored. The Canvas card shows the file's

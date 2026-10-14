@@ -48,24 +48,46 @@ export const OFFICE_MIME: Readonly<Record<OfficeKind, string>> = {
 
 const BY_MIME: ReadonlyMap<string, string> = new Map(Object.entries(OFFICE_FORMATS).map(([ext, f]) => [f.mime, ext]));
 
-function extensionOf(filename: string | null | undefined): string {
+/**
+ * A file name's extension, lower-cased, after its last dot ('' for none): the
+ * one helper every file rule (text, Office, PDF, family) reads a name with.
+ */
+export function extensionOf(filename: string | null | undefined): string {
   const name = (filename ?? '').toLowerCase();
   const dot = name.lastIndexOf('.');
   return dot < 0 ? '' : name.slice(dot + 1);
 }
 
-function bare(mime: string): string {
+/** A mime as the rules compare it: lower-cased, its parameters (`; charset=binary`) dropped. */
+export function bareMime(mime: string | null | undefined): string {
   return (mime || '').toLowerCase().split(';')[0]!.trim();
 }
 
-/** The Office format a file is, by mime, else by extension for an unnamed type. */
+/**
+ * The types that say nothing about a file — none, what a browser or a command
+ * gives anything it does not recognise, and the zip every Open XML package
+ * is — so the extension decides. Shared with the family rule's SQL.
+ */
+export const UNTYPED_MIMES: readonly string[] = ['', 'application/octet-stream', 'application/zip'];
+
+/** The Office format a file is, by mime, else by extension for an untyped file. */
 function formatOf(mime: string, filename?: string | null): string | null {
-  const value = bare(mime);
+  const value = bareMime(mime);
   const byMime = BY_MIME.get(value);
   if (byMime) return byMime;
-  if (value !== '' && value !== 'application/octet-stream' && value !== 'application/zip') return null;
+  if (!UNTYPED_MIMES.includes(value)) return null;
   const ext = extensionOf(filename);
   return OFFICE_EXTS.has(ext) ? ext : null;
+}
+
+/**
+ * Is this file a PDF: its mime, else `.pdf` on an untyped file. The one rule
+ * for a PDF's family, its preview (the server's and the page's) and whether a
+ * call that made one opens its tab.
+ */
+export function isPdf(mime: string, filename?: string | null): boolean {
+  const value = bareMime(mime);
+  return value === 'application/pdf' || (UNTYPED_MIMES.includes(value) && extensionOf(filename) === 'pdf');
 }
 
 /** Which Office document this file is — docx, xlsx or pptx — or null. */
@@ -106,7 +128,7 @@ export const MADE_FROM: Readonly<Record<MadeDocument, { from: 'text/markdown' | 
 export function madeDocumentOf(mime: string, filename?: string | null): MadeDocument | null {
   const kind = officeKindOf(mime, filename);
   if (kind === 'docx' || kind === 'xlsx') return kind;
-  return bare(mime) === 'application/pdf' || (bare(mime) === 'application/octet-stream' && extensionOf(filename) === 'pdf') ? 'pdf' : null;
+  return isPdf(mime, filename) ? 'pdf' : null;
 }
 
 /**

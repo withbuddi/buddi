@@ -19,7 +19,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Queryable = { query(sql: string, params?: any[]): Promise<{ rows: any[] }> };
 
-const FAMILY_EXPR = familySql('lower(f.mime)', "lower(coalesce(substring(f.name from '\\.([A-Za-z0-9]+)$'), ''))");
+const FAMILY_EXPR = familySql('f.mime', 'f.name');
 
 export type FileOrigin = 'uploaded' | 'produced' | 'unknown';
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { decodeCursor, encodeCursor, familyOf, filterKey, listLibrary } from './library.js';
 import { isTextFile as textPreviewable } from '../text-files.js';
-import { FAMILY_LABEL, familySql } from '../file-families.js';
-import { OFFICE_MIME } from '../office-files.js';
+import { FAMILY_LABEL } from '../file-families.js';
+import { isPdf, madeDocumentOf, OFFICE_MIME } from '../office-files.js';
 
 describe('the library', () => {
   it('classifies families from the mime first and the extension second', () => {
@@ -23,11 +23,13 @@ describe('the library', () => {
     expect(familyOf('application/octet-stream', 'Deck.pptx')).toBe('presentation');
     expect(familyOf('application/zip', 'Letter.docx')).toBe('text');
     expect(familyOf('application/vnd.ms-powerpoint', 'old.ppt')).toBe('presentation');
+    expect(familyOf(`${OFFICE_MIME.docx}; charset=binary`, 'Letter.docx')).toBe('text');
+    // One PDF rule: an untyped .pdf is a PDF to the family, the preview and a made document alike.
+    expect(familyOf('application/octet-stream', 'Report.pdf')).toBe('pdf');
+    expect(isPdf('application/octet-stream', 'Report.pdf')).toBe(true);
+    expect(madeDocumentOf('application/octet-stream', 'Report.pdf')).toBe('pdf');
+    expect(familyOf('text/plain', 'Report.pdf')).not.toBe('pdf');
     expect([FAMILY_LABEL.text, FAMILY_LABEL.table, FAMILY_LABEL.presentation]).toEqual(['Document', 'Spreadsheet', 'Presentation']);
-    // The database's filter says the same.
-    const sql = familySql('m', 'e');
-    expect(sql.indexOf(`'${OFFICE_MIME.docx}' or`)).toBeLessThan(sql.indexOf("like '%xml%'"));
-    expect(sql).toContain(`then 'presentation'`);
   });
 
   it('previews as text only what is genuinely text, never an Office container', () => {

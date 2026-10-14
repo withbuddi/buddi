@@ -52,6 +52,13 @@ describe('Office previews', () => {
     expect(frame.contentDocument?.querySelectorAll('script')).toHaveLength(0);
     // Nothing of the document is in the page itself.
     expect(document.body.textContent).not.toContain('Revenue grew');
+    // Office fonts fall back to what this computer has, the real one first (Calibri drew as a serif).
+    const faces = [...frame.contentDocument!.querySelectorAll('style')].map((style) => style.textContent ?? '').join('\n');
+    expect(faces).toContain("@font-face { font-family: 'Calibri'; font-weight: 400; font-style: normal; src: local('Calibri'), local('Carlito'), local('Helvetica Neue'), local('Arial')");
+    expect(faces).toContain("font-family: 'Calibri'; font-weight: 700; font-style: normal; src: local('Calibri Bold'), local('Carlito Bold')");
+    expect(faces).toContain("font-family: 'Cambria'; font-weight: 400; font-style: normal; src: local('Cambria'), local('Caladea'), local('Georgia')");
+    expect(faces).toContain("font-family: 'Consolas'; font-weight: 400; font-style: normal; src: local('Consolas'), local('Menlo')");
+    expect(faces).not.toMatch(/url\(/);
   });
 
   it('draws a workbook as buddi’s table, one tab per sheet', async () => {
@@ -130,7 +137,7 @@ describe('a Word document an agent wrote, on the Canvas', () => {
     // Owner's test on b9a8fe77: the tab read "Artifacts · Write" with the key-value result.
     const { api } = await import('../api');
     const { renderablesFrom } = await import('../canvas/renderables');
-    const { fileTabId } = await import('../canvas/text-files');
+    const { fileTabId } = await import('../canvas/file-tabs');
     const { ArtifactView } = await import('../canvas/views/ArtifactView');
     const FILE = 'df3f04e4-0000-4000-8000-000000000000';
     const V1 = '33333333-3333-4333-8333-333333333333';

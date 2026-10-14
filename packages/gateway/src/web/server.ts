@@ -126,7 +126,7 @@ import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
 import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, isTextFile, officeKindOf, OFFICE_PREVIEW_BYTES, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, isTextFile, isPdf, officeKindOf, OFFICE_PREVIEW_BYTES, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type PermissionScope } from '@buddi/core';
 import { EXPORT_MIME, MAX_EXPORT_SOURCE_BYTES, exportFormats, exportName, type ExportFormat } from '../export/document.js';
 import { ExportRefused, runExport } from '../export/convert.js';
 import { createVault, saveArtifactReporting, recordArtifactUse, versionedFileName } from '@buddi/core';
@@ -572,7 +572,7 @@ const PREVIEW_TEXT_BYTES = 100_000;
  */
 function previewKind(mime: string, filename: string | null): 'image' | 'pdf' | 'text' | 'office' | null {
   if (['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) return 'image';
-  if (mime === 'application/pdf') return 'pdf';
+  if (isPdf(mime, filename)) return 'pdf';
   if (isTextFile(mime, filename)) return 'text';
   // The bytes, for the dashboard's own Office previewer to parse (docs/files.md, "Office documents").
   if (officeKindOf(mime, filename) !== null) return 'office';
@@ -2103,7 +2103,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         } else {
           bytes = await readArtifactBytes(deps.env ?? process.env, artifact);
         }
-        res.setHeader('Content-Type', kind === 'text' ? 'text/plain; charset=utf-8' : preview ? artifact.mime : 'application/octet-stream');
+        // A PDF is served as one, however it was typed (`isPdf`), so the browser's viewer draws it.
+        res.setHeader('Content-Type', kind === 'text' ? 'text/plain; charset=utf-8' : kind === 'pdf' ? 'application/pdf' : preview ? artifact.mime : 'application/octet-stream');
         // A download names its version (" (v2)"); the stored name never carries one.
         const name = preview ? artifact.filename ?? 'download' : versionedFileName(artifact.filename, artifact.version);
         res.setHeader('Content-Disposition', `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name).replace(/'/g, '%27')}`);

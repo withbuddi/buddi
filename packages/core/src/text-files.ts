@@ -11,7 +11,7 @@
  * nothing else from core.
  */
 
-import { OFFICE_EXTS } from './office-files.js';
+import { bareMime, extensionOf, OFFICE_EXTS } from './office-files.js';
 
 const TEXT_MIMES = new Set([
   'application/json', 'application/xml', 'application/javascript', 'application/x-yaml', 'application/yaml',
@@ -26,17 +26,11 @@ const TEXT_EXTS = new Set([
 /** Containers that are never text, however they are named or typed. */
 const NEVER_TEXT_EXTS = new Set([...OFFICE_EXTS, 'pdf']);
 
-function extensionOf(filename: string | null | undefined): string {
-  const name = (filename ?? '').toLowerCase();
-  const dot = name.lastIndexOf('.');
-  return dot < 0 ? '' : name.slice(dot + 1);
-}
-
 /** Is this file text: previewed as text, and opened in the editor? */
 export function isTextFile(mime: string, filename?: string | null): boolean {
   const ext = extensionOf(filename);
   if (NEVER_TEXT_EXTS.has(ext)) return false;
-  const value = (mime || '').toLowerCase().split(';')[0]!.trim();
+  const value = bareMime(mime);
   if (value.startsWith('text/') || TEXT_MIMES.has(value)) return true;
   return (value === '' || value === 'application/octet-stream') && TEXT_EXTS.has(ext);
 }

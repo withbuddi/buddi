@@ -10,7 +10,7 @@
  * through the `@buddi/core/file-families` subpath so the dashboard bundle
  * loads nothing else from core.
  */
-import { OFFICE_FORMATS, officeKindOf, type OfficeKind } from './office-files.js';
+import { bareMime, extensionOf, isPdf, OFFICE_FORMATS, officeKindOf, UNTYPED_MIMES, type OfficeKind } from './office-files.js';
 
 export type FileFamily = 'image' | 'pdf' | 'table' | 'text' | 'presentation' | 'code' | 'audio' | 'video' | 'archive' | 'file';
 export const FILE_FAMILIES: readonly FileFamily[] = ['image', 'pdf', 'table', 'text', 'presentation', 'code', 'audio', 'video', 'archive', 'file'];
@@ -39,12 +39,12 @@ const CODE_EXT = ['ts', 'tsx', 'js', 'py', 'rb', 'go', 'rs', 'swift', 'json', 'y
 const TEXT_EXT = ['md', 'txt', 'rtf', 'doc', 'docx', 'pages', 'odt'];
 
 export function familyOf(mime: string, filename?: string | null): FileFamily {
-  const value = (mime || '').toLowerCase();
-  const ext = (filename ?? '').toLowerCase().split('.').pop() ?? '';
+  const value = bareMime(mime);
+  const ext = extensionOf(filename);
   const office = officeKindOf(value, filename);
   if (office) return OFFICE_FAMILY[office];
   if (value.startsWith('image/')) return 'image';
-  if (value === 'application/pdf') return 'pdf';
+  if (isPdf(value, filename)) return 'pdf';
   if (value.startsWith('audio/')) return 'audio';
   if (value.startsWith('video/')) return 'video';
   if (value === 'text/csv' || value === 'text/tab-separated-values' || value.includes('spreadsheet') || value.includes('excel') || value === OFFICE_FORMATS.numbers!.mime || TABLE_EXT.includes(ext)) return 'table';
@@ -56,20 +56,25 @@ export function familyOf(mime: string, filename?: string | null): FileFamily {
 }
 
 /**
- * The same classification as SQL, so a family filter runs in the database.
- * `m` is the lower-cased mime, `e` the lower-cased extension.
+ * The same classification as SQL, so a family filter runs in the database:
+ * `mime` and `name` are column expressions, normalised here exactly as
+ * `bareMime` and `extensionOf` do (lower-cased, parameters dropped; the
+ * text after the last dot).
  */
-export function familySql(m: string, e: string): string {
+export function familySql(mime: string, name: string): string {
+  const m = `btrim(split_part(lower(coalesce(${mime}, '')), ';', 1))`;
+  const e = `(case when position('.' in coalesce(${name}, '')) > 0 then lower(regexp_replace(${name}, '^.*\\.', '')) else '' end)`;
   const inList = (xs: readonly string[]): string => xs.map((x) => `'${x}'`).join(', ');
-  // Office first, as officeKindOf: its mime, else its extension for an unnamed type.
+  const untyped = `${m} in (${inList(UNTYPED_MIMES)})`;
+  // Office first, as officeKindOf: its mime, else its extension for an untyped file.
   const office = (Object.entries(OFFICE_FORMATS) as Array<[string, { mime: string; kind?: OfficeKind }]>)
     .filter(([, f]) => f.kind)
-    .map(([ext, f]) => `when ${m} = '${f.mime}' or (${m} in ('', 'application/octet-stream', 'application/zip') and ${e} = '${ext}') then '${OFFICE_FAMILY[f.kind!]}'`)
+    .map(([ext, f]) => `when ${m} = '${f.mime}' or (${untyped} and ${e} = '${ext}') then '${OFFICE_FAMILY[f.kind!]}'`)
     .join('\n    ');
   return `case
     ${office}
     when ${m} like 'image/%' then 'image'
-    when ${m} = 'application/pdf' then 'pdf'
+    when ${m} = 'application/pdf' or (${untyped} and ${e} = 'pdf') then 'pdf'
     when ${m} like 'audio/%' then 'audio'
     when ${m} like 'video/%' then 'video'
     when ${m} in ('text/csv', 'text/tab-separated-values', '${OFFICE_FORMATS.numbers!.mime}') or ${m} like '%spreadsheet%' or ${m} like '%excel%' or ${e} in (${inList(TABLE_EXT)}) then 'table'

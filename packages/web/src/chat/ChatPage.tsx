@@ -42,7 +42,7 @@ import { useCanvasTabs } from './canvas-tabs';
 import { useCanvasOpen } from './canvas-open';
 import { selfClosed, tabStamp, versionHolding } from '../canvas/tab-order';
 import { isDirty as isFileDirty, setDraft as setFileDraft, useDirtyTabIds } from '../canvas/file-drafts';
-import { fileTabId } from '../canvas/text-files';
+import { fileTabId } from '../canvas/file-tabs';
 import { agentRoute, chatRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
