@@ -317,7 +317,7 @@ import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentIntro, readAgentIntro } from '../agents/agent-intro.js';
 import { parseCanvasTabs, readCanvasTabs, writeCanvasTabs } from './canvas-tabs.js';
 import { OpenInApp, type OpenInAppOptions } from './open-in-app.js';
-import { MAX_EDIT_BYTES, createOwnerFile, deleteFromFiles, readFileContent, readFileView, saveFileVersion, undeleteFiles } from './file-content.js';
+import { MAX_EDIT_BYTES, createOwnerFile, deleteFromFiles, readComposedSource, readFileContent, readFileView, saveFileVersion, undeleteFiles } from './file-content.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
@@ -2054,6 +2054,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (!onThisComputer(session, req)) return sendJson(res, 403, { error: 'Open in app works on the computer buddi runs on.' });
         return reply(res, await openInApp.status(openState[1]!.toLowerCase()));
       }
+      // The program a composed version was made from, for Files' View program (web/file-content.ts).
+      const composedSource = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/versions\/([1-9][0-9]{0,8})\/source$/i.exec(path);
+      if (composedSource) return reply(res, await readComposedSource(deps.pool, composedSource[1]!.toLowerCase(), Number(composedSource[2])));
       // A file and its versions, and its current version's text, for the canvas editor and Files (web/file-content.ts).
       const fileView = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/content)?$/i.exec(path);
       if (fileView) {

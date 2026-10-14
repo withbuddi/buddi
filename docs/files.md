@@ -446,7 +446,10 @@ Word file). A write never changes a file's format, and:
 - a file the owner made or sent is refused until he agreed: the refusal tells
   the agent to ask him first, and only then to write with
   `confirmedRebuild: true` (`officeRebuildRefusal`, in core);
-- a .pptx is read-only for agents.
+- a file whose newest version a program composed is changed by editing that
+  program (**Composed documents** below); written from text only once the
+  owner asked for it (`confirmedRebuild`);
+- a .pptx is never written from text; a deck is composed.
 
 **Open in app.** On an Office file's Canvas card and its page in Files,
 beside Download. `POST /api/files/<id>/open` exports the newest version to a
@@ -490,8 +493,122 @@ the page before a previewer parses it, by the server before it extracts text
 Open in app before it imports a save.
 
 Not in this phase: editing in the Canvas, converting to PDF (LibreOffice),
-formulas, charts, comments and tracked changes, and a deck written by an
-agent.
+formulas, charts, comments and tracked changes.
+
+## Composed documents
+
+Markdown through `artifacts.write` is the quick path: notes, drafts,
+anything the owner reads in the chat or edits himself. When he will send,
+print or present it — a letter, an offer, an invoice, a report under his
+name, any deck — or asks for a look, an agent holding `artifacts.compose`
+writes a small JavaScript program against one library and buddi runs it:
+`docx` (MIT) for a Word document, `pptxgenjs` (MIT; 2.6 MB unpacked, its
+only real dependencies jszip and image-size) for a PowerPoint deck. The bytes
+it returns are the file's next version, and the program is kept beside that
+version, so a later change edits the program and keeps the design.
+
+```
+artifacts.compose { kind: 'docx'|'pptx', program, title?, fileId?, readVersion?, folder?, attachments?: fileId[], dryRun?, confirmedRebuild? }
+  → { artifactId, fileId, version, filename, mime, sizeBytes, render, console?, unchanged?, note }
+artifacts.compose { fileId, source: true }  → { fileId, version, artifactId, kind, library, libraryVersion, program, note }
+artifacts.compose { guide: 'docx'|'pptx'|'layout' }  → { guide, text }
+artifacts.view { fileId }  → { id, fileId, version, width, height, shown, note } and the picture, once
+```
+
+The program is an ES module whose default export, `async (ctx) => bytes`,
+returns the file (`Packer.toBuffer(doc)`, `pres.write({ outputType:
+'nodebuffer' })`). `ctx.files` holds the pictures named in `attachments`
+(PNG, JPEG, GIF or BMP from Files, at most ten and 20 MB): the only way an
+image gets in. `artifacts.view` shows the agent a picture first — upright,
+at most 1568 px on its long side and about 1 MB as a JPEG, as an image beside
+the result, sent once and never stored in the transcript; a model that takes
+no images reads a line saying so in its place.
+
+**One save, the same rules.** Title, folder, versions by `fileId`,
+`readVersion` and the conflict refusal are `artifacts.write`'s, through the
+same save (`files.save`, host API 1.35, with `composed`) under the file's
+one lock; the mime never changes and a program for another kind is refused.
+The rebuild rule reads both ways (`officeRebuildRefusal`, in core): a
+composed newest version is composed again freely; one the owner wrote (a
+save in Word, Open in app, a file he sent) is refused until he agreed — the
+refusal names his version so the agent reads it (`artifacts.text`) and
+carries his changes into the program, then passes `confirmedRebuild: true`.
+The other way, `artifacts.write` from text onto a composed file is refused
+with "change it by editing its program", with the same override. `dryRun`
+runs the program and stores nothing, for trying a layout; every real run is
+a stored version (the same bytes again are not).
+
+**Where the program lives.** `core.compose_sources` (one row per composed
+version: the kind, the library and its version, the Node it ran under and
+the program, at most 200 KB), deleted with its version by the purge. Owner
+versions have none. **Restore as newest** copies the row with the bytes, so a
+restored composed version is composed. `GET /api/files/<id>` marks each
+version `composed`; Files says "Made by a program" on such a version with
+**View program**, which shows it read-only (`GET
+/api/files/<id>/versions/<n>/source`); a version's row says "with a
+program". The Canvas opens a composed file as its file tab, like any Office
+file a call made.
+
+**The render summary.** Every compose reply carries `render`, read back from
+the bytes in the extractor's worker (15 s, 256 MB) by a cheap pass over the
+XML: for a document the page size and paper, margins, fonts, body size, the
+heading outline, an estimate of the pages, explicit breaks, tables (rows ×
+columns), pictures, header and footer, and the first 2,000 characters; for a
+deck the slide size, fonts, each slide's title, text and shape count, and
+**warnings** — a shape past the slide's edge, or text estimated (characters
+× size against the box) to spill out of its box. Nothing is drawn; the owner
+is the eye. The guides end with a checklist the agent reads against it.
+
+**The sandbox.** A child Node, never buddi's own process:
+
+- `node --permission --allow-fs-read=<work> --allow-fs-read=<library>…
+  --disallow-code-generation-from-strings --max-old-space-size=384
+  run.mjs` (and `--no-experimental-webstorage` on Node 25+). Nothing else is
+  allowed: no `--allow-fs-write`, `--allow-child-process`, `--allow-worker`,
+  `--allow-addons`, `--allow-wasi`, `--allow-inspector`, and no `--allow-net`,
+  so on Node 25 and later the network is denied. No `eval`, no `new Function`.
+- Readable: the run's own folder (`<data>/plugins-data/artifacts/compose/run-<id>/`,
+  removed after the run) and the real folders of `docx`, `pptxgenjs` and
+  their dependencies, each `realpath`ed so no granted folder holds a link.
+  The runner resolves every import to those folders itself and refuses any
+  other package.
+- Outside, where the computer has one, the skill scripts' OS confinement
+  (`sandbox-exec` on macOS, bubblewrap `--unshare-all` on Linux): network
+  denied, only the system, Node, the libraries and the work folder readable.
+- Limits: 20 s (then SIGKILL), 384 MB of heap, 20 MB back, a 200 KB
+  program; the environment is `PATH` only, no keys. One run at a time per
+  conversation, four in the service. The bytes come back on fd 3, framed, so
+  the console stays text (its tail, 64 KB of each stream, kept).
+- Errors come back to the agent as one line it can act on — `program_error`
+  (the message, and the program's own frames as `program.mjs:line:col`),
+  `forbidden` (what it tried: write a file, use the network, start a
+  process…), `timeout`, `memory`, `too_large`, `not_a_package`, `unavailable`
+  — with no path of buddi's. After two failed runs the agent writes the
+  document with `artifacts.write` format `docx` and says so.
+
+**Platforms.** macOS: both layers. Linux: both with bubblewrap; without it,
+the Node layer alone on Node 25+ (the doctor suggests installing
+bubblewrap). Windows: the Node layer alone, which on Node 26 (buddi.app and
+the Windows installer carry 26.11.1) denies files, processes and the
+network; Node's permission model is not an OS sandbox, which is why it is
+not run alone on older Node. With neither an OS layer nor a Node that denies
+the network — an npm install on Node 22 or 24 without one — compose is off:
+the tool refuses with the reason and `buddi doctor`'s **compose** row says
+it. Compose needs Node 22.15 or newer (`module.registerHooks`).
+
+**What agents are told.** The tool's description and, once per turn, the
+files policy: compose a designed or "professional" document, keep plain
+notes in Markdown, change a composed file by reading and editing its
+program, and fall back to `artifacts.write` format `docx` after two failed
+runs. The guides (`packages/tools/artifacts/guides/`: docx, pptx, layout)
+are fetched with `{ guide }`, never put in the prompt. Tier `auto`, granted
+per agent: the first assistant holds it through `artifacts.*`; the
+catalogue's Writer, Chief of Staff and CFO name `artifacts.compose` and
+`artifacts.view` in their entries (buddi-market).
+
+Not in this phase: workbooks with styles (xlsx), templates, pixel previews
+or PDFs of composed files, editing them on the Canvas, and merging an
+owner's Word edits back into a program.
 
 ## Files agents download
 

@@ -62,6 +62,11 @@ export interface DoctorProbes {
    */
   browser?(): Promise<ProbeResult>;
   /**
+   * Whether agents can compose designed Word documents and decks here, and
+   * under which sandbox layers. Optional for the same reason `config` is.
+   */
+  compose?(): ProbeResult;
+  /**
    * The mailboxes this installation reads and sends as, and when each last
    * saw mail. Optional for the same reason `config` is.
    */
@@ -140,6 +145,8 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   // whose agents cannot open a website, which is a lost capability, not a
   // broken buddi.
   { name: 'browser', critical: false, probe: 'browser' },
+  // Never critical: without it agents write Word files from Markdown, unstyled.
+  { name: 'compose', critical: false, probe: 'compose' },
   // Never critical: an installation with no mailbox is one that does no mail,
   // which is a capability the owner has not set up rather than a fault. What
   // it is not is silent — an account whose password left the vault stops
@@ -1062,6 +1069,26 @@ export function checkSubscriptionSignIns(facts: SubscriptionSignInFacts): ProbeR
   const names = facts.oldVars.join(' and ');
   const verb = facts.oldVars.length === 1 ? 'is an old variable' : 'are old variables';
   return { status: 'warn', detail: `${state}; ${names} ${verb}, use BUDDI_SUBSCRIPTION_SIGNINS=off instead` };
+}
+
+/** What `composeAvailability` (the artifacts plugin) says of this computer. */
+export interface ComposeFacts {
+  available: boolean;
+  confinement: string | null;
+  detail: string;
+}
+
+/**
+ * Composed documents (docs/files.md): on, under both layers or Node's alone,
+ * or off and why. Node alone is how Windows runs; on Linux it means
+ * bubblewrap is missing, which is worth installing.
+ */
+export function checkCompose(facts: ComposeFacts, platform: NodeJS.Platform = process.platform): ProbeResult {
+  if (!facts.available) return { status: 'warn', detail: facts.detail };
+  if (facts.confinement === null && platform === 'linux') {
+    return { status: 'warn', detail: `${facts.detail}; install bubblewrap (apt install bubblewrap) for the OS sandbox too` };
+  }
+  return { status: 'ok', detail: facts.detail };
 }
 
 export interface OllamaFacts {

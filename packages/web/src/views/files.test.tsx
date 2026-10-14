@@ -122,6 +122,23 @@ describe('a file with versions', () => {
     await waitFor(() => expect(navigate).toHaveBeenLastCalledWith(`#/files/${FILE}`));
   });
 
+  it('says a version was made by a program, and shows that program read-only', async () => {
+    const composed = versions.map((v) => (v.version === 3 ? v : { ...v, composed: true }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/files/${FILE}/versions/2/source`) return new Response(JSON.stringify({ fileId: FILE, version: 2, artifactId: V(2), kind: 'docx', library: 'docx', libraryVersion: '9.8.1', nodeVersion: '26.11.1', program: "import { Document } from 'docx';", createdAt: null }), { status: 200 });
+      if (url.startsWith(`/api/files/${FILE}`)) return new Response(JSON.stringify({ file: { id: FILE, name: 'packing.md' }, current: { fileId: FILE, version: 3, artifactId: V(3) }, versions: composed, entry: entry(V(2)), contexts: [], contextsTotal: 0, contextsOffset: 0, available: true }), { status: 200 });
+      if (url.includes('/preview')) return new Response('# now', { status: 200 });
+      return new Response(JSON.stringify({ entries: [entry(V(3))], next: null }), { status: 200 });
+    }));
+    render(<Tooltip.Provider><Files hash={`#/files/${FILE}?v=2`} timezone="UTC" navigate={vi.fn()} agents={agents} attention={{} as never} /></Tooltip.Provider>);
+    expect(await screen.findByText('Made by a program')).toBeDefined();
+    const section = await screen.findByRole('region', { name: 'Versions' });
+    expect(section.textContent).toContain('Ledger with a program');
+    fireEvent.click(screen.getByRole('button', { name: 'View program' }));
+    expect((await screen.findByLabelText('Program')).textContent).toBe("import { Document } from 'docx';");
+  });
+
   it('opens an old link naming a version’s id at its file’s address', async () => {
     const navigate = vi.fn();
     vi.stubGlobal('fetch', serve([]));

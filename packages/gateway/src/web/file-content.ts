@@ -23,6 +23,7 @@ import { commandsRunning, holdWorkspaces, hostWorkspaceDir, workspaceRanConfined
 import type { Pool } from 'pg';
 import {
   artifactBytesExist,
+  composeSourceOf,
   currentVersion,
   deleteFile,
   deleteFileVersion,
@@ -220,6 +221,28 @@ export async function readFileView(pool: Pool, env: EnvLike, id: string, opts: {
       contextsTotal: library?.contextsTotal ?? 0,
       contextsOffset: library?.contextsOffset ?? 0,
       available: row ? await artifactBytesExist(env, row).catch(() => false) : false,
+    },
+  };
+}
+
+/**
+ * `GET /api/files/:id/versions/:n/source`: the program version `n` was
+ * composed from (docs/files.md, "Composed documents"), for Files' View
+ * program. Read-only; 404 when that version was not made by a program.
+ */
+export async function readComposedSource(pool: Pool, id: string, version: number): Promise<Answer> {
+  const found = await liveFile(pool, id);
+  if (isAnswer(found)) return found;
+  const row = (await fileVersions(pool, found.file.id)).find((v) => v.version === version);
+  if (!row) return { status: 404, body: { error: `there is no version ${version} of this file` } };
+  const source = await composeSourceOf(pool, row.id);
+  if (!source) return { status: 404, body: { error: `v${version} was not made by a program` } };
+  return {
+    status: 200,
+    body: {
+      fileId: source.fileId, version: source.version, artifactId: source.artifactId, kind: source.kind,
+      library: source.library, libraryVersion: source.libraryVersion, nodeVersion: source.nodeVersion,
+      program: source.program, createdAt: source.createdAt,
     },
   };
 }

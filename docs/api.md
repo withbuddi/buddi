@@ -155,7 +155,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-352 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+353 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -2824,6 +2824,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | GET | `/api/artifacts/:id/preview` | The file inline, where it is safe to show: images, PDFs, text (as text/plain, its start only), and Word, Excel and PowerPoint files as bytes for the dashboard's own previewer (at most 20 MB). | yes |
 | DELETE | `/api/artifacts/:id` | Take back a file uploaded from the dashboard that no message carries. | yes |
 | GET | `/api/files/:id` | A file (by its id, or any version’s): what it is, its newest version and its versions, newest first, and the library’s entry for the version shown, where it was used and whether its bytes are there. | yes |
+| GET | `/api/files/:id/versions/:version/source` | The program a version was composed from (artifacts.compose), read-only, for Files’ View program. | yes |
 | GET | `/api/files/:id/content` | A text file’s current version whole, for the canvas editor, with the version a save names. | yes |
 | POST | `/api/files/:id/versions` | The owner’s save as a new version: his edit (text), or a Restore of an older version (from, its bytes copied server-side), over the version he opened. | yes |
 | DELETE | `/api/files/:id` | Delete a file from Files with every version. Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be undeleted for 30 days. | yes |
@@ -2937,12 +2938,25 @@ A file (by its id, or any version’s): what it is, its newest version and its v
 
 - **Auth:** Session or API token.
 - **Query:** `version?: n (an older version to show), contexts?: offset`
-- **Answer:** `{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy, createdByName: string|null }, versions, entry|null, contexts, contextsTotal, contextsOffset, available }`
+- **Answer:** `{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy, createdByName: string|null }, versions (each with composed: boolean, made by a program), entry|null, contexts, contextsTotal, contextsOffset, available }`
 - **Errors:** 400 a bad version; 404 (deleted: true when it was deleted, or no such version)
 - **Since:** 0.1.0-pre.55
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>"
+```
+
+#### `GET /api/files/:id/versions/:version/source`
+
+The program a version was composed from (artifacts.compose), read-only, for Files’ View program.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ fileId, version, artifactId, kind: 'docx'|'pptx', library, libraryVersion, nodeVersion, program, createdAt }`
+- **Errors:** 404 no such file or version, or that version was not made by a program
+- **Since:** 0.1.0-pre.55
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>/versions/<version>/source"
 ```
 
 #### `GET /api/files/:id/content`

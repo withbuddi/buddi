@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { hostShell } from '@buddi/tool-host';
+import { COMPOSE_RULE } from '@buddi/tool-artifacts';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
@@ -199,6 +200,8 @@ export function filesPolicy(tools: readonly string[]): string {
       : 'To change one of the owner\'s files, write it with artifacts.write by its fileId; a new title makes a new file.');
     lines.push(OFFICE_FORMAT_LINE);
   }
+  // A designed document is composed (docs/files.md, "Composed documents"): the rule the tool's description carries too.
+  if (tools.includes('artifacts.compose')) lines.push(COMPOSE_RULE);
   if (tools.includes('canvas.open')) {
     lines.push("To show the owner one of their files, find it with artifacts.list and open it with canvas.open { fileId }; don't paste its contents into the chat unless asked.");
   }

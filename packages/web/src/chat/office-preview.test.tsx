@@ -163,4 +163,22 @@ describe('a Word document an agent wrote, on the Canvas', () => {
     expect(await screen.findByTestId('office-docx')).toBeInTheDocument();
     expect(screen.getByText('Document')).toBeInTheDocument();
   });
+
+  it('opens a composed .docx as its file’s tab, one tab across the versions compose writes', async () => {
+    const { renderablesFrom } = await import('../canvas/renderables');
+    const { fileTabId } = await import('../canvas/file-tabs');
+    const FILE = 'c0c0c0c0-0000-4000-8000-000000000000';
+    const V1 = '44444444-4444-4444-8444-444444444444';
+    const V2 = '55555555-5555-4555-8555-555555555555';
+    const name = 'Offer for the kitchen.docx';
+    const at = new Date().toISOString();
+    const composed = (id: string, artifactId: string, version: number) => [
+      { id: `u${id}`, role: 'assistant' as const, at, blocks: [{ type: 'tool_use' as const, id, name: 'artifacts.compose', input: { kind: 'docx', program: 'export default async () => …', ...(version > 1 ? { fileId: FILE } : { title: 'Offer for the kitchen' }) } }] },
+      { id: `r${id}`, role: 'user' as const, at, blocks: [{ type: 'tool_result' as const, toolUseId: id, name: 'artifacts.compose', ok: true,
+        output: { artifactId, fileId: FILE, version, filename: name, mime: OFFICE_MIME.docx, sizeBytes: 9_000, render: { kind: 'docx' }, note: 'Saved' },
+        files: [{ artifactId, fileId: FILE, version, filename: name, mime: OFFICE_MIME.docx, deleted: false, fileDeleted: false }], fileResult: true as const }] },
+    ];
+    const items = renderablesFrom({ descriptors: [], messages: [...composed('c1', V1, 1), ...composed('c2', V2, 2)] });
+    expect(items.map((item) => [item.id, item.renderer, item.tool, item.title])).toEqual([[fileTabId(FILE), 'artifact', 'Document', name]]);
+  });
 });

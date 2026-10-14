@@ -790,7 +790,11 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'GET', path: '/api/files/:id', area: 'files', summary: 'A file (by its id, or any version’s): what it is, its newest version and its versions, newest first, and the library’s entry for the version shown, where it was used and whether its bytes are there.',
-    query: 'version?: n (an older version to show), contexts?: offset', answer: '{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy, createdByName: string|null }, versions, entry|null, contexts, contextsTotal, contextsOffset, available }', errors: '400 a bad version; 404 (deleted: true when it was deleted, or no such version)',
+    query: 'version?: n (an older version to show), contexts?: offset', answer: '{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy, createdByName: string|null }, versions (each with composed: boolean, made by a program), entry|null, contexts, contextsTotal, contextsOffset, available }', errors: '400 a bad version; 404 (deleted: true when it was deleted, or no such version)',
+  },
+  {
+    method: 'GET', path: '/api/files/:id/versions/:version/source', area: 'files', summary: 'The program a version was composed from (artifacts.compose), read-only, for Files’ View program.',
+    answer: "{ fileId, version, artifactId, kind: 'docx'|'pptx', library, libraryVersion, nodeVersion, program, createdAt }", errors: '404 no such file or version, or that version was not made by a program',
   },
   {
     method: 'GET', path: '/api/files/:id/content', area: 'files', summary: 'A text file’s current version whole, for the canvas editor, with the version a save names.',
@@ -1375,6 +1379,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
  */
 export const API_SINCE: Readonly<Record<string, string>> = {
   'GET /api/files/:id': '0.1.0-pre.55',
+  'GET /api/files/:id/versions/:version/source': '0.1.0-pre.55',
   'POST /api/files/:id/open': '0.1.0-pre.55',
   'GET /api/files/:id/open': '0.1.0-pre.55',
   'POST /api/files/:id/open/resolve': '0.1.0-pre.55',

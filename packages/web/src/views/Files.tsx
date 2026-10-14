@@ -253,6 +253,8 @@ function FileDetail({ id, version: shownVersion, timezone, agents, navigate, onB
   const [restoreConflict, setRestoreConflict] = useState<{ from: LibraryVersion; current: number; workspace: boolean } | null>(null);
   const [moreContexts, setMoreContexts] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** View program: the program the shown version was composed from, read-only. */
+  const [program, setProgram] = useState<{ version: number; text: string | null; error: string | null } | null>(null);
   useEffect(() => {
     let cancelled = false;
     setData(null);
@@ -331,7 +333,15 @@ function FileDetail({ id, version: shownVersion, timezone, agents, navigate, onB
   };
   const madeBy = (version: LibraryVersion): string => {
     const maker = version.createdBy === 'owner' ? 'You' : nameOf(version.createdBy) || 'buddi';
-    return version.restoredFrom !== null ? `${maker}, restored v${version.restoredFrom}` : maker;
+    const how = version.composed ? ' with a program' : '';
+    return version.restoredFrom !== null ? `${maker}, restored v${version.restoredFrom}${how}` : `${maker}${how}`;
+  };
+  const shownRow = versions.find((v) => v.id === entry.id) ?? null;
+  const viewProgram = (version: number): void => {
+    setProgram({ version, text: null, error: null });
+    api.fileSource(fileId, version)
+      .then((found) => setProgram((now) => (now?.version === version ? { version, text: found.program, error: null } : now)))
+      .catch((err: unknown) => setProgram((now) => (now?.version === version ? { version, text: null, error: err instanceof Error ? err.message : String(err) } : now)));
   };
   const loadMoreContexts = (): void => {
     setMoreContexts(true);
@@ -367,6 +377,18 @@ function FileDetail({ id, version: shownVersion, timezone, agents, navigate, onB
           <p>{versions.length > 1 ? `Delete ${name} and its ${versions.length} versions?` : `Delete ${name}?`} Conversations that used it will show it as deleted.</p>
         </Modal>
       ) : null}
+      {program ? (
+        <Modal
+          title={`The program behind v${program.version}`}
+          onClose={() => setProgram(null)}
+          foot={<Button onClick={() => setProgram(null)}>Close</Button>}
+        >
+          <p className="muted">An agent wrote this program; buddi ran it to make this version. To change the document, ask the agent: it edits the program and makes a new version.</p>
+          {program.error ? <Notice tone="critical" role="alert">{program.error}</Notice>
+            : program.text === null ? <Empty>Loading…</Empty>
+            : <pre className="file-preview-text" aria-label="Program">{program.text}</pre>}
+        </Modal>
+      ) : null}
       {notNewest ? (
         <Notice tone="warning" action={<Button size="sm" onClick={() => navigate(fileRoute(fileId))}>Open newest</Button>}>v{entry.version} is not the newest version (v{latest.version} is).</Notice>
       ) : null}
@@ -376,6 +398,7 @@ function FileDetail({ id, version: shownVersion, timezone, agents, navigate, onB
         { label: 'Origin', value: originLabel(entry, nameOf) },
         ...(entry.caption && entry.origin === 'produced' ? [{ label: 'Filed under', value: entry.caption }] : []),
         ...(entry.agentId && entry.origin === 'produced' ? [{ label: 'Made by', value: <span className="files-agent"><AgentAvatar agents={agents} id={entry.agentId} size="sm" />{nameOf(entry.agentId)}</span> }] : []),
+        ...(shownRow?.composed ? [{ label: 'Program', value: <span className="ui-toolbar">Made by a program<Button size="sm" onClick={() => viewProgram(shownRow.version)}>View program</Button></span> }] : []),
         { label: 'Type', value: <span className="mono">{entry.mime}</span> },
         { label: 'Id', value: <span className="mono">{entry.id}</span> },
       ]} />

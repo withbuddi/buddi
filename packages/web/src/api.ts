@@ -1786,6 +1786,20 @@ export interface LibraryVersion {
   createdBy: string;
   /** A Restore: the version whose bytes it copies. */
   restoredFrom: number | null;
+  /** Made by a program an agent wrote (`artifacts.compose`); `fileSource` reads it. */
+  composed?: boolean;
+}
+/** The program a composed version was made from (`GET /api/files/:id/versions/:n/source`). */
+export interface ComposedSource {
+  fileId: string;
+  version: number;
+  artifactId: string;
+  kind: 'docx' | 'pptx';
+  library: string;
+  libraryVersion: string;
+  nodeVersion: string;
+  program: string;
+  createdAt: string | null;
 }
 export interface LibraryContext {
   conversationId: string;
@@ -2958,6 +2972,8 @@ export const api = {
       ...(opts.version === undefined ? {} : { version: opts.version }),
       ...(opts.contexts ? { contexts: opts.contexts } : {}),
     }),
+  /** The program version `version` was composed from; 404 when a program did not make it. */
+  fileSource: (id: string, version: number) => get<ComposedSource>(`/files/${encodeURIComponent(id)}/versions/${version}/source`),
   /** A text file's current version whole, for the canvas editor, with the version a save names. */
   fileContent: (id: string) => get<FileContent>(`/files/${encodeURIComponent(id)}/content`),
   /**

@@ -72,6 +72,7 @@ import {
   searchConfiguration,
 } from '@buddi/tool-web';
 import { lastSyncByAccount, listAccounts } from '@buddi/tool-email';
+import { composeAvailability } from '@buddi/tool-artifacts';
 import type { Pool } from 'pg';
 import { STALE_AFTER_MS, isLocalOllamaUrl, findSecret, listArchives, listPendingPluginData, ownerSecretVaultName, readRecovery, readWebSetting } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
@@ -90,6 +91,7 @@ import {
   checkTailscale,
   checkCloudflareAccess,
   checkSubscriptionSignIns,
+  checkCompose,
   checkNodeVersion,
   checkOllama,
   checkPlugins,
@@ -873,6 +875,10 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       const pool = await connected();
       if (pool === null) return null;
       return checkPendingPluginData(await listPendingPluginData(pool));
+    },
+
+    compose(): ProbeResult {
+      return checkCompose(composeAvailability());
     },
 
     subscriptionSignIns(): ProbeResult {

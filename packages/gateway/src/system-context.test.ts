@@ -188,4 +188,15 @@ describe('the files policy', () => {
     expect(said.split(OFFICE_FORMAT_LINE)).toHaveLength(2);
     expect(filesPolicy(['canvas.open'])).not.toContain(OFFICE_FORMAT_LINE);
   });
+
+  it('tells an agent that composes when to compose, how to change a composed file, and when to fall back', async () => {
+    const { filesPolicy } = await import('./system-context.js');
+    const { COMPOSE_RULE } = await import('@buddi/tool-artifacts');
+    const said = filesPolicy(['artifacts.write', 'artifacts.compose']);
+    expect(said).toContain(COMPOSE_RULE);
+    expect(COMPOSE_RULE).toMatch(/designed or "professional" document.*artifacts\.compose.*Markdown/);
+    expect(COMPOSE_RULE).toMatch(/source: true/);
+    expect(COMPOSE_RULE).toMatch(/After two failed runs, fall back to artifacts\.write with format docx and tell the owner/);
+    expect(filesPolicy(['artifacts.write'])).not.toContain(COMPOSE_RULE);
+  });
 });
