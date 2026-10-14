@@ -13,9 +13,9 @@
  * with mammoth (BSD-2-Clause), a spreadsheet's cells with read-excel-file
  * (MIT; each sheet as CSV under a `## Sheet` heading), a presentation's slide
  * text from its slide XML (fflate, MIT; one `## Slide n` per slide). Which
- * files those are is core's one rule (`@buddi/core/office-files`).
+ * files those are is core's one rule (`@buddi/core/plugin`'s `officeKindOf`).
  */
-import { officeKindOf, type OfficeKind } from '@buddi/core/office-files';
+import { officeKindOf, type OfficeKind } from '@buddi/core/plugin';
 import { unzipSync } from 'fflate';
 import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
