@@ -73,6 +73,7 @@ import {
 } from '@buddi/tool-web';
 import { lastSyncByAccount, listAccounts } from '@buddi/tool-email';
 import { composeAvailability } from '@buddi/tool-artifacts';
+import { detectConfinement } from '@buddi/tool-host';
 import type { Pool } from 'pg';
 import { STALE_AFTER_MS, isLocalOllamaUrl, findSecret, listArchives, listPendingPluginData, ownerSecretVaultName, readRecovery, readWebSetting } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
@@ -878,7 +879,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
     },
 
     compose(): ProbeResult {
-      return checkCompose(composeAvailability());
+      return checkCompose(composeAvailability({ confinement: detectConfinement() }));
     },
 
     subscriptionSignIns(): ProbeResult {

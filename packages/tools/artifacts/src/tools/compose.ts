@@ -188,7 +188,8 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
       refuse('invalid', 'give the document a title, or the fileId of the file to change');
     }
     const kind = input.kind;
-    const availability = composeAvailability();
+    const confinement = ctx.buddi!.confinement;
+    const availability = composeAvailability({ confinement: confinement.kind });
     if (!availability.available) refuse('unavailable', availability.reason ?? 'composed documents are off here');
 
     const attachments = await readAttachments(input.attachments ?? [], ctx);
@@ -196,6 +197,7 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
       kind, program: input.program, attachments,
       root: path.join(ctx.buddi!.dir.path, 'compose'),
       availability,
+      confine: (work, opts) => confinement.argv(work, opts),
       ...(ctx.conversationId === undefined ? {} : { conversationId: ctx.conversationId }),
     });
     if (!run.ok) refuse(run.code, run.message, run.console);

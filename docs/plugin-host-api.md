@@ -1022,6 +1022,9 @@ keep its name (no `(vN)` in stored names), and `files.list` takes `latest`
 
 - **`files.get(id)`** (and `read`) take a file's own id too: its newest live
   version.
+- **`confinement`**, always present: `{ kind, argv(work, { readable?, network? }) }`,
+  the OS sandbox skill scripts run under (the host plugin's, handed in by the
+  gateway), for a process a plugin starts; `kind` is `null` where there is none.
 
 An older buddi ignores `composed` and has no `source`.
 

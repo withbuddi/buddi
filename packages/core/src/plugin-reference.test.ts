@@ -70,6 +70,7 @@ export const DOCUMENTED: Record<string, string> = {
       'ChannelsArea',
       'ToolsArea',
       'NetworkArea',
+      'ConfinementArea',
       'PluginsArea',
       'AssetsArea',
       'OnnxArea',

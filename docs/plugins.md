@@ -3712,6 +3712,7 @@ that say otherwise.
 | `pages` | `PagesArea` | yes | 1.0 | What a query or a tool asks about pages and previews. |
 | `tools` | `ToolsArea` | yes | 1.6 | Your own tools, added and removed while buddi runs. Also on the `register` hook's host. |
 | `network` | `NetworkArea` | yes | 1.7 | Hosts you talk to that you learn while buddi runs, beside your manifest's `network`. Also on the `register` hook's host. |
+| `confinement` | `ConfinementArea` | yes | 1.35 | The OS sandbox a process you start can be wrapped in: the one skill scripts run under. |
 | `http` | `HttpArea` | no | 1.0 | Declared as `http`. |
 | `accounts` | `AccountsArea` | no | 1.0 | Declared as `accounts`. |
 | `files` | `FilesArea` | no | 1.0 | Declared as `files` or `files:library`. |
@@ -3784,6 +3785,18 @@ that say otherwise.
 | `register` | `(definitions: ToolDefinition[]) => void` | yes | 1.6 | Add tools while buddi runs, for tools you cannot know at boot (a connection the owner made this afternoon). Each name must be `<plugin>.<what>` (letters, digits, `_`, `-`); every check a manifest's tools get applies — no name twice, tier and `tierFor` coherent, `untrusted` a known kind, an input a provider can take. All or nothing: one bad definition and none is added. Agents' `tools:` grants are resolved again for their next turn, so `mcp.github.*` covers a tool added after the agent loaded. |
 | `unregister` | `(names: string[]) => void` | yes | 1.6 | Remove tools you added with `register`. A manifest tool, or another plugin's, is refused; so is the whole call if one name is. An approval still pending on a removed tool is refused when it would execute. |
 | `registered` | `() => string[]` | yes | 1.6 | The names you have added at runtime and not removed, in order. |
+
+#### `ConfinementArea`
+
+A process your plugin starts (a compose program is the first) can be
+confined to one folder by the OS's own sandbox, the same one skill bundle
+scripts run under: `sandbox-exec` on macOS, bubblewrap on Linux, none on
+Windows.
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `kind` | `'macos-sandbox' \| 'bwrap' \| null` | yes | 1.35 | The sandbox this computer has, or `null`. |
+| `argv` | `(work, opts?) => string[]` | yes | 1.35 | The argv to put before your command: writes only to `work`, reads only the system, Node, `opts.readable` and `work`, no network unless `opts.network`. Throws when `kind` is `null`. |
 
 #### `NetworkArea`
 

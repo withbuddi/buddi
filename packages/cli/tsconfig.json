@@ -11,6 +11,7 @@
     { "path": "../core" },
     { "path": "../gateway" },
     { "path": "../tools/artifacts" },
+    { "path": "../tools/host" },
     { "path": "../tools/web" }
   ]
 }

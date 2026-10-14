@@ -24,7 +24,6 @@
   },
   "dependencies": {
     "@buddi/core": "workspace:*",
-    "@buddi/tool-host": "workspace:*",
     "docx": "^9.8.1",
     "fflate": "^0.8.3",
     "jpeg-js": "^0.4.4",

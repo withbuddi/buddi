@@ -18,7 +18,7 @@ import type { SystemContext } from './system-context.js';
 import type { IdleRollover } from './agents/idle-rollover.js';
 import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/types.js';
 import type { ProviderAccountsAccess } from './provider-accounts.js';
-import type { BuddiHost, RegisterHost, SecretDestination } from './host/types.js';
+import type { BuddiHost, ConfinementArea, RegisterHost, SecretDestination } from './host/types.js';
 import type { PluginUse } from './plugin/uses.js';
 import type { PluginAuthor } from './plugin/author.js';
 import type { JSONSchema7 } from './json-schema.js';
@@ -198,6 +198,12 @@ export interface CoreToolContext extends ToolContext {
    * such a write is refused.
    */
   convertDocument?: (source: { bytes: Buffer; mime: string; filename: string }, to: 'docx' | 'xlsx' | 'pdf') => Promise<Buffer>;
+  /**
+   * The OS sandbox a plugin's process can be wrapped in (`ctx.buddi.confinement`,
+   * host API 1.35): the gateway hands in the host plugin's, the one skill
+   * scripts run under. Absent, there is none.
+   */
+  confinement?: ConfinementArea;
   /**
    * A mission run's context plugin vouching for a tool (`consent_for_run`,
    * host API 1.33): the run it is bound to, and the question. Set by the

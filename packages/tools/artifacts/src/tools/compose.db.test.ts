@@ -18,7 +18,8 @@ import { composeAvailability } from '../compose/sandbox.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
-const composing = composeAvailability().available ? describe : describe.skip;
+// The tool context here hands no OS sandbox: the Node layer alone, which Node 25+ makes enough.
+const composing = composeAvailability({ confinement: null }).available ? describe : describe.skip;
 const TEST_DB = `buddi_compose_test_${process.pid}`;
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';

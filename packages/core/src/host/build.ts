@@ -96,6 +96,7 @@ import type {
   EnqueueRunInput,
   FileRow,
   FilesArea,
+  ConfinementArea,
   NetworkArea,
   ProposalsArea,
   ScheduleArea,
@@ -414,6 +415,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
     plugin,
     log,
     scrub: (text: string): string => scrubText(text),
+    confinement: facts.confinement ?? NO_CONFINEMENT,
     owner: {
       id: facts.ownerId ?? OWNER_ID,
       timezone: facts.timezone,
@@ -722,6 +724,12 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   // nothing yet, and a call is `undefined`.
   return host;
 }
+
+/** `ctx.buddi.confinement` where the process was handed none (a test, a tool run outside the gateway): no OS sandbox. */
+const NO_CONFINEMENT: ConfinementArea = {
+  kind: null,
+  argv() { throw new Error('This computer has no OS sandbox to confine a process in.'); },
+};
 
 /**
  * What a manifest's `register` hook is handed: the version, the name, the
@@ -1475,6 +1483,8 @@ export function readOnlyHostOf(host: BuddiHost, what: string): BuddiHost {
     pages: host.pages,
     tools: only('tools', host.tools, ['registered']),
     network: only('network', host.network, ['declared']),
+    // Whether there is a sandbox is a read; starting a confined process is not.
+    confinement: only('confinement', host.confinement, ['kind']),
   };
   if (host.http) {
     const http = host.http;

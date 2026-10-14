@@ -55,6 +55,8 @@ export interface BuddiHost {
   tools: ToolsArea;
   /** The hosts this plugin talks to that it learns while buddi runs. Since 1.7. */
   network: NetworkArea;
+  /** The OS sandbox a process this plugin starts can be wrapped in. Since 1.35. */
+  confinement: ConfinementArea;
   /** Declared as `http`. */
   http?: HttpArea;
   /** Declared as `accounts`. */
@@ -252,6 +254,23 @@ export interface DbArea {
   query<R = any>(sql: string, params?: unknown[]): Promise<DbResult<R>>;
   /** One connection, `begin`, the plugin's schema first on `search_path`, then commit or rollback. */
   transaction<T>(fn: (tx: DbTransaction) => Promise<T>): Promise<T>;
+}
+
+/**
+ * Confining a process this plugin starts to one folder, with the OS's own
+ * sandbox — the one skill scripts run under (the host plugin's
+ * `skill-run.ts`, handed in by the gateway). Always present; `kind` is null
+ * where the computer has none (Windows, Linux without bubblewrap). Since 1.35.
+ */
+export interface ConfinementArea {
+  /** `macos-sandbox`, `bwrap`, or null. */
+  readonly kind: 'macos-sandbox' | 'bwrap' | null;
+  /**
+   * The argv to put before the command: writes only to `work`, reads only
+   * the system, Node, `readable` and `work`, no network unless `network`.
+   * Refused when `kind` is null.
+   */
+  argv(work: string, opts?: { readable?: readonly string[]; network?: boolean }): string[];
 }
 
 /** A directory of the plugin's own: `<data>/plugins-data/<plugin>`. */

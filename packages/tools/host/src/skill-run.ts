@@ -20,6 +20,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import type { ConfinementArea } from '@buddi/core/plugin';
 
 /** A bundle as the host tool needs it, resolved by the gateway from the agent's skills. */
 export interface SkillBundleView {
@@ -181,4 +182,20 @@ export function noConfinementReason(platform: NodeJS.Platform = process.platform
  */
 export function skillScriptsRunnable(platform: NodeJS.Platform = process.platform): boolean {
   return detectConfinement(platform) !== null;
+}
+
+/**
+ * This computer's confinement as the host API hands it to every plugin
+ * (`ctx.buddi.confinement`, 1.35): what a compose program runs under too.
+ * The gateway passes it into the tool context; the rule stays here.
+ */
+export function confinementArea(platform: NodeJS.Platform = process.platform): ConfinementArea {
+  const kind = detectConfinement(platform);
+  return {
+    kind,
+    argv(work, opts = {}) {
+      if (kind === null) throw new Error(noConfinementReason(platform));
+      return confinementArgv(kind, work, opts);
+    },
+  };
 }

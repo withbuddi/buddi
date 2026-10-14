@@ -68,6 +68,7 @@ import { sweepIncoming, sweepStages } from './plugins/stage.js';
 import { sweepPluginDirs } from './plugins/paths.js';
 import { ROLE_FRONT_DESK } from './agents/roles.js';
 import { runExport } from './export/convert.js';
+import { confinementArea } from '@buddi/tool-host';
 
 export { REPO_ROOT };
 
@@ -562,6 +563,8 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     ctx: { db: pool, ownerId: OWNER_ID, now,
       get timezone() { return zone(); },
       protectedPaths: protectedWritePaths(),
+      // The OS sandbox skill scripts run under, for any plugin's process (a compose program).
+      confinement: confinementArea(),
       // A new version of an Office file written from text: the download's own exporter, queued.
       convertDocument: async (source, to) => {
         const bytes = await runExport(source, to, { wait: true });

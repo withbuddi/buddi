@@ -11,7 +11,8 @@
  *    `--disallow-code-generation-from-strings` (no `eval`, no
  *    `new Function`); a 384 MB heap.
  *  - **The OS confinement skill scripts run under**, outside, where there is
- *    one: `sandbox-exec` on macOS, bubblewrap on Linux (`@buddi/tool-host`),
+ *    one: `sandbox-exec` on macOS, bubblewrap on Linux (`ctx.buddi.confinement`,
+ *    the host plugin's),
  *    with the network denied and only the system, Node, the libraries and
  *    the work folder readable.
  *
@@ -27,8 +28,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { OFFICE_PREVIEW_BYTES } from '@buddi/core/plugin';
-import { confinementArgv, detectConfinement, type Confinement } from '@buddi/tool-host/confinement';
+import { OFFICE_PREVIEW_BYTES, type ConfinementArea } from '@buddi/core/plugin';
 import { libraryClosure, type ComposeKind } from './libraries.js';
 import { RUNNER_SOURCE } from './runner.js';
 
@@ -53,7 +53,7 @@ const NODE_MINIMUM = { major: 22, minor: 15 };
 export interface ComposeAvailability {
   available: boolean;
   /** The OS layer this computer offers, or null. */
-  confinement: Confinement | null;
+  confinement: ConfinementArea['kind'];
   /** This Node denies the network under `--permission`. */
   networkDenied: boolean;
   nodeVersion: string;
@@ -63,11 +63,11 @@ export interface ComposeAvailability {
   detail: string;
 }
 
-/** Whether compose can run here, and under which layers. */
-export function composeAvailability(opts: { platform?: NodeJS.Platform; nodeVersion?: string; confinement?: Confinement | null } = {}): ComposeAvailability {
+/** Whether compose can run here, and under which layers: `confinement` is the OS sandbox this computer has (`ctx.buddi.confinement.kind`). */
+export function composeAvailability(opts: { confinement: ConfinementArea['kind']; platform?: NodeJS.Platform; nodeVersion?: string }): ComposeAvailability {
   const platform = opts.platform ?? process.platform;
   const nodeVersion = opts.nodeVersion ?? process.versions.node;
-  const confinement = opts.confinement === undefined ? detectConfinement(platform) : opts.confinement;
+  const confinement = opts.confinement;
   const [major = 0, minor = 0] = nodeVersion.split('.').map(Number);
   const networkDenied = major >= NETWORK_DENIED_FROM;
   const base = { confinement, networkDenied, nodeVersion };
@@ -213,8 +213,8 @@ async function slot<T>(conversation: string | undefined, fn: () => Promise<T>): 
 
 /**
  * Run one program in a fresh work folder under `root` (the plugin's own
- * data folder), and remove the folder after. `availability` is passed in
- * tests; otherwise this computer's.
+ * data folder), and remove the folder after, under the layers
+ * `availability` names.
  */
 export async function runCompose(input: {
   kind: ComposeKind;
@@ -222,10 +222,12 @@ export async function runCompose(input: {
   attachments: readonly ComposeAttachment[];
   root: string;
   conversationId?: string;
-  availability?: ComposeAvailability;
+  availability: ComposeAvailability;
+  /** The OS layer's argv for a work folder (`ctx.buddi.confinement.argv`), when `availability.confinement` names one. */
+  confine?: ConfinementArea['argv'];
   limits?: { timeoutMs?: number; heapMb?: number };
 }): Promise<ComposeRun> {
-  const availability = input.availability ?? composeAvailability();
+  const availability = input.availability;
   const quiet = { stdout: '', stderr: '' };
   if (!availability.available) return { ok: false, code: 'unavailable', message: availability.reason ?? 'composed documents are off here', console: quiet };
   return slot(input.conversationId, async () => {
@@ -233,7 +235,7 @@ export async function runCompose(input: {
     const work = path.join(await realpath(input.root), `run-${randomUUID()}`);
     await mkdir(work);
     try {
-      return await runIn(work, input, availability);
+      return await runIn(work, input, availability, input.confine);
     } finally {
       await rm(work, { recursive: true, force: true }).catch(() => {});
     }
@@ -244,6 +246,7 @@ async function runIn(
   work: string,
   input: { kind: ComposeKind; program: string; attachments: readonly ComposeAttachment[]; limits?: { timeoutMs?: number; heapMb?: number } },
   availability: ComposeAvailability,
+  confine: ConfinementArea['argv'] | undefined,
 ): Promise<ComposeRun> {
   const closure = libraryClosure();
   const attachments = input.attachments.map((a, i) => ({
@@ -260,9 +263,8 @@ async function runIn(
   const heapMb = input.limits?.heapMb ?? COMPOSE_LIMITS.heapMb;
   const flags = nodeFlags(work, closure.grants, availability).map((flag) => flag.startsWith('--max-old-space-size=') ? `--max-old-space-size=${heapMb}` : flag);
   const node = [process.execPath, ...flags, path.join(work, 'run.mjs')];
-  const argv = availability.confinement
-    ? [...confinementArgv(availability.confinement, work, { readable: closure.grants }), ...node]
-    : node;
+  // The OS layer where there is one; without it, Node's alone (composeAvailability allowed that).
+  const argv = availability.confinement && confine ? [...confine(work, { readable: closure.grants }), ...node] : node;
   const stdout = new Tail(COMPOSE_LIMITS.consoleBytes);
   const stderr = new Tail(COMPOSE_LIMITS.consoleBytes);
   const console = (): { stdout: string; stderr: string } => ({ stdout: scrubPaths(stdout.text(), work), stderr: scrubPaths(stderr.text(), work) });

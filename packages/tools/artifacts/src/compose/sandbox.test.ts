@@ -11,12 +11,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { officePackageProblem } from '@buddi/core/plugin';
 import { composeAvailability, runCompose, scrubPaths } from './sandbox.js';
 
-const here = composeAvailability();
-/** This computer's layers, and — where Node denies the network itself — the Node layer alone, as on Windows. */
-const layers = !here.available ? [] : [
-  { name: here.confinement ? `Node and ${here.confinement}` : 'Node only', availability: here },
-  ...(here.confinement && here.networkDenied ? [{ name: 'Node only', availability: { ...here, confinement: null } }] : []),
-];
+/**
+ * The Node layer alone, as on Windows: what this package can run by itself.
+ * The OS layer is the host plugin's, handed in by the gateway; the
+ * gateway's `compose-sandbox.test.ts` runs the two together.
+ */
+const here = composeAvailability({ confinement: null });
+const layers = here.available ? [{ name: 'Node only', availability: here }] : [];
 
 describe.each(layers)('the compose sandbox ($name)', { timeout: 120_000 }, ({ availability }) => {
   let root: string;

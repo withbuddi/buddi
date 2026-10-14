@@ -67,6 +67,9 @@ importers:
       '@buddi/tool-email':
         specifier: workspace:*
         version: link:../tools/email
+      '@buddi/tool-host':
+        specifier: workspace:*
+        version: link:../tools/host
       '@buddi/tool-web':
         specifier: workspace:*
         version: link:../tools/web
@@ -312,9 +315,6 @@ importers:
       '@buddi/core':
         specifier: workspace:*
         version: link:../../core
-      '@buddi/tool-host':
-        specifier: workspace:*
-        version: link:../host
       docx:
         specifier: ^9.8.1
         version: 9.8.1

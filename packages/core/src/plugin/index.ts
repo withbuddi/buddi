@@ -202,6 +202,7 @@ export type {
   EnqueueRunInput,
   FileRow,
   FilesArea,
+  ConfinementArea,
   HttpArea,
   HttpRequest,
   HttpResponse,
