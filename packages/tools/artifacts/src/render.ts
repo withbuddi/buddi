@@ -65,7 +65,7 @@ export interface XlsxSheetRender {
   numberFormats: string[];
   /** The first 40 formulas with their values as the sheet shows them: read the totals back. */
   formulas: Array<{ cell: string; formula: string; value: string }>;
-  /** Formulas whose value is an error, that buddi could not compute (they have no value in the file), or stored with their `=` (Numbers refuses them). */
+  /** Formulas whose value is an error, or that buddi could not compute (they have no value in the file). */
   errors: Array<{ cell: string; formula: string; error: string }>;
 }
 
@@ -77,8 +77,6 @@ export interface XlsxRender {
 export type OfficeRender = DocxRender | PptxRender | XlsxRender;
 
 const SHEET_LISTED = 40;
-/** What a formula stored with its `=` is said as: buddi's fill takes it off, so this is a fill that failed to. */
-const STORED_WITH_EQUALS = "stored with a leading '=' in the file, which Numbers does not open";
 
 /** A workbook said in words, from what the sheet engine read and computed. */
 export function xlsxRender(workbook: WorkbookModel, evaluation: Evaluation | null): XlsxRender {
@@ -104,15 +102,6 @@ export function xlsxRender(workbook: WorkbookModel, evaluation: Evaluation | nul
       if ((failure || isSheetError(value) || (value === null && !cell.hasValue)) && errors.length < SHEET_LISTED) {
         const code = isSheetError(value) ? value.error : failure?.error ?? 'no value';
         errors.push({ cell: at, formula: `=${cell.formula}`, error: failure ? `${code}: ${failure.reason}` : code });
-      } else if (cell.storedWithEquals && errors.length < SHEET_LISTED) {
-        errors.push({ cell: at, formula: `=${cell.formula}`, error: STORED_WITH_EQUALS });
-      }
-    }
-    for (const block of sheet.conditional) {
-      for (const rule of block.rules) {
-        if (!rule.storedWithEquals || errors.length >= SHEET_LISTED) continue;
-        const first = block.ranges[0]!;
-        errors.push({ cell: address(first.r1, first.c1), formula: `=${rule.formulas.join(', ')}`, error: `conditional rule ${STORED_WITH_EQUALS}` });
       }
     }
     const header = cells.filter((c) => c.row === 1 && c.col <= 50).map((c) => shown(valueOf(evaluation, sheet, c), style(c.style).numFmt));

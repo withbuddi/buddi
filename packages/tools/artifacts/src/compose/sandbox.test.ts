@@ -81,9 +81,10 @@ describe('what the model is shown', () => {
   it('says how to fix the errors a model makes again and again, in one line', () => {
     const wrapper = '\nThe program must be `export default async (ctx) => { … return <bytes> }`; a top-level return is not allowed.';
     expect(programHint('SyntaxError: Illegal return statement')).toBe(wrapper);
-    expect(programHint("the program must export a default async function (ctx) that returns the file's bytes")).toBe(wrapper);
     expect(programHint('`format` "$#,##0.00" was specified on a cell of type `undefined`. Specify a `type` too.'))
-      .toBe('\nAn empty cell the owner fills in is `{ type: Number, value: null, format, backgroundColor }`: a `format` needs a `type` when there is no value.');
+      .toBe('\nA cell with a `format` and no value needs a `type`: see the xlsx guide on empty input cells.');
+    // buddi's own runner says the wrapper itself; a hint is for what Node or a library says.
+    expect(programHint('the program has no default export: it must be `export default async (ctx) => { … return <bytes> }`')).toBe('');
     expect(programHint('ReferenceError: missing is not defined')).toBe('');
   });
 });

@@ -464,14 +464,17 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         continue;
       }
 
+      // A document tool's call that saved nothing — a dry run, a guide, a program read back, a failed run
+      // the agent fixes — is the agent checking its own work: the gateway says so (`rowOnly`), and it
+      // stays in its row, which says "failed" and opens the error on demand.
+      if (block.rowOnly) continue;
+
       const output = forOwner(block.output);
       const storyOutput = byTool.get(tool)?.renderer === 'story' && output && typeof output === 'object' ? output as Record<string, unknown> : null;
       const subject = storyOutput && typeof storyOutput.title === 'string' && typeof storyOutput.id === 'string'
         ? { key: storyOutput.id, label: storyOutput.title.length > 60 ? `${storyOutput.title.slice(0, 59)}…` : storyOutput.title }
         : subjectIdentityOf(use?.input ?? null, output);
       if (block.ok === false) {
-        // A document tool's failed run is the agent's to fix: its row says "failed" and opens the error.
-        if (block.rowOnly) continue;
         place({
           id: block.toolUseId,
           tool,
@@ -507,9 +510,6 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         for (const file of produced) placeFile(file, at, block.toolUseId);
         continue;
       }
-      // A document tool's call that saved nothing — a dry run, a guide, a program read back — is the agent
-      // checking its own work: the gateway says so (`rowOnly`), and it stays in its row.
-      if (block.rowOnly) continue;
       const draw = (): void => {
         const descriptor = byTool.get(tool);
         if (descriptor) {

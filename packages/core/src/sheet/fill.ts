@@ -5,10 +5,12 @@
  * show the totals, and Excel and Numbers recompute them on open. Only ever
  * on bytes buddi made (a compose program's output): an upload, a command's
  * output and an owner's save are never changed. A formula buddi could not
- * compute is left without a value, as the program wrote it. A formula
- * stored with its `=` (write-excel-file writes what it is given, and its
- * docs give the `=`) loses it: OOXML has none, and Numbers replaces such a
- * formula by its value and drops such a conditional rule.
+ * compute is left without a value, as the program wrote it. Before it,
+ * `storedWithoutEquals` takes the `=` off formulas stored with one
+ * (write-excel-file writes what it is given, and its docs give the `=`):
+ * OOXML has none, and Numbers replaces such a formula by its value and
+ * drops such a conditional rule. It is a step of its own so the file
+ * buddi keeps is cleaned even when the fill fails.
  */
 import { zipSync, type Zippable } from 'fflate';
 import { evaluate, type Evaluation } from './evaluate.js';
@@ -51,11 +53,31 @@ function fillSheet(xml: string, values: Map<number, CellValue>): string {
   });
 }
 
+/** A leading `=` as XML may write it: itself, or a character reference to it. */
+const LEADING_EQUALS = String.raw`\s*(?:=|&#0*61;|&#[xX]0*3[dD];)`;
+
 /** A sheet's XML with one leading `=` taken off every cell formula and every conditional rule's formula. */
 export function withoutLeadingEquals(xml: string): string {
   return xml
-    .replace(/(<f\b[^>]*?(?<!\/)>)\s*=/g, '$1')
-    .replace(/(<formula>)\s*=/g, '$1');
+    .replace(new RegExp(String.raw`(<f\b[^>]*?(?<!\/)>)${LEADING_EQUALS}`, 'g'), '$1')
+    .replace(new RegExp(`(<formula>)${LEADING_EQUALS}`, 'g'), '$1');
+}
+
+/** A workbook buddi made with its formulas stored as OOXML has them, without `=`; the same bytes when none had one. */
+export function storedWithoutEquals(bytes: Uint8Array): Uint8Array {
+  const raw = unzipBounded(bytes);
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let changed = false;
+  const out: Zippable = {};
+  for (const [name, data] of Object.entries(raw)) {
+    out[name] = data;
+    if (!/^xl\/worksheets\/[^/]+\.xml$/.test(name)) continue;
+    const xml = decoder.decode(data);
+    const clean = withoutLeadingEquals(xml);
+    if (clean !== xml) { out[name] = encoder.encode(clean); changed = true; }
+  }
+  return changed ? zipSync(out, { level: 6 }) : bytes;
 }
 
 /** `workbook.xml` asking the app to recalculate every formula when it opens the file. */
@@ -80,13 +102,10 @@ export async function fillCachedValues(bytes: Uint8Array): Promise<FilledWorkboo
   const encoder = new TextEncoder();
   const parts: WorkbookParts = {};
   for (const name of Object.keys(raw)) if (isWorkbookPart(name)) parts[name] = decoder.decode(raw[name]);
-  const sheetParts = Object.keys(parts).filter((name) => /^xl\/worksheets\/[^/]+\.xml$/.test(name));
-  for (const name of sheetParts) parts[name] = withoutLeadingEquals(parts[name]!);
   const workbook = readWorkbookParts(parts);
   const evaluation = await evaluate(workbook, { want: (_sheet, cell) => cell.formula !== undefined });
   const out: Zippable = {};
   for (const [name, data] of Object.entries(raw)) out[name] = data;
-  for (const name of sheetParts) out[name] = encoder.encode(parts[name]!);
   for (const sheet of workbook.sheets) {
     const values = evaluation.values.get(sheet.name);
     if (values && values.size > 0) out[sheet.path] = encoder.encode(fillSheet(parts[sheet.path]!, values));

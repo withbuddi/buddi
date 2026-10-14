@@ -158,7 +158,7 @@ describe.skipIf(!availability.available)(`a compose program inside ${area.kind ?
     // A program with no wrapper: what to write instead, not only the syntax error.
     expect((await refused(`import { Document, Packer } from 'docx';\nreturn Packer.toBuffer(new Document({ sections: [] }));\n`)).message)
       .toMatch(/^SyntaxError: Illegal return statement.*\nThe program must be `export default async \(ctx\) => \{ … return <bytes> \}`; a top-level return is not allowed\.$/s);
-    expect((await refused(`export const notDefault = 1;`)).message).toMatch(/a top-level return is not allowed/);
+    expect((await refused(`export const notDefault = 1;`)).message).toBe('the program has no default export: it must be `export default async (ctx) => { … return <bytes> }`');
     expect((await refused(`import { Document } from 'docx'; export default async () => new Document({ sections: [] });`)).message).toMatch(/Packer\.toBuffer/);
   });
 

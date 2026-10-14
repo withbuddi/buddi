@@ -34,8 +34,9 @@ calculator.
   empty one, or an object: `{ value, type, format, fontWeight: 'bold',
   fontStyle: 'italic', textColor: '#9C0006', backgroundColor: '#EEF3F8',
   align: 'right', wrap: true, topBorderStyle: 'thin', columnSpan: 2 }`.
-- An empty cell the owner fills in is `{ type: Number, value: null, format,
-  backgroundColor }`: a `format` needs a `type` when there is no value.
+- An empty input cell, one the owner fills in, is `{ type: Number,
+  value: null, format, backgroundColor }`: a `format` needs a `type` when
+  there is no value.
 - A formula is `{ type: 'Formula', value: '=SUM(B2:B6)' }`. Refer across
   sheets with `Costs!B7`, or `'Trip costs'!B7` when the name has a space.
 - Rows and columns count from 1 in conditional ranges, as Excel's do.

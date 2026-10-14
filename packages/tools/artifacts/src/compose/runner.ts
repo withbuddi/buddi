@@ -198,7 +198,7 @@ const ctx = Object.freeze({
 try {
   const program = await import(pathToFileURL(path.join(work, 'program.mjs')).href);
   if (typeof program.default !== 'function') {
-    report(new Error('the program must export a default async function (ctx) that returns the file\'s bytes'), { shape: true });
+    report(new Error('the program has no default export: it must be \`export default async (ctx) => { … return <bytes> }\`'), { shape: true });
     process.exit(1);
   }
   const out = await program.default(ctx);

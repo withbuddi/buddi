@@ -210,15 +210,15 @@ function childFailure(error: ChildError, work: string): { code: ComposeErrorCode
   return { code: 'program_error', message: [head + syntax, ...frames].join('\n') + programHint(head) };
 }
 
-/** Errors a model makes again and again, each with the one line that fixes it. */
+/** Errors from Node or a library that a model makes again and again, each with the one line that fixes it. */
 const HINTS: ReadonlyArray<{ test: RegExp; hint: string }> = [
   {
-    test: /Illegal return statement|must export a default async function/,
+    test: /Illegal return statement/,
     hint: 'The program must be `export default async (ctx) => { … return <bytes> }`; a top-level return is not allowed.',
   },
   {
     test: /was specified on a cell of type `?undefined`?/,
-    hint: 'An empty cell the owner fills in is `{ type: Number, value: null, format, backgroundColor }`: a `format` needs a `type` when there is no value.',
+    hint: 'A cell with a `format` and no value needs a `type`: see the xlsx guide on empty input cells.',
   },
 ];
 

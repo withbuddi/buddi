@@ -21,6 +21,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { OFFICE_MIME, officePackageProblem, safeFileName, type ToolContext, type ToolDefinition } from '@buddi/core/plugin';
+import { storedWithoutEquals } from '@buddi/core/sheet';
 import { z } from 'zod';
 import { MAX_FOLDER_CHARS, MAX_TITLE_CHARS } from '../document.js';
 import { fillWorkbook, imageDimensions, renderOffice } from '../extract.js';
@@ -187,6 +188,8 @@ async function readAttachments(ids: readonly string[], ctx: ToolContext): Promis
 async function finish(bytes: Buffer, kind: ComposeKind): Promise<{ bytes: Buffer; render: OfficeRender | { error: string } }> {
   const why = (err: unknown): string => (err instanceof Error ? err.message : String(err));
   if (kind === 'xlsx') {
+    // Formulas as OOXML stores them, without `=`, whether or not the fill below works out.
+    try { bytes = Buffer.from(storedWithoutEquals(bytes)); } catch { /* the fill says why it cannot read the file */ }
     try {
       return await fillWorkbook(bytes);
     } catch (err) {
@@ -233,7 +236,8 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
   describe: (input, ctx) => rebuildDescription(ctx, targetOf(input), true, input.program ?? ''),
   async execute(input, ctx) {
     if (input.guide !== undefined) {
-      if (ctx.conversationId) guided.add(`${ctx.conversationId}:${input.guide}`);
+      // The layout guide alone is no kind's guide: a failure still brings that kind's.
+      if (ctx.conversationId && input.guide !== 'layout') guided.add(`${ctx.conversationId}:${input.guide}`);
       return guideText(input.guide);
     }
     const files = ctx.buddi?.files;

@@ -11,7 +11,7 @@ import { strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import {
   address, cellKey, conditionalStyles, criterion, evaluate, fillCachedValues, formatCell, readWorkbook, sheetEngine, shiftFormula, valueOf,
-  withFullCalcOnLoad, withoutLeadingEquals,
+  storedWithoutEquals, withFullCalcOnLoad, withoutLeadingEquals,
 } from './index.js';
 
 const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
@@ -336,23 +336,30 @@ describe('what the review found', () => {
     expect(new TextDecoder().decode(parts['xl/workbook.xml'])).toContain("<calcPr calcId = '1' fullCalcOnLoad=\"1\"/>");
   });
 
-  it('takes the leading = off every stored formula, cell and conditional rule, which Numbers refuses, and reads both forms alike', async () => {
-    const cf = '<conditionalFormatting sqref="A1:B1"><cfRule type="expression" dxfId="0" priority="1"><formula>=AND($A1&lt;&gt;"",$A1&gt;1)</formula></cfRule></conditionalFormatting>';
-    const bytes = openpyxlBook([{ name: 'S', data: row(1, N('A1', 2), '<c r="B1"><f>=A1*3</f></c>', '<c r="C1"><f t="shared" ref="C1:C2" si="0">=A1+1</f></c>'), after: cf }], strings);
+  it('takes the leading = off every stored formula, cell and conditional rule, which Numbers refuses, as a step of its own, and reads both forms alike', async () => {
+    const cf = '<conditionalFormatting sqref="A1:B1"><cfRule type="expression" dxfId="0" priority="1"><formula>=AND($A1&lt;&gt;"",$A1&gt;1)</formula></cfRule>'
+      + '<cfRule type="expression" dxfId="0" priority="2"><formula>&#x3D;$A1&gt;0</formula></cfRule></conditionalFormatting>';
+    const data = row(1, N('A1', 2), '<c r="B1"><f>=A1*3</f></c>', '<c r="C1"><f t="shared" ref="C1:C2" si="0">=A1+1</f></c>', '<c r="D1"><f>&#61;1+1</f></c>');
+    const bytes = openpyxlBook([{ name: 'S', data, after: cf }], strings);
     const before = readWorkbook(bytes).sheets[0]!;
-    expect(before.cells.get(cellKey(1, 2))).toMatchObject({ formula: 'A1*3', storedWithEquals: true });
-    expect(before.conditional[0]!.rules[0]).toMatchObject({ formulas: ['AND($A1<>"",$A1>1)'], storedWithEquals: true });
-    const filled = await fillCachedValues(bytes);
-    const xml = new TextDecoder().decode(unzipSync(filled.bytes)['xl/worksheets/sheet1.xml']);
-    expect(xml).toContain('<c r="B1"><f>A1*3</f><v>6</v></c>');
-    expect(xml).toContain('<f t="shared" ref="C1:C2" si="0">A1+1</f><v>3</v>');
+    expect(before.cells.get(cellKey(1, 2))).toMatchObject({ formula: 'A1*3' });
+    expect(before.cells.get(cellKey(1, 4))).toMatchObject({ formula: '1+1' });
+    expect(before.conditional[0]!.rules.map((r) => r.formulas)).toEqual([['AND($A1<>"",$A1>1)'], ['$A1>0']]);
+    const clean = storedWithoutEquals(bytes);
+    const xml = new TextDecoder().decode(unzipSync(clean)['xl/worksheets/sheet1.xml']);
+    expect(xml).toContain('<c r="B1"><f>A1*3</f></c>');
+    expect(xml).toContain('<f t="shared" ref="C1:C2" si="0">A1+1</f>');
+    expect(xml).toContain('<c r="D1"><f>1+1</f></c>');
     expect(xml).toContain('<formula>AND($A1&lt;&gt;"",$A1&gt;1)</formula>');
-    expect(xml).not.toMatch(/<f\b[^>]*>\s*=|<formula>\s*=/);
+    expect(xml).toContain('<formula>$A1&gt;0</formula>');
+    expect(xml).not.toMatch(/<f\b[^>]*>\s*(?:=|&#)|<formula>\s*(?:=|&#)/);
+    // Read and filled, the clean file says the same.
+    const filled = await fillCachedValues(clean);
     const after = readWorkbook(filled.bytes).sheets[0]!;
     expect(after.cells.get(cellKey(1, 2))).toMatchObject({ formula: 'A1*3', value: 6 });
-    expect(after.cells.get(cellKey(1, 2))!.storedWithEquals).toBeUndefined();
-    expect(after.conditional[0]!.rules[0]!.storedWithEquals).toBeUndefined();
-    // A formula without one, a self-closing <f/> and an = inside a formula are left as they are.
+    expect(after.conditional[0]!.rules.map((r) => r.formulas)).toEqual([['AND($A1<>"",$A1>1)'], ['$A1>0']]);
+    // A workbook with nothing to take off is the same bytes; an = inside a formula and a self-closing <f/> stay.
+    expect(storedWithoutEquals(filled.bytes)).toBe(filled.bytes);
     expect(withoutLeadingEquals('<f>A1=1</f><f t="shared" si="0"/><formula>$A1="x"</formula>')).toBe('<f>A1=1</f><f t="shared" si="0"/><formula>$A1="x"</formula>');
   });
 
@@ -360,9 +367,11 @@ describe('what the review found', () => {
     if (process.env.BUDDI_WRITE_FIXTURES === '1') writeFileSync(CACHED_TEXT, cachedText());
     expect(Buffer.from(readFileSync(CACHED_TEXT)).equals(Buffer.from(cachedText()))).toBe(true);
     expect([...readWorkbook(cachedText()).sheets[0]!.cells.values()].filter((c) => c.formula !== undefined).every((c) => c.hasValue)).toBe(true);
-    const data = row(1, '<c r="A1" t="str"><f>IF(1=0,"",1)</f><v></v></c>', F('B1', 'A1&"x"'));
+    const data = row(1, '<c r="A1" t="str"><f>IF(1=0,"",1)</f><v></v></c>', F('B1', 'A1&"x"'), '<c r="C1" t="str"><f>""</f><v/></c>', '<c r="D1"><f>1+1</f><v/></c>');
     const sheet = readWorkbook(one(data)).sheets[0]!;
     expect(sheet.cells.get(cellKey(1, 1))).toMatchObject({ value: '', hasValue: true });
     expect(sheet.cells.get(cellKey(1, 2))).toMatchObject({ value: null, hasValue: false });
+    expect(sheet.cells.get(cellKey(1, 3))).toMatchObject({ value: '', hasValue: true });
+    expect(sheet.cells.get(cellKey(1, 4))).toMatchObject({ value: null, hasValue: false });
   });
 });

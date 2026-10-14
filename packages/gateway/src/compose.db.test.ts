@@ -250,6 +250,11 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
       const stored = await bytesOf(v1.artifactId);
       const parts = unzipSync(new Uint8Array(stored));
       expect(new TextDecoder().decode(parts['xl/workbook.xml'])).toMatch(/<calcPr[^>]*fullCalcOnLoad="1"/);
+      // The guide gives formulas with their `=`, as write-excel-file's docs do; the file stores them as OOXML does, without.
+      const sheetXml = Object.entries(parts).filter(([name]) => name.startsWith('xl/worksheets/')).map(([, data]) => new TextDecoder().decode(data)).join('');
+      expect(sheetXml).toMatch(/<f>SUM\(/);
+      expect(sheetXml).toContain('<formula>');
+      expect(sheetXml).not.toMatch(/<f\b[^>]*>\s*=|<formula>\s*=/);
       const book = readWorkbook(new Uint8Array(stored));
       expect(book.sheets[0]!.cells.get(cellKey(5, 2))).toMatchObject({ formula: 'IF(B4<0,"yes","no")', value: 'yes', hasValue: true });
       expect(book.sheets[1]!.cells.get(cellKey(6, 3))).toMatchObject({ value: 1389, hasValue: true });
@@ -273,11 +278,15 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
       const main = conversationId;
       conversationId = String((await pool.query(`insert into core.conversations (agent_id) values ('writer') returning id`)).rows[0].id);
       try {
+        // The layout guide alone is no kind's guide: a failure after it still brings the xlsx one.
+        await call('artifacts.compose', { guide: 'layout' });
+        expect(await refusal('artifacts.compose', { kind: 'xlsx', program: 'export default async () => { throw new Error("first"); };', title: 'Budget' })).toContain('# Type, colour and space');
+        conversationId = String((await pool.query(`insert into core.conversations (agent_id) values ('writer') returning id`)).rows[0].id);
         await call('artifacts.compose', { guide: 'xlsx' });
         const program = `import writeXlsxFile from 'write-excel-file';\nexport default async () => Buffer.from(await (await writeXlsxFile([[{ value: null, format: '$#,##0.00', backgroundColor: '#FFF7E0' }]]).toBlob()).arrayBuffer());`;
         const message = await refusal('artifacts.compose', { kind: 'xlsx', program, title: 'Budget' });
         expect(message).toMatch(/was specified on a cell of type `?undefined/);
-        expect(message).toContain('An empty cell the owner fills in is `{ type: Number, value: null, format, backgroundColor }`');
+        expect(message).toContain('A cell with a `format` and no value needs a `type`: see the xlsx guide on empty input cells.');
         expect(message).not.toContain('# Type, colour and space');
         // The cell the hint says runs.
         const fixed = program.replace('{ value: null,', '{ type: Number, value: null,');
