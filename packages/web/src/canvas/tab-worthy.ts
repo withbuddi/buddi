@@ -24,6 +24,12 @@
  * phone; the row says where). Their row still expands to the whole result, and
  * its "Open on the canvas" draws it on demand.
  *
+ * **Tools whose tab is their file** (`FILE_ONLY_TOOLS`): `artifacts.write`
+ * and `artifacts.compose`. A save opens (or updates) its file's tab; any
+ * other result of theirs — a compose dry run, a `{ guide }`, a program read
+ * back with `{ fileId, source: true }` — is the agent checking its own work,
+ * and stays in its thread row, never taking the front.
+ *
  * Exempt from the rule entirely: `canvas.show` (the agent asked for this to be
  * shown), a call stopped on a gate (an envelope), and a failure, which keeps a
  * quiet tab in the timeline so bad news is never hidden — unless its tool is
@@ -61,6 +67,14 @@ export const ROW_ONLY_TOOLS: readonly string[] = [
   'owner.notify',
 ];
 
+/** Tools that open a tab only for the file a call saved (`files` on the result). */
+export const FILE_ONLY_TOOLS: readonly string[] = ['artifacts.write', 'artifacts.compose'];
+
+/** Does this tool open a tab only for a file it saved? */
+export function fileOnlyTool(tool: string): boolean {
+  return FILE_ONLY_TOOLS.includes(tool);
+}
+
 /** Does this tool's result stay in its thread row? */
 export function rowOnlyTool(tool: string): boolean {
   return ROW_ONLY_TOOLS.some((pattern) => pattern.endsWith('.*')
@@ -76,7 +90,7 @@ export function rowOnlyTool(tool: string): boolean {
  * in it (`hasSubstance`), which only `structured` needs.
  */
 export function opensTab({ tool, renderer, substantial }: { tool: string; renderer: RendererName; substantial: boolean }): boolean {
-  if (rowOnlyTool(tool)) return false;
+  if (rowOnlyTool(tool) || fileOnlyTool(tool)) return false;
   if (renderer === 'structured') return substantial;
   return VIEW_RENDERERS.has(renderer);
 }

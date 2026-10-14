@@ -181,4 +181,26 @@ describe('a Word document an agent wrote, on the Canvas', () => {
     const items = renderablesFrom({ descriptors: [], messages: [...composed('c1', V1, 1), ...composed('c2', V2, 2)] });
     expect(items.map((item) => [item.id, item.renderer, item.tool, item.title])).toEqual([[fileTabId(FILE), 'artifact', 'Document', name]]);
   });
+
+  it('opens no tab for a compose call that is the agent checking its work: a dry run, a guide, a program read back', async () => {
+    const { renderablesFrom } = await import('../canvas/renderables');
+    const { fileTabId } = await import('../canvas/file-tabs');
+    const FILE = 'c1c1c1c1-0000-4000-8000-000000000000';
+    const V1 = '66666666-6666-4666-8666-666666666666';
+    const at = new Date().toISOString();
+    const call = (id: string, input: Record<string, unknown>, output: Record<string, unknown>, files: unknown[] = []) => [
+      { id: `u${id}`, role: 'assistant' as const, at, blocks: [{ type: 'tool_use' as const, id, name: 'artifacts.compose', input }] },
+      { id: `r${id}`, role: 'user' as const, at, blocks: [{ type: 'tool_result' as const, toolUseId: id, name: 'artifacts.compose', ok: true, output, files, ...(files.length ? { fileResult: true as const } : {}) }] },
+    ];
+    const checking = [
+      ...call('g', { guide: 'docx' }, { guide: 'docx', text: '# Composing a Word document\n\nYou write one ES module.' }),
+      ...call('d', { kind: 'docx', program: 'x', title: 'Letter', dryRun: true }, { dryRun: true, kind: 'docx', sizeBytes: 9000, render: { kind: 'docx', page: { width: '8.27 in', height: '11.69 in' }, fonts: ['Georgia'], outline: [{ level: 1, text: 'Offer' }] }, note: 'Nothing was saved' }),
+      ...call('s', { fileId: FILE, source: true }, { fileId: FILE, version: 1, artifactId: V1, kind: 'docx', library: 'docx', libraryVersion: '9.8.1', program: 'export default async () => …', note: 'The program of v1.' }),
+    ];
+    expect(renderablesFrom({ descriptors: [], messages: checking })).toEqual([]);
+    // The save that follows opens the file's tab, and only that.
+    const saved = call('w', { kind: 'docx', program: 'x', title: 'Letter' }, { artifactId: V1, fileId: FILE, version: 1, filename: 'Letter.docx', mime: OFFICE_MIME.docx, sizeBytes: 9000, render: { kind: 'docx' }, note: 'Saved' },
+      [{ artifactId: V1, fileId: FILE, version: 1, filename: 'Letter.docx', mime: OFFICE_MIME.docx, deleted: false, fileDeleted: false }]);
+    expect(renderablesFrom({ descriptors: [], messages: [...checking, ...saved] }).map((item) => item.id)).toEqual([fileTabId(FILE)]);
+  });
 });
