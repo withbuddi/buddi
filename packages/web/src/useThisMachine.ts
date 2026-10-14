@@ -15,15 +15,37 @@ export function machineWords(platform: string | undefined): ThisMachine {
   return platform === 'darwin' ? 'this Mac' : 'this computer';
 }
 
-let asked: Promise<string | undefined> | null = null;
+let asked: Promise<{ platform?: string; local: boolean } | undefined> | null = null;
+
+function session(): Promise<{ platform?: string; local: boolean } | undefined> {
+  asked ??= Promise.resolve().then(() => api.session()).then(
+    (s) => ({ ...(s.platform ? { platform: s.platform } : {}), local: s.signedInThrough === 'local' }),
+    () => { asked = null; return undefined; },
+  );
+  return asked;
+}
 
 export function useThisMachine(): ThisMachine {
   const [platform, setPlatform] = useState<string | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    asked ??= Promise.resolve().then(() => api.session()).then((s) => s.platform, () => { asked = null; return undefined; });
-    void asked.then((p) => { if (live) setPlatform(p); });
+    void session().then((s) => { if (live) setPlatform(s?.platform); });
     return () => { live = false; };
   }, []);
   return machineWords(platform);
+}
+
+/**
+ * Whether this dashboard is open on the machine buddi runs on (signed in
+ * locally): what "Open in app" needs, as the server's local-only routes do.
+ * False until the session says.
+ */
+export function useOnThisMachine(): boolean {
+  const [local, setLocal] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void session().then((s) => { if (live) setLocal(s?.local === true); });
+    return () => { live = false; };
+  }, []);
+  return local;
 }

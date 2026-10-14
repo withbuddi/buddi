@@ -6,11 +6,15 @@
  * Previews are honest about what they are. An image is the image; a PDF is
  * the browser's own viewer over the preview route; text, code and tables are
  * fetched as plain text and drawn as text — a table is parsed here, quoted
- * fields and all, never evaluated. Anything else says so and offers the
- * download. Nothing here fetches off this origin.
+ * fields and all, never evaluated. Word, Excel and PowerPoint files are
+ * parsed by a renderer loaded only when one is opened (`OfficePreview`).
+ * Anything else says so and offers the download. Nothing here fetches off
+ * this origin.
  */
+import { officeKindOf } from '@buddi/core/office-files';
 import { useEffect, useMemo, useState } from 'react';
 import { Empty, Notice } from '../ui';
+import { OfficePreview } from './OfficePreview';
 import { previewUrl, type FileFamily } from './attachments';
 import { AudioCard, isPlayableAudio } from './AudioCard';
 
@@ -45,6 +49,9 @@ export function ArtifactPreview({ artifactId, filename, mime, family, available 
       </div>
     );
   }
+  // Word, Excel and PowerPoint: parsed here by a renderer loaded only now (OfficePreview).
+  const office = officeKindOf(mime, filename);
+  if (office) return <OfficePreview key={artifactId} artifactId={artifactId} filename={filename} kind={office} />;
   if (family === 'text' || family === 'code' || family === 'table') return <TextPreview artifactId={artifactId} filename={filename} mime={mime} family={family} />;
   return <Notice>Preview not supported for this kind of file. Download it to open it.</Notice>;
 }

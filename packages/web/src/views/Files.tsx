@@ -24,6 +24,7 @@ import { ArtifactPreview } from '../chat/ArtifactPreview';
 import { FAMILY_LABEL, formatBytes, previewUrl } from '../chat/attachments';
 import { FamilyMark } from '../chat/FileTile';
 import { DownloadMenu } from '../chat/DownloadMenu';
+import { OpenInAppBar, OpenInAppButton, opensInApp, useOpenInApp } from '../chat/OpenInApp';
 import { fmtRelative, fmtTime } from '../format';
 import { chatRoute, fileRoute, groupChatRoute, parseFileRoute } from '../routes';
 import { ActionMenu, AgentAvatar, Button, Chip, Empty, ErrorBanner, Field, FormGrid, KV, List, Modal, Notice, PickRow, SearchBar, Split, Toolbar, EmptyState } from '../ui';
@@ -271,6 +272,8 @@ function FileDetail({ id, version: shownVersion, timezone, agents, navigate, onB
     return () => { cancelled = true; };
   }, [id, shownVersion, revision]);
   const nameOf = (agentId: string | null): string => (agentId ? agents.find((a) => a.id === agentId)?.name ?? agentId : '');
+  // Open in app: a save in the owner's app is a new version, read again here.
+  const app = useOpenInApp(id, () => setRevision((n) => n + 1));
 
   if (error) return <div className="files-detail-body"><Button size="sm" onClick={onBack} className="files-back">Back to Files</Button><Notice tone="critical">{error}</Notice></div>;
   if (!data) return <div className="files-detail-body"><Empty>Loading…</Empty></div>;
@@ -347,11 +350,13 @@ function FileDetail({ id, version: shownVersion, timezone, agents, navigate, onB
           <p className="files-detail-meta">{FAMILY_LABEL[entry.family]} · {formatBytes(entry.sizeBytes)} · {fmtTime(entry.createdAt, timezone)}</p>
         </div>
         <span className="ui-toolbar">
+          {available && opensInApp(entry.mime, entry.filename) ? <OpenInAppButton app={app} /> : null}
           {available ? <DownloadMenu artifactId={entry.id} filename={entry.filename} mime={entry.mime} /> : null}
           <ActionMenu label={`More for ${name}`} items={[{ label: 'Delete file', tone: 'critical', hint: versions.length > 1 ? `all ${versions.length} versions` : undefined, onSelect: () => setConfirming(true) }]} />
         </span>
       </header>
       {deleteError ? <Notice tone="critical" role="alert">{deleteError}</Notice> : null}
+      {opensInApp(entry.mime, entry.filename) ? <OpenInAppBar app={app} /> : null}
       {confirming ? (
         <Modal
           title="Delete this file?"

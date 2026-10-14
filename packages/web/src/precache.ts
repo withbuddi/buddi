@@ -18,12 +18,43 @@ export function precacheList(bundled: readonly string[], publicFiles: readonly s
   return ['index.html', ...[...bundled, ...publicFiles].filter(keep).sort()];
 }
 
+/** What `generateBundle` is handed, as far as the list reads it. */
+type BundleEntry = { type?: string; isEntry?: boolean; facadeModuleId?: string | null; imports?: string[]; dynamicImports?: string[]; viteMetadata?: { importedAssets?: Set<string> } };
+
+/** The Office previewers' entries (`src/chat/office/`): loaded when a file is opened, never kept offline. */
+const OFFICE_ENTRY = /[\\/]src[\\/]chat[\\/]office[\\/]/;
+
+/**
+ * The files only an Office previewer loads — its chunk, what nothing else
+ * imports, and the parser and worker it brings — which the shell never needs
+ * offline: megabytes the worker would otherwise fetch at every install.
+ */
+export function officeOnly(bundle: Record<string, BundleEntry>): Set<string> {
+  const walk = (starts: string[], skip: (name: string) => boolean): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [...starts];
+    while (queue.length > 0) {
+      const name = queue.pop()!;
+      if (seen.has(name) || skip(name) || !bundle[name]) continue;
+      seen.add(name);
+      const chunk = bundle[name]!;
+      queue.push(...(chunk.imports ?? []), ...(chunk.dynamicImports ?? []), ...(chunk.viteMetadata?.importedAssets ?? []));
+    }
+    return seen;
+  };
+  const isOffice = (name: string): boolean => OFFICE_ENTRY.test(bundle[name]?.facadeModuleId ?? '');
+  const office = walk(Object.keys(bundle).filter(isOffice), () => false);
+  const shell = walk(Object.keys(bundle).filter((name) => bundle[name]!.isEntry), isOffice);
+  return new Set([...office].filter((name) => !shell.has(name)));
+}
+
 export function precacheManifest(build: string, publicFiles: () => string[]): Plugin {
   return {
     name: 'buddi-precache',
     apply: 'build',
     generateBundle(_options, bundle) {
-      const files = precacheList(Object.keys(bundle), publicFiles());
+      const office = officeOnly(bundle as unknown as Record<string, BundleEntry>);
+      const files = precacheList(Object.keys(bundle).filter((name) => !office.has(name)), publicFiles());
       this.emitFile({ type: 'asset', fileName: 'precache.json', source: `${JSON.stringify({ build, files }, null, 2)}\n` });
     },
   };

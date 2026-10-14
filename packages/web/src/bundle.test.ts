@@ -56,6 +56,15 @@ const ALLOWED_LITERALS = [
   'https://myaccount.google.com/apppasswords', 'https://support.apple.com/en-us/102654', 'https://www.fastmail.help/hc/en-us/articles/360058752854',
   // The MP3 encoder's own home page, a string it reports as its URL (lamejs, loaded only for an MP3 download): never fetched.
   'http://www.mp3dev.org/',
+  // Office Open XML's namespace and relationship names, read inside a file the previewers parse: names, never fetched.
+  'http://schemas.openxmlformats.org/', 'http://schemas.microsoft.com/office/', 'http://purl.oclc.org/ooxml/',
+  // docx-preview resolves a part's path against this made-up base, then strips it: never fetched.
+  'http://docx/',
+  // jszip's and docx-preview's home pages and licences in their own error and header text: never fetched.
+  'http://stuartk.com/jszip', 'https://raw.github.com/Stuk/jszip/', 'https://stuk.github.io/jszip/', 'https://github.com/nodeca/pako/', 'https://github.com/VolodymyrBaydalka/docxjs',
+  // The pptx viewer's map of font substitutes, used only with its useGoogleFonts option, which buddi keeps off
+  // (chat/office/pptx.tsx): in the lazy chunk, never fetched.
+  'https://fonts.googleapis.com/css2?family=',
 ];
 
 function externalUrls(text: string): string[] {

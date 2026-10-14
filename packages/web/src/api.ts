@@ -352,6 +352,24 @@ export interface FileView {
   available: boolean;
 }
 
+/** `GET /api/files/:id/open`: a file open in the owner's own app, and what came back from it. */
+export interface OpenInAppState {
+  open: boolean;
+  fileId?: string;
+  name?: string;
+  /** The version the working copy is based on. */
+  base?: number;
+  /** The last version a save in the app brought back. */
+  savedVersion?: number;
+  savedAt?: string;
+  /** A save there refused: a newer version was saved meanwhile (`current`). */
+  conflict?: 'newer' | 'workspace';
+  current?: FileVersionRef;
+  error?: string;
+  deleted?: boolean;
+  closed?: boolean;
+}
+
 /** A save the server refused (409): one shape for the editor and Restore alike. */
 export interface FileConflict {
   error: string;
@@ -2943,6 +2961,11 @@ export const api = {
     del<{ fileId: string; version?: number; fileDeleted?: boolean }>(`/files/${encodeURIComponent(id)}${version === undefined ? '' : `/versions/${version}`}`),
   undeleteFile: (id: string, version?: number) =>
     post<{ fileId: string; restored: true }>(`/files/${encodeURIComponent(id)}/undelete`, version === undefined ? {} : { version }),
+  /** Open in app: the newest version as a working copy in this computer's default app. */
+  openInApp: (id: string) => post<OpenInAppState>(`/files/${encodeURIComponent(id)}/open`, {}),
+  openInAppState: (id: string) => get<OpenInAppState>(`/files/${encodeURIComponent(id)}/open`),
+  /** After a save in the app was refused: keep his, or theirs (the copy is closed). */
+  resolveOpenInApp: (id: string, keep: 'mine' | 'theirs') => post<OpenInAppState>(`/files/${encodeURIComponent(id)}/open/resolve`, { keep }),
   /** A new text file of the owner's ("Save as new file"). */
   createFile: (body: { name: string; text: string; mime?: string; conversationId?: string | null }) =>
     post<FileVersionRef & { filename: string | null }>('/files', body),

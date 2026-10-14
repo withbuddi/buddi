@@ -3382,6 +3382,21 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .file-preview-pdf object { width: 100%; height: 70vh; display: block; }
 .file-preview-text { margin: 0; padding: 12px 14px; max-height: 60vh; overflow: auto; font-family: var(--font-mono); font-size: var(--text-md); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .file-preview-table { max-height: 60vh; overflow: auto; }
+/* Word, Excel and PowerPoint previews (chat/OfficePreview.tsx): drawn by buddi, never by the file. */
+.file-preview-office { display: flex; flex-direction: column; }
+.office-docx { display: block; width: 100%; min-height: 40vh; border: 0; background: var(--surface-sunken); }
+.office-xlsx { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) 0 var(--space-3); }
+.office-xlsx > .muted { margin: 0 var(--space-3); }
+.office-xlsx-tabs { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: 0 var(--space-3); border-bottom: 1px solid var(--line); }
+.office-xlsx-tabs .ui-tab { margin: 0; padding: var(--space-1) var(--space-2); font: inherit; font-size: var(--text-sm); }
+.office-xlsx-tabs .ui-tab[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); }
+.office-xlsx-grid { max-height: 60vh; overflow: auto; }
+.office-xlsx-grid thead th { position: sticky; top: 0; background: var(--surface-sunken); z-index: 1; }
+.office-xlsx-grid .office-xlsx-row, .office-xlsx-grid thead th:first-child { width: 1%; white-space: nowrap; }
+.office-xlsx-grid .office-xlsx-row { color: var(--text-faint); font-weight: var(--weight-medium); background: var(--surface-sunken); }
+.office-pptx { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); }
+.office-pptx-stage { display: flex; justify-content: center; }
+.office-pptx-stage canvas { max-width: 100%; height: auto; box-shadow: var(--shadow-panel); }
 .files-agent { display: inline-flex; align-items: center; gap: var(--space-2); }
 .files-conversations { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-4); border-top: 1px solid var(--line); }
 .files-ctx { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }

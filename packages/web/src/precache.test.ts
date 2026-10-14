@@ -42,3 +42,22 @@ describe('precacheManifest', () => {
     expect(parsed.files.some((file) => file.startsWith('api'))).toBe(false);
   });
 });
+
+describe('the Office previewers', () => {
+  it('are never kept offline: their chunks, what only they import, and their parser and worker', () => {
+    const bundle = {
+      'assets/index-a.js': { type: 'chunk', isEntry: true, imports: [], dynamicImports: ['assets/CodeEditor-b.js', 'assets/pptx-c.js', 'assets/docx-d.js'] },
+      'assets/CodeEditor-b.js': { type: 'chunk', facadeModuleId: '/repo/packages/web/src/canvas/views/CodeEditor.tsx', imports: ['assets/index-a.js'] },
+      'assets/pptx-c.js': { type: 'chunk', facadeModuleId: '/repo/packages/web/src/chat/office/pptx.tsx', imports: ['assets/index-a.js'], dynamicImports: ['assets/host-e.js'], viteMetadata: { importedAssets: new Set(['assets/render-worker-f.js', 'assets/pptx_parser-g.wasm']) } },
+      'assets/docx-d.js': { type: 'chunk', facadeModuleId: '/repo/packages/web/src/chat/office/docx.tsx', imports: ['assets/index-a.js'] },
+      'assets/host-e.js': { type: 'chunk', imports: [] },
+      'assets/render-worker-f.js': { type: 'asset' },
+      'assets/pptx_parser-g.wasm': { type: 'asset' },
+    };
+    const plugin = precacheManifest('b', () => []);
+    const emitFile = vi.fn();
+    (plugin.generateBundle as unknown as (this: unknown, o: unknown, b: unknown) => void).call({ emitFile }, {}, bundle);
+    const files = (JSON.parse((emitFile.mock.calls[0]?.[0] as { source: string }).source) as { files: string[] }).files;
+    expect(files).toEqual(['index.html', 'assets/CodeEditor-b.js', 'assets/index-a.js']);
+  });
+});
