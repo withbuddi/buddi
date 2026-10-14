@@ -95,8 +95,9 @@ honestly:
   with a tool you have (a web search or a rates tool). Never write a rate
   from memory; if no tool gives you one, leave the cell yellow and empty and
   tell the owner.
-- The local amounts are formulas on that cell (`=D5*$C$3`), never typed, so
-  changing the rate updates them all.
+- The local amounts are formulas on that cell, never typed, so changing the
+  rate updates them all, and blank while it is empty, so a missing rate never
+  reads as zero: `=IF($C$3="","",D5*$C$3)`, the local total the same way.
 - A note under the table: "Converted at the rate above; the real rate on the
   day will differ."
 
