@@ -5,10 +5,13 @@
  *
  * Genuinely textual formats, by mime or — for the `application/octet-stream`
  * a browser or a command gives anything it does not recognise — by
- * extension; never a binary container, however it is named. A leaf module
- * (no imports), reached through the `@buddi/core/text-files` subpath so the
- * dashboard bundle loads nothing else from core.
+ * extension; never a binary container, however it is named (the Office
+ * list is `office-files.ts`'s). A leaf module but for that list, reached
+ * through the `@buddi/core/text-files` subpath so the dashboard bundle loads
+ * nothing else from core.
  */
+
+import { OFFICE_EXTS } from './office-files.js';
 
 const TEXT_MIMES = new Set([
   'application/json', 'application/xml', 'application/javascript', 'application/x-yaml', 'application/yaml',
@@ -21,7 +24,7 @@ const TEXT_EXTS = new Set([
 ]);
 
 /** Containers that are never text, however they are named or typed. */
-const NEVER_TEXT_EXTS = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'numbers', 'pages', 'key', 'rtf', 'odt', 'ods', 'odp', 'pdf']);
+const NEVER_TEXT_EXTS = new Set([...OFFICE_EXTS, 'pdf']);
 
 function extensionOf(filename: string | null | undefined): string {
   const name = (filename ?? '').toLowerCase();

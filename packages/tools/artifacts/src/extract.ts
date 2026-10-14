@@ -15,12 +15,12 @@
  * text from its slide XML (fflate, MIT; one `## Slide n` per slide). Which
  * files those are is core's one rule (`@buddi/core/plugin`'s `officeKindOf`).
  */
-import { officeKindOf, type OfficeKind } from '@buddi/core/plugin';
-import { unzipSync } from 'fflate';
-import mammoth from 'mammoth';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
+import { officeKindOf, officePackageProblem, type OfficeKind } from '@buddi/core/plugin';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
-import readExcelFile from 'read-excel-file/node';
-import { toCsv } from './document.js';
+import { officeText } from './office-text.js';
 
 /** How much text `artifacts.describe` shows before it truncates. */
 export const DESCRIBE_TEXT_CHARS = 20_000;
@@ -44,8 +44,8 @@ export interface ExtractedText {
   truncated: boolean;
 }
 
-/** The most an Office file's unpacked part may be before it is refused as too large to read. */
-export const MAX_OFFICE_PART_BYTES = 64 * 1024 * 1024;
+/** How long, and in how much heap, an Office file's text may take to read. */
+export const OFFICE_READ_LIMITS = { timeoutMs: 15_000, memoryMb: 256 };
 
 const TEXTUAL_MIMES = new Set([
   'application/json',
@@ -94,7 +94,9 @@ export async function extractText(
   if (office) {
     let read: { text: string; sheets?: number; slides?: number };
     try {
-      read = await officeText(bytes, office);
+      const problem = officePackageProblem(bytes, office);
+      if (problem) throw new Error(problem);
+      read = await readOffice(bytes, office);
     } catch (err) {
       throw new Error(
         `this ${OFFICE_NAME[office]} could not be read (${err instanceof Error ? err.message : String(err)}); ` +
@@ -133,73 +135,45 @@ export async function extractText(
 
 const OFFICE_NAME: Record<OfficeKind, string> = { docx: 'Word document', xlsx: 'spreadsheet', pptx: 'presentation' };
 
-/** The text of an Office file: a document's paragraphs, a workbook's sheets as CSV, a deck's slides. */
-async function officeText(bytes: Buffer, kind: OfficeKind): Promise<{ text: string; sheets?: number; slides?: number }> {
-  if (kind === 'docx') {
-    const out = await mammoth.extractRawText({ buffer: bytes });
-    return { text: out.value };
-  }
-  if (kind === 'xlsx') {
-    const sheets = await readExcelFile(bytes);
-    const text = sheets.map(({ sheet, data }) => {
-      const rows = data.map((row) => row.map(cellText));
-      const width = rows.reduce((w, row) => Math.max(w, row.length), 0);
-      if (rows.length === 0 || width === 0) return `## ${sheet}\n\n(empty)`;
-      const [head, ...body] = rows.map((row) => [...row, ...Array<string>(width - row.length).fill('')]);
-      return `## ${sheet}\n\n${toCsv(head!, body).replace(/\r\n/g, '\n')}`;
-    }).join('\n\n');
-    return { text, sheets: sheets.length };
-  }
-  return slideText(bytes);
-}
-
-/** A cell as text: a date as its ISO day (or moment), everything else as written. */
-function cellText(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  if (value instanceof Date) {
-    const iso = value.toISOString();
-    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso;
-  }
-  return String(value);
-}
-
-const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-
-function decodeXml(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_all, code: string) => {
-    if (code[0] === '#') {
-      const n = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
-      return Number.isFinite(n) && n <= 0x10ffff ? String.fromCodePoint(n) : '';
-    }
-    return ENTITIES[code.toLowerCase()] ?? '';
-  });
-}
+const workerUrl = new URL('./office-worker.js', import.meta.url);
+const hasWorker = import.meta.url.endsWith('.js') && existsSync(fileURLToPath(workerUrl));
 
 /**
- * A presentation's text, slide by slide: the runs (`<a:t>`) of each
- * paragraph (`<a:p>`) of `ppt/slides/slideN.xml`, in slide order. Only the
- * slide parts are unpacked, each at most `MAX_OFFICE_PART_BYTES`.
+ * An Office file's text within `OFFICE_READ_LIMITS`: in a worker with a heap
+ * limit, stopped at the deadline. Run from source (the tests) there is no
+ * compiled worker, and it runs here, still answered at the deadline.
  */
-function slideText(bytes: Buffer): { text: string; slides: number } {
-  const SLIDE = /^ppt\/slides\/slide(\d+)\.xml$/;
-  const parts = unzipSync(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), {
-    filter: (file) => {
-      if (!SLIDE.test(file.name)) return false;
-      if (file.originalSize > MAX_OFFICE_PART_BYTES) throw new Error(`${file.name} is too large to read`);
-      return true;
-    },
+function readOffice(bytes: Buffer, kind: OfficeKind): Promise<{ text: string; sheets?: number; slides?: number }> {
+  const tooSlow = (): Error => new Error(`it took more than ${OFFICE_READ_LIMITS.timeoutMs / 1000} s to read`);
+  if (!hasWorker) {
+    let timer: NodeJS.Timeout | undefined;
+    return Promise.race([
+      officeText(bytes, kind),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(tooSlow()), OFFICE_READ_LIMITS.timeoutMs); }),
+    ]).finally(() => clearTimeout(timer));
+  }
+  return new Promise((resolve, reject) => {
+    const copy = new Uint8Array(bytes);
+    const worker = new Worker(workerUrl, {
+      workerData: { bytes: copy, kind },
+      transferList: [copy.buffer],
+      resourceLimits: { maxOldGenerationSizeMb: OFFICE_READ_LIMITS.memoryMb, maxYoungGenerationSizeMb: 32, stackSizeMb: 8 },
+    });
+    let settled = false;
+    const done = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+      void worker.terminate();
+    };
+    const timer = setTimeout(() => done(() => reject(tooSlow())), OFFICE_READ_LIMITS.timeoutMs);
+    worker.once('message', (msg: { ok: boolean; out?: { text: string; sheets?: number; slides?: number }; message?: string }) => {
+      done(() => (msg.ok && msg.out ? resolve(msg.out) : reject(new Error(msg.message ?? 'it could not be read'))));
+    });
+    worker.once('error', (err: Error & { code?: string }) => done(() => reject(err.code === 'ERR_WORKER_OUT_OF_MEMORY' ? new Error('it is too large to read') : err)));
+    worker.once('exit', (code) => done(() => reject(new Error(`the reader stopped (exit ${code})`))));
   });
-  const slides = Object.keys(parts)
-    .map((name) => ({ name, n: Number(SLIDE.exec(name)![1]) }))
-    .sort((a, b) => a.n - b.n);
-  const text = slides.map(({ name }, i) => {
-    const xml = Buffer.from(parts[name]!).toString('utf8');
-    const paragraphs = [...xml.matchAll(/<a:p[\s>][\s\S]*?<\/a:p>/g)]
-      .map((p) => [...p[0].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((t) => decodeXml(t[1]!)).join(''))
-      .filter((line) => line.trim() !== '');
-    return `## Slide ${i + 1}\n\n${paragraphs.join('\n')}`;
-  }).join('\n\n');
-  return { text, slides: slides.length };
 }
 
 export interface ImageDimensions {

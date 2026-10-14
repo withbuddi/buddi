@@ -14,19 +14,39 @@
 
 export type OfficeKind = 'docx' | 'xlsx' | 'pptx';
 
-/** The mime each kind is stored under. */
-export const OFFICE_MIME: Readonly<Record<OfficeKind, string>> = {
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+/**
+ * Every Office format buddi knows, by extension: its mime, and — for the
+ * three Open XML formats it reads — its kind and the part every such
+ * package has. The one list the text rule (never text), the store (a
+ * document, stored under this extension) and Open in app read.
+ */
+export const OFFICE_FORMATS: Readonly<Record<string, { mime: string; kind?: OfficeKind; main?: string }>> = {
+  docx: { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', kind: 'docx', main: 'word/document.xml' },
+  xlsx: { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', kind: 'xlsx', main: 'xl/workbook.xml' },
+  pptx: { mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', kind: 'pptx', main: 'ppt/presentation.xml' },
+  doc: { mime: 'application/msword' },
+  xls: { mime: 'application/vnd.ms-excel' },
+  ppt: { mime: 'application/vnd.ms-powerpoint' },
+  rtf: { mime: 'application/rtf' },
+  odt: { mime: 'application/vnd.oasis.opendocument.text' },
+  ods: { mime: 'application/vnd.oasis.opendocument.spreadsheet' },
+  odp: { mime: 'application/vnd.oasis.opendocument.presentation' },
+  pages: { mime: 'application/vnd.apple.pages' },
+  numbers: { mime: 'application/vnd.apple.numbers' },
+  key: { mime: 'application/vnd.apple.keynote' },
 };
 
-const BY_MIME: ReadonlyMap<string, OfficeKind> = new Map(
-  (Object.entries(OFFICE_MIME) as Array<[OfficeKind, string]>).map(([kind, mime]) => [mime, kind]),
-);
+/** The extensions of every Office format: containers that are never text. */
+export const OFFICE_EXTS: ReadonlySet<string> = new Set(Object.keys(OFFICE_FORMATS));
 
-/** Office formats buddi does not read, which the owner's own app still opens. */
-const OTHER_OFFICE_EXTS = new Set(['doc', 'xls', 'ppt', 'rtf', 'pages', 'numbers', 'key', 'odt', 'ods', 'odp']);
+/** The mime each kind is stored under. */
+export const OFFICE_MIME: Readonly<Record<OfficeKind, string>> = {
+  docx: OFFICE_FORMATS.docx!.mime,
+  xlsx: OFFICE_FORMATS.xlsx!.mime,
+  pptx: OFFICE_FORMATS.pptx!.mime,
+};
+
+const BY_MIME: ReadonlyMap<string, string> = new Map(Object.entries(OFFICE_FORMATS).map(([ext, f]) => [f.mime, ext]));
 
 function extensionOf(filename: string | null | undefined): string {
   const name = (filename ?? '').toLowerCase();
@@ -38,14 +58,20 @@ function bare(mime: string): string {
   return (mime || '').toLowerCase().split(';')[0]!.trim();
 }
 
-/** Which Office document this file is — docx, xlsx or pptx — or null. */
-export function officeKindOf(mime: string, filename?: string | null): OfficeKind | null {
+/** The Office format a file is, by mime, else by extension for an unnamed type. */
+function formatOf(mime: string, filename?: string | null): string | null {
   const value = bare(mime);
   const byMime = BY_MIME.get(value);
   if (byMime) return byMime;
   if (value !== '' && value !== 'application/octet-stream' && value !== 'application/zip') return null;
   const ext = extensionOf(filename);
-  return ext === 'docx' || ext === 'xlsx' || ext === 'pptx' ? ext : null;
+  return OFFICE_EXTS.has(ext) ? ext : null;
+}
+
+/** Which Office document this file is — docx, xlsx or pptx — or null. */
+export function officeKindOf(mime: string, filename?: string | null): OfficeKind | null {
+  const format = formatOf(mime, filename);
+  return format ? OFFICE_FORMATS[format]!.kind ?? null : null;
 }
 
 /**
@@ -53,7 +79,7 @@ export function officeKindOf(mime: string, filename?: string | null): OfficeKind
  * kind, the ones buddi reads and the ones it only hands to the owner's app.
  */
 export function opensInApp(mime: string, filename?: string | null): boolean {
-  return officeKindOf(mime, filename) !== null || OTHER_OFFICE_EXTS.has(extensionOf(filename));
+  return formatOf(mime, filename) !== null;
 }
 
 /** The largest Office file previewed on the Canvas and in Files; a bigger one is Download only. */
@@ -82,4 +108,88 @@ export function officeRebuildRefusal(
   const owner = file.createdBy === 'owner' || (input.ownerId !== undefined && file.createdBy === input.ownerId);
   if (!owner || input.confirmedRebuild === true) return null;
   return `${name} is the owner's own ${kind === 'docx' ? 'Word document' : 'spreadsheet'}. Writing it from ${kind === 'docx' ? 'Markdown' : 'a table'} rebuilds it and loses its formatting. Ask the owner first; only once they agree, write again with confirmedRebuild: true.`;
+}
+
+/**
+ * A cell as text, the one rule for the agent's CSV and the page's table: a
+ * date as its day (or its moment when it has a time), TRUE/FALSE, the rest
+ * as written. Never evaluated.
+ */
+export function cellText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) {
+    const iso = value.toISOString();
+    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso.replace('T', ' ').replace(/(:00)?\.000Z$/, '');
+  }
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  return String(value);
+}
+
+/**
+ * What any Office package may hold before buddi reads it — the server's
+ * text for agents, the page's previews, an import from Open in app alike:
+ * checked from the zip's central directory, before anything is inflated.
+ */
+export const OFFICE_ZIP_LIMITS = { entries: 2_000, entryBytes: 50 * 1024 * 1024, totalBytes: 200 * 1024 * 1024 } as const;
+
+/** One entry of a zip's central directory: its name and the sizes it declares. */
+export interface ZipEntry { name: string; compressed: number; size: number }
+
+/**
+ * The entries a zip's central directory lists, or why it is not a zip buddi
+ * will read: no end record, more entries or more expanded bytes than
+ * `OFFICE_ZIP_LIMITS`, or a ZIP64 size (more than 4 GiB declared). Reads
+ * only the directory; nothing is inflated.
+ */
+export function zipEntries(bytes: Uint8Array, limits: { entries: number; entryBytes: number; totalBytes: number } = OFFICE_ZIP_LIMITS): ZipEntry[] | string {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // The end-of-central-directory record: in the last 64 KiB + 22 bytes.
+  let end = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 0xffff); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
+  }
+  if (end < 0) return 'it is not a zip package';
+  const count = view.getUint16(end + 10, true);
+  const dirSize = view.getUint32(end + 12, true);
+  const dirAt = view.getUint32(end + 16, true);
+  if (count === 0xffff || dirAt === 0xffffffff) return 'it is a ZIP64 package, larger than buddi reads';
+  if (count > limits.entries) return `it holds ${count} parts; at most ${limits.entries}`;
+  if (dirAt + dirSize > end) return 'its zip directory is damaged';
+  const out: ZipEntry[] = [];
+  let total = 0;
+  let at = dirAt;
+  const decoder = new TextDecoder();
+  for (let n = 0; n < count; n++) {
+    if (at + 46 > end || view.getUint32(at, true) !== 0x02014b50) return 'its zip directory is damaged';
+    const compressed = view.getUint32(at + 20, true);
+    const size = view.getUint32(at + 24, true);
+    const nameLength = view.getUint16(at + 28, true);
+    const extra = view.getUint16(at + 30, true);
+    const comment = view.getUint16(at + 32, true);
+    const name = decoder.decode(bytes.subarray(at + 46, at + 46 + nameLength));
+    if (size === 0xffffffff || compressed === 0xffffffff) return 'it is a ZIP64 package, larger than buddi reads';
+    if (size > limits.entryBytes) return `${name} unpacks to more than ${Math.round(limits.entryBytes / 1024 / 1024)} MB`;
+    total += size;
+    if (total > limits.totalBytes) return `it unpacks to more than ${Math.round(limits.totalBytes / 1024 / 1024)} MB`;
+    out.push({ name, compressed, size });
+    at += 46 + nameLength + extra + comment;
+  }
+  return out;
+}
+
+/**
+ * Why these bytes are not a whole package of this kind buddi will read, or
+ * null: within `OFFICE_ZIP_LIMITS`, with `[Content_Types].xml` and the kind's
+ * main part. What an Open in app save must be before it is imported (an app
+ * half way through writing leaves something that is not), and what every
+ * reader checks first.
+ */
+export function officePackageProblem(bytes: Uint8Array, kind: OfficeKind): string | null {
+  const entries = zipEntries(bytes);
+  if (typeof entries === 'string') return entries;
+  const names = new Set(entries.map((e) => e.name));
+  if (!names.has('[Content_Types].xml')) return 'it is not an Office package';
+  const main = OFFICE_FORMATS[kind]!.main!;
+  if (!names.has(main)) return `it has no ${main}`;
+  return null;
 }

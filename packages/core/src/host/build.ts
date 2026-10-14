@@ -1146,15 +1146,17 @@ function filesArea(
     const kind = officeKindOf(file.mime, file.name);
     if (kind === null) return null;
     const refusal = officeRebuildRefusal(file, { confirmedRebuild, ...(facts.ownerId ? { ownerId: facts.ownerId } : {}) });
-    if (refusal || kind === 'pptx') throw new Error(refusal ?? 'agents cannot write a presentation');
+    // A presentation is always refused above: what is left is a document or a workbook.
+    if (refusal) throw new Error(refusal);
+    const to = kind === 'docx' ? 'docx' : 'xlsx';
     const sent = mime.toLowerCase().split(';')[0]!.trim();
-    const wants = kind === 'docx' ? 'text/markdown' : 'text/csv';
+    const wants = to === 'docx' ? 'text/markdown' : 'text/csv';
     if (sent !== wants) {
-      throw new Error(`${file.name ?? 'This file'} is ${kind === 'docx' ? 'a Word document: write it as Markdown' : 'a spreadsheet: write it as a table (csv or json)'}.`);
+      throw new Error(`${file.name ?? 'This file'} is ${to === 'docx' ? 'a Word document: write it as Markdown' : 'a spreadsheet: write it as a table (csv or json)'}.`);
     }
     if (!facts.convertDocument) throw new Error('buddi cannot write Office files in this process.');
     const base = (file.name ?? 'Document').replace(/\.[a-z0-9]{1,8}$/i, '');
-    return facts.convertDocument({ bytes, mime: wants, filename: `${base}.${kind === 'docx' ? 'md' : 'csv'}` }, kind);
+    return facts.convertDocument({ bytes, mime: wants, filename: `${base}.${to === 'docx' ? 'md' : 'csv'}` }, to);
   };
   return {
     async save(input) {

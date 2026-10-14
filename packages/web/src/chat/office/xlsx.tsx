@@ -5,7 +5,7 @@
  * sheet are shown, and a sheet with more says so. Charts, styles and number
  * formats are not drawn. Loaded only when a .xlsx is opened.
  */
-import { SHEET_PREVIEW_COLS, SHEET_PREVIEW_ROWS } from '@buddi/core/office-files';
+import { SHEET_PREVIEW_COLS, SHEET_PREVIEW_ROWS, cellText } from '@buddi/core/office-files';
 import readExcelFile from 'read-excel-file/browser';
 import { useEffect, useMemo, useState } from 'react';
 import { Empty, Notice } from '../../ui';
@@ -13,16 +13,6 @@ import type { OfficeViewerProps } from '../OfficePreview';
 
 type Cell = string | number | boolean | Date | null;
 interface Sheet { name: string; rows: Cell[][] }
-
-function cellText(value: Cell | undefined): string {
-  if (value === null || value === undefined) return '';
-  if (value instanceof Date) {
-    const iso = value.toISOString();
-    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso.replace('T', ' ').replace(/:00\.000Z$|\.000Z$/, '');
-  }
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  return String(value);
-}
 
 /** Column letters, as the spreadsheet names them: A … Z, AA … */
 function columnName(index: number): string {

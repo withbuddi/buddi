@@ -87,7 +87,14 @@ describe('Office previews', () => {
     cleanup();
     serve(Buffer.from('not a zip'));
     render(<ArtifactPreview artifactId="a5" filename="Broken.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
-    expect(await screen.findByText(/spreadsheet could not be read/, {}, { timeout: 10_000 })).toBeInTheDocument();
+    expect(await screen.findByText(/can’t be previewed: it is not a zip package/)).toBeInTheDocument();
+  });
+
+  it('refuses a zip bomb from its directory before any parser sees it', async () => {
+    serve(fixture('bomb.docx'));
+    render(<ArtifactPreview artifactId="a7" filename="Bomb.docx" mime={OFFICE_MIME.docx} family="text" />);
+    expect(await screen.findByText(/can’t be previewed: word\/document\.xml unpacks to more than 50 MB/)).toBeInTheDocument();
+    expect(screen.queryByTestId('office-docx')).not.toBeInTheDocument();
   });
 
   it('leaves a legacy or Apple file to Download', () => {

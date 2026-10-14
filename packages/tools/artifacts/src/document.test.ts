@@ -1,19 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_DOCUMENT_CHARS, MAX_TABLE_COLUMNS, parseJsonTable, safeName, toCsv } from './document.js';
-
-describe('document names', () => {
-  it('keeps a title readable and makes it safe as a file name', () => {
-    expect(safeName('Heat pumps compared', 100, 'Document')).toBe('Heat pumps compared');
-    expect(safeName('../../etc/passwd', 100, 'Document')).toBe('etc-passwd');
-    expect(safeName('..', 100, 'Document')).toBe('Document');
-    expect(safeName('a\\b:c*d?e"f<g>h|i', 100, 'Document')).toBe('a-b-c-d-e-f-g-h-i');
-    expect(safeName('line\none\u0000two', 100, 'Document')).toBe('line one two');
-    expect(safeName('.hidden', 100, 'Document')).toBe('hidden');
-    expect(safeName('CON', 100, 'Document')).toBe('CON-file');
-    expect(safeName('word '.repeat(40), 30, 'Document').length).toBeLessThanOrEqual(30);
-    expect(safeName('   ', 100, 'Document')).toBe('Document');
-  });
-});
+import { MAX_DOCUMENT_CHARS, MAX_TABLE_COLUMNS, parseJsonTable, toCsv } from './document.js';
 
 describe('JSON tables', () => {
   it('reads an array of objects, keys in first-seen order', () => {

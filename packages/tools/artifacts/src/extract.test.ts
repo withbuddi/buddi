@@ -129,4 +129,10 @@ describe('Office files', () => {
     expect(out.text.length).toBe(10);
     await expect(extractText(Buffer.from('not a zip'), XLSX, 100)).rejects.toThrow(/spreadsheet could not be read/);
   });
+
+  it('refuses a zip bomb from its directory, fast, before inflating it', async () => {
+    const started = performance.now();
+    await expect(extractText(fixture('bomb.docx'), DOCX, 10_000)).rejects.toThrow(/Word document could not be read \(word\/document\.xml unpacks to more than 50 MB\)/);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
 });

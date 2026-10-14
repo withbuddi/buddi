@@ -30,6 +30,7 @@
  * the file. A month later `purgeDeletedArtifacts` removes the rows, and the
  * bytes no remaining version stores.
  */
+import { OFFICE_FORMATS } from '../office-files.js';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -132,24 +133,16 @@ const DOCUMENT_MIMES = new Set([
   'application/pdf',
   'application/json',
   'application/xml',
-  'application/rtf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-  'application/vnd.ms-powerpoint',
+  // Every Office format (`office-files.ts`).
+  ...Object.values(OFFICE_FORMATS).map((f) => f.mime),
 ]);
 
 const MIME_EXTENSIONS: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(OFFICE_FORMATS).map(([ext, f]) => [f.mime, ext])),
   'application/pdf': 'pdf',
   'application/json': 'json',
   'application/xml': 'xml',
   'application/zip': 'zip',
-  'application/msword': 'doc',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'audio/mpeg': 'mp3',
   'audio/mp4': 'm4a',
   'audio/ogg': 'ogg',

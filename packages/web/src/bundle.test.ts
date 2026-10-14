@@ -14,6 +14,7 @@
  * what a cashflow is.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -141,6 +142,29 @@ describe('the page makes no external request', () => {
         expect(text, `${relative} fetches a remote asset`).not.toMatch(/url\(\s*['"]?(https?:)?\/\//);
       }
     }
+  });
+});
+
+describe('the Office previewers stay lazy and bounded', () => {
+  /**
+   * The deck previewer (`chat/office/pptx.tsx`) brings a WASM parser and a
+   * render worker: shipped only while the whole stays under ~6 MB gzipped
+   * (the owner's decision, 2026-10-13; 1.4 MB when it landed).
+   */
+  it.runIf(existsSync(DIST))('keeps the deck previewer, its parser and its worker under 6 MB gzipped', () => {
+    const assets = readdirSync(path.join(DIST, 'assets'));
+    const deck = assets.filter((name) => /^pptx-[\w-]+\.js$/.test(name) || /^pptx_parser_bg-[\w-]+\.wasm$/.test(name) || /^render-worker-[\w-]+\.js$/.test(name));
+    expect(deck.some((name) => name.endsWith('.wasm')), 'the deck previewer moved').toBe(true);
+    const gz = deck.reduce((sum, name) => sum + gzipSync(readFileSync(path.join(DIST, 'assets', name))).length, 0);
+    expect(gz).toBeLessThan(6 * 1024 * 1024);
+  });
+
+  it.runIf(existsSync(DIST))('keeps every Office library out of the dashboard’s own chunk', () => {
+    const html = readFileSync(path.join(DIST, 'index.html'), 'utf8');
+    const entry = /assets\/(index-[\w-]+\.js)/.exec(html)?.[1];
+    expect(entry).toBeTruthy();
+    const main = readFileSync(path.join(DIST, 'assets', entry!), 'utf8');
+    for (const marker of ['docx-wrapper', 'PptxViewer', 'sharedStrings']) expect(main, marker).not.toContain(marker);
   });
 });
 

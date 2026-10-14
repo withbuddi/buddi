@@ -17,7 +17,7 @@
  * file's *name* only; the bytes are stored content-addressed by the host
  * (`artifacts/<yyyy>/<mm>/<sha256>.<ext>`).
  */
-import type { ToolDefinition } from '@buddi/core/plugin';
+import { safeFileName, type ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   FORMAT_FILE,
@@ -26,7 +26,6 @@ import {
   MAX_FOLDER_CHARS,
   MAX_TITLE_CHARS,
   parseJsonTable,
-  safeName,
   toCsv,
   type DocumentFormat,
 } from '../document.js';
@@ -102,8 +101,8 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
     if (!files) throw new Error('Files is not available to this agent');
     const { mime, ext } = FORMAT_FILE[input.format];
     const title = input.title.replace(/\s+/g, ' ');
-    const base = safeName(title, MAX_TITLE_CHARS, 'Document');
-    const folder = input.folder === undefined ? undefined : safeName(input.folder, MAX_FOLDER_CHARS, '') || undefined;
+    const base = safeFileName(title, MAX_TITLE_CHARS, 'Document');
+    const folder = input.folder === undefined ? undefined : safeFileName(input.folder, MAX_FOLDER_CHARS, '') || undefined;
 
     let text: string;
     if (input.format === 'json') {

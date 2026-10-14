@@ -20,5 +20,9 @@ describe('a file name from a title', () => {
     expect(safeFileName('a\\b:c*d?e"f<g>h|i', 100, 'Document')).toBe('a-b-c-d-e-f-g-h-i');
     expect(safeFileName('..', 100, 'Document')).toBe('Document');
     expect(safeFileName('nul', 100, 'Document')).toBe('nul-file');
+    expect(safeFileName('line\none\u0000two', 100, 'Document')).toBe('line one two');
+    expect(safeFileName('.hidden', 100, 'Document')).toBe('hidden');
+    expect(safeFileName('word '.repeat(40), 30, 'Document').length).toBeLessThanOrEqual(30);
+    expect(safeFileName('   ', 100, 'Document')).toBe('Document');
   });
 });

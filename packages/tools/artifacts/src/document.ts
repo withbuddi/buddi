@@ -2,7 +2,6 @@
  * The pure half of `artifacts.write`: what a document's file is called, which
  * version it is, and how a JSON table becomes a CSV. No database, no disk.
  */
-import { safeFileName } from '@buddi/core/plugin';
 
 /**
  * The most a written document may hold: 512 KiB once saved (about a
@@ -29,9 +28,6 @@ export const FORMAT_FILE: Record<DocumentFormat, { mime: string; ext: string }> 
   csv: { mime: 'text/csv', ext: 'csv' },
   json: { mime: 'text/csv', ext: 'csv' },
 };
-
-/** A title made into a file name: core's one rule (`@buddi/core/plugin`). */
-export const safeName = safeFileName;
 
 function csvCell(value: unknown): string {
   if (value === null || value === undefined) return '';
