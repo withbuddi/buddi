@@ -900,12 +900,20 @@ export interface UpgradeServiceOptions {
   backupWaitMs?: number | undefined;
 }
 
-/** The `@buddi/core` folder a release root resolves, as the new gateway will. */
-export function releaseCoreDir(root: string): string {
+/**
+ * The `@buddi/core` folder a release root resolves, as the new gateway will.
+ * Only a core inside the release folder counts: Node's lookup walks every
+ * folder above it, and a `@buddi/core` higher up (a checkout, a global
+ * install) is not the one this release runs.
+ */
+export function releaseCoreDir(root: string, release: string): string {
+  const own = path.join(root, 'node_modules', '@buddi', 'core');
   try {
-    return path.dirname(createRequire(path.join(root, 'package.json')).resolve('@buddi/core/package.json'));
+    const found = path.dirname(createRequire(path.join(root, 'package.json')).resolve('@buddi/core/package.json'));
+    const rel = path.relative(release, found);
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel) ? found : own;
   } catch {
-    return path.join(root, 'node_modules', '@buddi', 'core');
+    return own;
   }
 }
 
@@ -1208,7 +1216,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     // The previous release's folder may be gone now, and with it the core every
     // plugin was linked to. Never in the way of the hand-over.
     if (opts.relinkPlugins !== undefined) {
-      try { await opts.relinkPlugins(releaseCoreDir(placed.root)); }
+      try { await opts.relinkPlugins(releaseCoreDir(placed.root, placed.dir)); }
       catch (err) { log(`upgrade: relinking plugins to ${to} failed (${message(err)}); the gateway relinks them at start.`); }
     }
     handOver = true;
