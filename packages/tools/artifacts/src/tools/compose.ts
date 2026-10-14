@@ -145,7 +145,11 @@ async function guideText(name: string): Promise<{ guide: string; text: string }>
 /** The app the owner opens each kind in. */
 const APP: Readonly<Record<ComposeKind, string>> = { docx: 'Word', pptx: 'PowerPoint', xlsx: 'Excel or Numbers' };
 
-/** Conversations already handed the guide with a failed run: it rides along once, on the first. */
+/**
+ * The guides each conversation already has, as `conversation:kind`: read
+ * with { guide }, or handed with a failed run. A failure brings the guide
+ * along only to a conversation that has not seen it, once.
+ */
 const guided = new Set<string>();
 
 /** The file a compose would write, as the host's save names it. */
@@ -228,7 +232,10 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
     : rebuildTier(ctx, targetOf(input), true, input.confirmedRebuild)),
   describe: (input, ctx) => rebuildDescription(ctx, targetOf(input), true, input.program ?? ''),
   async execute(input, ctx) {
-    if (input.guide !== undefined) return guideText(input.guide);
+    if (input.guide !== undefined) {
+      if (ctx.conversationId) guided.add(`${ctx.conversationId}:${input.guide}`);
+      return guideText(input.guide);
+    }
     const files = ctx.buddi?.files;
     if (!files) throw new Error('Files is not available to this agent');
 
@@ -268,9 +275,9 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
       ...(ctx.conversationId === undefined ? {} : { conversationId: ctx.conversationId }),
     });
     if (!run.ok) {
-      // The first failure in a conversation brings the guide with it, unasked.
-      if ((run.code === 'program_error' || run.code === 'forbidden') && ctx.conversationId && !guided.has(ctx.conversationId)) {
-        guided.add(ctx.conversationId);
+      // The first failure in a conversation that never read this kind's guide brings it along, unasked.
+      if ((run.code === 'program_error' || run.code === 'forbidden') && ctx.conversationId && !guided.has(`${ctx.conversationId}:${kind}`)) {
+        guided.add(`${ctx.conversationId}:${kind}`);
         refuse(run.code, `${run.message}\n\nThe guide, for this and the next run:\n\n${(await guideText(kind)).text}`, run.console, kind);
       }
       refuse(run.code, run.message, run.console, kind);

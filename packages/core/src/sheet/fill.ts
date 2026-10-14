@@ -5,7 +5,10 @@
  * show the totals, and Excel and Numbers recompute them on open. Only ever
  * on bytes buddi made (a compose program's output): an upload, a command's
  * output and an owner's save are never changed. A formula buddi could not
- * compute is left without a value, as the program wrote it.
+ * compute is left without a value, as the program wrote it. A formula
+ * stored with its `=` (write-excel-file writes what it is given, and its
+ * docs give the `=`) loses it: OOXML has none, and Numbers replaces such a
+ * formula by its value and drops such a conditional rule.
  */
 import { zipSync, type Zippable } from 'fflate';
 import { evaluate, type Evaluation } from './evaluate.js';
@@ -48,6 +51,13 @@ function fillSheet(xml: string, values: Map<number, CellValue>): string {
   });
 }
 
+/** A sheet's XML with one leading `=` taken off every cell formula and every conditional rule's formula. */
+export function withoutLeadingEquals(xml: string): string {
+  return xml
+    .replace(/(<f\b[^>]*?(?<!\/)>)\s*=/g, '$1')
+    .replace(/(<formula>)\s*=/g, '$1');
+}
+
 /** `workbook.xml` asking the app to recalculate every formula when it opens the file. */
 export function withFullCalcOnLoad(xml: string): string {
   if (/<calcPr\b/.test(xml)) {
@@ -70,10 +80,13 @@ export async function fillCachedValues(bytes: Uint8Array): Promise<FilledWorkboo
   const encoder = new TextEncoder();
   const parts: WorkbookParts = {};
   for (const name of Object.keys(raw)) if (isWorkbookPart(name)) parts[name] = decoder.decode(raw[name]);
+  const sheetParts = Object.keys(parts).filter((name) => /^xl\/worksheets\/[^/]+\.xml$/.test(name));
+  for (const name of sheetParts) parts[name] = withoutLeadingEquals(parts[name]!);
   const workbook = readWorkbookParts(parts);
   const evaluation = await evaluate(workbook, { want: (_sheet, cell) => cell.formula !== undefined });
   const out: Zippable = {};
   for (const [name, data] of Object.entries(raw)) out[name] = data;
+  for (const name of sheetParts) out[name] = encoder.encode(parts[name]!);
   for (const sheet of workbook.sheets) {
     const values = evaluation.values.get(sheet.name);
     if (values && values.size > 0) out[sheet.path] = encoder.encode(fillSheet(parts[sheet.path]!, values));

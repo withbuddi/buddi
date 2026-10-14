@@ -606,7 +606,11 @@ suite('files as rows', () => {
       ...turn('t1', 'artifacts.text', { id: made.id, fileId: made.fileId, version: 1, text: '# Notes\n' }),
       ...turn('d1', 'artifacts.compose', { dryRun: true, kind: 'docx', sizeBytes: 9000, render: { kind: 'docx' }, note: 'Nothing was saved' }),
       ...turn('g1', 'artifacts.compose', { guide: 'docx', text: '# Composing a Word document' }),
-    ]) await pool.query('insert into core.messages (conversation_id, role, content) values ($1, $2, $3)', [here, role, JSON.stringify(content)]);
+      ['assistant', [{ type: 'tool_use', id: 'f1', name: 'artifacts.compose', input: {} }]],
+      ['user', [{ type: 'tool_result', tool_use_id: 'f1', content: 'program_error: SyntaxError: Illegal return statement', is_error: true }]],
+      ['assistant', [{ type: 'tool_use', id: 'f2', name: 'artifacts.list', input: {} }]],
+      ['user', [{ type: 'tool_result', tool_use_id: 'f2', content: 'no such folder', is_error: true }]],
+    ] as Array<[string, unknown]>) await pool.query('insert into core.messages (conversation_id, role, content) values ($1, $2, $3)', [here, role, JSON.stringify(content)]);
     await saveVersion(pool, { id: made.fileId, bytes: Buffer.from('# Notes, two\n'), createdBy: 'scout' }, env);
     await pool.query('update core.artifacts set deleted_at = now() where id = $1', [made.id]);
     const transcript = await readChatTranscript(pool, here, new Date(), undefined, (tool) => tool === 'artifacts.write' || tool === 'artifacts.compose');
@@ -620,6 +624,9 @@ suite('files as rows', () => {
     expect(by('d1').rowOnly).toBe(true);
     expect(by('g1').rowOnly).toBe(true);
     expect(by('w1').rowOnly).toBeUndefined();
+    // So is a failed run it is about to fix; another tool's failure keeps its tab.
+    expect(by('f1').rowOnly).toBe(true);
+    expect(by('f2').rowOnly).toBeUndefined();
   });
 
   describe('the turn note', () => {

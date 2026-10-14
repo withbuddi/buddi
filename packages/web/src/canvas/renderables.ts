@@ -470,6 +470,8 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         ? { key: storyOutput.id, label: storyOutput.title.length > 60 ? `${storyOutput.title.slice(0, 59)}…` : storyOutput.title }
         : subjectIdentityOf(use?.input ?? null, output);
       if (block.ok === false) {
+        // A document tool's failed run is the agent's to fix: its row says "failed" and opens the error.
+        if (block.rowOnly) continue;
         place({
           id: block.toolUseId,
           tool,

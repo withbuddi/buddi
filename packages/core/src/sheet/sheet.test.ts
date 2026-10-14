@@ -11,7 +11,7 @@ import { strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import {
   address, cellKey, conditionalStyles, criterion, evaluate, fillCachedValues, formatCell, readWorkbook, sheetEngine, shiftFormula, valueOf,
-  withFullCalcOnLoad,
+  withFullCalcOnLoad, withoutLeadingEquals,
 } from './index.js';
 
 const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
@@ -90,6 +90,13 @@ const book = (): Uint8Array => openpyxlBook([
 ], strings);
 
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '__fixtures__', 'office', 'trip.xlsx');
+// Every formula cached, as buddi's fill leaves one: an IF that returned "" is a `str` with an empty `<v>`.
+const CACHED_TEXT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '__fixtures__', 'office', 'cached-text.xlsx');
+const cachedText = (): Uint8Array => openpyxlBook([{
+  name: 'Budget',
+  data: row(1, S('A1', 0, 1), S('B1', 1, 1), S('C1', 1, 1)) + row(2, S('A2', 2), N('B2', 95.5, 2), '<c r="C2" t="str"><f>IF(B2=0,"",B2-100)</f><v></v></c>')
+    + row(3, S('A3', 7), '<c r="B3" s="3"><f>SUM(B2:B2)</f><v>95.5</v></c>'),
+}], strings);
 
 describe('reading a workbook openpyxl wrote', () => {
   it('is the fixture the page’s preview tests read (BUDDI_WRITE_FIXTURES=1 writes it again)', () => {
@@ -327,5 +334,35 @@ describe('what the review found', () => {
     const parts = unzipSync(filled.bytes);
     expect(new TextDecoder().decode(parts['xl/worksheets/sheet1.xml'])).toContain("<c r='B1'><f>A1*3</f><v>6</v></c>");
     expect(new TextDecoder().decode(parts['xl/workbook.xml'])).toContain("<calcPr calcId = '1' fullCalcOnLoad=\"1\"/>");
+  });
+
+  it('takes the leading = off every stored formula, cell and conditional rule, which Numbers refuses, and reads both forms alike', async () => {
+    const cf = '<conditionalFormatting sqref="A1:B1"><cfRule type="expression" dxfId="0" priority="1"><formula>=AND($A1&lt;&gt;"",$A1&gt;1)</formula></cfRule></conditionalFormatting>';
+    const bytes = openpyxlBook([{ name: 'S', data: row(1, N('A1', 2), '<c r="B1"><f>=A1*3</f></c>', '<c r="C1"><f t="shared" ref="C1:C2" si="0">=A1+1</f></c>'), after: cf }], strings);
+    const before = readWorkbook(bytes).sheets[0]!;
+    expect(before.cells.get(cellKey(1, 2))).toMatchObject({ formula: 'A1*3', storedWithEquals: true });
+    expect(before.conditional[0]!.rules[0]).toMatchObject({ formulas: ['AND($A1<>"",$A1>1)'], storedWithEquals: true });
+    const filled = await fillCachedValues(bytes);
+    const xml = new TextDecoder().decode(unzipSync(filled.bytes)['xl/worksheets/sheet1.xml']);
+    expect(xml).toContain('<c r="B1"><f>A1*3</f><v>6</v></c>');
+    expect(xml).toContain('<f t="shared" ref="C1:C2" si="0">A1+1</f><v>3</v>');
+    expect(xml).toContain('<formula>AND($A1&lt;&gt;"",$A1&gt;1)</formula>');
+    expect(xml).not.toMatch(/<f\b[^>]*>\s*=|<formula>\s*=/);
+    const after = readWorkbook(filled.bytes).sheets[0]!;
+    expect(after.cells.get(cellKey(1, 2))).toMatchObject({ formula: 'A1*3', value: 6 });
+    expect(after.cells.get(cellKey(1, 2))!.storedWithEquals).toBeUndefined();
+    expect(after.conditional[0]!.rules[0]!.storedWithEquals).toBeUndefined();
+    // A formula without one, a self-closing <f/> and an = inside a formula are left as they are.
+    expect(withoutLeadingEquals('<f>A1=1</f><f t="shared" si="0"/><formula>$A1="x"</formula>')).toBe('<f>A1=1</f><f t="shared" si="0"/><formula>$A1="x"</formula>');
+  });
+
+  it('counts a cached empty text (an IF that returned "") as a saved value, and openpyxl’s untyped empty <v> as none (cached-text.xlsx, BUDDI_WRITE_FIXTURES=1 writes it again)', () => {
+    if (process.env.BUDDI_WRITE_FIXTURES === '1') writeFileSync(CACHED_TEXT, cachedText());
+    expect(Buffer.from(readFileSync(CACHED_TEXT)).equals(Buffer.from(cachedText()))).toBe(true);
+    expect([...readWorkbook(cachedText()).sheets[0]!.cells.values()].filter((c) => c.formula !== undefined).every((c) => c.hasValue)).toBe(true);
+    const data = row(1, '<c r="A1" t="str"><f>IF(1=0,"",1)</f><v></v></c>', F('B1', 'A1&"x"'));
+    const sheet = readWorkbook(one(data)).sheets[0]!;
+    expect(sheet.cells.get(cellKey(1, 1))).toMatchObject({ value: '', hasValue: true });
+    expect(sheet.cells.get(cellKey(1, 2))).toMatchObject({ value: null, hasValue: false });
   });
 });

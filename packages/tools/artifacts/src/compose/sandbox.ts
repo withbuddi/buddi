@@ -207,7 +207,25 @@ function childFailure(error: ChildError, work: string): { code: ComposeErrorCode
     .slice(0, 6);
   const head = `${error.name && error.name !== 'Error' ? `${error.name}: ` : ''}${scrubPaths(error.message ?? 'the program failed', work)}`;
   const syntax = error.name === 'SyntaxError' && frames.length === 0 ? syntaxPosition(error.stack ?? '', work) : '';
-  return { code: 'program_error', message: [head + syntax, ...frames].join('\n') };
+  return { code: 'program_error', message: [head + syntax, ...frames].join('\n') + programHint(head) };
+}
+
+/** Errors a model makes again and again, each with the one line that fixes it. */
+const HINTS: ReadonlyArray<{ test: RegExp; hint: string }> = [
+  {
+    test: /Illegal return statement|must export a default async function/,
+    hint: 'The program must be `export default async (ctx) => { … return <bytes> }`; a top-level return is not allowed.',
+  },
+  {
+    test: /was specified on a cell of type `?undefined`?/,
+    hint: 'An empty cell the owner fills in is `{ type: Number, value: null, format, backgroundColor }`: a `format` needs a `type` when there is no value.',
+  },
+];
+
+/** The pointed hint for a program's error, on a line of its own, or nothing. */
+export function programHint(message: string): string {
+  const found = HINTS.find((h) => h.test.test(message));
+  return found ? `\n${found.hint}` : '';
 }
 
 /** A syntax error's position, which Node prints before the message rather than as a frame. */
@@ -375,7 +393,7 @@ async function runIn(
       if (signal === 'SIGXCPU') return { ok: false, code: 'timeout', message: `the program used more than ${COMPOSE_LIMITS.cpuSeconds} s of CPU and was stopped.`, console: console() };
       // The runner did not get to say anything: a syntax error Node printed itself, or a crash.
       const syntax = /SyntaxError: [^\n]+/.exec(err);
-      if (syntax) return { ok: false, code: 'program_error', message: `${scrubPaths(syntax[0], work)}${syntaxPosition(err, work)}`, console: console() };
+      if (syntax) return { ok: false, code: 'program_error', message: `${scrubPaths(syntax[0], work)}${syntaxPosition(err, work)}${programHint(syntax[0])}`, console: console() };
       return { ok: false, code: 'program_error', message: `the program stopped without returning a file (exit ${exitCode ?? signal ?? 'unknown'}).`, console: console() };
     };
   });

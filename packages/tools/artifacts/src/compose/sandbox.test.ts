@@ -7,7 +7,7 @@
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { COMPOSE_BUILTINS, composeAvailability, nodeFloorProblem, readFrame, runCompose, scrubPaths } from './sandbox.js';
+import { COMPOSE_BUILTINS, composeAvailability, nodeFloorProblem, programHint, readFrame, runCompose, scrubPaths } from './sandbox.js';
 
 const frame = (type: string, payload: Buffer | string, length?: number): Buffer => {
   const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
@@ -77,5 +77,13 @@ describe('what fd 3 carries', () => {
 describe('what the model is shown', () => {
   it('scrubs buddi’s paths out of what a program said', () => {
     expect(scrubPaths('at /Users/amen/buddi/node_modules/docx/x.js and C:\\buddi\\x', '/w')).toBe('at <buddi> and <buddi>');
+  });
+  it('says how to fix the errors a model makes again and again, in one line', () => {
+    const wrapper = '\nThe program must be `export default async (ctx) => { … return <bytes> }`; a top-level return is not allowed.';
+    expect(programHint('SyntaxError: Illegal return statement')).toBe(wrapper);
+    expect(programHint("the program must export a default async function (ctx) that returns the file's bytes")).toBe(wrapper);
+    expect(programHint('`format` "$#,##0.00" was specified on a cell of type `undefined`. Specify a `type` too.'))
+      .toBe('\nAn empty cell the owner fills in is `{ type: Number, value: null, format, backgroundColor }`: a `format` needs a `type` when there is no value.');
+    expect(programHint('ReferenceError: missing is not defined')).toBe('');
   });
 });

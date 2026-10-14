@@ -33,6 +33,8 @@ export interface CellModel {
   formula?: string;
   /** Whether the file carries a value for it (a formula from openpyxl or write-excel-file has none). */
   hasValue: boolean;
+  /** The file stores the formula with its `=`, which OOXML does not have and Numbers refuses. */
+  storedWithEquals?: true;
   /** The cell format (`s`), an index into `StyleSheet.cells`. */
   style: number;
 }
@@ -50,6 +52,8 @@ export interface ConditionalRule {
   dxf: number | null;
   priority: number;
   stopIfTrue: boolean;
+  /** A formula of its is stored with its `=`, which Numbers refuses (the rule is removed). */
+  storedWithEquals?: true;
 }
 
 export interface ConditionalBlock { ranges: CellRange[]; rules: ConditionalRule[] }
@@ -179,8 +183,10 @@ function readSheet(xml: string, target: { name: string; path: string; hidden: bo
     const style = numAttr(tag, 's') ?? 0;
     const fTag = /<f\b([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(body);
     let formula: string | undefined;
+    let storedWithEquals = false;
     if (fTag) {
       const fAttrs = fTag[1] ?? '';
+      storedWithEquals = fTag[2] !== undefined && /^\s*=/.test(fTag[2]);
       const text = fTag[2] === undefined ? '' : stripEquals(decodeXml(fTag[2]));
       if (attr(fAttrs, 't') === 'shared') {
         const si = attr(fAttrs, 'si') ?? '';
@@ -192,11 +198,12 @@ function readSheet(xml: string, target: { name: string; path: string; hidden: bo
     const vMatch = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body);
     const inline = type === 'inlineStr' ? runText(/<is>([\s\S]*?)<\/is>/.exec(body)?.[1] ?? '') : null;
     const raw = vMatch ? decodeXml(vMatch[1]!) : null;
-    // openpyxl writes an empty `<v></v>` (or `<v/>`) after a formula: no value.
-    const hasValue = inline !== null || (raw !== null && raw !== '');
+    // openpyxl writes an empty `<v></v>` (or `<v/>`) after a formula: no value. Typed `str`, it is a
+    // saved empty string (an IF that returned "").
+    const hasValue = inline !== null || (raw !== null && (raw !== '' || type === 'str'));
     const value = inline !== null ? inline : hasValue ? valueOf(type, raw!, strings) : null;
     if (formula === undefined && !hasValue && style === 0) continue;
-    cells.set(cellKey(row, col), { row, col, value, hasValue, style, ...(formula === undefined ? {} : { formula }) });
+    cells.set(cellKey(row, col), { row, col, value, hasValue, style, ...(formula === undefined ? {} : { formula }), ...(formula !== undefined && storedWithEquals ? { storedWithEquals: true as const } : {}) });
     if (formula !== undefined || hasValue) {
       if (row > maxRow) maxRow = row;
       if (col > maxCol) maxCol = col;
@@ -230,11 +237,13 @@ function readSheet(xml: string, target: { name: string; path: string; hidden: bo
       const type: ConditionalType = ['cellIs', 'expression', 'containsText', 'notContainsText', 'beginsWith', 'endsWith'].includes(t) ? t as ConditionalType : 'other';
       const operator = attr(tag, 'operator');
       const text = attr(tag, 'text');
+      const stored = [...(rule[2] ?? '').matchAll(/<formula>([\s\S]*?)<\/formula>/g)].map((f) => f[1]!);
       return {
         type,
         ...(operator === null ? {} : { operator }),
         ...(text === null ? {} : { text }),
-        formulas: [...(rule[2] ?? '').matchAll(/<formula>([\s\S]*?)<\/formula>/g)].map((f) => stripEquals(decodeXml(f[1]!))),
+        ...(stored.some((f) => /^\s*=/.test(f)) ? { storedWithEquals: true as const } : {}),
+        formulas: stored.map((f) => stripEquals(decodeXml(f))),
         dxf: numAttr(tag, 'dxfId'),
         priority: numAttr(tag, 'priority') ?? 0,
         stopIfTrue: boolAttr(tag, 'stopIfTrue'),

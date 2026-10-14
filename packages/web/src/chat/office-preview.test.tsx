@@ -123,6 +123,13 @@ describe('Office previews', () => {
     expect(screen.queryByText(/Totals calculated by buddi/)).not.toBeInTheDocument();
   });
 
+  it('adds no footer note when a formula’s saved value is an empty text', async () => {
+    serve(fixture('cached-text.xlsx'));
+    render(<ArtifactPreview artifactId="a9" filename="Budget.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
+    expect(await screen.findAllByRole('cell', { name: '€95.50' }, { timeout: 10_000 })).toHaveLength(2);
+    expect(screen.queryByText(/Totals calculated by buddi/)).not.toBeInTheDocument();
+  });
+
   it('shows a deck slide by slide, with no fonts fetched', async () => {
     const deck = fixture('deck.pptx');
     serve(deck);
@@ -252,5 +259,16 @@ describe('a Word document an agent wrote, on the Canvas', () => {
     const saved = call('w', { kind: 'docx', program: 'x', title: 'Letter' }, { artifactId: V1, fileId: FILE, version: 1, filename: 'Letter.docx', mime: OFFICE_MIME.docx, sizeBytes: 9000, render: { kind: 'docx' }, note: 'Saved' },
       [{ artifactId: V1, fileId: FILE, version: 1, filename: 'Letter.docx', mime: OFFICE_MIME.docx, deleted: false, fileDeleted: false }]);
     expect(renderablesFrom({ descriptors: [], messages: [...checking, ...saved] }).map((item) => item.id)).toEqual([fileTabId(FILE)]);
+  });
+
+  it('opens no tab for a failed compose run, which the agent fixes; another tool’s failure keeps its tab', async () => {
+    const { renderablesFrom } = await import('../canvas/renderables');
+    const at = new Date().toISOString();
+    const failed = (id: string, name: string, rowOnly: boolean) => [
+      { id: `u${id}`, role: 'assistant' as const, at, blocks: [{ type: 'tool_use' as const, id, name, input: {} }] },
+      { id: `r${id}`, role: 'user' as const, at, blocks: [{ type: 'tool_result' as const, toolUseId: id, name, ok: false, output: null, error: 'program_error: SyntaxError: Illegal return statement', files: [], ...(rowOnly ? { rowOnly: true as const } : {}) }] },
+    ];
+    expect(renderablesFrom({ descriptors: [], messages: failed('f', 'artifacts.compose', true) })).toEqual([]);
+    expect(renderablesFrom({ descriptors: [], messages: failed('o', 'artifacts.text', false) }).map((item) => [item.id, item.tone])).toEqual([['o', 'critical']]);
   });
 });

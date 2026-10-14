@@ -87,9 +87,16 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
   });
 
   it('hands out its guides', async () => {
-    for (const guide of ['docx', 'pptx', 'xlsx', 'layout']) {
-      const out = await call('artifacts.compose', { guide });
-      expect(out.text.split('\n').length).toBeGreaterThan(60);
+    // In a conversation of its own: one that read a guide is not handed it again with a failure.
+    const main = conversationId;
+    conversationId = String((await pool.query(`insert into core.conversations (agent_id) values ('writer') returning id`)).rows[0].id);
+    try {
+      for (const guide of ['docx', 'pptx', 'xlsx', 'layout']) {
+        const out = await call('artifacts.compose', { guide });
+        expect(out.text.split('\n').length).toBeGreaterThan(60);
+      }
+    } finally {
+      conversationId = main;
     }
   });
 
@@ -260,6 +267,24 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
       expect(saved.ok && saved.row.version).toBe(3);
       expect(await refusal('artifacts.compose', { kind: 'xlsx', program, fileId: v1.fileId, readVersion: 3 }))
         .toMatch(/v3 of Lisbon budget\.xlsx is the owner's own version.*artifacts\.text.*carry the inputs he typed into the program's data \(never into formula results/);
+    });
+
+    it('hands a conversation that read the guide only the error and its one-line fix, not the guide again', async () => {
+      const main = conversationId;
+      conversationId = String((await pool.query(`insert into core.conversations (agent_id) values ('writer') returning id`)).rows[0].id);
+      try {
+        await call('artifacts.compose', { guide: 'xlsx' });
+        const program = `import writeXlsxFile from 'write-excel-file';\nexport default async () => Buffer.from(await (await writeXlsxFile([[{ value: null, format: '$#,##0.00', backgroundColor: '#FFF7E0' }]]).toBlob()).arrayBuffer());`;
+        const message = await refusal('artifacts.compose', { kind: 'xlsx', program, title: 'Budget' });
+        expect(message).toMatch(/was specified on a cell of type `?undefined/);
+        expect(message).toContain('An empty cell the owner fills in is `{ type: Number, value: null, format, backgroundColor }`');
+        expect(message).not.toContain('# Type, colour and space');
+        // The cell the hint says runs.
+        const fixed = program.replace('{ value: null,', '{ type: Number, value: null,');
+        expect((await call('artifacts.compose', { kind: 'xlsx', program: fixed, title: 'Budget', dryRun: true })).dryRun).toBe(true);
+      } finally {
+        conversationId = main;
+      }
     });
 
     it('tells an agent whose sheet program fails to fall back to a table with values', async () => {

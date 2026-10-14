@@ -411,7 +411,7 @@ export type ChatBlock =
       readsFile?: true;
       /** The result is the file it made or opened (a document write, `canvas.open`), not a command that left files. */
       fileResult?: true;
-      /** A document tool's call that saved no file (a dry run, a guide, a program read back): the row is all. */
+      /** A document tool's call that saved no file (a dry run, a guide, a program read back, a failed run): the row is all. */
       rowOnly?: true;
     }
   /** A file in a message: the version it carries, and the file that is a version of (when the row is still there). */
@@ -711,9 +711,11 @@ export async function readChatTranscript(
 const CANVAS_OPEN_TOOL = 'canvas.open';
 /**
  * The tools whose result is a document they saved. Any other result of
- * theirs — a compose dry run, `{ guide }`, `{ fileId, source: true }` — is
- * the agent checking its own work: it opens no canvas tab and never takes
- * the front; only a save opens or updates the file's tab.
+ * theirs — a compose dry run, `{ guide }`, `{ fileId, source: true }`, a
+ * failed run the agent is about to fix — is the agent checking its own
+ * work: it opens no canvas tab and never takes the front; only a save opens
+ * or updates the file's tab, and a failure the agent gives up on it says in
+ * chat.
  */
 const DOCUMENT_TOOLS: ReadonlySet<string> = new Set(['artifacts.write', 'artifacts.compose']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -771,6 +773,7 @@ async function withFiles(
       continue;
     }
     block.files = [];
+    if (block.ok === false && DOCUMENT_TOOLS.has(block.name)) block.rowOnly = true;
     if (named && byId.has(named)) block.readsFile = true;
   }
 }
