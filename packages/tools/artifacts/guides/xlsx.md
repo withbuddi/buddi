@@ -96,15 +96,18 @@ conditionalFormatting: [
   // An amount over 1,000 in red.
   { cellRange: { from: { row: 2, column: 3 }, to: { row: 20, column: 3 } },
     condition: { operator: '>', value: 1000 }, style: { textColor: '#C00000' } },
-  // A whole row when its actual (D) is over its budget (C).
-  { cellRange: { from: { row: 2, column: 1 }, to: { row: 20, column: 4 } },
-    condition: { formula: '=$D2>$C2' }, style: { backgroundColor: '#FDECEC' } },
+  // Over budget: the Difference column (actual minus budget) above zero.
+  { cellRange: { from: { row: 2, column: 4 }, to: { row: 20, column: 4 } },
+    condition: { operator: '>', value: 0 }, style: { textColor: '#C00000' } },
 ],
 ```
 
 Operators: `<`, `<=`, `>`, `>=`, `=`, `!=`, and `'...'` with `value` and
-`value2` for between. A row rule's formula is written for the range's first
-row; keep the column absolute (`$D2`) and the row relative.
+`value2` for between. Use these value rules, on a column the sheet already
+computes (a Difference, a Remaining). A formula rule (`{ formula: '…' }`, e.g.
+a whole row when D is over C) works in Excel but Apple Numbers drops it on
+open, so the owner on a Mac or iPhone loses the colour: write the comparison
+as a column and colour that column instead.
 
 ## Functions
 
@@ -140,7 +143,7 @@ export default async () => {
   const items = [['Flights', 420, 455], ['Hotel', 600, 560], ['Food', 250, 310], ['Museums', 80, 64]];
   const rows = items.map(([name, budget, actual], i) => [
     name, input(budget), input(actual),
-    { type: 'Formula', value: `=C${i + 2}-B${i + 2}`, format: `${EUR};[Red]-${EUR}` },
+    { type: 'Formula', value: `=C${i + 2}-B${i + 2}`, format: EUR },
   ]);
   const last = items.length + 1;
   const costs = {
@@ -153,8 +156,8 @@ export default async () => {
     columns: [{ width: 18 }, { width: 14 }, { width: 14 }, { width: 14 }],
     stickyRowsCount: 1,
     conditionalFormatting: [{
-      cellRange: { from: { row: 2, column: 1 }, to: { row: last, column: 4 } },
-      condition: { formula: '=$C2>$B2' }, style: { textColor: '#C00000' },
+      cellRange: { from: { row: 2, column: 4 }, to: { row: last, column: 4 } },
+      condition: { operator: '>', value: 0 }, style: { textColor: '#C00000' },
     }],
   };
   const summary = {

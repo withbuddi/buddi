@@ -24,6 +24,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A composed Excel budget keeps its over-budget colour in Apple Numbers: the guide now colours a computed Difference column with a value rule instead of a formula rule, which Numbers drops on open.
 - An upgrade relinks the installed plugins to the new release's own `@buddi/core`, never to one found in a folder above the release (a checkout or another install).
 - Reading a PDF's text (`artifacts.text`, `artifacts.describe`, the document export check) no longer fails at random with "bad XRef entry" on valid PDFs: the abandoned pdf-parse (pdf.js 1.10) is replaced by unpdf, a current pdf.js build.
 - A document an agent names with punctuation between words gets a readable file name: "List: Two" is saved as "List - Two.md", no longer "List- Two.md". One rule in core names every file buddi makes from a title.
