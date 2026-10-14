@@ -20,6 +20,7 @@
  * The result is plain text with blank lines between blocks. It is still
  * untrusted; stripping markup does not make a sentence honest.
  */
+import { decodeEntities as decodeCharacterReferences } from '@buddi/core/plugin';
 
 /** Blocks whose *contents* go too, not just their tags. */
 const DROPPED_ELEMENTS =
@@ -61,19 +62,9 @@ const ENTITIES: Record<string, string> = {
   bull: '•',
 };
 
+/** HTML's common named entities, through core's one decoder. */
 export function decodeEntities(text: string): string {
-  return text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (whole, name: string) => {
-    const lower = name.toLowerCase();
-    if (lower.startsWith('#x')) {
-      const code = Number.parseInt(lower.slice(2), 16);
-      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
-    }
-    if (lower.startsWith('#')) {
-      const code = Number.parseInt(lower.slice(1), 10);
-      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
-    }
-    return ENTITIES[lower] ?? whole;
-  });
+  return decodeCharacterReferences(text, ENTITIES);
 }
 
 /** The page's `<title>`, trimmed and collapsed, or `null`. */

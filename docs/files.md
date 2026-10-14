@@ -613,8 +613,8 @@ untouched.
 
 **The sheet engine**, `@buddi/core/sheet`: one module, browser-safe like
 `office-files`, with two callers, the fill and the preview (the artifacts
-plugin reaches what it uses through `@buddi/core/plugin`, like the Office
-rule).
+plugin imports the subpath, the one beside `@buddi/core/plugin` a plugin
+may import).
 
 - `readWorkbook`: every cell's cached value, formula (shared formulas
   expanded) and format, and per sheet its widths, row heights, frozen pane,
@@ -628,10 +628,20 @@ rule).
   computing — in the page its own chunk) over buddi's cell reader, plus
   buddi's own COUNTA, COUNTBLANK, SUMIFS, COUNTIFS, AVERAGEIFS, MATCH and
   SUBTOTAL (which skips the subtotals in its range, as Excel does), and
-  never WEBSERVICE. Caps: 20,000 formula cells a workbook, 2 s a sheet.
-  A circular reference is `#REF!`, a function it does not know `#NAME?`,
-  and a formula reading one of those is not computed either; each is listed
-  with its reason. Not HyperFormula (GPL).
+  never WEBSERVICE; an error in a summed range is the result, as in Excel,
+  and a 1904 workbook's dates are moved at the date functions. Caps:
+  20,000 formula cells a workbook, 2 s a sheet (checked inside range reads
+  too), 100,000 cells in one range and 2,000,000 read in all; past them a
+  formula is `#REF!`, "a range too large to calculate". A range keeps its
+  size, blanks included, except a whole column or row (`A:A`), which reads
+  to the workbook's last used row or column. A circular reference is
+  `#REF!`, a function it does not know `#NAME?`, and a formula reading one
+  of those is not computed either; each is listed with its reason. The fill
+  recomputes every formula, each reading the others' new values. Not
+  HyperFormula (GPL).
+- The parts are inflated within core's Office limits (`OFFICE_ZIP_LIMITS`,
+  `unzipBounded`): the zip directory is checked first, and no part is
+  inflated past the size it declares.
 - `formatCell`: ssf (Apache-2.0, 0.11.2, SheetJS's format engine) for
   `#,##0.00`, `0%`, `[Red]` sections, dates and `[$€-407]`; the one
   formatter of the preview and the render summary.
@@ -640,9 +650,10 @@ rule).
   `stopIfTrue`; colour scales, data bars and icon sets are not drawn.
 
 **The preview** draws the values, then the look over them; a formula
-without a value (an openpyxl file, an upload) is computed in the page and
-the sheet's footer says "Totals calculated by buddi"; a cell it could not
-compute shows its error. The owner's bytes are only read. Fonts stay the
+without a value (an openpyxl file, an upload) is computed off the page's
+thread, in a Web Worker the page ends after 15 s (`sheet-job.ts`; the sheet
+then says it was too large to calculate), and the sheet's footer says
+"Totals calculated by buddi"; a cell it could not compute shows its error. The owner's bytes are only read. Fonts stay the
 table's; borders are hairline, 1 px and 2 px for thin, medium and thick;
 widths are characters × 7 px.
 

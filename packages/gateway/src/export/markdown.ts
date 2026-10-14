@@ -8,6 +8,7 @@
  * export of a file in the owner's library must never reach the network.
  */
 import { marked, type Token, type Tokens } from 'marked';
+import { decodeEntities as decodeCharacterReferences } from '@buddi/core/plugin';
 
 /** A stretch of text with one style. */
 export interface Run {
@@ -41,14 +42,9 @@ export type Block =
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" };
 
+/** HTML's common named entities, through core's one decoder. */
 export function decodeEntities(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+\d*);/gi, (whole, name: string) => {
-    if (name[0] === '#') {
-      const code = name[1] === 'x' || name[1] === 'X' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
-      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : whole;
-    }
-    return ENTITIES[name.toLowerCase()] ?? whole;
-  });
+  return decodeCharacterReferences(text, ENTITIES);
 }
 
 function safeHref(href: string | undefined): string | undefined {

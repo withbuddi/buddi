@@ -103,7 +103,7 @@ export type ComposeOutput =
 /** What to fall back to after two failed runs, by kind. */
 const FALLBACK: Readonly<Record<ComposeKind, string>> = {
   docx: 'write the document with artifacts.write format docx instead and tell the owner',
-  pptx: 'write the document with artifacts.write format docx instead and tell the owner',
+  pptx: "write the deck's content as a Word document with artifacts.write format docx instead, and tell the owner the deck could not be made",
   xlsx: 'write the table with artifacts.write format xlsx instead, the numbers worked out as values, and tell the owner',
 };
 

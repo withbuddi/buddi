@@ -31,10 +31,10 @@ const STYLES = `<?xml version="1.0"?><styleSheet ${NS}><numFmts count="2"><numFm
 <dxfs count="2"><dxf><font><color rgb="FF9C0006"/></font><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf><dxf><font><b/></font></dxf></dxfs></styleSheet>`;
 
 /** A workbook as openpyxl writes one: each sheet's `<sheetData>` and what follows it. */
-function openpyxlBook(sheets: Array<{ name: string; data: string; before?: string; after?: string }>, strings: string[]): Uint8Array {
+function openpyxlBook(sheets: Array<{ name: string; data: string; before?: string; after?: string }>, strings: string[], workbook?: string): Uint8Array {
   const parts: Record<string, Uint8Array> = {
     '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'),
-    'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${NS}><workbookPr/><sheets>${sheets.map((s, i) => `<sheet name="${s.name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets><calcPr calcId="124519" fullCalcOnLoad="1"/></workbook>`),
+    'xl/workbook.xml': strToU8(workbook ?? `<?xml version="1.0"?><workbook ${NS}><workbookPr/><sheets>${sheets.map((s, i) => `<sheet name="${s.name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets><calcPr calcId="124519" fullCalcOnLoad="1"/></workbook>`),
     'xl/_rels/workbook.xml.rels': strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_s, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet${i + 1}.xml"/>`).join('')}</Relationships>`),
     'xl/styles.xml': strToU8(STYLES),
     'xl/theme/theme1.xml': strToU8(THEME),
@@ -233,5 +233,99 @@ describe('the fill', () => {
     expect(withFullCalcOnLoad('<workbook><sheets><sheet/></sheets><definedNames/></workbook>')).toBe('<workbook><sheets><sheet/></sheets><definedNames/><calcPr fullCalcOnLoad="1"/></workbook>');
     expect(withFullCalcOnLoad('<workbook><calcPr/></workbook>')).toBe('<workbook><calcPr fullCalcOnLoad="1"/></workbook>');
     expect(address(12, 28)).toBe('AB12');
+  });
+});
+
+describe('what the review found', () => {
+  const one = (data: string, workbook?: string): Uint8Array => openpyxlBook([{ name: 'S', data }], strings, workbook);
+  const valueAt = async (bytes: Uint8Array, ref: string, opts?: Parameters<typeof evaluate>[1]) => {
+    const wb = readWorkbook(bytes);
+    const evaluation = await evaluate(wb, opts);
+    const at = { row: Number(ref.slice(1)), col: ref.charCodeAt(0) - 64 };
+    return { value: evaluation.values.get(wb.sheets[0]!.name)?.get(cellKey(at.row, at.col)), evaluation };
+  };
+
+  it('refuses a range too large to calculate, and reads a whole column to the last used row', async () => {
+    const sparse = one(row(1, N('A1', 1), F('B1', 'SUM(A1:XFD1048576)')) + row(1048576, N('XFD1048576', 1)));
+    const { evaluation } = await valueAt(sparse, 'B1');
+    expect(evaluation.failed[0]).toMatchObject({ cell: 'B1', error: '#REF!', reason: expect.stringMatching(/a range too large to calculate/) });
+    const column = one(row(1, N('A1', 2), F('B1', 'SUM(A:A)')) + row(3, N('A3', 5)));
+    expect((await valueAt(column, 'B1')).value).toBe(7);
+    const total = one(row(1, N('A1', 1), F('B1', 'SUM(A1:A100)'), F('C1', 'SUM(A1:A100)')));
+    const capped = await valueAt(total, 'C1', { limits: { cellsRead: 150 } });
+    expect(capped.evaluation.failed.map((f) => f.cell)).toEqual(['C1']);
+  });
+
+  it('inflates a package only within the Office limits, never past what its directory declares', () => {
+    expect(() => readWorkbook(book(), { entries: 2_000, entryBytes: 500, totalBytes: 200 * 1024 * 1024 })).toThrow(/unpacks to more than/);
+    expect(() => readWorkbook(book(), { entries: 3, entryBytes: 50 * 1024 * 1024, totalBytes: 200 * 1024 * 1024 })).toThrow(/at most 3/);
+    // A sheet that says it is 64 bytes is inflated into 64 bytes.
+    const bytes = new Uint8Array(book());
+    const view = new DataView(bytes.buffer);
+    for (let i = 0; i + 46 < bytes.length; i++) {
+      if (view.getUint32(i, true) !== 0x02014b50) continue;
+      const nameLength = view.getUint16(i + 28, true);
+      const name = new TextDecoder().decode(bytes.subarray(i + 46, i + 46 + nameLength));
+      if (name === 'xl/worksheets/sheet2.xml') view.setUint32(i + 24, 64, true);
+    }
+    let read: ReturnType<typeof readWorkbook> | null = null;
+    try { read = readWorkbook(bytes); } catch { read = null; }
+    expect(read === null || read.sheets[1]!.cells.size === 0).toBe(true);
+  });
+
+  it('keeps a range’s size, blanks included', async () => {
+    expect((await valueAt(one(row(1, N('A1', 1), F('B1', 'COUNTBLANK(A1:A10)'))), 'B1')).value).toBe(9);
+  });
+
+  it('passes an error in the range through SUMIFS, AVERAGEIFS and SUBTOTAL', async () => {
+    const data = row(1, F('A1', '1/0'), N('B1', 1), F('C1', 'SUMIFS(A1:A2,B1:B2,1)'), F('D1', 'SUBTOTAL(9,A1:A2)'), F('E1', 'AVERAGEIFS(A1:A2,B1:B2,1)'), F('F1', 'SUBTOTAL(2,A1:A2)'))
+      + row(2, N('A2', 5), N('B2', 2));
+    const wb = readWorkbook(one(data));
+    const values = (await evaluate(wb)).values.get('S')!;
+    expect(values.get(cellKey(1, 3))).toEqual({ error: '#DIV/0!' });
+    expect(values.get(cellKey(1, 4))).toEqual({ error: '#DIV/0!' });
+    expect(values.get(cellKey(1, 5))).toEqual({ error: '#DIV/0!' });
+    expect(values.get(cellKey(1, 6))).toBe(1);
+  });
+
+  it('fills every formula from what the others now compute, not from their stale values', async () => {
+    const stale = one(row(1, '<c r="A1"><f>2+2</f><v>1</v></c>', F('B1', 'A1*2')));
+    const filled = await fillCachedValues(stale);
+    const xml = new TextDecoder().decode(unzipSync(filled.bytes)['xl/worksheets/sheet1.xml']);
+    expect(xml).toContain('<c r="A1"><f>2+2</f><v>4</v></c>');
+    expect(xml).toContain('<c r="B1"><f>A1*2</f><v>8</v></c>');
+  });
+
+  it('keeps a 1904 workbook’s dates in its own epoch', async () => {
+    const workbook = `<?xml version="1.0"?><workbook ${NS}><workbookPr date1904="1"/><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+    const bytes = one(row(1, F('A1', 'DATE(2026,10,13)', 5), F('B1', 'YEAR(A1)'), F('C1', 'TEXT(A1,"d mmm yyyy")')), workbook);
+    const wb = readWorkbook(bytes);
+    expect(wb.date1904).toBe(true);
+    const values = (await evaluate(wb)).values.get('S')!;
+    expect(values.get(cellKey(1, 1))).toBe(46308 - 1462);
+    expect(values.get(cellKey(1, 2))).toBe(2026);
+    expect(values.get(cellKey(1, 3))).toBe('13 Oct 2026');
+    expect(formatCell(46308 - 1462, 'd mmm yyyy', { date1904: true }).text).toBe('13 Oct 2026');
+  });
+
+  it('counts an empty text with COUNTA, and with SUBTOTAL’s COUNTA', async () => {
+    // A1 is a formula giving "", A2 a number, A3 empty.
+    const data = row(1, F('A1', '""'), F('B1', 'COUNTA(A1:A3)'), F('C1', 'COUNTA("")'), F('D1', 'SUBTOTAL(3,A1:A3)')) + row(2, N('A2', 3));
+    const values = (await evaluate(readWorkbook(one(data)))).values.get('S')!;
+    expect(values.get(cellKey(1, 2))).toBe(2);
+    expect(values.get(cellKey(1, 3))).toBe(1);
+    expect(values.get(cellKey(1, 4))).toBe(2);
+  });
+
+  it('reads attributes in either quote with space around =, and fills such a cell', async () => {
+    const workbook = `<?xml version="1.0"?><workbook ${NS}><sheets><sheet name = 'Quoted' sheetId='1' r:id = 'rId1'/></sheets><calcPr calcId = '1' fullCalcOnLoad = '0'/></workbook>`;
+    const bytes = one(`<row r='1'><c r = 'A1'><v>2</v></c><c r='B1' t = 'n'><f>A1*3</f></c></row>`, workbook);
+    const wb = readWorkbook(bytes);
+    expect(wb.sheets.map((s) => s.name)).toEqual(['Quoted']);
+    expect(wb.sheets[0]!.cells.get(cellKey(1, 1))?.value).toBe(2);
+    const filled = await fillCachedValues(bytes);
+    const parts = unzipSync(filled.bytes);
+    expect(new TextDecoder().decode(parts['xl/worksheets/sheet1.xml'])).toContain("<c r='B1'><f>A1*3</f><v>6</v></c>");
+    expect(new TextDecoder().decode(parts['xl/workbook.xml'])).toContain("<calcPr calcId = '1' fullCalcOnLoad=\"1\"/>");
   });
 });

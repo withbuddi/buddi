@@ -69,6 +69,9 @@ plugin's name, schema and declared areas. Pure helpers and types
 (`localDateString`, `sha256Of`, `pageFile`, `QueryRefusal`,
 `parseViewDescriptors`, `checkUrl`, the manifest types) live in a separate
 entry point, `@buddi/core/plugin`, which holds nothing with state or I/O.
+One pure module sits beside it rather than in it, so the entry stays lean:
+`@buddi/core/sheet`, the sheet engine (docs/files.md, "Composed workbooks"),
+whose formula library loads only when a formula is computed.
 Core itself runs plugins on `CoreToolContext`, `CoreSourceContext` and
 `CoreSentinelContext`, which `/plugin` never exports; tests import
 `@buddi/core/testing`.
@@ -557,7 +560,8 @@ so any reach is visible in review:
 
 - `packages/gateway/src/plugin-imports.test.ts` walks every plugin source
   in `packages/tools/*` and fails on any import of `@buddi/core` other than
-  `@buddi/core/plugin` (and `@buddi/core/testing` in tests), any
+  `@buddi/core/plugin` and `@buddi/core/sheet` (and `@buddi/core/testing`
+  in tests), any
   `@buddi/runtime`, `@buddi/gateway` or `@buddi/tool-*`, and any `core.`
   table in a SQL string, naming the file, as `bundle.test.ts` does for the
   web package. buddi-plugins runs the same check from its root `pnpm test`

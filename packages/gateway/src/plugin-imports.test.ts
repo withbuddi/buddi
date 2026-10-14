@@ -8,7 +8,8 @@
  * example under `examples/plugins/*`) and fails,
  * naming the file, on:
  *
- *  - an import of `@buddi/core` other than `@buddi/core/plugin`, or
+ *  - an import of `@buddi/core` other than `@buddi/core/plugin`, the
+ *    declared pure subpaths beside it (`PLUGIN_SUBPATHS`), or
  *    `@buddi/core/testing` in a test;
  *  - an import of `@buddi/runtime`, `@buddi/gateway` or any `@buddi/tool-*`;
  *  - a relative import that leaves the plugin's own package;
@@ -86,9 +87,16 @@ function coreTables(text: string): string[] {
   return found;
 }
 
+/**
+ * The core subpaths a plugin may import: the plugin entry, and pure modules
+ * kept apart so the entry stays lean — the sheet engine (`@buddi/core/sheet`,
+ * its formula library loaded only when used).
+ */
+const PLUGIN_SUBPATHS = new Set(['@buddi/core/plugin', '@buddi/core/sheet']);
+
 /** Why this import is not allowed here, or undefined. */
 function importProblem(spec: string, from: { file: string; packageRoot: string; test: boolean }): string | undefined {
-  if (spec === '@buddi/core/plugin') return undefined;
+  if (PLUGIN_SUBPATHS.has(spec)) return undefined;
   if (from.test && (spec === '@buddi/core/testing' || spec.startsWith('@buddi/core/testing/'))) return undefined;
   if (spec === '@buddi/core' || spec.startsWith('@buddi/core/')) {
     return `imports ${spec}; a plugin reaches core through ctx.buddi and @buddi/core/plugin${from.test ? ' (and @buddi/core/testing in a test)' : ''}`;
@@ -166,6 +174,8 @@ describe('the check itself', () => {
     expect(importProblem('@buddi/core', at('index.ts'))).toMatch(/imports @buddi\/core;/);
     expect(importProblem('@buddi/core/testing', at('index.ts'))).toMatch(/imports @buddi\/core\/testing/);
     expect(importProblem('@buddi/core/plugin', at('index.ts'))).toBeUndefined();
+    expect(importProblem('@buddi/core/sheet', at('index.ts'))).toBeUndefined();
+    expect(importProblem('@buddi/core/office-files', at('index.ts'))).toMatch(/imports @buddi\/core\/office-files;/);
     expect(importProblem('@buddi/core/testing', at('index.test.ts', true))).toBeUndefined();
   });
 

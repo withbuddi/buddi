@@ -8,18 +8,24 @@
  * The parser and functions are `fast-formula-parser` (MIT; pinned, loaded
  * only when there is something to compute), over buddi's own cell reader
  * (`read.ts`); the functions the library leaves empty that the xlsx guide
- * names are buddi's own below (COUNTA, SUMIFS, COUNTIFS, AVERAGEIFS, MATCH,
- * SUBTOTAL). Swappable behind this module: nothing else imports the
- * library.
+ * names are buddi's own below (COUNTA, COUNTBLANK, SUMIFS, COUNTIFS,
+ * AVERAGEIFS, MATCH, SUBTOTAL). Swappable behind this module: nothing else
+ * imports the library. A 1904 workbook's dates are moved to and from the
+ * library's 1900 serials at its date functions.
  *
- * Caps: 20,000 formula cells a workbook, 2 s a sheet. A circular reference
- * is `#REF!`; a function it does not know, `#NAME?`; neither gets a value.
- * Cells with a value in the file are read, never recomputed.
+ * Caps: 20,000 formula cells a workbook, 2 s a sheet (checked inside range
+ * reads too), 100,000 cells in one range and 2,000,000 read in all; a range
+ * past them is `#REF!`, "too large to calculate". A whole-column or
+ * whole-row reference (`A:A`) is read to the workbook's last used row or
+ * column; any other range keeps its size, blanks included. A circular
+ * reference is `#REF!`; a function it does not know, `#NAME?`; neither gets
+ * a value. Cells with a value in the file are read, never recomputed,
+ * unless `want` picks them (the fill recomputes every formula).
  */
 import { isSheetError, type CellModel, type CellValue, type SheetError, type SheetModel, type WorkbookModel } from './read.js';
 import { address, cellKey } from './refs.js';
 
-export const EVALUATE_LIMITS = { formulas: 20_000, msPerSheet: 2_000, depth: 200, listed: 200 } as const;
+export const EVALUATE_LIMITS = { formulas: 20_000, msPerSheet: 2_000, depth: 200, listed: 200, rangeCells: 100_000, cellsRead: 2_000_000 } as const;
 
 /** A formula buddi could not give a value. */
 export interface UncomputedCell {
@@ -60,6 +66,7 @@ interface ParserLike {
   utils: { extractRefValue(arg: unknown): { val: unknown; isArray: boolean } };
   funsNeedContextAndNoDataRetrieve: string[];
   funsNeedContext: string[];
+  functions: Record<string, (...args: unknown[]) => unknown>;
 }
 interface LibraryLike {
   new (config: {
@@ -81,6 +88,38 @@ function loadLibrary(): Promise<LibraryLike> {
 }
 
 class TimeUp extends Error {}
+/** A range past `rangeCells`, or past `cellsRead` in all. */
+class TooLarge extends Error {}
+
+/** Days between the 1900 and the 1904 date systems. */
+const DAYS_1904 = 1462;
+/** The library's date functions, by what they take and give: moved for a 1904 workbook. */
+const DATE_OUT = ['DATE', 'DATEVALUE', 'TODAY', 'NOW'];
+const DATE_IN = ['YEAR', 'MONTH', 'DAY', 'WEEKDAY', 'WEEKNUM', 'ISOWEEKNUM', 'TEXT'];
+const DATE_IN_OUT = ['EDATE', 'EOMONTH', 'WORKDAY'];
+const DATES_IN = ['DATEDIF', 'YEARFRAC', 'DAYS360', 'NETWORKDAYS'];
+
+/** A 1904 workbook's serials are the library's less 1,462 days: shift what goes in, and what comes out. */
+function in1904(functions: Record<string, (...args: unknown[]) => unknown>): void {
+  const shiftArg = (arg: unknown): unknown => {
+    const held = arg as Arg | null;
+    return held && typeof held === 'object' && typeof held.value === 'number' ? { ...held, value: held.value + DAYS_1904 } : arg;
+  };
+  const shiftOut = (out: unknown): unknown => (typeof out === 'number' ? out - DAYS_1904 : out);
+  const wrap = (name: string, ins: number, out: boolean): void => {
+    const original = functions[name];
+    if (!original) return;
+    functions[name] = (...args: unknown[]) => {
+      const moved = args.map((a, i) => (i < ins ? shiftArg(a) : a));
+      const result = original(...moved);
+      return out ? shiftOut(result) : result;
+    };
+  };
+  for (const name of DATE_OUT) wrap(name, 0, true);
+  for (const name of DATE_IN) wrap(name, 1, false);
+  for (const name of DATE_IN_OUT) wrap(name, 1, true);
+  for (const name of DATES_IN) wrap(name, 2, false);
+}
 
 /** Excel's criteria (`">100"`, `"<>"`, `"Fl*"`, `5`) as a test of one value. */
 export function criterion(spec: unknown): (value: unknown) => boolean {
@@ -128,6 +167,10 @@ const grid = (arg: Arg | undefined): unknown[][] => {
   return [[value]];
 };
 const flat = (args: Arg[]): unknown[] => args.flatMap((a) => (a.omitted ? [] : grid(a).flat()));
+/** A formula error value as the library carries one (its FormulaError). */
+const isError = (v: unknown): v is FormulaErrorLike => v instanceof Error;
+/** Present, for COUNTA: anything but an empty cell; an empty text ("") counts, as in Excel. */
+const present = (v: unknown): boolean => v !== null && v !== undefined;
 
 /** The functions buddi computes itself: the ones the guide names that the library leaves empty. */
 function buddiFunctions(lib: LibraryLike, isSubtotal: (sheet: string, row: number, col: number) => boolean) {
@@ -143,6 +186,9 @@ function buddiFunctions(lib: LibraryLike, isSubtotal: (sheet: string, row: numbe
     return shape.map((row, r) => row.map((_v, c) => tests.every((t) => t.test(t.cells[r]?.[c]))));
   };
   const aggregate = (fn: number, values: unknown[]): unknown => {
+    // An error in the range is the result, except where Excel counts: COUNT skips it, COUNTA counts it.
+    const mode = fn % 100;
+    if (mode !== 2 && mode !== 3) { const err = values.find(isError); if (err) throw err; }
     const nums = values.filter((v): v is number => typeof v === 'number');
     const sum = nums.reduce((s, n) => s + n, 0);
     const mean = nums.length ? sum / nums.length : NaN;
@@ -154,7 +200,7 @@ function buddiFunctions(lib: LibraryLike, isSubtotal: (sheet: string, row: numbe
     switch (fn % 100) {
       case 1: if (!nums.length) throw E.DIV0; return mean;
       case 2: return nums.length;
-      case 3: return values.filter((v) => v !== null && v !== undefined && v !== '').length;
+      case 3: return values.filter(present).length;
       case 4: return nums.length ? Math.max(...nums) : 0;
       case 5: return nums.length ? Math.min(...nums) : 0;
       case 6: return nums.reduce((p, n) => p * n, 1);
@@ -167,13 +213,17 @@ function buddiFunctions(lib: LibraryLike, isSubtotal: (sheet: string, row: numbe
     }
   };
   return {
-    COUNTA: (...args: Arg[]) => flat(args).filter((v) => v !== null && v !== undefined && v !== '').length,
+    COUNTA: (...args: Arg[]) => flat(args).filter(present).length,
     COUNTBLANK: (range: Arg) => grid(range).flat().filter((v) => v === null || v === undefined || v === '').length,
     SUMIFS: (sumRange: Arg, ...pairs: Arg[]) => {
       const cells = grid(sumRange);
       const pass = ifs(pairs, cells);
       let sum = 0;
-      cells.forEach((row, r) => row.forEach((v, c) => { if (pass[r]![c] && typeof v === 'number') sum += v; }));
+      cells.forEach((row, r) => row.forEach((v, c) => {
+        if (!pass[r]![c]) return;
+        if (isError(v)) throw v;
+        if (typeof v === 'number') sum += v;
+      }));
       return sum;
     },
     COUNTIFS: (...pairs: Arg[]) => {
@@ -183,7 +233,10 @@ function buddiFunctions(lib: LibraryLike, isSubtotal: (sheet: string, row: numbe
     AVERAGEIFS: (avgRange: Arg, ...pairs: Arg[]) => {
       const cells = grid(avgRange);
       const pass = ifs(pairs, cells);
-      const picked = cells.flatMap((row, r) => row.filter((v, c) => pass[r]![c] && typeof v === 'number')) as number[];
+      const chosen = cells.flatMap((row, r) => row.filter((_v, c) => pass[r]![c]));
+      const err = chosen.find(isError);
+      if (err) throw err;
+      const picked = chosen.filter((v): v is number => typeof v === 'number');
       if (picked.length === 0) throw E.DIV0;
       return picked.reduce((s, n) => s + n, 0) / picked.length;
     },
@@ -317,6 +370,7 @@ export async function sheetEngine(workbook: WorkbookModel, opts: EvaluateOptions
     });
     parser.funsNeedContextAndNoDataRetrieve.push('SUBTOTAL');
     parser.funsNeedContext.push('SUBTOTAL');
+    if (workbook.date1904) in1904(parser.functions);
     pool[depth] = parser;
     return parser;
   };
@@ -347,7 +401,10 @@ export async function sheetEngine(workbook: WorkbookModel, opts: EvaluateOptions
       try {
         result = parserAt(depth).parse(cell.formula!, { sheet: sheet.name, row: cell.row, col: cell.col });
       } catch (err) {
-        if (err instanceof TimeUp) throw err;
+        // The library wraps what a cell read threw in its own #ERROR!; what buddi threw is buddi's.
+        const cause = err instanceof TimeUp || err instanceof TooLarge ? err : (err as { details?: unknown } | null)?.details;
+        if (cause instanceof TimeUp) throw cause;
+        if (cause instanceof TooLarge) return refuse('#REF!', `a range too large to calculate (${cause.message})`);
         const known = err as FormulaErrorLike & { details?: unknown };
         const inner = known?.error === '#ERROR!' && known.details && typeof (known.details as FormulaErrorLike).error === 'string' ? known.details as FormulaErrorLike : known;
         if (inner && typeof inner.error === 'string' && inner.error !== '#ERROR!') result = inner;
@@ -375,17 +432,29 @@ export async function sheetEngine(workbook: WorkbookModel, opts: EvaluateOptions
     if (!sheet) return { error: '#REF!' };
     const cell = sheet.cells.get(cellKey(row, col));
     if (!cell) return null;
-    if (cell.formula !== undefined && !cell.hasValue) return compute(sheet, cell, depth);
+    // A formula `want` picks is computed, a value in the file notwithstanding (the fill): its readers see the new one.
+    if (cell.formula !== undefined && (!cell.hasValue || want(sheet, cell))) return compute(sheet, cell, depth);
     return cell.value;
   }
+
+  /** The workbook's last used row and column: where a whole-column or whole-row reference stops. */
+  const usedRows = Math.max(1, ...workbook.sheets.map((s) => s.maxRow));
+  const usedCols = Math.max(1, ...workbook.sheets.map((s) => s.maxCol));
+  let cellsRead = 0;
 
   function rangeAt(sheetName: string, ref: ParserRef, depth: number): unknown {
     const sheet = byName.get(sheetName.toLowerCase());
     if (!sheet || !ref.from || !ref.to) return E.REF;
-    const r2 = Math.min(ref.to.row, Math.max(sheet.maxRow, ref.from.row));
-    const c2 = Math.min(ref.to.col, Math.max(sheet.maxCol, ref.from.col));
+    // `A:A` and `1:1` reach the sheet's edge; they read to the last used row or column, the same for every sheet.
+    const r2 = ref.to.row >= lib.MAX_ROW ? Math.max(ref.from.row, usedRows) : ref.to.row;
+    const c2 = ref.to.col >= lib.MAX_COLUMN ? Math.max(ref.from.col, usedCols) : ref.to.col;
+    const size = (r2 - ref.from.row + 1) * (c2 - ref.from.col + 1);
+    if (size > limits.rangeCells) throw new TooLarge(`${size.toLocaleString('en-US')} cells; at most ${limits.rangeCells.toLocaleString('en-US')}`);
+    if (cellsRead + size > limits.cellsRead) throw new TooLarge(`more than ${limits.cellsRead.toLocaleString('en-US')} cells read in the workbook`);
+    cellsRead += size;
     const out: unknown[][] = [];
     for (let row = ref.from.row; row <= r2; row++) {
+      if (Date.now() > deadline) throw new TimeUp();
       const line: unknown[] = [];
       for (let col = ref.from.col; col <= c2; col++) line.push(toLibrary(valueAt(sheet.name, row, col, depth)));
       out.push(line);

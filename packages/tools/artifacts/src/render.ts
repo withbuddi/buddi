@@ -9,7 +9,8 @@
  * extractor's text; nothing is drawn. Pure, so it runs in the extractor's
  * worker (`office-worker.ts`) and, from source, in the caller's thread.
  */
-import { address, columnName, formatCell, isSheetError, valueOf, type Evaluation, type WorkbookModel } from '@buddi/core/plugin';
+import { decodeEntities } from '@buddi/core/plugin';
+import { address, columnName, formatCell, isSheetError, valueOf, type Evaluation, type WorkbookModel } from '@buddi/core/sheet';
 import { unzipSync } from 'fflate';
 import { officeText } from './office-text.js';
 
@@ -122,16 +123,7 @@ export function xlsxRender(workbook: WorkbookModel, evaluation: Evaluation | nul
   return { kind: 'xlsx', sheets };
 }
 
-const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-function decode(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_all, code: string) => {
-    if (code[0] === '#') {
-      const n = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
-      return Number.isFinite(n) && n <= 0x10ffff ? String.fromCodePoint(n) : '';
-    }
-    return ENTITIES[code.toLowerCase()] ?? '';
-  });
-}
+const decode = (text: string): string => decodeEntities(text);
 
 const attr = (xml: string, name: string): string | null => {
   const match = new RegExp(`\\b${name}="([^"]*)"`).exec(xml);

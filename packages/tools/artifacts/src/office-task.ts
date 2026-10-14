@@ -6,7 +6,7 @@
  * the summary of the filled workbook.
  */
 import type { OfficeKind } from '@buddi/core/plugin';
-import { fillCachedValues } from '@buddi/core/plugin';
+import { fillCachedValues } from '@buddi/core/sheet';
 import { officeText } from './office-text.js';
 import { officeRender, xlsxRender } from './render.js';
 

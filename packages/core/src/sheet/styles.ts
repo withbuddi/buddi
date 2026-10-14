@@ -78,8 +78,9 @@ export function readTheme(xml: string | undefined): string[] {
   if (!scheme) return DEFAULT_THEME;
   const slot = (name: string, fallback: string): string => {
     const body = new RegExp(`<a:${name}>([\\s\\S]*?)</a:${name}>`).exec(scheme)?.[1] ?? '';
-    const srgb = /<a:srgbClr\b[^>]*val="([0-9A-Fa-f]{6})"/.exec(body)?.[1];
-    const sys = /<a:sysClr\b[^>]*lastClr="([0-9A-Fa-f]{6})"/.exec(body)?.[1];
+    const hex = (v: string | null): string | undefined => (v !== null && /^[0-9A-Fa-f]{6}$/.test(v) ? v : undefined);
+    const srgb = hex(attr(/<a:srgbClr\b([^>]*)\/?>/.exec(body)?.[1] ?? '', 'val'));
+    const sys = hex(attr(/<a:sysClr\b([^>]*)\/?>/.exec(body)?.[1] ?? '', 'lastClr'));
     return (srgb ?? sys ?? fallback).toUpperCase();
   };
   const names = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'];

@@ -3,19 +3,11 @@
  * its text, entities decoded. Spreadsheet XML is regular enough that a pass
  * of regular expressions reads it; nothing here builds a tree.
  */
+import { decodeEntities } from '../entities.js';
 
-const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-
-/** Text with its XML entities (named and numeric) decoded. */
+/** Text with its XML entities (named and numeric) decoded: core's one decoder (`entities.ts`). */
 export function decodeXml(text: string): string {
-  if (!text.includes('&')) return text;
-  return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_all, code: string) => {
-    if (code[0] === '#') {
-      const n = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
-      return Number.isFinite(n) && n <= 0x10ffff ? String.fromCodePoint(n) : '';
-    }
-    return ENTITIES[code.toLowerCase()] ?? '';
-  });
+  return decodeEntities(text);
 }
 
 /** Text made safe inside an element or a double-quoted attribute. */
@@ -23,10 +15,20 @@ export function encodeXml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** One attribute of a start tag's attribute text, decoded, or null. Prefixed names (`r:id`) are matched as written. */
+/** One attribute, as XML allows it: either quote, space around `=`. Prefixed names (`r:id`) are matched as written. */
+function attrPattern(name: string, flags = ''): RegExp {
+  return new RegExp(`(?:^|\\s)${name.replace(/[.:]/g, '\\$&')}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, flags);
+}
+
+/** One attribute of a start tag's attribute text, decoded, or null. */
 export function attr(tag: string, name: string): string | null {
-  const match = new RegExp(`(?:^|\\s)${name.replace(/[.:]/g, '\\$&')}="([^"]*)"`).exec(tag);
-  return match ? decodeXml(match[1]!) : null;
+  const match = attrPattern(name).exec(tag);
+  return match ? decodeXml(match[1] ?? match[2]!) : null;
+}
+
+/** A start tag's attribute text without one attribute, however it was quoted. */
+export function withoutAttr(tag: string, name: string): string {
+  return tag.replace(attrPattern(name, 'g'), '');
 }
 
 /** A numeric attribute, or null. */

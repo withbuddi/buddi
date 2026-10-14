@@ -6,7 +6,7 @@
  * `extract.ts` starts (`office-worker.ts`) and, from source, in the caller's
  * thread. The package's limits are checked before it is called.
  */
-import { cellText, type OfficeKind } from '@buddi/core/plugin';
+import { cellText, decodeEntities, type OfficeKind } from '@buddi/core/plugin';
 import { unzipSync } from 'fflate';
 import mammoth from 'mammoth';
 import readExcelFile from 'read-excel-file/node';
@@ -32,18 +32,6 @@ export async function officeText(bytes: Buffer, kind: OfficeKind): Promise<{ tex
   return slideText(bytes);
 }
 
-const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-
-function decodeXml(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_all, code: string) => {
-    if (code[0] === '#') {
-      const n = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
-      return Number.isFinite(n) && n <= 0x10ffff ? String.fromCodePoint(n) : '';
-    }
-    return ENTITIES[code.toLowerCase()] ?? '';
-  });
-}
-
 /**
  * A presentation's text, slide by slide: the runs (`<a:t>`) of each
  * paragraph (`<a:p>`) of `ppt/slides/slideN.xml`, in slide order. Only the
@@ -60,7 +48,7 @@ function slideText(bytes: Buffer): { text: string; slides: number } {
   const text = slides.map(({ name }, i) => {
     const xml = Buffer.from(parts[name]!).toString('utf8');
     const paragraphs = [...xml.matchAll(/<a:p[\s>][\s\S]*?<\/a:p>/g)]
-      .map((p) => [...p[0].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((t) => decodeXml(t[1]!)).join(''))
+      .map((p) => [...p[0].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((t) => decodeEntities(t[1]!)).join(''))
       .filter((line) => line.trim() !== '');
     return `## Slide ${i + 1}\n\n${paragraphs.join('\n')}`;
   }).join('\n\n');

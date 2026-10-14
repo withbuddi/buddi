@@ -211,9 +211,11 @@ export function officeRebuildRefusal(
 }
 
 /**
- * A cell as text, the one rule for the agent's CSV and the page's table: a
- * date as its day (or its moment when it has a time), TRUE/FALSE, the rest
- * as written. Never evaluated.
+ * A cell as text, the one rule for the agent's CSV and the page's table for
+ * a value read-excel-file read: a date as its day (or its moment when it has
+ * a time), TRUE/FALSE, the rest as written. It evaluates nothing and applies
+ * no number format: the preview shows a number with its format, and a
+ * formula's value buddi computed, through `@buddi/core/sheet`'s `formatCell`.
  */
 export function cellText(value: unknown): string {
   if (value === null || value === undefined) return '';

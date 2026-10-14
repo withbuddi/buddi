@@ -7,11 +7,11 @@
  * output and an owner's save are never changed. A formula buddi could not
  * compute is left without a value, as the program wrote it.
  */
-import { unzipSync, zipSync, type Zippable } from 'fflate';
+import { zipSync, type Zippable } from 'fflate';
 import { evaluate, type Evaluation } from './evaluate.js';
-import { isSheetError, readWorkbookParts, type CellValue, type WorkbookModel, type WorkbookParts } from './read.js';
+import { isSheetError, isWorkbookPart, readWorkbookParts, unzipBounded, type CellValue, type WorkbookModel, type WorkbookParts } from './read.js';
 import { cellKey, parseAddress } from './refs.js';
-import { encodeXml } from './xml.js';
+import { attr, encodeXml, withoutAttr } from './xml.js';
 
 export interface FilledWorkbook {
   bytes: Uint8Array;
@@ -32,7 +32,7 @@ function fillSheet(xml: string, values: Map<number, CellValue>): string {
   if (values.size === 0) return xml;
   return xml.replace(/<c\b([^>]*?)(?<!\/)>([\s\S]*?)<\/c>/g, (all, attrs: string, body: string) => {
     if (!/<f\b/.test(body)) return all;
-    const ref = /(?:^|\s)r="([^"]+)"/.exec(attrs)?.[1];
+    const ref = attr(attrs, 'r');
     const at = ref ? parseAddress(ref) : null;
     if (!at) return all;
     const value = values.get(cellKey(at.row, at.col));
@@ -40,7 +40,7 @@ function fillSheet(xml: string, values: Map<number, CellValue>): string {
     // A value already there (an empty `<v/>` included) is replaced: these are bytes buddi made.
     const withoutValue = body.replace(/<v(?:\s[^>]*)?\/>|<v(?:\s[^>]*)?>[\s\S]*?<\/v>/g, '');
     const { t, v } = written(value);
-    const cleaned = attrs.replace(/\s+t="[^"]*"/, '');
+    const cleaned = withoutAttr(attrs, 't');
     const typed = t === null ? cleaned : `${cleaned} t="${t}"`;
     const formulaEnd = /<\/f>|<f\b[^>]*\/>/.exec(withoutValue);
     const at2 = formulaEnd ? formulaEnd.index + formulaEnd[0].length : withoutValue.length;
@@ -52,7 +52,7 @@ function fillSheet(xml: string, values: Map<number, CellValue>): string {
 export function withFullCalcOnLoad(xml: string): string {
   if (/<calcPr\b/.test(xml)) {
     return xml.replace(/<calcPr\b([^>]*?)(\/?)>/, (_all, attrs: string, close: string) =>
-      `<calcPr${attrs.replace(/\s+fullCalcOnLoad="[^"]*"/, '')} fullCalcOnLoad="1"${close}>`);
+      `<calcPr${withoutAttr(attrs, 'fullCalcOnLoad')} fullCalcOnLoad="1"${close}>`);
   }
   // Its place in the schema: after the sheets and defined names, before what follows them.
   const after = /<\/definedNames>|<definedNames\s*\/>|<\/sheets>/g;
@@ -65,15 +65,11 @@ export function withFullCalcOnLoad(xml: string): string {
 
 /** The workbook with every formula's value filled in that buddi could compute, and what it computed. */
 export async function fillCachedValues(bytes: Uint8Array): Promise<FilledWorkbook> {
-  const raw = unzipSync(bytes);
+  const raw = unzipBounded(bytes);
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  const text = (name: string): string | undefined => (raw[name] ? decoder.decode(raw[name]) : undefined);
   const parts: WorkbookParts = {};
-  for (const name of Object.keys(raw)) {
-    if (name === 'xl/workbook.xml' || name === 'xl/_rels/workbook.xml.rels' || name === 'xl/sharedStrings.xml' || name === 'xl/styles.xml'
-      || /^xl\/theme\/theme\d*\.xml$/.test(name) || /^xl\/worksheets\/[^/]+\.xml$/.test(name)) parts[name] = text(name)!;
-  }
+  for (const name of Object.keys(raw)) if (isWorkbookPart(name)) parts[name] = decoder.decode(raw[name]);
   const workbook = readWorkbookParts(parts);
   const evaluation = await evaluate(workbook, { want: (_sheet, cell) => cell.formula !== undefined });
   const out: Zippable = {};

@@ -10,7 +10,8 @@
  * this reader is for what read-excel-file leaves out — formulas without a
  * value, and the look.
  */
-import { unzipSync } from 'fflate';
+import { unzipSync, type Unzipped } from 'fflate';
+import { OFFICE_ZIP_LIMITS, zipEntries } from '../office-files.js';
 import { cellKey, parseAddress, parseRange, parseRanges, shiftFormula, type CellRange } from './refs.js';
 import { readStyles, type StyleSheet } from './styles.js';
 import { attr, boolAttr, decodeXml, numAttr, runText } from './xml.js';
@@ -81,12 +82,32 @@ export interface WorkbookModel {
 /** The parts a workbook is read from, by name, as text. */
 export type WorkbookParts = Record<string, string>;
 
-/** The parts of an xlsx this reader needs, unzipped: the workbook, its relations, sheets, shared strings, styles, theme. */
-export function workbookParts(bytes: Uint8Array): WorkbookParts {
-  const wanted = (name: string): boolean => name === 'xl/workbook.xml' || name === 'xl/_rels/workbook.xml.rels'
+/** The limits a package is read within: parts, bytes of each, bytes in all. */
+export interface ZipLimits { entries: number; entryBytes: number; totalBytes: number }
+
+/** The parts of an xlsx this reader reads: the workbook, its relations, sheets, shared strings, styles, theme. */
+export function isWorkbookPart(name: string): boolean {
+  return name === 'xl/workbook.xml' || name === 'xl/_rels/workbook.xml.rels'
     || name === 'xl/sharedStrings.xml' || name === 'xl/styles.xml' || /^xl\/theme\/theme\d*\.xml$/.test(name)
     || /^xl\/worksheets\/[^/]+\.xml$/.test(name);
-  const parts = unzipSync(bytes, { filter: (file) => wanted(file.name) });
+}
+
+/**
+ * A package's parts, inflated within the Office limits (`OFFICE_ZIP_LIMITS`,
+ * core's one list): its zip directory is checked first — parts, size of each,
+ * size in all — and each part is inflated into a buffer of the size the
+ * directory declares, never more, so a part that lies about its size cannot
+ * grow past it.
+ */
+export function unzipBounded(bytes: Uint8Array, want: (name: string) => boolean = () => true, limits: ZipLimits = OFFICE_ZIP_LIMITS): Unzipped {
+  const entries = zipEntries(bytes, limits);
+  if (typeof entries === 'string') throw new Error(`the workbook cannot be read: ${entries}`);
+  return unzipSync(bytes, { filter: (file) => want(file.name) && file.originalSize <= limits.entryBytes });
+}
+
+/** The parts of an xlsx this reader needs, unzipped within the Office limits. */
+export function workbookParts(bytes: Uint8Array, limits: ZipLimits = OFFICE_ZIP_LIMITS): WorkbookParts {
+  const parts = unzipBounded(bytes, isWorkbookPart, limits);
   const decoder = new TextDecoder();
   return Object.fromEntries(Object.entries(parts).map(([name, data]) => [name, decoder.decode(data)]));
 }
@@ -238,6 +259,6 @@ export function readWorkbookParts(parts: WorkbookParts): WorkbookModel {
 }
 
 /** A workbook read from an xlsx's bytes. */
-export function readWorkbook(bytes: Uint8Array): WorkbookModel {
-  return readWorkbookParts(workbookParts(bytes));
+export function readWorkbook(bytes: Uint8Array, limits: ZipLimits = OFFICE_ZIP_LIMITS): WorkbookModel {
+  return readWorkbookParts(workbookParts(bytes, limits));
 }
