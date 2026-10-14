@@ -107,8 +107,9 @@ replace the newly selected file.
 Previewing never edits the original. Download always retrieves the original
 bytes, not a preview, extracted text or thumbnail.
 
-The first version adds no preview dependency and bundles no PDF engine or
-Office parser. Reuse existing components and platform capabilities.
+The first version added no preview dependency and bundled no PDF engine.
+Office documents have their own renderers, loaded only when one is opened
+(**Office documents** below).
 
 | Family | First-version preview |
 | --- | --- |
@@ -116,7 +117,8 @@ Office parser. Reuse existing components and platform capabilities.
 | PDF | Browser-native viewer using the existing Canvas `DocumentView` PDF `<object>` pattern; Download fallback when the viewer is unavailable. No page rendering engine in the application bundle. |
 | Plain text, Markdown, code | Escaped, bounded text with preserved whitespace; no executable HTML. |
 | CSV / TSV | Read-only table, first 200 rows and 30 columns, with an explicit truncation notice. |
-| Office documents and spreadsheets, audio, video, archives, other | Metadata/download only in v1. No Office parsing or extraction promise. |
+| Word, Excel, PowerPoint (.docx, .xlsx, .pptx) | Drawn by buddi in the browser, at most 20 MB: see **Office documents**. |
+| Legacy and Apple Office formats, audio, video, archives, other | Metadata/download only; an Office file of any kind also has Open in app. |
 
 Text previews stop at 100,000 characters and state when truncated. CSV/TSV
 cells are displayed as data, never evaluated as formulas. Parsing must handle
@@ -133,7 +135,8 @@ unpacked for previews.
 
 HTML, SVG, scripts and embedded active content must not execute on the
 dashboard origin. Keep the passive-image allowlist; render other formats as
-escaped text or download-only. PDFs use the browser viewer's isolation rather
+escaped text or download-only (Office documents are parsed into inert
+markup in a sandboxed frame, a table or a canvas: below). PDFs use the browser viewer's isolation rather
 than a JavaScript renderer in the page; the `<object>` tag or same-origin URL
 validation alone is not a security sandbox. Verify the embedding and response
 headers on supported browsers, and use Download when safe embedding is not
@@ -379,6 +382,76 @@ file, listed in Files whether or not a conversation is named, sharing bytes
 on disk with any file that holds the same ones but never becoming that file.
 What he types while it is being made stays as an edit.
 
+## Office documents
+
+A Word document, a workbook or a deck is a file like any other: one row of
+`core.files`, its mime never changing, numbered versions. Which files these
+are is one rule, `@buddi/core/office-files` (`officeKindOf`), beside the text
+rule and applied by the page and the server alike: the Open XML mime, or the
+`.docx`/`.xlsx`/`.pptx` extension when the type was not given. `.doc`, `.xls`,
+`.ppt`, Pages, Numbers, Keynote and OpenDocument files are not read; they
+are downloaded, or opened in the owner's app.
+
+**Seeing one.** `ArtifactPreview` stays the one preview switch, on the
+Canvas and in Files; an Office file goes to `OfficePreview`, which fetches the
+version's bytes from `/preview` (same auth; at most 20 MB, past that 413 and
+Download only) and loads one renderer for its kind, never part of the
+dashboard's bundle, never kept by the offline worker:
+
+| Kind | Renderer | What is drawn |
+| --- | --- | --- |
+| .docx | docx-preview (Apache-2.0), into an `<iframe sandbox="allow-same-origin">` with no scripts | its pages, images inlined; comments, tracked changes and embedded HTML left out |
+| .xlsx | read-excel-file (MIT) and buddi's own table | a tab per sheet, the first 1,000 rows and 50 columns of each as values (text, numbers, dates); styles, number formats and charts not drawn |
+| .pptx | @silurus/ooxml (MIT; Rust/WASM parser, Canvas 2D), about 1.4 MB gzipped with its parser and worker | slide by slide on a canvas, Previous and Next; its Google Fonts option stays off |
+
+A render is made in the browser from the version's bytes and thrown away
+with the tab: nothing derived is stored. The Canvas card shows the file's
+newest version and who wrote it, and draws a newer one when it arrives.
+
+**What the agent sees.** `artifacts.describe` and `artifacts.text` read
+Office files like PDFs, with the same caps: a document's text (mammoth,
+BSD-2-Clause), each sheet as CSV under a `## <sheet>` heading with the sheet
+count, each slide's text under `## Slide n` with the slide count.
+`artifacts.write { fileId, readVersion, format, content }` onto a .docx
+(Markdown) or a .xlsx (`csv` or `json`) stores the next version in that
+format, made by the download's exporter (`export/document.ts`, in its worker
+with its limits), and the reply says the formatting was rebuilt from the
+text, not kept. Text that does not fit the file is refused (a table for a
+Word file). A write never changes a file's format, and:
+
+- a file buddi made (its creator is an agent) is rebuilt freely;
+- a file the owner made or sent is refused until he agreed: the refusal tells
+  the agent to ask him first, and only then to write with
+  `confirmedRebuild: true` (`officeRebuildRefusal`, in core);
+- a .pptx is read-only for agents.
+
+**Open in app.** On an Office file's Canvas card and its page in Files,
+beside Download. `POST /api/files/<id>/open` exports the newest version to a
+working copy the server names itself — `<data>/open/<fileId>/<name>`, the name
+cleaned by the file-name rule, never through a link — and hands it to the
+computer's default app (`open`, `xdg-open`, the Windows shell; no shell
+command line). The copy is watched: a change that has held still for a
+moment is imported through the owner's one save (`saveOwnerBytes`, the file's
+lock, over the version exported), so it is a version by `owner` like an edit
+on the Canvas. The app's lock and scratch files (`~$Plan.docx`,
+`.~lock.Plan.docx#`) are never imported. A version saved meanwhile refuses
+the import with the one conflict shape, and the page shows the same bar —
+"This file changed since you opened it", **Keep mine** (saved over it) or
+**Show theirs** (the copy is closed, the newest stays): `POST
+/api/files/<id>/open/resolve`. The page asks `GET /api/files/<id>/open` while
+the file is open.
+
+Only from a dashboard on the computer buddi runs on (a local session): from
+anywhere else the routes answer 403 and the button is off, saying so. A copy
+goes once it has been idle for two hours with no app's lock file beside it,
+after a day whatever, or on Show theirs; a change not yet imported is
+imported first. Copies a previous run left are removed at start once a day
+old.
+
+Not in this phase: editing in the Canvas, converting to PDF (LibreOffice),
+formulas, charts, comments and tracked changes, and a deck written by an
+agent.
+
 ## Files agents download
 
 A file a page hands an agent in the browser (a transactions CSV, a statement)
@@ -455,7 +528,7 @@ isolation. `artifacts.write` (above) only adds files; it reads nothing new.
    and return to the right conversation. Missing/deleted files fail clearly.
 8. Preview limits and malformed files fail without hanging the page. Text/code
    and CSV are inert; PDFs use the browser-native viewer or a Download fallback.
-   Office files stay download-only, with no new preview dependency. Untrusted
+   Office files are drawn by buddi's own lazy renderers (below). Untrusted
    file content cannot execute in the dashboard's scripting context.
 9. Unauthenticated metadata, preview and download requests are refused. Safe
    raster previews and existing Canvas/chat downloads continue to work.
@@ -483,7 +556,7 @@ match use or production in that group's conversations. Date ranges will use
 the owner's timezone, translated to inclusive-start/exclusive-end UTC bounds.
 Filter-bound cursor pagination can follow if actual library size warrants it.
 
-Postponed: Office parsing, application-bundled PDF rendering, folders, tags,
+Postponed: application-bundled PDF rendering, folders, tags,
 renaming, file-content search, inferred lineage, bulk actions, public
 sharing, cloud-drive sync, host-folder browsing and automatic file analysis.
 Standalone uploads directly to Files and attaching a library file to a new
