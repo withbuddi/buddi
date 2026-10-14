@@ -178,3 +178,14 @@ describe('shared platform context', () => {
     expect(await registry.invoke('system.time', { command: 'anything' }, ctx)).toMatchObject({ ok: false, reason: 'invalid-args' });
   });
 });
+
+describe('the files policy', () => {
+  it('tells an agent that writes files to make a Word, Excel or PDF document in that format, once', async () => {
+    const { filesPolicy, OFFICE_FORMAT_LINE } = await import('./system-context.js');
+    const said = filesPolicy(['artifacts.write', 'canvas.open']);
+    expect(said).toContain(OFFICE_FORMAT_LINE);
+    expect(OFFICE_FORMAT_LINE).toMatch(/Word, Excel or PDF document, write it with artifacts\.write in that format \(docx, xlsx, pdf\)/);
+    expect(said.split(OFFICE_FORMAT_LINE)).toHaveLength(2);
+    expect(filesPolicy(['canvas.open'])).not.toContain(OFFICE_FORMAT_LINE);
+  });
+});

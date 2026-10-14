@@ -90,24 +90,45 @@ export const SHEET_PREVIEW_ROWS = 1_000;
 export const SHEET_PREVIEW_COLS = 50;
 
 /**
- * Who may rebuild an Office file from text (an agent's `artifacts.write` of
- * Markdown onto a .docx, a CSV onto a .xlsx), losing the formatting its
- * newest version had: null when it may, else why not — what the agent is
- * told. A file buddi made (its creator is an agent) may be rebuilt; one the
- * owner made or handed in only once he agreed (`confirmedRebuild`), which
- * the agent passes only after asking him. A pptx is never rebuilt.
+ * The documents buddi makes from text, with buddi's own exporter: a Word
+ * document or a PDF from Markdown, a workbook from a table (CSV). What an
+ * agent's `artifacts.write` may ask for, and what a file of that kind is
+ * rebuilt from when written again. A presentation is not one.
+ */
+export type MadeDocument = 'docx' | 'xlsx' | 'pdf';
+export const MADE_FROM: Readonly<Record<MadeDocument, { from: 'text/markdown' | 'text/csv'; mime: string }>> = {
+  docx: { from: 'text/markdown', mime: OFFICE_MIME.docx },
+  xlsx: { from: 'text/csv', mime: OFFICE_MIME.xlsx },
+  pdf: { from: 'text/markdown', mime: 'application/pdf' },
+};
+
+/** Which made document this file is (written again, it is rebuilt from text), or null. */
+export function madeDocumentOf(mime: string, filename?: string | null): MadeDocument | null {
+  const kind = officeKindOf(mime, filename);
+  if (kind === 'docx' || kind === 'xlsx') return kind;
+  return bare(mime) === 'application/pdf' || (bare(mime) === 'application/octet-stream' && extensionOf(filename) === 'pdf') ? 'pdf' : null;
+}
+
+/**
+ * Who may rebuild a document from text — an agent's Markdown onto a .docx or
+ * a .pdf, a table onto a .xlsx — losing what its newest version had beyond
+ * the text: null when it may, else why not, which is what the agent is told.
+ * A file buddi made (its creator is an agent) may be rebuilt; one the owner
+ * made or handed in only once he agreed (`confirmedRebuild`), which the agent
+ * passes only after asking him. A presentation is never rebuilt.
  */
 export function officeRebuildRefusal(
   file: { name: string | null; mime: string; createdBy: string },
   input: { confirmedRebuild?: boolean; ownerId?: string },
 ): string | null {
-  const kind = officeKindOf(file.mime, file.name);
   const name = file.name ?? 'this file';
-  if (kind === 'pptx') return `${name} is a presentation; agents can read it (artifacts.text) but not write it.`;
-  if (kind === null) return null;
+  if (officeKindOf(file.mime, file.name) === 'pptx') return `${name} is a presentation; agents can read it (artifacts.text) but not write it.`;
+  const made = madeDocumentOf(file.mime, file.name);
+  if (made === null) return null;
   const owner = file.createdBy === 'owner' || (input.ownerId !== undefined && file.createdBy === input.ownerId);
   if (!owner || input.confirmedRebuild === true) return null;
-  return `${name} is the owner's own ${kind === 'docx' ? 'Word document' : 'spreadsheet'}. Writing it from ${kind === 'docx' ? 'Markdown' : 'a table'} rebuilds it and loses its formatting. Ask the owner first; only once they agree, write again with confirmedRebuild: true.`;
+  const what = made === 'docx' ? 'Word document' : made === 'xlsx' ? 'spreadsheet' : 'PDF';
+  return `${name} is the owner's own ${what}. Writing it from ${made === 'xlsx' ? 'a table' : 'Markdown'} rebuilds it and loses its formatting. Ask the owner first; only once they agree, write again with confirmedRebuild: true.`;
 }
 
 /**

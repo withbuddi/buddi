@@ -41,7 +41,7 @@ import { notifyOwner } from '../notifications/notify.js';
 import { AGENT_ACTION_MAX } from '../notifications/agent.js';
 import type { DeliverableMessage } from '../notifications/types.js';
 import { OWNER_ID } from '../owner.js';
-import { officeKindOf, officeRebuildRefusal } from '../office-files.js';
+import { MADE_FROM, madeDocumentOf, officeRebuildRefusal, type MadeDocument } from '../office-files.js';
 import { getOwnerProfile } from '../onboarding/store.js';
 import { languageTag } from '../onboarding/language-tag.js';
 import { OWNER_AGENT_ID } from '../pages.js';
@@ -1134,29 +1134,24 @@ function filesArea(
     return row === undefined ? null : { ...toFileRow(row), storagePath: row.storage_path };
   };
   /**
-   * The bytes of a new version of an Office file, made from the text a
-   * writer sent — Markdown onto a .docx, a CSV onto a .xlsx — by buddi's own
-   * exporter, or null when the file is not an Office file. Refused when the
-   * text does not fit the format, for a presentation, and for the owner's
-   * own file until he agreed (`officeRebuildRefusal`).
+   * A made document's bytes — a Word document or a PDF from Markdown, a
+   * workbook from a CSV — by buddi's own exporter (`MADE_FROM`). Refused
+   * when the text sent is not what that kind is made from.
    */
-  const officeBytes = async (fileId: string, mime: string, bytes: Buffer, confirmedRebuild: boolean): Promise<Buffer | null> => {
-    const file = await getFile(pool(), fileId);
-    if (!file) return null;
-    const kind = officeKindOf(file.mime, file.name);
-    if (kind === null) return null;
-    const refusal = officeRebuildRefusal(file, { confirmedRebuild, ...(facts.ownerId ? { ownerId: facts.ownerId } : {}) });
-    // A presentation is always refused above: what is left is a document or a workbook.
-    if (refusal) throw new Error(refusal);
-    const to = kind === 'docx' ? 'docx' : 'xlsx';
+  const madeBytes = async (to: MadeDocument, name: string | null, mime: string, bytes: Buffer): Promise<Buffer> => {
     const sent = mime.toLowerCase().split(';')[0]!.trim();
-    const wants = to === 'docx' ? 'text/markdown' : 'text/csv';
+    const wants = MADE_FROM[to].from;
     if (sent !== wants) {
-      throw new Error(`${file.name ?? 'This file'} is ${to === 'docx' ? 'a Word document: write it as Markdown' : 'a spreadsheet: write it as a table (csv or json)'}.`);
+      throw new Error(`${name ?? 'This file'} is ${to === 'xlsx' ? 'a spreadsheet: write it as a table (csv or json)' : `a ${to === 'docx' ? 'Word document' : 'PDF'}: write it as Markdown`}.`);
     }
-    if (!facts.convertDocument) throw new Error('buddi cannot write Office files in this process.');
-    const base = (file.name ?? 'Document').replace(/\.[a-z0-9]{1,8}$/i, '');
-    return facts.convertDocument({ bytes, mime: wants, filename: `${base}.${to === 'docx' ? 'md' : 'csv'}` }, to);
+    if (!facts.convertDocument) throw new Error('buddi cannot make Word, Excel or PDF files in this process.');
+    const base = (name ?? 'Document').replace(/\.[a-z0-9]{1,8}$/i, '');
+    return facts.convertDocument({ bytes, mime: wants, filename: `${base}.${wants === 'text/csv' ? 'csv' : 'md'}` }, to);
+  };
+  /** Who may write the next version of this file from text: the rebuild rule, with the owner's id. */
+  const mayRebuild = (file: { name: string | null; mime: string; createdBy: string }, confirmedRebuild: boolean): void => {
+    const refusal = officeRebuildRefusal(file, { confirmedRebuild, ...(facts.ownerId ? { ownerId: facts.ownerId } : {}) });
+    if (refusal) throw new Error(refusal);
   };
   return {
     async save(input) {
@@ -1196,23 +1191,39 @@ function filesArea(
         const of = input.version.of;
         const fileId = await resolveFileId(pool(), of);
         if (fileId === null || !(await fileInScope(fileId))) throw new Error(`There is no file ${of} that ${binding.plugin} can read.`);
-        // An Office file stays one: text written onto it is rebuilt into its format (docs/files.md, "Office documents").
-        const office = await officeBytes(fileId, input.mime, input.bytes, input.version.confirmedRebuild === true);
-        if (office) rebuilt = true;
+        // A made document stays one: text written onto it is rebuilt into its format (docs/files.md, "Office documents").
+        const file = await getFile(pool(), fileId);
+        let bytes = input.bytes;
+        if (file) {
+          mayRebuild(file, input.version.confirmedRebuild === true);
+          const made = madeDocumentOf(file.mime, file.name);
+          if (made) { bytes = await madeBytes(made, file.name, input.mime, input.bytes); rebuilt = true; }
+        }
         result = await saveVersion(pool(), {
-          id: fileId, bytes: office ?? input.bytes, createdBy: fields.createdBy,
+          id: fileId, bytes, createdBy: fields.createdBy,
           ...(input.caption === undefined ? {} : { caption: input.caption }),
           ...(readVersion === undefined ? {} : { readVersion }),
         }, env());
       } else if (input.version !== undefined) {
         // A document by title: the next version of that name in this conversation, else a new file.
+        // Asked for as a Word, Excel or PDF file, the text is made into one: that is what is stored.
+        const ext = input.version.ext.toLowerCase();
+        const made = ext === 'docx' || ext === 'xlsx' || ext === 'pdf' ? ext : null;
+        const name = `${input.version.base}.${input.version.ext}`;
+        const confirmed = input.version.confirmedRebuild === true;
         result = await saveDocument(pool(), {
-          conversationId, name: `${input.version.base}.${input.version.ext}`, mime: input.mime, bytes: input.bytes, createdBy: fields.createdBy,
+          conversationId, name, createdBy: fields.createdBy,
+          mime: made ? MADE_FROM[made].mime : input.mime,
+          bytes: made ? await madeBytes(made, name, input.mime, input.bytes) : input.bytes,
+          guard: (file) => mayRebuild(file, confirmed),
           ...(input.caption === undefined ? {} : { caption: input.caption }),
           ...(readVersion === undefined ? {} : { readVersion }),
         }, env());
       } else {
         result = await saveArtifactReporting(pool(), { ...fields, ...(input.filename === undefined ? {} : { filename: input.filename }), conversationId }, env());
+      }
+      if (input.version !== undefined && input.version.of === undefined && result.row.version > 1 && !result.existed) {
+        rebuilt = madeDocumentOf(result.row.mime, result.row.filename) !== null;
       }
       const saved = result.row;
       await pool().query(

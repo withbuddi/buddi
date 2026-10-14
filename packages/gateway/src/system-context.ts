@@ -181,6 +181,10 @@ async function editionLine(
   } catch { return ''; }
 }
 
+/** When a document is to be a Word, Excel or PDF file: said once, to every agent that writes files. */
+export const OFFICE_FORMAT_LINE =
+  "When the owner asks for a Word, Excel or PDF document, write it with artifacts.write in that format (docx, xlsx, pdf), so the file is that document; Markdown is for notes and drafts the owner didn't ask to be Word.";
+
 /**
  * How an agent works with the owner's files (docs/files.md), said once here
  * rather than in each tool, and only for the tools it was granted. An agent
@@ -193,6 +197,7 @@ export function filesPolicy(tools: readonly string[]): string {
     lines.push(tools.includes('host.exec')
       ? 'To create or change a document for the owner, use artifacts.write (an existing file by its fileId), not shell redirection through host.exec: a file written in your workspace reaches the owner only when it is returned in outputs.'
       : 'To change one of the owner\'s files, write it with artifacts.write by its fileId; a new title makes a new file.');
+    lines.push(OFFICE_FORMAT_LINE);
   }
   if (tools.includes('canvas.open')) {
     lines.push("To show the owner one of their files, find it with artifacts.list and open it with canvas.open { fileId }; don't paste its contents into the chat unless asked.");

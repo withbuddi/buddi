@@ -193,11 +193,11 @@ export interface ToolContext {
 export interface CoreToolContext extends ToolContext {
   /**
    * buddi's document exporter (the gateway's, in a worker with its limits):
-   * Markdown to .docx, a CSV to .xlsx. What a new version of an Office file
-   * written from text is made with (`files.save` `version.of`). Absent, such
-   * a write is refused.
+   * Markdown to .docx or .pdf, a CSV to .xlsx. What a document written from
+   * text is made with (`files.save` with `version`, `MADE_FROM`). Absent,
+   * such a write is refused.
    */
-  convertDocument?: (source: { bytes: Buffer; mime: string; filename: string }, to: 'docx' | 'xlsx') => Promise<Buffer>;
+  convertDocument?: (source: { bytes: Buffer; mime: string; filename: string }, to: 'docx' | 'xlsx' | 'pdf') => Promise<Buffer>;
   /**
    * A mission run's context plugin vouching for a tool (`consent_for_run`,
    * host API 1.33): the run it is bound to, and the question. Set by the

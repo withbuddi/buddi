@@ -102,3 +102,27 @@ describe('Office previews', () => {
     expect(screen.queryByTestId('office-docx')).not.toBeInTheDocument();
   });
 });
+
+describe('a Word document an agent wrote, on the Canvas', () => {
+  it('opens in the Word preview, with Open in app and Download beside it', async () => {
+    const { api } = await import('../api');
+    const { ArtifactView } = await import('../canvas/views/ArtifactView');
+    const FILE = '11111111-1111-4111-8111-111111111111';
+    const V1 = '22222222-2222-4222-8222-222222222222';
+    vi.spyOn(api, 'session').mockResolvedValue({ timezone: 'UTC', platform: 'darwin', signedInThrough: 'local' } as never);
+    vi.spyOn(api, 'openInAppState').mockResolvedValue({ open: false });
+    vi.spyOn(api, 'file').mockResolvedValue({
+      file: { id: FILE, name: 'Congratulation Letter.docx', mime: OFFICE_MIME.docx, conversationId: null, origin: 'document', createdBy: 'writer' },
+      current: { fileId: FILE, version: 1, artifactId: V1, sha256: 'x', createdBy: 'writer', createdByName: 'Writer' },
+      versions: [], entry: null, contexts: [], contextsTotal: 0, contextsOffset: 0, available: true,
+    } as never);
+    serve(fixture('letter.docx'));
+    render(<ArtifactView attachment={{ type: 'attachment', artifactId: V1, fileId: FILE, filename: 'Congratulation Letter.docx', mime: OFFICE_MIME.docx, kind: 'document', sizeBytes: 9_539 }} />);
+    const frame = (await screen.findByTestId('office-docx')) as HTMLIFrameElement;
+    await waitFor(() => expect(frame.contentDocument?.body.textContent).toContain('Quarterly letter'));
+    expect(screen.queryByTestId('text-file')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open in app' })).toBeInTheDocument();
+    expect(screen.getByText('v1, by Writer')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Download/ })).toBeInTheDocument();
+  });
+});

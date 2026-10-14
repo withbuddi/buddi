@@ -20,13 +20,21 @@ export const MAX_TABLE_COLUMNS = 200;
 /** Most cells (rows × columns) a JSON table may describe, checked before any row is built. */
 export const MAX_TABLE_CELLS = 1_000_000;
 
-export type DocumentFormat = 'markdown' | 'csv' | 'json';
+export type DocumentFormat = 'markdown' | 'csv' | 'json' | 'docx' | 'xlsx' | 'pdf';
 
-/** The stored type for each format. A JSON table is stored as the CSV it describes. */
-export const FORMAT_FILE: Record<DocumentFormat, { mime: string; ext: string }> = {
-  markdown: { mime: 'text/markdown', ext: 'md' },
-  csv: { mime: 'text/csv', ext: 'csv' },
-  json: { mime: 'text/csv', ext: 'csv' },
+/**
+ * What each format is written as and stored under. `mime` is the text sent
+ * (Markdown, or a table as CSV); a Word, Excel or PDF format is made from it
+ * by buddi's exporter, and stored as that file (`ext`). A JSON table is the
+ * CSV it describes.
+ */
+export const FORMAT_FILE: Record<DocumentFormat, { mime: 'text/markdown' | 'text/csv'; ext: string; table: boolean }> = {
+  markdown: { mime: 'text/markdown', ext: 'md', table: false },
+  csv: { mime: 'text/csv', ext: 'csv', table: true },
+  json: { mime: 'text/csv', ext: 'csv', table: true },
+  docx: { mime: 'text/markdown', ext: 'docx', table: false },
+  pdf: { mime: 'text/markdown', ext: 'pdf', table: false },
+  xlsx: { mime: 'text/csv', ext: 'xlsx', table: true },
 };
 
 function csvCell(value: unknown): string {

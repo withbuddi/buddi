@@ -344,6 +344,35 @@ suite('artifacts tools (postgres)', () => {
         expect(agreed).toMatchObject({ version: 2, rebuilt: true });
       });
 
+      it('makes a Word document when asked for one: the converted bytes are the file, and writing it again rebuilds the next version', async () => {
+        converted.length = 0;
+        const letter = await call('artifacts.write', { title: 'Congratulation Letter to Rashid', format: 'docx', content: '# Congratulations\n\nWell done.' }, conversationId);
+        expect(letter).toMatchObject({ filename: 'Congratulation Letter to Rashid.docx', mime: DOCX, version: 1 });
+        expect(letter.rebuilt).toBeUndefined();
+        expect(converted).toEqual([{ to: 'docx', mime: 'text/markdown', filename: 'Congratulation Letter to Rashid.md' }]);
+        const { rows } = await pool.query(`select f.mime, f.name, a.size_bytes from core.files f join core.artifacts a on a.file_id = f.id where a.id = $1`, [letter.artifactId]);
+        expect(rows[0]).toMatchObject({ mime: DOCX, name: 'Congratulation Letter to Rashid.docx' });
+        // By fileId, in Markdown: the next version, a Word document again.
+        const again = await call('artifacts.write', { title: 'x', format: 'markdown', content: '# Congratulations!\n', fileId: letter.fileId }, conversationId);
+        expect(again).toMatchObject({ fileId: letter.fileId, version: 2, mime: DOCX, rebuilt: true });
+        // By its title, in its format: the same file's next version.
+        const third = await call('artifacts.write', { title: 'Congratulation Letter to Rashid', format: 'docx', content: '# Congratulations, Rashid\n' }, conversationId);
+        expect(third).toMatchObject({ fileId: letter.fileId, version: 3, rebuilt: true });
+        // A PDF and a workbook the same way.
+        expect(await call('artifacts.write', { title: 'Invoice', format: 'pdf', content: '# Invoice' }, conversationId)).toMatchObject({ filename: 'Invoice.pdf', mime: 'application/pdf' });
+        const sheet = await call('artifacts.write', { title: 'Budget sheet', format: 'xlsx', content: '[{"Item":"Rent","Amount":1200}]' }, conversationId);
+        expect(sheet).toMatchObject({ filename: 'Budget sheet.xlsx', mime: XLSX });
+        expect(converted.at(-1)).toEqual({ to: 'xlsx', mime: 'text/csv', filename: 'Budget sheet.csv' });
+      });
+
+      it('refuses to rebuild the owner’s own document by its title until he agreed', async () => {
+        await saveArtifact(pool, { bytes: Buffer.from('his letter'), mime: DOCX, filename: 'Cover letter.docx', createdBy: 'owner', conversationId, source: { surface: 'web', chatId: conversationId } });
+        const { rows } = await pool.query(`select id from core.files where name = 'Cover letter.docx'`);
+        await pool.query(`insert into core.artifact_uses (artifact_id, conversation_id, kind) select a.id, $2, 'uploaded' from core.artifacts a where a.file_id = $1 on conflict do nothing`, [rows[0].id, conversationId]);
+        const refused = await registry.invoke('artifacts.write', { title: 'Cover letter', format: 'docx', content: '# Mine', readVersion: 1 }, ctx(conversationId));
+        expect(refused.ok ? '' : refused.message).toMatch(/owner's own Word document.*Ask the owner first/);
+      });
+
       it('never writes a presentation', async () => {
         const deck = await office(PPTX, 'Deck.pptx', 'writer');
         const refused = await registry.invoke('artifacts.write', { title: 'x', format: 'markdown', content: '# Deck', fileId: deck.fileId, confirmedRebuild: true }, ctx(conversationId));
@@ -355,7 +384,7 @@ suite('artifacts tools (postgres)', () => {
       const big = await registry.invoke('artifacts.write', { title: 'Big', format: 'markdown', content: 'x'.repeat(600_000) }, ctx(conversationId));
       expect(big.ok).toBe(false);
       if (!big.ok) expect(big.reason).toBe('invalid-args');
-      const badFormat = await registry.invoke('artifacts.write', { title: 'A', format: 'docx', content: 'x' }, ctx(conversationId));
+      const badFormat = await registry.invoke('artifacts.write', { title: 'A', format: 'odt', content: 'x' }, ctx(conversationId));
       expect(badFormat.ok).toBe(false);
       const badTable = await registry.invoke('artifacts.write', { title: 'A', format: 'json', content: '{"a":1}' }, ctx(conversationId));
       expect(badTable.ok).toBe(false);

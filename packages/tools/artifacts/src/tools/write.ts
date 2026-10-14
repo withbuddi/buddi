@@ -38,13 +38,14 @@ const writeInput = z.object({
     .max(200)
     .describe('The document title, e.g. "Heat pumps compared". It names the file; write it as a person would, not as a file name.'),
   format: z
-    .enum(['markdown', 'csv', 'json'])
-    .describe("'markdown' for a report or any prose; 'csv' for a table as CSV text; 'json' for a table as an array of objects (saved as CSV). A table can be downloaded as Excel, Markdown as PDF or Word."),
+    .enum(['markdown', 'csv', 'json', 'docx', 'xlsx', 'pdf'])
+    .optional()
+    .describe("What the file is. 'docx' (a Word document), 'pdf' or 'xlsx' (an Excel workbook) when the owner asked for that kind of file: content is Markdown for docx and pdf, a table (CSV text or a JSON array of objects) for xlsx, and buddi makes the file. 'markdown' for notes and drafts, 'csv' or 'json' for a table kept as CSV."),
   content: z
     .string()
     .min(1)
     .max(MAX_DOCUMENT_CHARS)
-    .describe(`The whole document. At most ${MAX_DOCUMENT_CHARS.toLocaleString('en-US')} characters (512 KiB once saved).`),
+    .describe(`The whole document, as Markdown (or a table for csv, json and xlsx). At most ${MAX_DOCUMENT_CHARS.toLocaleString('en-US')} characters (512 KiB).`),
   folder: z
     .string()
     .trim()
@@ -91,7 +92,7 @@ export interface WrittenDocument {
 export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> = {
   name: 'artifacts.write',
   description:
-    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. The owner downloads it from Files as PDF or Word (Markdown) or Excel (tables) — never tell them to paste it into another program, and never convert it yourself (no pandoc): point them to Files and the download. Writing the same title again in this conversation saves its next version; the earlier ones stay. To change an existing file, pass its fileId. A Word (.docx) or Excel (.xlsx) file named by fileId takes Markdown or a table and is rebuilt from it in its own format (its formatting is not kept; for one the owner made or sent, ask them first and pass confirmedRebuild); a PowerPoint is read-only.",
+    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. Asked for a Word document, a PDF or a spreadsheet, write that format (docx, pdf, xlsx) and buddi makes the file from your Markdown or table; a Markdown file downloads as PDF or Word too. Never tell them to paste it into another program, and never convert it yourself (no pandoc). Writing the same title again in this conversation saves its next version; the earlier ones stay. To change an existing file, pass its fileId. A Word (.docx) or Excel (.xlsx) file named by fileId takes Markdown or a table and is rebuilt from it in its own format (its formatting is not kept; for one the owner made or sent, ask them first and pass confirmedRebuild); a PowerPoint is read-only.",
   tier: 'auto',
   sideEffect: true,
   producesArtifacts: true,
@@ -99,16 +100,18 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
   async execute(input, ctx) {
     const files = ctx.buddi?.files;
     if (!files) throw new Error('Files is not available to this agent');
-    const { mime, ext } = FORMAT_FILE[input.format];
+    const format = input.format ?? 'markdown';
+    const { mime, ext } = FORMAT_FILE[format];
     const title = input.title.replace(/\s+/g, ' ');
     const base = safeFileName(title, MAX_TITLE_CHARS, 'Document');
     const folder = input.folder === undefined ? undefined : safeFileName(input.folder, MAX_FOLDER_CHARS, '') || undefined;
 
     let text: string;
-    if (input.format === 'json') {
+    const json = format === 'json' || (format === 'xlsx' && /^\s*[[{]/.test(input.content));
+    if (json) {
       const table = parseJsonTable(input.content);
       text = toCsv(table.columns, table.rows);
-    } else if (input.format === 'csv') {
+    } else if (FORMAT_FILE[format].table) {
       text = input.content.replace(/\r?\n/g, '\r\n');
       if (!text.endsWith('\r\n')) text += '\r\n';
     } else {
@@ -139,14 +142,14 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
     const unchanged = saved.existed === true;
     const filename = saved.filename ?? fallbackName;
     const version = saved.version;
-    const kind = input.format === 'markdown' ? 'PDF or Word' : 'Excel or CSV';
+    const kind = saved.mime === 'text/markdown' ? 'PDF or Word' : saved.mime === 'text/csv' ? 'Excel or CSV' : 'it is';
     const rebuilt = saved.rebuilt === true;
     return {
       artifactId: saved.id,
       fileId: saved.fileId,
       filename,
       title,
-      format: input.format,
+      format,
       version,
       mime: saved.mime,
       sizeBytes: saved.sizeBytes,
@@ -157,7 +160,7 @@ export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> 
         ? `These exact contents are already v${version} of ${filename} in Files; nothing new was saved.`
         : rebuilt
         ? `Saved ${filename} v${version} in Files, rebuilt from your text: its formatting was not preserved from v${version - 1}. Tell the owner so. To change it again, write with fileId "${saved.fileId}".`
-        : `Saved to Files${folder === undefined ? '' : ` under "${folder}"`} as ${filename}, v${version} (buddi's Files, not the computer's desktop or disk). The owner can open it there and download it as ${kind}; no conversion needed. To change it later, write with fileId "${saved.fileId}".`,
+        : `Saved to Files${folder === undefined ? '' : ` under "${folder}"`} as ${filename}, v${version} (buddi's Files, not the computer's desktop or disk). The owner can open it there${kind === 'it is' ? ', or in their own app,' : ''} and download it ${kind === 'it is' ? 'as it is' : `as ${kind}`}; no conversion needed. To change it later, write with fileId "${saved.fileId}".`,
     };
   },
 };

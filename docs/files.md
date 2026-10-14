@@ -199,9 +199,19 @@ An agent granted `artifacts.write` saves a document into Files itself, so the
 owner never has to paste an answer into Word:
 
 ```
-artifacts.write { title, format: 'markdown' | 'csv' | 'json', content, folder?, fileId?, readVersion? }
-  → { artifactId, fileId, filename, title, format, version, mime, sizeBytes, folder?, unchanged?, note }
+artifacts.write { title, format?: 'markdown' | 'csv' | 'json' | 'docx' | 'xlsx' | 'pdf', content, folder?, fileId?, readVersion?, confirmedRebuild? }
+  → { artifactId, fileId, filename, title, format, version, mime, sizeBytes, folder?, unchanged?, rebuilt?, note }
 ```
+
+- **A Word, Excel or PDF file when that is what was asked for.** `docx` and
+  `pdf` take Markdown, `xlsx` a table (CSV, or JSON as below); buddi's
+  exporter makes the file and those bytes are what is stored — a `.docx` with
+  the Word mime, a version like any other — so the owner gets the document
+  itself, previewed as one on the Canvas and in Files and opened in his own
+  app. Writing it again (by title in that format, or by `fileId` in Markdown
+  or a table) rebuilds its next version; see **Office documents** for who
+  may. `markdown` (the default) is for notes and drafts nobody asked to be
+  Word; the turn's context says so once to every agent that writes files.
 
 - **What is stored.** Markdown as a `.md` file; a table as a `.csv` (`json`
   takes an array of objects, an array of arrays with a header first, or

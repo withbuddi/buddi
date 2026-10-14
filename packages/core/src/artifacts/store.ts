@@ -570,7 +570,11 @@ export async function saveVersion(
  */
 export async function saveDocument(
   pool: Pool,
-  input: { conversationId: string | null; name: string; mime: string; bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: number },
+  input: {
+    conversationId: string | null; name: string; mime: string; bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: number;
+    /** Asked, under the lock, before the next version of an existing file is written: throws to refuse it. */
+    guard?: (file: FileRecord) => void;
+  },
   env: EnvLike = process.env,
 ): Promise<{ row: ArtifactRow; existed: boolean; file: FileRecord }> {
   checkInput(input, input.mime);
@@ -585,7 +589,14 @@ export async function saveDocument(
         [input.conversationId, input.name],
       );
       if (rows.length > 1) throw new AmbiguousFileError(input.name, rows.map((row) => String(row.id)));
-      if (rows[0]) return appendWriterVersion(client, env, String(rows[0].id), input);
+      if (rows[0]) {
+        if (input.guard) {
+          await lockFile(client, String(rows[0].id));
+          const existing = await loadFile(client, String(rows[0].id));
+          if (existing) input.guard(existing);
+        }
+        return appendWriterVersion(client, env, String(rows[0].id), input);
+      }
     }
     const file = await createFile(client, { conversationId: input.conversationId, name: input.name, mime: input.mime.trim(), createdBy: input.createdBy, origin: 'document' });
     return { row: await insertVersion(client, env, file, input), existed: false, file };
