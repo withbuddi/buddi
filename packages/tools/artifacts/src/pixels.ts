@@ -8,6 +8,10 @@
  * The downscale streams source rows into one output row at a time, so a
  * 48-megapixel phone photo costs its decoded pixels and little more.
  */
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
+import { inflateSync } from 'node:zlib';
 import pngjs from 'pngjs';
 import * as jpeg from 'jpeg-js';
 
@@ -94,11 +98,57 @@ export function exifOrientation(bytes: Buffer): number {
   return 1;
 }
 
+/** Channels per pixel of each PNG colour type. */
+const PNG_CHANNELS: Readonly<Record<number, number>> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+
+/**
+ * A PNG's compressed pixels inflate to exactly what its header promises —
+ * checked before the decoder sees it, inflating with a cap, because pngjs
+ * inflates without one: a few hundred bytes can claim one pixel and unpack
+ * into gigabytes. Throws a `PixelsError` for anything else.
+ */
+export function checkPngData(bytes: Buffer): void {
+  let at = 8;
+  let header: { width: number; height: number; depth: number; colour: number; interlace: number } | null = null;
+  const data: Buffer[] = [];
+  let chunks = 0;
+  while (at + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(at);
+    const type = bytes.subarray(at + 4, at + 8).toString('latin1');
+    if (length > bytes.length - at - 12 || ++chunks > 100_000) throw new PixelsError('damaged', 'That PNG is damaged.');
+    const body = bytes.subarray(at + 8, at + 8 + length);
+    if (type === 'IHDR' && length >= 13) header = { width: body.readUInt32BE(0), height: body.readUInt32BE(4), depth: body[8]!, colour: body[9]!, interlace: body[12]! };
+    if (type === 'IDAT') data.push(body);
+    at += 12 + length;
+    if (type === 'IEND') break;
+  }
+  const channels = header ? PNG_CHANNELS[header.colour] : undefined;
+  if (!header || channels === undefined || ![1, 2, 4, 8, 16].includes(header.depth) || data.length === 0) throw new PixelsError('damaged', 'That PNG is damaged.');
+  checkSize(header.width, header.height);
+  const bits = channels * header.depth;
+  const rows = (w: number, h: number): number => (w === 0 || h === 0 ? 0 : h * (1 + Math.ceil((w * bits) / 8)));
+  const { width: w, height: h } = header;
+  // Adam7: seven passes, each a sub-image with its own rows.
+  const expected = header.interlace === 1
+    ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]]
+      .reduce((sum, [x0, y0, dx, dy]) => sum + rows(Math.ceil((w - x0!) / dx!), Math.ceil((h - y0!) / dy!)), 0)
+    : rows(w, h);
+  let inflated: Buffer;
+  try {
+    inflated = inflateSync(Buffer.concat(data), { maxOutputLength: expected + 1 });
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') throw new PixelsError('too-large', 'That PNG unpacks to more than its size says; it is not a photo.');
+    throw new PixelsError('damaged', 'That PNG is damaged.');
+  }
+  if (inflated.length > expected) throw new PixelsError('too-large', 'That PNG unpacks to more than its size says; it is not a photo.');
+}
+
 /** Decode a JPEG or a PNG into RGBA, its size checked first. */
 export function decodeRaster(bytes: Buffer, kind: RasterKind): Rgba {
   if (kind === 'png') {
     if (bytes.length < 24) throw new PixelsError('damaged', 'That PNG is damaged.');
     checkSize(bytes.readUInt32BE(16), bytes.readUInt32BE(20));
+    checkPngData(bytes);
     try {
       const png = pngjs.PNG.sync.read(bytes);
       return { width: png.width, height: png.height, data: new Uint8Array(png.data.buffer, png.data.byteOffset, png.data.byteLength) };
@@ -233,4 +283,45 @@ export function fitPicture(bytes: Buffer, opts: { longSide: number; maxBytes: nu
     }
     side = Math.round(side * 0.75);
   }
+}
+
+/** How long, and in how much heap, making a picture smaller may take outside buddi's own thread. */
+export const PICTURE_LIMITS = { timeoutMs: 15_000, memoryMb: 256 } as const;
+
+const workerUrl = new URL('./pixels-worker.js', import.meta.url);
+const hasWorker = import.meta.url.endsWith('.js') && existsSync(fileURLToPath(workerUrl));
+
+/**
+ * `fitPicture` in a worker thread with a heap limit, stopped at the
+ * deadline, so a hostile file never decodes in the gateway's own thread.
+ * Run from source (the tests) there is no compiled worker, and it runs
+ * here; the inflated-size and pixel checks hold either way.
+ */
+export function fitPictureContained(bytes: Buffer, opts: { longSide: number; maxBytes: number }): Promise<ReturnType<typeof fitPicture>> {
+  if (!hasWorker) return Promise.resolve().then(() => fitPicture(bytes, opts));
+  return new Promise((resolve, reject) => {
+    const copy = new Uint8Array(bytes);
+    const worker = new Worker(workerUrl, {
+      workerData: { bytes: copy, opts },
+      transferList: [copy.buffer],
+      resourceLimits: { maxOldGenerationSizeMb: PICTURE_LIMITS.memoryMb, maxYoungGenerationSizeMb: 32, stackSizeMb: 8 },
+    });
+    let settled = false;
+    const done = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+      void worker.terminate();
+    };
+    const timer = setTimeout(() => done(() => reject(new PixelsError('too-large', 'The picture took too long to read.'))), PICTURE_LIMITS.timeoutMs);
+    worker.once('message', (msg: { ok: boolean; out?: { jpeg: Uint8Array; width: number; height: number; sourceWidth: number; sourceHeight: number }; pixels?: PixelsError['reason'] | null; message?: string }) => {
+      done(() => {
+        if (msg.ok && msg.out) resolve({ ...msg.out, jpeg: Buffer.from(msg.out.jpeg) });
+        else reject(msg.pixels ? new PixelsError(msg.pixels, msg.message ?? 'The picture could not be read.') : new Error(msg.message ?? 'the picture could not be read'));
+      });
+    });
+    worker.once('error', (err: Error & { code?: string }) => done(() => reject(err.code === 'ERR_WORKER_OUT_OF_MEMORY' ? new PixelsError('too-large', 'The picture is too large to read.') : err)));
+    worker.once('exit', (code) => done(() => reject(new Error(`the picture reader stopped (exit ${code})`))));
+  });
 }

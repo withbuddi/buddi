@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { imageDimensions } from '../extract.js';
-import { PixelsError, fitPicture, sniffRaster } from '../pixels.js';
+import { PixelsError, fitPictureContained, sniffRaster } from '../pixels.js';
 
 /** What a model is shown of a picture, at most. */
 export const VIEW_LIMITS = { longSide: 1568, maxBytes: 1024 * 1024 } as const;
@@ -80,7 +80,7 @@ export const view: ToolDefinition<z.infer<typeof viewInput>, ViewedPicture> = {
     const base = { id: row.id, fileId: row.fileId, version: row.version, filename: row.filename, mime: row.mime, width: size?.width ?? null, height: size?.height ?? null };
     if (sniffRaster(bytes)) {
       try {
-        const fitted = fitPicture(bytes, { longSide: VIEW_LIMITS.longSide, maxBytes: VIEW_LIMITS.maxBytes });
+        const fitted = await fitPictureContained(bytes, { longSide: VIEW_LIMITS.longSide, maxBytes: VIEW_LIMITS.maxBytes });
         return {
           ...base, width: fitted.sourceWidth, height: fitted.sourceHeight,
           shown: { mime: 'image/jpeg', width: fitted.width, height: fitted.height, sizeBytes: fitted.jpeg.length },
