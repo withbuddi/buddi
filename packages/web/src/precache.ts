@@ -19,7 +19,7 @@ export function precacheList(bundled: readonly string[], publicFiles: readonly s
 }
 
 /** What `generateBundle` is handed, as far as the list reads it. */
-type BundleEntry = { type?: string; isEntry?: boolean; facadeModuleId?: string | null; imports?: string[]; dynamicImports?: string[]; viteMetadata?: { importedAssets?: Set<string> } };
+type BundleEntry = { type?: string; isEntry?: boolean; facadeModuleId?: string | null; imports?: string[]; dynamicImports?: string[]; viteMetadata?: { importedAssets?: Set<string> }; code?: string; source?: string | Uint8Array };
 
 /** The Office previewers' entries (`src/chat/office/`): loaded when a file is opened, never kept offline. */
 const OFFICE_ENTRY = /[\\/]src[\\/]chat[\\/]office[\\/]/;
@@ -45,6 +45,23 @@ export function officeOnly(bundle: Record<string, BundleEntry>): Set<string> {
   const isOffice = (name: string): boolean => OFFICE_ENTRY.test(bundle[name]?.facadeModuleId ?? '');
   const office = walk(Object.keys(bundle).filter(isOffice), () => false);
   const shell = walk(Object.keys(bundle).filter((name) => bundle[name]!.isEntry), isOffice);
+  // A previewer's Web Worker (the xlsx sheet engine) is an asset the chunk names by file, with chunks of its own it names the same way.
+  const text = (name: string): string => {
+    const entry = bundle[name]!;
+    return typeof entry.code === 'string' ? entry.code : typeof entry.source === 'string' ? entry.source : '';
+  };
+  const workers = Object.keys(bundle).filter((name) => bundle[name]!.type === 'asset' && name.endsWith('.js'));
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const name of [...office]) {
+      const body = text(name);
+      for (const other of workers) {
+        if (office.has(other) || shell.has(other) || !body.includes(other.split('/').pop()!)) continue;
+        office.add(other);
+        grew = true;
+      }
+    }
+  }
   return new Set([...office].filter((name) => !shell.has(name)));
 }
 

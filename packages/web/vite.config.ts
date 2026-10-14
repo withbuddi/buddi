@@ -54,6 +54,8 @@ export default defineConfig({
   define: { __BUDDI_WEB_BUILD__: JSON.stringify(WEB_BUILD) },
   // Assets are referenced relatively, so the page works wherever it is mounted.
   base: './',
+  // Module workers (the xlsx preview's sheet engine, chat/office/sheet-job.ts): their formula library is a chunk of its own.
+  worker: { format: 'es' },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

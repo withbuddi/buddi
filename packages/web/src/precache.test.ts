@@ -60,4 +60,19 @@ describe('the Office previewers', () => {
     const files = (JSON.parse((emitFile.mock.calls[0]?.[0] as { source: string }).source) as { files: string[] }).files;
     expect(files).toEqual(['index.html', 'assets/CodeEditor-b.js', 'assets/index-a.js']);
   });
+
+  it('leaves out a previewer’s module worker and the chunks it names, which the chunk graph does not list', () => {
+    const bundle = {
+      'index.html': { type: 'asset' },
+      'assets/index-a.js': { type: 'chunk', isEntry: true, imports: [], dynamicImports: ['assets/xlsx-c.js'], code: 'import("./xlsx-c.js")' },
+      'assets/xlsx-c.js': { type: 'chunk', facadeModuleId: '/repo/packages/web/src/chat/office/xlsx.tsx', imports: ['assets/index-a.js'], code: 'new Worker(new URL("sheet-worker-w.js", import.meta.url))' },
+      'assets/sheet-worker-w.js': { type: 'asset', source: 'import("./engine-e.js")' },
+      'assets/engine-e.js': { type: 'asset', source: 'export default 1' },
+    };
+    const plugin = precacheManifest('b', () => []);
+    const emitFile = vi.fn();
+    (plugin.generateBundle as unknown as (this: unknown, o: unknown, b: unknown) => void).call({ emitFile }, {}, bundle);
+    const files = (JSON.parse((emitFile.mock.calls[0]?.[0] as { source: string }).source) as { files: string[] }).files;
+    expect(files).toEqual(['index.html', 'assets/index-a.js']);
+  });
 });

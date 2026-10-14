@@ -111,6 +111,14 @@ export interface ChatPageProps {
   newConversationSignal?: number;
 }
 
+/** A run that finished: the conversation and the turn (when the owner spoke) it finished in. */
+export interface EndedTurn { conversationId: string | null; turn: string | null }
+
+/** Whether the turn that ended is the one on screen: same conversation, same turn. */
+export function turnEndHolds(ended: EndedTurn | null, conversationId: string | null, turn: string | null): boolean {
+  return ended !== null && ended.conversationId === conversationId && ended.turn === turn;
+}
+
 /** A sheet or dialog is open, or this is a touch screen: leave the focus where it is. */
 function composerFocusUnwanted(): boolean {
   if (typeof document === 'undefined') return true;
@@ -878,24 +886,29 @@ export function ChatPage({
     const at = item.versions?.at(-1)?.at ?? item.at;
     return at !== null && Date.parse(at) >= Date.parse(turnStartedAt) && ownerPicks === picksAtTurnStart.current;
   }, [holdPage, turnStartedAt, ownerPicks]);
-  /** The run has finished and no new one has started: the moment the exception above is read. */
-  const [turnEnded, setTurnEnded] = useState(false);
+  /**
+   * Which turn has finished, in which conversation: the moment the exception
+   * above is read. Bound to both, so a turn that ended in one conversation
+   * never fronts a file in the next one opened.
+   */
+  const [endedTurn, setEndedTurn] = useState<EndedTurn | null>(null);
   const wasRunning = useRef(running);
   useEffect(() => {
-    if (running) setTurnEnded(false);
-    else if (wasRunning.current) setTurnEnded(true);
+    if (running) setEndedTurn(null);
+    else if (wasRunning.current) setEndedTurn({ conversationId: conversationId ?? null, turn: turnStartedAt });
     wasRunning.current = running;
+    // Read at the moment the run ends: the conversation and turn it ended in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
-  useEffect(() => { setTurnEnded(false); }, [conversationId]);
   const frontedAtTurnEnd = useRef<string | null>(null);
   useEffect(() => {
-    if (!turnEnded || !holdPage || !focusId || frontedAtTurnEnd.current === focusId) return;
+    if (!turnEndHolds(endedTurn, conversationId ?? null, turnStartedAt) || !holdPage || !focusId || frontedAtTurnEnd.current === focusId) return;
     const candidate = renderables.find((item) => tabStamp(item) === focusId);
     if (takesFront(candidate, true)) {
       frontedAtTurnEnd.current = focusId;
       setActiveTab(focusId);
     }
-  }, [turnEnded, holdPage, focusId, renderables, takesFront]);
+  }, [endedTurn, conversationId, turnStartedAt, holdPage, focusId, renderables, takesFront]);
   useEffect(() => {
     if (focusId && focusId !== previousFocus.current) {
       previousFocus.current = focusId;
