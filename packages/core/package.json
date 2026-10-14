@@ -53,6 +53,10 @@
       "types": "./dist/office-files.d.ts",
       "default": "./dist/office-files.js"
     },
+    "./sheet": {
+      "types": "./dist/sheet/index.d.ts",
+      "default": "./dist/sheet/index.js"
+    },
     "./uninstall": {
       "types": "./dist/uninstall.d.ts",
       "default": "./dist/uninstall.js"
@@ -93,8 +97,11 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "dotenv": "^16.4.7",
+    "fast-formula-parser": "1.0.19",
+    "fflate": "0.8.3",
     "pg": "^8.13.1",
     "pg-copy-streams": "^7.0.0",
+    "ssf": "0.11.2",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.24.1"
   },

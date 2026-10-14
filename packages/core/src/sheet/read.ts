@@ -1,0 +1,243 @@
+/**
+ * A workbook's sheets as the sheet engine reads them: every cell's cached
+ * value, formula and format, and per sheet its column widths, row heights,
+ * frozen panes, merges and conditional rules. Read-only, from the bytes;
+ * the caller checks the package's limits first (`officePackageProblem`).
+ *
+ * Values here are the file's own: a number (a date is its serial), text, a
+ * boolean, an error such as `#DIV/0!`, or null. read-excel-file stays what
+ * turns them into dates and text for the agent's CSV and the page's table;
+ * this reader is for what read-excel-file leaves out — formulas without a
+ * value, and the look.
+ */
+import { unzipSync } from 'fflate';
+import { cellKey, parseAddress, parseRange, parseRanges, shiftFormula, type CellRange } from './refs.js';
+import { readStyles, type StyleSheet } from './styles.js';
+import { attr, boolAttr, decodeXml, numAttr, runText } from './xml.js';
+
+/** An error a cell holds, as Excel writes it: `#DIV/0!`, `#N/A`, `#NAME?`, `#REF!`, `#VALUE!`, `#NUM!`, `#NULL!`. */
+export interface SheetError { error: string }
+
+export type CellValue = number | string | boolean | SheetError | null;
+
+export const isSheetError = (value: unknown): value is SheetError =>
+  typeof value === 'object' && value !== null && typeof (value as SheetError).error === 'string';
+
+export interface CellModel {
+  row: number;
+  col: number;
+  /** What the file says the cell holds: its cached value for a formula. */
+  value: CellValue;
+  /** The formula, without its `=`, when the cell has one. */
+  formula?: string;
+  /** Whether the file carries a value for it (a formula from openpyxl or write-excel-file has none). */
+  hasValue: boolean;
+  /** The cell format (`s`), an index into `StyleSheet.cells`. */
+  style: number;
+}
+
+export type ConditionalType = 'cellIs' | 'expression' | 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith' | 'other';
+
+export interface ConditionalRule {
+  type: ConditionalType;
+  /** cellIs: `greaterThan`, `between`…; containsText: `containsText`. */
+  operator?: string;
+  /** Its formulas, without `=`, written for the first cell of its first range. */
+  formulas: string[];
+  text?: string;
+  /** The format it applies (`StyleSheet.dxfs`), or null. */
+  dxf: number | null;
+  priority: number;
+  stopIfTrue: boolean;
+}
+
+export interface ConditionalBlock { ranges: CellRange[]; rules: ConditionalRule[] }
+
+export interface SheetModel {
+  name: string;
+  /** The part it was read from, e.g. `xl/worksheets/sheet1.xml`. */
+  path: string;
+  hidden: boolean;
+  cells: Map<number, CellModel>;
+  /** The last row and column holding a cell. */
+  maxRow: number;
+  maxCol: number;
+  /** Widths in characters, by column range (`<col min max width>`). */
+  columns: Array<{ min: number; max: number; width: number; hidden: boolean }>;
+  /** Heights in points, by row, where the file sets one. */
+  rowHeights: Map<number, number>;
+  frozen: { rows: number; cols: number };
+  merges: CellRange[];
+  conditional: ConditionalBlock[];
+}
+
+export interface WorkbookModel {
+  sheets: SheetModel[];
+  styles: StyleSheet;
+  /** Dates count from 1904 (old Mac workbooks). */
+  date1904: boolean;
+}
+
+/** The parts a workbook is read from, by name, as text. */
+export type WorkbookParts = Record<string, string>;
+
+/** The parts of an xlsx this reader needs, unzipped: the workbook, its relations, sheets, shared strings, styles, theme. */
+export function workbookParts(bytes: Uint8Array): WorkbookParts {
+  const wanted = (name: string): boolean => name === 'xl/workbook.xml' || name === 'xl/_rels/workbook.xml.rels'
+    || name === 'xl/sharedStrings.xml' || name === 'xl/styles.xml' || /^xl\/theme\/theme\d*\.xml$/.test(name)
+    || /^xl\/worksheets\/[^/]+\.xml$/.test(name);
+  const parts = unzipSync(bytes, { filter: (file) => wanted(file.name) });
+  const decoder = new TextDecoder();
+  return Object.fromEntries(Object.entries(parts).map(([name, data]) => [name, decoder.decode(data)]));
+}
+
+/** Where each sheet's part is, from the workbook's relations. */
+function sheetTargets(parts: WorkbookParts): Array<{ name: string; path: string; hidden: boolean }> {
+  const rels = new Map<string, string>();
+  for (const m of (parts['xl/_rels/workbook.xml.rels'] ?? '').matchAll(/<Relationship\b([^>]*)\/?>/g)) {
+    const id = attr(m[1]!, 'Id');
+    const target = attr(m[1]!, 'Target');
+    if (id && target) rels.set(id, target.startsWith('/') ? target.slice(1) : `xl/${target}`.replace(/\/\.\//g, '/'));
+  }
+  const out: Array<{ name: string; path: string; hidden: boolean }> = [];
+  for (const m of (parts['xl/workbook.xml'] ?? '').matchAll(/<sheet\b([^>]*)\/?>/g)) {
+    const name = attr(m[1]!, 'name');
+    const id = attr(m[1]!, 'r:id');
+    const path = id ? rels.get(id) : undefined;
+    if (name !== null && path) out.push({ name, path, hidden: (attr(m[1]!, 'state') ?? 'visible') !== 'visible' });
+  }
+  return out;
+}
+
+function sharedStrings(xml: string | undefined): string[] {
+  if (!xml) return [];
+  return [...xml.matchAll(/<si>([\s\S]*?)<\/si>|<si\/>/g)].map((m) => runText(m[1] ?? ''));
+}
+
+const stripEquals = (formula: string): string => formula.replace(/^\s*=/, '');
+
+/** A cell's value from its type and `<v>` text. */
+function valueOf(type: string | null, raw: string, strings: string[]): CellValue {
+  switch (type) {
+    case 's': return strings[Number(raw)] ?? '';
+    case 'str':
+    case 'inlineStr': return raw;
+    case 'b': return raw === '1' || raw.toLowerCase() === 'true';
+    case 'e': return { error: raw };
+    case 'd': return raw;
+    default: {
+      const n = Number(raw);
+      return raw.trim() !== '' && Number.isFinite(n) ? n : raw;
+    }
+  }
+}
+
+function readSheet(xml: string, target: { name: string; path: string; hidden: boolean }, strings: string[]): SheetModel {
+  const cells = new Map<number, CellModel>();
+  const rowHeights = new Map<number, number>();
+  const shared = new Map<string, { formula: string; row: number; col: number }>();
+  let maxRow = 0;
+  let maxCol = 0;
+  let row = 0;
+  let col = 0;
+  const data = /<sheetData\b[^>]*>([\s\S]*?)<\/sheetData>/.exec(xml)?.[1] ?? '';
+  for (const m of data.matchAll(/<row\b([^>]*?)(\/?)>|<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+    if (m[1] !== undefined) {
+      row = numAttr(m[1], 'r') ?? row + 1;
+      col = 0;
+      const ht = numAttr(m[1], 'ht');
+      if (ht !== null && boolAttr(m[1], 'customHeight')) rowHeights.set(row, ht);
+      continue;
+    }
+    const tag = m[3] ?? '';
+    const body = m[4] ?? '';
+    const at = parseAddress(attr(tag, 'r') ?? '');
+    if (at) { row = at.row; col = at.col; } else col += 1;
+    if (row === 0) row = 1;
+    const type = attr(tag, 't');
+    const style = numAttr(tag, 's') ?? 0;
+    const fTag = /<f\b([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(body);
+    let formula: string | undefined;
+    if (fTag) {
+      const fAttrs = fTag[1] ?? '';
+      const text = fTag[2] === undefined ? '' : stripEquals(decodeXml(fTag[2]));
+      if (attr(fAttrs, 't') === 'shared') {
+        const si = attr(fAttrs, 'si') ?? '';
+        if (text !== '') shared.set(si, { formula: text, row, col });
+        const master = shared.get(si);
+        if (master) formula = text !== '' ? text : shiftFormula(master.formula, row - master.row, col - master.col);
+      } else if (text !== '') formula = text;
+    }
+    const vMatch = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body);
+    const inline = type === 'inlineStr' ? runText(/<is>([\s\S]*?)<\/is>/.exec(body)?.[1] ?? '') : null;
+    const raw = vMatch ? decodeXml(vMatch[1]!) : null;
+    // openpyxl writes an empty `<v></v>` (or `<v/>`) after a formula: no value.
+    const hasValue = inline !== null || (raw !== null && raw !== '');
+    const value = inline !== null ? inline : hasValue ? valueOf(type, raw!, strings) : null;
+    if (formula === undefined && !hasValue && style === 0) continue;
+    cells.set(cellKey(row, col), { row, col, value, hasValue, style, ...(formula === undefined ? {} : { formula }) });
+    if (formula !== undefined || hasValue) {
+      if (row > maxRow) maxRow = row;
+      if (col > maxCol) maxCol = col;
+    }
+  }
+
+  const columns = [...(/<cols\b[^>]*>([\s\S]*?)<\/cols>/.exec(xml)?.[1] ?? '').matchAll(/<col\b([^>]*)\/?>/g)].flatMap((c) => {
+    const min = numAttr(c[1]!, 'min');
+    const max = numAttr(c[1]!, 'max');
+    const width = numAttr(c[1]!, 'width');
+    return min !== null && max !== null && width !== null ? [{ min, max, width, hidden: boolAttr(c[1]!, 'hidden') }] : [];
+  });
+
+  const pane = /<pane\b([^>]*)\/?>/.exec(/<sheetView\b[\s\S]*?(?:<\/sheetView>|\/>)/.exec(xml)?.[0] ?? '')?.[1];
+  const frozenState = pane ? attr(pane, 'state') : null;
+  const frozen = pane && (frozenState === 'frozen' || frozenState === 'frozenSplit')
+    ? { rows: Math.max(0, Math.round(numAttr(pane, 'ySplit') ?? 0)), cols: Math.max(0, Math.round(numAttr(pane, 'xSplit') ?? 0)) }
+    : { rows: 0, cols: 0 };
+
+  const merges = [...xml.matchAll(/<mergeCell\b([^>]*)\/?>/g)]
+    .map((mc) => parseRange(attr(mc[1]!, 'ref') ?? ''))
+    .filter((r): r is CellRange => r !== null);
+
+  const conditional: ConditionalBlock[] = [];
+  for (const block of xml.matchAll(/<conditionalFormatting\b([^>]*)>([\s\S]*?)<\/conditionalFormatting>/g)) {
+    const ranges = parseRanges(attr(block[1]!, 'sqref') ?? '');
+    if (ranges.length === 0) continue;
+    const rules = [...block[2]!.matchAll(/<cfRule\b([^>]*?)(?:\/>|>([\s\S]*?)<\/cfRule>)/g)].map((rule): ConditionalRule => {
+      const tag = rule[1] ?? '';
+      const t = attr(tag, 'type') ?? '';
+      const type: ConditionalType = ['cellIs', 'expression', 'containsText', 'notContainsText', 'beginsWith', 'endsWith'].includes(t) ? t as ConditionalType : 'other';
+      const operator = attr(tag, 'operator');
+      const text = attr(tag, 'text');
+      return {
+        type,
+        ...(operator === null ? {} : { operator }),
+        ...(text === null ? {} : { text }),
+        formulas: [...(rule[2] ?? '').matchAll(/<formula>([\s\S]*?)<\/formula>/g)].map((f) => stripEquals(decodeXml(f[1]!))),
+        dxf: numAttr(tag, 'dxfId'),
+        priority: numAttr(tag, 'priority') ?? 0,
+        stopIfTrue: boolAttr(tag, 'stopIfTrue'),
+      };
+    });
+    conditional.push({ ranges, rules });
+  }
+
+  return { name: target.name, path: target.path, hidden: target.hidden, cells, maxRow, maxCol, columns, rowHeights, frozen, merges, conditional };
+}
+
+/** A workbook read from its parts (`workbookParts`). */
+export function readWorkbookParts(parts: WorkbookParts): WorkbookModel {
+  const strings = sharedStrings(parts['xl/sharedStrings.xml']);
+  const theme = Object.keys(parts).filter((p) => /^xl\/theme\/theme\d*\.xml$/.test(p)).sort()[0];
+  const sheets = sheetTargets(parts).flatMap((target) => {
+    const xml = parts[target.path];
+    return xml === undefined ? [] : [readSheet(xml, target, strings)];
+  });
+  const workbookPr = /<workbookPr\b([^>]*)\/?>/.exec(parts['xl/workbook.xml'] ?? '')?.[1] ?? '';
+  return { sheets, styles: readStyles(parts['xl/styles.xml'], theme ? parts[theme] : undefined), date1904: boolAttr(workbookPr, 'date1904') };
+}
+
+/** A workbook read from an xlsx's bytes. */
+export function readWorkbook(bytes: Uint8Array): WorkbookModel {
+  return readWorkbookParts(workbookParts(bytes));
+}
