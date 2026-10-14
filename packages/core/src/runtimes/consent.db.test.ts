@@ -126,7 +126,9 @@ suite('one card for a local model', () => {
     expect(onnxState().state).toBe('absent');
 
     await approve(first.pending!);
-    expect(onnxState().state).toBe('downloading');
+    // The yes starts the download; against the local test server it can
+    // already be finished by the time this line runs.
+    expect(['downloading', 'ready']).toContain(onnxState().state);
     await startOnnxDownload();
     expect(onnxState().state).toBe('ready');
 
