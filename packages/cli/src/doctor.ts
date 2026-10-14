@@ -1079,16 +1079,12 @@ export interface ComposeFacts {
 }
 
 /**
- * Composed documents (docs/files.md): on, under both layers or Node's alone,
- * or off and why. Node alone is how Windows runs; on Linux it means
- * bubblewrap is missing, which is worth installing.
+ * Composed documents (docs/files.md): on, inside the OS sandbox, or off and
+ * why — no OS sandbox (Windows, Linux without bubblewrap), or a Node without
+ * the permission model's security fixes.
  */
-export function checkCompose(facts: ComposeFacts, platform: NodeJS.Platform = process.platform): ProbeResult {
-  if (!facts.available) return { status: 'warn', detail: facts.detail };
-  if (facts.confinement === null && platform === 'linux') {
-    return { status: 'warn', detail: `${facts.detail}; install bubblewrap (apt install bubblewrap) for the OS sandbox too` };
-  }
-  return { status: 'ok', detail: facts.detail };
+export function checkCompose(facts: ComposeFacts): ProbeResult {
+  return { status: facts.available ? 'ok' : 'warn', detail: facts.detail };
 }
 
 export interface OllamaFacts {

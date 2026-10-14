@@ -98,6 +98,8 @@ export interface ConfineOptions {
   network?: boolean;
   /** More folders readable, never writable (real paths): the libraries a compose program may load. */
   readable?: readonly string[];
+  /** `false`: it may not start another process at all (macOS `process-fork` denied; bubblewrap has its own PID namespace). */
+  fork?: boolean;
 }
 
 /** Where an interpreter on PATH is installed (two levels above its real binary), or null. */
@@ -150,6 +152,7 @@ export function confinementArgv(kind: Confinement, work: string, opts: ConfineOp
       `(deny process-exec ${MACOS_DENIED_EXEC.map((p) => `(literal ${q(p)})`).join(' ')})`,
       `(deny mach-lookup ${MACOS_DENIED_LOOKUP.map((n) => `(global-name ${q(n)})`).join(' ')})`,
       ...(opts.network ? [] : ['(deny network*)']),
+      ...(opts.fork === false ? ['(deny process-fork)'] : []),
     ].join('');
     return ['/usr/bin/sandbox-exec', '-p', profile];
   }

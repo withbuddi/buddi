@@ -75,6 +75,53 @@ A4 is 11906 × 16838 twips; US Letter is 12240 × 15840. Use the owner's
 paper: Letter in the United States and Canada, A4 nearly everywhere else.
 For landscape, swap width and height and add `orientation: 'landscape'`.
 
+## A complete letter
+
+Sender at the top, the recipient where a window envelope shows it, the date
+and a reference on one line, the subject, the body, and room to sign. Fill
+every name, address and figure from what you read; leave a visible
+`[placeholder]` for what you do not know and say so.
+
+```js
+import { AlignmentType, BorderStyle, Document, Packer, Paragraph, TabStopType, TextRun } from 'docx';
+
+const ACCENT = '1F3A5F';
+const MUTED = '6B7280';
+const TEXT_WIDTH = 11906 - 2 * 1247; // A4 width minus both margins, in twips
+
+const line = (text, opts = {}) => new Paragraph({ spacing: { after: 0 }, children: [new TextRun({ text, ...opts })] });
+
+export default async () => {
+  const sender = ['Amina Diallo', '14 Rue des Lilas', '75011 Paris', 'amina@example.com'];
+  const recipient = ['Northwind Ltd', 'Attn. Jonas Berg', '2 Harbour Street', 'Oslo 0150'];
+  const doc = new Document({
+    styles: { default: { document: { run: { font: 'Calibri', size: 22 }, paragraph: { spacing: { after: 160, line: 276 } } } } },
+    sections: [{
+      properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1134, right: 1247, bottom: 1134, left: 1247 } } },
+      children: [
+        new Paragraph({ spacing: { after: 0 }, children: [new TextRun({ text: sender[0], bold: true, size: 28, color: ACCENT })] }),
+        ...sender.slice(1).map((l) => line(l, { color: MUTED, size: 20 })),
+        new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: ACCENT, space: 4 } }, spacing: { after: 600 } }),
+        ...recipient.map((l) => line(l)),
+        new Paragraph({
+          spacing: { before: 480, after: 240 },
+          tabStops: [{ type: TabStopType.RIGHT, position: TEXT_WIDTH }],
+          children: [new TextRun('Paris, 13 October 2026'), new TextRun({ text: '\tOur ref. 2026-114', color: MUTED })],
+        }),
+        new Paragraph({ spacing: { after: 240 }, children: [new TextRun({ text: 'Offer for the kitchen renovation', bold: true })] }),
+        new Paragraph('Dear Mr Berg,'),
+        new Paragraph('Thank you for your visit on 6 October. As agreed, here is our offer for the work we discussed.'),
+        new Paragraph('The price is fixed for thirty days. I would be glad to go through it with you by phone.'),
+        new Paragraph({ spacing: { before: 240 }, children: [new TextRun('Kind regards,')] }),
+        new Paragraph({ spacing: { before: 720, after: 0 }, children: [new TextRun({ text: 'Amina Diallo', bold: true })] }),
+        line('Owner, Diallo Interiors', { color: MUTED }),
+      ],
+    }],
+  });
+  return Packer.toBuffer(doc);
+};
+```
+
 ## Headings and the outline
 
 Give each heading `heading: 'Heading1'` (or `HeadingLevel.HEADING_1`) rather

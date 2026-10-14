@@ -7,28 +7,32 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import type { Pool } from 'pg';
 import pngjs from 'pngjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ToolRegistry, composeSourceOf, createPool, migrateCore, officePackageProblem, saveArtifact, saveOwnerVersion, testDatabaseUrl } from '@buddi/core/testing';
+import { ToolRegistry, composeSourceOf, createPool, decideApproval, executeApproved, migrateCore, officePackageProblem, saveArtifact, saveOwnerVersion, testDatabaseUrl } from '@buddi/core/testing';
 import type { CoreToolContext } from '@buddi/core/testing';
-import { manifest } from '../index.js';
-import { composeAvailability } from '../compose/sandbox.js';
+import { composeAvailability, manifest } from '@buddi/tool-artifacts';
+import { confinementArea } from '@buddi/tool-host';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
-// The tool context here hands no OS sandbox: the Node layer alone, which Node 25+ makes enough.
-const composing = composeAvailability({ confinement: null }).available ? describe : describe.skip;
+// The OS sandbox the gateway hands every plugin; without one compose does not run, and that half is skipped.
+const confinement = confinementArea();
+const composing = composeAvailability({ confinement: confinement.kind }).available ? describe : describe.skip;
+const GUIDES = path.join(path.dirname(createRequire(import.meta.url).resolve('@buddi/tool-artifacts')), '..', 'guides');
 const TEST_DB = `buddi_compose_test_${process.pid}`;
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
-/** The guide's own skeleton: what an agent is told to start from must run. */
+/** The guide's own programs: what an agent is told to start from must run. */
+async function guideBlocks(name: 'docx' | 'pptx'): Promise<string[]> {
+  const text = await readFile(path.join(GUIDES, `${name}.md`), 'utf8');
+  return [...text.matchAll(/```js\n([\s\S]*?)```/g)].map((m) => m[1]!);
+}
 async function guideProgram(name: 'docx' | 'pptx'): Promise<string> {
-  const text = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'guides', `${name}.md`), 'utf8');
-  const blocks = [...text.matchAll(/```js\n([\s\S]*?)```/g)].map((m) => m[1]!);
-  return blocks.find((b) => b.includes('A4') || b.includes('defineSlideMaster') || b.includes('styles:'))!;
+  return (await guideBlocks(name)).find((b) => b.includes('defineSlideMaster') || b.includes('styles:'))!;
 }
 
 suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, () => {
@@ -40,7 +44,7 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
   const registry = new ToolRegistry();
   const ctx = (): CoreToolContext => ({
     db: pool, ownerId: 'test', now: () => new Date('2026-10-13T12:00:00Z'), timezone: 'UTC',
-    agentId: 'writer', conversationId,
+    agentId: 'writer', conversationId, confinement,
     convertDocument: async (source, to) => Buffer.from(`${to}:${source.bytes.toString('utf8')}`),
   });
   const call = async (name: string, args: unknown): Promise<any> => {
@@ -148,6 +152,10 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
       expect(message).toMatch(/^program_error: ReferenceError: missing is not defined\n {2}at default \(?program\.mjs:3:\d+/);
       expect(message).toMatch(/artifacts\.write format docx/);
       expect(message).not.toMatch(/\/Users\/|\/home\/|node_modules/);
+      // The conversation's first failed run brings the guide, with the shared layout one; the next does not.
+      expect(message).toContain('# Composing a Word document');
+      expect(message).toContain('# Type, colour and space');
+      expect(await refusal('artifacts.compose', { kind: 'docx', program: 'export default async () => { throw new Error("again"); };', fileId: letter.fileId })).not.toContain('# Composing a Word document');
       expect(await refusal('artifacts.compose', { kind: 'docx', program: `export default async () => Buffer.from('not a zip');`, fileId: letter.fileId })).toMatch(/^not_a_package:/);
       expect(await refusal('artifacts.compose', { kind: 'pptx', program: await guideProgram('pptx'), fileId: letter.fileId })).toMatch(/not a \.pptx; a write never changes a file's format/);
       expect(await versions(letter.fileId)).toBe(before);
@@ -165,21 +173,58 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
       expect(v4.version).toBe(4);
     });
 
-    it('refuses to compose over the owner’s own edit until he agreed, and the other way round', async () => {
+    it('composes over the owner’s own edit only once he approved it on a card, bound to the version and the program', async () => {
       // The owner saved it in Word: his version, no program.
       const saved = await saveOwnerVersion(pool, { fileId: letter.fileId, bytes: Buffer.concat([await bytesOf(letter.artifactId), Buffer.from(' ')]), base: 4 });
       expect(saved.ok && saved.row.version).toBe(5);
       const program = (await call('artifacts.compose', { fileId: letter.artifactId, source: true })).program;
       expect(await refusal('artifacts.compose', { kind: 'docx', program, fileId: letter.fileId, readVersion: 5 }))
-        .toMatch(/v5 of Offer for the kitchen\.docx is the owner's own version.*artifacts\.text.*confirmedRebuild: true/);
+        .toMatch(/v5 of Offer for the kitchen\.docx is the owner's own version.*artifacts\.text.*confirmedRebuild: true — buddi then asks him on a card/);
       expect(await refusal('artifacts.compose', { fileId: letter.fileId, source: true })).toMatch(/v5 of Offer for the kitchen\.docx was not made by a program/);
-      const agreed = await call('artifacts.compose', { kind: 'docx', program, fileId: letter.fileId, readVersion: 5, confirmedRebuild: true });
-      expect(agreed.version).toBe(6);
+      // The model saying it asked is not the owner's yes: it raises a card, and nothing is written yet.
+      const asked = await registry.invoke('artifacts.compose', { kind: 'docx', program, fileId: letter.fileId, readVersion: 5, confirmedRebuild: true }, ctx());
+      expect(asked).toMatchObject({ ok: false, reason: 'approval-required' });
+      if (asked.ok || asked.reason !== 'approval-required') return;
+      expect(asked.preview).toBe("Rebuild Offer for the kitchen.docx? Your edits in v5 would be replaced by buddi's program; formatting rebuilt.");
+      expect(await versions(letter.fileId)).toBe(5);
+      // A rejected card writes nothing.
+      const rejected = await registry.invoke('artifacts.compose', { kind: 'docx', program: `${program}\n// another`, fileId: letter.fileId, readVersion: 5, confirmedRebuild: true }, ctx());
+      if (!rejected.ok && rejected.reason === 'approval-required') {
+        await decideApproval(pool, { actionId: rejected.actionId, decision: 'rejected', by: 'owner', via: 'web', now: ctx().now() });
+        expect((await executeApproved(pool, { actionId: rejected.actionId, registry, ctx: ctx(), worker: 'w', now: ctx().now() })).ok).toBe(false);
+      }
+      expect(await versions(letter.fileId)).toBe(5);
+      // His yes: the action runs, as itself, and the version is written.
+      await decideApproval(pool, { actionId: asked.actionId, decision: 'approved', by: 'owner', via: 'web', now: ctx().now() });
+      const done = await executeApproved(pool, { actionId: asked.actionId, registry, ctx: ctx(), worker: 'w', now: ctx().now() });
+      expect(done).toMatchObject({ ok: true });
+      expect(await versions(letter.fileId)).toBe(6);
       // Markdown onto a composed file: edit the program instead, unless the owner asked for the rebuild.
       expect(await refusal('artifacts.write', { title: 'x', format: 'markdown', content: '# Offer', fileId: letter.fileId }))
         .toMatch(/was composed by a program: change it by editing its program \(artifacts\.compose \{ fileId, source: true \}/);
       const rebuilt = await call('artifacts.write', { title: 'x', format: 'markdown', content: '# Offer', fileId: letter.fileId, confirmedRebuild: true });
       expect(rebuilt).toMatchObject({ version: 7, rebuilt: true });
+    });
+
+    it('a card approved for one version does not write over a newer one', async () => {
+      const saved = await saveOwnerVersion(pool, { fileId: letter.fileId, bytes: Buffer.from('his v8'), base: 7 });
+      expect(saved.ok && saved.row.version).toBe(8);
+      const program = await guideProgram('docx');
+      const asked = await registry.invoke('artifacts.compose', { kind: 'docx', program, fileId: letter.fileId, readVersion: 8, confirmedRebuild: true }, ctx());
+      if (asked.ok || asked.reason !== 'approval-required') throw new Error('expected a card');
+      await decideApproval(pool, { actionId: asked.actionId, decision: 'approved', by: 'owner', via: 'web', now: ctx().now() });
+      // He saves again before it runs.
+      await saveOwnerVersion(pool, { fileId: letter.fileId, bytes: Buffer.from('his v9'), base: 8 });
+      const done = await executeApproved(pool, { actionId: asked.actionId, registry, ctx: ctx(), worker: 'w', now: ctx().now() });
+      expect(done.ok).toBe(false);
+      expect(await versions(letter.fileId)).toBe(9);
+    });
+
+    it('runs the docx guide’s letter as it is', async () => {
+      const letterProgram = (await guideBlocks('docx')).find((b) => b.includes('Dear Mr Berg'))!;
+      const out = await call('artifacts.compose', { kind: 'docx', program: letterProgram, title: 'Letter to Northwind', dryRun: true });
+      expect(out.render).toMatchObject({ kind: 'docx', page: { name: 'A4' }, pages: { estimated: 1 } });
+      expect(out.render.text).toContain('Dear Mr Berg');
     });
   });
 
@@ -195,6 +240,19 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
     expect(Buffer.from(picture!.data, 'base64').subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
     // Taken once: a later call does not send it again.
     expect(await registry.image('artifacts.view', out, ctx())).toBeUndefined();
+    // A decompression bomb — a tiny PNG claiming one pixel that unpacks to 64 MB — is read in a worker, refused, and shown as nothing.
+    const { crc32, deflateSync } = await import('node:zlib');
+    const chunk = (type: string, body: Buffer): Buffer => {
+      const head = Buffer.alloc(8); head.writeUInt32BE(body.length, 0); head.write(type, 4, 'latin1');
+      const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, 'latin1'), body])) >>> 0, 0);
+      return Buffer.concat([head, body, crc]);
+    };
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(1, 0); ihdr.writeUInt32BE(1, 4); ihdr[8] = 8; ihdr[9] = 6;
+    const bomb = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(Buffer.alloc(64 * 1024 * 1024), { level: 9 })), chunk('IEND', Buffer.alloc(0))]);
+    const bombed = await saveArtifact(pool, { bytes: bomb, mime: 'image/png', filename: 'bomb.png', createdBy: 'owner', conversationId });
+    const seen = await call('artifacts.view', { fileId: bombed.fileId });
+    expect(seen).toMatchObject({ shown: null, note: expect.stringMatching(/cannot be shown: That PNG unpacks to more than its size says/) });
+    expect(await registry.image('artifacts.view', seen, ctx())).toBeUndefined();
     expect(await refusal('artifacts.view', { fileId: (await saveArtifact(pool, { bytes: Buffer.from('notes'), mime: 'text/plain', filename: 'n.txt', createdBy: 'owner' })).id }))
       .toMatch(/not a picture/);
   });

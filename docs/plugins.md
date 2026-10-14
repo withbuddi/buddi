@@ -3796,7 +3796,7 @@ Windows.
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
 | `kind` | `'macos-sandbox' \| 'bwrap' \| null` | yes | 1.35 | The sandbox this computer has, or `null`. |
-| `argv` | `(work, opts?) => string[]` | yes | 1.35 | The argv to put before your command: writes only to `work`, reads only the system, Node, `opts.readable` and `work`, no network unless `opts.network`. Throws when `kind` is `null`. |
+| `argv` | `(work, opts?) => string[]` | yes | 1.35 | The argv to put before your command: writes only to `work`, reads only the system, Node, `opts.readable` and `work`, no network unless `opts.network`, no other process when `opts.fork` is `false`. Throws when `kind` is `null`. |
 
 #### `NetworkArea`
 
@@ -3834,6 +3834,7 @@ checks a request against, exactly like a manifest host.
 | --- | --- | --- | --- | --- |
 | `save` | `({bytes, mime, filename?, caption?, source?}) => Promise<FileRow>` | yes | 1.0 | Keep a file in the Files library. Who made it, where it lives and the conversation it belongs to (the call's, when that conversation exists) are filled in by core. A `FileRow` is the library's row without its path on disk, with `conversationId`. |
 | `get` | `(id) => Promise<FileRow \| null>` | yes | 1.0 | One file in scope, or `null`: a version by its id, or (1.35) a file by its own id as its newest version. |
+| `rebuildCheck` | `({version, composing?}) => Promise<{need, message, fileId, name, version} \| null>` | yes | 1.35 | What a save by `version` would need before it rebuilds its file: `owner` (his newest version: the save runs only as an action he approved, so raise a card with `tierFor`), `asked` (`confirmedRebuild`), `never`, or `null`. |
 | `source` | `(id) => Promise<StoredComposeSource \| null>` | yes | 1.35 | The program a composed version was made from (a version's id, or a file's for its newest), or `null`. A save says it made the bytes with `composed: { kind, library, libraryVersion, nodeVersion, program }` (docs/plugin-host-api.md, 1.35). |
 | `read` | `(id) => Promise<Buffer>` | yes | 1.0 | Its bytes. |
 | `list` | `({since?, before?, kind?, sha256?, surface?, limit?}) => Promise<FileRow[]>` | yes | 1.0 | Newest first, at most 100. In scope: the files you saved and the files handed into the conversation your tool runs in — every file with `files:library`. |

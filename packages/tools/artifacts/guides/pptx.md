@@ -96,6 +96,49 @@ export default async (ctx) => {
 - `valign: 'top'` for body text, so lines start at the same height whatever
   their count.
 
+## Title boxes
+
+A title box must hold its longest title on the lines it takes: at 30 pt a
+line needs about 0.5 in, so a two-line title needs `h: 1.1`, not `h: 0.6`.
+Give every content slide's title the same box (same `x`, `y`, `w`, `h`) and
+keep titles to one line where you can — shorten the words before you shrink
+the type. The render summary warns when a title spills out of its box.
+
+## A big number
+
+One figure, said large, with what it means beneath — the slide people
+remember:
+
+```js
+const big = pres.addSlide({ masterName: 'CONTENT' });
+big.addText('46%', { x: M, y: 1.6, w: W - 2 * M, h: 2.2, fontFace: FONT, fontSize: 120, bold: true, color: ACCENT, align: 'center' });
+big.addText('of sales now come from repeat customers (38% a year ago)', {
+  x: M + 1.5, y: 4.0, w: W - 2 * M - 3, h: 0.9, fontFace: FONT, fontSize: 24, color: INK, align: 'center', valign: 'top',
+});
+big.addText('Source: order system, Q3 2026', { x: M, y: H - 1.0, w: 6, h: 0.3, fontFace: FONT, fontSize: 11, color: MUTED });
+```
+
+## Two columns
+
+A comparison, or text beside a picture: two boxes of equal width with a gap
+between, both starting at the same `y`.
+
+```js
+const GAP = 0.5;
+const COL = (W - 2 * M - GAP) / 2;
+const two = pres.addSlide({ masterName: 'CONTENT' });
+two.addText('Rent or buy the van', { x: M, y: 0.5, w: W - 2 * M, h: 0.9, fontFace: FONT, fontSize: 30, bold: true, color: INK });
+const column = (x, head, points) => {
+  two.addShape(pres.ShapeType.rect, { x, y: 1.7, w: COL, h: 4.6, fill: { color: 'F3F5F8' }, line: { color: 'F3F5F8' } });
+  two.addText(head, { x: x + 0.3, y: 1.9, w: COL - 0.6, h: 0.6, fontFace: FONT, fontSize: 22, bold: true, color: ACCENT });
+  two.addText(points.map((text) => ({ text, options: { bullet: true } })), {
+    x: x + 0.3, y: 2.6, w: COL - 0.6, h: 3.5, fontFace: FONT, fontSize: 18, color: INK, valign: 'top', paraSpaceAfter: 8,
+  });
+};
+column(M, 'Rent', ['520 EUR a month, service included', 'Out in two weeks\' notice']);
+column(M + COL + GAP, 'Buy', ['24,000 EUR, about 46 months of rent', 'Ours to resell']);
+```
+
 ## Tables
 
 ```js

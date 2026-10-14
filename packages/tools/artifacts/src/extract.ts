@@ -149,12 +149,10 @@ const hasWorker = import.meta.url.endsWith('.js') && existsSync(fileURLToPath(wo
 /**
  * A composed document said in words (`render.ts`): page or slide size,
  * fonts, outline, pages, a deck's overflow warnings — read within
- * `OFFICE_READ_LIMITS`, in the extractor's worker, after the package's
- * limits were checked.
+ * `OFFICE_READ_LIMITS`, in the extractor's worker. The caller has checked
+ * the package's limits (`officePackageProblem`).
  */
 export async function renderOffice(bytes: Buffer, kind: 'docx' | 'pptx'): Promise<OfficeRender> {
-  const problem = officePackageProblem(bytes, kind);
-  if (problem) throw new Error(problem);
   return inWorker('render', bytes, kind) as Promise<OfficeRender>;
 }
 

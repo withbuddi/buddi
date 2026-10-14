@@ -1001,8 +1001,9 @@ keep its name (no `(vN)` in stored names), and `files.list` takes `latest`
   buddi's exporter, and the row says `rebuilt: true` — the formatting of the
   version before is not kept. A file the owner made or handed in is refused
   unless `version.confirmedRebuild` is true, which a writer passes only once
-  the owner agreed; a .pptx is never written (docs/files.md, "Office
-  documents").
+  the owner agreed (since 1.35: over his own newest version, only as an
+  action he approved, below); a .pptx is never written (docs/files.md,
+  "Office documents").
 
 1.35 keeps a program beside a version (docs/files.md, "Composed documents"):
 
@@ -1011,10 +1012,16 @@ keep its name (no `(vN)` in stored names), and `files.list` takes `latest`
   They must be a whole package of that kind under its Office mime, and are
   stored as they are — never rebuilt from text — with the program in
   `core.compose_sources` beside the version, in the same transaction. Saved
-  by title (`version`) or onto a file (`version.of`) of the same kind; the
-  rebuild rule reads the other way: a newest version the owner wrote is
-  refused until `version.confirmedRebuild`, a composed one is free. A save
-  from text onto a composed file is refused until `confirmedRebuild` too.
+  by title (`version`) or onto a file (`version.of`) of the same kind.
+- **The owner's yes is an approval, not a flag.** Since 1.35 any save that
+  rebuilds over a newest version the owner wrote — from text or composed —
+  runs only as an action he approved (the call carries the executor's
+  `actionId`); `version.confirmedRebuild` no longer lets it through, and now
+  only says the owner asked for text onto a composed version. A tool raises
+  the card by deciding its tier per call (`tierFor` → `gated`) when
+  **`files.rebuildCheck({ version, composing? })`** answers `need: 'owner'`;
+  it answers `null`, or `{ need: 'owner'|'asked'|'never', message, fileId,
+  name, version }`, the sentence the agent is told included.
 - **`files.source(id)`**: the program a version was composed from (by a
   version's id), or the newest version's (by a file's id): `{ artifactId,
   fileId, version, kind, library, libraryVersion, nodeVersion, program,
@@ -1022,7 +1029,7 @@ keep its name (no `(vN)` in stored names), and `files.list` takes `latest`
 
 - **`files.get(id)`** (and `read`) take a file's own id too: its newest live
   version.
-- **`confinement`**, always present: `{ kind, argv(work, { readable?, network? }) }`,
+- **`confinement`**, always present: `{ kind, argv(work, { readable?, network?, fork? }) }`,
   the OS sandbox skill scripts run under (the host plugin's, handed in by the
   gateway), for a process a plugin starts; `kind` is `null` where there is none.
 

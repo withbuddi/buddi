@@ -785,13 +785,9 @@ describe('the tailscale row', () => {
 });
 
 describe('checkCompose', () => {
-  it('is ok under both layers, and on Windows under Node alone', () => {
-    expect(checkCompose({ available: true, confinement: 'macos-sandbox', detail: 'inside the macOS sandbox' }, 'darwin')).toEqual({ status: 'ok', detail: 'inside the macOS sandbox' });
-    expect(checkCompose({ available: true, confinement: null, detail: 'permission model only' }, 'win32').status).toBe('ok');
-  });
-  it('warns when Linux lacks bubblewrap, and when compose is off', () => {
-    expect(checkCompose({ available: true, confinement: null, detail: 'permission model only' }, 'linux').detail).toMatch(/install bubblewrap/);
-    expect(checkCompose({ available: false, confinement: null, detail: 'Composed documents are off here: …' }, 'linux')).toEqual({ status: 'warn', detail: 'Composed documents are off here: …' });
+  it('is ok inside an OS sandbox, and a warning with the reason when off', () => {
+    expect(checkCompose({ available: true, confinement: 'macos-sandbox', detail: 'inside the macOS sandbox' })).toEqual({ status: 'ok', detail: 'inside the macOS sandbox' });
+    expect(checkCompose({ available: false, confinement: null, detail: 'Composed documents need an OS sandbox … (Windows support is planned)' })).toEqual({ status: 'warn', detail: 'Composed documents need an OS sandbox … (Windows support is planned)' });
   });
 });
 

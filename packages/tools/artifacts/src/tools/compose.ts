@@ -23,6 +23,7 @@ import { MAX_FOLDER_CHARS, MAX_TITLE_CHARS } from '../document.js';
 import { imageDimensions, renderOffice } from '../extract.js';
 import type { OfficeRender } from '../render.js';
 import { COMPOSE_LIBRARY, libraryClosure, type ComposeKind } from '../compose/libraries.js';
+import { rebuildDescription, rebuildTier } from './rebuild.js';
 import { COMPOSE_LIMITS, composeAvailability, runCompose, type ComposeAttachment, type ComposeErrorCode } from '../compose/sandbox.js';
 
 /** The guides `guide` returns, written for buddi (packages/tools/artifacts/guides). */
@@ -57,7 +58,7 @@ const composeInput = z.object({
   dryRun: z.boolean().optional()
     .describe('Run the program and say what it would make, without saving anything. For trying a layout.'),
   confirmedRebuild: z.boolean().optional()
-    .describe("Only when the newest version is the owner's own (a save in Word, a file he sent): composing replaces it, so ask him first and pass true once he agreed."),
+    .describe("Only when the newest version is the owner's own (a save in Word, a file he sent) and you told him you will replace it: buddi then shows him a card, and saves only if he approves it."),
   source: z.literal(true).optional()
     .describe('With fileId: return the program a composed version was made from, to edit it.'),
   guide: z.enum(COMPOSE_GUIDES).optional()
@@ -107,8 +108,20 @@ const shownConsole = (c: { stdout: string; stderr: string }): { stdout?: string;
   return Object.keys(out).length === 0 ? undefined : out;
 };
 
+/** A guide, with the shared one on type and layout after a docx or pptx guide: one call is enough. */
 async function guideText(name: string): Promise<{ guide: string; text: string }> {
-  return { guide: name, text: await readFile(new URL(`${name}.md`, GUIDES_DIR), 'utf8') };
+  const read = (which: string): Promise<string> => readFile(new URL(`${which}.md`, GUIDES_DIR), 'utf8');
+  const text = name === 'layout' ? await read('layout') : `${await read(name)}\n\n${await read('layout')}`;
+  return { guide: name, text };
+}
+
+/** Conversations already handed the guide with a failed run: it rides along once, on the first. */
+const guided = new Set<string>();
+
+/** The file a compose would write, as the host's save names it. */
+function targetOf(input: ComposeInput): { base: string; ext: string; of?: string } {
+  const base = safeFileName((input.title ?? 'Document').replace(/\s+/g, ' '), MAX_TITLE_CHARS, 'Document');
+  return { base, ext: input.kind ?? 'docx', ...(input.fileId === undefined ? {} : { of: input.fileId }) };
 }
 
 /** The images named, read from Files: only pictures a document can hold, and 20 MB in all. */
@@ -160,6 +173,11 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
   producesArtifacts: true,
   timeoutMs: 120_000,
   input: composeInput,
+  // A card for the owner only when it would replace his own version and the agent says it asked him (`rebuild.ts`).
+  tierFor: async (input, ctx) => (input.program === undefined || input.dryRun === true
+    ? { tier: 'auto' }
+    : rebuildTier(ctx, targetOf(input), true, input.confirmedRebuild)),
+  describe: (input, ctx) => rebuildDescription(ctx, targetOf(input), true, input.program ?? ''),
   async execute(input, ctx) {
     if (input.guide !== undefined) return guideText(input.guide);
     const files = ctx.buddi?.files;
@@ -171,7 +189,7 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
       if (!found) {
         const row = await files.get(input.fileId);
         refuse('invalid', row
-          ? `v${row.version} of ${row.filename ?? 'that file'} was not made by a program (the owner saved it, or artifacts.write made it); read it with artifacts.text, and compose a new version with confirmedRebuild only once the owner agreed`
+          ? `v${row.version} of ${row.filename ?? 'that file'} was not made by a program (the owner saved it, or artifacts.write made it); read it with artifacts.text and write a program that carries its content`
           : `there is no file ${input.fileId} in Files that you can read`);
       }
       return {
@@ -200,7 +218,14 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
       confine: (work, opts) => confinement.argv(work, opts),
       ...(ctx.conversationId === undefined ? {} : { conversationId: ctx.conversationId }),
     });
-    if (!run.ok) refuse(run.code, run.message, run.console);
+    if (!run.ok) {
+      // The first failure in a conversation brings the guide with it, unasked.
+      if ((run.code === 'program_error' || run.code === 'forbidden') && ctx.conversationId && !guided.has(ctx.conversationId)) {
+        guided.add(ctx.conversationId);
+        refuse(run.code, `${run.message}\n\nThe guide, for this and the next run:\n\n${(await guideText(kind)).text}`, run.console);
+      }
+      refuse(run.code, run.message, run.console);
+    }
     const problem = officePackageProblem(run.bytes, kind);
     if (problem) refuse('not_a_package', `what the program returned is not a whole .${kind}: ${problem}. Return ${kind === 'docx' ? 'await Packer.toBuffer(doc)' : "await pres.write({ outputType: 'nodebuffer' })"}.`, run.console);
     const summary = await render(run.bytes, kind);
@@ -214,8 +239,7 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
       };
     }
 
-    const title = (input.title ?? 'Document').replace(/\s+/g, ' ');
-    const base = safeFileName(title, MAX_TITLE_CHARS, 'Document');
+    const { base } = targetOf(input);
     const folder = input.folder === undefined ? undefined : safeFileName(input.folder, MAX_FOLDER_CHARS, '') || undefined;
     const library = COMPOSE_LIBRARY[kind];
     const saved = await files.save({
@@ -226,7 +250,6 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
         base, ext: kind,
         ...(input.fileId === undefined ? {} : { of: input.fileId }),
         ...(input.readVersion === undefined ? {} : { readVersion: input.readVersion }),
-        ...(input.confirmedRebuild === true ? { confirmedRebuild: true } : {}),
       },
       composed: { kind, program: input.program, library, libraryVersion: libraryClosure().versions[library] ?? '', nodeVersion: process.versions.node },
       ...(folder === undefined ? {} : { caption: folder }),

@@ -442,10 +442,12 @@ with its limits), and the reply says the formatting was rebuilt from the
 text, not kept. Text that does not fit the file is refused (a table for a
 Word file). A write never changes a file's format, and:
 
-- a file buddi made (its creator is an agent) is rebuilt freely;
-- a file the owner made or sent is refused until he agreed: the refusal tells
-  the agent to ask him first, and only then to write with
-  `confirmedRebuild: true` (`officeRebuildRefusal`, in core);
+- over a newest version an agent wrote it is rebuilt freely;
+- over one the owner wrote (a file he sent, a save in Word) only with his
+  yes on an approval card: the refusal tells the agent to read it and tell
+  him, and `confirmedRebuild: true` then raises the card; the write runs
+  only as the action he approved (`rebuildNeed`, in core; nothing the model
+  passes is enough);
 - a file whose newest version a program composed is changed by editing that
   program (**Composed documents** below); written from text only once the
   owner asked for it (`confirmedRebuild`);
@@ -522,19 +524,28 @@ returns the file (`Packer.toBuffer(doc)`, `pres.write({ outputType:
 image gets in. `artifacts.view` shows the agent a picture first — upright,
 at most 1568 px on its long side and about 1 MB as a JPEG, as an image beside
 the result, sent once and never stored in the transcript; a model that takes
-no images reads a line saying so in its place.
+no images reads a line saying so in its place. The picture is decoded in a
+worker thread with a 256 MB heap and 15 s, and a PNG's compressed pixels are
+inflated with a cap first — to exactly what its header promises — so a tiny
+file that unpacks into gigabytes is refused before any decoder sees it.
 
 **One save, the same rules.** Title, folder, versions by `fileId`,
 `readVersion` and the conflict refusal are `artifacts.write`'s, through the
 same save (`files.save`, host API 1.35, with `composed`) under the file's
 one lock; the mime never changes and a program for another kind is refused.
-The rebuild rule reads both ways (`officeRebuildRefusal`, in core): a
-composed newest version is composed again freely; one the owner wrote (a
-save in Word, Open in app, a file he sent) is refused until he agreed — the
-refusal names his version so the agent reads it (`artifacts.text`) and
-carries his changes into the program, then passes `confirmedRebuild: true`.
-The other way, `artifacts.write` from text onto a composed file is refused
-with "change it by editing its program", with the same override. `dryRun`
+The rebuild rule reads both ways (`rebuildNeed`, in core), on the newest
+version alone: a composed or an agent's newest version is composed again
+freely; one the owner wrote (a save in Word, Open in app, a file he sent)
+only with his yes on a card. The refusal names his version so the agent
+reads it (`artifacts.text`), carries his changes into the program and tells
+him; `confirmedRebuild: true` then raises the card — "Rebuild <file>? Your
+edits in v3 would be replaced by buddi's program; formatting rebuilt." —
+bound to the file, the version replaced and a hash of the program, and the
+call runs only as the action he approved (a version saved meanwhile changes
+the card's envelope, and nothing is written). The other way,
+`artifacts.write` from text onto a composed file is refused with "change it
+by editing its program"; `confirmedRebuild` there says the owner asked for
+the Markdown rebuild. `dryRun`
 runs the program and stores nothing, for trying a layout; every real run is
 a stored version (the same bytes again are not).
 
@@ -559,49 +570,73 @@ deck the slide size, fonts, each slide's title, text and shape count, and
 × size against the box) to spill out of its box. Nothing is drawn; the owner
 is the eye. The guides end with a checklist the agent reads against it.
 
-**The sandbox.** A child Node, never buddi's own process:
+**The sandbox.** A child Node, never buddi's own process, and only ever
+inside the OS sandbox: Node's permission model is not a boundary by itself
+(Node says so; an SQL `ATTACH` through `node:sqlite`, for one, is outside its
+checks), so it is one layer of several, not the wall.
 
-- `node --permission --allow-fs-read=<work> --allow-fs-read=<library>…
-  --disallow-code-generation-from-strings --max-old-space-size=384
-  run.mjs` (and `--no-experimental-webstorage` on Node 25+). Nothing else is
-  allowed: no `--allow-fs-write`, `--allow-child-process`, `--allow-worker`,
-  `--allow-addons`, `--allow-wasi`, `--allow-inspector`, and no `--allow-net`,
-  so on Node 25 and later the network is denied. No `eval`, no `new Function`.
-- Readable: the run's own folder (`<data>/plugins-data/artifacts/compose/run-<id>/`,
+- **The OS sandbox**, the one skill scripts run under, handed to every
+  plugin as `ctx.buddi.confinement` (host API 1.35): `sandbox-exec` on macOS
+  (network, writes outside the work folder and `process-fork` denied, only
+  the system, Node, the libraries and the work folder readable), bubblewrap
+  `--unshare-all` on Linux (its own namespaces, nothing of the owner's
+  bound). Without one compose does not run.
+- **Node's permission model**: `node --permission --allow-fs-read=<work>
+  --allow-fs-read=<library>… --disallow-code-generation-from-strings
+  --max-old-space-size=384 run.mjs` (and `--no-experimental-webstorage` on
+  Node 25+). Nothing else is allowed: no `--allow-fs-write`,
+  `--allow-child-process`, `--allow-worker`, `--allow-addons`,
+  `--allow-wasi`, `--allow-inspector`, and no `--allow-net`, so on Node 25
+  and later the network is denied here too. No `eval`, no `new Function`.
+  Readable: the run's own folder (`<data>/plugins-data/artifacts/compose/run-<id>/`,
   removed after the run) and the real folders of `docx`, `pptxgenjs` and
   their dependencies, each `realpath`ed so no granted folder holds a link.
-  The runner resolves every import to those folders itself and refuses any
-  other package.
-- Outside, where the computer has one, the skill scripts' OS confinement
-  (`sandbox-exec` on macOS, bubblewrap `--unshare-all` on Linux): network
-  denied, only the system, Node, the libraries and the work folder readable.
-- Limits: 20 s (then SIGKILL), 384 MB of heap, 20 MB back, a 200 KB
-  program; the environment is `PATH` only, no keys. One run at a time per
-  conversation, four in the service. The bytes come back on fd 3, framed, so
-  the console stays text (its tail, 64 KB of each stream, kept).
+- **The runner** resolves every import itself: the program may import only
+  its library, and a program or library only the built-ins `buffer`,
+  `events`, `path`, `stream`, `string_decoder`, `url` and `util` (what docx
+  and pptxgenjs were traced to use). Every other built-in — `fs`, `net`,
+  `child_process`, `worker_threads`, `vm`, `sqlite`, `inspector`, `module`…
+  — is refused; pptxgenjs's own `fs` and `https` imports get a module that
+  refuses when used. Before the program runs it removes
+  `process.getBuiltinModule`, `binding`, `dlopen` and `report`, and the
+  network globals (`fetch`, `WebSocket`…).
+- **Limits**: 20 s on the clock (then the whole process group is killed),
+  30 s of CPU (`ulimit -t`), 384 MB of heap, and — because the heap limit
+  does not count Buffers — the group's resident memory sampled every 100 ms
+  (`ps` on macOS, `/proc` on Linux) and the group killed past 512 MB; on
+  Linux a 1 GB data limit too (`ulimit -d`). A 200 KB program, 20 MB back;
+  the environment is `PATH` only, no keys. One run at a time per
+  conversation, four in the service.
+- **What comes back** on fd 3 is one frame, checked before it is believed:
+  `B` and the file's bytes, or `E` and an error object of short strings.
+  Anything else — a program can write fd 3 itself — is the program's error,
+  never a fault in buddi. The console stays text (its tail, 64 KB of each
+  stream, kept).
 - Errors come back to the agent as one line it can act on — `program_error`
   (the message, and the program's own frames as `program.mjs:line:col`),
-  `forbidden` (what it tried: write a file, use the network, start a
-  process…), `timeout`, `memory`, `too_large`, `not_a_package`, `unavailable`
-  — with no path of buddi's. After two failed runs the agent writes the
+  `forbidden` (what it tried: load `node:fs`, write a file, use the
+  network…), `timeout`, `memory`, `too_large`, `not_a_package`,
+  `unavailable` — with no path of buddi's. The conversation's first failed
+  run brings the guide with it. After two failed runs the agent writes the
   document with `artifacts.write` format `docx` and says so.
 
-**Platforms.** macOS: both layers. Linux: both with bubblewrap; without it,
-the Node layer alone on Node 25+ (the doctor suggests installing
-bubblewrap). Windows: the Node layer alone, which on Node 26 (buddi.app and
-the Windows installer carry 26.11.1) denies files, processes and the
-network; Node's permission model is not an OS sandbox, which is why it is
-not run alone on older Node. With neither an OS layer nor a Node that denies
-the network — an npm install on Node 22 or 24 without one — compose is off:
-the tool refuses with the reason and `buddi doctor`'s **compose** row says
-it. Compose needs Node 22.15 or newer (`module.registerHooks`).
+**Platforms.** macOS: runs (sandbox-exec). Linux: runs with bubblewrap;
+without it compose is off and the doctor says to install it. Windows: off —
+there is no OS sandbox buddi can use there without administrator rights;
+Windows support is planned. Only a Node with this year's permission-model
+security fixes runs it: 22.23.2, 24.18.1 or 26.5.1 and later on those lines
+(the July 2026 releases: CVE-2026-58043, -58039, -56847), or a later line;
+buddi.app and the installers carry 26.11.1. Off, the tool refuses with the
+reason and `buddi doctor`'s **compose** row says it.
 
 **What agents are told.** The tool's description and, once per turn, the
 files policy: compose a designed or "professional" document, keep plain
 notes in Markdown, change a composed file by reading and editing its
 program, and fall back to `artifacts.write` format `docx` after two failed
 runs. The guides (`packages/tools/artifacts/guides/`: docx, pptx, layout)
-are fetched with `{ guide }`, never put in the prompt. Tier `auto`, granted
+are fetched with `{ guide }` (a docx or pptx guide comes with the layout
+one), never put in the prompt, and the first failed run in a conversation
+brings its guide unasked. Tier `auto`, granted
 per agent: the first assistant holds it through `artifacts.*`; the
 catalogue's Writer, Chief of Staff and CFO name `artifacts.compose` and
 `artifacts.view` in their entries (buddi-market).

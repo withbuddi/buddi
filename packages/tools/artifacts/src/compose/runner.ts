@@ -42,9 +42,11 @@ function report(err, extra) {
   const e = err instanceof Error ? err : new Error(String(err));
   // fetch() says "fetch failed" and keeps why in its cause.
   const denied = e.code === 'ERR_ACCESS_DENIED' ? e : e.cause && e.cause.code === 'ERR_ACCESS_DENIED' ? e.cause : null;
+  const text = (value) => (typeof value === 'string' ? value.slice(0, 16384) : undefined);
   frame('E', Buffer.from(JSON.stringify({
-    name: e.name, message: String(e.message), code: denied ? denied.code : e.code, permission: denied ? denied.permission : e.permission,
-    stack: String(e.stack ?? ''), ...extra,
+    name: text(e.name), message: text(String(e.message)), code: text(denied ? denied.code : e.code),
+    permission: text(denied ? denied.permission : e.permission), builtin: text(denied ? denied.builtin : undefined),
+    stack: text(String(e.stack ?? '')), ...extra,
   })));
 }
 
@@ -55,9 +57,30 @@ function ownerOf(parentURL) {
   for (const dir of dirs) if (file === dir || file.startsWith(dir + path.sep)) return dir;
   return null;
 }
+// The built-ins a program and its library may load: what docx and pptxgenjs were traced to need, and
+// nothing that reaches outside (no fs, net, child_process, worker_threads, vm, sqlite, inspector, module…).
+const BUILTINS = new Set(plan.builtins);
+// pptxgenjs imports fs and https at every write, to read images by path or URL; it gets a module that refuses.
+const STUBBED = new Set(['fs', 'https']);
+const STUB = 'buddi-stub:';
+function refusedBuiltin(name) {
+  const err = new Error('a compose program may not load node:' + name);
+  err.code = 'ERR_ACCESS_DENIED';
+  err.permission = 'Builtin';
+  err.builtin = name;
+  return err;
+}
 registerHooks({
   resolve(specifier, context, next) {
-    if (isBuiltin(specifier) || specifier.startsWith('.') || path.isAbsolute(specifier) || /^[a-z][a-z0-9+.-]+:/i.test(specifier)) {
+    if (isBuiltin(specifier)) {
+      const name = specifier.replace(/^node:/, '');
+      const root = name.split('/')[0];
+      if (BUILTINS.has(root)) return next(specifier, context);
+      const owner = ownerOf(context.parentURL);
+      if (owner !== null && owner === plan.top.pptxgenjs && STUBBED.has(name)) return { url: STUB + name, shortCircuit: true };
+      throw refusedBuiltin(name);
+    }
+    if (specifier.startsWith('.') || path.isAbsolute(specifier) || /^[a-z][a-z0-9+.-]+:/i.test(specifier)) {
       return next(specifier, context);
     }
     const name = specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0];
@@ -65,7 +88,7 @@ registerHooks({
     const dir = owner === null ? plan.top[name] : plan.deps[owner][name];
     if (!dir) {
       const err = new Error(owner === null
-        ? 'a compose program can import only ' + Object.keys(plan.top).join(' or ') + ' (and node: built-ins), not "' + name + '"'
+        ? 'a compose program can import only ' + Object.keys(plan.top).join(' or ') + ' (and a few node: built-ins: ' + plan.builtins.join(', ') + '), not "' + name + '"'
         : "Cannot find package '" + name + "'");
       err.code = 'ERR_MODULE_NOT_FOUND';
       throw err;
@@ -75,7 +98,29 @@ registerHooks({
     if (context.conditions && context.conditions.includes('require')) return next(sub ? path.join(dir, sub) : dir, context);
     return next(specifier, { ...context, parentURL: pathToFileURL(path.join(dir, 'package.json')).href });
   },
+  load(url, context, next) {
+    if (url.startsWith(STUB)) {
+      const name = url.slice(STUB.length);
+      return {
+        format: 'module', shortCircuit: true,
+        source: 'const refuse = () => { throw new Error("a compose program cannot read files or the network; images come in ctx.files"); };\n'
+          + 'const stub = new Proxy({}, { get: (_t, key) => key === "then" ? undefined : refuse });\n'
+          + 'export default stub;\nexport const promises = stub;\n// node:' + name + '\n',
+      };
+    }
+    return next(url, context);
+  },
 });
+
+// What reaches around the resolver goes before the program runs: built-ins by name, native bindings,
+// addons, the diagnostic report (it writes files), and the network globals.
+for (const key of ['getBuiltinModule', 'binding', '_linkedBinding', 'dlopen', 'report', 'mainModule']) {
+  try { delete process[key]; } catch { /* not configurable */ }
+  try { if (key in process) Object.defineProperty(process, key, { value: undefined, configurable: false, writable: false }); } catch { /* kept */ }
+}
+for (const key of ['fetch', 'WebSocket', 'EventSource', 'XMLHttpRequest', 'Request', 'Response', 'Headers']) {
+  try { delete globalThis[key]; } catch { /* not configurable */ }
+}
 
 process.on('unhandledRejection', (err) => { report(err); process.exit(1); });
 process.on('uncaughtException', (err) => { report(err); process.exit(1); });
