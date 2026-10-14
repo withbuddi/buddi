@@ -71,7 +71,6 @@ import { useLostLink } from './shell/Unreachable';
 import { useRestart } from './shell/Restarting';
 import { buildDiffers } from './build';
 import { BUILD_CHECK_MS, useAutoReload, useCheckOnReconnect } from './shell/freshness';
-import { useStaleNotice } from './shell/stale-chunk';
 import { FORMATS_CHANGED, setDisplayFormats } from './format';
 import type { OnboardingPhase } from './views/parts/WakesAfterRestart';
 
@@ -431,8 +430,7 @@ export function App(): JSX.Element {
     version: version ? { current: version.current, latest: version.latest, updateAvailable: !version.checkout && version.updateAvailable } : undefined,
     timezone,
   };
-  const updated = useStaleNotice();
-  const banners = shellBanners({ recovery: recovery.data?.active === true, lost: lost && !restarting, paused: badges.paused, updated });
+  const banners = shellBanners({ recovery: recovery.data?.active === true, lost: lost && !restarting, paused: badges.paused });
 
   const welcome = parseWelcomeRoute(hash);
   const place = placeOf(hash);

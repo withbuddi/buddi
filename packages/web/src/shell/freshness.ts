@@ -15,9 +15,21 @@
  * A page reloads on its own at most once per served build (kept in
  * `sessionStorage`), so a browser that keeps serving the old bundle from a
  * cache cannot loop.
+ *
+ * A part of the page that failed to load late (a chunk Vite reports, a
+ * `loadChunk` caller, a worker that never started) is only a hint: an update
+ * deletes the old build's chunks, but so does nothing else, and a network blip
+ * or a broken module looks the same from here. `confirmUpdate` asks the
+ * gateway at once. A different build is the update above, with one
+ * difference: the page is already broken, so it reloads now rather than after
+ * a minute idle — unless something is in progress, when the avatar's "Reload
+ * to update" is the notice and the idle rule takes over. The same build is an
+ * ordinary failure: no reload, and the caller's own fallback stands.
  */
 import { useEffect, useRef } from 'react';
+import { api } from '../api';
 import { buildDiffers, WEB_BUILD } from '../build';
+import { hasUnsavedEdits } from '../canvas/file-drafts';
 
 /** How often the shell asks which build is served. */
 export const BUILD_CHECK_MS = 5 * 60_000;
@@ -29,6 +41,8 @@ export const SAFE_RECHECK_MS = 5_000;
 export const STREAM_RECONNECTED = 'buddi:stream-reconnected';
 /** The served build this tab already reloaded for, once. */
 export const AUTO_RELOAD_KEY = 'buddi.autoReloadedFor';
+/** Said on `window` when a part of the page failed to load and the gateway said a new build is served: the shell reads the version again. */
+export const UPDATE_CONFIRMED = 'buddi:update-confirmed';
 
 /** Tell the shell the live stream is back (`useAttention`'s stream calls this). */
 export function announceReconnect(): void {
@@ -71,10 +85,12 @@ export function setLastActivityForTests(at: number): void {
 /**
  * Something on the page would be lost by a reload: a composer with text or
  * files in it (Home, the chat, the dock: each marks itself `data-busy`), a
- * recording, or an open sheet or dialog.
+ * recording, an open sheet or dialog, or a file edited on the canvas and not
+ * yet saved.
  */
 export function somethingInProgress(doc: Document = document): boolean {
   return (
+    hasUnsavedEdits() ||
     doc.querySelector('.wb-composer[data-busy="true"]') !== null ||
     doc.querySelector('.wb-listening, [data-recording="true"]') !== null ||
     doc.querySelector('[role="dialog"], [role="alertdialog"], dialog[open]') !== null
@@ -103,15 +119,78 @@ function rememberReloadFor(served: string): void {
   }
 }
 
-/** Ask again for the served build whenever the live stream comes back. */
+/** Ask again for the served build whenever the live stream comes back, or a failed load turned out to be an update. */
 export function useCheckOnReconnect(check: () => void): void {
   const latest = useRef(check);
   latest.current = check;
   useEffect(() => {
     const onReconnect = (): void => latest.current();
     window.addEventListener(STREAM_RECONNECTED, onReconnect);
-    return () => window.removeEventListener(STREAM_RECONNECTED, onReconnect);
+    window.addEventListener(UPDATE_CONFIRMED, onReconnect);
+    return () => {
+      window.removeEventListener(STREAM_RECONNECTED, onReconnect);
+      window.removeEventListener(UPDATE_CONFIRMED, onReconnect);
+    };
   }, []);
+}
+
+/* ---- a part of the page that would not load ---- */
+
+/** What `confirmUpdate` reads and does; tests swap them. */
+export const updateDeps = {
+  served: (): Promise<string | undefined> => api.version().then((version) => version.web),
+  reload: (): void => window.location.reload(),
+  own: (): string | undefined => WEB_BUILD,
+};
+
+let asking: Promise<boolean> | null = null;
+
+/**
+ * A late load failed: is that because a new build is served? Yes → reload now
+ * (once for that build) or, with something in progress, leave it to the
+ * avatar's notice. No, or the gateway cannot say → false, and nothing moves.
+ * Every hint at once shares one question.
+ */
+export function confirmUpdate(): Promise<boolean> {
+  asking ??= (async () => {
+    let served: string | undefined;
+    try { served = await updateDeps.served(); } catch { return false; }
+    if (!buildDiffers(served, updateDeps.own()) || served === undefined) return false;
+    window.dispatchEvent(new Event(UPDATE_CONFIRMED));
+    if (!alreadyReloadedFor(served) && !somethingInProgress()) {
+      rememberReloadFor(served);
+      updateDeps.reload();
+    }
+    return true;
+  })().finally(() => { asking = null; });
+  return asking;
+}
+
+/** A chunk of this build that could not be loaded because an update replaced it. */
+export class ChunkLoadError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'A part of the page could not be loaded', { cause });
+    this.name = 'ChunkLoadError';
+  }
+}
+
+export function isChunkLoadError(error: unknown): error is ChunkLoadError {
+  return error instanceof ChunkLoadError;
+}
+
+/** Load a chunk; when it fails and an update is why, the caller gets a `ChunkLoadError`, otherwise the failure as it was. */
+export function loadChunk<T>(load: () => Promise<T>): Promise<T> {
+  return load().catch(async (error: unknown) => {
+    throw (await confirmUpdate()) ? new ChunkLoadError(error) : error;
+  });
+}
+
+/** Vite's own report of a chunk it could not load is a hint too. Once, from `main.tsx`. */
+export function watchChunkFailures(): () => void {
+  // Not prevented: the import still rejects, so its caller's fallback stands if the page stays.
+  const onError = (): void => { void confirmUpdate(); };
+  window.addEventListener('vite:preloadError', onError);
+  return () => window.removeEventListener('vite:preloadError', onError);
 }
 
 /**

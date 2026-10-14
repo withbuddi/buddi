@@ -54,12 +54,12 @@ export async function computeSheet(bytes: ArrayBuffer, post: (message: SheetMess
 }
 
 /** Why a calculation ended without values. */
-export type SheetStop = 'too-large' | 'failed' | 'gone';
+export type SheetStop = 'too-large' | 'failed' | 'unstarted';
 
 export interface SheetJob {
   /** The read workbook, or null when it could not be read. */
   model: Promise<WorkbookModel | null>;
-  /** The calculation, or `too-large` when it was ended at the deadline, `failed` when it broke, `gone` when its worker's script is (an update replaced it). */
+  /** The calculation, or `too-large` when it was ended at the deadline, `failed` when it broke, `unstarted` when its worker never ran (a hint its script is gone in an update). */
   computed: Promise<SheetComputed | SheetStop>;
   cancel(): void;
 }
@@ -112,8 +112,8 @@ export function runSheetJob(bytes: ArrayBuffer, opts: { timeoutMs?: number; make
   };
   worker.onerror = (event) => {
     clearTimeout(timer);
-    // A worker that never started (no message yet, and no error of its own to report) is a script this build no longer has.
-    stop(!heard && !(typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent && event.message) ? 'gone' : 'failed');
+    // A worker that never started (no message yet, no error of its own to report): its script may be gone in an update.
+    stop(!heard && !(typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent && event.message) ? 'unstarted' : 'failed');
   };
   // A copy, so the page keeps its bytes for read-excel-file.
   const copy = bytes.slice(0);

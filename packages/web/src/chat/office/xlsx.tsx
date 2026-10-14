@@ -16,7 +16,7 @@ import {
   cellKey, columnName, conditionalStyles, formatCell, valueOf,
   type BorderEdge, type CellStyle, type SheetModel, type WorkbookModel,
 } from '@buddi/core/sheet';
-import { onStaleChunk } from '../../shell/stale-chunk';
+import { confirmUpdate } from '../../shell/freshness';
 import { runSheetJob, type SheetComputed } from './sheet-job';
 import readExcelFile from 'read-excel-file/browser';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
@@ -94,9 +94,10 @@ export default function XlsxPreview({ bytes }: OfficeViewerProps): JSX.Element {
     const job = runSheetJob(bytes);
     void job.model.then((read) => { if (!cancelled && read) setModel(read); });
     void job.computed.then((out) => {
-      // The sheet engine's script is gone (an update): the values stand without it, and the page reloads onto the new build when it may.
-      if (out === 'gone') { onStaleChunk(); return; }
-      if (!cancelled && out !== 'failed') setComputed(out);
+      if (cancelled) return;
+      // The sheet engine never started: the values stand without it, and the shell asks whether an update is why.
+      if (out === 'unstarted') { void confirmUpdate(); return; }
+      if (out !== 'failed') setComputed(out);
     });
     return () => { cancelled = true; job.cancel(); };
   }, [bytes]);

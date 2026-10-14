@@ -4,8 +4,8 @@ import { App } from './App';
 import { registerWorker } from './serviceWorker';
 import { BootGate } from './shell/Unreachable';
 import { RestartGate } from './shell/Restarting';
+import { watchChunkFailures } from './shell/freshness';
 import { LockGate } from './shell/lock';
-import { watchStaleChunks } from './shell/stale-chunk';
 import { ConnectionCallback } from './views/ConnectionCallback';
 import '@fontsource-variable/dm-sans/standard.css';
 import '@fontsource-variable/dm-sans/standard-italic.css';
@@ -23,6 +23,6 @@ if (root) {
   );
 }
 
-// A tab from before an update reloads onto the new build when a chunk it asks for is gone.
-watchStaleChunks();
+// A late chunk that will not load may mean an update: the shell asks (shell/freshness.ts).
+watchChunkFailures();
 registerWorker();

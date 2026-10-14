@@ -13,7 +13,7 @@
 import { useEffect, useState, type ComponentType } from 'react';
 import { OFFICE_PREVIEW_BYTES, officePackageProblem, type OfficeKind } from '@buddi/core/office-files';
 import { Empty, Notice } from '../ui';
-import { isChunkLoadError, loadChunk } from '../shell/stale-chunk';
+import { isChunkLoadError, loadChunk } from '../shell/freshness';
 import { previewUrl } from './attachments';
 
 export interface OfficeViewerProps {
@@ -35,7 +35,7 @@ type State =
   /** Past the package limits, or not a whole package: never handed to a parser. */
   | { phase: 'refused'; why: string }
   | { phase: 'failed' }
-  /** The renderer's chunk is gone: the page is from before an update, the file is fine. */
+  /** The renderer's chunk is gone because a new build is served: the file is fine. */
   | { phase: 'stale' };
 
 export function OfficePreview({ artifactId, filename, kind }: { artifactId: string; filename: string | null; kind: OfficeKind }): JSX.Element {
@@ -63,7 +63,7 @@ export function OfficePreview({ artifactId, filename, kind }: { artifactId: stri
   if (state.phase === 'loading') return <div className="file-preview"><Empty>Loading preview…</Empty></div>;
   if (state.phase === 'too-large') return <Notice>This file is over {Math.round(OFFICE_PREVIEW_BYTES / 1024 / 1024)} MB, too large to preview here. Download it to open it.</Notice>;
   if (state.phase === 'refused') return <Notice>This file can’t be previewed: {state.why}. Download it to open it.</Notice>;
-  if (state.phase === 'stale') return <Notice>This part of buddi was updated. Reload the page to see the preview.</Notice>;
+  if (state.phase === 'stale') return <Notice>buddi was updated. Reload to see the preview.</Notice>;
   if (state.phase === 'failed') return <Notice>The preview could not be loaded. Download the file to open it.</Notice>;
   const { Viewer, bytes } = state;
   return <div className="file-preview file-preview-office" data-kind={kind}><Viewer bytes={bytes} name={filename ?? 'File'} /></div>;
