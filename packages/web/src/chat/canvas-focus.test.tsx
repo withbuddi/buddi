@@ -118,6 +118,70 @@ describe('the Canvas with a live page', () => {
   });
 });
 
+describe('a file the turn made, at the end of the turn', () => {
+  const FILE = '11111111-1111-4111-8111-111111111111';
+  const V1 = '22222222-2222-4222-8222-222222222222';
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const composed = (when: number): ChatMessage[] => [
+    { id: 'x-use', role: 'assistant', at: at(when), blocks: [{ type: 'tool_use', id: 'x1', name: 'artifacts.compose', input: { kind: 'xlsx', title: 'Trip budget', program: '…' } }] },
+    { id: 'x-result', role: 'user', at: at(when), blocks: [{ type: 'tool_result', toolUseId: 'x1', name: 'artifacts.compose', ok: true,
+      output: { artifactId: V1, fileId: FILE, version: 1, filename: 'Trip budget.xlsx', mime: XLSX, sizeBytes: 9_000 },
+      files: [{ artifactId: V1, fileId: FILE, version: 1, filename: 'Trip budget.xlsx', mime: XLSX, deleted: false, fileDeleted: false }], fileResult: true }] },
+  ];
+  const event = (name: string): void => { act(() => streams.at(-1)!({ id: name, name, data: {} } as ChatEvent)); };
+  beforeEach(() => {
+    vi.spyOn(api, 'file').mockResolvedValue({
+      file: { id: FILE, name: 'Trip budget.xlsx', mime: XLSX, conversationId: 'c1', origin: 'document', createdBy: 'keeper' },
+      current: { fileId: FILE, version: 1, artifactId: V1, sha256: 'x', createdBy: 'keeper', createdByName: 'Keeper' },
+      versions: [], entry: null, contexts: [], contextsTotal: 0, contextsOffset: 0, available: true,
+    } as never);
+  });
+
+  it('comes to the front over the Page when the run finishes; mid-run it waits behind with a dot', async () => {
+    transcript = [said('Make me a trip budget', 0)];
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    await pageInFront();
+    event('run.started');
+    await lands(composed(3), 'x1');
+    const sheet = await screen.findByRole('tab', { name: /Trip budget\.xlsx/ });
+    expect(sheet).toHaveAttribute('data-state', 'inactive');
+    expect(sheet).toHaveAttribute('data-unread', 'true');
+    expect(screen.getByRole('tab', { name: 'Page' })).toHaveAttribute('data-state', 'active');
+    event('run.finished');
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Trip budget\.xlsx/ })).toHaveAttribute('data-state', 'active'));
+    expect(screen.getByRole('tab', { name: /Trip budget\.xlsx/ })).not.toHaveAttribute('data-unread');
+  });
+
+  it('stays behind when the owner picked a tab this turn: his choice wins', async () => {
+    transcript = [said('Make me a trip budget', 0)];
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    await pageInFront();
+    event('run.started');
+    await lands(composed(3), 'x1');
+    // He looks at the sheet, then goes back to the Page.
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: /Trip budget\.xlsx/ }), { button: 0, ctrlKey: false });
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Trip budget\.xlsx/ })).toHaveAttribute('data-state', 'active'));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Page' }), { button: 0, ctrlKey: false });
+    await pageInFront();
+    event('run.finished');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByRole('tab', { name: 'Page' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('tab', { name: /Trip budget\.xlsx/ })).toHaveAttribute('data-state', 'inactive');
+  });
+
+  it('leaves a list a turn ended on behind the Page: only a file comes forward', async () => {
+    transcript = [said('Which logins do I have?', 0)];
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    await pageInFront();
+    event('run.started');
+    await lands(call('l1', 'shed.saved_logins', {}, rows, 2), 'l1');
+    await screen.findByRole('tab', { name: 'Shed · Saved logins' });
+    event('run.finished');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByRole('tab', { name: 'Page' })).toHaveAttribute('data-state', 'active');
+  });
+});
+
 describe('the Canvas with no live page', () => {
   it('follows the work as before: a list takes the front', async () => {
     vi.mocked(api.browser).mockResolvedValue(idle);

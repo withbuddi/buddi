@@ -856,9 +856,46 @@ export function ChatPage({
    * is a sheet the owner opens; the canvas inside it follows the work as
    * before.
    */
+  /*
+   * One exception, at the end of a turn: the file the turn made. When the run
+   * finishes, the newest substantial tab takes the front over the Page if it
+   * is a file a call wrote (its file tab; the owner's own click opens one
+   * unsubstantial, so never that) whose newest version is from this turn —
+   * what he asked for, done — unless he picked a tab himself this turn: his
+   * choice wins. Mid-turn a file still opens behind, with a dot.
+   */
+  const picksAtTurnStart = useRef(ownerPicks);
+  useEffect(() => {
+    picksAtTurnStart.current = ownerPicks;
+    // Only when a turn starts: his picks after that are his choice for this turn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnStartedAt]);
   const holdPage = liveBrowser !== null && !narrow;
-  const takesFront = useCallback((item: Renderable | undefined): boolean =>
-    item !== undefined && (!holdPage || item.source === 'canvas'), [holdPage]);
+  const takesFront = useCallback((item: Renderable | undefined, atTurnEnd = false): boolean => {
+    if (item === undefined) return false;
+    if (!holdPage || item.source === 'canvas') return true;
+    if (!atTurnEnd || item.source !== 'artifact' || !item.substantial || turnStartedAt === null) return false;
+    const at = item.versions?.at(-1)?.at ?? item.at;
+    return at !== null && Date.parse(at) >= Date.parse(turnStartedAt) && ownerPicks === picksAtTurnStart.current;
+  }, [holdPage, turnStartedAt, ownerPicks]);
+  /** The run has finished and no new one has started: the moment the exception above is read. */
+  const [turnEnded, setTurnEnded] = useState(false);
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (running) setTurnEnded(false);
+    else if (wasRunning.current) setTurnEnded(true);
+    wasRunning.current = running;
+  }, [running]);
+  useEffect(() => { setTurnEnded(false); }, [conversationId]);
+  const frontedAtTurnEnd = useRef<string | null>(null);
+  useEffect(() => {
+    if (!turnEnded || !holdPage || !focusId || frontedAtTurnEnd.current === focusId) return;
+    const candidate = renderables.find((item) => tabStamp(item) === focusId);
+    if (takesFront(candidate, true)) {
+      frontedAtTurnEnd.current = focusId;
+      setActiveTab(focusId);
+    }
+  }, [turnEnded, holdPage, focusId, renderables, takesFront]);
   useEffect(() => {
     if (focusId && focusId !== previousFocus.current) {
       previousFocus.current = focusId;

@@ -358,7 +358,10 @@ The list lives in one place, `packages/web/src/canvas/tab-worthy.ts`.
 **A live page keeps the front.** While an agent has a page open in this
 conversation, the **Page** tab stays in front: nothing the run produces takes
 it away, and a new tab opens behind it with a quiet dot, which clears when you
-open it. Only the agent's own `canvas.show` brings something forward. Without a
+open it. Only the agent's own `canvas.show` brings something forward, and, when
+the run finishes, a file the turn wrote: its file tab comes to the front if its
+newest version is from this turn and you picked no tab yourself during the turn
+(your choice wins; mid-turn it waits behind with its dot). Without a
 live page the canvas follows the work as before: the newest result with
 something in it comes to the front, and anything else that arrives behind the
 tab you are reading wears the dot. On a phone, where the canvas is a sheet you
