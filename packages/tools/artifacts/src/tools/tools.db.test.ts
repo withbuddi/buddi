@@ -96,14 +96,16 @@ suite('artifacts tools (postgres)', () => {
     if (dataDir) await rm(dataDir, { recursive: true, force: true });
   });
 
-  it('registers four auto-tier tools and no migrations', () => {
+  it('registers six auto-tier tools and no migrations', () => {
     expect(manifest.migrationsDir).toBe('');
     const specs = registry.list().filter((s) => s.name.startsWith('artifacts.'));
     expect(specs.map((s) => s.name)).toEqual([
       'artifacts.list',
       'artifacts.describe',
       'artifacts.text',
+      'artifacts.view',
       'artifacts.write',
+      'artifacts.compose',
     ]);
     expect(specs.every((s) => s.tier === 'auto')).toBe(true);
   });

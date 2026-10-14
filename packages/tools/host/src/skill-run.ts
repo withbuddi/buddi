@@ -95,6 +95,8 @@ export interface ConfineOptions {
   interpreter?: string;
   /** The bundle declared `network: true`; otherwise the script has no network. */
   network?: boolean;
+  /** More folders readable, never writable (real paths): the libraries a compose program may load. */
+  readable?: readonly string[];
 }
 
 /** Where an interpreter on PATH is installed (two levels above its real binary), or null. */
@@ -134,7 +136,7 @@ export function confinementArgv(kind: Confinement, work: string, opts: ConfineOp
   if (kind === 'macos-sandbox') {
     const q = (p: string): string => JSON.stringify(p);
     const readable = [...MACOS_READABLE];
-    for (const extra of [home, own, opts.bundle]) if (extra && !covered(extra, readable)) readable.push(extra);
+    for (const extra of [home, own, opts.bundle, ...(opts.readable ?? [])]) if (extra && !covered(extra, readable)) readable.push(extra);
     const profile = [
       '(version 1)',
       '(allow default)',
@@ -152,7 +154,7 @@ export function confinementArgv(kind: Confinement, work: string, opts: ConfineOp
   }
   const bwrap = BWRAP.find((p) => existsSync(p)) ?? 'bwrap';
   const system = [...LINUX_SYSTEM, ...(opts.network ? ['/run/systemd/resolve'] : [])].flatMap((p) => ['--ro-bind-try', p, p]);
-  const extra = [home, own].filter((d): d is string => !!d && !covered(d, LINUX_SYSTEM)).flatMap((d) => ['--ro-bind-try', d, d]);
+  const extra = [home, own, ...(opts.readable ?? [])].filter((d): d is string => !!d && !covered(d, LINUX_SYSTEM)).flatMap((d) => ['--ro-bind-try', d, d]);
   return [bwrap, '--unshare-all', ...(opts.network ? ['--share-net'] : []), '--die-with-parent',
     ...system, ...extra,
     ...(opts.bundle ? ['--ro-bind', opts.bundle, opts.bundle] : []),

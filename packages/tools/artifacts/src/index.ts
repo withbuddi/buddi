@@ -8,12 +8,15 @@
  * over that store — so `migrationsDir` is empty and uninstalling removes tools,
  * not data.
  *
- * The reads are tier `auto`, and so is `artifacts.write`: its only effect is a
- * new file in the owner's own library, credited to the agent that wrote it.
+ * The reads are tier `auto`, and so are `artifacts.write` and
+ * `artifacts.compose`: their only effect is a new file, or a new version of
+ * one, in the owner's own library, credited to the agent that wrote it.
  */
 import type { PluginManifest } from '@buddi/core/plugin';
 import { describe, list, text } from './tools/artifacts.js';
 import { write } from './tools/write.js';
+import { compose } from './tools/compose.js';
+import { view } from './tools/view.js';
 
 /** This plugin ships no migrations: it reads `core.artifacts`. */
 export const MIGRATIONS_DIR = '';
@@ -25,14 +28,18 @@ export const manifest: PluginManifest = {
   // dropped here, which is exactly what an empty migrationsDir means.
   schema: 'core',
   migrationsDir: MIGRATIONS_DIR,
-  tools: [list, describe, text, write],
+  tools: [list, describe, text, view, write, compose],
   uses: ['files:library'],
 };
 
 export default manifest;
 
-export { list, describe, text, write };
+export { list, describe, text, view, write, compose };
 export type { WrittenDocument } from './tools/write.js';
 export * from './document.js';
 export type { ArtifactSummary, ArtifactDescription } from './tools/artifacts.js';
 export * from './extract.js';
+export * from './pixels.js';
+export { COMPOSE_RULE, COMPOSE_GUIDES, type ComposeOutput, type ComposedDocument } from './tools/compose.js';
+export { composeAvailability, COMPOSE_LIMITS, type ComposeAvailability } from './compose/sandbox.js';
+export type { OfficeRender, DocxRender, PptxRender } from './render.js';

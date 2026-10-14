@@ -61,6 +61,9 @@ importers:
       '@buddi/gateway':
         specifier: workspace:*
         version: link:../gateway
+      '@buddi/tool-artifacts':
+        specifier: workspace:*
+        version: link:../tools/artifacts
       '@buddi/tool-email':
         specifier: workspace:*
         version: link:../tools/email
@@ -309,15 +312,30 @@ importers:
       '@buddi/core':
         specifier: workspace:*
         version: link:../../core
+      '@buddi/tool-host':
+        specifier: workspace:*
+        version: link:../host
+      docx:
+        specifier: ^9.8.1
+        version: 9.8.1
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
+      jpeg-js:
+        specifier: ^0.4.4
+        version: 0.4.4
       mammoth:
         specifier: 1.13.0
         version: 1.13.0
       pg:
         specifier: ^8.13.1
         version: 8.23.0
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+      pptxgenjs:
+        specifier: 4.0.1
+        version: 4.0.1
       read-excel-file:
         specifier: 9.3.12
         version: 9.3.12
@@ -334,6 +352,9 @@ importers:
       '@types/pg':
         specifier: ^8.11.10
         version: 8.23.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
@@ -2140,6 +2161,9 @@ packages:
     resolution: {integrity: sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==}
     engines: {node: '>= 14'}
 
+  https@1.0.0:
+    resolution: {integrity: sha512-4EC57ddXrkaF0x83Oj8sM6SLQHAWXw90Skqu2M4AEWENZ3F02dFJE/GARA8igO79tcgYqGrD7ae4f5L3um2lgg==}
+
   iconv-lite@0.6.3:
     resolution: {integrity: sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==}
     engines: {node: '>=0.10.0'}
@@ -2147,6 +2171,11 @@ packages:
   iconv-lite@0.7.3:
     resolution: {integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==}
     engines: {node: '>=0.10.0'}
+
+  image-size@1.2.1:
+    resolution: {integrity: sha512-rH+46sQJ2dlwfjfhCyNx5thzrv+dtmBIhPHk0zgRUukHzZ/kRueTJXoYYsclBaKcSMBWuGbOFXtioLpzTb5euw==}
+    engines: {node: '>=16.x'}
+    hasBin: true
 
   imapflow@2.0.2:
     resolution: {integrity: sha512-jrWWecWFifN3Feum2MqaTUupNeYSAdPEltKuwGdr8IPdxW72NZXf7ObVUfTWoUH2MPrli0q7SZm9pRt8ob/9XQ==}
@@ -2517,6 +2546,9 @@ packages:
     resolution: {integrity: sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==}
     engines: {node: '>=0.10.0'}
 
+  pptxgenjs@4.0.1:
+    resolution: {integrity: sha512-TeJISr8wouAuXw4C1F/mC33xbZs/FuEG6nH9FG1Zj+nuPcGMP5YRHl6X+j3HSUnS1f3at6k75ZZXPMZlA5Lj9A==}
+
   pretty-format@27.5.1:
     resolution: {integrity: sha512-Qb1gy5OrP5+zDf2Bvnzdl3jsTf1qXVMazbvCoKhtKqVs4/YK4ozX4gKQJJVyNe+cajNPn0KoC0MC3FUmaHWEmQ==}
     engines: {node: ^10.13.0 || ^12.13.0 || ^14.15.0 || >=15.0.0}
@@ -2547,6 +2579,9 @@ packages:
   qs@6.16.0:
     resolution: {integrity: sha512-h6fhOIaRrID2CbEY2fqs+7t+UXZo+MLAnU5gRIq85uFtdiUPCdsApMlHhXogKVM4HM2DVbIjGNTTYH2OcmP1vA==}
     engines: {node: '>=0.6'}
+
+  queue@6.0.2:
+    resolution: {integrity: sha512-iHZWu+q3IdFZFX36ro/lKBkSvfkztY5Y7HMiPlOUjhupPcG2JMfst2KKEpu5XndviX/3UhFbRngUPNKtgvtZiA==}
 
   quick-format-unescaped@4.0.4:
     resolution: {integrity: sha512-tYC1Q1hgyRuHgloV/YXs2w15unPVh8qfu/qCTfhTYamaw7fyhumKa2yGpdSo87vY32rIclj+4fWYQXUMs9EHvg==}
@@ -4131,14 +4166,6 @@ snapshots:
     optionalDependencies:
       vite: 5.4.21(@types/node@22.20.2)
 
-  '@vitest/mocker@2.1.9(vite@5.4.21(@types/node@26.6.4))':
-    dependencies:
-      '@vitest/spy': 2.1.9
-      estree-walker: 3.0.3
-      magic-string: 0.30.21
-    optionalDependencies:
-      vite: 5.4.21(@types/node@26.6.4)
-
   '@vitest/pretty-format@2.1.9':
     dependencies:
       tinyrainbow: 1.2.0
@@ -4636,6 +4663,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  https@1.0.0: {}
+
   iconv-lite@0.6.3:
     dependencies:
       safer-buffer: 2.1.2
@@ -4643,6 +4672,10 @@ snapshots:
   iconv-lite@0.7.3:
     dependencies:
       safer-buffer: 2.1.2
+
+  image-size@1.2.1:
+    dependencies:
+      queue: 6.0.2
 
   imapflow@2.0.2:
     dependencies:
@@ -4983,6 +5016,13 @@ snapshots:
     dependencies:
       xtend: 4.0.2
 
+  pptxgenjs@4.0.1:
+    dependencies:
+      '@types/node': 22.20.2
+      https: 1.0.0
+      image-size: 1.2.1
+      jszip: 3.10.2
+
   pretty-format@27.5.1:
     dependencies:
       ansi-regex: 5.0.1
@@ -5012,6 +5052,10 @@ snapshots:
     dependencies:
       es-define-property: 1.0.1
       side-channel: 1.1.1
+
+  queue@6.0.2:
+    dependencies:
+      inherits: 2.0.4
 
   quick-format-unescaped@4.0.4: {}
 
@@ -5469,7 +5513,7 @@ snapshots:
   vitest@2.1.9(@types/node@26.6.4)(jsdom@25.0.1):
     dependencies:
       '@vitest/expect': 2.1.9
-      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@26.6.4))
+      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@22.20.2))
       '@vitest/pretty-format': 2.1.9
       '@vitest/runner': 2.1.9
       '@vitest/snapshot': 2.1.9

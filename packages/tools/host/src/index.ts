@@ -33,6 +33,6 @@ export function createHostManifest(service: HostService = hostService()): Plugin
 }
 export { hostService, HostService, execInput, useSkillBundles, hostWorkspaceDir, holdWorkspaces, commandsRunning, enterWorkspace, workspaceRanConfined, confinedMarkPath, type SkillRunView } from './service.js';
 export { hostShell, type HostShell } from './process.js';
-export { detectConfinement, skillScriptsRunnable, noConfinementReason, type Confinement, type SkillBundles, type SkillBundleView } from './skill-run.js';
+export { confinementArgv, detectConfinement, skillScriptsRunnable, noConfinementReason, type Confinement, type ConfineOptions, type SkillBundles, type SkillBundleView } from './skill-run.js';
 export const manifest = createHostManifest();
 export default manifest;
