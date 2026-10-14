@@ -50,6 +50,30 @@ describe.skipIf(!availability.available)(`a compose program inside ${area.kind ?
     expect((await readdir(path.join(root, 'runs'))).length).toBe(0);
   });
 
+  it('runs a write-excel-file program to a whole workbook through its universal build, within the same built-ins, a sheet past 160 KB too', async () => {
+    const small = await run(`
+      import writeXlsxFile from 'write-excel-file';
+      export default async () => Buffer.from(await (await writeXlsxFile([{ sheet: 'Costs', data: [['Item', 'Cost'], ['Flights', 420], ['Total', { type: 'Formula', value: '=SUM(B2:B2)' }]] }]).toBlob()).arrayBuffer());
+    `, { kind: 'xlsx' });
+    expect(small.ok && officePackageProblem(small.bytes, 'xlsx')).toBeNull();
+    // fflate's async zip would start a worker for a part this big; the runner gives it the library's own sync zip.
+    const big = await run(`
+      import writeXlsxFile from 'write-excel-file/universal';
+      export default async () => {
+        const data = Array.from({ length: 6000 }, (_, i) => ['Row ' + i, i, { type: 'Formula', value: '=B' + (i + 1) + '*2' }]);
+        return Buffer.from(await (await writeXlsxFile(data).toBlob()).arrayBuffer());
+      };
+    `, { kind: 'xlsx' });
+    expect(big.ok && officePackageProblem(big.bytes, 'xlsx')).toBeNull();
+    // Its node and browser builds are not there: they write files, or need a page.
+    for (const sub of ['node', 'browser']) {
+      const out = await refused(`import writeXlsxFile from 'write-excel-file/${sub}'; export default async () => Buffer.from('x');`);
+      expect(out.message, sub).toMatch(new RegExp(`write-excel-file/${sub} is not available to a compose program`));
+    }
+    // A program that returns the Blob is told how to return bytes.
+    expect((await refused(`import writeXlsxFile from 'write-excel-file'; export default async () => writeXlsxFile([['x']]).toBlob();`)).message).toMatch(/Buffer\.from\(await blob\.arrayBuffer\(\)\)/);
+  });
+
   it('refuses the built-ins that reach outside: fs, net, child_process, worker_threads, vm, sqlite, inspector, module', async () => {
     for (const name of ['fs', 'net', 'child_process', 'worker_threads', 'vm', 'sqlite', 'inspector', 'module', 'https', 'dns']) {
       const out = await refused(`import x from 'node:${name}'; export default async () => Buffer.from(String(x));`);
@@ -101,7 +125,7 @@ describe.skipIf(!availability.available)(`a compose program inside ${area.kind ?
 
   it('refuses any package but its library', async () => {
     const out = await refused(`import pako from 'pako'; export default async () => Buffer.from('x');`);
-    expect(out).toMatchObject({ code: 'program_error', message: expect.stringMatching(/can import only docx or pptxgenjs/) });
+    expect(out).toMatchObject({ code: 'program_error', message: expect.stringMatching(/can import only docx or pptxgenjs or write-excel-file/) });
   });
 
   it('stops a program at the deadline', async () => {

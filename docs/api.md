@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-13
+updated: 2026-10-14
 ---
 
 # The HTTP API
@@ -2951,7 +2951,7 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>"
 The program a version was composed from (artifacts.compose), read-only, for Files’ View program.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ fileId, version, artifactId, kind: 'docx'|'pptx', library, libraryVersion, nodeVersion, program, createdAt }`
+- **Answer:** `{ fileId, version, artifactId, kind: 'docx'|'pptx'|'xlsx', library, libraryVersion, nodeVersion, program, createdAt }`
 - **Errors:** 404 no such file or version, or that version was not made by a program
 - **Since:** 0.1.0-pre.55
 

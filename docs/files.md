@@ -414,7 +414,7 @@ dashboard's bundle, never kept by the offline worker:
 | Kind | Renderer | What is drawn |
 | --- | --- | --- |
 | .docx | docx-preview (Apache-2.0), into an `<iframe sandbox="allow-same-origin">` with no scripts | its pages, images inlined; comments, tracked changes and embedded HTML left out |
-| .xlsx | read-excel-file (MIT) and buddi's own table | a tab per sheet, the first 1,000 rows and 50 columns of each as values (text, numbers, dates); styles, number formats and charts not drawn |
+| .xlsx | read-excel-file (MIT) for values, `@buddi/core/sheet` for the look, buddi's own table | a tab per sheet, the first 1,000 rows and 50 columns of each: values, number formats, fonts' weight and colour, fills, borders, alignment, widths, row heights, merges, frozen rows and columns, conditional colour (`cellIs`, `expression`, text rules); a formula without a value computed (**Composed workbooks** below); charts, colour scales and data bars not drawn |
 | .pptx | @silurus/ooxml (MIT; Rust/WASM parser, Canvas 2D), about 1.4 MB gzipped with its parser and worker | slide by slide on a canvas, Previous and Next; its Google Fonts option stays off |
 
 An Office file or a PDF a call made — `artifacts.write { format }` or a
@@ -495,31 +495,34 @@ the page before a previewer parses it, by the server before it extracts text
 Open in app before it imports a save.
 
 Not in this phase: editing in the Canvas, converting to PDF (LibreOffice),
-formulas, charts, comments and tracked changes.
+charts, comments and tracked changes.
 
 ## Composed documents
 
 Markdown through `artifacts.write` is the quick path: notes, drafts,
 anything the owner reads in the chat or edits himself. When he will send,
 print or present it — a letter, an offer, an invoice, a report under his
-name, any deck — or asks for a look, an agent holding `artifacts.compose`
-writes a small JavaScript program against one library and buddi runs it:
-`docx` (MIT) for a Word document, `pptxgenjs` (MIT; 2.6 MB unpacked, its
-only real dependencies jszip and image-size) for a PowerPoint deck. The bytes
+name, any deck, a budget or a model — or asks for a look, an agent holding
+`artifacts.compose` writes a small JavaScript program against one library
+and buddi runs it: `docx` (MIT) for a Word document, `pptxgenjs` (MIT; 2.6
+MB unpacked, its only real dependencies jszip and image-size) for a
+PowerPoint deck, `write-excel-file` (MIT, 4.1.1; 2.7 MB unpacked, its one
+dependency fflate) for an Excel workbook. The bytes
 it returns are the file's next version, and the program is kept beside that
 version, so a later change edits the program and keeps the design.
 
 ```
-artifacts.compose { kind: 'docx'|'pptx', program, title?, fileId?, readVersion?, folder?, attachments?: fileId[], dryRun?, confirmedRebuild? }
+artifacts.compose { kind: 'docx'|'pptx'|'xlsx', program, title?, fileId?, readVersion?, folder?, attachments?: fileId[], dryRun?, confirmedRebuild? }
   → { artifactId, fileId, version, filename, mime, sizeBytes, render, console?, unchanged?, note }
 artifacts.compose { fileId, source: true }  → { fileId, version, artifactId, kind, library, libraryVersion, program, note }
-artifacts.compose { guide: 'docx'|'pptx'|'layout' }  → { guide, text }
+artifacts.compose { guide: 'docx'|'pptx'|'xlsx'|'layout' }  → { guide, text }
 artifacts.view { fileId }  → { id, fileId, version, width, height, shown, note } and the picture, once
 ```
 
 The program is an ES module whose default export, `async (ctx) => bytes`,
 returns the file (`Packer.toBuffer(doc)`, `pres.write({ outputType:
-'nodebuffer' })`). `ctx.files` holds the pictures named in `attachments`
+'nodebuffer' })`, `Buffer.from(await (await writeXlsxFile(sheets,
+options).toBlob()).arrayBuffer())`). `ctx.files` holds the pictures named in `attachments`
 (PNG, JPEG, GIF or BMP from Files, at most ten and 20 MB): the only way an
 image gets in. `artifacts.view` shows the agent a picture first — upright,
 at most 1568 px on its long side and about 1 MB as a JPEG, as an image beside
@@ -567,8 +570,96 @@ heading outline, an estimate of the pages, explicit breaks, tables (rows ×
 columns), pictures, header and footer, and the first 2,000 characters; for a
 deck the slide size, fonts, each slide's title, text and shape count, and
 **warnings** — a shape past the slide's edge, or text estimated (characters
-× size against the box) to spill out of its box. Nothing is drawn; the owner
-is the eye. The guides end with a checklist the agent reads against it.
+× size against the box) to spill out of its box; for a workbook
+(`XlsxRender`) each sheet's name, rows × columns, header row, frozen rows
+and columns, the columns given a width, counts of styled cells, formulas,
+merges and conditional rules, the number formats used, its first 40
+formulas as `{ cell, formula, value }` (the value as the sheet shows it,
+through the preview's formatter) and `errors` — a formula whose value is an
+error, or that buddi could not compute. Nothing is drawn; the owner is the
+eye, and for a sheet the numbers are the check. The guides end with a
+checklist the agent reads against it. A self-check by picture is not in
+this phase.
+
+### Composed workbooks
+
+A program imports `write-excel-file` and the runner resolves it to the
+library's **universal** build (`toBlob()`, fflate only); `write-excel-file/node`
+(node:fs, node:stream) and `/browser` are refused by name. fflate is loaded
+through its plain build, since its Node build reaches for `node:module` and
+worker threads, and the library's async zip is given its own synchronous one
+(fflate would start a worker for a part over 160 KB, and there are none in
+the sandbox), so the built-ins stay the allowlist below. Sheets are rows of
+cell objects: fonts, fills, borders per side, alignment and wrap, number
+formats, widths, row heights, merges, frozen rows and columns, formulas,
+conditional formatting (`cellIs`-style and formula rules), several sheets.
+No charts, data validation, named ranges or pivot tables: the guide says to
+tell the owner.
+
+**The fill.** write-excel-file, like openpyxl, writes a formula and no
+value, so a sheet in Quick Look, Telegram, mail or on a phone would show
+empty totals. After every xlsx compose — and never on an upload, a
+command's output or an owner's save: buddi never changes bytes it did not
+make — the extractor's worker (15 s, 256 MB) runs the sheet engine over the
+workbook and writes each formula's value into the sheet XML (`<v>`, typed
+`t="str"`, `"b"` or `"e"` where it is not a number) and `calcPr
+fullCalcOnLoad="1"` into `workbook.xml`, so Excel and Numbers recompute on
+open: buddi's value is a preview, the app's is the truth. The stored
+version is the filled bytes; the program is kept as written. A formula the
+engine could not compute stays without a value and is named in
+`render.errors`. If the fill itself fails, the program's bytes are kept and
+the preview computes. `artifacts.write format xlsx` has no formulas and is
+untouched.
+
+**The sheet engine**, `@buddi/core/sheet`: one module, browser-safe like
+`office-files`, with two callers, the fill and the preview (the artifacts
+plugin reaches what it uses through `@buddi/core/plugin`, like the Office
+rule).
+
+- `readWorkbook`: every cell's cached value, formula (shared formulas
+  expanded) and format, and per sheet its widths, row heights, frozen pane,
+  merges and conditional rules. `readStyles`: `styles.xml` (number formats,
+  fonts, fills, borders, cell formats, the formats conditional rules apply)
+  and `theme1.xml`'s colour slots with tint, resolved to one style per cell
+  format. read-excel-file stays what reads values and dates for the agent's
+  CSV and the preview's table.
+- `evaluate`: fast-formula-parser (MIT, 1.0.19 pinned; chevrotain, jstat,
+  bessel, bahttext; about 300 KB minified, loaded only when a formula needs
+  computing — in the page its own chunk) over buddi's cell reader, plus
+  buddi's own COUNTA, COUNTBLANK, SUMIFS, COUNTIFS, AVERAGEIFS, MATCH and
+  SUBTOTAL (which skips the subtotals in its range, as Excel does), and
+  never WEBSERVICE. Caps: 20,000 formula cells a workbook, 2 s a sheet.
+  A circular reference is `#REF!`, a function it does not know `#NAME?`,
+  and a formula reading one of those is not computed either; each is listed
+  with its reason. Not HyperFormula (GPL).
+- `formatCell`: ssf (Apache-2.0, 0.11.2, SheetJS's format engine) for
+  `#,##0.00`, `0%`, `[Red]` sections, dates and `[$€-407]`; the one
+  formatter of the preview and the render summary.
+- `conditionalStyles`: `cellIs`, `expression` (its formula moved for each
+  cell, as Excel reads it) and the text rules, in priority order with
+  `stopIfTrue`; colour scales, data bars and icon sets are not drawn.
+
+**The preview** draws the values, then the look over them; a formula
+without a value (an openpyxl file, an upload) is computed in the page and
+the sheet's footer says "Totals calculated by buddi"; a cell it could not
+compute shows its error. The owner's bytes are only read. Fonts stay the
+table's; borders are hairline, 1 px and 2 px for thin, medium and thick;
+widths are characters × 7 px.
+
+**Which tool.** Both tools' descriptions and the turn's files policy carry
+one rule (`SHEET_RULE`): `artifacts.write` format `xlsx` for a flat table
+the owner asked for as a spreadsheet (one sheet, header bold and frozen, no
+formulas); `artifacts.compose` kind `xlsx` for anything with a formula, a
+number format, an input cell or several sheets, or asked as a budget,
+model, tracker, plan or calculator. After two failed runs the agent writes
+the table with `artifacts.write` format `xlsx`, the numbers worked out as
+values, and says so.
+
+**Rebuilding over his numbers.** The rebuild rule is the documents' one. An
+owner's version of a workbook holds the numbers he typed: the refusal tells
+the agent to read it (`artifacts.text`, the values his app saved, as CSV)
+and carry the inputs he changed into the program's data — never a formula's
+result — then `confirmedRebuild` raises the card.
 
 **The sandbox.** A child Node, never buddi's own process, and only ever
 inside the OS sandbox: Node's permission model is not a boundary by itself
@@ -591,14 +682,15 @@ checks), so it is one layer of several, not the wall.
   `--allow-wasi`, `--allow-inspector`, and no `--allow-net`, so on Node 25
   and later the network is denied here too. No `eval`, no `new Function`.
   Readable: the run's own folder (`<data>/plugins-data/artifacts/compose/run-<id>/`,
-  removed after the run) and the real folders of `docx`, `pptxgenjs` and
-  their dependencies, each `realpath`ed so no granted folder holds a link.
+  removed after the run) and the real folders of `docx`, `pptxgenjs`,
+  `write-excel-file` and their dependencies, each `realpath`ed so no granted folder holds a link.
 - **The runner** resolves every import itself, and loads code only from a
   file in the work folder or a granted library (never a `data:` or `blob:`
   URL, which would be `eval` by another name): the program may import only
   its library, and a program or library only the built-ins `buffer`,
   `events`, `path`, `stream`, `string_decoder`, `url` and `util` (what docx
-  and pptxgenjs were traced to use). Every other built-in — `fs`, `net`,
+  and pptxgenjs were traced to use; write-excel-file's universal build
+  needs none). Every other built-in — `fs`, `net`,
   `child_process`, `worker_threads`, `vm`, `sqlite`, `inspector`, `module`…
   — is refused; pptxgenjs's own `fs` and `https` imports get a module that
   refuses when used. Before the program runs it removes
@@ -637,19 +729,22 @@ reason and `buddi doctor`'s **compose** row says it.
 
 **What agents are told.** The tool's description and, once per turn, the
 files policy: compose a designed or "professional" document, keep plain
-notes in Markdown, change a composed file by reading and editing its
-program, and fall back to `artifacts.write` format `docx` after two failed
-runs. The guides (`packages/tools/artifacts/guides/`: docx, pptx, layout)
-are fetched with `{ guide }` (a docx or pptx guide comes with the layout
+notes in Markdown, which tool makes a spreadsheet, change a composed file
+by reading and editing its program, and fall back to `artifacts.write`
+format `docx` (a sheet: `xlsx` with values) after two failed runs. The
+guides (`packages/tools/artifacts/guides/`: docx, pptx, xlsx, layout) are
+fetched with `{ guide }` (a docx, pptx or xlsx guide comes with the layout
 one), never put in the prompt, and the first failed run in a conversation
 brings its guide unasked. Tier `auto`, granted
 per agent: the first assistant holds it through `artifacts.*`; the
 catalogue's Writer, Chief of Staff and CFO name `artifacts.compose` and
 `artifacts.view` in their entries (buddi-market).
 
-Not in this phase: workbooks with styles (xlsx), templates, pixel previews
-or PDFs of composed files, editing them on the Canvas, and merging an
-owner's Word edits back into a program.
+Not in this phase: templates, pixel previews or PDFs of composed files, a
+self-check by picture, charts, data validation, named ranges and pivot
+tables in a workbook, filling values into files buddi did not compose,
+editing them on the Canvas, and merging an owner's Word edits back into a
+program.
 
 ## Files agents download
 

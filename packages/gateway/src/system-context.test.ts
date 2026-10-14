@@ -196,7 +196,17 @@ describe('the files policy', () => {
     expect(said).toContain(COMPOSE_RULE);
     expect(COMPOSE_RULE).toMatch(/designed or "professional" document.*artifacts\.compose.*Markdown/);
     expect(COMPOSE_RULE).toMatch(/source: true/);
-    expect(COMPOSE_RULE).toMatch(/After two failed runs, fall back to artifacts\.write with format docx and tell the owner/);
+    expect(COMPOSE_RULE).toMatch(/After two failed runs of a document, fall back to artifacts\.write with format docx and tell the owner/);
     expect(filesPolicy(['artifacts.write'])).not.toContain(COMPOSE_RULE);
+  });
+
+  it('says which tool makes a spreadsheet, in the turn and in both tools’ descriptions', async () => {
+    const { filesPolicy } = await import('./system-context.js');
+    const { SHEET_RULE, compose, write } = await import('@buddi/tool-artifacts');
+    expect(SHEET_RULE).toMatch(/artifacts\.write format xlsx for a flat table.*no formulas.*artifacts\.compose kind xlsx for anything with a formula, a number format, an input cell or several sheets, or asked as a budget, model, tracker, plan or calculator/);
+    expect(SHEET_RULE).toMatch(/After two failed compose runs for a sheet, write it with artifacts\.write format xlsx, the numbers worked out as values/);
+    expect(filesPolicy(['artifacts.write', 'artifacts.compose']).split(SHEET_RULE)).toHaveLength(2);
+    expect(compose.description).toContain(SHEET_RULE);
+    expect(write.description).toContain(SHEET_RULE);
   });
 });

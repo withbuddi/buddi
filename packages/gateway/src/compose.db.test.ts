@@ -14,6 +14,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ToolRegistry, composeSourceOf, createPool, decideApproval, executeApproved, migrateCore, officePackageProblem, saveArtifact, saveOwnerVersion, testDatabaseUrl } from '@buddi/core/testing';
 import type { CoreToolContext } from '@buddi/core/testing';
 import { composeAvailability, manifest } from '@buddi/tool-artifacts';
+import { cellKey, readWorkbook } from '@buddi/core/sheet';
+import { unzipSync } from 'fflate';
 import { confinementArea } from '@buddi/tool-host';
 
 const databaseUrl = await testDatabaseUrl();
@@ -25,9 +27,10 @@ const GUIDES = path.join(path.dirname(createRequire(import.meta.url).resolve('@b
 const TEST_DB = `buddi_compose_test_${process.pid}`;
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /** The guide's own programs: what an agent is told to start from must run. */
-async function guideBlocks(name: 'docx' | 'pptx'): Promise<string[]> {
+async function guideBlocks(name: 'docx' | 'pptx' | 'xlsx'): Promise<string[]> {
   const text = await readFile(path.join(GUIDES, `${name}.md`), 'utf8');
   return [...text.matchAll(/```js\n([\s\S]*?)```/g)].map((m) => m[1]!);
 }
@@ -84,7 +87,7 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
   });
 
   it('hands out its guides', async () => {
-    for (const guide of ['docx', 'pptx', 'layout']) {
+    for (const guide of ['docx', 'pptx', 'xlsx', 'layout']) {
       const out = await call('artifacts.compose', { guide });
       expect(out.text.split('\n').length).toBeGreaterThan(60);
     }
@@ -218,6 +221,53 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
       const done = await executeApproved(pool, { actionId: asked.actionId, registry, ctx: ctx(), worker: 'w', now: ctx().now() });
       expect(done.ok).toBe(false);
       expect(await versions(letter.fileId)).toBe(9);
+    });
+
+    it('makes a workbook from the xlsx guide’s budget, its formula values filled in before it is stored, and a v2 by fileId', async () => {
+      const program = (await guideBlocks('xlsx')).find((b) => b.includes('Trip to Lisbon'))!;
+      const v1 = await call('artifacts.compose', { kind: 'xlsx', program, title: 'Lisbon budget' });
+      expect(v1).toMatchObject({ version: 1, filename: 'Lisbon budget.xlsx', mime: XLSX });
+      expect(v1.note).toMatch(/Excel or Numbers/);
+      const [summary, costs] = v1.render.sheets;
+      expect(summary).toMatchObject({ name: 'Summary', header: ['Trip to Lisbon', ''], errors: [] });
+      expect(summary.formulas).toEqual([
+        { cell: 'B2', formula: '=Costs!B6', value: '€1,350.00' },
+        { cell: 'B3', formula: '=Costs!C6', value: '€1,389.00' },
+        { cell: 'B4', formula: '=B2-B3', value: '-€39.00' },
+        { cell: 'B5', formula: '=IF(B4<0,"yes","no")', value: 'yes' },
+      ]);
+      expect(costs).toMatchObject({ name: 'Costs', frozen: { rows: 1, cols: 0 }, widths: { A: 18, B: 14, C: 14, D: 14 }, errors: [] });
+      expect(costs.counts).toMatchObject({ formulas: 7, conditionalRules: 1 });
+      expect(costs.numberFormats).toContain('"€"#,##0.00');
+      // The stored bytes are the filled ones: values in the sheets, a recalculation asked for on open.
+      const stored = await bytesOf(v1.artifactId);
+      const parts = unzipSync(new Uint8Array(stored));
+      expect(new TextDecoder().decode(parts['xl/workbook.xml'])).toMatch(/<calcPr[^>]*fullCalcOnLoad="1"/);
+      const book = readWorkbook(new Uint8Array(stored));
+      expect(book.sheets[0]!.cells.get(cellKey(5, 2))).toMatchObject({ formula: 'IF(B4<0,"yes","no")', value: 'yes', hasValue: true });
+      expect(book.sheets[1]!.cells.get(cellKey(6, 3))).toMatchObject({ value: 1389, hasValue: true });
+      // The agent's read sees the values too, as any app does.
+      const text = await call('artifacts.text', { id: v1.artifactId });
+      expect(text.text).toMatch(/Budget,1350/);
+      // The program is kept as written; v2 edits it.
+      expect((await call('artifacts.compose', { fileId: v1.fileId, source: true })).program).toBe(program);
+      const v2 = await call('artifacts.compose', { kind: 'xlsx', program: program.replace("['Hotel', 600, 560]", "['Hotel', 650, 560]"), fileId: v1.fileId });
+      expect(v2).toMatchObject({ fileId: v1.fileId, version: 2 });
+      expect(v2.render.sheets[0].formulas[0]).toEqual({ cell: 'B2', formula: '=Costs!B6', value: '€1,400.00' });
+
+      // He types his own numbers in Excel and saves: composing again carries his inputs into the program, with his yes.
+      const saved = await saveOwnerVersion(pool, { fileId: v1.fileId, bytes: Buffer.concat([await bytesOf(v2.artifactId), Buffer.from(' ')]), base: 2 });
+      expect(saved.ok && saved.row.version).toBe(3);
+      expect(await refusal('artifacts.compose', { kind: 'xlsx', program, fileId: v1.fileId, readVersion: 3 }))
+        .toMatch(/v3 of Lisbon budget\.xlsx is the owner's own version.*artifacts\.text.*carry the inputs he typed into the program's data \(never into formula results/);
+    });
+
+    it('tells an agent whose sheet program fails to fall back to a table with values', async () => {
+      const message = await refusal('artifacts.compose', { kind: 'xlsx', program: `import writeXlsxFile from 'write-excel-file';\nexport default async () => { throw new Error('no'); };`, title: 'Broken sheet' });
+      expect(message).toMatch(/^program_error: no/);
+      expect(message).toMatch(/artifacts\.write format xlsx instead, the numbers worked out as values/);
+      expect(await refusal('artifacts.compose', { kind: 'xlsx', program: `export default async () => Buffer.from('x');`, title: 'Broken sheet' }))
+        .toMatch(/not a whole \.xlsx.*Buffer\.from\(await \(await writeXlsxFile/);
     });
 
     it('runs the docx guide’s letter as it is', async () => {

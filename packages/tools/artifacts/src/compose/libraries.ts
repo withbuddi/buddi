@@ -3,8 +3,8 @@
  * be read from (docs/files.md, "Composed documents").
  *
  * A program imports exactly one name — `docx` for a Word document,
- * `pptxgenjs` for a deck — and those packages import their own
- * dependencies. The child Node is granted read access to those package
+ * `pptxgenjs` for a deck, `write-excel-file` for a workbook — and those
+ * packages import their own dependencies. The child Node is granted read access to those package
  * folders and nothing else, each one `realpath`ed: a granted folder never
  * holds a link (a link inside a granted path is the permission model's
  * documented hole), and a pnpm install's symlinked `node_modules` are never
@@ -15,10 +15,10 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export type ComposeKind = 'docx' | 'pptx';
+export type ComposeKind = 'docx' | 'pptx' | 'xlsx';
 
 /** The one library each kind is written against. */
-export const COMPOSE_LIBRARY: Readonly<Record<ComposeKind, string>> = { docx: 'docx', pptx: 'pptxgenjs' };
+export const COMPOSE_LIBRARY: Readonly<Record<ComposeKind, string>> = { docx: 'docx', pptx: 'pptxgenjs', xlsx: 'write-excel-file' };
 
 /** Where every allowed package and its dependencies are, as the runner reads it. */
 export interface LibraryClosure {
@@ -51,7 +51,7 @@ function readManifest(dir: string): { name?: string; version?: string; dependenc
 let cached: LibraryClosure | null = null;
 
 /**
- * The closure of `docx` and `pptxgenjs` as installed beside this package.
+ * The closure of every `COMPOSE_LIBRARY` as installed beside this package.
  * Type-only packages (`@types/*`) are skipped; a dependency that is not
  * installed (an optional one) is left out.
  */

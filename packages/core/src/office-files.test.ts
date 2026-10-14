@@ -59,7 +59,14 @@ describe('rebuilding an Office file', () => {
   it('composing decides on the newest version’s author alone', () => {
     expect(officeRebuildRefusal({ ...docx, createdBy: 'owner' }, { composing: true, newest: newest('writer') })).toBeNull();
     expect(officeRebuildRefusal({ ...docx, createdBy: 'owner' }, { composing: true, newest: newest('owner', true) })).toBeNull();
-    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { composing: true, newest: newest('owner') })).toMatch(/owner's own version/);
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { composing: true, newest: newest('owner') })).toMatch(/owner's own version.*carry his changes into the program/);
+  });
+  it('composing over the owner’s workbook carries the numbers he typed into the program’s data, not its results', () => {
+    const sheet = { name: 'Budget.xlsx', mime: OFFICE_MIME.xlsx, createdBy: 'writer' };
+    expect(officeRebuildRefusal(sheet, { composing: true, newest: newest('owner') }))
+      .toMatch(/v3 of Budget\.xlsx is the owner's own version.*artifacts\.text \{ id: "v-id" \}.*carry the inputs he typed into the program's data \(never into formula results.*confirmedRebuild: true/);
+    expect(officeRebuildRefusal(sheet, { composing: true, newest: newest('owner'), approved: true })).toBeNull();
+    expect(officeRebuildRefusal(sheet, { composing: true, newest: newest('writer', true) })).toBeNull();
   });
   it('never writes a presentation from text', () => {
     expect(officeRebuildRefusal({ name: 'Deck.pptx', mime: OFFICE_MIME.pptx, createdBy: 'writer' }, { confirmedRebuild: true, approved: true })).toMatch(/not write it/);

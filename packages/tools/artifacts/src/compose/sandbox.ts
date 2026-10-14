@@ -66,7 +66,7 @@ const NETWORK_DENIED_FROM = 25;
  */
 export const NODE_FLOORS: Readonly<Record<number, string>> = { 22: '22.23.2', 24: '24.18.1', 26: '26.5.1' };
 
-/** The built-ins a program and its library may load: what docx and pptxgenjs were traced to use, and nothing with I/O. */
+/** The built-ins a program and its library may load: what docx and pptxgenjs were traced to use (write-excel-file's universal build needs none), and nothing with I/O. */
 export const COMPOSE_BUILTINS = ['buffer', 'events', 'path', 'stream', 'string_decoder', 'url', 'util'] as const;
 
 export interface ComposeAvailability {

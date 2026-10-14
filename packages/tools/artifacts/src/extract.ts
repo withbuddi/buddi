@@ -21,8 +21,8 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { officeKindOf, officePackageProblem, type OfficeKind } from '@buddi/core/plugin';
 import { extractText as pdfText, getDocumentProxy } from 'unpdf';
-import { officeText } from './office-text.js';
-import { officeRender, type OfficeRender } from './render.js';
+import { officeTask, type OfficeTask } from './office-task.js';
+import type { OfficeRender, XlsxRender } from './render.js';
 
 /** How much text `artifacts.describe` shows before it truncates. */
 export const DESCRIBE_TEXT_CHARS = 20_000;
@@ -156,6 +156,17 @@ export async function renderOffice(bytes: Buffer, kind: 'docx' | 'pptx'): Promis
   return inWorker('render', bytes, kind) as Promise<OfficeRender>;
 }
 
+/**
+ * A composed workbook with its formula values filled in, and its render
+ * summary (`@buddi/core/sheet`'s fill, `render.ts`'s `xlsxRender`), in the
+ * extractor's worker within `OFFICE_READ_LIMITS`. Only ever on a compose
+ * program's output: buddi never changes bytes it did not make.
+ */
+export async function fillWorkbook(bytes: Buffer): Promise<{ bytes: Buffer; render: XlsxRender }> {
+  const out = await inWorker('fill', bytes, 'xlsx') as { bytes: Uint8Array; render: XlsxRender };
+  return { bytes: Buffer.from(out.bytes.buffer, out.bytes.byteOffset, out.bytes.byteLength), render: out.render };
+}
+
 /** An Office file's text within `OFFICE_READ_LIMITS`. */
 function readOffice(bytes: Buffer, kind: OfficeKind): Promise<{ text: string; sheets?: number; slides?: number }> {
   return inWorker('text', bytes, kind) as Promise<{ text: string; sheets?: number; slides?: number }>;
@@ -166,12 +177,12 @@ function readOffice(bytes: Buffer, kind: OfficeKind): Promise<{ text: string; sh
  * a heap limit, stopped at the deadline. Run from source (the tests) there
  * is no compiled worker, and it runs here, still answered at the deadline.
  */
-function inWorker(task: 'text' | 'render', bytes: Buffer, kind: OfficeKind): Promise<unknown> {
+function inWorker(task: OfficeTask, bytes: Buffer, kind: OfficeKind): Promise<unknown> {
   const tooSlow = (): Error => new Error(`it took more than ${OFFICE_READ_LIMITS.timeoutMs / 1000} s to read`);
   if (!hasWorker) {
     let timer: NodeJS.Timeout | undefined;
     return Promise.race([
-      task === 'text' ? officeText(bytes, kind) : officeRender(bytes, kind as 'docx' | 'pptx'),
+      officeTask(task, bytes, kind),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(tooSlow()), OFFICE_READ_LIMITS.timeoutMs); }),
     ]).finally(() => clearTimeout(timer));
   }

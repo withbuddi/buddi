@@ -4,9 +4,10 @@
  * and the attachments. The plan — where the libraries are — comes on fd 4
  * and is never a file the program could read.
  *
- * It resolves every bare import itself — a program's `docx` or
- * `pptxgenjs`, and their own dependencies — to the real folders buddi
- * granted (`libraries.ts`), refusing any other package a program names;
+ * It resolves every bare import itself — a program's `docx`,
+ * `pptxgenjs` or `write-excel-file` (its universal build), and their own
+ * dependencies — to the real folders buddi granted (`libraries.ts`),
+ * refusing any other package a program names;
  * calls the program's default export with `ctx`; and sends what came back
  * to buddi on fd 3, framed (a type byte, a 4-byte length, the payload): `B`
  * the file's bytes, `E` an error as JSON. stdout and stderr stay the
@@ -60,7 +61,7 @@ function ownerOf(parentURL) {
   for (const dir of dirs) if (file === dir || file.startsWith(dir + path.sep)) return dir;
   return null;
 }
-// The built-ins a program and its library may load: what docx and pptxgenjs were traced to need, and
+// The built-ins a program and its library may load: what docx, pptxgenjs and write-excel-file were traced to need, and
 // nothing that reaches outside (no fs, net, child_process, worker_threads, vm, sqlite, inspector, module…).
 const BUILTINS = new Set(plan.builtins);
 // pptxgenjs imports fs and https at every write, to read images by path or URL; it gets a module that refuses.
@@ -93,6 +94,7 @@ function checked(result) {
   if (!result || typeof result.url !== 'string' || !allowedURL(result.url)) throw refusedURL(result && result.url || '');
   return result;
 }
+const ASYNC_ZIP = plan.top['write-excel-file'] ? pathToFileURL(path.join(plan.top['write-excel-file'], 'modules', 'zip', 'zipToArrayBuffer.js')).href : null;
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const next = (spec, ctx) => checked(nextResolve(spec, ctx));
@@ -117,13 +119,32 @@ registerHooks({
       err.code = 'ERR_MODULE_NOT_FOUND';
       throw err;
     }
-    const sub = specifier.slice(name.length);
+    let sub = specifier.slice(name.length);
+    if (owner === null && name === 'write-excel-file') {
+      // Its universal build only (toBlob, fflate): the node build writes files and streams, the browser one needs a page.
+      if (sub === '') sub = '/universal';
+      if (sub !== '/universal') {
+        const err = new Error("import writeXlsxFile from 'write-excel-file' (its universal build: await writeXlsxFile(sheets, options).toBlob()); write-excel-file" + sub + ' is not available to a compose program');
+        err.code = 'ERR_MODULE_NOT_FOUND';
+        throw err;
+      }
+    }
     // require() follows the package's main by path; import resolves its exports from inside its real folder.
     if (context.conditions && context.conditions.includes('require')) return next(sub ? path.join(dir, sub) : dir, context);
-    return next(specifier, { ...context, parentURL: pathToFileURL(path.join(dir, 'package.json')).href });
+    // fflate as write-excel-file loads it: its plain build; the Node one reaches for node:module and worker threads.
+    const plain = owner !== null && owner === plan.top['write-excel-file'] && name === 'fflate';
+    const conditions = plain && context.conditions ? context.conditions.filter((c) => c !== 'node' && c !== 'module-sync') : context.conditions;
+    return next(name + sub, { ...context, conditions, parentURL: pathToFileURL(path.join(dir, 'package.json')).href });
   },
   load(url, context, next) {
     if (!url.startsWith(STUB) && !allowedURL(url)) throw refusedURL(url);
+    // write-excel-file zips with fflate's async zip, which starts a worker for a part over 160 KB; there are none here.
+    if (url === ASYNC_ZIP) {
+      return {
+        format: 'module', shortCircuit: true,
+        source: "import zipSync from './zipToArrayBufferSync.js';\nexport default function zipToArrayBuffer(files) { return Promise.resolve().then(() => zipSync(files)); }\n",
+      };
+    }
     if (url.startsWith(STUB)) {
       const name = url.slice(STUB.length);
       return {
@@ -155,6 +176,8 @@ function describe(value) {
   const name = value && value.constructor && value.constructor.name;
   if (name === 'Document' || name === 'File') return 'a docx Document (pass it to Packer.toBuffer(doc) and return that)';
   if (name === 'PptxGenJS') return 'the presentation itself (return await pres.write({ outputType: "nodebuffer" }))';
+  if (name === 'Blob') return 'a Blob (return Buffer.from(await blob.arrayBuffer()))';
+  if (value && typeof value.toBlob === 'function') return 'what writeXlsxFile returns (return Buffer.from(await (await writeXlsxFile(sheets, options).toBlob()).arrayBuffer()))';
   return typeof value === 'object' ? 'an object (' + (name || 'Object') + ')' : 'a ' + typeof value;
 }
 

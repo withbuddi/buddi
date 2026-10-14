@@ -794,7 +794,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'GET', path: '/api/files/:id/versions/:version/source', area: 'files', summary: 'The program a version was composed from (artifacts.compose), read-only, for Files’ View program.',
-    answer: "{ fileId, version, artifactId, kind: 'docx'|'pptx', library, libraryVersion, nodeVersion, program, createdAt }", errors: '404 no such file or version, or that version was not made by a program',
+    answer: "{ fileId, version, artifactId, kind: 'docx'|'pptx'|'xlsx', library, libraryVersion, nodeVersion, program, createdAt }", errors: '404 no such file or version, or that version was not made by a program',
   },
   {
     method: 'GET', path: '/api/files/:id/content', area: 'files', summary: 'A text file’s current version whole, for the canvas editor, with the version a save names.',

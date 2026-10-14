@@ -174,7 +174,10 @@ export function rebuildNeed(
   });
   if (input.composing === true) {
     if (newest === null || newest.composed || !owners(newest.createdBy)) return null;
-    return ownerVersion("Composing it again with your program's output", 'carry his changes into the program');
+    // A workbook's owner version holds the numbers he typed; artifacts.text gives them as his app saved them.
+    return ownerVersion("Composing it again with your program's output", officeKindOf(file.mime, file.name) === 'xlsx'
+      ? "carry the inputs he typed into the program's data (never into formula results: those the program computes)"
+      : 'carry his changes into the program');
   }
   if (officeKindOf(file.mime, file.name) === 'pptx') {
     return { need: 'never', message: `${name} is a presentation; agents can read it (artifacts.text) but not write it with artifacts.write. ${newest?.composed ? 'It was composed by a program: change it by editing that program (artifacts.compose { fileId, source: true }).' : 'A deck is made with artifacts.compose.'}` };

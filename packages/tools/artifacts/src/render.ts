@@ -3,10 +3,13 @@
  * composed it (docs/files.md, "Composed documents"): the page or slide size,
  * the fonts it uses, its outline, how many pages it will run to, and — for a
  * deck — where text is likely to spill out of its box or a shape off the
- * slide. A cheap pass over the package's XML with fflate (MIT), beside the
+ * slide; for a workbook, each sheet's shape, header, frozen panes, formats
+ * and its formulas with their values. A cheap pass over the package's XML
+ * with fflate (MIT) — a workbook's through `@buddi/core/sheet` — beside the
  * extractor's text; nothing is drawn. Pure, so it runs in the extractor's
  * worker (`office-worker.ts`) and, from source, in the caller's thread.
  */
+import { address, columnName, formatCell, isSheetError, valueOf, type Evaluation, type WorkbookModel } from '@buddi/core/plugin';
 import { unzipSync } from 'fflate';
 import { officeText } from './office-text.js';
 
@@ -46,7 +49,78 @@ export interface PptxRender {
   warnings: string[];
 }
 
-export type OfficeRender = DocxRender | PptxRender;
+export interface XlsxSheetRender {
+  name: string;
+  /** The last row and column holding a value or a formula. */
+  rows: number;
+  cols: number;
+  /** The first row's values, as shown. */
+  header: string[];
+  frozen: { rows: number; cols: number };
+  /** Columns given a width, in characters, by letter. */
+  widths: Record<string, number>;
+  counts: { styledCells: number; formulas: number; merges: number; conditionalRules: number };
+  /** Every number format the sheet's cells use, General left out. */
+  numberFormats: string[];
+  /** The first 40 formulas with their values as the sheet shows them: read the totals back. */
+  formulas: Array<{ cell: string; formula: string; value: string }>;
+  /** Formulas whose value is an error, or that buddi could not compute (they have no value in the file). */
+  errors: Array<{ cell: string; formula: string; error: string }>;
+}
+
+export interface XlsxRender {
+  kind: 'xlsx';
+  sheets: XlsxSheetRender[];
+}
+
+export type OfficeRender = DocxRender | PptxRender | XlsxRender;
+
+const SHEET_LISTED = 40;
+
+/** A workbook said in words, from what the sheet engine read and computed. */
+export function xlsxRender(workbook: WorkbookModel, evaluation: Evaluation | null): XlsxRender {
+  const style = (index: number) => workbook.styles.cells[index] ?? workbook.styles.cells[0]!;
+  const shown = (value: Parameters<typeof formatCell>[0], format: string): string => formatCell(value, format, { date1904: workbook.date1904 }).text;
+  const sheets = workbook.sheets.map((sheet): XlsxSheetRender => {
+    const cells = [...sheet.cells.values()].sort((a, b) => a.row - b.row || a.col - b.col);
+    const formats = new Set<string>();
+    let styled = 0;
+    const formulas: XlsxSheetRender['formulas'] = [];
+    const errors: XlsxSheetRender['errors'] = [];
+    let formulaCount = 0;
+    for (const cell of cells) {
+      const look = style(cell.style);
+      if (cell.style !== 0) styled += 1;
+      if (look.numFmt !== 'General' && (cell.formula !== undefined || typeof cell.value === 'number')) formats.add(look.numFmt);
+      if (cell.formula === undefined) continue;
+      formulaCount += 1;
+      const value = valueOf(evaluation, sheet, cell);
+      const at = address(cell.row, cell.col);
+      if (formulas.length < SHEET_LISTED) formulas.push({ cell: at, formula: `=${cell.formula}`, value: shown(value, look.numFmt) });
+      const failure = evaluation?.failed.find((f) => f.sheet === sheet.name && f.cell === at);
+      if ((failure || isSheetError(value) || (value === null && !cell.hasValue)) && errors.length < SHEET_LISTED) {
+        const code = isSheetError(value) ? value.error : failure?.error ?? 'no value';
+        errors.push({ cell: at, formula: `=${cell.formula}`, error: failure ? `${code}: ${failure.reason}` : code });
+      }
+    }
+    const header = cells.filter((c) => c.row === 1 && c.col <= 50).map((c) => shown(valueOf(evaluation, sheet, c), style(c.style).numFmt));
+    const widths: Record<string, number> = {};
+    for (const col of sheet.columns) for (let c = col.min; c <= Math.min(col.max, 50); c++) widths[columnName(c)] = col.width;
+    return {
+      name: sheet.name,
+      rows: sheet.maxRow,
+      cols: sheet.maxCol,
+      header,
+      frozen: sheet.frozen,
+      widths,
+      counts: { styledCells: styled, formulas: formulaCount, merges: sheet.merges.length, conditionalRules: sheet.conditional.reduce((n, b) => n + b.rules.length, 0) },
+      numberFormats: [...formats].sort(),
+      formulas,
+      errors,
+    };
+  });
+  return { kind: 'xlsx', sheets };
+}
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 function decode(text: string): string {
