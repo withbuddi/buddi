@@ -428,25 +428,43 @@ Word file). A write never changes a file's format, and:
 **Open in app.** On an Office file's Canvas card and its page in Files,
 beside Download. `POST /api/files/<id>/open` exports the newest version to a
 working copy the server names itself — `<data>/open/<fileId>/<name>`, the name
-cleaned by the file-name rule, never through a link — and hands it to the
-computer's default app (`open`, `xdg-open`, the Windows shell; no shell
-command line). The copy is watched: a change that has held still for a
-moment is imported through the owner's one save (`saveOwnerBytes`, the file's
-lock, over the version exported), so it is a version by `owner` like an edit
-on the Canvas. The app's lock and scratch files (`~$Plan.docx`,
-`.~lock.Plan.docx#`) are never imported. A version saved meanwhile refuses
-the import with the one conflict shape, and the page shows the same bar —
-"This file changed since you opened it", **Keep mine** (saved over it) or
-**Show theirs** (the copy is closed, the newest stays): `POST
-/api/files/<id>/open/resolve`. The page asks `GET /api/files/<id>/open` while
-the file is open.
+cleaned by the file-name rule — and hands it to the computer's default app
+(`open`, `xdg-open`, PowerShell's Start-Process; no shell command line). A
+nonzero exit from the opener is an error (502); no answer in ten seconds is
+said as "opening", not as success. Beside the copy, `.buddi.json` keeps the
+session: the version the copy is based on, what buddi last put there or
+brought back (hash, size, time) and its state, so a restart resumes the watch
+and brings back what was saved while buddi was down.
 
-Only from a dashboard on the computer buddi runs on (a local session): from
-anywhere else the routes answer 403 and the button is off, saying so. A copy
-goes once it has been idle for two hours with no app's lock file beside it,
-after a day whatever, or on Show theirs; a change not yet imported is
-imported first. Copies a previous run left are removed at start once a day
-old.
+One lock per file covers everything a session does. A change is read once
+it held still, through a handle that follows no link, and only if it is the
+same file, size and time after the read and a whole package of its kind
+(the limits below); anything else is looked at again later. It is imported
+through the owner's one save (`saveOwnerBytes`, the file's lock, over the
+version the copy is based on), a version by `owner` like an edit on the
+Canvas. The app's lock and scratch files are never imported. A version saved
+meanwhile refuses it with the one conflict shape, and the page shows the same
+bar — "This file changed since you opened it", **Keep mine** (saved over it)
+or **Show theirs** (the watch stops; his copy stays on disk, with **Save mine
+as new file** while it holds work Files lacks): `POST
+/api/files/<id>/open/resolve { keep: 'mine'|'theirs'|'new' }`. Reopening
+never writes over a copy that holds anything Files does not: it is brought
+back, or raises the bar.
+
+A copy is removed only when it holds exactly what Files has and no app holds
+it (its lock file is beside it): after two idle hours, after a day, or once
+he kept theirs. Every access — reading, writing, the record, the sweep —
+checks each folder from the data dir down with lstat and refuses a link or a
+junction. Only from a dashboard on the computer buddi runs on, never through
+a proxy such as Tailscale Serve (its forwarding headers make the request
+remote): elsewhere the routes refuse and the button is off, saying so.
+
+**Package limits.** Every Office package is checked from its zip directory
+before anything is inflated — at most 2,000 parts, 50 MB per part and 200 MB
+in all, no ZIP64 (`OFFICE_ZIP_LIMITS`, `officePackageProblem` in core) — by
+the page before a previewer parses it, by the server before it extracts text
+(in a worker thread with a 256 MB heap, stopped after 15 seconds), and by
+Open in app before it imports a save.
 
 Not in this phase: editing in the Canvas, converting to PDF (LibreOffice),
 formulas, charts, comments and tracked changes, and a deck written by an

@@ -790,7 +790,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'GET', path: '/api/files/:id', area: 'files', summary: 'A file (by its id, or any version’s): what it is, its newest version and its versions, newest first, and the library’s entry for the version shown, where it was used and whether its bytes are there.',
-    query: 'version?: n (an older version to show), contexts?: offset', answer: '{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy }, versions, entry|null, contexts, contextsTotal, contextsOffset, available }', errors: '400 a bad version; 404 (deleted: true when it was deleted, or no such version)',
+    query: 'version?: n (an older version to show), contexts?: offset', answer: '{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy, createdByName: string|null }, versions, entry|null, contexts, contextsTotal, contextsOffset, available }', errors: '400 a bad version; 404 (deleted: true when it was deleted, or no such version)',
   },
   {
     method: 'GET', path: '/api/files/:id/content', area: 'files', summary: 'A text file’s current version whole, for the canvas editor, with the version a save names.',
@@ -815,20 +815,21 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'POST', path: '/api/files/:id/open', area: 'files', localOnly: true,
-    summary: 'Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer\'s default app. Saves there come back as the owner\'s next versions, over the version exported; open already, the same copy again.',
-    body: '{}', answer: '{ open: true, fileId, name, base: version the copy is based on, savedVersion?, savedAt?, conflict?, current? }',
-    errors: '403 not this computer; 404 (deleted: true when it was deleted); 409 its folder is a link; 415 not an Office document; 502 no app opened it',
+    summary: 'Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer\'s default app. Saves there come back as the owner\'s next versions, over the version the copy is based on. Open already: the same copy again — brought up to the newest when it holds nothing new and no app holds it, imported (or the conflict) when it holds work Files lacks; never written over.',
+    body: '{}', answer: "{ open: true, fileId, name, base, state: 'watching'|'conflict'|'detached'|'deleted', launch: 'opened'|'unconfirmed', savedVersion?, savedAt?, conflict?, current? }",
+    errors: '403 not this computer, or through a proxy; 404 (deleted: true when it was deleted); 409 its folder is a link, or the app is saving it; 415 not an Office document; 502 it could not be written or no app opened it',
   },
   {
     method: 'GET', path: '/api/files/:id/open', area: 'files', localOnly: true,
-    summary: 'Whether a file is open in an app, the last version a save there brought back, and a save refused because a newer version was saved meanwhile.',
-    answer: "{ open: false } or { open: true, fileId, name, base, savedVersion?, savedAt?, conflict?: 'newer'|'workspace', current?: { fileId, version, artifactId, sha256, createdBy }, error?, deleted? }",
-    errors: '403 not this computer',
+    summary: 'Whether a file is open in an app, the last version a save there brought back, a save refused because a newer version was saved meanwhile, and whether the copy holds work Files does not have.',
+    answer: "{ open: false } or { open: true, fileId, name, base, state, unsaved: boolean, savedVersion?, savedAt?, conflict?: 'newer'|'workspace', current?: { fileId, version, artifactId, sha256, createdBy }, error?, deleted? }",
+    errors: '403 not this computer, or through a proxy',
   },
   {
     method: 'POST', path: '/api/files/:id/open/resolve', area: 'files', localOnly: true,
-    summary: 'After a save in the app was refused: keep mine (the copy saved over the version that won) or theirs (the copy is closed; the newest version stays).',
-    body: "{ keep: 'mine'|'theirs' }", answer: 'as GET, or { open: false, closed: true }', errors: '400; 403 not this computer; 404 not open in an app',
+    summary: 'After a save in the app was refused: keep mine (the copy saved over the version that won), theirs (the watch stops; the copy is kept while it holds work Files lacks) or new (the copy kept as a new file of the owner\'s, then let go).',
+    body: "{ keep: 'mine'|'theirs'|'new' }", answer: 'as GET; new adds savedAs: { fileId, artifactId, filename }, or is { open: false, closed: true, savedAs } once the copy is let go',
+    errors: '400; 403 not this computer, or through a proxy; 404 not open in an app; 409 the copy is being written, is not a whole document, or is a link',
   },
   {
     method: 'POST', path: '/api/files', area: 'files', summary: 'A new text file of the owner’s, always a new file (bytes another file holds are shared, never that file), listed in Files, and in a conversation when one is named (the editor’s "Save as new file").',

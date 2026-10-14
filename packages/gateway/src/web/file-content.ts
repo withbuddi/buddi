@@ -198,7 +198,7 @@ export function isAnswer(value: unknown): value is Answer {
  * shown (`version`, else the newest), where the file was used and whether the
  * bytes are there. One read for the canvas and Files alike.
  */
-export async function readFileView(pool: Pool, env: EnvLike, id: string, opts: { knownAgentIds?: readonly string[]; version?: number; contextsOffset?: number } = {}): Promise<Answer> {
+export async function readFileView(pool: Pool, env: EnvLike, id: string, opts: { knownAgentIds?: readonly string[]; version?: number; contextsOffset?: number; nameOf?: (agentId: string) => string | null } = {}): Promise<Answer> {
   const found = await liveFile(pool, id);
   if (isAnswer(found)) return found;
   const { file, current } = found;
@@ -211,7 +211,8 @@ export async function readFileView(pool: Pool, env: EnvLike, id: string, opts: {
     status: 200,
     body: {
       file: { id: file.id, name: file.name, mime: file.mime, conversationId: file.conversationId, origin: file.origin, createdBy: file.createdBy },
-      current: versionRef(current),
+      // Who wrote the newest version, as a person reads it: an agent's name, else its id.
+      current: { ...versionRef(current), createdByName: current.createdBy === 'owner' ? null : opts.nameOf?.(current.createdBy) ?? current.createdBy },
       versions,
       // Null when the file is not one the library lists (an upload still in a tray).
       entry: library?.entry ?? null,

@@ -579,6 +579,16 @@ function previewKind(mime: string, filename: string | null): 'image' | 'pdf' | '
   return null;
 }
 
+/**
+ * A request from a browser on the computer buddi runs on: a session signed
+ * in here, and this request too arriving here — not through a proxy such as
+ * Tailscale Serve, which also connects from 127.0.0.1 but adds its
+ * forwarding headers (`requestScope` counts those as remote).
+ */
+function onThisComputer(session: { via: string }, req: IncomingMessage): boolean {
+  return session.via === 'local' && requestScope(req) === 'local';
+}
+
 /** A group as the page draws it. */
 function groupView(group: GroupRow): { id: string; name: string; coordinator: string; members: string[]; contextCapChars: number; createdAt: string } {
   return { id: group.id, name: group.name, coordinator: group.coordinator, members: group.members, contextCapChars: group.contextCapChars, createdAt: group.createdAt.toISOString() };
@@ -2041,7 +2051,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       // Whether a file is open in the owner's app, and what came back from it (web/open-in-app.ts). This computer only.
       const openState = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/open$/i.exec(path);
       if (openState) {
-        if (session.via !== 'local') return sendJson(res, 403, { error: 'Open in app works on the computer buddi runs on.' });
+        if (!onThisComputer(session, req)) return sendJson(res, 403, { error: 'Open in app works on the computer buddi runs on.' });
         return reply(res, await openInApp.status(openState[1]!.toLowerCase()));
       }
       // A file and its versions, and its current version's text, for the canvas editor and Files (web/file-content.ts).
@@ -2054,6 +2064,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         const contexts = Number(q.get('contexts') ?? '0');
         return reply(res, await readFileView(deps.pool, deps.env ?? process.env, id, {
           knownAgentIds: deps.catalog.list().map((a) => a.id),
+          nameOf: (agentId) => deps.catalog.get(agentId)?.name ?? null,
           ...(version === null ? {} : { version: Number(version) }),
           ...(Number.isInteger(contexts) && contexts > 0 ? { contextsOffset: contexts } : {}),
         }));
@@ -3112,7 +3123,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     const openWrite = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/open(\/resolve)?$/i.exec(path);
     if (openWrite) {
-      if (session.via !== 'local') return sendJson(res, 403, { error: 'Open in app works on the computer buddi runs on.' });
+      if (!onThisComputer(session, req)) return sendJson(res, 403, { error: 'Open in app works on the computer buddi runs on.' });
       let body: Record<string, unknown>;
       try {
         body = await readJsonBody(req);

@@ -2829,9 +2829,9 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/memory/peop
 | DELETE | `/api/files/:id` | Delete a file from Files with every version. Soft: conversations show it as deleted, nothing on disk or in a workspace changes, and it can be undeleted for 30 days. | yes |
 | DELETE | `/api/files/:id/versions/:version` | Delete one version: the one before it is the newest again; the last one takes the file with it. | yes |
 | POST | `/api/files/:id/undelete` | Undo a delete: the file with the versions deleted with it, or one version; not once purged (after 30 days). | yes |
-| POST | `/api/files/:id/open` | Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer's default app. Saves there come back as the owner's next versions, over the version exported; open already, the same copy again. | yes |
-| GET | `/api/files/:id/open` | Whether a file is open in an app, the last version a save there brought back, and a save refused because a newer version was saved meanwhile. | yes |
-| POST | `/api/files/:id/open/resolve` | After a save in the app was refused: keep mine (the copy saved over the version that won) or theirs (the copy is closed; the newest version stays). | yes |
+| POST | `/api/files/:id/open` | Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer's default app. Saves there come back as the owner's next versions, over the version the copy is based on. Open already: the same copy again — brought up to the newest when it holds nothing new and no app holds it, imported (or the conflict) when it holds work Files lacks; never written over. | yes |
+| GET | `/api/files/:id/open` | Whether a file is open in an app, the last version a save there brought back, a save refused because a newer version was saved meanwhile, and whether the copy holds work Files does not have. | yes |
+| POST | `/api/files/:id/open/resolve` | After a save in the app was refused: keep mine (the copy saved over the version that won), theirs (the watch stops; the copy is kept while it holds work Files lacks) or new (the copy kept as a new file of the owner's, then let go). | yes |
 | POST | `/api/files` | A new text file of the owner’s, always a new file (bytes another file holds are shared, never that file), listed in Files, and in a conversation when one is named (the editor’s "Save as new file"). | yes |
 
 #### `GET /api/reports/audio`
@@ -2937,7 +2937,7 @@ A file (by its id, or any version’s): what it is, its newest version and its v
 
 - **Auth:** Session or API token.
 - **Query:** `version?: n (an older version to show), contexts?: offset`
-- **Answer:** `{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy }, versions, entry|null, contexts, contextsTotal, contextsOffset, available }`
+- **Answer:** `{ file: { id, name, mime, conversationId, origin, createdBy }, current: { fileId, version, artifactId, sha256, createdBy, createdByName: string|null }, versions, entry|null, contexts, contextsTotal, contextsOffset, available }`
 - **Errors:** 400 a bad version; 404 (deleted: true when it was deleted, or no such version)
 - **Since:** 0.1.0-pre.55
 
@@ -3014,12 +3014,12 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `POST /api/files/:id/open`
 
-Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer's default app. Saves there come back as the owner's next versions, over the version exported; open already, the same copy again.
+Open in app: the newest version of an Office document exported to a working copy buddi names under its data folder, and opened in this computer's default app. Saves there come back as the owner's next versions, over the version the copy is based on. Open already: the same copy again — brought up to the newest when it holds nothing new and no app holds it, imported (or the conflict) when it holds work Files lacks; never written over.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin); from the computer buddi runs on.
 - **Body:** `{}`
-- **Answer:** `{ open: true, fileId, name, base: version the copy is based on, savedVersion?, savedAt?, conflict?, current? }`
-- **Errors:** 403 not this computer; 404 (deleted: true when it was deleted); 409 its folder is a link; 415 not an Office document; 502 no app opened it
+- **Answer:** `{ open: true, fileId, name, base, state: 'watching'|'conflict'|'detached'|'deleted', launch: 'opened'|'unconfirmed', savedVersion?, savedAt?, conflict?, current? }`
+- **Errors:** 403 not this computer, or through a proxy; 404 (deleted: true when it was deleted); 409 its folder is a link, or the app is saving it; 415 not an Office document; 502 it could not be written or no app opened it
 - **Since:** 0.1.0-pre.55
 
 ```sh
@@ -3028,11 +3028,11 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/files/:id/open`
 
-Whether a file is open in an app, the last version a save there brought back, and a save refused because a newer version was saved meanwhile.
+Whether a file is open in an app, the last version a save there brought back, a save refused because a newer version was saved meanwhile, and whether the copy holds work Files does not have.
 
 - **Auth:** Session or API token; from the computer buddi runs on.
-- **Answer:** `{ open: false } or { open: true, fileId, name, base, savedVersion?, savedAt?, conflict?: 'newer'|'workspace', current?: { fileId, version, artifactId, sha256, createdBy }, error?, deleted? }`
-- **Errors:** 403 not this computer
+- **Answer:** `{ open: false } or { open: true, fileId, name, base, state, unsaved: boolean, savedVersion?, savedAt?, conflict?: 'newer'|'workspace', current?: { fileId, version, artifactId, sha256, createdBy }, error?, deleted? }`
+- **Errors:** 403 not this computer, or through a proxy
 - **Since:** 0.1.0-pre.55
 
 ```sh
@@ -3041,12 +3041,12 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/files/<id>/open"
 
 #### `POST /api/files/:id/open/resolve`
 
-After a save in the app was refused: keep mine (the copy saved over the version that won) or theirs (the copy is closed; the newest version stays).
+After a save in the app was refused: keep mine (the copy saved over the version that won), theirs (the watch stops; the copy is kept while it holds work Files lacks) or new (the copy kept as a new file of the owner's, then let go).
 
 - **Auth:** Session or API token (a session adds CSRF + Origin); from the computer buddi runs on.
-- **Body:** `{ keep: 'mine'|'theirs' }`
-- **Answer:** `as GET, or { open: false, closed: true }`
-- **Errors:** 400; 403 not this computer; 404 not open in an app
+- **Body:** `{ keep: 'mine'|'theirs'|'new' }`
+- **Answer:** `as GET; new adds savedAs: { fileId, artifactId, filename }, or is { open: false, closed: true, savedAs } once the copy is let go`
+- **Errors:** 400; 403 not this computer, or through a proxy; 404 not open in an app; 409 the copy is being written, is not a whole document, or is a link
 - **Since:** 0.1.0-pre.55
 
 ```sh

@@ -28,7 +28,7 @@ export interface OpenInApp {
   busy: boolean;
   error: string | null;
   open: () => Promise<void>;
-  resolve: (keep: 'mine' | 'theirs') => Promise<void>;
+  resolve: (keep: 'mine' | 'theirs' | 'new') => Promise<void>;
 }
 
 /**
@@ -80,7 +80,7 @@ export function useOpenInApp(fileId: string, onSaved?: (version: number) => void
     }
   }, [fileId, take]);
 
-  const resolve = useCallback(async (keep: 'mine' | 'theirs'): Promise<void> => {
+  const resolve = useCallback(async (keep: 'mine' | 'theirs' | 'new'): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
@@ -111,13 +111,21 @@ export function OpenInAppButton({ app }: { app: OpenInApp }): JSX.Element {
   );
 }
 
-/** While it is open: where saves go, a refused save's choice, or why it could not open. */
+/** While it is open: where saves go, a refused save's choice, his kept copy, or why it could not open. */
 export function OpenInAppBar({ app }: { app: OpenInApp }): JSX.Element | null {
   const { state, error } = app;
   if (error) return <Notice tone="critical" role="alert">{error}</Notice>;
+  if (state.closed && state.savedAs) return <Notice role="status">Your copy is saved in Files as {state.savedAs.filename ?? 'a new file'}.</Notice>;
   if (!state.open) return null;
-  if (state.deleted) return <Notice role="status">This file was deleted from Files; saves in the app no longer come back here.</Notice>;
-  if (state.conflict && state.current) {
+  const saveAsNew = <Button size="sm" disabled={app.busy} onClick={() => { void app.resolve('new'); }}>Save mine as new file</Button>;
+  if (state.state === 'deleted') {
+    return (
+      <Notice role="status" action={state.unsaved ? saveAsNew : undefined}>
+        This file was deleted from Files; saves in the app no longer come back here.{state.unsaved ? ' Your copy in the app is kept.' : ''}
+      </Notice>
+    );
+  }
+  if (state.state === 'conflict' && state.conflict && state.current) {
     return (
       <Notice tone="warning" role="status" action={
         <span className="ui-toolbar">
@@ -125,13 +133,21 @@ export function OpenInAppBar({ app }: { app: OpenInApp }): JSX.Element | null {
           <Button size="sm" variant="accent" disabled={app.busy} onClick={() => { void app.resolve('mine'); }}>Keep mine</Button>
         </span>
       }>
-        {CHANGED_SINCE}{state.conflict === 'workspace' ? ': a command changed its copy in buddi’s workspace.' : ` (v${state.current.version} is newer).`} Your save in the app is waiting: Keep mine saves it over, Show theirs keeps v{state.current.version} and closes the copy.
+        {CHANGED_SINCE}{state.conflict === 'workspace' ? ': a command changed its copy in buddi’s workspace.' : ` (v${state.current.version} is newer).`} Your save in the app is waiting: Keep mine saves it over, Show theirs keeps v{state.current.version}.
+      </Notice>
+    );
+  }
+  if (state.state === 'detached') {
+    return (
+      <Notice role="status" action={state.unsaved ? saveAsNew : undefined}>
+        {state.unsaved ? 'You kept their version. Your copy in the app is kept, and no longer comes back here.' : 'You kept their version.'}
       </Notice>
     );
   }
   return (
     <Notice role="status">
-      Open in your app{state.savedVersion !== undefined ? `; your last save there is v${state.savedVersion}` : ''}. Each save there comes back here as a new version.
+      {state.launch === 'unconfirmed' ? 'Opening in your app… if nothing opens, open it again. ' : 'Open in your app. '}
+      Each save there comes back here as a new version{state.savedVersion !== undefined ? `; your last is v${state.savedVersion}` : ''}.
     </Notice>
   );
 }

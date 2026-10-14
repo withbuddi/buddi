@@ -68,7 +68,7 @@ function FileCard({ attachment }: { attachment: AttachmentBlock }): JSX.Element 
   }
   // Until Files answers, the version the conversation named.
   const shown = view?.current.artifactId ?? attachment.artifactId;
-  const by = view ? (view.current.createdBy === 'owner' ? 'you' : view.current.createdBy) : null;
+  const by = view ? (view.current.createdBy === 'owner' ? 'you' : view.current.createdByName ?? view.current.createdBy) : null;
 
   return (
     <div className="wb-artifact" data-family={family} data-testid="artifact-view">

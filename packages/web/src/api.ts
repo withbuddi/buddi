@@ -343,7 +343,8 @@ export interface FileContent extends FileVersionRef {
  */
 export interface FileView {
   file: { id: string; name: string | null; mime: string; conversationId: string | null; origin: 'document' | 'capture' | 'upload'; createdBy: string };
-  current: FileVersionRef;
+  /** `createdByName`: the agent's name, null for the owner. */
+  current: FileVersionRef & { createdByName?: string | null };
   versions: LibraryVersion[];
   entry: LibraryEntry | null;
   contexts: LibraryContext[];
@@ -359,6 +360,14 @@ export interface OpenInAppState {
   name?: string;
   /** The version the working copy is based on. */
   base?: number;
+  /** Watching for saves; a save waiting for a choice; the watch stopped (theirs kept); the file deleted. */
+  state?: 'watching' | 'conflict' | 'detached' | 'deleted';
+  /** The copy holds work Files does not have. */
+  unsaved?: boolean;
+  /** The system's opener answered (`opened`), or did not in time. */
+  launch?: 'opened' | 'unconfirmed';
+  /** Save mine as new file: the file it became. */
+  savedAs?: { fileId: string; artifactId: string; filename: string | null };
   /** The last version a save in the app brought back. */
   savedVersion?: number;
   savedAt?: string;
@@ -2964,8 +2973,8 @@ export const api = {
   /** Open in app: the newest version as a working copy in this computer's default app. */
   openInApp: (id: string) => post<OpenInAppState>(`/files/${encodeURIComponent(id)}/open`, {}),
   openInAppState: (id: string) => get<OpenInAppState>(`/files/${encodeURIComponent(id)}/open`),
-  /** After a save in the app was refused: keep his, or theirs (the copy is closed). */
-  resolveOpenInApp: (id: string, keep: 'mine' | 'theirs') => post<OpenInAppState>(`/files/${encodeURIComponent(id)}/open/resolve`, { keep }),
+  /** After a save in the app was refused: keep his, theirs (the copy is kept, not watched), or his as a new file. */
+  resolveOpenInApp: (id: string, keep: 'mine' | 'theirs' | 'new') => post<OpenInAppState>(`/files/${encodeURIComponent(id)}/open/resolve`, { keep }),
   /** A new text file of the owner's ("Save as new file"). */
   createFile: (body: { name: string; text: string; mime?: string; conversationId?: string | null }) =>
     post<FileVersionRef & { filename: string | null }>('/files', body),

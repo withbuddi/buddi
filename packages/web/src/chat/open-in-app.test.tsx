@@ -20,7 +20,7 @@ const attachment: AttachmentBlock = { type: 'attachment', artifactId: V1, fileId
 
 const view = (version: number, createdBy: string) => ({
   file: { id: FILE, name: 'Plan.docx', mime: OFFICE_MIME.docx, conversationId: null, origin: 'upload', createdBy: 'owner' },
-  current: { fileId: FILE, version, artifactId: `33333333-3333-4333-8333-33333333333${version}`, sha256: 'x', createdBy },
+  current: { fileId: FILE, version, artifactId: `33333333-3333-4333-8333-33333333333${version}`, sha256: 'x', createdBy, createdByName: createdBy === 'owner' ? null : 'Writer' },
   versions: [], entry: null, contexts: [], contextsTotal: 0, contextsOffset: 0, available: true,
 });
 
@@ -38,7 +38,7 @@ async function card(signedInThrough: 'local' | 'ticket') {
   const file = vi.spyOn(api, 'file').mockResolvedValue(view(1, 'writer') as never);
   const state = vi.spyOn(api, 'openInAppState').mockResolvedValue({ open: false });
   const open = vi.spyOn(api, 'openInApp').mockResolvedValue({ open: true, fileId: FILE, name: 'Plan.docx', base: 1 });
-  const resolve = vi.spyOn(api, 'resolveOpenInApp').mockResolvedValue({ open: true, fileId: FILE, base: 3, savedVersion: 3 });
+  const resolve = vi.spyOn(api, 'resolveOpenInApp').mockResolvedValue({ open: true, fileId: FILE, base: 3, state: 'watching', savedVersion: 3 });
   render(<ArtifactView attachment={attachment} />);
   return { api, file, state, open, resolve };
 }
@@ -48,27 +48,42 @@ describe('Open in app', () => {
     const { file, state, open } = await card('local');
     const button = await screen.findByRole('button', { name: 'Open in app' });
     await waitFor(() => expect(button).toBeEnabled());
-    expect(await screen.findByText('v1, by writer')).toBeInTheDocument();
+    expect(await screen.findByText('v1, by Writer')).toBeInTheDocument();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     fireEvent.click(button);
     await waitFor(() => expect(open).toHaveBeenCalledWith(FILE));
     expect(await screen.findByText(/Each save there comes back here as a new version/)).toBeInTheDocument();
     // He saves in Word: the next look says v2 came back, and the card reads the file again.
-    state.mockResolvedValue({ open: true, fileId: FILE, base: 2, savedVersion: 2 });
+    state.mockResolvedValue({ open: true, fileId: FILE, base: 2, state: 'watching', savedVersion: 2 });
     file.mockResolvedValue(view(2, 'owner') as never);
     await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
     expect(await screen.findByText('v2, by you')).toBeInTheDocument();
-    expect(screen.getByText(/your last save there is v2/)).toBeInTheDocument();
+    expect(screen.getByText(/your last is v2/)).toBeInTheDocument();
   });
 
   it('offers theirs or mine when a save in the app was refused', async () => {
     const { state, resolve } = await card('local');
-    state.mockResolvedValue({ open: true, fileId: FILE, base: 1, conflict: 'newer', current: { fileId: FILE, version: 2, artifactId: V1, sha256: 'y', createdBy: 'writer' } });
+    state.mockResolvedValue({ open: true, fileId: FILE, base: 1, state: 'conflict', conflict: 'newer', current: { fileId: FILE, version: 2, artifactId: V1, sha256: 'y', createdBy: 'writer' } });
     expect(await screen.findByText(/This file changed since you opened it \(v2 is newer\)/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }));
     await waitFor(() => expect(resolve).toHaveBeenCalledWith(FILE, 'mine'));
-    expect(await screen.findByText(/your last save there is v3/)).toBeInTheDocument();
+    expect(await screen.findByText(/your last is v3/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Keep mine' })).not.toBeInTheDocument();
+  });
+
+  it('keeps his copy after Show theirs, with Save mine as new file', async () => {
+    const { state, resolve } = await card('local');
+    state.mockResolvedValue({ open: true, fileId: FILE, base: 1, state: 'conflict', conflict: 'newer', current: { fileId: FILE, version: 2, artifactId: V1, sha256: 'y', createdBy: 'writer' } });
+    const theirs = await screen.findByRole('button', { name: 'Show theirs' });
+    resolve.mockResolvedValueOnce({ open: true, fileId: FILE, base: 1, state: 'detached', unsaved: true });
+    state.mockResolvedValue({ open: true, fileId: FILE, base: 1, state: 'detached', unsaved: true });
+    fireEvent.click(theirs);
+    await waitFor(() => expect(resolve).toHaveBeenCalledWith(FILE, 'theirs'));
+    expect(await screen.findByText(/Your copy in the app is kept/)).toBeInTheDocument();
+    resolve.mockResolvedValueOnce({ open: false, closed: true, savedAs: { fileId: FILE, artifactId: V1, filename: 'Plan (your copy).docx' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save mine as new file' }));
+    await waitFor(() => expect(resolve).toHaveBeenCalledWith(FILE, 'new'));
+    expect(await screen.findByText('Your copy is saved in Files as Plan (your copy).docx.')).toBeInTheDocument();
   });
 
   it('is off from another device, saying where it works', async () => {
