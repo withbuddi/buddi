@@ -57,7 +57,7 @@ npm_tarball() { # <name> <version> -> path of the verified .tgz
 }
 
 # ---------------------------------------------------------------- Node runtime
-echo "$NODE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || die "NODE_VERSION must name one exact Node version like 22.23.3, not \"${NODE_VERSION#v}\""
+echo "$NODE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || die "NODE_VERSION must name one exact Node version like 26.11.1, not \"${NODE_VERSION#v}\""
 say "Node $NODE_VERSION (universal)"
 SUMS="$CACHE/node-$NODE_VERSION-SHASUMS256.txt"
 [ -s "$SUMS" ] || curl -fsSL "https://nodejs.org/dist/$NODE_VERSION/SHASUMS256.txt" -o "$SUMS" \

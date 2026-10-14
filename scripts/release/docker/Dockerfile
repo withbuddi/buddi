@@ -3,7 +3,7 @@
 # What goes in is the release tarball and nothing else: no checkout, no pnpm,
 # no build tools. The point is to meet the packaged install the way a stranger
 # on a clean Linux machine would.
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 
 # socat: `environment()` forces the gateway to bind 127.0.0.1 and that must
 # not change, so reaching it from the host needs a forwarder inside the

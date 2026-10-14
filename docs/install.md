@@ -250,7 +250,8 @@ gateway, core, the runtime, the dashboard and the built-in tools.
 `@buddi/core` is published beside it, on its own, because plugins import it
 (§7).
 
-What the machine needs: Node 22 or newer. Nothing else — no Docker, no git,
+What the machine needs: Node 22 or newer (the bundled installs, buddi.app,
+Linux and Windows, carry Node 26). Nothing else — no Docker, no git,
 no pnpm, no build step. `buddi` has no install script. The Postgres binaries
 come in a package whose upstream uses one to recreate symlinks inside its
 binaries directory; buddi does not need it, because the first run copies that
@@ -952,7 +953,7 @@ pnpm release:docker            # build the tarball, then an image containing onl
 scripts/release/docker/run.sh  # start it and print the dashboard link
 ```
 
-The image is `node:22-bookworm-slim` plus the tarball installed with
+The image is `node:26-bookworm-slim` plus the tarball installed with
 `npm install -g --ignore-scripts`. Optional dependencies stay on, which is how
 `@embedded-postgres/linux-<arch>` arrives, and the build fails if the image's
 architecture did not get its package. There is no checkout, no pnpm and no

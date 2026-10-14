@@ -57,7 +57,7 @@ say() { printf '\033[36m==>\033[0m %s\n' "$*" >&2; }
 die() { printf 'windows-bundle: %s\n' "$*" >&2; exit 1; }
 
 echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || die "\"$VERSION\" is not a version"
-echo "$NODE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || die "apps/mac/NODE_VERSION must name one exact Node version like 22.23.3"
+echo "$NODE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || die "apps/mac/NODE_VERSION must name one exact Node version like 26.11.1"
 [ -n "${VCRUNTIME_DIR:-}" ] || die "VCRUNTIME_DIR must name the folder with $VC_DLLS (Microsoft.VC14x.CRT from a Visual Studio redistributable folder)"
 mkdir -p "$CACHE" "$OUT"
 OUT="$(cd "$OUT" && pwd)"

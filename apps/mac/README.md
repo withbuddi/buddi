@@ -192,7 +192,7 @@ release twice:
    --ignore-scripts` with the bundled npm, and checks that the integrity npm recorded
    in its lock is the registry's.
 2. `npm audit signatures --include-attestations` verifies the registry signature and the
-   sigstore bundles with npm's own sigstore client (Node 22's npm reports only what is
+   sigstore bundles with npm's own sigstore client (its `--json` lists what is
    invalid or missing). Then `provenance.ts` checks who signed: the SLSA bundle chains
    to Fulcio, its signature verifies, its subject is the tarball's sha512, and its
    certificate names `withbuddi/buddi`'s `release.yml` at this version's tag. From

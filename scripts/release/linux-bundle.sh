@@ -44,7 +44,7 @@ die() { printf 'linux-bundle: %s\n' "$*" >&2; exit 1; }
 
 case "$ARCH" in x64|arm64) ;; *) die "architecture must be x64 or arm64, not \"$ARCH\"";; esac
 echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || die "\"$VERSION\" is not a version"
-echo "$NODE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || die "apps/mac/NODE_VERSION must name one exact Node version like 22.23.3"
+echo "$NODE_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || die "apps/mac/NODE_VERSION must name one exact Node version like 26.11.1"
 mkdir -p "$CACHE" "$OUT"
 
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{ print $1 }'; else shasum -a 256 "$1" | awk '{ print $1 }'; fi; }

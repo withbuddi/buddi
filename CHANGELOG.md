@@ -23,6 +23,7 @@ What changes in buddi from one release to the next, newest first.
 ### Changed
 
 - On a desktop a conversation starts with the chat alone: the Canvas opens the first time something lands on it, and once you close it (the × in its header) it stays closed for that conversation; what arrives later counts up on the Canvas button in the chat header, which opens it at any time.
+- buddi.app, the Linux install and the Windows installer carry Node 26.11.1 (was 22.23.3), and CI builds and tests on Node 26. An npm install still runs on Node 22 or newer. On Node 25 and later buddi no longer prints "ExperimentalWarning: localStorage is not available" at every start: the Word writer is loaded only when a Word file is made.
 
 ## 0.1.0-pre.54 — 2026-10-13
 
