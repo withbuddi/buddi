@@ -13,6 +13,7 @@
 import { useEffect, useState, type ComponentType } from 'react';
 import { OFFICE_PREVIEW_BYTES, officePackageProblem, type OfficeKind } from '@buddi/core/office-files';
 import { Empty, Notice } from '../ui';
+import { isChunkLoadError, loadChunk } from '../shell/stale-chunk';
 import { previewUrl } from './attachments';
 
 export interface OfficeViewerProps {
@@ -22,9 +23,9 @@ export interface OfficeViewerProps {
 
 /** Each kind's renderer, loaded on first use. */
 const VIEWERS: Record<OfficeKind, () => Promise<{ default: ComponentType<OfficeViewerProps> }>> = {
-  docx: () => import('./office/docx'),
-  xlsx: () => import('./office/xlsx'),
-  pptx: () => import('./office/pptx'),
+  docx: () => loadChunk(() => import('./office/docx')),
+  xlsx: () => loadChunk(() => import('./office/xlsx')),
+  pptx: () => loadChunk(() => import('./office/pptx')),
 };
 
 type State =
@@ -33,7 +34,9 @@ type State =
   | { phase: 'too-large' }
   /** Past the package limits, or not a whole package: never handed to a parser. */
   | { phase: 'refused'; why: string }
-  | { phase: 'failed' };
+  | { phase: 'failed' }
+  /** The renderer's chunk is gone: the page is from before an update, the file is fine. */
+  | { phase: 'stale' };
 
 export function OfficePreview({ artifactId, filename, kind }: { artifactId: string; filename: string | null; kind: OfficeKind }): JSX.Element {
   const [state, setState] = useState<State>({ phase: 'loading' });
@@ -53,13 +56,14 @@ export function OfficePreview({ artifactId, filename, kind }: { artifactId: stri
         const problem = officePackageProblem(new Uint8Array(data), kind);
         setState(problem ? { phase: 'refused', why: problem } : { phase: 'ready', bytes: data, Viewer: module.default });
       })
-      .catch(() => { if (!cancelled) setState({ phase: 'failed' }); });
+      .catch((error: unknown) => { if (!cancelled) setState({ phase: isChunkLoadError(error) ? 'stale' : 'failed' }); });
     return () => { cancelled = true; };
   }, [artifactId, kind]);
 
   if (state.phase === 'loading') return <div className="file-preview"><Empty>Loading preview…</Empty></div>;
   if (state.phase === 'too-large') return <Notice>This file is over {Math.round(OFFICE_PREVIEW_BYTES / 1024 / 1024)} MB, too large to preview here. Download it to open it.</Notice>;
   if (state.phase === 'refused') return <Notice>This file can’t be previewed: {state.why}. Download it to open it.</Notice>;
+  if (state.phase === 'stale') return <Notice>This part of buddi was updated. Reload the page to see the preview.</Notice>;
   if (state.phase === 'failed') return <Notice>The preview could not be loaded. Download the file to open it.</Notice>;
   const { Viewer, bytes } = state;
   return <div className="file-preview file-preview-office" data-kind={kind}><Viewer bytes={bytes} name={filename ?? 'File'} /></div>;

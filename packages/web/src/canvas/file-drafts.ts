@@ -65,6 +65,11 @@ export function setDraft(tabId: string, draft: FileDraft | null): void {
   emit();
 }
 
+/** Whether any tab holds an unsaved edit (a reload would lose it). */
+export function hasUnsavedEdits(): boolean {
+  return dirty.size > 0;
+}
+
 export function isDirty(tabId: string): boolean {
   return dirty.has(tabId);
 }

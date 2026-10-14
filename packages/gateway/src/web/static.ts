@@ -58,6 +58,17 @@ export interface ServeResult {
 }
 
 /**
+ * Whether a missing path is one of the build's own files rather than a page
+ * route: those answer 404 instead of the shell. A tab from before an update
+ * asks for chunks the new build no longer has; `index.html` under that name
+ * would reach it as an immutable "script" the browser keeps for a year, and
+ * the page could not tell a deleted chunk from a broken one.
+ */
+export function isBuildFile(pathname: string): boolean {
+  return /^\/assets\//.test(pathname);
+}
+
+/**
  * Send one static file, falling back to `index.html` so the SPA's own routes
  * survive a reload. A missing build is reported, not guessed at.
  */
@@ -68,12 +79,18 @@ export async function serveAsset(
 ): Promise<ServeResult> {
   const index = path.resolve(assetsDir, 'index.html');
   const direct = resolveAsset(assetsDir, pathname);
-  const file = direct && (await isFile(direct)) ? direct : index;
+  const found = direct !== null && (await isFile(direct));
+  if (!found && isBuildFile(pathname) && (await isFile(index))) {
+    res.writeHead(404, { ...baseHeaders(), 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end('Not found');
+    return { served: true };
+  }
+  const file = found && direct ? direct : index;
 
   if (!(await isFile(file))) return { served: false, missing: true };
 
   const type = contentType(file);
-  const hashed = /\/assets\//.test(pathname) && /-[A-Za-z0-9_]{8,}\./.test(pathname);
+  const hashed = found && /\/assets\//.test(pathname) && /-[A-Za-z0-9_]{8,}\./.test(pathname);
   res.writeHead(200, {
     ...baseHeaders(),
     'Content-Type': type,

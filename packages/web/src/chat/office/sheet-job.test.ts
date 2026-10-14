@@ -39,12 +39,23 @@ describe('the preview’s calculation', () => {
     expect(terminate).toHaveBeenCalled();
   });
 
+  it('tells a worker whose script is gone (an update) from one that broke', async () => {
+    const gone: WorkerLike = { postMessage: vi.fn(), terminate: vi.fn(), onmessage: null, onerror: null };
+    const lost = runSheetJob(trip(), { makeWorker: () => gone });
+    gone.onerror!(new Event('error'));
+    expect(await lost.computed).toBe('gone');
+    const broke: WorkerLike = { postMessage: vi.fn(), terminate: vi.fn(), onmessage: null, onerror: null };
+    const failed = runSheetJob(trip(), { makeWorker: () => broke });
+    broke.onerror!(new ErrorEvent('error', { message: 'RangeError: too deep' }));
+    expect(await failed.computed).toBe('failed');
+  });
+
   it('runs on this thread where there is no Worker, with the same results', async () => {
     const job = runSheetJob(trip(), { makeWorker: () => null });
     expect((await job.model)?.sheets.map((s) => s.name)).toEqual(['Summary', 'Costs']);
     const computed = await job.computed;
     expect(computed).not.toBe('too-large');
-    if (computed === 'too-large' || computed === 'failed') return;
+    if (computed === 'too-large' || computed === 'failed' || computed === 'gone') return;
     expect(computed.evaluation?.values.get('Costs')?.size).toBeGreaterThan(0);
   });
 });

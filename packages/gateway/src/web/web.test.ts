@@ -5,9 +5,11 @@
  * Everything here is arithmetic and string handling — the database-backed API
  * tests live in `web.db.test.ts`.
  */
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import type { ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { createMemoryVault } from '@buddi/core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -36,7 +38,7 @@ import {
   REMOTE_SESSION_TTL_MS,
   SessionStore,
 } from './sessions.js';
-import { contentType, resolveAsset } from './static.js';
+import { contentType, resolveAsset, serveAsset } from './static.js';
 import { toStreamEvent } from './stream.js';
 import { ensureWebToken, mintTicket, verifyTicket, webTokenExists, webTokenFile } from './token.js';
 
@@ -367,6 +369,34 @@ describe('static files', () => {
   it('serve the app manifest and its icons with their own types', () => {
     expect(contentType(`${root}/manifest.webmanifest`)).toBe('application/manifest+json');
     expect(contentType(`${root}/icon-512.png`)).toBe('image/png');
+  });
+
+  it('answer a chunk an older build named with 404, never the shell as an immutable script', async () => {
+    const dist = mkdtempSync(path.join(tmpdir(), 'buddi-dist-'));
+    writeFileSync(path.join(dist, 'index.html'), '<!doctype html>');
+    mkdirSync(path.join(dist, 'assets'));
+    writeFileSync(path.join(dist, 'assets', 'xlsx-NEWHASH1.js'), 'export {}');
+    const send = async (pathname: string) => {
+      const out = { status: 0, headers: {} as Record<string, string>, body: '' };
+      const res = new PassThrough() as unknown as ServerResponse & PassThrough;
+      res.writeHead = ((status: number, headers: Record<string, string>) => { out.status = status; out.headers = headers; return res; }) as never;
+      res.on('data', (chunk: Buffer) => { out.body += chunk.toString(); });
+      const done = new Promise((resolve) => res.on('finish', resolve));
+      await serveAsset(res, dist, pathname);
+      if (!res.writableEnded) res.end();
+      await done;
+      return out;
+    };
+    const gone = await send('/assets/xlsx-OLDHASH1.js');
+    expect(gone.status).toBe(404);
+    expect(gone.headers['Cache-Control']).toBe('no-store');
+    const kept = await send('/assets/xlsx-NEWHASH1.js');
+    expect(kept.status).toBe(200);
+    expect(kept.headers['Cache-Control']).toContain('immutable');
+    // A page route still gets the shell, so a reload on it works.
+    const route = await send('/connections');
+    expect(route.status).toBe(200);
+    expect(route.body).toBe('<!doctype html>');
   });
 });
 

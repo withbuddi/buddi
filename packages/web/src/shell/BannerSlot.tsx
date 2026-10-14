@@ -11,27 +11,31 @@ import { api } from '../api';
 import { BACKUP_ROUTE } from '../routes';
 import { RECOVERY_BANNER } from '../views/Recovery';
 import { Button, ButtonLink } from '../ui';
+import { reloadForUpdate } from './stale-chunk';
 
 export interface Banner {
   id: string;
-  /** Lower comes first: recovery 0, lost connection 1, a paused queue 2, anything else after. */
+  /** Lower comes first: recovery 0, lost connection 1, a paused queue 2, an updated page 3. */
   priority: number;
   tone: 'warning' | 'critical';
   text: string;
   action?: { label: string; href?: string; onClick?: () => void };
 }
 
-export const BANNER_PRIORITY = { recovery: 0, lost: 1, paused: 2 } as const;
+export const BANNER_PRIORITY = { recovery: 0, lost: 1, paused: 2, updated: 3 } as const;
 
 export const LOST_BANNER = 'Lost buddi. Retrying…';
 export const PAUSED_BANNER = 'The queue is paused. Nothing is being claimed until you resume it.';
+/** A chunk of this page was gone while something was in progress (shell/stale-chunk.ts). */
+export const UPDATED_BANNER = 'buddi was updated.';
 
 /** The shell's candidates, from what it already knows. */
-export function shellBanners(state: { recovery: boolean; lost: boolean; paused: boolean }): Banner[] {
+export function shellBanners(state: { recovery: boolean; lost: boolean; paused: boolean; updated?: boolean }): Banner[] {
   const out: Banner[] = [];
   if (state.recovery) out.push({ id: 'recovery', priority: BANNER_PRIORITY.recovery, tone: 'warning', text: RECOVERY_BANNER, action: { label: 'Finish the checklist', href: BACKUP_ROUTE } });
   if (state.lost) out.push({ id: 'lost', priority: BANNER_PRIORITY.lost, tone: 'critical', text: LOST_BANNER });
   if (state.paused) out.push({ id: 'paused', priority: BANNER_PRIORITY.paused, tone: 'warning', text: PAUSED_BANNER, action: { label: 'Resume', onClick: () => { void api.setPaused(false).catch(() => {}); } } });
+  if (state.updated) out.push({ id: 'updated', priority: BANNER_PRIORITY.updated, tone: 'warning', text: UPDATED_BANNER, action: { label: 'Reload', onClick: reloadForUpdate } });
   return out;
 }
 

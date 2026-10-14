@@ -16,6 +16,7 @@ import {
   cellKey, columnName, conditionalStyles, formatCell, valueOf,
   type BorderEdge, type CellStyle, type SheetModel, type WorkbookModel,
 } from '@buddi/core/sheet';
+import { onStaleChunk } from '../../shell/stale-chunk';
 import { runSheetJob, type SheetComputed } from './sheet-job';
 import readExcelFile from 'read-excel-file/browser';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
@@ -92,7 +93,11 @@ export default function XlsxPreview({ bytes }: OfficeViewerProps): JSX.Element {
     // The look and the formulas, off this thread: a workbook it cannot read is still shown, as plain values.
     const job = runSheetJob(bytes);
     void job.model.then((read) => { if (!cancelled && read) setModel(read); });
-    void job.computed.then((out) => { if (!cancelled && out !== 'failed') setComputed(out); });
+    void job.computed.then((out) => {
+      // The sheet engine's script is gone (an update): the values stand without it, and the page reloads onto the new build when it may.
+      if (out === 'gone') { onStaleChunk(); return; }
+      if (!cancelled && out !== 'failed') setComputed(out);
+    });
     return () => { cancelled = true; job.cancel(); };
   }, [bytes]);
 

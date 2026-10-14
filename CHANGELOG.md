@@ -24,6 +24,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A dashboard tab left open across an update or a rebuild no longer says a file's preview could not be loaded: when a part of the page it loads late is gone, it reloads once onto the new build, keeping your place. While you are writing a message or editing a file it asks first with a "buddi was updated" banner and a Reload button instead, and if the part is still missing after the reload the preview says to reload rather than to download the file. The server now answers a missing build file with "not found" instead of the page itself, which the browser could keep for a year.
 - A composed Excel budget keeps its over-budget colour in Apple Numbers: the guide now colours a computed Difference column with a value rule instead of a formula rule, which Numbers drops on open.
 - An upgrade relinks the installed plugins to the new release's own `@buddi/core`, never to one found in a folder above the release (a checkout or another install).
 - Reading a PDF's text (`artifacts.text`, `artifacts.describe`, the document export check) no longer fails at random with "bad XRef entry" on valid PDFs: the abandoned pdf-parse (pdf.js 1.10) is replaced by unpdf, a current pdf.js build.

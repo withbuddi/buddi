@@ -5,6 +5,7 @@ import { registerWorker } from './serviceWorker';
 import { BootGate } from './shell/Unreachable';
 import { RestartGate } from './shell/Restarting';
 import { LockGate } from './shell/lock';
+import { watchStaleChunks } from './shell/stale-chunk';
 import { ConnectionCallback } from './views/ConnectionCallback';
 import '@fontsource-variable/dm-sans/standard.css';
 import '@fontsource-variable/dm-sans/standard-italic.css';
@@ -22,4 +23,6 @@ if (root) {
   );
 }
 
+// A tab from before an update reloads onto the new build when a chunk it asks for is gone.
+watchStaleChunks();
 registerWorker();

@@ -53,11 +53,14 @@ export async function computeSheet(bytes: ArrayBuffer, post: (message: SheetMess
   post({ type: 'computed', computed: { evaluation: engine?.evaluation ?? null, conditional } });
 }
 
+/** Why a calculation ended without values. */
+export type SheetStop = 'too-large' | 'failed' | 'gone';
+
 export interface SheetJob {
   /** The read workbook, or null when it could not be read. */
   model: Promise<WorkbookModel | null>;
-  /** The calculation, or `too-large` when it was ended at the deadline, `failed` when it broke. */
-  computed: Promise<SheetComputed | 'too-large' | 'failed'>;
+  /** The calculation, or `too-large` when it was ended at the deadline, `failed` when it broke, `gone` when its worker's script is (an update replaced it). */
+  computed: Promise<SheetComputed | SheetStop>;
   cancel(): void;
 }
 
@@ -76,9 +79,9 @@ function defaultWorker(): WorkerLike | null {
 /** The preview's calculation, in a worker ended after `timeoutMs`. */
 export function runSheetJob(bytes: ArrayBuffer, opts: { timeoutMs?: number; makeWorker?: () => WorkerLike | null } = {}): SheetJob {
   let resolveModel!: (model: WorkbookModel | null) => void;
-  let resolveComputed!: (computed: SheetComputed | 'too-large' | 'failed') => void;
+  let resolveComputed!: (computed: SheetComputed | SheetStop) => void;
   const model = new Promise<WorkbookModel | null>((resolve) => { resolveModel = resolve; });
-  const computed = new Promise<SheetComputed | 'too-large' | 'failed'>((resolve) => { resolveComputed = resolve; });
+  const computed = new Promise<SheetComputed | SheetStop>((resolve) => { resolveComputed = resolve; });
   let done = false;
   const receive = (message: SheetMessage): void => {
     if (done) return;
@@ -93,7 +96,7 @@ export function runSheetJob(bytes: ArrayBuffer, opts: { timeoutMs?: number; make
     void computeSheet(bytes, receive).catch(() => receive({ type: 'failed' }));
     return { model, computed, cancel: () => { done = true; } };
   }
-  const stop = (why: 'too-large' | 'failed'): void => {
+  const stop = (why: SheetStop): void => {
     if (done) return;
     done = true;
     worker.terminate();
@@ -101,11 +104,17 @@ export function runSheetJob(bytes: ArrayBuffer, opts: { timeoutMs?: number; make
     resolveComputed(why);
   };
   const timer = setTimeout(() => stop('too-large'), opts.timeoutMs ?? SHEET_JOB_MS);
+  let heard = false;
   worker.onmessage = (event) => {
+    heard = true;
     receive(event.data);
     if (done) { clearTimeout(timer); worker.terminate(); }
   };
-  worker.onerror = () => { clearTimeout(timer); stop('failed'); };
+  worker.onerror = (event) => {
+    clearTimeout(timer);
+    // A worker that never started (no message yet, and no error of its own to report) is a script this build no longer has.
+    stop(!heard && !(typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent && event.message) ? 'gone' : 'failed');
+  };
   // A copy, so the page keeps its bytes for read-excel-file.
   const copy = bytes.slice(0);
   worker.postMessage(copy, [copy]);
