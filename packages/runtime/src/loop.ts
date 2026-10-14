@@ -675,6 +675,8 @@ async function persistMessage(
 export const SCREENSHOT_REFUSED_TEXT = '(A screenshot was taken but this model does not take images. The text observation above is what it saw.)';
 /** What any other image becomes for that model. */
 export const IMAGE_REFUSED_TEXT = '(An image was here but this model does not take images.)';
+/** What a model that takes no images reads where a tool's picture would have been (`artifacts.view`). */
+export const IMAGE_NOT_SENT_TEXT = '(The picture the tool result mentions was not sent: this model does not take images. Tell the owner you cannot look at it here.)';
 
 /**
  * Replace every image block in the outgoing messages with a line of text,
@@ -1371,6 +1373,8 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
 
     const results: ContentBlock[] = [];
     const images: ContentBlock[] = [];
+    /** A picture a tool made that this model cannot be shown: said once, after the results. */
+    let unseen: ContentBlock | null = null;
     /** Files the tools of this turn saved, recorded with the results they came in. */
     const produced: ArtifactUse[] = [];
     let skipReason: string | undefined;
@@ -1481,6 +1485,9 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
               const block: ContentBlock = { type: 'image', ...picture };
               if (call.name === DELEGATE_TOOL_NAME) pictures.add(block);
               images.push(block);
+            } else if (picture) {
+              // The tool said a picture follows; this model is told why none does.
+              unseen = { type: 'text', text: IMAGE_NOT_SENT_TEXT };
             }
           } catch { /* Observation loss must never turn a completed action into a retry. */ }
         }
@@ -1596,6 +1603,7 @@ async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
       ephemeralImages.add(latest);
       messages[messages.length - 1]!.content = [...results, ...spokenBlocks, latest];
     }
+    if (unseen) messages[messages.length - 1]!.content.push(unseen);
     ctx.signal?.throwIfAborted();
 
     if (pendingActionId !== undefined) {
