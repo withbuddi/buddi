@@ -75,6 +75,54 @@ describe('Office previews', () => {
     expect(screen.queryByText('Month')).not.toBeInTheDocument();
   });
 
+  it('draws a workbook’s look: fills, bold, borders, number formats, widths, merges, the frozen header and conditional colour', async () => {
+    serve(fixture('trip.xlsx'));
+    render(<ArtifactPreview artifactId="a6" filename="Trip.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
+    await screen.findByTestId('office-xlsx', {}, { timeout: 10_000 });
+    // Summary: a header in the theme's accent, bold white, frozen; a width of 24 characters; a merge.
+    const item = await screen.findByRole('cell', { name: 'Item' });
+    expect(item).toHaveStyle({ backgroundColor: '#4F81BD', color: '#FFFFFF', fontWeight: 'var(--weight-bold)', textAlign: 'center' });
+    expect(item.closest('tr')).toHaveAttribute('data-frozen', 'row');
+    const cols = screen.getByTestId('office-xlsx').querySelectorAll('col');
+    expect(cols[1]).toHaveStyle({ width: '168px' });
+    expect(screen.getByRole('cell', { name: 'Yellow cells are inputs' })).toHaveAttribute('colspan', '2');
+    // Costs!B7 through Summary!B2, in euros, bold with a rule above and a double one below.
+    const total = await screen.findByRole('cell', { name: '€950.50' }, { timeout: 10_000 });
+    expect(total).toHaveStyle({ fontWeight: 'var(--weight-bold)' });
+    expect(total.style.borderTop).toMatch(/0\.5px solid/);
+    expect(total.style.borderBottom).toMatch(/2px solid/);
+    fireEvent.click(screen.getByRole('tab', { name: 'Costs' }));
+    // Number formats: euros, a date, a percent's error; a conditional fill on the amount over 400, bold on the food row.
+    const flights = await screen.findByRole('cell', { name: '€420.50' });
+    expect(flights).toHaveStyle({ backgroundColor: '#FFC7CE', color: '#9C0006' });
+    expect(screen.getByRole('cell', { name: '€380.00' }).style.backgroundColor).toBe('');
+    const [food, foodSubtotal] = screen.getAllByRole('cell', { name: '€150.00' });
+    expect(food).toHaveStyle({ fontWeight: 'var(--weight-bold)' });
+    expect(foodSubtotal!.style.fontWeight).toBe('');
+    expect(screen.getAllByRole('cell', { name: '13 Oct 2026' })).toHaveLength(2);
+  });
+
+  it('computes the values of a sheet openpyxl wrote without them, says so in the footer, and shows what it could not compute as its error', async () => {
+    serve(fixture('trip.xlsx'));
+    render(<ArtifactPreview artifactId="a7" filename="Trip.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
+    await screen.findByTestId('office-xlsx', {}, { timeout: 10_000 });
+    fireEvent.click(screen.getByRole('tab', { name: 'Costs' }));
+    expect(await screen.findByRole('cell', { name: '€800.50' }, { timeout: 10_000 })).toHaveClass('num');
+    expect(screen.getByRole('cell', { name: '€950.50' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'over' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '316.83' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '#NAME?' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '#DIV/0!' })).toBeInTheDocument();
+    expect(screen.getByText(/Totals calculated by buddi/)).toBeInTheDocument();
+  });
+
+  it('adds no footer note to a workbook whose values are all in the file', async () => {
+    serve(fixture('budget.xlsx'));
+    render(<ArtifactPreview artifactId="a8" filename="Budget.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
+    await screen.findByRole('cell', { name: '95.5' }, { timeout: 10_000 });
+    expect(screen.queryByText(/Totals calculated by buddi/)).not.toBeInTheDocument();
+  });
+
   it('shows a deck slide by slide, with no fonts fetched', async () => {
     const deck = fixture('deck.pptx');
     serve(deck);

@@ -3396,6 +3396,16 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .office-xlsx-grid thead th { position: sticky; top: 0; background: var(--surface-sunken); z-index: 1; }
 .office-xlsx-grid .office-xlsx-row, .office-xlsx-grid thead th:first-child { width: 1%; white-space: nowrap; }
 .office-xlsx-grid .office-xlsx-row { color: var(--text-faint); font-weight: var(--weight-medium); background: var(--surface-sunken); }
+/* The file's look: its widths (fixed layout), its frozen rows and columns kept in view, a cell's own text past its width cut. */
+.office-xlsx-table { table-layout: fixed; }
+.office-xlsx-table td { overflow: hidden; text-overflow: ellipsis; }
+.office-xlsx-grid tbody tr[data-frozen='row'] > * { position: sticky; z-index: 1; background: var(--surface); }
+.office-xlsx-grid td[data-frozen='col'], .office-xlsx-grid tbody th.office-xlsx-row { position: sticky; z-index: 1; background: var(--surface); }
+.office-xlsx-grid tbody th.office-xlsx-row { left: 0; }
+.office-xlsx-grid tbody tr[data-frozen='row'] > td[data-frozen='col'], .office-xlsx-grid tbody tr[data-frozen='row'] > th { z-index: 2; }
+.office-xlsx-grid thead th[data-frozen='col'], .office-xlsx-grid thead th:first-child { z-index: 3; }
+.office-xlsx-grid thead th:first-child { left: 0; }
+.office-xlsx-note { font-size: var(--text-sm); }
 .office-pptx { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); }
 .office-pptx-stage { display: flex; justify-content: center; }
 .office-pptx-stage canvas { max-width: 100%; height: auto; box-shadow: var(--shadow-panel); }

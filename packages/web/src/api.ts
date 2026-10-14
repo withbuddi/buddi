@@ -1794,7 +1794,7 @@ export interface ComposedSource {
   fileId: string;
   version: number;
   artifactId: string;
-  kind: 'docx' | 'pptx';
+  kind: 'docx' | 'pptx' | 'xlsx';
   library: string;
   libraryVersion: string;
   nodeVersion: string;

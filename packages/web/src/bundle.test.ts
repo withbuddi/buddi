@@ -66,6 +66,10 @@ const ALLOWED_LITERALS = [
   // The pptx viewer's map of font substitutes, used only with its useGoogleFonts option, which buddi keeps off
   // (chat/office/pptx.tsx): in the lazy chunk, never fetched.
   'https://fonts.googleapis.com/css2?family=',
+  // The formula engine's libraries (chevrotain, regexp-to-ast, bahttext) name their docs and issues in their own
+  // error text; in the sheet engine's lazy chunk, never fetched.
+  'https://chevrotain.io/docs/', 'https://github.com/chevrotain/chevrotain/', 'https://unpkg.com/chevrotain@',
+  'https://github.com/bd82/regexp-to-ast/', 'https://github.com/jojoee/bahttext',
 ];
 
 function externalUrls(text: string): string[] {
