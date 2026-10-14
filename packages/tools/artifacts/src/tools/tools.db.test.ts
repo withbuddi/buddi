@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ToolRegistry, createPool, migrateCore, saveArtifact } from '@buddi/core/testing';
+import { ToolRegistry, createPool, decideApproval, executeApproved, migrateCore, saveArtifact } from '@buddi/core/testing';
 import type { CoreToolContext } from '@buddi/core/testing';
 import { manifest } from '../index.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -339,11 +339,17 @@ suite('artifacts tools (postgres)', () => {
         const upload = await office(DOCX, 'Contract.docx', 'owner');
         const refused = await registry.invoke('artifacts.write', { title: 'x', format: 'markdown', content: '# Contract\n', fileId: upload.fileId, readVersion: 1 }, ctx(conversationId));
         expect(refused.ok).toBe(false);
-        expect(refused.ok ? '' : refused.message).toMatch(/owner's own Word document.*Ask the owner first.*confirmedRebuild: true/);
+        expect(refused.ok ? '' : refused.message).toMatch(/v1 of Contract\.docx is the owner's own version.*confirmedRebuild: true — buddi then asks him on a card/);
         const { rows } = await pool.query(`select count(*)::int as n from core.artifacts where file_id = $1`, [upload.fileId]);
         expect(rows[0].n).toBe(1);
-        const agreed = await call('artifacts.write', { title: 'x', format: 'markdown', content: '# Contract\n', fileId: upload.fileId, readVersion: 1, confirmedRebuild: true }, conversationId);
-        expect(agreed).toMatchObject({ version: 2, rebuilt: true });
+        // The agent saying it asked is a card for the owner, not his yes.
+        const asked = await registry.invoke('artifacts.write', { title: 'x', format: 'markdown', content: '# Contract\n', fileId: upload.fileId, readVersion: 1, confirmedRebuild: true }, ctx(conversationId));
+        expect(asked).toMatchObject({ ok: false, reason: 'approval-required', preview: "Rebuild Contract.docx? Your edits in v1 would be replaced by the agent's text; formatting rebuilt." });
+        if (asked.ok || asked.reason !== 'approval-required') return;
+        const at = ctx(conversationId).now();
+        await decideApproval(pool, { actionId: asked.actionId, decision: 'approved', by: 'owner', via: 'web', now: at });
+        const agreed = await executeApproved(pool, { actionId: asked.actionId, registry, ctx: ctx(conversationId), worker: 'w', now: at });
+        expect(agreed).toMatchObject({ ok: true, result: { version: 2, rebuilt: true } });
       });
 
       it('makes a Word document when asked for one: the converted bytes are the file, and writing it again rebuilds the next version', async () => {
@@ -372,7 +378,7 @@ suite('artifacts tools (postgres)', () => {
         const { rows } = await pool.query(`select id from core.files where name = 'Cover letter.docx'`);
         await pool.query(`insert into core.artifact_uses (artifact_id, conversation_id, kind) select a.id, $2, 'uploaded' from core.artifacts a where a.file_id = $1 on conflict do nothing`, [rows[0].id, conversationId]);
         const refused = await registry.invoke('artifacts.write', { title: 'Cover letter', format: 'docx', content: '# Mine', readVersion: 1 }, ctx(conversationId));
-        expect(refused.ok ? '' : refused.message).toMatch(/owner's own Word document.*Ask the owner first/);
+        expect(refused.ok ? '' : refused.message).toMatch(/v1 of Cover letter\.docx is the owner's own version/);
       });
 
       it('never writes a presentation', async () => {

@@ -267,10 +267,10 @@ export interface ConfinementArea {
   readonly kind: 'macos-sandbox' | 'bwrap' | null;
   /**
    * The argv to put before the command: writes only to `work`, reads only
-   * the system, Node, `readable` and `work`, no network unless `network`.
-   * Refused when `kind` is null.
+   * the system, Node, `readable` and `work`, no network unless `network`,
+   * and no other process when `fork` is false. Refused when `kind` is null.
    */
-  argv(work: string, opts?: { readable?: readonly string[]; network?: boolean }): string[];
+  argv(work: string, opts?: { readable?: readonly string[]; network?: boolean; fork?: boolean }): string[];
 }
 
 /** A directory of the plugin's own: `<data>/plugins-data/<plugin>`. */
@@ -495,16 +495,17 @@ export interface FilesArea {
    * Onto an Office file (1.34), `version.of` with Markdown (a .docx) or a
    * CSV (a .xlsx) is rebuilt into that format by buddi's exporter, and the
    * row says `rebuilt: true`: the formatting of the version before is not
-   * kept. Refused for a presentation, and for a file the owner made or
-   * handed in unless `version.confirmedRebuild` is true — passed only once
-   * the owner agreed.
+   * kept. Refused for a presentation, and over a newest version the owner
+   * wrote unless the call runs as an action he approved (1.35; before, a file
+   * he made and `version.confirmedRebuild`). `confirmedRebuild` now only
+   * says the owner asked for text onto a composed version (`rebuildCheck`).
    *
    * `composed` (1.35) says a program made these bytes (`artifacts.compose`):
    * the bytes are a whole .docx or .pptx of that kind, stored as they are
    * (never rebuilt from text), and the program is kept beside the version.
-   * The rebuild rule reads the other way: onto a newest version the owner
-   * wrote it is refused until he agreed (`confirmedRebuild`); onto a
-   * composed one it is free. A file of another kind is refused.
+   * Onto a newest version the owner wrote it runs only as an action he
+   * approved; onto a composed one, or an agent's, it is free. A file of
+   * another kind is refused.
    */
   save(input: {
     bytes: Buffer;
@@ -516,6 +517,17 @@ export interface FilesArea {
     workspacePath?: string;
     composed?: ComposeSource;
   }): Promise<FileRow & { existed?: boolean; rebuilt?: true }>;
+  /**
+   * What a save by `version` would need before it rebuilds the file it
+   * names (since 1.35): null when nothing, else `owner` (the newest version
+   * is the owner's: the save goes ahead only as an action he approved, so a
+   * tool raises its card first), `asked` (from text onto a composed
+   * version: `confirmedRebuild`) or `never`, with the sentence the agent is
+   * told. `composing` asks it for a composed save.
+   */
+  rebuildCheck(input: { version: { base: string; ext: string; of?: string }; composing?: boolean }): Promise<
+    { need: 'owner' | 'asked' | 'never'; message: string; fileId: string; name: string | null; version: number | null } | null
+  >;
   /** A version by its id; since 1.35 also a file by its own id, as its newest version. */
   get(id: string): Promise<FileRow | null>;
   /**

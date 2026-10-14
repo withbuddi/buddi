@@ -19,6 +19,7 @@
  */
 import { safeFileName, type ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
+import { rebuildDescription, rebuildTier } from './rebuild.js';
 import {
   FORMAT_FILE,
   MAX_DOCUMENT_BYTES,
@@ -67,7 +68,7 @@ const writeInput = z.object({
   confirmedRebuild: z
     .boolean()
     .optional()
-    .describe("Only for a Word (.docx) or Excel (.xlsx) file the owner made or sent: writing it rebuilds it from your text and loses its formatting, so ask the owner first and pass true only once they agreed. Not needed for a file buddi made."),
+    .describe("Two cases. A Word or Excel file whose newest version is the owner's own (a file he sent, a save in Word): writing it rebuilds his version from your text, so tell him first and pass true — buddi shows him a card and saves only if he approves. A file artifacts.compose made: pass true only when the owner asked for it to be rewritten from Markdown."),
 }).strict();
 
 export interface WrittenDocument {
@@ -89,14 +90,23 @@ export interface WrittenDocument {
   note: string;
 }
 
+/** The file a write would save the next version of, as the host's save names it. */
+function targetOf(input: z.infer<typeof writeInput>): { base: string; ext: string; of?: string } {
+  const base = safeFileName(input.title.replace(/\s+/g, ' '), MAX_TITLE_CHARS, 'Document');
+  return { base, ext: FORMAT_FILE[input.format ?? 'markdown'].ext, ...(input.fileId === undefined ? {} : { of: input.fileId }) };
+}
+
 export const write: ToolDefinition<z.infer<typeof writeInput>, WrittenDocument> = {
   name: 'artifacts.write',
   description:
-    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. Asked for a Word document, a PDF or a spreadsheet, write that format (docx, pdf, xlsx) and buddi makes the file from your Markdown or table; a Markdown file downloads as PDF or Word too. Never tell them to paste it into another program, and never convert it yourself (no pandoc). Writing the same title again in this conversation saves its next version; the earlier ones stay. To change an existing file, pass its fileId. A Word (.docx) or Excel (.xlsx) file named by fileId takes Markdown or a table and is rebuilt from it in its own format (its formatting is not kept; for one the owner made or sent, ask them first and pass confirmedRebuild); a PowerPoint file is not written here. A designed document the owner will send, print or present — a letter, an offer, a report under their name, a deck — is made with artifacts.compose when you hold it; a file it composed is changed by editing its program there.",
+    "Save a document into the owner's Files — buddi's own storage, not a folder on their computer (a folder label like “Desktop” is not their desktop): a report, a plan, a letter, a table. Use it when the owner asks for a file, or when what you made is long or structured enough that they will want to keep, print or send it; a short answer stays in the chat. Asked for a Word document, a PDF or a spreadsheet, write that format (docx, pdf, xlsx) and buddi makes the file from your Markdown or table; a Markdown file downloads as PDF or Word too. Never tell them to paste it into another program, and never convert it yourself (no pandoc). Writing the same title again in this conversation saves its next version; the earlier ones stay. To change an existing file, pass its fileId. A Word (.docx) or Excel (.xlsx) file named by fileId takes Markdown or a table and is rebuilt from it in its own format (its formatting is not kept; over the owner's own version, tell them and pass confirmedRebuild, and buddi asks them on a card); a PowerPoint file is not written here. A designed document the owner will send, print or present — a letter, an offer, a report under their name, a deck — is made with artifacts.compose when you hold it; a file it composed is changed by editing its program there.",
   tier: 'auto',
   sideEffect: true,
   producesArtifacts: true,
   input: writeInput,
+  // A card for the owner only when it would rebuild his own version and the agent says it told him (`rebuild.ts`).
+  tierFor: (input, ctx) => rebuildTier(ctx, targetOf(input), false, input.confirmedRebuild),
+  describe: (input, ctx) => rebuildDescription(ctx, targetOf(input), false, input.content),
   async execute(input, ctx) {
     const files = ctx.buddi?.files;
     if (!files) throw new Error('Files is not available to this agent');

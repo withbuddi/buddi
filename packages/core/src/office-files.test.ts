@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { OFFICE_MIME, OFFICE_ZIP_LIMITS, cellText, officeKindOf, officePackageProblem, officeRebuildRefusal, opensInApp, zipEntries } from './office-files.js';
+import { OFFICE_MIME, OFFICE_ZIP_LIMITS, cellText, officeKindOf, officePackageProblem, officeRebuildRefusal, opensInApp, rebuildNeed, zipEntries } from './office-files.js';
 import { isTextFile } from './text-files.js';
 
 describe('which files are Office documents', () => {
@@ -37,20 +37,32 @@ describe('which files are Office documents', () => {
   });
 });
 
-describe('rebuilding an Office file from text', () => {
+describe('rebuilding an Office file', () => {
   const docx = { name: 'Plan.docx', mime: OFFICE_MIME.docx };
-  it('is allowed on a file an agent made', () => {
-    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, {})).toBeNull();
+  const newest = (createdBy: string, composed = false) => ({ id: 'v-id', version: 3, createdBy, composed });
+  it('is allowed over an agent’s version', () => {
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'owner' }, { newest: newest('writer') })).toBeNull();
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { newest: newest('writer') })).toBeNull();
   });
-  it('is refused on the owner’s own file until he agreed, saying to ask him', () => {
-    const refusal = officeRebuildRefusal({ ...docx, createdBy: 'owner' }, {});
-    expect(refusal).toMatch(/Ask the owner first/);
-    expect(refusal).toMatch(/confirmedRebuild: true/);
-    expect(officeRebuildRefusal({ ...docx, createdBy: 'owner' }, { confirmedRebuild: true })).toBeNull();
-    expect(officeRebuildRefusal({ name: 'B.xlsx', mime: OFFICE_MIME.xlsx, createdBy: 'u-1' }, { ownerId: 'u-1' })).toMatch(/spreadsheet/);
+  it('over the owner’s own version only as an action he approved — confirmedRebuild is not enough', () => {
+    const refusal = officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { newest: newest('owner') });
+    expect(refusal).toMatch(/v3 of Plan\.docx is the owner's own version.*confirmedRebuild: true — buddi then asks him on a card/);
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { newest: newest('owner'), confirmedRebuild: true })).toBe(refusal);
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { newest: newest('owner'), approved: true })).toBeNull();
+    expect(officeRebuildRefusal({ name: 'B.xlsx', mime: OFFICE_MIME.xlsx, createdBy: 'writer' }, { ownerId: 'u-1', newest: newest('u-1') })).toMatch(/owner's own version/);
+    expect(rebuildNeed({ ...docx, createdBy: 'writer' }, { newest: newest('owner') })?.need).toBe('owner');
   });
-  it('never writes a presentation', () => {
-    expect(officeRebuildRefusal({ name: 'Deck.pptx', mime: OFFICE_MIME.pptx, createdBy: 'writer' }, { confirmedRebuild: true })).toMatch(/not write it/);
+  it('from text onto a composed version only when the owner asked for it', () => {
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { newest: newest('writer', true) })).toMatch(/edit.* its program/);
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { newest: newest('writer', true), confirmedRebuild: true })).toBeNull();
+  });
+  it('composing decides on the newest version’s author alone', () => {
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'owner' }, { composing: true, newest: newest('writer') })).toBeNull();
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'owner' }, { composing: true, newest: newest('owner', true) })).toBeNull();
+    expect(officeRebuildRefusal({ ...docx, createdBy: 'writer' }, { composing: true, newest: newest('owner') })).toMatch(/owner's own version/);
+  });
+  it('never writes a presentation from text', () => {
+    expect(officeRebuildRefusal({ name: 'Deck.pptx', mime: OFFICE_MIME.pptx, createdBy: 'writer' }, { confirmedRebuild: true, approved: true })).toMatch(/not write it/);
   });
 });
 

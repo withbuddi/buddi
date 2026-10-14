@@ -44,7 +44,7 @@ import { notifyOwner } from '../notifications/notify.js';
 import { AGENT_ACTION_MAX } from '../notifications/agent.js';
 import type { DeliverableMessage } from '../notifications/types.js';
 import { OWNER_ID } from '../owner.js';
-import { MADE_FROM, OFFICE_MIME, madeDocumentOf, officeKindOf, officePackageProblem, officeRebuildRefusal, type MadeDocument, type NewestVersionFacts, type OfficeKind } from '../office-files.js';
+import { MADE_FROM, OFFICE_MIME, madeDocumentOf, officeKindOf, officePackageProblem, officeRebuildRefusal, rebuildNeed, type MadeDocument, type NewestVersionFacts, type OfficeKind } from '../office-files.js';
 import { getOwnerProfile } from '../onboarding/store.js';
 import { languageTag } from '../onboarding/language-tag.js';
 import { OWNER_AGENT_ID } from '../pages.js';
@@ -1173,7 +1173,9 @@ function filesArea(
         throw new Error(`${file.name ?? 'This file'} is not a .${composed.kind}; a write never changes a file's format. Compose a new file (a title, no fileId) instead.`);
       }
       const refusal = officeRebuildRefusal(file, {
-        confirmedRebuild, newest, ...(composed ? { composing: true } : {}), ...(facts.ownerId ? { ownerId: facts.ownerId } : {}),
+        // Approved: this call runs as an action the owner said yes to — set by the executor, never by the model.
+        confirmedRebuild, approved: facts.actionId !== undefined, newest,
+        ...(composed ? { composing: true } : {}), ...(facts.ownerId ? { ownerId: facts.ownerId } : {}),
       });
       if (refusal) throw new Error(refusal);
     };
@@ -1183,7 +1185,30 @@ function filesArea(
     if (!newest) return null;
     return { id: newest.id, version: newest.version, createdBy: newest.createdBy, composed: (await composeSourceOf(pool(), newest.id)) !== null };
   };
+  /** The live file a save by `version` would write: by id, else the conversation's file of that name. */
+  const targetOf = async (version: { base: string; ext: string; of?: string }): Promise<string | null> => {
+    if (version.of !== undefined) {
+      const fileId = await resolveFileId(pool(), version.of);
+      return fileId !== null && (await fileInScope(fileId)) ? fileId : null;
+    }
+    if (facts.conversationId === undefined || !/^[0-9a-f-]{36}$/i.test(facts.conversationId)) return null;
+    const { rows } = await pool().query(
+      `select f.id from core.files f
+        where f.conversation_id = $1 and lower(f.name) = lower($2) and f.deleted_at is null
+          and exists (select 1 from core.artifacts a where a.file_id = f.id and a.deleted_at is null)`,
+      [facts.conversationId, `${version.base}.${version.ext}`],
+    );
+    return rows.length === 1 ? String(rows[0].id) : null;
+  };
   return {
+    async rebuildCheck(input) {
+      const fileId = await targetOf(input.version);
+      const file = fileId === null ? null : await getFile(pool(), fileId);
+      if (!file || file.deletedAt !== null) return null;
+      const newest = await newestFacts(file.id);
+      const rule = rebuildNeed(file, { newest, ...(input.composing ? { composing: true } : {}), ...(facts.ownerId ? { ownerId: facts.ownerId } : {}) });
+      return rule === null ? null : { ...rule, fileId: file.id, name: file.name, version: newest?.version ?? null };
+    },
     async save(input) {
       if (input.composed) {
         // A program's output is stored as it is: a whole package of its kind, never rebuilt from text.

@@ -601,6 +601,15 @@ async function insertComposeSource(client: Queryable, artifactId: string, source
   );
 }
 
+/** The program `from` was composed from, kept beside `to` too (a Restore of it). Nothing when `from` was not composed. */
+async function copyComposeSource(client: Queryable, from: string, to: string): Promise<void> {
+  await client.query(
+    `insert into core.compose_sources (artifact_id, kind, library, library_version, node_version, program)
+     select $2, kind, library, library_version, node_version, program from core.compose_sources where artifact_id = $1`,
+    [from, to],
+  );
+}
+
 /**
  * The program a version was composed from, by the version's id — or, by a
  * file's id, its newest version's. Null when that version was not composed.
@@ -816,13 +825,8 @@ export async function saveOwnerVersion(
     });
     // A Restore of a composed version brings its program with the bytes.
     if (!same && input.restoredFrom !== undefined) {
-      await client.query(
-        `insert into core.compose_sources (artifact_id, kind, library, library_version, node_version, program)
-         select $1, s.kind, s.library, s.library_version, s.node_version, s.program
-           from core.compose_sources s join core.artifacts a on a.id = s.artifact_id
-          where a.file_id = $2 and a.version = $3`,
-        [row.id, file.id, input.restoredFrom],
-      );
+      const { rows: from } = await client.query(`select id from core.artifacts where file_id = $1 and version = $2`, [file.id, input.restoredFrom]);
+      if (from[0]) await copyComposeSource(client, String(from[0].id), row.id);
     }
     await client.query('commit');
 
