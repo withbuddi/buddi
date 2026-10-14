@@ -583,7 +583,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.34`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.35`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -1003,6 +1003,27 @@ keep its name (no `(vN)` in stored names), and `files.list` takes `latest`
   unless `version.confirmedRebuild` is true, which a writer passes only once
   the owner agreed; a .pptx is never written (docs/files.md, "Office
   documents").
+
+1.35 keeps a program beside a version (docs/files.md, "Composed documents"):
+
+- **`files.save({ composed })`**: `{ kind: 'docx'|'pptx', library,
+  libraryVersion, nodeVersion, program }` says a program made these bytes.
+  They must be a whole package of that kind under its Office mime, and are
+  stored as they are — never rebuilt from text — with the program in
+  `core.compose_sources` beside the version, in the same transaction. Saved
+  by title (`version`) or onto a file (`version.of`) of the same kind; the
+  rebuild rule reads the other way: a newest version the owner wrote is
+  refused until `version.confirmedRebuild`, a composed one is free. A save
+  from text onto a composed file is refused until `confirmedRebuild` too.
+- **`files.source(id)`**: the program a version was composed from (by a
+  version's id), or the newest version's (by a file's id): `{ artifactId,
+  fileId, version, kind, library, libraryVersion, nodeVersion, program,
+  createdAt }`, or `null` when it was not composed or is out of scope.
+
+- **`files.get(id)`** (and `read`) take a file's own id too: its newest live
+  version.
+
+An older buddi ignores `composed` and has no `source`.
 
 ## 8. End to end
 

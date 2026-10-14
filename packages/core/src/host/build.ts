@@ -29,6 +29,9 @@ import {
   resolveFileId,
   recordFileRead,
   getFile,
+  currentVersion,
+  composeSourceOf,
+  type ComposeSource,
   type ArtifactKind,
   type ArtifactRow,
   type EnvLike,
@@ -41,7 +44,7 @@ import { notifyOwner } from '../notifications/notify.js';
 import { AGENT_ACTION_MAX } from '../notifications/agent.js';
 import type { DeliverableMessage } from '../notifications/types.js';
 import { OWNER_ID } from '../owner.js';
-import { MADE_FROM, madeDocumentOf, officeRebuildRefusal, type MadeDocument } from '../office-files.js';
+import { MADE_FROM, OFFICE_MIME, madeDocumentOf, officeKindOf, officePackageProblem, officeRebuildRefusal, type MadeDocument, type NewestVersionFacts, type OfficeKind } from '../office-files.js';
 import { getOwnerProfile } from '../onboarding/store.js';
 import { languageTag } from '../onboarding/language-tag.js';
 import { OWNER_AGENT_ID } from '../pages.js';
@@ -1125,9 +1128,12 @@ function filesArea(
   const get = async (id: string): Promise<(FileRow & { storagePath: string }) | null> => {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
     const where = scope(2);
+    // A version by its id, or (since 1.35) a file by its own: its newest live version.
     const { rows } = await pool().query(
       `select ${FILE_COLUMNS}, a.storage_path from core.artifacts a
-        where a.id = $1 and a.deleted_at is null and ${where.sql}`,
+        where a.deleted_at is null and ${where.sql}
+          and (a.id = $1 or a.id = (select v.id from core.artifacts v where v.file_id = $1::uuid and v.deleted_at is null order by v.version desc limit 1))
+        order by (a.id = $1) desc limit 1`,
       [id, ...where.params],
     );
     const row = rows[0];
@@ -1148,13 +1154,36 @@ function filesArea(
     const base = (name ?? 'Document').replace(/\.[a-z0-9]{1,8}$/i, '');
     return facts.convertDocument({ bytes, mime: wants, filename: `${base}.${wants === 'text/csv' ? 'csv' : 'md'}` }, to);
   };
-  /** Who may write the next version of this file from text: the rebuild rule, with the owner's id. */
-  const mayRebuild = (file: { name: string | null; mime: string; createdBy: string }, confirmedRebuild: boolean): void => {
-    const refusal = officeRebuildRefusal(file, { confirmedRebuild, ...(facts.ownerId ? { ownerId: facts.ownerId } : {}) });
-    if (refusal) throw new Error(refusal);
+  /**
+   * Who may write the next version of this file — from text, or by a
+   * program (`composing`): the rebuild rule, with the owner's id and the
+   * file's newest version. Asked under the file's lock by the store.
+   */
+  const mayRebuild = (confirmedRebuild: boolean, composed?: ComposeSource) =>
+    (file: { name: string | null; mime: string; createdBy: string }, newest: NewestVersionFacts | null): void => {
+      if (composed && officeKindOf(file.mime, file.name) !== composed.kind) {
+        throw new Error(`${file.name ?? 'This file'} is not a .${composed.kind}; a write never changes a file's format. Compose a new file (a title, no fileId) instead.`);
+      }
+      const refusal = officeRebuildRefusal(file, {
+        confirmedRebuild, newest, ...(composed ? { composing: true } : {}), ...(facts.ownerId ? { ownerId: facts.ownerId } : {}),
+      });
+      if (refusal) throw new Error(refusal);
+    };
+  /** The file's newest version as the rule reads it, before anything is made (the store asks again under the lock). */
+  const newestFacts = async (fileId: string): Promise<NewestVersionFacts | null> => {
+    const newest = await currentVersion(pool(), fileId);
+    if (!newest) return null;
+    return { id: newest.id, version: newest.version, createdBy: newest.createdBy, composed: (await composeSourceOf(pool(), newest.id)) !== null };
   };
   return {
     async save(input) {
+      if (input.composed) {
+        // A program's output is stored as it is: a whole package of its kind, never rebuilt from text.
+        if (input.version === undefined) throw new Error('files.save: composed bytes are saved as a document (version)');
+        if (input.mime !== OFFICE_MIME[input.composed.kind as OfficeKind]) throw new Error(`files.save: a composed ${input.composed.kind} is saved as ${OFFICE_MIME[input.composed.kind as OfficeKind]}`);
+        const problem = officePackageProblem(input.bytes, input.composed.kind as OfficeKind);
+        if (problem) throw new Error(`The program's output is not a whole .${input.composed.kind}: ${problem}.`);
+      }
       // The file belongs to the conversation the call runs in only when that
       // conversation exists: a mission's or a test's id is not a row, and the
       // library's reference to it would not hold.
@@ -1193,14 +1222,17 @@ function filesArea(
         if (fileId === null || !(await fileInScope(fileId))) throw new Error(`There is no file ${of} that ${binding.plugin} can read.`);
         // A made document stays one: text written onto it is rebuilt into its format (docs/files.md, "Office documents").
         const file = await getFile(pool(), fileId);
+        const guard = mayRebuild(input.version.confirmedRebuild === true, input.composed);
         let bytes = input.bytes;
         if (file) {
-          mayRebuild(file, input.version.confirmedRebuild === true);
-          const made = madeDocumentOf(file.mime, file.name);
+          // Refused before anything is made; asked again under the file's lock.
+          guard(file, await newestFacts(fileId));
+          const made = input.composed ? null : madeDocumentOf(file.mime, file.name);
           if (made) { bytes = await madeBytes(made, file.name, input.mime, input.bytes); rebuilt = true; }
         }
         result = await saveVersion(pool(), {
-          id: fileId, bytes, createdBy: fields.createdBy,
+          id: fileId, bytes, createdBy: fields.createdBy, guard,
+          ...(input.composed ? { composed: input.composed } : {}),
           ...(input.caption === undefined ? {} : { caption: input.caption }),
           ...(readVersion === undefined ? {} : { readVersion }),
         }, env());
@@ -1208,21 +1240,21 @@ function filesArea(
         // A document by title: the next version of that name in this conversation, else a new file.
         // Asked for as a Word, Excel or PDF file, the text is made into one: that is what is stored.
         const ext = input.version.ext.toLowerCase();
-        const made = ext === 'docx' || ext === 'xlsx' || ext === 'pdf' ? ext : null;
+        const made = input.composed ? null : ext === 'docx' || ext === 'xlsx' || ext === 'pdf' ? ext : null;
         const name = `${input.version.base}.${input.version.ext}`;
-        const confirmed = input.version.confirmedRebuild === true;
         result = await saveDocument(pool(), {
           conversationId, name, createdBy: fields.createdBy,
           mime: made ? MADE_FROM[made].mime : input.mime,
           bytes: made ? await madeBytes(made, name, input.mime, input.bytes) : input.bytes,
-          guard: (file) => mayRebuild(file, confirmed),
+          guard: mayRebuild(input.version.confirmedRebuild === true, input.composed),
+          ...(input.composed ? { composed: input.composed } : {}),
           ...(input.caption === undefined ? {} : { caption: input.caption }),
           ...(readVersion === undefined ? {} : { readVersion }),
         }, env());
       } else {
         result = await saveArtifactReporting(pool(), { ...fields, ...(input.filename === undefined ? {} : { filename: input.filename }), conversationId }, env());
       }
-      if (input.version !== undefined && input.version.of === undefined && result.row.version > 1 && !result.existed) {
+      if (input.version !== undefined && input.version.of === undefined && input.composed === undefined && result.row.version > 1 && !result.existed) {
         rebuilt = madeDocumentOf(result.row.mime, result.row.filename) !== null;
       }
       const saved = result.row;
@@ -1243,6 +1275,11 @@ function filesArea(
       if (row === null) return null;
       const { storagePath: _hidden, ...visible } = row;
       return visible;
+    },
+    async source(id) {
+      const found = await composeSourceOf(pool(), id);
+      if (found === null || (await get(found.artifactId)) === null) return null;
+      return found;
     },
     async read(id) {
       const row = await get(id);

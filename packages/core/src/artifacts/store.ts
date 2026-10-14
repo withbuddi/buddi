@@ -30,7 +30,7 @@
  * the file. A month later `purgeDeletedArtifacts` removes the rows, and the
  * bytes no remaining version stores.
  */
-import { OFFICE_FORMATS } from '../office-files.js';
+import { OFFICE_FORMATS, type NewestVersionFacts } from '../office-files.js';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -69,6 +69,32 @@ export interface ArtifactSource {
   chatId?: string | null;
   messageId?: string | null;
 }
+
+/**
+ * The program a composed version was made from (`core.compose_sources`):
+ * what `artifacts.compose` stores beside the version it produced, and what
+ * a Restore of that version copies.
+ */
+export interface ComposeSource {
+  kind: 'docx' | 'pptx' | 'xlsx';
+  /** The library the program was written against (`docx`, `pptxgenjs`), and its version. */
+  library: string;
+  libraryVersion: string;
+  /** The Node it ran under. */
+  nodeVersion: string;
+  program: string;
+}
+
+/** A composed version's program, with the version it belongs to. */
+export interface StoredComposeSource extends ComposeSource {
+  artifactId: string;
+  fileId: string;
+  version: number;
+  createdAt: string | null;
+}
+
+/** The largest program stored beside a version (the table's own check says the same). */
+export const MAX_COMPOSE_PROGRAM_BYTES = 200 * 1024;
 
 export interface SaveArtifactInput {
   bytes: Buffer;
@@ -529,18 +555,73 @@ async function appendWriterVersion(
   client: PoolClient,
   env: EnvLike,
   fileId: string,
-  input: { bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: number },
+  input: WriterInput,
 ): Promise<{ row: ArtifactRow; existed: boolean; file: FileRecord }> {
   await lockFile(client, fileId);
   const file = await loadFile(client, fileId);
   if (!file || file.deletedAt !== null) throw new FileGoneError(fileId);
   const newest = await newestOf(client, file.id);
+  // Asked under the lock, of the file and its newest version: the rebuild rule.
+  input.guard?.(file, newest ? { id: newest.id, version: newest.version, createdBy: newest.createdBy, composed: await isComposed(client, newest.id) } : null);
   if (newest) {
     const stale = input.readVersion !== undefined ? newest.version > input.readVersion : newest.createdBy !== input.createdBy;
     if (stale) throw new FileChangedError(file, newest, input.readVersion);
     if (newest.sha256 === sha256Of(input.bytes)) return { row: newest, existed: true, file };
   }
-  return { row: await insertVersion(client, env, file, input), existed: false, file };
+  const row = await insertVersion(client, env, file, input);
+  if (input.composed) await insertComposeSource(client, row.id, input.composed);
+  return { row, existed: false, file };
+}
+
+/** What a writer's version carries: its bytes, who wrote it, what it read, and what may refuse it. */
+interface WriterInput {
+  bytes: Buffer;
+  createdBy: string;
+  caption?: string | null;
+  readVersion?: number;
+  /** Asked, under the file's lock, before the next version of an existing file is written: throws to refuse it. */
+  guard?: (file: FileRecord, newest: NewestVersionFacts | null) => void;
+  /** The program that made these bytes, stored beside the version (`artifacts.compose`). */
+  composed?: ComposeSource;
+}
+
+async function isComposed(client: Queryable, artifactId: string): Promise<boolean> {
+  const { rows } = await client.query(`select 1 from core.compose_sources where artifact_id = $1`, [artifactId]);
+  return rows.length > 0;
+}
+
+async function insertComposeSource(client: Queryable, artifactId: string, source: ComposeSource): Promise<void> {
+  if (Buffer.byteLength(source.program, 'utf8') > MAX_COMPOSE_PROGRAM_BYTES) {
+    throw new Error(`a program can be at most ${MAX_COMPOSE_PROGRAM_BYTES / 1024} KB`);
+  }
+  await client.query(
+    `insert into core.compose_sources (artifact_id, kind, library, library_version, node_version, program)
+     values ($1, $2, $3, $4, $5, $6)`,
+    [artifactId, source.kind, source.library, source.libraryVersion, source.nodeVersion, source.program],
+  );
+}
+
+/**
+ * The program a version was composed from, by the version's id — or, by a
+ * file's id, its newest version's. Null when that version was not composed.
+ */
+export async function composeSourceOf(pool: Queryable, id: string): Promise<StoredComposeSource | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  const { rows } = await pool.query(
+    `select s.artifact_id, s.kind, s.library, s.library_version, s.node_version, s.program, s.created_at, a.file_id, a.version
+       from core.compose_sources s join core.artifacts a on a.id = s.artifact_id
+      where a.deleted_at is null and s.artifact_id = coalesce(
+        (select v.id from core.artifacts v where v.id = $1::uuid),
+        (select v.id from core.artifacts v where v.file_id = $1::uuid and v.deleted_at is null order by v.version desc limit 1))`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    artifactId: String(row.artifact_id), fileId: String(row.file_id), version: Number(row.version),
+    kind: row.kind, library: String(row.library), libraryVersion: String(row.library_version),
+    nodeVersion: String(row.node_version), program: String(row.program), createdAt: toIso(row.created_at),
+  };
 }
 
 /**
@@ -551,7 +632,7 @@ async function appendWriterVersion(
  */
 export async function saveVersion(
   pool: Pool,
-  input: { id: string; bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: number },
+  input: WriterInput & { id: string },
   env: EnvLike = process.env,
 ): Promise<{ row: ArtifactRow; existed: boolean; file: FileRecord }> {
   checkInput(input);
@@ -571,10 +652,8 @@ export async function saveVersion(
 export async function saveDocument(
   pool: Pool,
   input: {
-    conversationId: string | null; name: string; mime: string; bytes: Buffer; createdBy: string; caption?: string | null; readVersion?: number;
-    /** Asked, under the lock, before the next version of an existing file is written: throws to refuse it. */
-    guard?: (file: FileRecord) => void;
-  },
+    conversationId: string | null; name: string; mime: string;
+  } & WriterInput,
   env: EnvLike = process.env,
 ): Promise<{ row: ArtifactRow; existed: boolean; file: FileRecord }> {
   checkInput(input, input.mime);
@@ -589,17 +668,12 @@ export async function saveDocument(
         [input.conversationId, input.name],
       );
       if (rows.length > 1) throw new AmbiguousFileError(input.name, rows.map((row) => String(row.id)));
-      if (rows[0]) {
-        if (input.guard) {
-          await lockFile(client, String(rows[0].id));
-          const existing = await loadFile(client, String(rows[0].id));
-          if (existing) input.guard(existing);
-        }
-        return appendWriterVersion(client, env, String(rows[0].id), input);
-      }
+      if (rows[0]) return appendWriterVersion(client, env, String(rows[0].id), input);
     }
     const file = await createFile(client, { conversationId: input.conversationId, name: input.name, mime: input.mime.trim(), createdBy: input.createdBy, origin: 'document' });
-    return { row: await insertVersion(client, env, file, input), existed: false, file };
+    const row = await insertVersion(client, env, file, input);
+    if (input.composed) await insertComposeSource(client, row.id, input.composed);
+    return { row, existed: false, file };
   });
 }
 
@@ -637,14 +711,16 @@ export async function currentVersion(pool: Queryable, fileId: string): Promise<A
 }
 
 /** A file's live versions, newest first, each saying which version it restored, if any. */
-export async function fileVersions(pool: Queryable, fileId: string): Promise<Array<ArtifactRow & { restoredFrom: number | null }>> {
+export async function fileVersions(pool: Queryable, fileId: string): Promise<Array<ArtifactRow & { restoredFrom: number | null; composed: boolean }>> {
   const { rows } = await pool.query(
-    `select ${A_COLUMNS}, a.restored_from from core.artifacts a
+    `select ${A_COLUMNS}, a.restored_from,
+            exists (select 1 from core.compose_sources s where s.artifact_id = a.id) as composed
+       from core.artifacts a
       where a.file_id = $1 and a.deleted_at is null
       order by a.version desc`,
     [fileId],
   );
-  return rows.map((row) => ({ ...toRow(row), restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : Number(row.restored_from) }));
+  return rows.map((row) => ({ ...toRow(row), restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : Number(row.restored_from), composed: row.composed === true }));
 }
 
 /** What `saveOwnerVersion` found. */
@@ -738,6 +814,16 @@ export async function saveOwnerVersion(
       bytes: input.bytes, createdBy: 'owner',
       ...(input.restoredFrom === undefined ? {} : { restoredFrom: input.restoredFrom }),
     });
+    // A Restore of a composed version brings its program with the bytes.
+    if (!same && input.restoredFrom !== undefined) {
+      await client.query(
+        `insert into core.compose_sources (artifact_id, kind, library, library_version, node_version, program)
+         select $1, s.kind, s.library, s.library_version, s.node_version, s.program
+           from core.compose_sources s join core.artifacts a on a.id = s.artifact_id
+          where a.file_id = $2 and a.version = $3`,
+        [row.id, file.id, input.restoredFrom],
+      );
+    }
     await client.query('commit');
 
     const done = { ok: true as const, row, file, created: !same };

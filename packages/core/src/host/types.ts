@@ -18,7 +18,7 @@ import type { PluginAsset } from '../plugin/assets.js';
 import type { OAuthProvider, OAuthSignInRequest, OAuthSignInStart, OAuthSignInStatus } from '../plugin/sign-in.js';
 import type { Vault } from '../vault/types.js';
 import type { ToolPermission } from '../actions/permissions.js';
-import type { ArtifactKind, ArtifactRow, ArtifactSource } from '../artifacts/store.js';
+import type { ArtifactKind, ArtifactRow, ArtifactSource, ComposeSource, StoredComposeSource } from '../artifacts/store.js';
 import type { ProposePolicyInput } from '../learning/policies.js';
 import type { CreateProposalResult, TrackRecord } from '../learning/store.js';
 import type { Proposal } from '../learning/types.js';
@@ -479,6 +479,13 @@ export interface FilesArea {
    * kept. Refused for a presentation, and for a file the owner made or
    * handed in unless `version.confirmedRebuild` is true — passed only once
    * the owner agreed.
+   *
+   * `composed` (1.35) says a program made these bytes (`artifacts.compose`):
+   * the bytes are a whole .docx or .pptx of that kind, stored as they are
+   * (never rebuilt from text), and the program is kept beside the version.
+   * The rebuild rule reads the other way: onto a newest version the owner
+   * wrote it is refused until he agreed (`confirmedRebuild`); onto a
+   * composed one it is free. A file of another kind is refused.
    */
   save(input: {
     bytes: Buffer;
@@ -488,8 +495,16 @@ export interface FilesArea {
     source?: ArtifactSource;
     version?: { base: string; ext: string; readVersion?: number; of?: string; confirmedRebuild?: boolean };
     workspacePath?: string;
+    composed?: ComposeSource;
   }): Promise<FileRow & { existed?: boolean; rebuilt?: true }>;
+  /** A version by its id; since 1.35 also a file by its own id, as its newest version. */
   get(id: string): Promise<FileRow | null>;
+  /**
+   * The program a composed version was made from: by a version's id that
+   * version, by a file's id its newest. Null when it was not composed, or
+   * is not a file this plugin can read. Since 1.35.
+   */
+  source(id: string): Promise<StoredComposeSource | null>;
   read(id: string): Promise<Buffer>;
   list(opts?: {
     since?: Date;

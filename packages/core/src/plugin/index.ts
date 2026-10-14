@@ -16,7 +16,7 @@ export type { DayMonth } from '../day-month.js';
 export { sha256Of } from './hash.js';
 // Files: the one file-name rule and the one Office rule, as core applies them (docs/files.md).
 export { safeFileName } from '../text-files.js';
-export { OFFICE_ZIP_LIMITS, cellText, officeKindOf, officePackageProblem, zipEntries, type OfficeKind, type ZipEntry } from '../office-files.js';
+export { OFFICE_MIME, OFFICE_PREVIEW_BYTES, OFFICE_ZIP_LIMITS, cellText, officeKindOf, officePackageProblem, zipEntries, type OfficeKind, type ZipEntry } from '../office-files.js';
 export { QueryRefusal, pageFile, isPageFile } from './page-file.js';
 export { parseViewDescriptors } from '../views.js';
 export {
@@ -182,7 +182,7 @@ export type { CreateProposalResult, TrackRecord } from '../learning/store.js';
 export type { AccountCapabilities, CodexImage, CodexImageOptions, CodexProfile, ProviderAccountListing, ProviderAccountsAccess } from '../provider-accounts.js';
 export type { ResolvedProvider } from '../provider.js';
 export type { SurfaceProfile } from '../surfaces.js';
-export type { ArtifactKind, ArtifactSource } from '../artifacts/store.js';
+export type { ArtifactKind, ArtifactSource, ComposeSource, StoredComposeSource } from '../artifacts/store.js';
 export type { ToolPermission } from '../actions/permissions.js';
 export type { MisfirePolicy } from '../scheduler/types.js';
 export type {

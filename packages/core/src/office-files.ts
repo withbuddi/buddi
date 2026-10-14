@@ -131,26 +131,58 @@ export function madeDocumentOf(mime: string, filename?: string | null): MadeDocu
   return isPdf(mime, filename) ? 'pdf' : null;
 }
 
+/** The newest version of a file, as the rebuild rule reads it. */
+export interface NewestVersionFacts {
+  id: string;
+  version: number;
+  createdBy: string;
+  /** Made by `artifacts.compose`: a program's output, with the program beside it. */
+  composed: boolean;
+}
+
 /**
- * Who may rebuild a document from text — an agent's Markdown onto a .docx or
- * a .pdf, a table onto a .xlsx — losing what its newest version had beyond
- * the text: null when it may, else why not, which is what the agent is told.
- * A file buddi made (its creator is an agent) may be rebuilt; one the owner
- * made or handed in only once he agreed (`confirmedRebuild`), which the agent
- * passes only after asking him. A presentation is never rebuilt.
+ * Who may rebuild a document — losing what its newest version had — null
+ * when the writer may, else why not, which is what the agent is told. The
+ * one rule for both ways a document is made (docs/files.md, "Office
+ * documents" and "Composed documents"):
+ *
+ *  - **From text** (`artifacts.write`: Markdown onto a .docx or a .pdf, a
+ *    table onto a .xlsx). A file buddi made (its creator is an agent) may be
+ *    rebuilt; one the owner made or handed in only once he agreed
+ *    (`confirmedRebuild`), which the agent passes only after asking him. A
+ *    file whose newest version a program composed is changed by editing that
+ *    program, and rebuilt from text only once the owner asked for it. A
+ *    presentation is never written from text.
+ *  - **By a program** (`composing`). A newest version that was composed is
+ *    composed again freely; one the owner wrote (a save in Word, Open in app,
+ *    a file he sent) only once he agreed: the agent reads it first and
+ *    carries his changes into the program.
  */
 export function officeRebuildRefusal(
   file: { name: string | null; mime: string; createdBy: string },
-  input: { confirmedRebuild?: boolean; ownerId?: string },
+  input: { confirmedRebuild?: boolean; ownerId?: string; newest?: NewestVersionFacts | null; composing?: boolean },
 ): string | null {
   const name = file.name ?? 'this file';
-  if (officeKindOf(file.mime, file.name) === 'pptx') return `${name} is a presentation; agents can read it (artifacts.text) but not write it.`;
+  const owners = (by: string): boolean => by === 'owner' || (input.ownerId !== undefined && by === input.ownerId);
+  const confirmed = input.confirmedRebuild === true;
+  const newest = input.newest ?? null;
+  if (input.composing === true) {
+    if (newest === null || newest.composed || confirmed) return null;
+    if (!owners(newest.createdBy) && !owners(file.createdBy)) return null;
+    return `v${newest.version} of ${name} is the owner's own version (a save in Word or another app, or a file he sent), not made by a program. Composing it again replaces it with your program's output: read it first (artifacts.text { id: "${newest.id}" }) and carry his changes into the program, ask the owner, and only once he agrees compose again with readVersion: ${newest.version} and confirmedRebuild: true.`;
+  }
+  if (officeKindOf(file.mime, file.name) === 'pptx') {
+    return `${name} is a presentation; agents can read it (artifacts.text) but not write it with artifacts.write. ${newest?.composed ? 'It was composed by a program: change it by editing that program (artifacts.compose { fileId, source: true }).' : 'A deck is made with artifacts.compose.'}`;
+  }
   const made = madeDocumentOf(file.mime, file.name);
-  if (made === null) return null;
-  const owner = file.createdBy === 'owner' || (input.ownerId !== undefined && file.createdBy === input.ownerId);
-  if (!owner || input.confirmedRebuild === true) return null;
+  if (made === null || confirmed) return null;
+  const from = made === 'xlsx' ? 'a table' : 'Markdown';
+  if (newest?.composed) {
+    return `${name} was composed by a program: change it by editing its program (artifacts.compose { fileId, source: true }, then artifacts.compose with the edited program). Writing it from ${from} would rebuild it and lose its design; only if the owner asks for that, write again with confirmedRebuild: true.`;
+  }
+  if (!owners(file.createdBy)) return null;
   const what = made === 'docx' ? 'Word document' : made === 'xlsx' ? 'spreadsheet' : 'PDF';
-  return `${name} is the owner's own ${what}. Writing it from ${made === 'xlsx' ? 'a table' : 'Markdown'} rebuilds it and loses its formatting. Ask the owner first; only once they agree, write again with confirmedRebuild: true.`;
+  return `${name} is the owner's own ${what}. Writing it from ${from} rebuilds it and loses its formatting. Ask the owner first; only once they agree, write again with confirmedRebuild: true.`;
 }
 
 /**

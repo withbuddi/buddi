@@ -62,6 +62,8 @@ export interface LibraryVersion {
   createdBy: string;
   /** A Restore: the version whose bytes it copies. */
   restoredFrom: number | null;
+  /** Made by a program (`artifacts.compose`), which is stored beside it. */
+  composed: boolean;
 }
 
 /** A file's versions as both the Files page and the canvas read them. */
@@ -75,6 +77,7 @@ export async function libraryVersions(pool: Queryable, fileId: string): Promise<
     sha256: v.sha256,
     createdBy: v.createdBy,
     restoredFrom: v.restoredFrom,
+    composed: v.composed,
   }));
 }
 

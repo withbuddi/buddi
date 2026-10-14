@@ -225,7 +225,7 @@ describe('browser.act and a download', () => {
         return { id: '11111111-2222-4333-8444-555555555555', kind: 'document', mime: input.mime, filename: input.filename ?? null, sizeBytes: input.bytes.length,
           sha256: 'x', caption: input.caption ?? null, createdBy: 'cfo', createdAt: new Date(now).toISOString(), conversationId: null } as never;
       },
-      get: async () => null, read: async () => Buffer.alloc(0), list: async () => [],
+      get: async () => null, source: async () => null, read: async () => Buffer.alloc(0), list: async () => [],
     };
     const ctx = { ...facts, buddi: { ...host, files } } as CoreToolContext;
     return { service, ctx, pending, saved, store, root, cleanup, advance: (ms: number) => { now += ms; } };
