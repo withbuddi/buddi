@@ -6,9 +6,10 @@
  * a restart onto a new build drops the stream, so a reconnect is the moment a
  * new build is most likely. When the served build is not this page's:
  *
- *  - the tab is hidden, or the owner has been idle for a minute with every
- *    composer on the page empty, nothing recording and no sheet or dialog
- *    open → reload now, where the owner was (a reload keeps the hash);
+ *  - nothing is in progress (every composer empty, nothing recording, no
+ *    sheet or dialog open, no unsaved canvas edit) and the tab is hidden or
+ *    the owner has been idle for a minute → reload now, where the owner was
+ *    (a reload keeps the hash); a hidden tab is no exception to "in progress";
  *  - otherwise nothing moves under the owner's hands: the avatar's dot and
  *    "Reload to update" stay, and the check is made again every few seconds.
  *
@@ -99,8 +100,8 @@ export function somethingInProgress(doc: Document = document): boolean {
 
 /** Whether a stale page may reload now. */
 export function safeToReload(opts: { hidden: boolean; idleMs: number; busy: boolean }): boolean {
-  if (opts.hidden) return true;
-  return opts.idleMs >= IDLE_MS && !opts.busy;
+  if (opts.busy) return false;
+  return opts.hidden || opts.idleMs >= IDLE_MS;
 }
 
 function alreadyReloadedFor(served: string): boolean {

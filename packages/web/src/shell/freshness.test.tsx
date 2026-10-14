@@ -97,6 +97,24 @@ describe('the automatic reload', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a hidden tab that is in the middle of something, and reloads it once that is done', () => {
+    vi.useFakeTimers();
+    visibility = 'hidden';
+    setLastActivityForTests(Date.now());
+    document.body.innerHTML = '<div class="wb-listening" role="group" aria-label="Recording"></div>';
+    setDraft('tab-1', { fileId: 'f1', base: 1, baseText: 'a', text: 'ab' });
+    const reload = vi.fn();
+    renderHook(() => useAutoReload('new', reload, 'old'));
+    act(() => { vi.advanceTimersByTime(3 * SAFE_RECHECK_MS); });
+    expect(reload).not.toHaveBeenCalled();
+    document.body.innerHTML = '';
+    act(() => { vi.advanceTimersByTime(SAFE_RECHECK_MS); });
+    expect(reload).not.toHaveBeenCalled();
+    setDraft('tab-1', null);
+    act(() => { vi.advanceTimersByTime(SAFE_RECHECK_MS); });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   it('never reloads while a recording runs or a dialog is open', () => {
     vi.useFakeTimers();
     document.body.innerHTML = '<div class="wb-listening" role="group" aria-label="Recording"></div>';
@@ -131,7 +149,8 @@ describe('the automatic reload', () => {
     setDraft('tab-1', { fileId: 'f1', base: 1, baseText: 'a', text: 'ab' });
     expect(somethingInProgress()).toBe(true);
     setDraft('tab-1', null);
-    expect(safeToReload({ hidden: true, idleMs: 0, busy: true })).toBe(true);
+    expect(safeToReload({ hidden: true, idleMs: 0, busy: true })).toBe(false);
+    expect(safeToReload({ hidden: true, idleMs: 0, busy: false })).toBe(true);
     expect(safeToReload({ hidden: false, idleMs: IDLE_MS, busy: false })).toBe(true);
     expect(safeToReload({ hidden: false, idleMs: IDLE_MS - 1, busy: false })).toBe(false);
     expect(safeToReload({ hidden: false, idleMs: IDLE_MS, busy: true })).toBe(false);
