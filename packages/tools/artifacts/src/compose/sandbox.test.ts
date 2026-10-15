@@ -8,7 +8,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdir, mkdtemp, readdir, rm, utimes } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { COMPOSE_BUILTINS, clearStaleComposeRuns, composeAvailability, composeSlot, nodeFloorProblem, programHint, readFrame, runCompose, scrubPaths } from './sandbox.js';
+import { COMPOSE_BUILTINS, clearStaleComposeRuns, composeAvailability, composeSlot, holdComposeRun, nodeFloorProblem, programHint, readFrame, runCompose, scrubPaths } from './sandbox.js';
 
 const frame = (type: string, payload: Buffer | string, length?: number): Buffer => {
   const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
@@ -137,6 +137,15 @@ describe('stale run folders', () => {
       await utimes(path.join(root, 'keep-me'), hourAgo, hourAgo);
       expect(await clearStaleComposeRuns(root)).toBe(1);
       expect((await readdir(root)).sort()).toEqual(['keep-me', fresh]);
+      // A run still going whose folder looks old (the clock jumped forward) is kept.
+      const active = `run-${'2'.repeat(8)}-0000-4000-8000-${'2'.repeat(12)}`;
+      await mkdir(path.join(root, active));
+      await utimes(path.join(root, active), hourAgo, hourAgo);
+      const release = holdComposeRun(active);
+      expect(await clearStaleComposeRuns(root)).toBe(0);
+      expect(await readdir(root)).toContain(active);
+      release();
+      expect(await clearStaleComposeRuns(root)).toBe(1);
       // No folder yet: nothing to do, and no error.
       expect(await clearStaleComposeRuns(path.join(root, 'none'))).toBe(0);
     } finally {

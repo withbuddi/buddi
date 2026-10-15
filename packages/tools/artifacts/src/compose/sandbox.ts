@@ -282,8 +282,8 @@ export async function composeSlot<T>(conversation: string | undefined, fn: () =>
 }
 
 /**
- * Remove the work folders under `root` that no run of this process can still
- * be using: a run's folder older than `olderThanMs`, left by a buddi that
+ * Remove the work folders under `root` that no run of this process is
+ * using (`activeRuns`, never by age alone): a run's folder older than `olderThanMs`, left by a buddi that
  * stopped mid-run (a restart, a crash). They hold the owner's attached
  * pictures. Run at start and with the hourly artifact sweep. Returns how many
  * went.
@@ -295,11 +295,22 @@ export async function clearStaleComposeRuns(root: string, opts: { olderThanMs?: 
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^run-[0-9a-f-]{36}$/.test(entry.name)) continue;
     const dir = path.join(root, entry.name);
+    // A run of this process is never stale, however old its folder looks (the clock can jump).
+    if (activeRuns.has(entry.name)) continue;
     const made = await stat(dir).then((s) => s.mtimeMs, () => null);
     if (made === null || made >= olderThan) continue;
     await rm(dir, { recursive: true, force: true }).then(() => { removed += 1; }, () => {});
   }
   return removed;
+}
+
+/** The run folders this process is using, by name: added when a run starts, removed in its `finally`. */
+const activeRuns = new Set<string>();
+
+/** For a test: mark a run folder name as in use until the returned function is called. */
+export function holdComposeRun(name: string): () => void {
+  activeRuns.add(name);
+  return () => { activeRuns.delete(name); };
 }
 
 /** A run folder this old is no run's: well past the wall clock and the runner's own deadline. */
@@ -329,12 +340,15 @@ export async function runCompose(input: {
   if (!availability.available || availability.confinement === null) return { ok: false, code: 'unavailable', message: availability.reason ?? 'composed documents are off here', console: quiet };
   return composeSlot(input.conversationId, async () => {
     await mkdir(input.root, { recursive: true });
-    const work = path.join(await realpath(input.root), `run-${randomUUID()}`);
-    await mkdir(work);
+    const name = `run-${randomUUID()}`;
+    const work = path.join(await realpath(input.root), name);
+    activeRuns.add(name);
     try {
+      await mkdir(work);
       return await runIn(work, input, availability, input.confine);
     } finally {
       await rm(work, { recursive: true, force: true }).catch(() => {});
+      activeRuns.delete(name);
     }
   });
 }
