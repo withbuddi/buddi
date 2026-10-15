@@ -1,11 +1,13 @@
 /**
  * The sheet engine's work for the xlsx preview, off the page's thread: the
- * workbook read (`readWorkbook`, within the Office zip limits), then the
+ * workbook read (`readWorkbook`, within the Office zip limits, its cells
+ * kept sparsely) — everything the table draws — then the
  * values of formulas the file carries none for and each sheet's conditional
  * colours (`sheetEngine`, `conditionalStyles`). It runs in a Web Worker
  * (`sheet-worker.ts`) the page ends if it takes longer than `SHEET_JOB_MS`,
- * so no workbook can hang the page; the look then stands without the
- * computed values, and the sheet says it was too large to calculate. Where
+ * so no workbook can hang the page: ended before the read, the preview says
+ * the file is too large; after it, the table stands without the computed
+ * values, and the sheet says it was too large to calculate. Where
  * there is no Worker (a test's jsdom) it runs here.
  */
 import { SHEET_PREVIEW_COLS, SHEET_PREVIEW_ROWS } from '@buddi/core/office-files';
@@ -115,7 +117,7 @@ export function runSheetJob(bytes: ArrayBuffer, opts: { timeoutMs?: number; make
     // A worker that never started (no message yet, no error of its own to report): its script may be gone in an update.
     stop(!heard && !(typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent && event.message) ? 'unstarted' : 'failed');
   };
-  // A copy, so the page keeps its bytes for read-excel-file.
+  // A copy: the bytes are the preview's state, and a transfer would empty them.
   const copy = bytes.slice(0);
   worker.postMessage(copy, [copy]);
   return { model, computed, cancel: () => { clearTimeout(timer); if (!done) { done = true; worker.terminate(); } } };

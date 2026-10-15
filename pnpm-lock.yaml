@@ -625,9 +625,6 @@ importers:
       react-dom:
         specifier: ^18.3.1
         version: 18.3.1(react@18.3.1)
-      read-excel-file:
-        specifier: 9.3.12
-        version: 9.3.12
     devDependencies:
       '@buddi/core':
         specifier: workspace:*
@@ -4205,14 +4202,6 @@ snapshots:
     optionalDependencies:
       vite: 5.4.21(@types/node@22.20.2)
 
-  '@vitest/mocker@2.1.9(vite@5.4.21(@types/node@26.6.4))':
-    dependencies:
-      '@vitest/spy': 2.1.9
-      estree-walker: 3.0.3
-      magic-string: 0.30.21
-    optionalDependencies:
-      vite: 5.4.21(@types/node@26.6.4)
-
   '@vitest/pretty-format@2.1.9':
     dependencies:
       tinyrainbow: 1.2.0
@@ -5585,7 +5574,7 @@ snapshots:
   vitest@2.1.9(@types/node@26.6.4)(jsdom@25.0.1):
     dependencies:
       '@vitest/expect': 2.1.9
-      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@26.6.4))
+      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@22.20.2))
       '@vitest/pretty-format': 2.1.9
       '@vitest/runner': 2.1.9
       '@vitest/snapshot': 2.1.9

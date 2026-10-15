@@ -19,7 +19,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { officeKindOf, officePackageProblem, type OfficeKind } from '@buddi/core/plugin';
+import { officeKindOf, type OfficeKind } from '@buddi/core/plugin';
 import { extractText as pdfText, getDocumentProxy } from 'unpdf';
 import { officeTask, type OfficeTask } from './office-task.js';
 import type { OfficeRender, XlsxRender } from './render.js';
@@ -96,8 +96,7 @@ export async function extractText(
   if (office) {
     let read: { text: string; sheets?: number; slides?: number };
     try {
-      const problem = officePackageProblem(bytes, office);
-      if (problem) throw new Error(problem);
+      // The package is checked as its parts truly inflate, in the worker, before any parser reads it.
       read = await readOffice(bytes, office);
     } catch (err) {
       throw new Error(
@@ -149,8 +148,8 @@ const hasWorker = import.meta.url.endsWith('.js') && existsSync(fileURLToPath(wo
 /**
  * A composed document said in words (`render.ts`): page or slide size,
  * fonts, outline, pages, a deck's overflow warnings — read within
- * `OFFICE_READ_LIMITS`, in the extractor's worker. The caller has checked
- * the package's limits (`officePackageProblem`).
+ * `OFFICE_READ_LIMITS`, in the extractor's worker, which checks the
+ * package as its parts truly inflate before reading it (`office-task.ts`).
  */
 export async function renderOffice(bytes: Buffer, kind: 'docx' | 'pptx'): Promise<OfficeRender> {
   return inWorker('render', bytes, kind) as Promise<OfficeRender>;

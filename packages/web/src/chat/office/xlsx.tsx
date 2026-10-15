@@ -1,30 +1,28 @@
 /**
- * A workbook as buddi's own table, one tab per sheet. The cells' values are
- * read by read-excel-file (MIT) — text, numbers, dates, true/false — and the
- * look by core's sheet engine (`@buddi/core/sheet`): bold and italic, font
+ * A workbook as buddi's own table, one tab per sheet. The cells — values,
+ * shown through their number formats — and the look are read by core's
+ * sheet engine (`@buddi/core/sheet`), off the page's thread, in the Web
+ * Worker `sheet-job.ts` ends if it runs too long. It keeps cells sparsely,
+ * so a workbook with one cell in its far corner is one cell, and the table
+ * draws only the shown part. The look: bold and italic, font
  * and fill colours, borders, alignment, wrap, column widths, row heights,
  * merged cells, the frozen header and columns, number formats and the
  * conditional rules that compare a cell or test a formula. A formula the
- * file carries no value for (openpyxl writes none) is computed off the
- * page's thread, in a Web Worker ended if it runs too long (`sheet-job.ts`),
+ * file carries no value for (openpyxl writes none) is computed there too,
  * and the footer says so; a cell it cannot compute shows its error. The owner's bytes are only read. Fonts stay the table's.
  * The first 1,000 rows and 50 columns of a sheet are shown, and a sheet
  * with more says so. Loaded only when a .xlsx is opened.
  */
-import { SHEET_PREVIEW_COLS, SHEET_PREVIEW_ROWS, cellText } from '@buddi/core/office-files';
+import { SHEET_PREVIEW_COLS, SHEET_PREVIEW_ROWS } from '@buddi/core/office-files';
 import {
   cellKey, columnName, conditionalStyles, formatCell, valueOf,
   type BorderEdge, type CellStyle, type SheetModel, type WorkbookModel,
 } from '@buddi/core/sheet';
 import { confirmUpdate } from '../../shell/freshness';
 import { runSheetJob, type SheetComputed } from './sheet-job';
-import readExcelFile from 'read-excel-file/browser';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Empty, Notice } from '../../ui';
 import type { OfficeViewerProps } from '../OfficePreview';
-
-type Cell = string | number | boolean | Date | null;
-interface Sheet { name: string; rows: Cell[][] }
 
 /** Characters of a column's width, in pixels: Excel's default is 8.43. */
 const CHAR_PX = 7;
@@ -77,58 +75,58 @@ function mergeMap(sheet: SheetModel | undefined, rows: number, cols: number): { 
 }
 
 export default function XlsxPreview({ bytes }: OfficeViewerProps): JSX.Element {
-  const [sheets, setSheets] = useState<Sheet[] | 'loading' | 'failed'>('loading');
-  const [model, setModel] = useState<WorkbookModel | null>(null);
+  const [model, setModel] = useState<WorkbookModel | 'loading' | 'failed' | 'too-large'>('loading');
   const [computed, setComputed] = useState<SheetComputed | 'too-large' | null>(null);
   const [at, setAt] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    setSheets('loading');
-    setModel(null);
+    setModel('loading');
     setComputed(null);
     setAt(0);
-    readExcelFile(bytes)
-      .then((read) => { if (!cancelled) setSheets(read.map((s) => ({ name: s.sheet, rows: s.data as unknown as Cell[][] }))); })
-      .catch(() => { if (!cancelled) setSheets('failed'); });
-    // The look and the formulas, off this thread: a workbook it cannot read is still shown, as plain values.
+    // Everything off this thread: the page only draws what the worker read.
     const job = runSheetJob(bytes);
-    void job.model.then((read) => { if (!cancelled && read) setModel(read); });
-    void job.computed.then((out) => {
+    void job.model.then(async (read) => {
       if (cancelled) return;
-      // The sheet engine never started: the values stand without it, and the shell asks whether an update is why.
-      if (out === 'unstarted') { void confirmUpdate(); return; }
-      if (out !== 'failed') setComputed(out);
+      if (read) { setModel(read); return; }
+      const why = await job.computed;
+      if (cancelled) return;
+      // The sheet engine never started: the shell asks whether an update is why.
+      if (why === 'unstarted') void confirmUpdate();
+      setModel(why === 'too-large' ? 'too-large' : 'failed');
+    });
+    void job.computed.then((out) => {
+      if (cancelled || out === 'unstarted' || out === 'failed') return;
+      setComputed(out);
     });
     return () => { cancelled = true; job.cancel(); };
   }, [bytes]);
 
-  const sheet = Array.isArray(sheets) ? sheets[at] : undefined;
-  const modelSheet = sheet ? model?.sheets.find((s) => s.name === sheet.name) ?? model?.sheets[at] : undefined;
+  const workbook = typeof model === 'object' ? model : null;
+  const modelSheet = workbook?.sheets[at];
   const view = useMemo(() => {
-    if (!sheet) return null;
-    const readWidth = sheet.rows.reduce((w, r) => Math.max(w, r.length), 0);
-    const totalRows = Math.max(sheet.rows.length, modelSheet?.maxRow ?? 0);
-    const totalCols = Math.max(readWidth, modelSheet?.maxCol ?? 0);
+    if (!modelSheet) return null;
+    const totalRows = modelSheet.maxRow;
+    const totalCols = modelSheet.maxCol;
     return {
       rows: Math.min(totalRows, SHEET_PREVIEW_ROWS),
       width: Math.min(totalCols, SHEET_PREVIEW_COLS),
       moreRows: totalRows > SHEET_PREVIEW_ROWS,
       moreCols: totalCols > SHEET_PREVIEW_COLS,
     };
-  }, [sheet, modelSheet]);
+  }, [modelSheet]);
 
   const evaluation = computed !== null && computed !== 'too-large' ? computed.evaluation : null;
-  const sheetIndex = modelSheet && model ? model.sheets.indexOf(modelSheet) : -1;
+  const sheetIndex = at;
   const conditional = useMemo(() => {
-    if (!model || !modelSheet || !view || modelSheet.conditional.length === 0) return new Map<number, Partial<CellStyle>>();
+    if (!workbook || !modelSheet || !view || modelSheet.conditional.length === 0) return new Map<number, Partial<CellStyle>>();
     if (computed !== null && computed !== 'too-large') return computed.conditional[sheetIndex] ?? new Map<number, Partial<CellStyle>>();
     // Until the worker's colours come (or if it was ended): the rules that compare with a plain number or text.
     const valueAt = (r: number, c: number) => {
       const cell = modelSheet.cells.get(cellKey(r, c));
       return cell ? valueOf(null, modelSheet, cell) : null;
     };
-    return conditionalStyles(model, modelSheet, { r1: 1, c1: 1, r2: view.rows, c2: view.width }, valueAt, null);
-  }, [model, modelSheet, view, computed, sheetIndex]);
+    return conditionalStyles(workbook, modelSheet, { r1: 1, c1: 1, r2: view.rows, c2: view.width }, valueAt, null);
+  }, [workbook, modelSheet, view, computed, sheetIndex]);
 
   const frozen = modelSheet?.frozen ?? { rows: 0, cols: 0 };
   const table = useRef<HTMLTableElement>(null);
@@ -156,14 +154,16 @@ export default function XlsxPreview({ bytes }: OfficeViewerProps): JSX.Element {
     }
   });
 
-  if (sheets === 'loading') return <Empty>Reading the workbook…</Empty>;
-  if (sheets === 'failed') return <Notice>This spreadsheet could not be read. Download it to open it.</Notice>;
-  if (sheets.length === 0 || !view) return <p className="muted">The workbook is empty.</p>;
+  if (model === 'loading') return <Empty>Reading the workbook…</Empty>;
+  if (model === 'too-large') return <Notice>This spreadsheet is too large to preview here. Download it to open it.</Notice>;
+  if (model === 'failed') return <Notice>This spreadsheet could not be read. Download it to open it.</Notice>;
+  const sheets = model.sheets;
+  if (sheets.length === 0 || !view || !modelSheet) return <p className="muted">The workbook is empty.</p>;
   const columns = Array.from({ length: view.width }, (_, i) => i + 1);
-  const styles = model?.styles;
+  const styles = model.styles;
   const lookOf = (index: number): CellStyle => styles?.cells[index] ?? styles?.cells[0] ?? { numFmt: 'General' };
   const widthOf = (col: number): number => {
-    const set = modelSheet?.columns.find((c) => col >= c.min && col <= c.max);
+    const set = modelSheet.columns.find((c) => col >= c.min && col <= c.max);
     return set ? Math.max(12, Math.round(set.width * CHAR_PX)) : DEFAULT_COL_PX;
   };
   const merges = mergeMap(modelSheet, view.rows, view.width);
@@ -181,7 +181,7 @@ export default function XlsxPreview({ bytes }: OfficeViewerProps): JSX.Element {
           ))}
         </div>
       ) : null}
-      <div className="ui-table-wrap office-xlsx-grid" role="tabpanel" aria-label={sheet!.name}>
+      <div className="ui-table-wrap office-xlsx-grid" role="tabpanel" aria-label={modelSheet.name}>
         {view.rows === 0 || view.width === 0 ? <p className="muted">This sheet is empty.</p> : (
           <table className="ui-table office-xlsx-table" ref={table} style={{ width: `${columns.reduce((sum, c) => sum + widthOf(c), ROW_NUMBER_PX)}px` }}>
             <colgroup>
@@ -196,7 +196,7 @@ export default function XlsxPreview({ bytes }: OfficeViewerProps): JSX.Element {
             </thead>
             <tbody>
               {Array.from({ length: view.rows }, (_, r) => r + 1).map((row) => {
-                const height = modelSheet?.rowHeights.get(row);
+                const height = modelSheet.rowHeights.get(row);
                 return (
                   <tr key={row} data-frozen={row <= frozen.rows ? 'row' : undefined} style={height ? { height: `${Math.round(height * 4 / 3)}px` } : undefined}>
                     <th scope="row" className="office-xlsx-row" data-col={0}>{row}</th>
@@ -204,26 +204,14 @@ export default function XlsxPreview({ bytes }: OfficeViewerProps): JSX.Element {
                       const key = cellKey(row, col);
                       if (merges.covered.has(key)) return null;
                       const span = merges.spans.get(key);
-                      const modelCell = modelSheet?.cells.get(key);
+                      const modelCell = modelSheet.cells.get(key);
                       const look = { ...lookOf(modelCell?.style ?? 0), ...conditional.get(key) };
-                      const raw = sheet!.rows[row - 1]?.[col - 1] ?? null;
-                      let text: string;
-                      let numberColor: string | undefined;
-                      let numeric = typeof raw === 'number';
-                      if (modelCell && modelSheet && modelCell.formula !== undefined && !modelCell.hasValue) {
-                        const value = valueOf(evaluation, modelSheet, modelCell);
-                        const shown = formatCell(value, look.numFmt, { date1904: model!.date1904 });
-                        text = shown.text;
-                        numberColor = shown.color;
-                        numeric = typeof value === 'number';
-                      } else if (modelCell && typeof modelCell.value === 'number' && look.numFmt !== 'General') {
-                        const shown = formatCell(modelCell.value, look.numFmt, { date1904: model!.date1904 });
-                        text = shown.text;
-                        numberColor = shown.color;
-                        numeric = true;
-                      } else {
-                        text = cellText(raw);
-                      }
+                      // The file's value, or buddi's for a formula saved without one, as its number format shows it.
+                      const value = modelCell ? valueOf(evaluation, modelSheet, modelCell) : null;
+                      const shown = formatCell(value, look.numFmt, { date1904: model.date1904 });
+                      const text = shown.text;
+                      const numberColor = shown.color;
+                      const numeric = typeof value === 'number';
                       return (
                         <td
                           key={col}

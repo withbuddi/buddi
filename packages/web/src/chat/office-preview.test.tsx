@@ -15,7 +15,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OFFICE_MIME } from '@buddi/core/office-files';
+import { verifiedOfficePackage } from '@buddi/core/office-zip';
 import { ArtifactPreview } from './ArtifactPreview';
+import { FRAME_POLICY, safeFontNames } from './office/docx';
 
 const loaded = vi.hoisted(() => ({ bytes: 0, slides: 2, at: 0 }));
 vi.mock('@silurus/ooxml/pptx', () => ({
@@ -59,6 +61,34 @@ describe('Office previews', () => {
     expect(faces).toContain("font-family: 'Cambria'; font-weight: 400; font-style: normal; src: local('Cambria'), local('Caladea'), local('Georgia')");
     expect(faces).toContain("font-family: 'Consolas'; font-weight: 400; font-style: normal; src: local('Consolas'), local('Menlo')");
     expect(faces).not.toMatch(/url\(/);
+    // A policy that fetches nothing, in the frame before the document, and still there after it is drawn.
+    const policy = frame.contentDocument!.querySelector('meta[http-equiv="Content-Security-Policy"]');
+    expect(policy?.getAttribute('content')).toBe(FRAME_POLICY);
+    expect(FRAME_POLICY).toMatch(/^default-src 'none';/);
+    expect(FRAME_POLICY).not.toMatch(/https?:|\*/);
+  });
+
+  it('cleans the font names a document gives, so none reaches the frame’s CSS as a url(', async () => {
+    // font-url.docx: letter.docx with a run's rFonts and the theme's heading typeface set to CSS that loads a URL.
+    serve(fixture('font-url.docx'));
+    render(<ArtifactPreview artifactId="a10" filename="Fonts.docx" mime={OFFICE_MIME.docx} family="text" />);
+    const frame = (await screen.findByTestId('office-docx')) as HTMLIFrameElement;
+    await waitFor(() => expect(frame.contentDocument?.body.textContent).toContain('Revenue grew 12% this quarter.'));
+    const doc = frame.contentDocument!;
+    const css = [
+      ...[...doc.querySelectorAll('style')].map((style) => style.textContent ?? ''),
+      ...[...doc.querySelectorAll('[style]')].map((el) => el.getAttribute('style') ?? ''),
+    ].join('\n');
+    expect(css).toContain('Evilbackground-imageurlhttpsevil.examplea.png');
+    expect(css).not.toMatch(/url\(/i);
+    expect(css).not.toContain('evil.example/');
+  });
+
+  it('keeps a font name to letters, digits, spaces and . _ -, entities and quotes included', () => {
+    expect(safeFontNames(`<w:rFonts w:ascii="A;b:url(https://x)" w:hAnsi='C&#40;d' w:asciiTheme="minorHAnsi);x"/>`))
+      .toBe(`<w:rFonts w:ascii="Aburlhttpsx" w:hAnsi="C40d" w:asciiTheme="minorHAnsix"/>`);
+    expect(safeFontNames(`<a:latin typeface="Calibri Light" panose="020F0302020204030204"/><w:font w:name="x'y(z)"><w:sym w:font="Wingdings" w:char="F0FC"/>`))
+      .toBe(`<a:latin typeface="Calibri Light" panose="020F0302020204030204"/><w:font w:name="xyz"><w:sym w:font="Wingdings" w:char="F0FC"/>`);
   });
 
   it('draws a workbook as buddi’s table, one tab per sheet', async () => {
@@ -135,7 +165,9 @@ describe('Office previews', () => {
     serve(deck);
     render(<ArtifactPreview artifactId="a3" filename="Deck.pptx" mime="application/octet-stream" family="file" />);
     expect(await screen.findByText('Slide 1 of 2')).toBeInTheDocument();
-    expect(loaded.bytes).toBe(deck.length);
+    // The viewer is handed the verified copy, never the bytes as sent.
+    const verified = verifiedOfficePackage(new Uint8Array(deck), 'pptx');
+    expect(typeof verified === 'string' ? verified : loaded.bytes).toBe(typeof verified === 'string' ? '' : verified.length);
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('Slide 2 of 2')).toBeInTheDocument();
@@ -158,6 +190,27 @@ describe('Office previews', () => {
     expect(await screen.findByText(/can’t be previewed: word\/document\.xml unpacks to more than 50 MB/)).toBeInTheDocument();
     expect(screen.queryByTestId('office-docx')).not.toBeInTheDocument();
   });
+
+  it('refuses a package that understates its parts’ sizes while it inflates, before any parser sees it', async () => {
+    serve(fixture('lying.docx'));
+    render(<ArtifactPreview artifactId="a11" filename="Lying.docx" mime={OFFICE_MIME.docx} family="text" />);
+    expect(await screen.findByText(/can’t be previewed: word\/document\.xml unpacks to more than its zip directory says/)).toBeInTheDocument();
+    expect(screen.queryByTestId('office-docx')).not.toBeInTheDocument();
+    cleanup();
+    serve(fixture('lying.xlsx'));
+    render(<ArtifactPreview artifactId="a12" filename="Lying.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
+    expect(await screen.findByText(/can’t be previewed: xl\/worksheets\/sheet1\.xml unpacks to more than its zip directory says/)).toBeInTheDocument();
+  });
+
+  it('reads a workbook with one cell in its far corner sparsely: the shown part only, at once', async () => {
+    // far-corner.xlsx: "Near" in A1 and 42 in XFD1048576. Read as rectangular rows, that is 17 billion cells.
+    serve(fixture('far-corner.xlsx'));
+    render(<ArtifactPreview artifactId="a13" filename="Far.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
+    // jsdom drawing the 1,000 × 50 shown cells is the slow part; the read itself is one cell.
+    expect(await screen.findByRole('cell', { name: 'Near' }, { timeout: 30_000 })).toBeInTheDocument();
+    expect(screen.getByTestId('office-xlsx').querySelectorAll('tbody tr')).toHaveLength(1_000);
+    expect(screen.getByText(/Showing the first 1,000 rows and 50 columns of this sheet/)).toBeInTheDocument();
+  }, 60_000);
 
   it('leaves a legacy or Apple file to Download', () => {
     render(<ArtifactPreview artifactId="a6" filename="Old.doc" mime="application/msword" family="text" />);

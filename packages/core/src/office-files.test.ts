@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { OFFICE_MIME, OFFICE_ZIP_LIMITS, cellText, officeKindOf, officePackageProblem, officeRebuildRefusal, opensInApp, rebuildNeed, zipEntries } from './office-files.js';
+import { OFFICE_MIME, OFFICE_ZIP_LIMITS, cellText, officeKindOf, officeRebuildRefusal, opensInApp, rebuildNeed, zipEntries } from './office-files.js';
+import { officePackageProblem } from './office-zip.js';
 import { isTextFile } from './text-files.js';
 
 describe('which files are Office documents', () => {

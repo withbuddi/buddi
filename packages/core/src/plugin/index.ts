@@ -16,7 +16,8 @@ export type { DayMonth } from '../day-month.js';
 export { sha256Of } from './hash.js';
 // Files: the one file-name rule and the one Office rule, as core applies them (docs/files.md).
 export { safeFileName } from '../text-files.js';
-export { OFFICE_MIME, OFFICE_PREVIEW_BYTES, OFFICE_ZIP_LIMITS, cellText, officeKindOf, officePackageProblem, zipEntries, type OfficeKind, type ZipEntry } from '../office-files.js';
+export { OFFICE_MIME, OFFICE_PREVIEW_BYTES, OFFICE_ZIP_LIMITS, cellText, officeKindOf, zipEntries, type OfficeKind, type ZipEntry } from '../office-files.js';
+export { officePackageProblem, unzipOffice, verifiedOfficePackage, type ZipLimits } from '../office-zip.js';
 // The one character-reference decoder (XML's entities, or a caller's HTML set).
 export { decodeEntities, XML_ENTITIES } from '../entities.js';
 export { QueryRefusal, pageFile, isPageFile } from './page-file.js';

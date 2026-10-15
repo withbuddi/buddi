@@ -415,8 +415,8 @@ dashboard's bundle, never kept by the offline worker:
 
 | Kind | Renderer | What is drawn |
 | --- | --- | --- |
-| .docx | docx-preview (Apache-2.0), into an `<iframe sandbox="allow-same-origin">` with no scripts | its pages, images inlined; comments, tracked changes and embedded HTML left out |
-| .xlsx | read-excel-file (MIT) for values, `@buddi/core/sheet` for the look, buddi's own table | a tab per sheet, the first 1,000 rows and 50 columns of each: values, number formats, fonts' weight and colour, fills, borders, alignment, widths, row heights, merges, frozen rows and columns, conditional colour (`cellIs`, `expression`, text rules); a formula without a value computed (**Composed workbooks** below); charts, colour scales and data bars not drawn |
+| .docx | docx-preview (Apache-2.0), into an `<iframe sandbox="allow-same-origin">` with no scripts and a content policy that fetches nothing (`default-src 'none'`; images and fonts as data only); the document's font names cleaned to letters, digits, spaces, `.`, `_` and `-` first, so none can reach the CSS as a `url(` | its pages, images inlined; comments, tracked changes and embedded HTML left out |
+| .xlsx | `@buddi/core/sheet` for values and look, read sparsely in a Web Worker ended after 15 s, buddi's own table | a tab per sheet, the first 1,000 rows and 50 columns of each: values, number formats, fonts' weight and colour, fills, borders, alignment, widths, row heights, merges, frozen rows and columns, conditional colour (`cellIs`, `expression`, text rules); a formula without a value computed (**Composed workbooks** below); charts, colour scales and data bars not drawn |
 | .pptx | @silurus/ooxml (MIT; Rust/WASM parser, Canvas 2D), about 1.4 MB gzipped with its parser and worker | slide by slide on a canvas, Previous and Next; its Google Fonts option stays off |
 
 An Office file or a PDF a call made — `artifacts.write { format }` or a
@@ -489,12 +489,19 @@ junction. Only from a dashboard on the computer buddi runs on, never through
 a proxy such as Tailscale Serve (its forwarding headers make the request
 remote): elsewhere the routes refuse and the button is off, saying so.
 
-**Package limits.** Every Office package is checked from its zip directory
-before anything is inflated — at most 2,000 parts, 50 MB per part and 200 MB
-in all, no ZIP64 (`OFFICE_ZIP_LIMITS`, `officePackageProblem` in core) — by
-the page before a previewer parses it, by the server before it extracts text
-(in a worker thread with a 256 MB heap, stopped after 15 seconds), and by
-Open in app before it imports a save.
+**Package limits.** Every Office package is held to one rule in core
+(`OFFICE_ZIP_LIMITS`, `office-zip.ts`): at most 2,000 parts, 50 MB per part
+and 200 MB in all, no ZIP64, each name once. It is checked from the zip
+directory before anything is inflated, and again as each part inflates: a
+part that grows past the size the directory declared is refused at the
+first slice over, so a file that understates its sizes gets no further than
+one that states them. A parser buddi does not own (mammoth, read-excel-file,
+docx-preview, the deck viewer) is handed only the verified copy
+(`verifiedOfficePackage`: the same compressed parts under a directory of
+their true sizes), never the bytes as sent. The page checks before a
+previewer parses, the server's worker (a 256 MB heap, stopped after 15
+seconds) before it extracts text, renders or fills, compose before it saves
+a program's output, and Open in app before it imports a save.
 
 Not in this phase: editing in the Canvas, converting to PDF (LibreOffice),
 charts, comments and tracked changes.
@@ -623,8 +630,9 @@ may import).
   merges and conditional rules. `readStyles`: `styles.xml` (number formats,
   fonts, fills, borders, cell formats, the formats conditional rules apply)
   and `theme1.xml`'s colour slots with tint, resolved to one style per cell
-  format. read-excel-file stays what reads values and dates for the agent's
-  CSV and the preview's table.
+  format. Cells are kept sparsely, by address. read-excel-file stays what
+  reads values and dates for the agent's CSV; the preview's table shows the
+  model's values through `formatCell`.
 - `evaluate`: fast-formula-parser (MIT, 1.0.19 pinned; chevrotain, jstat,
   bessel, bahttext; about 300 KB minified, loaded only when a formula needs
   computing — in the page its own chunk) over buddi's cell reader, plus
@@ -642,8 +650,8 @@ may import).
   recomputes every formula, each reading the others' new values. Not
   HyperFormula (GPL).
 - The parts are inflated within core's Office limits (`OFFICE_ZIP_LIMITS`,
-  `unzipBounded`): the zip directory is checked first, and no part is
-  inflated past the size it declares.
+  `unzipOffice`): the zip directory is checked first, and a part that
+  inflates past the size it declares is refused.
 - `formatCell`: ssf (Apache-2.0, 0.11.2, SheetJS's format engine) for
   `#,##0.00`, `0%`, `[Red]` sections, dates and `[$€-407]`; the one
   formatter of the preview and the render summary.

@@ -9,9 +9,8 @@
  * extractor's text; nothing is drawn. Pure, so it runs in the extractor's
  * worker (`office-worker.ts`) and, from source, in the caller's thread.
  */
-import { decodeEntities } from '@buddi/core/plugin';
+import { decodeEntities, unzipOffice } from '@buddi/core/plugin';
 import { address, columnName, formatCell, isSheetError, valueOf, type Evaluation, type WorkbookModel } from '@buddi/core/sheet';
-import { unzipSync } from 'fflate';
 import { officeText } from './office-text.js';
 
 const EMU_PER_INCH = 914_400;
@@ -144,11 +143,12 @@ function paperName(w: number, h: number): string | undefined {
 }
 
 function unzip(bytes: Buffer, want: (name: string) => boolean): Record<string, string> {
-  const parts = unzipSync(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), { filter: (file) => want(file.name) });
+  const parts = unzipOffice(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), want);
+  if (typeof parts === 'string') throw new Error(parts);
   return Object.fromEntries(Object.entries(parts).map(([name, data]) => [name, Buffer.from(data).toString('utf8')]));
 }
 
-/** A composed file, said in words. The package's limits are checked before it is called. */
+/** A composed file, said in words, from a verified package (`office-task.ts`). */
 export async function officeRender(bytes: Buffer, kind: 'docx' | 'pptx'): Promise<OfficeRender> {
   return kind === 'docx' ? docxRender(bytes) : pptxRender(bytes);
 }

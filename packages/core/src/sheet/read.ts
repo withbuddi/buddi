@@ -1,17 +1,18 @@
 /**
  * A workbook's sheets as the sheet engine reads them: every cell's cached
  * value, formula and format, and per sheet its column widths, row heights,
- * frozen panes, merges and conditional rules. Read-only, from the bytes;
- * the caller checks the package's limits first (`officePackageProblem`).
+ * frozen panes, merges and conditional rules. Read-only, from the bytes,
+ * each part inflated within the Office limits (`unzipOffice`). Cells are
+ * kept sparsely, by address: a workbook with one cell in its far corner is
+ * one cell, not a million rows.
  *
  * Values here are the file's own: a number (a date is its serial), text, a
  * boolean, an error such as `#DIV/0!`, or null. read-excel-file stays what
- * turns them into dates and text for the agent's CSV and the page's table;
- * this reader is for what read-excel-file leaves out — formulas without a
- * value, and the look.
+ * turns them into dates and text for the agent's CSV; the page's table
+ * shows them through `formatCell`.
  */
-import { unzipSync, type Unzipped } from 'fflate';
-import { OFFICE_ZIP_LIMITS, zipEntries } from '../office-files.js';
+import { OFFICE_ZIP_LIMITS } from '../office-files.js';
+import { unzipOffice, type ZipLimits } from '../office-zip.js';
 import { cellKey, parseAddress, parseRange, parseRanges, shiftFormula, type CellRange } from './refs.js';
 import { readStyles, type StyleSheet } from './styles.js';
 import { attr, boolAttr, decodeXml, numAttr, runText } from './xml.js';
@@ -82,8 +83,7 @@ export interface WorkbookModel {
 /** The parts a workbook is read from, by name, as text. */
 export type WorkbookParts = Record<string, string>;
 
-/** The limits a package is read within: parts, bytes of each, bytes in all. */
-export interface ZipLimits { entries: number; entryBytes: number; totalBytes: number }
+export type { ZipLimits };
 
 /** The parts of an xlsx this reader reads: the workbook, its relations, sheets, shared strings, styles, theme. */
 export function isWorkbookPart(name: string): boolean {
@@ -93,16 +93,14 @@ export function isWorkbookPart(name: string): boolean {
 }
 
 /**
- * A package's parts, inflated within the Office limits (`OFFICE_ZIP_LIMITS`,
- * core's one list): its zip directory is checked first — parts, size of each,
- * size in all — and each part is inflated into a buffer of the size the
- * directory declares, never more, so a part that lies about its size cannot
- * grow past it.
+ * A package's parts, inflated within the Office limits by core's one rule
+ * (`unzipOffice`): the zip directory is checked first, and a part that
+ * inflates past the size it declared is refused, not read.
  */
-export function unzipBounded(bytes: Uint8Array, want: (name: string) => boolean = () => true, limits: ZipLimits = OFFICE_ZIP_LIMITS): Unzipped {
-  const entries = zipEntries(bytes, limits);
-  if (typeof entries === 'string') throw new Error(`the workbook cannot be read: ${entries}`);
-  return unzipSync(bytes, { filter: (file) => want(file.name) && file.originalSize <= limits.entryBytes });
+export function unzipBounded(bytes: Uint8Array, want: (name: string) => boolean = () => true, limits: ZipLimits = OFFICE_ZIP_LIMITS): Record<string, Uint8Array> {
+  const parts = unzipOffice(bytes, want, limits);
+  if (typeof parts === 'string') throw new Error(`the workbook cannot be read: ${parts}`);
+  return parts;
 }
 
 /** The parts of an xlsx this reader needs, unzipped within the Office limits. */

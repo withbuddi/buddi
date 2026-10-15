@@ -53,6 +53,10 @@
       "types": "./dist/office-files.d.ts",
       "default": "./dist/office-files.js"
     },
+    "./office-zip": {
+      "types": "./dist/office-zip.d.ts",
+      "default": "./dist/office-zip.js"
+    },
     "./sheet": {
       "types": "./dist/sheet/index.d.ts",
       "default": "./dist/sheet/index.js"

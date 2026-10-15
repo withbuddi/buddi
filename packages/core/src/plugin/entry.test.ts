@@ -15,8 +15,8 @@ import * as entry from './index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-/** Bare specifiers a pure helper may use: an IP-literal check, a hash, a schema library. */
-const ALLOWED = new Set(['node:net', 'node:crypto', 'zod']);
+/** Bare specifiers a pure helper may use: an IP-literal check, a hash, a schema library, a zip codec (the Office package rule, `office-zip.ts`). */
+const ALLOWED = new Set(['node:net', 'node:crypto', 'zod', 'fflate']);
 
 /** Value imports and re-exports of one module: `import type` and `export type` are erased. */
 function runtimeSpecifiers(source: string): string[] {

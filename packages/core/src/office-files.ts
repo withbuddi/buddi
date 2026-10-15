@@ -215,11 +215,10 @@ export function officeRebuildRefusal(
 }
 
 /**
- * A cell as text, the one rule for the agent's CSV and the page's table for
- * a value read-excel-file read: a date as its day (or its moment when it has
- * a time), TRUE/FALSE, the rest as written. It evaluates nothing and applies
- * no number format: the preview shows a number with its format, and a
- * formula's value buddi computed, through `@buddi/core/sheet`'s `formatCell`.
+ * A cell as text, the rule for the agent's CSV for a value read-excel-file
+ * read: a date as its day (or its moment when it has a time), TRUE/FALSE,
+ * the rest as written. It evaluates nothing and applies no number format:
+ * the preview shows every cell through `@buddi/core/sheet`'s `formatCell`.
  */
 export function cellText(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -233,13 +232,27 @@ export function cellText(value: unknown): string {
 
 /**
  * What any Office package may hold before buddi reads it — the server's
- * text for agents, the page's previews, an import from Open in app alike:
- * checked from the zip's central directory, before anything is inflated.
+ * text for agents, the page's previews, an import from Open in app alike.
+ * Checked twice: from the zip's central directory before anything is
+ * inflated (`zipEntries`), and again while each part inflates, against what
+ * it declared (`office-zip.ts`), so a package that understates its sizes is
+ * refused at the first byte over.
  */
 export const OFFICE_ZIP_LIMITS = { entries: 2_000, entryBytes: 50 * 1024 * 1024, totalBytes: 200 * 1024 * 1024 } as const;
 
-/** One entry of a zip's central directory: its name and the sizes it declares. */
-export interface ZipEntry { name: string; compressed: number; size: number }
+/** One entry of a zip's central directory: its name, the sizes it declares, and where its data is. */
+export interface ZipEntry {
+  name: string;
+  compressed: number;
+  size: number;
+  /** 0 stored, 8 deflated. */
+  method: number;
+  /** General-purpose flags; bit 0 is encryption. */
+  flags: number;
+  crc: number;
+  /** Where its local header starts. */
+  offset: number;
+}
 
 /**
  * The entries a zip's central directory lists, or why it is not a zip buddi
@@ -267,35 +280,23 @@ export function zipEntries(bytes: Uint8Array, limits: { entries: number; entryBy
   const decoder = new TextDecoder();
   for (let n = 0; n < count; n++) {
     if (at + 46 > end || view.getUint32(at, true) !== 0x02014b50) return 'its zip directory is damaged';
+    const flags = view.getUint16(at + 8, true);
+    const method = view.getUint16(at + 10, true);
+    const crc = view.getUint32(at + 16, true);
     const compressed = view.getUint32(at + 20, true);
     const size = view.getUint32(at + 24, true);
     const nameLength = view.getUint16(at + 28, true);
     const extra = view.getUint16(at + 30, true);
     const comment = view.getUint16(at + 32, true);
+    const offset = view.getUint32(at + 42, true);
+    if (at + 46 + nameLength > end) return 'its zip directory is damaged';
     const name = decoder.decode(bytes.subarray(at + 46, at + 46 + nameLength));
     if (size === 0xffffffff || compressed === 0xffffffff) return 'it is a ZIP64 package, larger than buddi reads';
     if (size > limits.entryBytes) return `${name} unpacks to more than ${Math.round(limits.entryBytes / 1024 / 1024)} MB`;
     total += size;
     if (total > limits.totalBytes) return `it unpacks to more than ${Math.round(limits.totalBytes / 1024 / 1024)} MB`;
-    out.push({ name, compressed, size });
+    out.push({ name, compressed, size, method, flags, crc, offset });
     at += 46 + nameLength + extra + comment;
   }
   return out;
-}
-
-/**
- * Why these bytes are not a whole package of this kind buddi will read, or
- * null: within `OFFICE_ZIP_LIMITS`, with `[Content_Types].xml` and the kind's
- * main part. What an Open in app save must be before it is imported (an app
- * half way through writing leaves something that is not), and what every
- * reader checks first.
- */
-export function officePackageProblem(bytes: Uint8Array, kind: OfficeKind): string | null {
-  const entries = zipEntries(bytes);
-  if (typeof entries === 'string') return entries;
-  const names = new Set(entries.map((e) => e.name));
-  if (!names.has('[Content_Types].xml')) return 'it is not an Office package';
-  const main = OFFICE_FORMATS[kind]!.main!;
-  if (!names.has(main)) return `it has no ${main}`;
-  return null;
 }

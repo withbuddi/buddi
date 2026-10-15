@@ -3,15 +3,18 @@
  * Canvas or Files — by the one switch in `ArtifactPreview`.
  *
  * The file's bytes come from the preview route (the same auth, at most
- * `OFFICE_PREVIEW_BYTES`), are checked against core's package limits from
- * the zip's directory (`officePackageProblem`), and only then parsed here, by a renderer loaded only now, one chunk per
- * kind (`office/docx`, `office/xlsx`, `office/pptx`): the dashboard's own
- * bundle carries none of them. Nothing in the file runs on this page: a
- * document is drawn into a sandboxed frame with no scripts, a workbook's
- * cells are text in buddi's own table, a deck is painted on a canvas.
+ * `OFFICE_PREVIEW_BYTES`), are checked against core's package limits as
+ * each part truly inflates (`verifiedOfficePackage`, the server's rule), and
+ * only the verified copy is parsed, by a renderer loaded only now, one chunk
+ * per kind (`office/docx`, `office/xlsx`, `office/pptx`): the dashboard's
+ * own bundle carries none of them. Nothing in the file runs on this page or
+ * reaches the network: a document is drawn into a sandboxed frame with no
+ * scripts and a policy that fetches nothing, a workbook's cells are read in
+ * a worker and drawn as text in buddi's own table, a deck is painted on a
+ * canvas.
  */
 import { useEffect, useState, type ComponentType } from 'react';
-import { OFFICE_PREVIEW_BYTES, officePackageProblem, type OfficeKind } from '@buddi/core/office-files';
+import { OFFICE_PREVIEW_BYTES, type OfficeKind } from '@buddi/core/office-files';
 import { Empty, Notice } from '../ui';
 import { isChunkLoadError, loadChunk } from '../shell/freshness';
 import { LoadBoundary } from '../shell/LoadBoundary';
@@ -49,13 +52,14 @@ export function OfficePreview({ artifactId, filename, kind }: { artifactId: stri
       if (!res.ok) throw new Error(String(res.status));
       return res.arrayBuffer();
     });
-    Promise.all([bytes, VIEWERS[kind]()])
-      .then(([data, module]) => {
+    Promise.all([bytes, VIEWERS[kind](), loadChunk(() => import('@buddi/core/office-zip'))])
+      .then(([data, module, zip]) => {
         if (cancelled) return;
         if (data === 'too-large') { setState({ phase: 'too-large' }); return; }
-        // The same limits the server reads with, from the zip's directory, before anything is inflated.
-        const problem = officePackageProblem(new Uint8Array(data), kind);
-        setState(problem ? { phase: 'refused', why: problem } : { phase: 'ready', bytes: data, Viewer: module.default });
+        // The same limits the server reads with, as each part inflates; the viewer gets the verified copy only.
+        const verified = zip.verifiedOfficePackage(new Uint8Array(data), kind);
+        if (typeof verified === 'string') { setState({ phase: 'refused', why: verified }); return; }
+        setState({ phase: 'ready', bytes: verified.buffer as ArrayBuffer, Viewer: module.default });
       })
       .catch((error: unknown) => { if (!cancelled) setState({ phase: isChunkLoadError(error) ? 'stale' : 'failed' }); });
     return () => { cancelled = true; };

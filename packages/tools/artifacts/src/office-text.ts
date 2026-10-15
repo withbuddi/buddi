@@ -4,10 +4,9 @@
  * `## Sheet` heading with read-excel-file (MIT), a deck's slide text from its
  * slide XML with fflate (MIT). Pure, so it runs the same in the worker
  * `extract.ts` starts (`office-worker.ts`) and, from source, in the caller's
- * thread. The package's limits are checked before it is called.
+ * thread. It is handed a verified package (`office-task.ts`).
  */
-import { cellText, decodeEntities, type OfficeKind } from '@buddi/core/plugin';
-import { unzipSync } from 'fflate';
+import { cellText, decodeEntities, unzipOffice, type OfficeKind } from '@buddi/core/plugin';
 import mammoth from 'mammoth';
 import readExcelFile from 'read-excel-file/node';
 import { toCsv } from './document.js';
@@ -35,13 +34,12 @@ export async function officeText(bytes: Buffer, kind: OfficeKind): Promise<{ tex
 /**
  * A presentation's text, slide by slide: the runs (`<a:t>`) of each
  * paragraph (`<a:p>`) of `ppt/slides/slideN.xml`, in slide order. Only the
- * slide parts are unpacked; the package's size was checked before.
+ * slide parts are unpacked, within the Office limits.
  */
 function slideText(bytes: Buffer): { text: string; slides: number } {
   const SLIDE = /^ppt\/slides\/slide(\d+)\.xml$/;
-  const parts = unzipSync(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), {
-    filter: (file) => SLIDE.test(file.name),
-  });
+  const parts = unzipOffice(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), (name) => SLIDE.test(name));
+  if (typeof parts === 'string') throw new Error(parts);
   const slides = Object.keys(parts)
     .map((name) => ({ name, n: Number(SLIDE.exec(name)![1]) }))
     .sort((a, b) => a.n - b.n);
