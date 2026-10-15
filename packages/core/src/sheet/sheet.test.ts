@@ -8,10 +8,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { strToU8, unzipSync, zipSync } from 'fflate';
-import { withReadPrefixes } from './xml.js';
 import { describe, expect, it } from 'vitest';
 import {
-  address, cellKey, conditionalStyles, criterion, evaluate, fillCachedValues, formatCell, readWorkbook, sheetEngine, shiftFormula, valueOf,
+  address, cellKey, conditionalStyles, criterion, evaluate, fillCachedValues, formatCell, readWorkbook, sheetEngine, shiftFormula, valueOf, workbookUnsupported,
   storedWithoutEquals, withFullCalcOnLoad, withoutLeadingEquals,
 } from './index.js';
 
@@ -382,17 +381,18 @@ describe('what the review found', () => {
 describe('a workbook written with prefixed SpreadsheetML', () => {
   const office = (name: string): Uint8Array => new Uint8Array(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../__fixtures__/office', name)));
 
-  it('reads the same as without prefixes (budget-prefixed.xlsx: budget.xlsx with x:, pr: and rel: prefixes)', () => {
-    const plain = readWorkbook(office('budget.xlsx'));
+  it('is reported as one buddi does not read, not read as empty (budget-prefixed.xlsx: budget.xlsx with x: prefixes)', () => {
+    expect(readWorkbook(office('budget.xlsx')).unsupported).toBeUndefined();
     const prefixed = readWorkbook(office('budget-prefixed.xlsx'));
-    expect(plain.sheets.map((s) => s.name)).toEqual(['Budget', 'Notes']);
-    expect(prefixed).toEqual(plain);
+    expect(prefixed.unsupported).toBe('prefixed');
+    expect(prefixed.sheets).toEqual([]);
   });
 
-  it('renames prefixes in tag names only, never in text or values', () => {
-    const xml = '<x:sst xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:si><x:t>see x:t a x:b="1"</x:t></x:si></x:sst>';
-    expect(withReadPrefixes(xml)).toBe('<sst xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>see x:t a x:b="1"</t></si></sst>');
-    const plain = '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>A</t></si></sst>';
-    expect(withReadPrefixes(plain)).toBe(plain);
+  it('looks at the root element only, past the declaration, comments and a doctype', () => {
+    const NS = 'xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+    expect(workbookUnsupported(`<?xml version="1.0"?><!-- <x:fake> --><!DOCTYPE workbook><x:workbook ${NS}/>`)).toBe('prefixed');
+    expect(workbookUnsupported('<?xml version="1.0"?><!-- <x:fake> --><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:sheets/></workbook>')).toBeNull();
+    expect(workbookUnsupported('<!-- never closed <x:workbook>')).toBeNull();
+    expect(workbookUnsupported(undefined)).toBeNull();
   });
 });

@@ -15,7 +15,7 @@ import { OFFICE_ZIP_LIMITS } from '../office-files.js';
 import { unzipOffice, type ZipLimits } from '../office-zip.js';
 import { cellKey, parseAddress, parseRange, parseRanges, shiftFormula, type CellRange } from './refs.js';
 import { readStyles, type StyleSheet } from './styles.js';
-import { attr, boolAttr, decodeXml, numAttr, runText, withReadPrefixes } from './xml.js';
+import { attr, boolAttr, decodeXml, numAttr, runText } from './xml.js';
 
 /** An error a cell holds, as Excel writes it: `#DIV/0!`, `#N/A`, `#NAME?`, `#REF!`, `#VALUE!`, `#NUM!`, `#NULL!`. */
 export interface SheetError { error: string }
@@ -78,6 +78,42 @@ export interface WorkbookModel {
   styles: StyleSheet;
   /** Dates count from 1904 (old Mac workbooks). */
   date1904: boolean;
+  /**
+   * Set when buddi does not read this workbook, and then it has no sheets:
+   * `prefixed`, its SpreadsheetML written with a namespace prefix
+   * (`<x:workbook>`), which some exporters do and this reader does not
+   * follow (`workbookUnsupported`).
+   */
+  unsupported?: 'prefixed';
+}
+
+/** What a reader says of a workbook it does not read (`WorkbookModel.unsupported`). */
+export const UNSUPPORTED_WORKBOOK: Readonly<Record<'prefixed', string>> = {
+  prefixed: 'it writes its spreadsheet markup with a namespace prefix, which buddi does not read',
+};
+
+/**
+ * Whether buddi reads this workbook part, or why not: its root element is
+ * looked at, and only that — past the XML declaration, comments and a
+ * doctype, within the first 64 KB — never the whole part. A prefixed root
+ * (`<x:workbook>`) is `prefixed`: the readers here match unprefixed
+ * SpreadsheetML, and would read such a workbook as empty.
+ */
+export function workbookUnsupported(workbookXml: string | undefined): 'prefixed' | null {
+  if (workbookXml === undefined) return null;
+  const end = Math.min(workbookXml.length, 64 * 1024);
+  let at = 0;
+  while (at < end) {
+    const lt = workbookXml.indexOf('<', at);
+    if (lt < 0 || lt >= end) return null;
+    // A declaration, a comment or a doctype is skipped; the first other tag is the root.
+    const skip = workbookXml.startsWith('<?', lt) ? '?>' : workbookXml.startsWith('<!--', lt) ? '-->' : workbookXml.startsWith('<!', lt) ? '>' : null;
+    if (skip === null) return /^<[A-Za-z_][\w.-]*:/.test(workbookXml.slice(lt, lt + 256)) ? 'prefixed' : null;
+    const close = workbookXml.indexOf(skip, lt + 2);
+    if (close < 0) return null;
+    at = close + skip.length;
+  }
+  return null;
 }
 
 /** The parts a workbook is read from, by name, as text. */
@@ -107,7 +143,7 @@ export function unzipBounded(bytes: Uint8Array, want: (name: string) => boolean 
 export function workbookParts(bytes: Uint8Array, limits: ZipLimits = OFFICE_ZIP_LIMITS): WorkbookParts {
   const parts = unzipBounded(bytes, isWorkbookPart, limits);
   const decoder = new TextDecoder();
-  return Object.fromEntries(Object.entries(parts).map(([name, data]) => [name, withReadPrefixes(decoder.decode(data))]));
+  return Object.fromEntries(Object.entries(parts).map(([name, data]) => [name, decoder.decode(data)]));
 }
 
 /** Where each sheet's part is, from the workbook's relations. */
@@ -247,6 +283,9 @@ function readSheet(xml: string, target: { name: string; path: string; hidden: bo
 
 /** A workbook read from its parts (`workbookParts`). */
 export function readWorkbookParts(parts: WorkbookParts): WorkbookModel {
+  if (workbookUnsupported(parts['xl/workbook.xml']) === 'prefixed') {
+    return { sheets: [], styles: readStyles(undefined, undefined), date1904: false, unsupported: 'prefixed' };
+  }
   const strings = sharedStrings(parts['xl/sharedStrings.xml']);
   const theme = Object.keys(parts).filter((p) => /^xl\/theme\/theme\d*\.xml$/.test(p)).sort()[0];
   const sheets = sheetTargets(parts).flatMap((target) => {

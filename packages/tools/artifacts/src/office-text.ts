@@ -7,6 +7,7 @@
  * thread. It is handed a verified package (`office-task.ts`).
  */
 import { cellText, decodeEntities, unzipOffice, type OfficeKind } from '@buddi/core/plugin';
+import { UNSUPPORTED_WORKBOOK, workbookUnsupported } from '@buddi/core/sheet';
 import mammoth from 'mammoth';
 import readExcelFile from 'read-excel-file/node';
 import { toCsv } from './document.js';
@@ -18,6 +19,11 @@ export async function officeText(bytes: Buffer, kind: OfficeKind): Promise<{ tex
     return { text: out.value };
   }
   if (kind === 'xlsx') {
+    // A workbook buddi does not read is said so, not read as empty sheets.
+    const workbook = unzipOffice(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), (name) => name === 'xl/workbook.xml');
+    if (typeof workbook === 'string') throw new Error(workbook);
+    const unsupported = workbookUnsupported(workbook['xl/workbook.xml'] && new TextDecoder().decode(workbook['xl/workbook.xml']));
+    if (unsupported) throw new Error(UNSUPPORTED_WORKBOOK[unsupported]);
     const sheets = await readExcelFile(bytes);
     const text = sheets.map(({ sheet, data }) => {
       const rows = data.map((row) => row.map(cellText));

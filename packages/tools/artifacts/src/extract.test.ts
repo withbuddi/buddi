@@ -136,6 +136,10 @@ describe('Office files', () => {
     expect(performance.now() - started).toBeLessThan(500);
   });
 
+  it('says a workbook written with prefixed SpreadsheetML is one it does not read, instead of empty sheets', async () => {
+    await expect(extractText(fixture('budget-prefixed.xlsx'), XLSX, 10_000)).rejects.toThrow(/spreadsheet could not be read \(it writes its spreadsheet markup with a namespace prefix, which buddi does not read\)/);
+  });
+
   it('refuses a package that understates its sizes while it inflates, before mammoth or read-excel-file sees it', async () => {
     // lying.docx / lying.xlsx: 30 MB parts whose directory says 2 KB and 4 KB. The directory alone passes.
     await expect(extractText(fixture('lying.docx'), DOCX, 10_000)).rejects.toThrow(/Word document could not be read \(word\/document\.xml unpacks to more than its zip directory says\)/);

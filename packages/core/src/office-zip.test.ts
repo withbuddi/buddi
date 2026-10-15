@@ -19,7 +19,7 @@ import { readWorkbook } from './sheet/read.js';
  * directory that may point several entries at the same local header
  * (`alias`), as Codex's aliasing case does.
  */
-function handZip(files: Array<{ name: string; data: Uint8Array; method: 0 | 8; size: number }>, alias: Array<{ name: string; of: string }> = []): Uint8Array {
+function handZip(files: Array<{ name: string; data: Uint8Array; method: 0 | 8; size: number; localName?: string }>, alias: Array<{ name: string; of: string }> = []): Uint8Array {
   const encoder = new TextEncoder();
   const local: Uint8Array[] = [];
   const dir: Uint8Array[] = [];
@@ -40,7 +40,7 @@ function handZip(files: Array<{ name: string; data: Uint8Array; method: 0 | 8; s
     return out;
   };
   for (const f of files) {
-    const name = encoder.encode(f.name);
+    const name = encoder.encode(f.localName ?? f.name);
     offsets.set(f.name, at);
     const head = header(name, f, false, 0);
     local.push(head, f.data);
@@ -105,6 +105,23 @@ describe('an Office package, as its parts truly inflate', () => {
     const verified = verifiedOfficePackage(honest, 'docx', tight);
     if (typeof verified === 'string') throw new Error(verified);
     expect(verified.length).toBeLessThanOrEqual(honest.length);
+  });
+
+  it('refuses a package whose verified copy would be longer than the file (Codex: 210 bytes rebuilt as 246)', () => {
+    // Local headers with no names, the central directory naming them: the rebuild writes each name twice.
+    const text = (s: string): { data: Uint8Array; method: 0; size: number } => { const data = new TextEncoder().encode(s); return { data, method: 0, size: data.length }; };
+    const short = handZip([
+      { name: '[Content_Types].xml', localName: '', ...text('<Types/>') },
+      { name: 'word/document.xml', localName: '', ...text('<w:document/>') },
+    ]);
+    expect(short.length).toBeLessThan(250);
+    expect(verifiedOfficePackage(short, 'docx')).toBe('its zip directory does not match its parts');
+    expect(officePackageProblem(short, 'docx')).toBe('its zip directory does not match its parts');
+    // Every honest fixture's copy fits in the file it came from.
+    for (const [name, kind] of [['letter.docx', 'docx'], ['budget.xlsx', 'xlsx'], ['deck.pptx', 'pptx'], ['budget-prefixed.xlsx', 'xlsx']] as const) {
+      const verified = verifiedOfficePackage(fixture(name), kind);
+      expect(typeof verified === 'string' ? verified : verified.length <= fixture(name).length).toBe(true);
+    }
   });
 
   it('reads a workbook with one cell in its far corner as two cells, not a rectangle', () => {

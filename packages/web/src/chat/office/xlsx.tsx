@@ -157,6 +157,7 @@ export default function XlsxPreview({ bytes }: OfficeViewerProps): JSX.Element {
   if (model === 'loading') return <Empty>Reading the workbook…</Empty>;
   if (model === 'too-large') return <Notice>This spreadsheet is too large to preview here. Download it to open it.</Notice>;
   if (model === 'failed') return <Notice>This spreadsheet could not be read. Download it to open it.</Notice>;
+  if (model.unsupported) return <Notice>This workbook can’t be previewed here. Download it or open it in your app.</Notice>;
   const sheets = model.sheets;
   if (sheets.length === 0 || !view || !modelSheet) return <p className="muted">The workbook is empty.</p>;
   const columns = Array.from({ length: view.width }, (_, i) => i + 1);

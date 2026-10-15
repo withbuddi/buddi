@@ -121,22 +121,38 @@ export function unzipOffice(bytes: Uint8Array, want: (name: string) => boolean =
   return parts;
 }
 
-/** Each part with its compressed data and the size it truly inflates to, or why the package is refused. */
-function verifiedParts(bytes: Uint8Array, kind: OfficeKind, limits: ZipLimits): Array<{ entry: ZipEntry; data: Uint8Array; size: number }> | string {
+/** One part of the verified copy: its entry, compressed data, the size it truly inflates to, and its name as written. */
+interface VerifiedPart { entry: ZipEntry; data: Uint8Array; size: number; name: Uint8Array }
+
+/** The verified copy's exact length: each local header as written, its data, the directory and its end record. */
+function rebuiltLength(parts: ReadonlyArray<{ data: Uint8Array; name: Uint8Array }>): number {
+  return parts.reduce((n, p) => n + 30 + p.name.length + p.data.length + 46 + p.name.length, 22);
+}
+
+/**
+ * Each part with its compressed data and the size it truly inflates to, or
+ * why the package is refused. Before anything is inflated, the verified
+ * copy's exact length is worked out (`rebuiltLength`): longer than the
+ * file, it is refused, so the copy is never more than the bytes given.
+ */
+function verifiedParts(bytes: Uint8Array, kind: OfficeKind, limits: ZipLimits): { parts: VerifiedPart[]; length: number } | string {
   const entries = entriesOf(bytes, limits);
   if (typeof entries === 'string') return entries;
   const names = new Set(entries.map((e) => e.entry.name));
   if (!names.has('[Content_Types].xml')) return 'it is not an Office package';
   const main = OFFICE_FORMATS[kind]!.main!;
   if (!names.has(main)) return `it has no ${main}`;
-  const out: Array<{ entry: ZipEntry; data: Uint8Array; size: number }> = [];
-  for (const { entry, data } of entries) {
-    if (isDirectory(entry)) continue;
+  const encoder = new TextEncoder();
+  const kept = entries.filter(({ entry }) => !isDirectory(entry)).map((e) => ({ ...e, name: encoder.encode(e.entry.name) }));
+  const length = rebuiltLength(kept);
+  if (length > bytes.length) return 'its zip directory does not match its parts';
+  const parts: VerifiedPart[] = [];
+  for (const { entry, data, name } of kept) {
     const size = inflatePart(data, entry, false);
     if (typeof size === 'string') return size;
-    out.push({ entry, data, size: size as number });
+    parts.push({ entry, data, size: size as number, name });
   }
-  return out;
+  return { parts, length };
 }
 
 /**
@@ -159,13 +175,11 @@ export function officePackageProblem(bytes: Uint8Array, kind: OfficeKind, limits
  * (`officePackageProblem`'s answer) as a string otherwise.
  */
 export function verifiedOfficePackage(bytes: Uint8Array, kind: OfficeKind, limits: ZipLimits = OFFICE_ZIP_LIMITS): Uint8Array | string {
-  const parts = verifiedParts(bytes, kind, limits);
-  if (typeof parts === 'string') return parts;
-  const encoder = new TextEncoder();
-  const named = parts.map((p) => ({ ...p, name: encoder.encode(p.entry.name) }));
-  const localBytes = named.reduce((n, p) => n + 30 + p.name.length + p.data.length, 0);
-  const dirBytes = named.reduce((n, p) => n + 46 + p.name.length, 0);
-  const out = new Uint8Array(localBytes + dirBytes + 22);
+  const verified = verifiedParts(bytes, kind, limits);
+  if (typeof verified === 'string') return verified;
+  const named = verified.parts;
+  // Exactly the length checked against the file before anything was inflated.
+  const out = new Uint8Array(verified.length);
   const view = new DataView(out.buffer);
   const offsets: number[] = [];
   let at = 0;

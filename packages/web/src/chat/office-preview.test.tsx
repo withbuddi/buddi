@@ -105,13 +105,11 @@ describe('Office previews', () => {
     expect(screen.queryByText('Month')).not.toBeInTheDocument();
   });
 
-  it('draws a workbook written with prefixed SpreadsheetML (x:) as it draws the same one without', async () => {
+  it('says plainly that a workbook written with prefixed SpreadsheetML (x:) can’t be previewed, instead of showing it empty', async () => {
     serve(fixture('budget-prefixed.xlsx'));
     render(<ArtifactPreview artifactId="a14" filename="Budget.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
-    const grid = await screen.findByTestId('office-xlsx', {}, { timeout: 10_000 });
-    expect(grid).toHaveTextContent('Month');
-    expect(screen.getByRole('cell', { name: '95.5' })).toHaveClass('num');
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Budget', 'Notes']);
+    expect(await screen.findByText('This workbook can’t be previewed here. Download it or open it in your app.', {}, { timeout: 10_000 })).toBeInTheDocument();
+    expect(screen.queryByText(/The workbook is empty/)).not.toBeInTheDocument();
   });
 
   it('draws a workbook’s look: fills, bold, borders, number formats, widths, merges, the frozen header and conditional colour', async () => {
