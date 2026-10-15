@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { strToU8, unzipSync, zipSync } from 'fflate';
+import { withReadPrefixes } from './xml.js';
 import { describe, expect, it } from 'vitest';
 import {
   address, cellKey, conditionalStyles, criterion, evaluate, fillCachedValues, formatCell, readWorkbook, sheetEngine, shiftFormula, valueOf,
@@ -375,5 +376,23 @@ describe('what the review found', () => {
     expect(sheet.cells.get(cellKey(1, 2))).toMatchObject({ value: null, hasValue: false });
     expect(sheet.cells.get(cellKey(1, 3))).toMatchObject({ value: '', hasValue: true });
     expect(sheet.cells.get(cellKey(1, 4))).toMatchObject({ value: null, hasValue: false });
+  });
+});
+
+describe('a workbook written with prefixed SpreadsheetML', () => {
+  const office = (name: string): Uint8Array => new Uint8Array(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../__fixtures__/office', name)));
+
+  it('reads the same as without prefixes (budget-prefixed.xlsx: budget.xlsx with x:, pr: and rel: prefixes)', () => {
+    const plain = readWorkbook(office('budget.xlsx'));
+    const prefixed = readWorkbook(office('budget-prefixed.xlsx'));
+    expect(plain.sheets.map((s) => s.name)).toEqual(['Budget', 'Notes']);
+    expect(prefixed).toEqual(plain);
+  });
+
+  it('renames prefixes in tag names only, never in text or values', () => {
+    const xml = '<x:sst xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:si><x:t>see x:t a x:b="1"</x:t></x:si></x:sst>';
+    expect(withReadPrefixes(xml)).toBe('<sst xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>see x:t a x:b="1"</t></si></sst>');
+    const plain = '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>A</t></si></sst>';
+    expect(withReadPrefixes(plain)).toBe(plain);
   });
 });

@@ -68,16 +68,39 @@ function inflatePart(data: Uint8Array, entry: ZipEntry, keep: boolean): Uint8Arr
   return out;
 }
 
-/** The directory, each name once, within the limits. */
-function entriesOf(bytes: Uint8Array, limits: ZipLimits): ZipEntry[] | string {
+/** One entry of the directory with its compressed data. */
+interface Located { entry: ZipEntry; data: Uint8Array }
+
+/**
+ * The directory, each name once, within the limits, each entry with its
+ * data; refused when two entries' regions (local header and data) overlap —
+ * a shared offset included — so no byte of the file is read, or copied
+ * into the verified package, for two parts: what is copied is never more
+ * than the file itself.
+ */
+function entriesOf(bytes: Uint8Array, limits: ZipLimits): Located[] | string {
   const entries = zipEntries(bytes, limits);
   if (typeof entries === 'string') return entries;
   const names = new Set<string>();
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const located: Located[] = [];
   for (const entry of entries) {
     if (names.has(entry.name)) return `it names ${entry.name} twice`;
     names.add(entry.name);
+    const data = dataOf(bytes, view, entry);
+    if (typeof data === 'string') return data;
+    located.push({ entry, data });
   }
-  return entries;
+  const regions = located
+    .map(({ entry, data }) => ({ from: entry.offset, to: data.byteOffset - bytes.byteOffset + data.length }))
+    .sort((a, b) => a.from - b.from);
+  let copied = 0;
+  for (let i = 0; i < regions.length; i++) {
+    if (i > 0 && regions[i]!.from < regions[i - 1]!.to) return 'its parts overlap in the zip';
+    copied += regions[i]!.to - regions[i]!.from;
+  }
+  if (copied > bytes.length) return 'its parts overlap in the zip';
+  return located;
 }
 
 /**
@@ -88,12 +111,9 @@ function entriesOf(bytes: Uint8Array, limits: ZipLimits): ZipEntry[] | string {
 export function unzipOffice(bytes: Uint8Array, want: (name: string) => boolean = () => true, limits: ZipLimits = OFFICE_ZIP_LIMITS): Record<string, Uint8Array> | string {
   const entries = entriesOf(bytes, limits);
   if (typeof entries === 'string') return entries;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const parts: Record<string, Uint8Array> = {};
-  for (const entry of entries) {
+  for (const { entry, data } of entries) {
     if (isDirectory(entry) || !want(entry.name)) continue;
-    const data = dataOf(bytes, view, entry);
-    if (typeof data === 'string') return data;
     const part = inflatePart(data, entry, true);
     if (typeof part === 'string') return part;
     parts[entry.name] = part as Uint8Array;
@@ -105,16 +125,13 @@ export function unzipOffice(bytes: Uint8Array, want: (name: string) => boolean =
 function verifiedParts(bytes: Uint8Array, kind: OfficeKind, limits: ZipLimits): Array<{ entry: ZipEntry; data: Uint8Array; size: number }> | string {
   const entries = entriesOf(bytes, limits);
   if (typeof entries === 'string') return entries;
-  const names = new Set(entries.map((e) => e.name));
+  const names = new Set(entries.map((e) => e.entry.name));
   if (!names.has('[Content_Types].xml')) return 'it is not an Office package';
   const main = OFFICE_FORMATS[kind]!.main!;
   if (!names.has(main)) return `it has no ${main}`;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const out: Array<{ entry: ZipEntry; data: Uint8Array; size: number }> = [];
-  for (const entry of entries) {
+  for (const { entry, data } of entries) {
     if (isDirectory(entry)) continue;
-    const data = dataOf(bytes, view, entry);
-    if (typeof data === 'string') return data;
     const size = inflatePart(data, entry, false);
     if (typeof size === 'string') return size;
     out.push({ entry, data, size: size as number });

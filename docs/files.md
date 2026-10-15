@@ -491,7 +491,8 @@ remote): elsewhere the routes refuse and the button is off, saying so.
 
 **Package limits.** Every Office package is held to one rule in core
 (`OFFICE_ZIP_LIMITS`, `office-zip.ts`): at most 2,000 parts, 50 MB per part
-and 200 MB in all, no ZIP64, each name once. It is checked from the zip
+and 200 MB in all, no ZIP64, each name once, no two parts sharing bytes of
+the file (so the verified copy is never larger than it). It is checked from the zip
 directory before anything is inflated, and again as each part inflates: a
 part that grows past the size the directory declared is refused at the
 first slice over, so a file that understates its sizes gets no further than
@@ -630,7 +631,8 @@ may import).
   merges and conditional rules. `readStyles`: `styles.xml` (number formats,
   fonts, fills, borders, cell formats, the formats conditional rules apply)
   and `theme1.xml`'s colour slots with tint, resolved to one style per cell
-  format. Cells are kept sparsely, by address. read-excel-file stays what
+  format. Cells are kept sparsely, by address, and a part written with
+  prefixed SpreadsheetML (`<x:row>`) reads as one without (`withReadPrefixes`). read-excel-file stays what
   reads values and dates for the agent's CSV; the preview's table shows the
   model's values through `formatCell`.
 - `evaluate`: fast-formula-parser (MIT, 1.0.19 pinned; chevrotain, jstat,

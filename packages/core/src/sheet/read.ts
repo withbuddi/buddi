@@ -15,7 +15,7 @@ import { OFFICE_ZIP_LIMITS } from '../office-files.js';
 import { unzipOffice, type ZipLimits } from '../office-zip.js';
 import { cellKey, parseAddress, parseRange, parseRanges, shiftFormula, type CellRange } from './refs.js';
 import { readStyles, type StyleSheet } from './styles.js';
-import { attr, boolAttr, decodeXml, numAttr, runText } from './xml.js';
+import { attr, boolAttr, decodeXml, numAttr, runText, withReadPrefixes } from './xml.js';
 
 /** An error a cell holds, as Excel writes it: `#DIV/0!`, `#N/A`, `#NAME?`, `#REF!`, `#VALUE!`, `#NUM!`, `#NULL!`. */
 export interface SheetError { error: string }
@@ -107,7 +107,7 @@ export function unzipBounded(bytes: Uint8Array, want: (name: string) => boolean 
 export function workbookParts(bytes: Uint8Array, limits: ZipLimits = OFFICE_ZIP_LIMITS): WorkbookParts {
   const parts = unzipBounded(bytes, isWorkbookPart, limits);
   const decoder = new TextDecoder();
-  return Object.fromEntries(Object.entries(parts).map(([name, data]) => [name, decoder.decode(data)]));
+  return Object.fromEntries(Object.entries(parts).map(([name, data]) => [name, withReadPrefixes(decoder.decode(data))]));
 }
 
 /** Where each sheet's part is, from the workbook's relations. */

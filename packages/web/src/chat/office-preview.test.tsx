@@ -105,6 +105,15 @@ describe('Office previews', () => {
     expect(screen.queryByText('Month')).not.toBeInTheDocument();
   });
 
+  it('draws a workbook written with prefixed SpreadsheetML (x:) as it draws the same one without', async () => {
+    serve(fixture('budget-prefixed.xlsx'));
+    render(<ArtifactPreview artifactId="a14" filename="Budget.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
+    const grid = await screen.findByTestId('office-xlsx', {}, { timeout: 10_000 });
+    expect(grid).toHaveTextContent('Month');
+    expect(screen.getByRole('cell', { name: '95.5' })).toHaveClass('num');
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Budget', 'Notes']);
+  });
+
   it('draws a workbook’s look: fills, bold, borders, number formats, widths, merges, the frozen header and conditional colour', async () => {
     serve(fixture('trip.xlsx'));
     render(<ArtifactPreview artifactId="a6" filename="Trip.xlsx" mime={OFFICE_MIME.xlsx} family="table" />);
