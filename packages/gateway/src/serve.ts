@@ -77,7 +77,7 @@ import {
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
-import { resolveDataDir, scrubText, settleScheduleZones } from '@buddi/core';
+import { scrubText, settleScheduleZones } from '@buddi/core';
 import { adoptEnvMailbox, adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
