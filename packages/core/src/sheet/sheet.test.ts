@@ -390,7 +390,10 @@ describe('a workbook written with prefixed SpreadsheetML', () => {
 
   it('looks at the root element only, past the declaration, comments and a doctype', () => {
     const NS = 'xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
-    expect(workbookUnsupported(`<?xml version="1.0"?><!-- <x:fake> --><!DOCTYPE workbook><x:workbook ${NS}/>`)).toBe('prefixed');
+    expect(workbookUnsupported(`<?xml version="1.0"?><!-- <x:fake> --><x:workbook ${NS}/>`)).toBe('prefixed');
+    // A doctype is never read: its internal subset can hide the real root.
+    expect(workbookUnsupported(`<!DOCTYPE x:workbook [<!ENTITY bait "><workbook/>">]><x:workbook ${NS}/>`)).toBe('unreadable');
+    expect(workbookUnsupported(`<!DOCTYPE workbook><workbook ${NS}/>`)).toBe('unreadable');
     expect(workbookUnsupported('<?xml version="1.0"?><!-- <x:fake> --><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:sheets/></workbook>')).toBeNull();
     expect(workbookUnsupported('<!-- never closed <x:workbook>')).toBe('unreadable');
     expect(workbookUnsupported(undefined)).toBe('unreadable');

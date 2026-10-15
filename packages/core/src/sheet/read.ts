@@ -103,7 +103,7 @@ const ROOT_WITHIN = 64 * 1024;
  * Whether buddi reads this workbook part, failing closed: only a root
  * element that is exactly an unprefixed `<workbook` followed by
  * whitespace, `>` or `/`, found within the part's first 64 KB past the XML
- * declaration, comments and a doctype, is read (null). A `:` before
+ * declaration and comments, is read (null); a doctype is `unreadable`. A `:` before
  * `workbook` is `prefixed`; anything else (no part, no root within the
  * bound, another name) is `unreadable`. Nothing past the bound is scanned.
  */
@@ -114,8 +114,10 @@ export function workbookUnsupported(workbookXml: string | undefined): WorkbookUn
   while (at < head.length) {
     const lt = head.indexOf('<', at);
     if (lt < 0) return 'unreadable';
-    // A declaration, a comment or a doctype is skipped; the first other tag is the root.
-    const skip = head.startsWith('<?', lt) ? '?>' : head.startsWith('<!--', lt) ? '-->' : head.startsWith('<!', lt) ? '>' : null;
+    // A declaration or a comment is skipped; the first other tag is the root. Office never
+    // writes a doctype, and one can hide the root behind its internal subset: unreadable.
+    if (head.startsWith('<!', lt) && !head.startsWith('<!--', lt)) return 'unreadable';
+    const skip = head.startsWith('<?', lt) ? '?>' : head.startsWith('<!--', lt) ? '-->' : null;
     if (skip === null) {
       if (/^<workbook[\s>/]/.test(head.slice(lt, lt + 10))) return null;
       // The root's name as far as it goes, within 512 characters: a prefix is anything before a colon.
