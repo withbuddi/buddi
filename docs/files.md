@@ -634,7 +634,7 @@ may import).
   and `theme1.xml`'s colour slots with tint, resolved to one style per cell
   format. Cells are kept sparsely, by address. A workbook written with
   prefixed SpreadsheetML (`<x:workbook>`, which some exporters write) is not
-  read: `readWorkbook` reports it `unsupported: 'prefixed'`, the preview says
+  read: `readWorkbook` reports it `unsupported: 'prefixed'` (and any workbook part whose root is not a plain `<workbook>` within its first 64 KB `'unreadable'`: the check fails closed), the preview says
   it can't be previewed here (Download, or open it in your app), and
   `artifacts.text` says buddi does not read it. read-excel-file stays what
   reads values and dates for the agent's CSV; the preview's table shows the

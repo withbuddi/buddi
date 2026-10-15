@@ -392,7 +392,24 @@ describe('a workbook written with prefixed SpreadsheetML', () => {
     const NS = 'xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
     expect(workbookUnsupported(`<?xml version="1.0"?><!-- <x:fake> --><!DOCTYPE workbook><x:workbook ${NS}/>`)).toBe('prefixed');
     expect(workbookUnsupported('<?xml version="1.0"?><!-- <x:fake> --><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:sheets/></workbook>')).toBeNull();
-    expect(workbookUnsupported('<!-- never closed <x:workbook>')).toBeNull();
-    expect(workbookUnsupported(undefined)).toBeNull();
+    expect(workbookUnsupported('<!-- never closed <x:workbook>')).toBe('unreadable');
+    expect(workbookUnsupported(undefined)).toBe('unreadable');
+  });
+
+  it('fails closed: only a plain <workbook> root within the first 64 KB is read', () => {
+    const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+    // An ordinary part, and its root followed by whitespace, > or /.
+    expect(workbookUnsupported(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook ${NS}><sheets/></workbook>`)).toBeNull();
+    expect(workbookUnsupported('<workbook>')).toBeNull();
+    expect(workbookUnsupported('<workbook/>')).toBeNull();
+    expect(workbookUnsupported('<workbookx>')).toBe('unreadable');
+    // 64 KB of padding, or a comment as long, before the root: not found within the bound.
+    expect(workbookUnsupported(`${' '.repeat(64 * 1024)}<workbook ${NS}/>`)).toBe('unreadable');
+    expect(workbookUnsupported(`<!--${'-x'.repeat(32 * 1024)}--><workbook ${NS}/>`)).toBe('unreadable');
+    // Any prefix: non-ASCII, or very long.
+    expect(workbookUnsupported('<é:workbook xmlns:é="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>')).toBe('prefixed');
+    expect(workbookUnsupported(`<${'p'.repeat(256)}:workbook/>`)).toBe('prefixed');
+    expect(workbookUnsupported(`<${'p'.repeat(4096)}:workbook/>`)).toBe('unreadable');
+    expect(workbookUnsupported('<worksheet/>')).toBe('unreadable');
   });
 });
