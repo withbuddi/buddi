@@ -12,7 +12,7 @@ import { editionOriginLine, findEditionOrigin } from './edition-origin.js';
 import { MAX_QUESTION_OPTIONS, filesNewestByOwner, type OwnerNewestFile, dayMonthText, daysUntil, getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateString, localDateTimeString, turning, type DayMonth, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
-const clean = (value: string): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 120);
+const clean = (value: string, max = 120): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, max);
 async function command(file: string, args: string[]): Promise<string | null> {
   try { return clean((await exec(file, args, { timeout: 1500, maxBuffer: 8192 })).stdout) || null; }
   catch { return null; }
@@ -160,11 +160,13 @@ async function ownerEditLines(ctx: CoreToolContext, conversationId: string, agen
  */
 export function ownerEditLine(file: OwnerNewestFile, timezone: string, tools: readonly string[] = []): string {
   const when = file.savedAt ? localDateTimeString(new Date(file.savedAt), timezone) : 'just now';
-  const name = file.name ?? 'a file';
+  // A name and a path are the owner's or a program's text: one line each, as the profile lines are.
+  const name = file.name ? clean(file.name) : 'a file';
+  const workspacePath = file.workspacePath ? clean(file.workspacePath, 500) : null;
   const head = `The newest version of ${name} is the owner's (v${file.version}, saved ${when})${file.yours === null ? '' : `; you last wrote v${file.yours}`}.`;
   const write = tools.includes('artifacts.write') ? ` Save changes with artifacts.write { fileId: "${file.fileId}", readVersion: ${file.version} }.` : '';
-  if (file.workspacePath) {
-    return `${head} Your workspace copy at ${file.workspacePath} already holds it: work on that copy and return it in outputs again, so the owner sees the next version.${write} Don't ask the owner to paste it.`;
+  if (workspacePath) {
+    return `${head} Your workspace copy at ${workspacePath} already holds it: work on that copy and return it in outputs again, so the owner sees the next version.${write} Don't ask the owner to paste it.`;
   }
   if (!tools.includes('artifacts.text')) return `${head} Your earlier copies are out of date, and you cannot read files in Files; ask the owner what changed before changing it.`;
   return `${head} Your earlier copies (any in your workspace too) are out of date: read it with artifacts.text { id: "${file.artifactId}" } and keep the owner's changes.${write} Don't ask the owner to paste it.`;

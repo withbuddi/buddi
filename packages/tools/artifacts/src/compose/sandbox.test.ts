@@ -6,8 +6,9 @@
  */
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, readdir, rm, utimes } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { COMPOSE_BUILTINS, composeAvailability, nodeFloorProblem, programHint, readFrame, runCompose, scrubPaths } from './sandbox.js';
+import { COMPOSE_BUILTINS, clearStaleComposeRuns, composeAvailability, composeSlot, nodeFloorProblem, programHint, readFrame, runCompose, scrubPaths } from './sandbox.js';
 
 const frame = (type: string, payload: Buffer | string, length?: number): Buffer => {
   const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
@@ -86,5 +87,60 @@ describe('what the model is shown', () => {
     // buddi's own runner says the wrapper itself; a hint is for what Node or a library says.
     expect(programHint('the program has no default export: it must be `export default async (ctx) => { … return <bytes> }`')).toBe('');
     expect(programHint('ReferenceError: missing is not defined')).toBe('');
+  });
+});
+
+describe('the service-wide slots', () => {
+  it('hands a finished run’s slot to the next waiter, so a newcomer never makes one too many', async () => {
+    const limit = 2;
+    let now = 0;
+    let most = 0;
+    const releases: Array<() => void> = [];
+    const hold = () => async (): Promise<void> => {
+      now += 1;
+      most = Math.max(most, now);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      now -= 1;
+    };
+    const runs = [composeSlot(undefined, hold(), limit), composeSlot(undefined, hold(), limit), composeSlot(undefined, hold(), limit)];
+    await new Promise((r) => setImmediate(r));
+    expect(now).toBe(2);
+    // One finishes; before the waiter is let in, a newcomer asks — at every point of the microtask queue.
+    releases.shift()!();
+    for (let i = 0; i < 6; i++) {
+      await Promise.resolve();
+      runs.push(composeSlot(undefined, hold(), limit));
+    }
+    await new Promise((r) => setImmediate(r));
+    expect(most).toBe(limit);
+    expect(now).toBe(limit);
+    // Drain: every run gets its turn, never more than the limit at once.
+    while (releases.length > 0) {
+      releases.shift()!();
+      await new Promise((r) => setImmediate(r));
+      expect(now).toBeLessThanOrEqual(limit);
+    }
+    await Promise.all(runs);
+    expect(most).toBe(limit);
+  });
+});
+
+describe('stale run folders', () => {
+  it('clears the run folders a stopped buddi left, and keeps a fresh one and anything else', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'buddi-compose-stale-'));
+    try {
+      const old = `run-${'0'.repeat(8)}-0000-4000-8000-${'0'.repeat(12)}`;
+      const fresh = `run-${'1'.repeat(8)}-0000-4000-8000-${'1'.repeat(12)}`;
+      for (const name of [old, fresh, 'keep-me']) await mkdir(path.join(root, name));
+      const hourAgo = new Date(Date.now() - 60 * 60_000);
+      await utimes(path.join(root, old), hourAgo, hourAgo);
+      await utimes(path.join(root, 'keep-me'), hourAgo, hourAgo);
+      expect(await clearStaleComposeRuns(root)).toBe(1);
+      expect((await readdir(root)).sort()).toEqual(['keep-me', fresh]);
+      // No folder yet: nothing to do, and no error.
+      expect(await clearStaleComposeRuns(path.join(root, 'none'))).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

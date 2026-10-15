@@ -27,7 +27,8 @@
  *    describing "a cashflow chart" would be putting finance into the platform
  *    through the back door.
  */
-import { ToolRefusal, currentVersion, getFile, resolveFileId, type CoreToolContext, type PluginManifest, type ToolDefinition, type ZodToolDefinition } from '@buddi/core';
+import { ToolRefusal, createPluginHost, currentVersion, getFile, hostBindingOf, resolveFileId, type CoreToolContext, type PluginManifest, type ToolDefinition, type ZodToolDefinition } from '@buddi/core';
+import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { z } from 'zod';
 
 /** Plugin family name. Three tools, no schema, no tables. */
@@ -197,11 +198,17 @@ export const canvasOpen: ToolDefinition<CanvasOpenInput, { opened: true; fileId:
   async execute(input, toolCtx) {
     // A platform tool: core runs it on its own context, with the pool.
     const ctx = toolCtx as CoreToolContext;
-    const fileId = await resolveFileId(ctx.db, input.fileId);
-    const file = fileId ? await getFile(ctx.db, fileId) : null;
-    if (!file) throw new ToolRefusal(`There is no file ${input.fileId} in Files. Find it with artifacts.list.`);
-    const current = await currentVersion(ctx.db, file.id);
-    if (!current) throw new ToolRefusal(`File ${file.id} was deleted from Files by the owner. Do not open or recreate it unless they ask.`);
+    // Looked up as the artifacts tools look a file up (their host's `files.get`): the same scope, one rule.
+    const found = await createPluginHost(hostBindingOf(artifactsManifest), ctx).files!.get(input.fileId);
+    if (!found) {
+      const fileId = await resolveFileId(ctx.db, input.fileId);
+      const gone = fileId ? await getFile(ctx.db, fileId) : null;
+      if (gone?.deletedAt) throw new ToolRefusal(`File ${gone.id} was deleted from Files by the owner. Do not open or recreate it unless they ask.`);
+      throw new ToolRefusal(`There is no file ${input.fileId} in Files. Find it with artifacts.list.`);
+    }
+    const file = await getFile(ctx.db, found.fileId);
+    const current = file ? await currentVersion(ctx.db, file.id) : null;
+    if (!file || !current) throw new ToolRefusal(`File ${found.fileId} was deleted from Files by the owner. Do not open or recreate it unless they ask.`);
     // The page draws it by its type: the editor for text, the preview for the rest.
     return {
       opened: true, fileId: file.id, artifactId: current.id, version: current.version, filename: file.name, mime: file.mime,

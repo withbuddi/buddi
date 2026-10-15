@@ -259,6 +259,15 @@ describe('producedArtifactIds', () => {
     expect(producedArtifactIds({ artifacts: [{ id: a }], artifactId: a })).toEqual([a]);
     expect(producedArtifactIds('text')).toEqual([]);
   });
+
+  it('names nothing for an output that saved nothing: a program read, the same bytes again, a dry run', () => {
+    const a = '0f6eda1f-2ac5-4a79-b9f1-548d216a797a';
+    expect(producedArtifactIds({ source: true, artifactId: a, fileId: a, program: 'x' })).toEqual([]);
+    expect(producedArtifactIds({ artifactId: a, unchanged: true })).toEqual([]);
+    expect(producedArtifactIds({ dryRun: true, artifactId: a })).toEqual([]);
+    // A saved row's own `source` (where its bytes came from) is not the read marker.
+    expect(producedArtifactIds({ artifactId: a, source: { kind: 'upload' } })).toEqual([a]);
+  });
 });
 
 describe('composeSystem', () => {

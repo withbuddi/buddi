@@ -133,6 +133,14 @@ describe.skipIf(!availability.available)(`a compose program inside ${area.kind ?
     expect(out).toMatchObject({ ok: false, code: 'timeout' });
   });
 
+  it('stops itself at its own deadline, a program that only waits too: a child left by a restart does not linger', async () => {
+    // buddi's clock set far off; the runner's own deadline is what stops it.
+    const started = Date.now();
+    const out = await run(`export default async () => { await new Promise((r) => setTimeout(r, 120_000)); return Buffer.from('x'); };`, { limits: { timeoutMs: 60_000, deadlineMs: 1_000 } });
+    expect(out).toMatchObject({ ok: false, code: 'timeout' });
+    expect(Date.now() - started).toBeLessThan(20_000);
+  });
+
   it('stops a program past its heap', async () => {
     const out = await run(`export default async () => { const keep = []; for (;;) keep.push(new Array(1e6).fill(Math.random())); };`, { limits: { heapMb: 64 } });
     expect(out).toMatchObject({ ok: false, code: 'memory' });

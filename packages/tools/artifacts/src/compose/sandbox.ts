@@ -20,7 +20,8 @@
  *    `COMPOSE_BUILTINS` of Node's built-ins, and removes what reaches around
  *    that (`process.getBuiltinModule`, `binding`, `dlopen`, `report`, the
  *    network globals) before the program runs.
- *  - **Limits**: 20 s on the clock and 30 s of CPU, the process group's
+ *  - **Limits**: 20 s on the clock (buddi's, and the runner's own a little
+ *    later, so a child that outlives buddi still stops) and 30 s of CPU, the process group's
  *    resident memory sampled every 100 ms and the group killed past 512 MB
  *    (the heap limit does not count Buffers), on Linux a 1 GB data limit
  *    too; at most 20 MB back on fd 3, framed and checked; 64 KB of stdout
@@ -28,7 +29,7 @@
  *    of buddi's environment: no keys.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { OFFICE_PREVIEW_BYTES, type ConfinementArea } from '@buddi/core/plugin';
@@ -53,6 +54,9 @@ export const COMPOSE_LIMITS = {
   /** Runs at once in the whole service. */
   concurrent: 4,
 } as const;
+
+/** The exit code the runner stops itself with at its deadline, as `timeout(1)` does. */
+export const RUNNER_DEADLINE_EXIT = 124;
 
 /** The Node that also denies the network by itself (`--permission` without `--allow-net`). */
 const NETWORK_DENIED_FROM = 25;
@@ -251,14 +255,24 @@ let running = 0;
 const waiting: Array<() => void> = [];
 const byConversation = new Map<string, Promise<unknown>>();
 
-/** One run at a time per conversation, `concurrent` in the whole service. */
-async function slot<T>(conversation: string | undefined, fn: () => Promise<T>): Promise<T> {
+/**
+ * One run at a time per conversation, `concurrent` in the whole service. A
+ * finished run hands its slot straight to the next waiter (`running` stays
+ * as it is), so a newcomer cannot take it in between and make one too many.
+ */
+export async function composeSlot<T>(conversation: string | undefined, fn: () => Promise<T>, concurrent: number = COMPOSE_LIMITS.concurrent): Promise<T> {
   const before = conversation ? byConversation.get(conversation) : undefined;
   const mine = (async () => {
     if (before) await before.catch(() => {});
-    if (running >= COMPOSE_LIMITS.concurrent) await new Promise<void>((resolve) => waiting.push(resolve));
-    running++;
-    try { return await fn(); } finally { running--; waiting.shift()?.(); }
+    if (running >= concurrent) await new Promise<void>((resolve) => waiting.push(resolve));
+    else running++;
+    try {
+      return await fn();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else running--;
+    }
   })();
   if (conversation) {
     byConversation.set(conversation, mine);
@@ -266,6 +280,33 @@ async function slot<T>(conversation: string | undefined, fn: () => Promise<T>): 
   }
   return mine;
 }
+
+/**
+ * Remove the work folders under `root` that no run of this process can still
+ * be using: a run's folder older than `olderThanMs`, left by a buddi that
+ * stopped mid-run (a restart, a crash). They hold the owner's attached
+ * pictures. Run at start and with the hourly artifact sweep. Returns how many
+ * went.
+ */
+export async function clearStaleComposeRuns(root: string, opts: { olderThanMs?: number; now?: number } = {}): Promise<number> {
+  const olderThan = (opts.now ?? Date.now()) - (opts.olderThanMs ?? STALE_RUN_MS);
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^run-[0-9a-f-]{36}$/.test(entry.name)) continue;
+    const dir = path.join(root, entry.name);
+    const made = await stat(dir).then((s) => s.mtimeMs, () => null);
+    if (made === null || made >= olderThan) continue;
+    await rm(dir, { recursive: true, force: true }).then(() => { removed += 1; }, () => {});
+  }
+  return removed;
+}
+
+/** A run folder this old is no run's: well past the wall clock and the runner's own deadline. */
+const STALE_RUN_MS = 10 * 60_000;
+
+/** How long after buddi's wall clock the runner stops itself, should buddi not be there to stop it. */
+const RUNNER_GRACE_MS = 2_000;
 
 /**
  * Run one program in a fresh work folder under `root` (the plugin's own
@@ -281,12 +322,12 @@ export async function runCompose(input: {
   availability: ComposeAvailability;
   /** The OS sandbox's argv for a work folder (`ctx.buddi.confinement.argv`). */
   confine: ConfinementArea['argv'];
-  limits?: { timeoutMs?: number; heapMb?: number; rssMb?: number };
+  limits?: { timeoutMs?: number; heapMb?: number; rssMb?: number; deadlineMs?: number };
 }): Promise<ComposeRun> {
   const availability = input.availability;
   const quiet = { stdout: '', stderr: '' };
   if (!availability.available || availability.confinement === null) return { ok: false, code: 'unavailable', message: availability.reason ?? 'composed documents are off here', console: quiet };
-  return slot(input.conversationId, async () => {
+  return composeSlot(input.conversationId, async () => {
     await mkdir(input.root, { recursive: true });
     const work = path.join(await realpath(input.root), `run-${randomUUID()}`);
     await mkdir(work);
@@ -300,7 +341,7 @@ export async function runCompose(input: {
 
 async function runIn(
   work: string,
-  input: { kind: ComposeKind; program: string; attachments: readonly ComposeAttachment[]; limits?: { timeoutMs?: number; heapMb?: number; rssMb?: number } },
+  input: { kind: ComposeKind; program: string; attachments: readonly ComposeAttachment[]; limits?: { timeoutMs?: number; heapMb?: number; rssMb?: number; deadlineMs?: number } },
   availability: ComposeAvailability,
   confine: ConfinementArea['argv'],
 ): Promise<ComposeRun> {
@@ -311,12 +352,14 @@ async function runIn(
   await Promise.all(input.attachments.map((a, i) => writeFile(path.join(work, `attachment-${i + 1}`), a.bytes)));
   await writeFile(path.join(work, 'program.mjs'), input.program);
   await writeFile(path.join(work, 'run.mjs'), RUNNER_SOURCE);
+  const timeoutMs = input.limits?.timeoutMs ?? COMPOSE_LIMITS.timeoutMs;
   // The plan goes on fd 4, never into the work folder: it names buddi's install paths.
+  // `deadlineMs`: the runner stops itself then, should buddi have gone (a restart) and a waiting program use no CPU.
   const plan = JSON.stringify({
     kind: input.kind, top: closure.top, deps: closure.deps, attachments, maxBytes: COMPOSE_LIMITS.outputBytes, builtins: COMPOSE_BUILTINS,
+    deadlineMs: input.limits?.deadlineMs ?? timeoutMs + RUNNER_GRACE_MS,
   });
 
-  const timeoutMs = input.limits?.timeoutMs ?? COMPOSE_LIMITS.timeoutMs;
   const heapMb = input.limits?.heapMb ?? COMPOSE_LIMITS.heapMb;
   const rssMb = input.limits?.rssMb ?? COMPOSE_LIMITS.rssMb;
   const node = [process.execPath, ...nodeFlags(work, closure.grants, { networkDenied: availability.networkDenied, heapMb }), path.join(work, 'run.mjs')];
@@ -390,6 +433,8 @@ async function runIn(
       if (frame.kind === 'invalid') return { ok: false, code: 'program_error', message: `the program sent buddi something that is not a file or an error (${frame.why}).`, console: console() };
       const err = stderr.text();
       if (/heap limit|heap out of memory|Allocation failed|Failed to allocate memory/i.test(err)) return { ok: false, ...tooMuchMemory, console: console() };
+      // The runner's own deadline (`deadlineMs`), reached before buddi's clock stopped it.
+      if (exitCode === RUNNER_DEADLINE_EXIT && frame.kind === 'none') return { ok: false, code: 'timeout', message: `the program ran for more than ${Math.min(timeoutMs, input.limits?.deadlineMs ?? timeoutMs) / 1000} s and was stopped. Keep it to building the document: no loops waiting on anything.`, console: console() };
       if (signal === 'SIGXCPU') return { ok: false, code: 'timeout', message: `the program used more than ${COMPOSE_LIMITS.cpuSeconds} s of CPU and was stopped.`, console: console() };
       // The runner did not get to say anything: a syntax error Node printed itself, or a crash.
       const syntax = /SyntaxError: [^\n]+/.exec(err);

@@ -22,6 +22,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   importWeatherPlaces,
@@ -47,6 +48,7 @@ import {
   sweepOrphanUploads,
   purgeDeletedArtifacts,
   DELETED_KEEP_MS,
+  resolveDataDir,
   resumeJob,
   runScheduler,
   runSentinels,
@@ -67,6 +69,7 @@ import {
 import type { Pool } from 'pg';
 import { browserHost } from './browser-host.js';
 import { hostService, useSkillBundles } from '@buddi/tool-host';
+import { clearStaleComposeRuns } from '@buddi/tool-artifacts';
 import type { ApprovalResume } from '@buddi/runtime';
 import {
   DEFAULT_POLL_TIMEOUT_MS,
@@ -956,6 +959,9 @@ export async function main(): Promise<void> {
       // Files deleted more than thirty days ago go for good, with the bytes no other file shares.
       const purged = await purgeDeletedArtifacts(pool, new Date(now().getTime() - DELETED_KEEP_MS));
       if (purged.rows > 0) console.error(`artifacts: purged ${purged.rows} deleted file(s), ${purged.blobs} blob(s)`);
+      // A compose run's folder left by a buddi that stopped mid-run, with the owner's attached pictures in it.
+      const runs = await clearStaleComposeRuns(path.join(resolveDataDir(process.env), 'plugins-data', 'artifacts', 'compose'));
+      if (runs > 0) console.error(`artifacts: cleared ${runs} stale compose run folder(s)`);
     };
     // In recovery this would tombstone uploads that came back in the archive
     // and are a day old by definition, before the owner has looked at any of

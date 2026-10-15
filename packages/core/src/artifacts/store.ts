@@ -515,7 +515,7 @@ export async function saveNewFile(
 
 /**
  * Someone else's version is the newest: the writer did not say it read it
- * (`readVersion`), or read an older one. Writing would drop that version's
+ * (`readVersion`), or read another one (an older one, or one since deleted). Writing would drop that version's
  * changes, so it is refused, with what to read.
  */
 export class FileChangedError extends Error {
@@ -526,7 +526,9 @@ export class FileChangedError extends Error {
     const read = `Read it with artifacts.text { id: "${newest.id}" }, keep its changes, and write again with fileId "${file.id}" and readVersion ${newest.version}.`;
     super(readVersion === undefined
       ? `The newest version of ${name} (v${newest.version}) is by ${by}, not you. ${read}`
-      : `${name} has a newer version (v${newest.version}, by ${by}) than the v${readVersion} you read. ${read}`);
+      : newest.version < readVersion
+        ? `The v${readVersion} of ${name} you read was deleted; the newest is now v${newest.version}, by ${by}. ${read}`
+        : `${name} has a newer version (v${newest.version}, by ${by}) than the v${readVersion} you read. ${read}`);
   }
 }
 
@@ -564,7 +566,8 @@ async function appendWriterVersion(
   // Asked under the lock, of the file and its newest version: the rebuild rule.
   input.guard?.(file, newest ? { id: newest.id, version: newest.version, createdBy: newest.createdBy, composed: await isComposed(client, newest.id) } : null);
   if (newest) {
-    const stale = input.readVersion !== undefined ? newest.version > input.readVersion : newest.createdBy !== input.createdBy;
+    // Exactly the version read: an older one is newest again only because a later one was deleted, and its changes were never read.
+    const stale = input.readVersion !== undefined ? newest.version !== input.readVersion : newest.createdBy !== input.createdBy;
     if (stale) throw new FileChangedError(file, newest, input.readVersion);
     if (newest.sha256 === sha256Of(input.bytes)) return { row: newest, existed: true, file };
   }
@@ -1071,7 +1074,9 @@ export async function undeleteFileVersion(pool: Pool, fileId: string, version: n
 export const DELETED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Versions tombstoned before `olderThan` go for good, files left with none
+ * Versions tombstoned before `olderThan` go for good — once the upgrade that
+ * brought the purge is itself older than that (`core.artifact_purge_epoch`):
+ * what was tombstoned before it gets its month from then. Files left with none
  * go with them, and so do the bytes no remaining version stores: blobs are
  * content-addressed, so the same bytes may be another version's too. Each
  * blob is checked and unlinked under its lock, the one a writer holds until
@@ -1083,6 +1088,9 @@ export async function purgeDeletedArtifacts(
   olderThan: Date,
   env: EnvLike = process.env,
 ): Promise<{ rows: number; blobs: number }> {
+  // A row deleted before the purge existed (086) has its month from the upgrade: until a month after it, nothing goes.
+  const { rows: epoch } = await pool.query<{ counted_from: Date }>(`select counted_from from core.artifact_purge_epoch limit 1`);
+  if (epoch[0] && new Date(epoch[0].counted_from).getTime() >= olderThan.getTime()) return { rows: 0, blobs: 0 };
   const { rows: due } = await pool.query<{ file_id: string }>(
     `select distinct file_id from core.artifacts where deleted_at is not null and deleted_at < $1`,
     [olderThan],

@@ -1167,14 +1167,21 @@ function filesArea(
    * program (`composing`): the rebuild rule, with the owner's id and the
    * file's newest version. Asked under the file's lock by the store.
    */
+  const approvedFor = (file: { id?: string }, newest: NewestVersionFacts | null): boolean => {
+    if (facts.actionId === undefined) return false;
+    const envelope = facts.approvedEffect?.envelope as { fileId?: unknown; replaces?: unknown } | null | undefined;
+    if (envelope === null || typeof envelope !== 'object') return false;
+    return envelope.fileId === (file.id ?? null) && envelope.replaces === (newest?.version ?? null);
+  };
   const mayRebuild = (confirmedRebuild: boolean, composed?: ComposeSource) =>
-    (file: { name: string | null; mime: string; createdBy: string }, newest: NewestVersionFacts | null): void => {
+    (file: { id?: string; name: string | null; mime: string; createdBy: string }, newest: NewestVersionFacts | null): void => {
       if (composed && officeKindOf(file.mime, file.name) !== composed.kind) {
         throw new Error(`${file.name ?? 'This file'} is not a .${composed.kind}; a write never changes a file's format. Compose a new file (a title, no fileId) instead.`);
       }
       const refusal = officeRebuildRefusal(file, {
-        // Approved: this call runs as an action the owner said yes to — set by the executor, never by the model.
-        confirmedRebuild, approved: facts.actionId !== undefined, newest,
+        // Approved: this call runs as an action the owner said yes to — set by the executor, never by the model —
+        // and that card named this file and this newest version (`rebuild.ts`'s envelope), asked again under the lock.
+        confirmedRebuild, approved: approvedFor(file, newest), newest,
         ...(composed ? { composing: true } : {}), ...(facts.ownerId ? { ownerId: facts.ownerId } : {}),
       });
       if (refusal) throw new Error(refusal);

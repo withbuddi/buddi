@@ -711,7 +711,8 @@ export async function readChatTranscript(
 const CANVAS_OPEN_TOOL = 'canvas.open';
 /**
  * The tools whose result is a document they saved. Any other result of
- * theirs — a compose dry run, `{ guide }`, `{ fileId, source: true }`, a
+ * theirs — a compose dry run, `{ guide }`, `{ fileId, source: true }`, the
+ * same bytes again (`unchanged`; `producedArtifactIds` names none), a
  * failed run the agent is about to fix — is the agent checking its own
  * work: it opens no canvas tab and never takes the front; only a save opens
  * or updates the file's tab, and a failure the agent gives up on it says in

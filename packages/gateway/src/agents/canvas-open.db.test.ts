@@ -11,7 +11,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, deleteFile, ensureOwner, migrate, saveArtifact, saveVersion, type CoreToolContext } from '@buddi/core';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPluginHost, createPool, deleteFile, ensureOwner, hostBindingOf, migrate, saveArtifact, saveVersion, type CoreToolContext } from '@buddi/core';
+import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { canvasOpen } from './canvas.js';
 
@@ -72,6 +73,22 @@ suite('canvas.open', () => {
     expect(() => canvasOpen.input!.parse({ name: 'notes.md' })).toThrow();
     expect(() => canvasOpen.input!.parse({})).toThrow();
     await expect(open({ fileId: '11111111-1111-4111-8111-111111111111' }, here)).rejects.toThrow(/There is no file/);
+  });
+
+  it('reaches exactly what the artifacts tools reach: the library’s live versions, not a deleted version’s id', async () => {
+    // Another conversation's file: in the library, so the artifacts tools read it, and canvas.open opens it.
+    const there = (await pool.query("insert into core.conversations (agent_id) values ('scout') returning id")).rows[0].id;
+    const elsewhere = await file('# Elsewhere\n', 'elsewhere.md', there);
+    expect(await open({ fileId: elsewhere.fileId }, here)).toMatchObject({ fileId: elsewhere.fileId, version: 1 });
+    // A version deleted from Files: files.get no longer finds it by its id, and neither does canvas.open.
+    const made = await file('# Draft\n', 'draft.md', here);
+    await saveVersion(pool, { id: made.fileId, bytes: Buffer.from('# Draft, two\n'), createdBy: 'scout' }, { BUDDI_DATA_DIR: dir });
+    await pool.query('update core.artifacts set deleted_at = now() where id = $1', [made.artifactId]);
+    const files = createPluginHost(hostBindingOf(artifactsManifest), ctx(here)).files!;
+    expect(await files.get(made.artifactId)).toBeNull();
+    await expect(open({ fileId: made.artifactId }, here)).rejects.toThrow(/There is no file/);
+    // By the file's own id it opens, at its live newest.
+    expect(await open({ fileId: made.fileId }, here)).toMatchObject({ version: 2 });
   });
 
   it('says a deleted file was deleted', async () => {

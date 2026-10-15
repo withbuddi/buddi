@@ -41,5 +41,5 @@ export type { ArtifactSummary, ArtifactDescription } from './tools/artifacts.js'
 export * from './extract.js';
 export * from './pixels.js';
 export { COMPOSE_RULE, COMPOSE_GUIDES, SHEET_RULE, type ComposeOutput, type ComposedDocument } from './tools/compose.js';
-export { composeAvailability, runCompose, COMPOSE_LIMITS, type ComposeAvailability, type ComposeRun } from './compose/sandbox.js';
+export { clearStaleComposeRuns, composeAvailability, runCompose, COMPOSE_LIMITS, type ComposeAvailability, type ComposeRun } from './compose/sandbox.js';
 export type { OfficeRender, DocxRender, PptxRender, XlsxRender, XlsxSheetRender } from './render.js';

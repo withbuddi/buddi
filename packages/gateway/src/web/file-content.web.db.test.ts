@@ -73,6 +73,8 @@ suite('files as rows', () => {
     url.pathname = `/${TEST_DB}`;
     pool = createPool(url.toString());
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
+    // Upgraded long ago: the purge's month counts from each delete (one test moves it back to now).
+    await pool.query("update core.artifact_purge_epoch set counted_from = now() - interval '90 days'");
     await ensureOwner(pool, 'owner');
     conversationId = await conversation();
     dir = await mkdtemp(path.join(tmpdir(), 'buddi-file-content-'));
@@ -608,6 +610,8 @@ suite('files as rows', () => {
       ...turn('t1', 'artifacts.text', { id: made.id, fileId: made.fileId, version: 1, text: '# Notes\n' }),
       ...turn('d1', 'artifacts.compose', { dryRun: true, kind: 'docx', sizeBytes: 9000, render: { kind: 'docx' }, note: 'Nothing was saved' }),
       ...turn('g1', 'artifacts.compose', { guide: 'docx', text: '# Composing a Word document' }),
+      ...turn('s1', 'artifacts.compose', { source: true, fileId: made.fileId, version: 1, artifactId: made.id, kind: 'docx', library: 'docx', libraryVersion: '9', program: 'export default 1', note: 'The program of v1.' }),
+      ...turn('u1', 'artifacts.compose', { artifactId: made.id, fileId: made.fileId, version: 1, filename: 'Notes.md', mime: 'text/markdown', unchanged: true, note: 'nothing new was saved' }),
       ['assistant', [{ type: 'tool_use', id: 'f1', name: 'artifacts.compose', input: {} }]],
       ['user', [{ type: 'tool_result', tool_use_id: 'f1', content: 'program_error: SyntaxError: Illegal return statement', is_error: true }]],
       ['assistant', [{ type: 'tool_use', id: 'f2', name: 'artifacts.list', input: {} }]],
@@ -616,7 +620,7 @@ suite('files as rows', () => {
     await saveVersion(pool, { id: made.fileId, bytes: Buffer.from('# Notes, two\n'), createdBy: 'scout' }, env);
     await pool.query('update core.artifacts set deleted_at = now() where id = $1', [made.id]);
     const transcript = await readChatTranscript(pool, here, new Date(), undefined, (tool) => tool === 'artifacts.write' || tool === 'artifacts.compose');
-    const results = transcript!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result') as Array<{ toolUseId: string; files?: unknown[]; readsFile?: true; rowOnly?: true }>;
+    const results = transcript!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result') as Array<{ toolUseId: string; files?: unknown[]; readsFile?: true; rowOnly?: true; fileResult?: true }>;
     const by = (id: string) => results.find((block) => block.toolUseId === id)!;
     // The version was deleted since; the file was not, and the tab keeps its id.
     expect(by('w1').files).toEqual([{ artifactId: made.id, fileId: made.fileId, version: 1, filename: 'Notes.md', mime: 'text/markdown', deleted: true, fileDeleted: false }]);
@@ -625,6 +629,9 @@ suite('files as rows', () => {
     // A document tool that saved nothing — a dry run, a guide — is the agent checking its work: its row, no tab.
     expect(by('d1').rowOnly).toBe(true);
     expect(by('g1').rowOnly).toBe(true);
+    // Reading a file's program, or composing the same bytes again, made nothing either.
+    for (const id of ['s1', 'u1']) expect(by(id)).toMatchObject({ files: [], rowOnly: true });
+    expect(by('s1').fileResult).toBeUndefined();
     expect(by('w1').rowOnly).toBeUndefined();
     // So is a failed run it is about to fix; another tool's failure keeps its tab.
     expect(by('f1').rowOnly).toBe(true);
@@ -781,6 +788,22 @@ suite('files as rows', () => {
   });
 
   describe('the purge', () => {
+    it('gives what was deleted before the upgrade a month from the upgrade, not from its delete', async () => {
+      const kept = await saveArtifact(pool, { bytes: Buffer.from('# Kept a month\n'), mime: 'text/markdown', filename: 'kept.md', createdBy: 'owner', conversationId: null }, env);
+      // Tombstoned long before this buddi had a purge; the upgrade was a week ago.
+      await pool.query('update core.artifacts set deleted_at = $2 where id = $1', [kept.id, new Date(Date.now() - 200 * 24 * 60 * 60 * 1000)]);
+      await pool.query("update core.artifact_purge_epoch set counted_from = now() - interval '7 days'");
+      try {
+        expect(await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env)).toEqual({ rows: 0, blobs: 0 });
+        expect((await pool.query('select 1 from core.artifacts where id = $1', [kept.id])).rows).toHaveLength(1);
+      } finally {
+        await pool.query("update core.artifact_purge_epoch set counted_from = now() - interval '90 days'");
+      }
+      // A month after the upgrade, it goes like any other.
+      expect((await purgeDeletedArtifacts(pool, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), env)).rows).toBeGreaterThanOrEqual(1);
+      expect((await pool.query('select 1 from core.artifacts where id = $1', [kept.id])).rows).toHaveLength(0);
+    });
+
     it('removes a version deleted a month ago, and keeps bytes another version still stores', async () => {
       const a = await saveArtifact(pool, { bytes: Buffer.from('# Shared bytes\n'), mime: 'text/markdown', filename: 'shared.md', createdBy: 'scout', conversationId }, env);
       const b = await saveArtifact(pool, { bytes: Buffer.from('# Shared bytes\n'), mime: 'text/markdown', filename: 'shared.md', createdBy: 'owner', source: { surface: 'telegram', chatId: '42' } }, env);

@@ -98,7 +98,7 @@ export interface ComposedDocument {
 export type ComposeOutput =
   | ComposedDocument
   | { dryRun: true; kind: ComposeKind; sizeBytes: number; render: OfficeRender | { error: string }; console?: { stdout?: string; stderr?: string }; note: string }
-  | { fileId: string; version: number; artifactId: string; kind: string; library: string; libraryVersion: string; program: string; note: string }
+  | { source: true; fileId: string; version: number; artifactId: string; kind: string; library: string; libraryVersion: string; program: string; note: string }
   | { guide: string; text: string };
 
 /** What to fall back to after two failed runs, by kind. */
@@ -253,6 +253,8 @@ export const compose: ToolDefinition<ComposeInput, ComposeOutput> = {
           : `there is no file ${input.fileId} in Files that you can read`);
       }
       return {
+        // A read: `source` says so, and the file it names is not one this call made (`producedArtifactIds`).
+        source: true,
         fileId: found.fileId, version: found.version, artifactId: found.artifactId, kind: found.kind,
         library: found.library, libraryVersion: found.libraryVersion, program: found.program,
         note: `The program of v${found.version}. Edit it and compose again with fileId "${found.fileId}" and readVersion ${found.version}.`,

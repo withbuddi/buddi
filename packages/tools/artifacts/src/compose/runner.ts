@@ -24,6 +24,10 @@ const work = path.dirname(fileURLToPath(import.meta.url));
 const plan = JSON.parse(readFileSync(4, 'utf8'));
 closeSync(4);
 const OUT = 3;
+// Its own deadline, kept here as well as in buddi: a child whose buddi went away (a restart) and that only
+// waits uses no CPU, so the CPU limit never stops it. Unref'd: it never keeps a finished run alive.
+const exit = process.exit.bind(process);
+if (Number.isFinite(plan.deadlineMs)) setTimeout(() => exit(124), plan.deadlineMs).unref();
 
 function writeAll(buffer) {
   let at = 0;

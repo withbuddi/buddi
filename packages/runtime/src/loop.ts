@@ -556,9 +556,18 @@ export async function loadMessages(
   }));
 }
 
-/** The artifact ids a tool output names as files it saved, and nothing else. */
+/**
+ * The artifact ids a tool output names as files it saved, and nothing else.
+ * An output that says it saved nothing — a read of a file's program
+ * (`source: true`), the same bytes again (`unchanged: true`), a dry run
+ * (`dryRun: true`) — names a file it did not make: none of it is produced,
+ * so Files does not credit it to the conversation and Telegram does not
+ * send it again.
+ */
 export function producedArtifactIds(output: unknown): string[] {
   if (!output || typeof output !== 'object') return [];
+  const marks = output as { source?: unknown; unchanged?: unknown; dryRun?: unknown };
+  if (marks.source === true || marks.unchanged === true || marks.dryRun === true) return [];
   const isId = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
   const out = output as { artifacts?: unknown; artifactId?: unknown };
   const list = Array.isArray(out.artifacts) ? out.artifacts : [];

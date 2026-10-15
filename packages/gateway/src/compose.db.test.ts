@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import type { Pool } from 'pg';
 import pngjs from 'pngjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ToolRegistry, composeSourceOf, createPool, decideApproval, executeApproved, migrateCore, officePackageProblem, saveArtifact, saveOwnerVersion, testDatabaseUrl } from '@buddi/core/testing';
+import { ToolRegistry, composeSourceOf, createPool, decideApproval, deleteFileVersion, executeApproved, migrateCore, officePackageProblem, saveArtifact, saveOwnerVersion, testDatabaseUrl } from '@buddi/core/testing';
 import type { CoreToolContext } from '@buddi/core/testing';
 import { composeAvailability, manifest } from '@buddi/tool-artifacts';
 import { cellKey, readWorkbook } from '@buddi/core/sheet';
@@ -228,6 +228,31 @@ suite('artifacts.compose and artifacts.view (postgres)', { timeout: 180_000 }, (
       const done = await executeApproved(pool, { actionId: asked.actionId, registry, ctx: ctx(), worker: 'w', now: ctx().now() });
       expect(done.ok).toBe(false);
       expect(await versions(letter.fileId)).toBe(9);
+    });
+
+    it('a card approved for a version that is deleted while it runs does not write over the one before it', async () => {
+      // The card named v9; v9 is deleted under it, so his v8 is the newest again — which he never approved replacing.
+      expect((await deleteFileVersion(pool, letter.fileId, 9)).deleted).toBe(true);
+      const program = await guideProgram('docx');
+      const run = registry.lookup('artifacts.compose')!;
+      const approved = (readVersion: number) => run.execute(
+        { kind: 'docx', program, fileId: letter.fileId, readVersion, confirmedRebuild: true },
+        { ...ctx(), actionId: '00000000-0000-4000-8000-000000000009', approvedEffect: { envelope: { fileId: letter.fileId, replaces: 9, sha256: 'x', composing: true } } },
+      );
+      // The approval was for v9, whichever version the call says it read: v8 is his and still needs his yes.
+      for (const readVersion of [9, 8]) {
+        await expect(approved(readVersion)).rejects.toThrow(/v8 of Offer for the kitchen\.docx is the owner's own version/);
+      }
+      expect(await versions(letter.fileId)).toBe(9);
+    });
+
+    it('refuses a write whose read version was deleted since, even when every version is the agent’s', async () => {
+      const v1 = await call('artifacts.compose', { kind: 'docx', program: await guideProgram('docx'), title: 'Deleted read' });
+      const v2 = await call('artifacts.compose', { kind: 'docx', program: `${await guideProgram('docx')}\n// v2`, fileId: v1.fileId, readVersion: 1 });
+      expect(v2.version).toBe(2);
+      await deleteFileVersion(pool, v1.fileId, 2);
+      expect(await refusal('artifacts.compose', { kind: 'docx', program: `${await guideProgram('docx')}\n// v3`, fileId: v1.fileId, readVersion: 2 }))
+        .toMatch(/The v2 of Deleted read\.docx you read was deleted; the newest is now v1/);
     });
 
     it('makes a workbook from the xlsx guide’s budget, its formula values filled in before it is stored, and a v2 by fileId', async () => {

@@ -386,7 +386,9 @@ deleted it.
 After 30 days the hourly artifact sweep removes deleted versions, files left
 with none, and the bytes no remaining version stores; each blob is checked
 and unlinked under its own lock, the one a save holds until its row is in, so
-a save adopting the same bytes meanwhile keeps them.
+a save adopting the same bytes meanwhile keeps them. What was deleted before
+the purge came (an upgrade from a buddi without it) gets its 30 days from the
+upgrade, not from its delete.
 
 On the Canvas a deleted file's tab goes, unless it holds an unsaved edit:
 then the edit stays on screen with **Save as new file**, which makes a new
