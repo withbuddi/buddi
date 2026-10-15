@@ -70,8 +70,12 @@ export function bareMime(mime: string | null | undefined): string {
  */
 export const UNTYPED_MIMES: readonly string[] = ['', 'application/octet-stream', 'application/zip'];
 
-/** The Office format a file is, by mime, else by extension for an untyped file. */
-function formatOf(mime: string, filename?: string | null): string | null {
+/**
+ * The Office format a file is — its extension in `OFFICE_FORMATS` — by mime,
+ * else by extension for an untyped file. What an Open in app copy is named
+ * with: a .docx stored as `application/zip` is still a .docx.
+ */
+export function officeFormatOf(mime: string, filename?: string | null): string | null {
   const value = bareMime(mime);
   const byMime = BY_MIME.get(value);
   if (byMime) return byMime;
@@ -92,7 +96,7 @@ export function isPdf(mime: string, filename?: string | null): boolean {
 
 /** Which Office document this file is — docx, xlsx or pptx — or null. */
 export function officeKindOf(mime: string, filename?: string | null): OfficeKind | null {
-  const format = formatOf(mime, filename);
+  const format = officeFormatOf(mime, filename);
   return format ? OFFICE_FORMATS[format]!.kind ?? null : null;
 }
 
@@ -101,7 +105,7 @@ export function officeKindOf(mime: string, filename?: string | null): OfficeKind
  * kind, the ones buddi reads and the ones it only hands to the owner's app.
  */
 export function opensInApp(mime: string, filename?: string | null): boolean {
-  return formatOf(mime, filename) !== null;
+  return officeFormatOf(mime, filename) !== null;
 }
 
 /** The largest Office file previewed on the Canvas and in Files; a bigger one is Download only. */

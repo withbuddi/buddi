@@ -14,6 +14,7 @@ import { useEffect, useState, type ComponentType } from 'react';
 import { OFFICE_PREVIEW_BYTES, officePackageProblem, type OfficeKind } from '@buddi/core/office-files';
 import { Empty, Notice } from '../ui';
 import { isChunkLoadError, loadChunk } from '../shell/freshness';
+import { LoadBoundary } from '../shell/LoadBoundary';
 import { previewUrl } from './attachments';
 
 export interface OfficeViewerProps {
@@ -66,5 +67,6 @@ export function OfficePreview({ artifactId, filename, kind }: { artifactId: stri
   if (state.phase === 'stale') return <Notice>buddi was updated. Reload to see the preview.</Notice>;
   if (state.phase === 'failed') return <Notice>The preview could not be loaded. Download the file to open it.</Notice>;
   const { Viewer, bytes } = state;
-  return <div className="file-preview file-preview-office" data-kind={kind}><Viewer bytes={bytes} name={filename ?? 'File'} /></div>;
+  // A renderer that throws while it draws stays this preview's problem, not the page's.
+  return <div className="file-preview file-preview-office" data-kind={kind}><LoadBoundary what="the preview"><Viewer bytes={bytes} name={filename ?? 'File'} /></LoadBoundary></div>;
 }

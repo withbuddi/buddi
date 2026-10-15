@@ -25,10 +25,14 @@ import { FileVersionsLink } from './FileVersionsLink';
 import type { AttachmentBlock } from '../../chat/attachments';
 import { Markdown } from '../../chat/markdown';
 import { Button, Empty, Notice, Segment } from '../../ui';
+import { LoadBoundary } from '../../shell/LoadBoundary';
 import { getDraft, getEdit, setDraft, useDirtyTabs } from '../file-drafts';
 import { changedLines, isMarkdown, languageOf } from '../text-files';
 
-const CodeEditor = lazy(() => import('./CodeEditor'));
+/** Where the editor's chunk comes from; tests swap it. */
+export const editorDeps = { load: () => import('./CodeEditor') };
+const editor = () => lazy(() => editorDeps.load());
+const CodeEditor = editor();
 
 /** How long buddi's changed lines stay marked. */
 export const MARK_MS = 2_500;
@@ -115,6 +119,8 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
   /** Saved, with something to say: the workspace copy could not be updated. */
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const dirty = useDirtyTabs().has(tabId);
+  /** The editor's lazy component: a fresh import after Retry, since React keeps one that rejected. */
+  const [Editor, setEditor] = useState(() => CodeEditor);
   const markTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** The text last read from the server and shown as it was: what a new version is compared with. */
   const shown = useRef<string | null>(null);
@@ -344,9 +350,11 @@ export function TextFileView({ attachment, tabId }: TextFileViewProps): JSX.Elem
             {markdown ? <div className="wb-doc"><Markdown text={text} /></div> : <CsvTable text={text} delimiter={/\.tsv$/i.test(filename ?? '') || /tab-separated/.test(attachment.mime) ? '\t' : ','} />}
           </div>
         ) : (
-          <Suspense fallback={<div className="file-preview"><Empty>Loading the editor…</Empty></div>}>
-            <CodeEditor value={text} onChange={edit} readOnly={readOnly} language={languageOf(filename, attachment.mime)} changed={changed} onSave={() => { void save(); }} label={`Edit ${label}`} />
-          </Suspense>
+          <LoadBoundary what="the editor" onRetry={() => setEditor(() => editor())} note={dirty ? 'Your changes are kept: save them before you reload.' : undefined}>
+            <Suspense fallback={<div className="file-preview"><Empty>Loading the editor…</Empty></div>}>
+              <Editor value={text} onChange={edit} readOnly={readOnly} language={languageOf(filename, attachment.mime)} changed={changed} onSave={() => { void save(); }} label={`Edit ${label}`} />
+            </Suspense>
+          </LoadBoundary>
         )}
       <div className="ui-toolbar wb-textfile-bar">
         {previewable ? (

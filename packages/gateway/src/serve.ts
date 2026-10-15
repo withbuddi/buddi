@@ -74,7 +74,7 @@ import {
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
-import { scrubText, settleScheduleZones } from '@buddi/core';
+import { resolveDataDir, scrubText, settleScheduleZones } from '@buddi/core';
 import { adoptEnvMailbox, adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
@@ -1239,6 +1239,8 @@ export async function main(): Promise<void> {
           config: web,
           token,
           env: process.env,
+          // Open in app's copies, under this installation's data folder.
+          openInApp: { dataDir: resolveDataDir(process.env) },
           providerSettings: wiring.providerSettings,
           providerAccounts: wiring.providerAccounts,
           // The owner can hand this process a bot token from the dashboard and

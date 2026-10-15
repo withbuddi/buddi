@@ -45,12 +45,12 @@ import {
   extensionFor,
   getFile,
   nativeEnvironment,
+  officeFormatOf,
   officeKindOf,
   officePackageProblem,
   opensInApp,
   readArtifactBytes,
   recordArtifactUse,
-  resolveDataDir,
   safeFileName,
   saveNewFile,
   type EnvLike,
@@ -140,6 +140,12 @@ interface Session extends SessionRecord {
 export interface OpenInAppOptions {
   pool: Pool;
   env: EnvLike;
+  /**
+   * The data folder the copies live under (`<dataDir>/open`), always named
+   * by the caller: serve passes its own, a test a temp folder. Never derived
+   * here, so a server made without one cannot read or rewrite a real one.
+   */
+  dataDir: string;
   ownerId: string;
   launch?: Launch;
   now?: () => number;
@@ -214,7 +220,7 @@ export class OpenInApp {
   /* ---------------- paths, every one checked ---------------- */
 
   private async data(): Promise<string> {
-    return realpath(resolveDataDir(this.opts.env));
+    return realpath(this.opts.dataDir);
   }
 
   /** A session's folder and copy, from its id and name only; null when either is not one. */
@@ -355,7 +361,7 @@ export class OpenInApp {
       const current = await currentVersion(this.opts.pool, file.id);
       if (!current) return { status: 404, body: { error: 'this file was deleted from Files', deleted: true } };
       const stem = (file.name ?? 'Document').replace(/\.[A-Za-z0-9]{1,8}$/, '');
-      const name = this.sessions.get(file.id)?.name ?? `${safeFileName(stem, 100, 'Document')}.${extensionFor(file.mime, file.name)}`;
+      const name = this.sessions.get(file.id)?.name ?? `${safeFileName(stem, 100, 'Document')}.${officeFormatOf(file.mime, file.name) ?? extensionFor(file.mime, file.name)}`;
       const at = await this.where(file.id, name);
       if (!at) return { status: 400, body: { error: 'this file cannot be opened here' } };
       try {

@@ -484,8 +484,10 @@ export interface WebServerDeps {
     connector?: ConnectorControl | null | undefined;
   } | undefined;
   /**
-   * Open in app (web/open-in-app.ts): how a working copy is handed to the
-   * owner's app, and the watch's pace. A test passes its own opener.
+   * Open in app (web/open-in-app.ts): the data folder its copies live under,
+   * how a copy is handed to the owner's app, and the watch's pace. serve
+   * passes its data folder; a test that needs it a temp one. Absent, nothing
+   * watches any folder and the routes say Open in app is not available.
    */
   openInApp?: Omit<OpenInAppOptions, 'pool' | 'env' | 'ownerId'> | undefined;
 }
@@ -700,7 +702,8 @@ export function createWebApp(deps: WebServerDeps): Server {
    * and nothing of it is served here.
    */
   const previewTickets = new PreviewTickets(deps.now);
-  const openInApp = new OpenInApp({ ...deps.openInApp, pool: deps.pool, env: deps.env ?? process.env, ownerId: deps.ctx.ownerId });
+  // Only with a data folder named for it: a server made without one (most tests) watches nothing.
+  const openInApp = deps.openInApp ? new OpenInApp({ ...deps.openInApp, pool: deps.pool, env: deps.env ?? process.env, ownerId: deps.ctx.ownerId }) : null;
   /*
    * How often one session may ask for a preview link.
    *
@@ -1300,7 +1303,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
   extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
-  server.once('close', () => { openInApp.close(); extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); clearInterval(ingressResync); setupRun?.abort.abort(); void ingress.close(); });
+  server.once('close', () => { openInApp?.close(); extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); clearInterval(ingressResync); setupRun?.abort.abort(); void ingress.close(); });
   server.once('close', () => offGiveBack?.());
   return server;
 
@@ -2052,7 +2055,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       const openState = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/open$/i.exec(path);
       if (openState) {
         if (!onThisComputer(session, req)) return sendJson(res, 403, { error: 'Open in app works on the computer buddi runs on.' });
-        return reply(res, await openInApp.status(openState[1]!.toLowerCase()));
+        return openInApp ? reply(res, await openInApp.status(openState[1]!.toLowerCase())) : sendJson(res, 200, { open: false });
       }
       // The program a composed version was made from, for Files' View program (web/file-content.ts).
       const composedSource = /^\/api\/files\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/versions\/([1-9][0-9]{0,8})\/source$/i.exec(path);
@@ -3135,6 +3138,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, 400, { error: 'request body must be JSON' });
       }
       const id = openWrite[1]!.toLowerCase();
+      if (!openInApp) return sendJson(res, 503, { error: 'Open in app is not available on this server.' });
       return reply(res, openWrite[2] ? await openInApp.resolve(id, body) : await openInApp.open(id));
     }
     const fileWrite = /^\/api\/files(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(versions|undelete))?$/i.exec(path);

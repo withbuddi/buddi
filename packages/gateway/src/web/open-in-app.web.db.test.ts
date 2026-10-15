@@ -68,6 +68,7 @@ suite('Open in app', () => {
       config: { enabled: true, host: '127.0.0.1', port: 0 }, token: TOKEN, openAccess: true, log: () => {},
       // The owner's app is a stand-in; a save is read at the first look after it.
       openInApp: {
+        dataDir: dir,
         launch: async (file): Promise<Launched> => {
           if (opener.mode === 'fail') throw new Error('no application knows this kind of file');
           launched.push(file);
@@ -135,6 +136,16 @@ suite('Open in app', () => {
     opener.mode = 'unconfirmed';
     expect((await call('POST', `/api/files/${fileId}/open`, {})).body.launch).toBe('unconfirmed');
     opener.mode = 'ok';
+  });
+
+  it('names the copy by its Office format, not by a zip mime it was stored under', async () => {
+    const call = await local();
+    const bytes = docx('zipped');
+    const row = await saveArtifact(pool, { bytes, mime: 'application/zip', filename: 'Zipped.docx', createdBy: 'writer', source: { surface: 'telegram', chatId: '1' } }, env);
+    const opened = await call('POST', `/api/files/${row.fileId}/open`, {});
+    expect(opened.status).toBe(200);
+    expect(opened.body).toMatchObject({ name: 'Zipped.docx' });
+    expect(launched.at(-1)).toBe(copyOf(row.fileId, 'Zipped.docx'));
   });
 
   it('reports an opener that refused, in the 502 shape', async () => {
@@ -266,7 +277,7 @@ suite('Open in app', () => {
 
   describe('across a restart, and the sweep', () => {
     let clock = Date.now();
-    const instance = (): OpenInApp => new OpenInApp({ pool, env, ownerId: 'owner', launch: async () => 'opened', settleMs: 0, pollMs: 3_600_000, now: () => clock });
+    const instance = (): OpenInApp => new OpenInApp({ pool, env, dataDir: dir, ownerId: 'owner', launch: async () => 'opened', settleMs: 0, pollMs: 3_600_000, now: () => clock });
 
     it('resumes the session a previous run left and brings back what was saved while buddi was down', async () => {
       const { fileId } = await word('Restart.docx');

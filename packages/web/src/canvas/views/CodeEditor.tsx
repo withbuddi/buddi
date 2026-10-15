@@ -17,6 +17,7 @@ import { StreamLanguage, syntaxHighlighting, bracketMatching, indentOnInput } fr
 import { Compartment, EditorState, RangeSetBuilder, StateEffect, StateField, type Extension } from '@codemirror/state';
 import { Decoration, EditorView, keymap, lineNumbers, highlightActiveLine, type DecorationSet } from '@codemirror/view';
 import { classHighlighter } from '@lezer/highlight';
+import { confirmUpdate } from '../../shell/freshness';
 import type { EditorLanguage } from '../text-files';
 
 export interface CodeEditorProps {
@@ -113,7 +114,8 @@ export default function CodeEditor({ value, onChange, readOnly, language, change
     let cancelled = false;
     void languageExtension(language).then((extension) => {
       if (!cancelled) view.current?.dispatch({ effects: compartments.current.language.reconfigure(extension) });
-    });
+    // A language's chunk that would not load leaves plain text, and asks whether an update is why.
+    }, () => { void confirmUpdate(); });
     return () => { cancelled = true; };
   }, [language]);
 
