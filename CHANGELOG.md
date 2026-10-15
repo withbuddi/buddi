@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.55 — 2026-10-15
+
 ### Added
 
 - Files keeps versions: every file is one row in Files, shown as its newest version with "N versions" beside its date, and each save — an agent writing it again, a command's output captured again from the same path, your edit on the Canvas — is a new numbered version; nothing is overwritten. A file's page lists its versions, who wrote each, with View, Delete version and Restore as newest (a new version with that version's exact bytes). File names no longer carry "(v2)"; a download of a later version is named "Report (v2).md". A file's page keeps one address (`#/files/<file>`) across its versions and after a Restore; older links to a version still open it. Version numbers are never given twice, even after a deleted version is purged. Existing files are grouped into versions once, by the rule Files used until now. `GET /api/files/:id`, `POST /api/files/:id/versions`.
