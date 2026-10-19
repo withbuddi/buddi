@@ -85,7 +85,7 @@ describe('what a conversation may grow to', () => {
   it('sizes an unbound agent against the installation default it will run on', async () => {
     const large = await transcriptBudget(accounts({ binding: null, installation: { model: 'claude-opus-5', kind: 'anthropic', override: null } }), CONVERSATION);
     expect(large.source).toBe('installation-default');
-    expect(large.windowTokens).toBe(200_000);
+    expect(large.windowTokens).toBe(1_000_000);
 
     const small = await transcriptBudget(accounts({ binding: null, installation: { model: 'llama3', kind: 'openai-compatible', override: 8_000 } }), CONVERSATION);
     expect(small.source).toBe('installation-default');

@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- Agents on Claude Opus 5, Haiku 5.5, Opus 4.6–4.8 and Sonnet 4.6 get their full million-token context: buddi counted them at 200k, so long conversations were trimmed five times sooner than needed.
+
 ## 0.1.0-pre.55 — 2026-10-15
 
 ### Added

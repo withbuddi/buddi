@@ -20,10 +20,16 @@ import {
 } from './context-window.js';
 
 describe('the window of a model we bind', () => {
-  it('knows the Claude 5 family and 4.x', () => {
-    expect(contextWindowTokens('claude-opus-5', 'anthropic')).toBe(200_000);
+  it('knows the Claude 5 family and 4.x, a million from Opus 4.6 on', () => {
+    expect(contextWindowTokens('claude-opus-5', 'anthropic')).toBe(1_000_000);
+    expect(contextWindowTokens('claude-opus-5-5', 'anthropic')).toBe(1_000_000);
     expect(contextWindowTokens('claude-sonnet-5', 'anthropic')).toBe(1_000_000);
-    expect(contextWindowTokens('claude-haiku-5', 'anthropic')).toBe(200_000);
+    expect(contextWindowTokens('claude-sonnet-5-5', 'anthropic')).toBe(1_000_000);
+    expect(contextWindowTokens('claude-haiku-5-5', 'anthropic')).toBe(1_000_000);
+    expect(contextWindowTokens('claude-opus-4-6', 'anthropic')).toBe(1_000_000);
+    expect(contextWindowTokens('claude-sonnet-4-6', 'anthropic')).toBe(1_000_000);
+    expect(contextWindowTokens('claude-opus-4-5-20251101', 'anthropic')).toBe(200_000);
+    expect(contextWindowTokens('claude-haiku-4-5-20251001', 'anthropic')).toBe(200_000);
     expect(contextWindowTokens('claude-sonnet-4-5-20250929', 'anthropic')).toBe(200_000);
     expect(contextWindowTokens('claude-opus-4-1', 'anthropic')).toBe(200_000);
   });

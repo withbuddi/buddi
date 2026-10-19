@@ -59,14 +59,18 @@ export type ContextProvider = 'anthropic' | 'openai' | 'openai-compatible' | 'ol
 type Entry = readonly [prefix: string, tokens: number];
 
 const ANTHROPIC: readonly Entry[] = [
-  // Claude 5 family: Fable 5.1, Opus 5.5 and Sonnet 5 hold a million tokens; Opus 5 did not.
+  // Claude 5 family: every model holds a million tokens, legacy Opus 5 and
+  // Haiku 5.5 included (platform.claude.com model pages, read 2026-10-19).
   ['claude-fable-5', 1_000_000],
   ['claude-mythos-5', 1_000_000],
-  ['claude-opus-5-5', 1_000_000],
-  ['claude-opus-5', 200_000],
+  ['claude-opus-5', 1_000_000],
   ['claude-sonnet-5', 1_000_000],
-  ['claude-haiku-5', 200_000],
-  // Claude 4.x.
+  ['claude-haiku-5', 1_000_000],
+  // Claude 4.x: Opus 4.6–4.8 and Sonnet 4.6 hold a million; 4.5 and earlier 200k.
+  ['claude-opus-4-8', 1_000_000],
+  ['claude-opus-4-7', 1_000_000],
+  ['claude-opus-4-6', 1_000_000],
+  ['claude-sonnet-4-6', 1_000_000],
   ['claude-opus-4', 200_000],
   ['claude-sonnet-4', 200_000],
   ['claude-haiku-4', 200_000],
