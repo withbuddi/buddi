@@ -41,17 +41,23 @@ import { MLXH_DEFAULT_MAX_PROMPT_TOKENS, isMlxhAccount, type Queryable } from '@
 import {
   CHARS_PER_TOKEN,
   compactObservations,
-  contextWindowTokens,
+  contextWindowInfo,
   estimateTokens,
   loadMessages,
+  reportedContextWindow,
   transcriptBudgetChars,
   transcriptTokenBudget,
   type ContextProvider,
 } from '@buddi/runtime';
 import { MAX_TRANSCRIPT_CHARS, type ConversationVitals } from './conversation-lifetime.js';
 
-/** Which provider family an account's `kind` column names. */
+/**
+ * Which provider family an account's `kind` column names. A ChatGPT account
+ * (`codex`) is OpenAI's family, as the account page reads it, so an agent on
+ * it is sized the same in both places.
+ */
 function providerOf(kind: unknown): ContextProvider | undefined {
+  if (kind === 'codex') return 'openai';
   return kind === 'anthropic' || kind === 'openai' || kind === 'openai-compatible' ? kind : undefined;
 }
 
@@ -78,6 +84,12 @@ export interface TranscriptBudget {
   windowTokens: number;
   /** Where the model came from, for the log line. */
   source: 'binding' | 'installation-default' | 'fallback';
+  /**
+   * Where the window came from, for the log line: the owner's number on the
+   * account, the provider's reported one, mlxh's prompt limit, buddi's table,
+   * or the 128k default. Absent on the compatibility fallback.
+   */
+  windowSource?: 'owner' | 'provider' | 'mlxh' | 'table' | 'default';
 }
 
 /**
@@ -104,15 +116,20 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
   const model = typeof row.model === 'string' ? row.model : '';
   const raw = row.override;
   const owner = raw === null || raw === undefined ? null : Number(raw);
-  // The owner's value wins; then what the provider's own model list reported.
-  const map = row.reported;
-  const reportedRaw = map && typeof map === 'object' && Object.hasOwn(map, model) ? (map as Record<string, unknown>)[model] : undefined;
-  const reported = typeof reportedRaw === 'number' && Number.isFinite(reportedRaw) ? reportedRaw : null;
+  // The owner's value wins; then what the provider's own model list reported,
+  // matched by the same normalised id the table uses.
+  const map = row.reported && typeof row.reported === 'object' ? row.reported as Record<string, unknown> : null;
+  const reported = reportedContextWindow(map, model) ?? null;
   // mlxh refuses a prompt past its max_prompt_tokens; until its model list
   // said the number, assume its default rather than the model's own window.
-  const mlxh = typeof row.baseUrl === 'string' && isMlxhAccount({ kind: String(row.kind), baseUrl: row.baseUrl }) ? MLXH_DEFAULT_MAX_PROMPT_TOKENS : null;
+  const isMlxh = typeof row.baseUrl === 'string' && isMlxhAccount({ kind: String(row.kind), baseUrl: row.baseUrl });
+  const mlxh = isMlxh ? MLXH_DEFAULT_MAX_PROMPT_TOKENS : null;
   const override = owner ?? reported ?? mlxh;
-  const windowTokens = contextWindowTokens(model, providerOf(row.kind), override);
+  const info = contextWindowInfo(model, providerOf(row.kind), override);
+  const windowTokens = info.tokens;
+  // `owner` from the runtime means "the override was used"; say whose it was.
+  const windowSource: TranscriptBudget['windowSource'] = info.source !== 'owner' ? info.source
+    : owner !== null ? 'owner' : reported !== null ? (isMlxh ? 'mlxh' : 'provider') : 'mlxh';
   const maxTokens = transcriptTokenBudget(windowTokens);
   return {
     maxTokens,
@@ -121,6 +138,7 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
     model,
     windowTokens,
     source,
+    windowSource,
   };
 }
 

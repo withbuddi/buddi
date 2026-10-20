@@ -6,7 +6,7 @@ import {
   type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
-import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, readCodexTokens, type AccountModels, type CompletionResponse, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
+import { contextWindowInfo, contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, reportedContextWindow, readCodexTokens, type AccountModels, type CompletionResponse, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type DiagnosticContext, type ProviderDiagnostic } from './provider-diagnostics.js';
@@ -31,11 +31,10 @@ type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | nul
 /** At most this many models' windows are kept per account. */
 const REPORTED_WINDOWS_MAX = 1000;
 
-/** The provider's reported window for a model, when it said a usable one. */
-function reportedWindow(map: Record<string, unknown> | null | undefined, model: string): number | undefined {
-  const tokens = map && Object.hasOwn(map, model) ? map[model] : undefined;
-  return typeof tokens === 'number' && Number.isInteger(tokens) && tokens >= 8_000 && tokens <= 2_000_000 ? tokens : undefined;
-}
+/** Where the window shown for an account's default model came from. */
+export type DetectedContextWindowSource = 'provider' | 'table' | 'default' | 'mlxh';
+/** The kinds whose model list can say a window and that a background refresh asks. */
+const WINDOW_REFRESH_KINDS = new Set(['anthropic', 'openai-compatible']);
 
 type Binding = { agentId: string; accountId: string; model: string };
 /**
@@ -125,6 +124,13 @@ export class ProviderAccounts {
   #tail: Promise<unknown> = Promise.resolve();
   #modelLists = new Map<string, { revision: number; until: number; value: AccountModels }>();
   #modelRequests = new Map<string, Promise<AccountModels>>();
+  /**
+   * Ask the provider for its windows in the background after a credential is
+   * saved or signed in. The serving gateway turns it on (`refreshWindows`); a
+   * one-off CLI command and a test leave it off, so neither starts a list it
+   * will not wait for.
+   */
+  #refreshWindows = false;
   /** The vault the OAuth adapters see, with account names translated onto owner secrets. */
   readonly accountVault: Vault | undefined;
   constructor(readonly deps: {
@@ -286,14 +292,17 @@ export class ProviderAccounts {
         // The provider's own number for the default model when its model list
         // said one, else what the runtime would assume from the name, so the
         // field can show it as a placeholder instead of a blank.
-        const reported = reportedWindow(reportedContextWindows, row.defaultModel);
+        const reported = reportedContextWindow(reportedContextWindows, row.defaultModel);
         // mlxh refuses a prompt over its max_prompt_tokens: until its list
         // said a number, the window is its default rather than the table's.
         const mlxh = isMlxhAccount(row, mlxhBaseUrl(this.deps.env));
+        // The table's answer says whether it knew the model or assumed 128k.
+        const known = contextWindowInfo(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind);
+        const detectedContextWindowSource: DetectedContextWindowSource = mlxh ? 'mlxh' : reported ? 'provider' : known.source === 'default' ? 'default' : 'table';
         return {
         ...row, configured: this.#configured.get(row.id) ?? false,
-        detectedContextWindowTokens: reported ?? (mlxh ? MLXH_DEFAULT_MAX_PROMPT_TOKENS : contextWindowTokens(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind)),
-        detectedContextWindowSource: (mlxh ? 'mlxh' : reported ? 'provider' : 'table') as 'provider' | 'table' | 'mlxh',
+        detectedContextWindowTokens: reported ?? (mlxh ? MLXH_DEFAULT_MAX_PROMPT_TOKENS : known.tokens),
+        detectedContextWindowSource,
         removalPending: deleting,
         refreshable: row.kind === 'codex' || row.auth === 'anthropic-oauth', tokenExpiresAt: null, subscriptionRenewsAt: null,
         ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
@@ -355,6 +364,42 @@ export class ProviderAccounts {
   }
 
   /**
+   * Fill the provider's windows for one account without anyone opening the
+   * picker: a forced list in the background, its failure silent (the table
+   * answers meanwhile). Only kinds whose list can say a window are asked.
+   */
+  #refreshWindowsSoon(id: string): void {
+    const row = this.#rows.get(id);
+    if (!this.#refreshWindows || !row || !this.#reportsWindows(row)) return;
+    this.#modelLists.delete(id);
+    void this.models(id, true).catch(() => {});
+  }
+
+  /**
+   * Is this account worth asking for its windows? Enabled, with a credential,
+   * of a kind whose list can say one. Ollama Cloud is left out: its list
+   * carries no window, and its capability sweep signs a request per model.
+   */
+  #reportsWindows(row: Row): boolean {
+    return row.enabled && !row.deleting && WINDOW_REFRESH_KINDS.has(row.kind) && row.auth !== 'device-key' && this.#configured.get(row.id) === true;
+  }
+
+  /**
+   * Once at gateway start: every enabled Anthropic and compatible account
+   * with a credential lists its models in the background, so an account
+   * saved before the provider's number was kept gets it without the picker.
+   * Fire-and-forget, failures silent; a list another caller already fetched
+   * is reused rather than asked for again. From here on, a saved credential
+   * or a finished sign-in does the same for its account.
+   */
+  refreshWindows(): void {
+    this.#refreshWindows = true;
+    for (const row of this.#rows.values()) {
+      if (this.#reportsWindows(row)) void this.models(row.id).catch(() => {});
+    }
+  }
+
+  /**
    * mlxh's list names models and nothing else. Its `/mlxh/info` says how long
    * a prompt it takes (`max_prompt_tokens`, a 400 past it) and which loaded
    * workers are image models; both go on the list, so the window is kept like
@@ -369,8 +414,9 @@ export class ProviderAccounts {
       ...list,
       models: list.models.map((m) => ({
         ...m,
-        // The limit off: the model's own window, from the table.
-        ...(m.contextWindow === undefined ? { contextWindow: window ?? contextWindowTokens(m.id, 'openai-compatible') } : {}),
+        // The limit is what the host enforces, so it beats any number the
+        // list carried; with the limit off, the list's number, else the table's.
+        contextWindow: window ?? m.contextWindow ?? contextWindowTokens(m.id, 'openai-compatible'),
         ...(kinds.get(m.id) === 'image' ? { image: true } : {}),
       })),
     };
@@ -496,6 +542,8 @@ export class ProviderAccounts {
     // An edited account (a new key, a paid plan) starts with a clean slate.
     if (old) await clearLimit(this.deps.pool, id).catch(() => {});
     await this.load();
+    // A new account or a new credential: fetch the provider's windows now.
+    if (!old || input.secret) this.#refreshWindowsSoon(id);
     return { id, warning };
     } finally { await lease?.release(); await oauthLease?.release(); }
   }); }
@@ -803,6 +851,7 @@ export class ProviderAccounts {
         await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
         this.#modelLists.delete(id); this.#tests.delete(id);
         await this.load();
+        if (action === 'complete-login') this.#refreshWindowsSoon(id);
         return action === 'login' ? this.anthropic!.start(id, row.revision + 1, owner) : { completed: true };
       } finally { await lease.release(); }
     });

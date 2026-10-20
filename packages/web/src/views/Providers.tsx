@@ -155,8 +155,10 @@ export function providerName(a: Pick<ProviderAccount, 'kind' | 'auth'> & Partial
 /** Whose the detected context window is, for the label beside it. */
 export function detectedWindowSource(a: Pick<ProviderAccount, 'kind' | 'detectedContextWindowSource'> & Partial<Pick<ProviderAccount, 'detectedContextWindowTokens'>>): string {
   if (a.detectedContextWindowSource === 'mlxh') return mlxhWindowNote(a.detectedContextWindowTokens);
-  if (a.detectedContextWindowSource !== 'provider') return 'assumed';
-  return a.kind === 'codex' ? 'from ChatGPT' : 'from the provider';
+  if (a.detectedContextWindowSource === 'provider') return a.kind === 'codex' ? 'from ChatGPT' : 'from the provider';
+  // buddi's table knew the model; only the 128k default for one it did not is a guess.
+  if (a.detectedContextWindowSource === 'table') return 'known model';
+  return 'assumed';
 }
 
 /** A provider's mark: one letter in the provider's own tint, never a logo we do not own. */

@@ -213,7 +213,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     exitCodes: [{ code: 3, meaning: 'No account has that id or label, or the database is not reachable.' }],
     next: 'To put an agent on it: `buddi agents set <handle> --account <id>`.',
     applies: 'both',
-    json: 'The fields of buddi accounts list, plus { baseUrl, contextWindowTokens, detectedContextWindowTokens, test: { state, message, checkedAt } | null }. The account may be named by its id or its label.',
+    json: 'The fields of buddi accounts list, plus { baseUrl, contextWindowTokens, detectedContextWindowTokens, detectedContextWindowSource: provider | table | default | mlxh, test: { state, message, checkedAt } | null }. The account may be named by its id or its label.',
   },
   {
     name: 'agents models',

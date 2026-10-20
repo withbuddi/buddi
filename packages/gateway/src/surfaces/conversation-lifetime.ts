@@ -322,7 +322,7 @@ export async function conversationForTurn(
       `${vitals.chars} stored chars` +
       `${vitals.projectedTokens === undefined ? '' : `, ${vitals.projectedTokens} projected tokens`}` +
       `, limit ${maxTokens === undefined ? `${maxChars} chars` : `${maxTokens} tokens`}` +
-      `${budget?.model ? ` for ${budget.model} (${budget.windowTokens}-token window, ${budget.source})` : ''}` +
+      `${budget?.model ? ` for ${budget.model} (${budget.windowTokens}-token window from ${budget.windowSource ?? 'default'}, ${budget.source})` : ''}` +
       `) — this turn runs in ${conversationId}`,
   );
   return {

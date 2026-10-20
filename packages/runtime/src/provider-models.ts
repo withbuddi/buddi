@@ -1,6 +1,7 @@
 import type { ResolvedProvider } from '@buddi/core';
 import { defaultHttpTransport, type HttpTransport } from './transport.js';
 import { signOllamaRequest } from './ollama-signing.js';
+import { MAX_CONTEXT_WINDOW_TOKENS, MIN_CONTEXT_WINDOW_TOKENS } from './context-window.js';
 
 export interface AccountModel {
   id: string;
@@ -8,7 +9,7 @@ export interface AccountModel {
   isDefault: boolean;
   /** The host says this model reasons before it answers. Only known for hosts that say (Ollama). */
   thinks?: boolean;
-  /** The host's own number for this model's window, when it says (the ChatGPT backend does). */
+  /** The host's own number for this model's window, when it says (Anthropic, the ChatGPT backend, OpenRouter, vLLM do). */
   contextWindow?: number;
   /** The host says this is an image model, not one to chat with. Only known for hosts that say (mlxh, once loaded). */
   image?: boolean;
@@ -36,7 +37,13 @@ export function modelOptions(items: unknown[], native = false): AccountModel[] {
     if (typeof id !== 'string' || !id.trim() || id.length > 150 || /[\x00-\x1f\x7f]/.test(id)) continue;
     const label = native ? item.displayName : item.display_name ?? item.name;
     const name = typeof label === 'string' && label.length <= 200 && !/[\x00-\x1f\x7f]/.test(label) ? label : id;
-    found.set(id, { id, name, isDefault: native && item.isDefault === true });
+    // The host's own number for the window, where its list says one:
+    // Anthropic's `max_input_tokens`, OpenRouter's `context_length`, vLLM's
+    // `max_model_len`. `contextWindow` is this function's own output, read
+    // back when a page of results is folded together.
+    const window = [item.contextWindow, item.max_input_tokens, item.context_length, item.max_model_len]
+      .find((v): v is number => typeof v === 'number' && Number.isInteger(v) && v >= MIN_CONTEXT_WINDOW_TOKENS && v <= MAX_CONTEXT_WINDOW_TOKENS);
+    found.set(id, { id, name, isDefault: native && item.isDefault === true, ...(window !== undefined ? { contextWindow: window } : {}) });
   }
   return [...found.values()];
 }

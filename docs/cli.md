@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-10-07
+updated: 2026-10-19
 ---
 
 # The buddi command line
@@ -463,7 +463,7 @@ buddi accounts show 6b2f9c1e-0d4a-4f7e-9a51-3c8e2d7b4a10
 
 **Then**: To put an agent on it: `buddi agents set <handle> --account <id>`.
 
-**JSON**: The fields of buddi accounts list, plus { baseUrl, contextWindowTokens, detectedContextWindowTokens, test: { state, message, checkedAt } | null }. The account may be named by its id or its label.
+**JSON**: The fields of buddi accounts list, plus { baseUrl, contextWindowTokens, detectedContextWindowTokens, detectedContextWindowSource: provider | table | default | mlxh, test: { state, message, checkedAt } | null }. The account may be named by its id or its label.
 
 **Exit codes**
 

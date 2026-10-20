@@ -10,9 +10,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHARS_PER_TOKEN,
+  contextWindowInfo,
   contextWindowTokens,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   estimateTokens,
+  reportedContextWindow,
   transcriptBudgetChars,
   transcriptTokenBudget,
   transcriptTokensForModel,
@@ -78,6 +80,41 @@ describe('the window of a model we bind', () => {
     expect(contextWindowTokens('qwen3:14b', 'ollama', 12)).toBe(32_000);
     expect(contextWindowTokens('qwen3:14b', 'ollama', Number.NaN)).toBe(32_000);
     expect(contextWindowTokens('qwen3:14b', 'ollama', null)).toBe(32_000);
+  });
+});
+
+describe('where the window came from', () => {
+  it('says owner, table or default', () => {
+    expect(contextWindowInfo('qwen3:14b', 'ollama', 262_144)).toEqual({ tokens: 262_144, source: 'owner' });
+    expect(contextWindowInfo('qwen3:14b', 'ollama', 12)).toEqual({ tokens: 32_000, source: 'table' });
+    expect(contextWindowInfo('claude-sonnet-5', 'anthropic')).toEqual({ tokens: 1_000_000, source: 'table' });
+    expect(contextWindowInfo('claude-opus-4-5[1m]', 'anthropic')).toEqual({ tokens: 1_000_000, source: 'table' });
+    expect(contextWindowInfo('some-model-nobody-has-heard-of')).toEqual({ tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' });
+    expect(contextWindowInfo('')).toEqual({ tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' });
+  });
+});
+
+describe('the window a provider reported, found for the bound model', () => {
+  const map = { 'claude-sonnet-4-5': 200_000, 'claude-opus-5': 1_000_000, 'gemini-2.5-pro': 1_048_576, junk: 5 };
+
+  it('finds an exact key first', () => {
+    expect(reportedContextWindow({ ...map, 'us.anthropic.claude-sonnet-4-5': 300_000 }, 'us.anthropic.claude-sonnet-4-5')).toBe(300_000);
+    expect(reportedContextWindow(map, 'claude-opus-5')).toBe(1_000_000);
+  });
+
+  it('finds a routed or suffixed binding by its normalised id', () => {
+    expect(reportedContextWindow(map, 'us.anthropic.claude-sonnet-4-5')).toBe(200_000);
+    expect(reportedContextWindow(map, 'models/gemini-2.5-pro')).toBe(1_048_576);
+    expect(reportedContextWindow(map, 'Claude-Opus-5')).toBe(1_000_000);
+    // A [1m] binding asked for the long window by name.
+    expect(reportedContextWindow(map, 'claude-sonnet-4-5[1m]')).toBe(1_000_000);
+  });
+
+  it('answers nothing for an unknown model or an unusable number', () => {
+    expect(reportedContextWindow(map, 'claude-haiku-5')).toBeUndefined();
+    expect(reportedContextWindow(map, 'junk')).toBeUndefined();
+    expect(reportedContextWindow(null, 'claude-opus-5')).toBeUndefined();
+    expect(reportedContextWindow(map, '')).toBeUndefined();
   });
 });
 

@@ -251,7 +251,9 @@ it('says whose the detected context window is', async () => {
   const { detectedWindowSource } = await import('./Providers');
   expect(detectedWindowSource({ kind: 'codex', detectedContextWindowSource: 'provider' })).toBe('from ChatGPT');
   expect(detectedWindowSource({ kind: 'openai-compatible', detectedContextWindowSource: 'provider' })).toBe('from the provider');
-  expect(detectedWindowSource({ kind: 'openai', detectedContextWindowSource: 'table' })).toBe('assumed');
+  expect(detectedWindowSource({ kind: 'anthropic', detectedContextWindowSource: 'provider' })).toBe('from the provider');
+  expect(detectedWindowSource({ kind: 'openai', detectedContextWindowSource: 'table' })).toBe('known model');
+  expect(detectedWindowSource({ kind: 'openai-compatible', detectedContextWindowSource: 'default' })).toBe('assumed');
   expect(detectedWindowSource({ kind: 'codex' })).toBe('assumed');
 });
 it('names mlxh\'s prompt limit as the window source, with how to raise it', async () => {

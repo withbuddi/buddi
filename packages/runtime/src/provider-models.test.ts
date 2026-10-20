@@ -38,6 +38,26 @@ it('returns only bounded model metadata, including native defaults', () => {
   expect(modelOptions([{ model: 'gpt-test', displayName: 'Test', isDefault: true, secret: 'LEAK' }], true)).toEqual([{ id: 'gpt-test', name: 'Test', isDefault: true }]);
   expect(modelOptions([{ id: 'bad\nmodel' }, { id: 'x'.repeat(151) }, null])).toEqual([]);
 });
+it('keeps the window a host lists: Anthropic, OpenRouter and vLLM each say it their way', async () => {
+  expect(modelOptions([
+    { id: 'claude-opus-5', display_name: 'Claude Opus 5', max_input_tokens: 1_000_000 },
+    { id: 'meta/llama', context_length: 131_072 },
+    { id: 'served', max_model_len: 32_768 },
+    { id: 'tiny', max_input_tokens: 512 },
+    { id: 'odd', context_length: '1000000' },
+  ])).toEqual([
+    { id: 'claude-opus-5', name: 'Claude Opus 5', isDefault: false, contextWindow: 1_000_000 },
+    { id: 'meta/llama', name: 'meta/llama', isDefault: false, contextWindow: 131_072 },
+    { id: 'served', name: 'served', isDefault: false, contextWindow: 32_768 },
+    { id: 'tiny', name: 'tiny', isDefault: false },
+    { id: 'odd', name: 'odd', isDefault: false },
+  ]);
+  // The number survives the fold across pages.
+  const transport = vi.fn<HttpTransport>().mockResolvedValueOnce(response({ data: [{ id: 'claude-a', max_input_tokens: 200_000 }], has_more: true, last_id: 'claude-a' }))
+    .mockResolvedValue(response({ data: [{ id: 'claude-b', max_input_tokens: 1_000_000 }], has_more: false }));
+  const result = await listProviderModels({ ...provider, kind: 'anthropic', baseUrl: 'https://api.anthropic.com' }, transport);
+  expect(result.models.map((m) => m.contextWindow)).toEqual([200_000, 1_000_000]);
+});
 
 it('tags what an Ollama host says can think, and leaves other hosts untagged', async () => {
   const calls: string[] = [];

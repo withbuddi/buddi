@@ -29,11 +29,14 @@
  *    to reply in, and one allowed 60% of it left too little slack for a
  *    transcript that tokenises worse than prose.
  *
- * The table is a fallback, not a source of truth: no provider serves a context
- * window over the wire in a shape worth depending on, and a wrong entry here
- * costs an early rollover, never a failed call. An unknown model gets 128k,
- * the smallest window any model we bind still has, so a model this table has
- * never heard of is never given more room than it can hold.
+ * The table is a fallback, not a source of truth. The order is the owner's
+ * number on the account, then the provider's own (Anthropic's `/v1/models`
+ * says `max_input_tokens`, the ChatGPT backend and some compatible hosts say
+ * theirs; the gateway keeps them per account), then this table, then 128k. A
+ * wrong entry here costs an early rollover, never a failed call. An unknown
+ * model gets 128k, the smallest window any model we bind still has, so a
+ * model this table has never heard of is never given more room than it can
+ * hold.
  */
 
 /** ASCII characters per token, assumed. Low on purpose: see the note above. */
@@ -156,6 +159,14 @@ function longContextSuffix(model: string): boolean {
   return /(\[1m\]|[-:]1m\b)/.test(model);
 }
 
+/** Where a window came from: the owner's number, this table, or the 128k default. */
+export type ContextWindowSource = 'owner' | 'table' | 'default';
+
+export interface ContextWindowInfo {
+  tokens: number;
+  source: ContextWindowSource;
+}
+
 /**
  * The context window of the model an agent is bound to, in tokens.
  *
@@ -173,13 +184,27 @@ export function contextWindowTokens(
   provider?: ContextProvider | undefined,
   override?: number | null | undefined,
 ): number {
+  return contextWindowInfo(model, provider, override).tokens;
+}
+
+/**
+ * The same answer with where it came from, so a page can say "known model"
+ * or "assumed" honestly. `owner` is whichever number the caller passed as
+ * `override` and the range accepted; the gateway knows whether that was the
+ * owner's or the provider's.
+ */
+export function contextWindowInfo(
+  model: string,
+  provider?: ContextProvider | undefined,
+  override?: number | null | undefined,
+): ContextWindowInfo {
   if (typeof override === 'number' && Number.isFinite(override)) {
     const rounded = Math.floor(override);
-    if (rounded >= MIN_CONTEXT_WINDOW_TOKENS && rounded <= MAX_CONTEXT_WINDOW_TOKENS) return rounded;
+    if (rounded >= MIN_CONTEXT_WINDOW_TOKENS && rounded <= MAX_CONTEXT_WINDOW_TOKENS) return { tokens: rounded, source: 'owner' };
   }
   const name = normalise(model ?? '');
-  if (name === '') return DEFAULT_CONTEXT_WINDOW_TOKENS;
-  if (longContextSuffix(name) && name.startsWith('claude-')) return 1_000_000;
+  if (name === '') return { tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' };
+  if (longContextSuffix(name) && name.startsWith('claude-')) return { tokens: 1_000_000, source: 'table' };
 
   const tables: readonly (readonly Entry[])[] =
     provider === 'anthropic' ? [ANTHROPIC]
@@ -190,10 +215,46 @@ export function contextWindowTokens(
 
   for (const table of tables) {
     for (const [prefix, tokens] of table) {
-      if (name.startsWith(prefix)) return tokens;
+      if (name.startsWith(prefix)) return { tokens, source: 'table' };
     }
   }
-  return DEFAULT_CONTEXT_WINDOW_TOKENS;
+  return { tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' };
+}
+
+/** A long-context suffix taken off, so `claude-sonnet-4-5[1m]` finds `claude-sonnet-4-5`. */
+function withoutLongContextSuffix(name: string): string {
+  return name.replace(/(\[1m\]|[-:]1m\b)$/, '');
+}
+
+/**
+ * The window a provider reported for the bound model, out of the per-account
+ * map the gateway keeps (`reported_context_windows`), or undefined.
+ *
+ * The exact key wins. Otherwise both sides are put through the same
+ * `normalise` the table uses, with a long-context suffix taken off the bound
+ * name, so a `us.anthropic.…` or `[1m]` binding still finds the row the
+ * provider listed under its bare id. A `[1m]` Claude binding asked for the
+ * long window by name, so it never comes out under a million.
+ */
+export function reportedContextWindow(map: Record<string, unknown> | null | undefined, model: string): number | undefined {
+  if (!map || typeof map !== 'object' || typeof model !== 'string' || model === '') return undefined;
+  const usable = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isInteger(value) && value >= MIN_CONTEXT_WINDOW_TOKENS && value <= MAX_CONTEXT_WINDOW_TOKENS ? value : undefined;
+  if (Object.hasOwn(map, model)) {
+    const exact = usable(map[model]);
+    if (exact !== undefined) return exact;
+  }
+  const name = normalise(model);
+  const long = longContextSuffix(name) && name.startsWith('claude-');
+  const bare = withoutLongContextSuffix(name);
+  let found: number | undefined;
+  for (const [key, value] of Object.entries(map)) {
+    if (normalise(key) !== bare) continue;
+    found = usable(value);
+    if (found !== undefined) break;
+  }
+  if (found === undefined) return undefined;
+  return long ? Math.max(found, 1_000_000) : found;
 }
 
 /**

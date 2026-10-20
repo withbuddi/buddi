@@ -1635,8 +1635,11 @@ export interface ProviderAccount {
   contextWindowTokens?: number | null;
   /** What the server would assume for `defaultModel`: the field's placeholder. */
   detectedContextWindowTokens?: number;
-  /** Whose that number is: the provider's own model list, or buddi's table for the model name. */
-  detectedContextWindowSource?: 'provider' | 'table' | 'mlxh';
+  /**
+   * Whose that number is: the provider's own model list, buddi's table for a
+   * model it knows, the 128k default for one it does not, or mlxh's limit.
+   */
+  detectedContextWindowSource?: 'provider' | 'table' | 'default' | 'mlxh';
   refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
   assignedAgents: string[]; test: AccountTest | null;
   removalPending?: boolean;

@@ -58,6 +58,8 @@ export interface ViewAccount {
   configured: boolean;
   contextWindowTokens?: number | null;
   detectedContextWindowTokens?: number;
+  /** Whose that number is, in the dashboard's words via `windowSourceWords`. */
+  detectedContextWindowSource?: 'provider' | 'table' | 'default' | 'mlxh';
   assignedAgents: string[];
   rateLimit?: AccountRateLimit | null;
   test?: { state: string; message: string; checkedAt: string } | null;
@@ -169,8 +171,20 @@ export function renderAccountLines(lines: readonly AccountLine[], style: Pick<Te
   return out.join('\n');
 }
 
+/**
+ * Whose a detected window is, in the words the dashboard's Providers page
+ * uses: the provider's (ChatGPT's) own number, buddi's table for a model it
+ * knows, mlxh's prompt limit, or assumed — only the 128k default is a guess.
+ */
+export function windowSourceWords(kind: string, source: ViewAccount['detectedContextWindowSource']): string {
+  if (source === 'provider') return kind === 'codex' ? 'from ChatGPT' : 'from the provider';
+  if (source === 'table') return 'known model';
+  if (source === 'mlxh') return 'mlxh’s max_prompt_tokens';
+  return 'assumed';
+}
+
 /** One account in full, as text. */
-export function renderAccount(line: AccountLine, extra: Pick<ViewAccount, 'baseUrl' | 'contextWindowTokens' | 'detectedContextWindowTokens' | 'test'>, style: Pick<TerminalStyle, 'color'>, timeZone: string, now: Date = new Date(), formats: OwnerFormats = {}): string {
+export function renderAccount(line: AccountLine, extra: Pick<ViewAccount, 'baseUrl' | 'contextWindowTokens' | 'detectedContextWindowTokens' | 'detectedContextWindowSource' | 'test'>, style: Pick<TerminalStyle, 'color'>, timeZone: string, now: Date = new Date(), formats: OwnerFormats = {}): string {
   const color = style.color;
   const row = (name: string, value: string): string => `  ${dim(name.padEnd(15), color)}${value}`;
   const out = [`${bold(line.label, color)} ${dim(line.id, color)}`];
@@ -179,7 +193,7 @@ export function renderAccount(line: AccountLine, extra: Pick<ViewAccount, 'baseU
   if (extra.baseUrl) out.push(row('address', extra.baseUrl));
   out.push(row('default model', line.defaultModel || '—'));
   const window = extra.contextWindowTokens ?? extra.detectedContextWindowTokens;
-  if (window) out.push(row('context window', `${window.toLocaleString('en-US')} tokens${extra.contextWindowTokens ? '' : ' (detected)'}`));
+  if (window) out.push(row('context window', `${window.toLocaleString('en-US')} tokens${extra.contextWindowTokens ? '' : ` (${windowSourceWords(line.kind, extra.detectedContextWindowSource)})`}`));
   out.push(row('state', stateText(line, timeZone, now, formats)));
   out.push(row('agents', line.agents.length === 0 ? 'no agents' : line.agents.map((a) => `${a.handle ? `@${a.handle}` : a.id} (${a.model})`).join(', ')));
   if (extra.test) out.push(row('last test', `${extra.test.message} ${dim(`(${extra.test.checkedAt})`, color)}`));
@@ -232,6 +246,7 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
       baseUrl: account.kind === 'codex' ? null : account.baseUrl ?? null,
       contextWindowTokens: account.contextWindowTokens ?? null,
       ...(account.detectedContextWindowTokens !== undefined ? { detectedContextWindowTokens: account.detectedContextWindowTokens } : {}),
+      ...(account.detectedContextWindowSource !== undefined ? { detectedContextWindowSource: account.detectedContextWindowSource } : {}),
       test: account.test ? { state: account.test.state, message: account.test.message, checkedAt: account.test.checkedAt } : null,
     };
     console.log(command.json ? JSON.stringify({ ...line, ...extra }, null, 2) : renderAccount(line, extra, style, timeZone, new Date(), formats));

@@ -244,7 +244,7 @@ describe('the size limit a conversation is held to', () => {
   it('is the bound model\'s window, so a big model keeps a long transcript', async () => {
     // 95k characters ended a conversation when the cap was flat. Against a
     // 200k-token window it is a fraction of the budget and nothing happens.
-    const out = await conversationForTurn(modelPool({ model: 'claude-opus-5' }), {
+    const out = await conversationForTurn(modelPool({ model: 'claude-opus-4-5' }), {
       current: 'old', start, now: NOW,
     });
     expect(out.boundary).toBeUndefined();
@@ -252,7 +252,7 @@ describe('the size limit a conversation is held to', () => {
 
   it('still ends one that is over even that', async () => {
     const out = await conversationForTurn(
-      modelPool({ model: 'claude-opus-5', chars: 900_000, rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(900_000) }] }] }),
+      modelPool({ model: 'claude-opus-4-5', chars: 900_000, rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(900_000) }] }] }),
       { current: 'old', start, now: NOW },
     );
     expect(out.boundary?.reason).toBe('size');
@@ -284,7 +284,7 @@ describe('the size limit a conversation is held to', () => {
     const japanese = '銀行残高'.repeat(30_000);
     const english = 'a'.repeat(japanese.length);
     const over = await conversationForTurn(
-      modelPool({ model: 'claude-opus-5', chars: japanese.length,
+      modelPool({ model: 'claude-opus-4-5', chars: japanese.length,
         rows: [{ role: 'user', content: [{ type: 'text', text: japanese }] }] }),
       { current: 'old', start, now: NOW },
     );
@@ -292,7 +292,7 @@ describe('the size limit a conversation is held to', () => {
 
     forgetProjectedSizes();
     const under = await conversationForTurn(
-      modelPool({ model: 'claude-opus-5', chars: english.length,
+      modelPool({ model: 'claude-opus-4-5', chars: english.length,
         rows: [{ role: 'user', content: [{ type: 'text', text: english }] }] }),
       { current: 'old', start, now: NOW },
     );
@@ -324,7 +324,7 @@ describe('the size limit a conversation is held to', () => {
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: `c${i}`, content: JSON.stringify({ observation: { id: `o${i}`, url: `https://bank/${i}`, title: `P${i}`, tree } }) }] },
     ]).flat();
     forgetProjectedSizes();
-    const pool = modelPool({ model: 'claude-opus-5', chars: 300_000, rows });
+    const pool = modelPool({ model: 'claude-opus-4-5', chars: 300_000, rows });
     await conversationForTurn(pool, { current: 'cached-one', start, now: NOW });
     await conversationForTurn(pool, { current: 'cached-one', start, now: NOW });
     const reads = (pool.query as unknown as { mock: { calls: unknown[][] } }).mock.calls
@@ -335,7 +335,7 @@ describe('the size limit a conversation is held to', () => {
   it('says in the log what ended, why, and against what', async () => {
     const lines: string[] = [];
     const out = await conversationForTurn(
-      modelPool({ model: 'claude-opus-5', chars: 900_000, rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(900_000) }] }] }),
+      modelPool({ model: 'claude-opus-4-5', chars: 900_000, rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(900_000) }] }] }),
       { current: 'old', start, now: NOW, log: (line) => lines.push(line) },
     );
     expect(out.boundary?.reason).toBe('size');
@@ -345,7 +345,8 @@ describe('the size limit a conversation is held to', () => {
     expect(line).toContain('projected tokens');
     expect(line).toContain('limit');
     expect(line).toContain('binding');
-    expect(line).toContain('claude-opus-5');
+    expect(line).toContain('claude-opus-4-5');
+    expect(line).toContain('window from table');
     expect(line.split('\n')).toHaveLength(1);
   });
 });

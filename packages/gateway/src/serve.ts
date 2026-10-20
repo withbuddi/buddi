@@ -516,6 +516,9 @@ export async function main(): Promise<void> {
     process.exit(1);
   }
   const { pool, now } = wiring;
+  // The provider's own windows, for accounts saved before they were kept. In
+  // the background: a start never waits on a model list.
+  wiring.providerAccounts?.refreshWindows();
 
   /*
    * The gateway's own log sinks, scrubbed (docs/owner-secrets.md §5,

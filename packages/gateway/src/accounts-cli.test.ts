@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountLines, parseAccountsArgs, renderAccount, renderAccountLines, stateText, type ViewAccount } from './accounts-cli.js';
+import { accountLines, parseAccountsArgs, renderAccount, renderAccountLines, stateText, windowSourceWords, type ViewAccount } from './accounts-cli.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
 const SECRET = 'sk-SEEDED-SECRET-1234';
@@ -47,6 +47,17 @@ describe('buddi accounts', () => {
     expect(text).toContain('6b2f9c1e-0d4a-4f7e-9a51-3c8e2d7b4a10');
     expect(text).toContain('@ledger');
     expect(shown).toContain('buddi agents set <handle> --account 6b2f9c1e-0d4a-4f7e-9a51-3c8e2d7b4a10');
+  });
+
+  it('says whose a detected window is in the dashboard\'s words, never "detected"', () => {
+    const shown = (source: ViewAccount['detectedContextWindowSource'], line = lines[1]!) =>
+      renderAccount(line, { baseUrl: null, contextWindowTokens: null, detectedContextWindowTokens: 1_000_000, detectedContextWindowSource: source, test: null }, { color: false }, 'UTC', new Date(NOW));
+    expect(shown('provider')).toContain('1,000,000 tokens (from the provider)');
+    expect(shown('table')).toContain('1,000,000 tokens (known model)');
+    expect(shown('default')).toContain('1,000,000 tokens (assumed)');
+    expect(shown('table')).not.toContain('detected');
+    expect(windowSourceWords('codex', 'provider')).toBe('from ChatGPT');
+    expect(windowSourceWords('openai-compatible', 'mlxh')).toBe('mlxh’s max_prompt_tokens');
   });
 
   it('parses list, show and --json', () => {

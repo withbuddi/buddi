@@ -140,6 +140,35 @@ suite('named provider accounts', () => {
     await f.service.refresh();
     expect(view()).toMatchObject({ detectedContextWindowTokens: 600_000, detectedContextWindowSource: 'provider' });
   });
+  it('fills an Anthropic account\'s windows in the background, at start and after a new key, and only for accounts that can say one', async () => {
+    const f = fixture({}); await f.service.initialize();
+    const listed = { models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: false, contextWindow: 1_000_000 }, { id: 'claude-haiku-4-5', name: 'H', isDefault: false, contextWindow: 200_000 }], truncated: false };
+    f.listModels.mockResolvedValue(listed as never);
+    // Saved before the gateway kept windows: nothing is fetched until it starts.
+    const a = await f.service.save(settings);
+    await f.service.save({ label: 'Disabled', kind: 'anthropic', auth: 'api-key', defaultModel: 'claude-sonnet-5', enabled: false, secret: 'disabled-fixture-key' });
+    await f.service.save({ label: 'OpenAI', kind: 'openai', auth: 'api-key', defaultModel: 'gpt-5', enabled: true, secret: 'sk-fixture-openai-0123456789' });
+    expect(f.listModels).not.toHaveBeenCalled();
+    const windows = async (id: string) => (await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [id])).rows[0]?.m;
+    f.service.refreshWindows();
+    await vi.waitFor(async () => expect(await windows(a.id)).toEqual({ 'claude-sonnet-5': 1_000_000, 'claude-haiku-4-5': 200_000 }));
+    // One list: the disabled account and the OpenAI one are not asked.
+    expect(f.listModels).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(f.service.view().accounts.find(x => x.id === a.id)).toMatchObject({ detectedContextWindowTokens: 1_000_000, detectedContextWindowSource: 'provider' }));
+    // From now on a new key fetches its account's windows at once.
+    f.listModels.mockResolvedValue({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: false, contextWindow: 900_000 }], truncated: false } as never);
+    await f.service.save({ ...settings, id: a.id, revision: 1, secret: 'rotated-fixture' });
+    await vi.waitFor(async () => expect((await windows(a.id))['claude-sonnet-5']).toBe(900_000));
+    // A label edit does not.
+    const calls = f.listModels.mock.calls.length;
+    await f.service.save({ ...settings, id: a.id, revision: 2, label: 'Renamed' });
+    expect(f.listModels).toHaveBeenCalledTimes(calls);
+    // A failing list is silent, and the table answers meanwhile.
+    f.listModels.mockRejectedValue(new Error('down'));
+    const b = await f.service.save({ ...settings, label: 'Second' });
+    await vi.waitFor(() => expect(f.listModels).toHaveBeenCalledTimes(calls + 1));
+    expect(f.service.view().accounts.find(x => x.id === b.id)).toMatchObject({ detectedContextWindowTokens: 1_000_000, detectedContextWindowSource: 'table' });
+  });
   it('fills an mlxh account\'s windows from its max_prompt_tokens, else 8192, and flags its image models', async () => {
     const f = fixture({}); await f.service.initialize();
     const probe = vi.fn(async (_opts: unknown) => ({ running: true, baseUrl: 'http://127.0.0.1:1060/v1', manager: true,
@@ -158,6 +187,9 @@ suite('named provider accounts', () => {
     ]);
     const { rows } = await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id]);
     expect(rows[0].m).toEqual({ 'gemma4-e2b-it': 8192, klein: 8192 });
+    // A number on the list loses to the limit mlxh enforces.
+    f.listModels.mockResolvedValueOnce({ models: [{ id: 'gemma4-e2b-it', name: 'gemma4-e2b-it', isDefault: false, contextWindow: 131_072 }], truncated: false } as never);
+    expect((await service.models(a.id, true)).models[0]?.contextWindow).toBe(8192);
     // A pinned server that reports its own limit wins.
     probe.mockResolvedValueOnce({ running: true, baseUrl: 'http://127.0.0.1:1060/v1', manager: false, maxPromptTokens: 40960,
       models: [{ id: 'gemma4-e2b-it', loaded: true, kind: 'language' as const }] } as never);

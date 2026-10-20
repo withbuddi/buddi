@@ -71,6 +71,29 @@ describe('what a conversation may grow to', () => {
     expect(installation.windowTokens).toBe(272_000);
   });
 
+  it('finds the reported window under a routed or [1m] binding, and says where each window came from', async () => {
+    const reported = { 'claude-sonnet-4-5': 200_000, 'claude-opus-5': 1_000_000 };
+    const routed = await transcriptBudget(accounts({ binding: { model: 'us.anthropic.claude-sonnet-4-5', kind: 'anthropic', override: null, reported } }), CONVERSATION);
+    expect(routed).toMatchObject({ windowTokens: 200_000, windowSource: 'provider' });
+    const long = await transcriptBudget(accounts({ binding: { model: 'claude-sonnet-4-5[1m]', kind: 'anthropic', override: null, reported } }), CONVERSATION);
+    expect(long).toMatchObject({ windowTokens: 1_000_000, windowSource: 'provider' });
+    const owner = await transcriptBudget(accounts({ binding: { model: 'claude-opus-5', kind: 'anthropic', override: 300_000, reported } }), CONVERSATION);
+    expect(owner).toMatchObject({ windowTokens: 300_000, windowSource: 'owner' });
+    const table = await transcriptBudget(accounts({ binding: { model: 'claude-haiku-5', kind: 'anthropic', override: null, reported } }), CONVERSATION);
+    expect(table).toMatchObject({ windowTokens: 1_000_000, windowSource: 'table' });
+    const unknown = await transcriptBudget(accounts({ binding: { model: 'nobody-knows', kind: 'openai-compatible', override: null } }), CONVERSATION);
+    expect(unknown).toMatchObject({ windowTokens: 128_000, windowSource: 'default' });
+  });
+
+  it('sizes a ChatGPT account as OpenAI\'s family, as the account page does', async () => {
+    // Read as an unknown host, `llama3` would be Ollama's 8k; on OpenAI's
+    // table it is a model nobody listed, so the 128k default.
+    const codex = await transcriptBudget(accounts({ binding: { model: 'llama3', kind: 'codex', override: null } }), CONVERSATION);
+    const openai = await transcriptBudget(accounts({ binding: { model: 'llama3', kind: 'openai', override: null } }), CONVERSATION);
+    expect(codex.windowTokens).toBe(openai.windowTokens);
+    expect(codex.windowTokens).toBe(128_000);
+  });
+
   it('holds an mlxh account to mlxh\'s prompt limit until its list says a number', async () => {
     const mlxh = { model: 'gemma4-e2b-it', kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:1060/v1' };
     expect((await transcriptBudget(accounts({ binding: { ...mlxh, override: null } }), CONVERSATION)).windowTokens).toBe(8192);
