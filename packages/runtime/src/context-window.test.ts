@@ -34,6 +34,15 @@ describe('the window of a model we bind', () => {
     expect(contextWindowTokens('claude-haiku-4-5-20251001', 'anthropic')).toBe(200_000);
     expect(contextWindowTokens('claude-sonnet-4-5-20250929', 'anthropic')).toBe(200_000);
     expect(contextWindowTokens('claude-opus-4-1', 'anthropic')).toBe(200_000);
+    // A dotted version, as some hosts spell it, is the same model.
+    expect(contextWindowTokens('claude-opus-5.5', 'anthropic')).toBe(1_000_000);
+  });
+
+  it('reads the ids Bedrock, Vertex and OpenRouter give Claude', () => {
+    expect(contextWindowTokens('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(200_000);
+    expect(contextWindowTokens('anthropic.claude-opus-4-6-v1:0', 'openai-compatible')).toBe(1_000_000);
+    expect(contextWindowTokens('claude-opus-4-1@20250805', 'openai-compatible')).toBe(200_000);
+    expect(contextWindowTokens('openrouter/anthropic/claude-sonnet-5', 'openai-compatible')).toBe(1_000_000);
   });
 
   it('reads the long-context suffix, which is the same model with more room', () => {
@@ -41,21 +50,42 @@ describe('the window of a model we bind', () => {
     expect(contextWindowTokens('claude-sonnet-4-5-1m', 'anthropic')).toBe(1_000_000);
   });
 
-  it('knows the GPT-5 family and the o-series', () => {
+  it('knows the GPT families and the o-series, the variants with their own windows included', () => {
     expect(contextWindowTokens('gpt-5', 'openai')).toBe(400_000);
     expect(contextWindowTokens('gpt-5-mini', 'openai')).toBe(400_000);
-    expect(contextWindowTokens('gpt-6-astra', 'openai')).toBe(1_000_000);
-    expect(contextWindowTokens('gpt-6', 'openai')).toBe(1_000_000);
+    expect(contextWindowTokens('gpt-5.4-codex', 'openai')).toBe(400_000);
+    expect(contextWindowTokens('gpt-5-chat-latest', 'openai')).toBe(128_000);
+    expect(contextWindowTokens('gpt-6-astra', 'openai')).toBe(1_050_000);
+    expect(contextWindowTokens('gpt-6', 'openai')).toBe(1_050_000);
+    expect(contextWindowTokens('gpt-4.1', 'openai')).toBe(1_047_576);
+    expect(contextWindowTokens('gpt-4', 'openai')).toBe(8192);
+    expect(contextWindowTokens('gpt-3.5-turbo', 'openai')).toBe(16_385);
     expect(contextWindowTokens('o3', 'openai')).toBe(200_000);
     expect(contextWindowTokens('o4-mini', 'openai')).toBe(200_000);
+    expect(contextWindowTokens('o1-mini', 'openai')).toBe(128_000);
+    expect(contextWindowTokens('o1-preview', 'openai')).toBe(128_000);
     expect(contextWindowTokens('gpt-4o', 'openai')).toBe(128_000);
   });
 
-  it('knows Gemini holds a million, bare or with Google\'s models/ prefix, and keeps gemma apart', () => {
-    expect(contextWindowTokens('gemini-3.1-pro-preview', 'openai-compatible')).toBe(1_000_000);
-    expect(contextWindowTokens('models/gemini-2.5-flash', 'openai-compatible')).toBe(1_000_000);
-    expect(contextWindowTokens('gemini-2.5-pro')).toBe(1_000_000);
+  it('knows Gemini by family, bare or with Google\'s models/ prefix, and keeps gemma apart', () => {
+    expect(contextWindowTokens('gemini-3.1-pro-preview', 'openai-compatible')).toBe(1_048_576);
+    expect(contextWindowTokens('models/gemini-2.5-flash', 'openai-compatible')).toBe(1_048_576);
+    expect(contextWindowTokens('gemini-2.5-pro')).toBe(1_048_576);
+    expect(contextWindowTokens('gemini-flash-latest')).toBe(1_048_576);
+    expect(contextWindowTokens('gemini-4-pro')).toBe(1_048_576);
     expect(contextWindowTokens('gemma3:4b', 'openai-compatible')).toBe(128_000);
+  });
+
+  it('gives an unlisted name of a known family the default, not the family\'s window', () => {
+    expect(contextWindowInfo('claude-x', 'anthropic')).toEqual({ tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' });
+    expect(contextWindowInfo('gemini-exp-1206')).toEqual({ tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' });
+    expect(contextWindowInfo('gemini-2.5-flash-image', 'openai-compatible')).toEqual({ tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' });
+  });
+
+  it('asks the local table first on a local or compatible host, and only there', () => {
+    expect(contextWindowInfo('gemma3', 'openai-compatible')).toEqual({ tokens: 128_000, source: 'table' });
+    expect(contextWindowInfo('qwen3:14b')).toEqual({ tokens: 32_000, source: 'table' });
+    expect(contextWindowInfo('qwen3:14b', 'anthropic')).toEqual({ tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' });
   });
 
   it('knows common local models by name prefix, tag and all', () => {

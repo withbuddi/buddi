@@ -17,6 +17,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@amenophis1er/byok": "0.1.11",
     "@buddi/core": "workspace:*"
   },
   "devDependencies": {

@@ -87,7 +87,20 @@ try {
   await mkdir(data, { recursive: true, mode: 0o700 });
   // The launchd fixture must also select the isolated file vault after login.
   await writeFile(path.join(data, '.env'), 'BUDDI_VAULT=file\n', { mode: 0o600 });
+  // byok must be inside the tarball, not fetched by the install below (which
+  // has the network): the Linux and Windows bundles and the mac payload unpack
+  // the tarball as it is. The version is the one runtime pins.
+  const byokPin = JSON.parse(await readFile(new URL('../../packages/runtime/package.json', import.meta.url), 'utf8')).dependencies['@amenophis1er/byok'];
+  const bundledByok = await exec('tar', ['-xOzf', archive, 'package/node_modules/@amenophis1er/byok/package.json'], { timeout: 60_000 })
+    .then(({ stdout }) => JSON.parse(stdout).version, () => undefined);
+  assert.equal(bundledByok, byokPin, `the tarball carries @amenophis1er/byok ${byokPin}`);
   await exec('npm', ['install', '--prefix', testRoot, '--ignore-scripts', '--no-audit', '--no-fund', archive], { env, timeout: 120_000 });
+  {
+    // The model table it is there for, called from where runtime resolves it.
+    const fromRuntime = createRequire(path.join(testRoot, 'node_modules/@withbuddi/buddi/node_modules/@buddi/runtime/package.json'));
+    const byok = await import(pathToFileURL(fromRuntime.resolve('@amenophis1er/byok/core')).href);
+    assert.equal(byok.knownModelInfoByName('claude-opus-5-5').contextWindow, 1_000_000, 'byok answers a Claude 5 window');
+  }
   const entry = path.join(testRoot, 'node_modules/buddi/packages/install/dist/launcher.js');
   const cli = async args => (await exec(process.execPath, [entry, ...args], { env, cwd: testRoot, timeout: 150_000 })).stdout;
   const start = await cli(startArgs);

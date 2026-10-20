@@ -305,6 +305,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@amenophis1er/byok':
+        specifier: 0.1.11
+        version: 0.1.11
       '@buddi/core':
         specifier: workspace:*
         version: link:../core
@@ -667,6 +670,10 @@ packages:
 
   '@adobe/css-tools@4.5.0':
     resolution: {integrity: sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q==}
+
+  '@amenophis1er/byok@0.1.11':
+    resolution: {integrity: sha512-4hMXuwociYp89bh1Po+TqaPqtiE+/wEEiEYaK51Wu27zZLYT4MegGf4GwVp7o93n1RTrcoX4k52yMv5ZiBc+dw==}
+    engines: {node: '>=20'}
 
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
@@ -3150,6 +3157,8 @@ packages:
 snapshots:
 
   '@adobe/css-tools@4.5.0': {}
+
+  '@amenophis1er/byok@0.1.11': {}
 
   '@asamuzakjp/css-color@3.2.0':
     dependencies:

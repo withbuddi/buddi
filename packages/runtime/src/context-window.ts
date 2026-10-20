@@ -32,12 +32,20 @@
  * The table is a fallback, not a source of truth. The order is the owner's
  * number on the account, then the provider's own (Anthropic's `/v1/models`
  * says `max_input_tokens`, the ChatGPT backend and some compatible hosts say
- * theirs; the gateway keeps them per account), then this table, then 128k. A
- * wrong entry here costs an early rollover, never a failed call. An unknown
- * model gets 128k, the smallest window any model we bind still has, so a
- * model this table has never heard of is never given more room than it can
- * hold.
+ * theirs; the gateway keeps them per account), then the known models, then
+ * 128k. A wrong entry costs an early rollover, never a failed call. An
+ * unknown model gets 128k, the smallest window any model we bind still has,
+ * so a model nobody has tabled is never given more room than it can hold.
+ *
+ * The known cloud models (Claude, GPT and the o-series, Gemini) are byok's
+ * table (`knownModelInfoByName`), pinned to one version so a change in it is
+ * a deliberate commit here. `@amenophis1er/byok/core` loads byok's whole
+ * core index (sign-ins, connections) into memory; only that one lookup is
+ * called, so none of its network code runs. The local models below stay
+ * buddi's: they are the windows hosts serve, which byok rightly doesn't know.
  */
+
+import { knownModelInfoByName } from '@amenophis1er/byok/core';
 
 /** ASCII characters per token, assumed. Low on purpose: see the note above. */
 export const CHARS_PER_TOKEN = 3.6;
@@ -60,55 +68,6 @@ export type ContextProvider = 'anthropic' | 'openai' | 'openai-compatible' | 'ol
  * longer, more specific prefix is listed before the family it belongs to.
  */
 type Entry = readonly [prefix: string, tokens: number];
-
-const ANTHROPIC: readonly Entry[] = [
-  // Claude 5 family: every model holds a million tokens, legacy Opus 5 and
-  // Haiku 5.5 included (platform.claude.com model pages, read 2026-10-19).
-  ['claude-fable-5', 1_000_000],
-  ['claude-mythos-5', 1_000_000],
-  ['claude-opus-5', 1_000_000],
-  ['claude-sonnet-5', 1_000_000],
-  ['claude-haiku-5', 1_000_000],
-  // Claude 4.x: Opus 4.6–4.8 and Sonnet 4.6 hold a million; 4.5 and earlier 200k.
-  ['claude-opus-4-8', 1_000_000],
-  ['claude-opus-4-7', 1_000_000],
-  ['claude-opus-4-6', 1_000_000],
-  ['claude-sonnet-4-6', 1_000_000],
-  ['claude-opus-4', 200_000],
-  ['claude-sonnet-4', 200_000],
-  ['claude-haiku-4', 200_000],
-  // 3.x, still bindable.
-  ['claude-3-7-sonnet', 200_000],
-  ['claude-3-5-haiku', 200_000],
-  ['claude-3-5-sonnet', 200_000],
-  ['claude-3-opus', 200_000],
-  ['claude-3-haiku', 200_000],
-  ['claude-', 200_000],
-];
-
-const OPENAI: readonly Entry[] = [
-  // GPT-6 on the API (~1.05M for Astra). A ChatGPT subscription serves a
-  // smaller window through Codex, but that account reads its number from the
-  // backend's own model list, so this entry only answers for `kind: 'openai'`.
-  ['gpt-6', 1_000_000],
-  ['gpt-5', 400_000],
-  ['gpt-4.1', 1_000_000],
-  ['gpt-4o', 128_000],
-  ['o4-mini', 200_000],
-  ['o3-mini', 200_000],
-  ['o3', 200_000],
-  ['o1', 200_000],
-];
-
-/**
- * Gemini, through Google's OpenAI-compatible endpoint. One prefix for the
- * family: Pro and Flash (2.5 onwards) hold a million tokens. The family's
- * image, TTS and live variants hold less, but they are not chat brains an
- * agent is bound to. `gemma` (Ollama) does not start with `gemini-`.
- */
-const GOOGLE: readonly Entry[] = [
-  ['gemini-', 1_000_000],
-];
 
 /**
  * Local models, by name prefix as Ollama tags them. These are the *served*
@@ -135,10 +94,12 @@ const OLLAMA: readonly Entry[] = [
 ];
 
 /**
- * A model id, reduced to something the table can be asked about: lowercased,
- * with the routing prefixes hosts add (`us.anthropic.`, `anthropic/`, an
- * Ollama `:tag`, Google's `models/`) taken off, and Anthropic's dated suffix left in place because
- * the prefixes above stop short of it anyway.
+ * A model id, reduced to something the tables can be asked about:
+ * lowercased, with the routing prefixes hosts add (`us.anthropic.`,
+ * `anthropic/`, `openrouter/`, Google's `models/`) taken off. An Ollama
+ * `:tag` and Anthropic's dated suffix stay: the prefixes above stop short of
+ * them, and byok reads (or strips) the rest — a Bedrock `-v1:0`, a Vertex
+ * `@date`.
  */
 function normalise(model: string): string {
   let name = model.trim().toLowerCase();
@@ -159,7 +120,7 @@ function longContextSuffix(model: string): boolean {
   return /(\[1m\]|[-:]1m\b)/.test(model);
 }
 
-/** Where a window came from: the owner's number, this table, or the 128k default. */
+/** Where a window came from: the owner's number, a known model, or the 128k default. */
 export type ContextWindowSource = 'owner' | 'table' | 'default';
 
 export interface ContextWindowInfo {
@@ -206,17 +167,21 @@ export function contextWindowInfo(
   if (name === '') return { tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' };
   if (longContextSuffix(name) && name.startsWith('claude-')) return { tokens: 1_000_000, source: 'table' };
 
-  const tables: readonly (readonly Entry[])[] =
-    provider === 'anthropic' ? [ANTHROPIC]
-    : provider === 'openai' ? [OPENAI]
-    : provider === 'ollama' || provider === 'openai-compatible' ? [OLLAMA, GOOGLE, OPENAI, ANTHROPIC]
+  const known = (): number | undefined => {
+    const tokens = knownModelInfoByName(name).contextWindow;
+    // Same guard as a reported window: a number outside the range falls through.
+    return typeof tokens === 'number' && tokens >= MIN_CONTEXT_WINDOW_TOKENS && tokens <= MAX_CONTEXT_WINDOW_TOKENS ? tokens : undefined;
+  };
+  const local = (): number | undefined => OLLAMA.find(([prefix]) => name.startsWith(prefix))?.[1];
+  const lookups =
+    provider === 'anthropic' || provider === 'openai' ? [known]
+    : provider === 'ollama' || provider === 'openai-compatible' ? [local, known]
     // Unknown host: the name itself says whose it is, in every case we bind.
-    : [ANTHROPIC, OPENAI, GOOGLE, OLLAMA];
+    : [known, local];
 
-  for (const table of tables) {
-    for (const [prefix, tokens] of table) {
-      if (name.startsWith(prefix)) return { tokens, source: 'table' };
-    }
+  for (const lookup of lookups) {
+    const tokens = lookup();
+    if (tokens !== undefined) return { tokens, source: 'table' };
   }
   return { tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' };
 }
