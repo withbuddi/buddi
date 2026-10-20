@@ -1636,8 +1636,8 @@ export interface ProviderAccount {
   /** What the server would assume for `defaultModel`: the field's placeholder. */
   detectedContextWindowTokens?: number;
   /**
-   * Whose that number is: the provider's own model list, buddi's table for a
-   * model it knows, the 128k default for one it does not, or mlxh's limit.
+   * Whose that number is: the provider's own model list, the known-model
+   * table for a model it lists, the 128k default for one it does not, or mlxh's limit.
    */
   detectedContextWindowSource?: 'provider' | 'table' | 'default' | 'mlxh';
   /** The gateway recognised this account as mlxh's, whatever its window's source. */

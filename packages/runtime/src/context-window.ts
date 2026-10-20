@@ -96,10 +96,10 @@ const OLLAMA: readonly Entry[] = [
 /**
  * A model id, reduced to something the tables can be asked about:
  * lowercased, with the routing prefixes hosts add (`us.anthropic.`,
- * `anthropic/`, `openrouter/`, Google's `models/`) taken off. An Ollama
- * `:tag` and Anthropic's dated suffix stay: the prefixes above stop short of
- * them, and byok reads (or strips) the rest — a Bedrock `-v1:0`, a Vertex
- * `@date`.
+ * `anthropic/`, `openrouter/`, Google's `models/`) and OpenRouter's routing
+ * variants (`:nitro`, `:floor`, `:online`, …, the same model routed
+ * differently) taken off. An Ollama `:tag` and a dated suffix are left in;
+ * byok strips Bedrock's `-v1:0` and Vertex's `@date`.
  */
 function normalise(model: string): string {
   let name = model.trim().toLowerCase();
@@ -108,7 +108,7 @@ function normalise(model: string): string {
     if (!host) break;
     name = name.slice(host[0].length);
   }
-  return name;
+  return name.replace(/:(?:nitro|floor|online|free|extended|thinking|beta|exacto)$/, '');
 }
 
 /**
@@ -196,7 +196,8 @@ function withoutLongContextSuffix(name: string): string {
  * map the gateway keeps (`reported_context_windows`), or undefined.
  *
  * The exact key wins. Then both sides are put through the same `normalise`
- * the table uses (routing prefixes off, suffix kept), so a `us.anthropic.…`
+ * the known-model lookup starts from (routing prefixes and variants off,
+ * long-context suffix kept), so a `us.anthropic.…`
  * binding finds the row the provider listed under its bare id. Then a
  * long-context suffix comes off the bound name too, so `claude-x-1m` finds
  * `claude-x` — except for a Claude `[1m]` binding: the provider's row is the

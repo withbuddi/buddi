@@ -18,7 +18,7 @@ export function mlxhWindowNote(tokens: number | undefined): string {
 }
 
 /**
- * The provider's (ChatGPT's) own number, buddi's table for a model it knows,
+ * The provider's (ChatGPT's) own number, the known-model table for a model it lists,
  * mlxh's prompt limit, or assumed — only the 128k default is a guess.
  */
 export function windowSourceWords(kind: string, source: WindowSource | undefined, tokens?: number): string {

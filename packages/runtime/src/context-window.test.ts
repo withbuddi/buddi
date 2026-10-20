@@ -43,6 +43,11 @@ describe('the window of a model we bind', () => {
     expect(contextWindowTokens('anthropic.claude-opus-4-6-v1:0', 'openai-compatible')).toBe(1_000_000);
     expect(contextWindowTokens('claude-opus-4-1@20250805', 'openai-compatible')).toBe(200_000);
     expect(contextWindowTokens('openrouter/anthropic/claude-sonnet-5', 'openai-compatible')).toBe(1_000_000);
+    // OpenRouter's routing variants are the same model, routed differently.
+    expect(contextWindowTokens('openrouter/anthropic/claude-sonnet-5:nitro', 'openai-compatible')).toBe(1_000_000);
+    expect(contextWindowTokens('anthropic/claude-sonnet-4:floor', 'openai-compatible')).toBe(200_000);
+    // An Ollama tag is not one of them.
+    expect(contextWindowTokens('qwen3:32b', 'openai-compatible')).toBe(32_000);
   });
 
   it('reads the long-context suffix, which is the same model with more room', () => {
@@ -82,7 +87,7 @@ describe('the window of a model we bind', () => {
     expect(contextWindowInfo('gemini-2.5-flash-image', 'openai-compatible')).toEqual({ tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' });
   });
 
-  it('asks the local table first on a local or compatible host, and only there', () => {
+  it('asks the local table first on a local or compatible host, then the known models', () => {
     expect(contextWindowInfo('gemma3', 'openai-compatible')).toEqual({ tokens: 128_000, source: 'table' });
     expect(contextWindowInfo('qwen3:14b')).toEqual({ tokens: 32_000, source: 'table' });
     expect(contextWindowInfo('qwen3:14b', 'anthropic')).toEqual({ tokens: DEFAULT_CONTEXT_WINDOW_TOKENS, source: 'default' });
@@ -143,6 +148,7 @@ describe('the window a provider reported, found for the bound model', () => {
     expect(contextWindowInfo('claude-sonnet-4-5[1m]', 'anthropic')).toEqual({ tokens: 1_000_000, source: 'table' });
     // Another host's suffixed id finds its base row.
     expect(reportedContextWindow({ 'qwen3-coder': 262_144 }, 'qwen3-coder-1m')).toBe(262_144);
+    expect(reportedContextWindow({ 'anthropic/claude-sonnet-5': 1_000_000 }, 'anthropic/claude-sonnet-5:nitro')).toBe(1_000_000);
   });
 
   it('answers nothing for an unknown model or an unusable number', () => {

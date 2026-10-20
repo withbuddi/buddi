@@ -143,11 +143,19 @@ if (filename === undefined) throw new Error(`npm pack produced no tarball in ${s
 // Every package's own dependencies must be inside the tarball, not left for
 // an install to fetch: the Linux and Windows bundles and the mac payload
 // unpack it as it is, with no npm and no network.
-const entries = new Set(execFileSync('tar', ['-tzf', path.join(stage, filename)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).split('\n'));
-const unbundled = packages.flatMap(({ pkg }) => Object.keys(pkg.dependencies || {})
-  .filter(name => !byName.has(name) && ![...entries].some(entry => entry.endsWith(`node_modules/${name}/package.json`)))
-  .map(name => `${pkg.name} → ${name}`));
-if (unbundled.length > 0) throw new Error(`The tarball is missing dependencies: ${unbundled.join(', ')}. Staging preserved: ${stage}`);
+// Each is looked for where Node would find it from the package that needs it
+// (its own node_modules, then the top one), and an exact pin must be that
+// version.
+const tarball = path.join(stage, filename);
+const entries = new Set(execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).split('\n'));
+const unbundled = packages.flatMap(({ pkg }) => Object.entries(pkg.dependencies || {}).filter(([name]) => !byName.has(name)).flatMap(([name, wanted]) => {
+  const found = [`package/node_modules/${pkg.name}/node_modules/${name}/package.json`, `package/node_modules/${name}/package.json`].find(entry => entries.has(entry));
+  if (found === undefined) return [`${pkg.name} → ${name} (missing)`];
+  if (!/^\d+\.\d+\.\d+$/.test(wanted)) return [];
+  const version = JSON.parse(execFileSync('tar', ['-xOzf', tarball, found], { encoding: 'utf8' })).version;
+  return version === wanted ? [] : [`${pkg.name} → ${name} (${version}, pinned ${wanted})`];
+}));
+if (unbundled.length > 0) throw new Error(`The tarball does not carry what its packages need: ${unbundled.join(', ')}. Staging preserved: ${stage}`);
 // The Chrome Web Store upload, beside the tarball: same files, no `key`. The
 // release workflow attaches it to the GitHub release. The last line stays the
 // tarball, which is what callers read.
