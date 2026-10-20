@@ -34,7 +34,7 @@ export function isMlxhAccount(account: Partial<Pick<ProviderAccount, 'mlxh' | 'd
 }
 
 /** What mlxh's prompt limit means for a conversation, beside the window: core's words, shared with the CLI. */
-export { mlxhWindowNote } from '@buddi/core/mlxh-note';
+export { mlxhWindowNote } from '@buddi/core/window-words';
 
 /** Said when nothing answers where mlxh should: the host and port come from the probe's address. */
 export function mlxhNotAnswering(baseUrl: string): string {

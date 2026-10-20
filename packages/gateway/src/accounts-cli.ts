@@ -12,7 +12,7 @@
  * a sign-in in progress.
  */
 import { getOwnerProfile, MLXH_BASE_URL, resetPhrase, ownerTimezone, type OwnerFormats } from '@buddi/core';
-import { mlxhWindowNote } from '@buddi/core/mlxh-note';
+import { windowSourceWords } from '@buddi/core/window-words';
 import type { AccountRateLimit } from './account-limits.js';
 import { createWiringAsync, hydrateSecrets, loadEnvironment } from './bootstrap.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
@@ -172,17 +172,8 @@ export function renderAccountLines(lines: readonly AccountLine[], style: Pick<Te
   return out.join('\n');
 }
 
-/**
- * Whose a detected window is, in the words the dashboard's Providers page
- * uses: the provider's (ChatGPT's) own number, buddi's table for a model it
- * knows, mlxh's prompt limit, or assumed — only the 128k default is a guess.
- */
-export function windowSourceWords(kind: string, source: ViewAccount['detectedContextWindowSource'], tokens?: number): string {
-  if (source === 'provider') return kind === 'codex' ? 'from ChatGPT' : 'from the provider';
-  if (source === 'table') return 'known model';
-  if (source === 'mlxh') return mlxhWindowNote(tokens);
-  return 'assumed';
-}
+/** Whose a detected window is: the dashboard's own words, from core. */
+export { windowSourceWords };
 
 /** One account in full, as text. */
 export function renderAccount(line: AccountLine, extra: Pick<ViewAccount, 'baseUrl' | 'contextWindowTokens' | 'detectedContextWindowTokens' | 'detectedContextWindowSource' | 'test'>, style: Pick<TerminalStyle, 'color'>, timeZone: string, now: Date = new Date(), formats: OwnerFormats = {}): string {

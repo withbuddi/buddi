@@ -13,7 +13,8 @@ import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, No
 import { ModelPicker } from '../ModelPicker';
 import { CODEX_STARTING_MODEL, codexSuggestion } from '../codex-models';
 import { GEMINI_FALLBACK_MODEL, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
-import { MLXH_IMAGE_MODEL, firstMlxhModel, isMlxhAccount, mlxhNotAnswering, mlxhWindowNote } from '../mlxh';
+import { MLXH_IMAGE_MODEL, firstMlxhModel, isMlxhAccount, mlxhNotAnswering } from '../mlxh';
+import { windowSourceWords } from '@buddi/core/window-words';
 import { SignInCode } from './parts/SignInCode';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
 import { fmtClock, fmtMoment, fmtTime } from '../format';
@@ -154,11 +155,8 @@ export function providerName(a: Pick<ProviderAccount, 'kind' | 'auth'> & Partial
 
 /** Whose the detected context window is, for the label beside it. */
 export function detectedWindowSource(a: Pick<ProviderAccount, 'kind' | 'detectedContextWindowSource'> & Partial<Pick<ProviderAccount, 'detectedContextWindowTokens'>>): string {
-  if (a.detectedContextWindowSource === 'mlxh') return mlxhWindowNote(a.detectedContextWindowTokens);
-  if (a.detectedContextWindowSource === 'provider') return a.kind === 'codex' ? 'from ChatGPT' : 'from the provider';
-  // buddi's table knew the model; only the 128k default for one it did not is a guess.
-  if (a.detectedContextWindowSource === 'table') return 'known model';
-  return 'assumed';
+  // Core's words, the same `buddi accounts show` says.
+  return windowSourceWords(a.kind, a.detectedContextWindowSource, a.detectedContextWindowTokens);
 }
 
 /** A provider's mark: one letter in the provider's own tint, never a logo we do not own. */

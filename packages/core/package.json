@@ -45,9 +45,9 @@
       "types": "./dist/text-files.d.ts",
       "default": "./dist/text-files.js"
     },
-    "./mlxh-note": {
-      "types": "./dist/mlxh-note.d.ts",
-      "default": "./dist/mlxh-note.js"
+    "./window-words": {
+      "types": "./dist/window-words.d.ts",
+      "default": "./dist/window-words.js"
     },
     "./file-families": {
       "types": "./dist/file-families.d.ts",

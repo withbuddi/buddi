@@ -123,8 +123,8 @@ export class ProviderAccounts {
   #codexReleased = new Map<string, Promise<void>>();
   #tail: Promise<unknown> = Promise.resolve();
   #modelLists = new Map<string, { revision: number; until: number; value: AccountModels }>();
-  /** In-flight listings by account version; `replace` turns on when a forced call joins one. */
-  #modelRequests = new Map<string, { pending: Promise<AccountModels>; replace: boolean }>();
+  /** In-flight listings by account version, for an ordinary call to join. */
+  #modelRequests = new Map<string, Promise<AccountModels>>();
   #windowRefreshes = new Map<string, Promise<void>>();
   /**
    * Ask the provider for its windows in the background after a credential is
@@ -337,31 +337,28 @@ export class ProviderAccounts {
     const cached = this.#modelLists.get(id);
     if (!refresh && cached?.revision === row.revision && cached.until > Date.now()) return cached.value;
     const key = `${id}:${row.revision}`;
-    const existing = this.#modelRequests.get(key);
-    if (existing) {
-      // A forced call joining an ordinary one makes it a forced one: its
-      // listing then replaces the windows, as the forced call asked.
-      if (refresh) existing.replace = true;
-      return existing.pending;
-    }
-    const request = { pending: undefined as unknown as Promise<AccountModels>, replace: refresh };
-    request.pending = (async () => {
+    // An ordinary call joins one in flight; a forced one makes its own
+    // listing, whose write replaces the windows, and later calls join it.
+    const existing = refresh ? undefined : this.#modelRequests.get(key);
+    if (existing) return existing;
+    let pending!: Promise<AccountModels>;
+    pending = (async () => {
       try {
         const listed = await this.#list(row);
         const current = await this.#row(id);
         if (current.revision !== row.revision || !current.enabled || current.deleting) throw new ProviderAccountError(409, 'Account changed. Refresh models again.');
         const value = { ...listed.value, fetchedAt: new Date().toISOString() };
         this.#modelLists.set(id, { revision: row.revision, until: Date.now() + 60_000, value });
-        await this.#rememberWindows(current, listed, request.replace).catch(() => {});
+        await this.#rememberWindows(current, listed, refresh).catch(() => {});
         return value;
       } catch (error) {
         if (error instanceof ProviderAccountError) throw error;
         const diagnostic = providerDiagnostic(error, diagnosticContext(row));
         throw new ProviderAccountError(502, `Could not load models. ${diagnostic.message} You can still enter a custom model.`);
-      } finally { this.#modelRequests.delete(key); }
+      } finally { if (this.#modelRequests.get(key) === pending) this.#modelRequests.delete(key); }
     })();
-    this.#modelRequests.set(key, request);
-    return request.pending;
+    this.#modelRequests.set(key, pending);
+    return pending;
   }
 
   /**
@@ -406,11 +403,12 @@ export class ProviderAccounts {
   /**
    * Is this account worth asking for its windows? Enabled, of a kind whose
    * list can say one, with a credential. A ChatGPT account says its windows
-   * too; its sign-in finishes outside a reload, so the lease decides.
+   * too, once its sign-in says it is connected.
    */
   #reportsWindows(row: Row): boolean {
     if (!row.enabled || row.deleting) return false;
-    return row.kind === 'codex' || (WINDOW_REFRESH_KINDS.has(row.kind) && this.#configured.get(row.id) === true);
+    if (row.kind === 'codex') return this.codex?.view(row.id)?.state === 'connected';
+    return WINDOW_REFRESH_KINDS.has(row.kind) && this.#configured.get(row.id) === true;
   }
 
   /**
@@ -1018,8 +1016,10 @@ export class ProviderAccounts {
       const lease = await this.#codexAccess(row, false);
       try { await deleteAccountSecret(this.deps.pool as Pool, this.vault!, row.secretRef); }
       finally { await lease.release(); }
-      await this.load();
       this.codex.forget(id);
+      // Runs on the old sign-in stop at their next call, and listings in flight write nothing.
+      await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
+      await this.load();
       await this.#endpointChanged(id);
       return { removed: true };
     }
@@ -1028,8 +1028,13 @@ export class ProviderAccounts {
       const started = await this.codex.login(lease.access);
       void started.finished.then(() => lease.release()).then(() => {
         if (this.codex?.view(id)?.state !== 'connected') return;
-        // Another ChatGPT sign-in may be another plan: its own windows, now.
-        return this.#endpointChanged(id);
+        // Another ChatGPT sign-in may be another plan: a new account version,
+        // as a Claude sign-in is, then its own windows.
+        return this.#serial(async () => {
+          await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
+          await this.load();
+          await this.#endpointChanged(id);
+        });
       }).catch(() => {});
       return started.view;
     } catch {

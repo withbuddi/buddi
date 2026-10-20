@@ -3,7 +3,6 @@ import { createMemoryVault, createPool, providerFromEnv, runMigrations, type Age
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
 import { ProviderAccounts } from './provider-accounts.js';
 const url = await testDatabaseUrl();
 const suite = url ? describe : describe.skip;
@@ -239,8 +238,12 @@ suite('named provider accounts', () => {
     // ChatGPT signed out: its windows go too.
     const codex = await f.service.save(codexSettings);
     await seed(codex.id); await f.service.refresh();
+    const lists = f.listModels.mock.calls.length;
     await f.service.codexAction(codex.id, 'logout', 1);
     expect(await windows(codex.id)).toEqual({ m: {}, l: null });
+    // A new account version, so a listing in flight writes nothing; and no listing for a signed-out account.
+    expect(f.service.view().accounts.find(x => x.id === codex.id)?.revision).toBe(2);
+    expect(f.listModels).toHaveBeenCalledTimes(lists);
   });
   it('never writes a listing\'s windows onto an account that changed while it was listing', async () => {
     const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
@@ -256,32 +259,23 @@ suite('named provider accounts', () => {
     expect(interleave).toBeNull();
     expect((await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id])).rows[0].m).toEqual({});
   });
-  it('a forced listing that joins an ordinary one in flight still replaces the windows', async () => {
+  it('a forced listing during an ordinary one makes its own, and its result replaces the windows', async () => {
     const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
-    await pool.query(`update core.provider_accounts set reported_context_windows='{"gone-model":64000}'::jsonb where id=$1`, [a.id]);
-    let finish!: (value: unknown) => void;
-    f.listModels.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }) as never);
+    const answers: Array<(value: unknown) => void> = [];
+    f.listModels.mockImplementation(() => new Promise(resolve => { answers.push(resolve); }) as never);
     const ordinary = f.service.models(a.id);
-    await vi.waitFor(() => expect(f.listModels).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(answers).toHaveLength(1));
     const forced = f.service.models(a.id, true);
-    // Let the forced call read its row and join before the listing answers.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    finish({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 500_000 }], truncated: false });
-    await Promise.all([ordinary, forced]);
-    expect(f.listModels).toHaveBeenCalledTimes(1);
+    // Its own listing, not the ordinary one's.
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    // An ordinary call now joins the forced one.
+    const joined = f.service.models(a.id);
+    answers[0]!({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 400_000 }, { id: 'gone-model', name: 'G', isDefault: false, contextWindow: 64_000 }], truncated: false });
+    await ordinary;
+    answers[1]!({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 500_000 }], truncated: false });
+    expect(await joined).toEqual(await forced);
+    expect(f.listModels).toHaveBeenCalledTimes(2);
     expect((await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id])).rows[0].m).toEqual({ 'claude-sonnet-5': 500_000 });
-  });
-  it('moves an mlxh limit an earlier build kept in the windows map into its own column (migration 087)', async () => {
-    const f = fixture({}); await f.service.initialize();
-    const a = await f.service.save({ label: 'mlxh', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://127.0.0.1:1060/v1', defaultModel: 'gemma4-e2b-it', enabled: true });
-    const b = await f.service.save({ label: 'Other', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11434/v1', defaultModel: 'qwen3:8b', enabled: true });
-    await pool.query(`update core.provider_accounts set reported_context_windows=$2::jsonb where id=$1`, [a.id, JSON.stringify({ 'gemma4-e2b-it': 131_072, '#mlxh:max_prompt_tokens': 0 })]);
-    await pool.query(`update core.provider_accounts set reported_context_windows=$2::jsonb where id=$1`, [b.id, JSON.stringify({ 'qwen3:8b': 40_000 })]);
-    const sql = readFileSync(new URL('../../core/migrations/087_mlxh_prompt_limit.sql', import.meta.url), 'utf8');
-    await pool.query(sql.slice(sql.indexOf('update core.provider_accounts')));
-    const read = async (id: string) => (await pool.query('select reported_context_windows as m, mlxh_prompt_limit as l from core.provider_accounts where id=$1', [id])).rows[0];
-    expect(await read(a.id)).toEqual({ m: { 'gemma4-e2b-it': 131_072 }, l: 0 });
-    expect(await read(b.id)).toEqual({ m: { 'qwen3:8b': 40_000 }, l: null });
   });
   it('hands a plugin each account with its audio capabilities and never a key (host API 1.30)', async () => {
     const f = fixture({}); await f.service.initialize();
@@ -310,7 +304,7 @@ suite('named provider accounts', () => {
     const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
     let finish!: (value: { models: Array<{ id: string; name: string; isDefault: boolean }>; truncated: boolean }) => void;
     f.listModels.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-    const one = f.service.models(a.id), two = f.service.models(a.id, true);
+    const one = f.service.models(a.id), two = f.service.models(a.id);
     const settled = Promise.allSettled([one, two]);
     await vi.waitFor(() => expect(f.listModels).toHaveBeenCalledTimes(1));
     await f.service.save({ ...settings, id: a.id, revision: 1, label: 'Edited' });

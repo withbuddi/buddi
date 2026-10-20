@@ -15,6 +15,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Signing a ChatGPT account out, or in again, now makes it a new account version as a Claude sign-in does: runs still on the old sign-in stop at their next call.
 - Providers page and `buddi accounts show` say where a context window comes from: "from the provider" (or "from ChatGPT"), "known model" for buddi's own table, and "assumed" only for the 128k guess for a model buddi does not know; an mlxh window carries the same `mlxh config max_prompt_tokens` hint in both. `buddi accounts show --json` gains `detectedContextWindowSource`, and the conversation rollover log line names the window's source.
 
 ## 0.1.0-pre.55 — 2026-10-15
