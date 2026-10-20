@@ -150,7 +150,9 @@ suite('Run now on a mission (postgres)', () => {
       expect(delivered).toEqual(['From the clock.', 'Because you asked.']);
       expect((await getOccurrence(pool, now.occurrence.id))?.state).toBe('succeeded');
 
-      const occurrences = await listOccurrences(pool, MISSION_ID);
+      // The clock moved 61 s: when that crosses two minute marks, coalesce
+      // records the older one as skipped. Only what ran is asserted.
+      const occurrences = (await listOccurrences(pool, MISSION_ID)).filter((o) => o.state !== 'skipped');
       const byId = (id: string) => occurrences.find((o) => o.id === id);
       expect(occurrences).toHaveLength(2);
       expect(byId(now.occurrence.id)).toMatchObject({ state: 'succeeded', scheduleRevision: 0 });
