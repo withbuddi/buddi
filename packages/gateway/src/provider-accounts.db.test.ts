@@ -222,6 +222,55 @@ suite('named provider accounts', () => {
     expect(probe).not.toHaveBeenCalled();
     expect(service.view().accounts.find(x => x.id === other.id)).toMatchObject({ detectedContextWindowSource: 'table' });
   });
+  it('treats every identity change the same: windows and mlxh limit cleared, then the new endpoint asked', async () => {
+    const f = fixture({}); await f.service.initialize();
+    const windows = async (id: string) => (await pool.query('select reported_context_windows as m, mlxh_prompt_limit as l from core.provider_accounts where id=$1', [id])).rows[0];
+    const seed = (id: string) => pool.query(`update core.provider_accounts set reported_context_windows='{"old-model":64000}'::jsonb, mlxh_prompt_limit=4096 where id=$1`, [id]);
+    f.listModels.mockResolvedValue({ models: [{ id: 'qwen3:8b', name: 'q', isDefault: false, contextWindow: 40_000 }], truncated: false } as never);
+    const local = await f.service.save({ label: 'Local', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11434/v1', defaultModel: 'qwen3:8b', enabled: true });
+    await seed(local.id); await f.service.refresh();
+    f.service.refreshWindows();
+    await vi.waitFor(async () => expect(await windows(local.id)).toEqual({ m: { 'qwen3:8b': 40_000 }, l: 4096 }));
+    // A no-key endpoint's new address is another host: cleared, and asked again.
+    await seed(local.id); await f.service.refresh();
+    f.listModels.mockResolvedValue({ models: [{ id: 'qwen3:8b', name: 'q', isDefault: false, contextWindow: 32_768 }], truncated: false } as never);
+    await f.service.save({ label: 'Local', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11435/v1', defaultModel: 'qwen3:8b', enabled: true, id: local.id, revision: 1 });
+    await vi.waitFor(async () => expect(await windows(local.id)).toEqual({ m: { 'qwen3:8b': 32_768 }, l: null }));
+    // ChatGPT signed out: its windows go too.
+    const codex = await f.service.save(codexSettings);
+    await seed(codex.id); await f.service.refresh();
+    await f.service.codexAction(codex.id, 'logout', 1);
+    expect(await windows(codex.id)).toEqual({ m: {}, l: null });
+  });
+  it('never writes a listing\'s windows onto an account that changed while it was listing', async () => {
+    const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
+    // Another process changes the key between the listing's own check and its write.
+    let interleave: (() => Promise<unknown>) | null = () => pool.query(`update core.provider_accounts set revision=revision+1, reported_context_windows='{}'::jsonb where id=$1`, [a.id]);
+    const racing = { connect: pool.connect.bind(pool), query: async (text: string, params?: unknown[]) => {
+      if (interleave && String(text).includes('set reported_context_windows=$2')) { const run = interleave; interleave = null; await run(); }
+      return pool.query(text, params as never);
+    } };
+    const service = new ProviderAccounts({ ...f.service.deps, pool: racing as never }); await service.initialize();
+    f.listModels.mockResolvedValueOnce({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 500_000 }], truncated: false } as never);
+    await service.models(a.id, true);
+    expect(interleave).toBeNull();
+    expect((await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id])).rows[0].m).toEqual({});
+  });
+  it('a forced listing that joins an ordinary one in flight still replaces the windows', async () => {
+    const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
+    await pool.query(`update core.provider_accounts set reported_context_windows='{"gone-model":64000}'::jsonb where id=$1`, [a.id]);
+    let finish!: (value: unknown) => void;
+    f.listModels.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }) as never);
+    const ordinary = f.service.models(a.id);
+    await vi.waitFor(() => expect(f.listModels).toHaveBeenCalledTimes(1));
+    const forced = f.service.models(a.id, true);
+    // Let the forced call read its row and join before the listing answers.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    finish({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 500_000 }], truncated: false });
+    await Promise.all([ordinary, forced]);
+    expect(f.listModels).toHaveBeenCalledTimes(1);
+    expect((await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id])).rows[0].m).toEqual({ 'claude-sonnet-5': 500_000 });
+  });
   it('moves an mlxh limit an earlier build kept in the windows map into its own column (migration 087)', async () => {
     const f = fixture({}); await f.service.initialize();
     const a = await f.service.save({ label: 'mlxh', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://127.0.0.1:1060/v1', defaultModel: 'gemma4-e2b-it', enabled: true });

@@ -9,9 +9,9 @@ What changes in buddi from one release to the next, newest first.
 - Agents on Claude Opus 5, Haiku 5.5, Opus 4.6–4.8 and Sonnet 4.6 get their full million-token context: buddi counted them at 200k, so long conversations were trimmed five times sooner than needed.
 - An agent on an Anthropic account now gets the context window Anthropic reports for its model (and an OpenRouter or vLLM endpoint the one its model list says), not only buddi's own table. Existing accounts pick the number up in the background when the gateway starts or a new key or sign-in is saved, without opening the model picker.
 - An agent bound to a routed model id (`us.anthropic.…`) now finds the window the provider reported for that model. A Claude `[1m]` binding keeps its million-token window, labelled as a known model, unless the provider listed the `[1m]` id itself.
-- A new key, sign-in or address on an account drops the windows the old one's model list reported, and refreshing the model list replaces them, so a model the provider stopped listing no longer keeps an old number.
+- A new key, address or sign-in on an account (Claude, ChatGPT or Ollama, signing in or out) drops the windows the old endpoint's model list reported and asks the new one, and refreshing the model list replaces them, so a model the provider stopped listing no longer keeps an old number and a listing still in flight from before the change cannot bring them back.
 - An agent on a ChatGPT account is sized the same in its conversation budget as on the Providers page, so it no longer rolls over at a different point than the page says.
-- On mlxh, its `max_prompt_tokens` limit now always wins over a window its model list names, since that limit is what mlxh enforces. With the limit turned off, the page and the budget use the model's own window and say where it came from, instead of calling it mlxh's.
+- On mlxh, its `max_prompt_tokens` limit now always wins over a window its model list names, since that limit is what mlxh enforces, and a limit under 8,000 tokens is used as it is rather than ignored. With the limit turned off, the page and the budget use the model's own window and say where it came from, instead of calling it mlxh's.
 
 ### Changed
 

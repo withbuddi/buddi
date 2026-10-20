@@ -100,6 +100,8 @@ describe('what a conversation may grow to', () => {
     expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null } }), CONVERSATION)).toMatchObject({ windowTokens: 8192, windowSource: 'mlxh' });
     const reported = { 'gemma4-e2b-it': 131_072 };
     expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported, mlxhLimit: 40_960 } }), CONVERSATION)).toMatchObject({ windowTokens: 40_960, windowSource: 'mlxh' });
+    // A limit under 8,000 is what mlxh enforces, so it is the window as it is.
+    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported, mlxhLimit: 4096 } }), CONVERSATION)).toMatchObject({ windowTokens: 4096, maxTokens: 2048, windowSource: 'mlxh' });
     // The limit off: the list's own number, else the table's.
     expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported, mlxhLimit: 0 } }), CONVERSATION)).toMatchObject({ windowTokens: 131_072, windowSource: 'provider' });
     expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, mlxhLimit: 0 } }), CONVERSATION)).toMatchObject({ windowTokens: 128_000, windowSource: 'default' });

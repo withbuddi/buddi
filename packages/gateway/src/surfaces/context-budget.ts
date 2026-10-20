@@ -125,12 +125,14 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
   // default until a probe said one) beats any listed number, unless it is off.
   const isMlxh = typeof row.baseUrl === 'string' && isMlxhAccount({ kind: String(row.kind), baseUrl: row.baseUrl });
   const mlxh = isMlxh ? mlxhLimitOf(row.mlxhLimit) : null;
-  const override = owner ?? mlxh ?? reported;
-  const info = contextWindowInfo(model, providerOf(row.kind), override);
-  const windowTokens = info.tokens;
+  // A limit the host enforces is taken as it is, under 8,000 too: it is not
+  // an override to be range-checked, and the account page shows it the same.
+  const info = owner === null && mlxh !== null ? null : contextWindowInfo(model, providerOf(row.kind), owner ?? reported);
+  const windowTokens = info?.tokens ?? mlxh!;
   // `owner` from the runtime means "the override was used"; say whose it was.
-  const windowSource: TranscriptBudget['windowSource'] = info.source !== 'owner' ? info.source
-    : owner !== null ? 'owner' : mlxh !== null ? 'mlxh' : 'provider';
+  const windowSource: TranscriptBudget['windowSource'] = info === null ? 'mlxh'
+    : info.source !== 'owner' ? info.source
+    : owner !== null ? 'owner' : 'provider';
   const maxTokens = transcriptTokenBudget(windowTokens);
   return {
     maxTokens,

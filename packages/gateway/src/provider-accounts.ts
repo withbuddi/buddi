@@ -123,7 +123,8 @@ export class ProviderAccounts {
   #codexReleased = new Map<string, Promise<void>>();
   #tail: Promise<unknown> = Promise.resolve();
   #modelLists = new Map<string, { revision: number; until: number; value: AccountModels }>();
-  #modelRequests = new Map<string, Promise<AccountModels>>();
+  /** In-flight listings by account version; `replace` turns on when a forced call joins one. */
+  #modelRequests = new Map<string, { pending: Promise<AccountModels>; replace: boolean }>();
   #windowRefreshes = new Map<string, Promise<void>>();
   /**
    * Ask the provider for its windows in the background after a credential is
@@ -337,15 +338,21 @@ export class ProviderAccounts {
     if (!refresh && cached?.revision === row.revision && cached.until > Date.now()) return cached.value;
     const key = `${id}:${row.revision}`;
     const existing = this.#modelRequests.get(key);
-    if (existing) return existing;
-    const pending = (async () => {
+    if (existing) {
+      // A forced call joining an ordinary one makes it a forced one: its
+      // listing then replaces the windows, as the forced call asked.
+      if (refresh) existing.replace = true;
+      return existing.pending;
+    }
+    const request = { pending: undefined as unknown as Promise<AccountModels>, replace: refresh };
+    request.pending = (async () => {
       try {
         const listed = await this.#list(row);
         const current = await this.#row(id);
         if (current.revision !== row.revision || !current.enabled || current.deleting) throw new ProviderAccountError(409, 'Account changed. Refresh models again.');
         const value = { ...listed.value, fetchedAt: new Date().toISOString() };
         this.#modelLists.set(id, { revision: row.revision, until: Date.now() + 60_000, value });
-        await this.#rememberWindows(current, listed, refresh).catch(() => {});
+        await this.#rememberWindows(current, listed, request.replace).catch(() => {});
         return value;
       } catch (error) {
         if (error instanceof ProviderAccountError) throw error;
@@ -353,8 +360,8 @@ export class ProviderAccounts {
         throw new ProviderAccountError(502, `Could not load models. ${diagnostic.message} You can still enter a custom model.`);
       } finally { this.#modelRequests.delete(key); }
     })();
-    this.#modelRequests.set(key, pending);
-    return pending;
+    this.#modelRequests.set(key, request);
+    return request.pending;
   }
 
   /**
@@ -379,18 +386,31 @@ export class ProviderAccounts {
   }
 
   /**
-   * Fill the provider's windows for one account without anyone opening the
-   * picker, its failure silent (the table answers meanwhile).
+   * The one place an account's identity change lands: a new key, a new
+   * address, a Claude sign-in finished or signed out, Ollama connected or
+   * disconnected, ChatGPT signed in again or out. What the old endpoint's list
+   * said (its windows, mlxh's limit) is no longer this account's to go by, so
+   * it goes; once the gateway is serving, the new endpoint is asked for its
+   * own in the background, its failure silent (the table answers meanwhile).
+   * Called after the change is written and loaded.
    */
-  #refreshWindowsSoon(id: string): void {
-    const row = this.#rows.get(id);
-    if (!this.#refreshWindows || !row || !this.#reportsWindows(row)) return;
-    void this.#windowsOnly(row).catch(() => {});
+  async #endpointChanged(id: string): Promise<void> {
+    this.#modelLists.delete(id);
+    await this.deps.pool.query(`update core.provider_accounts set reported_context_windows='{}'::jsonb, mlxh_prompt_limit=null where id=$1`, [id]);
+    const live = this.#rows.get(id);
+    if (!live) return;
+    this.#rows.set(id, { ...live, reportedContextWindows: {}, mlxhPromptLimit: null });
+    if (this.#refreshWindows && this.#reportsWindows(live)) void this.#windowsOnly(live).catch(() => {});
   }
 
-  /** Is this account worth asking for its windows? Enabled, with a credential, of a kind whose list can say one. */
+  /**
+   * Is this account worth asking for its windows? Enabled, of a kind whose
+   * list can say one, with a credential. A ChatGPT account says its windows
+   * too; its sign-in finishes outside a reload, so the lease decides.
+   */
   #reportsWindows(row: Row): boolean {
-    return row.enabled && !row.deleting && WINDOW_REFRESH_KINDS.has(row.kind) && this.#configured.get(row.id) === true;
+    if (!row.enabled || row.deleting) return false;
+    return row.kind === 'codex' || (WINDOW_REFRESH_KINDS.has(row.kind) && this.#configured.get(row.id) === true);
   }
 
   /**
@@ -424,7 +444,7 @@ export class ProviderAccounts {
   refreshWindows(): void {
     this.#refreshWindows = true;
     for (const row of this.#rows.values()) {
-      if (this.#reportsWindows(row)) void this.#windowsOnly(row).catch(() => {});
+      if (WINDOW_REFRESH_KINDS.has(row.kind) && this.#reportsWindows(row)) void this.#windowsOnly(row).catch(() => {});
     }
   }
 
@@ -477,10 +497,13 @@ export class ProviderAccounts {
     const capped: Record<string, number> = Object.fromEntries(entries.slice(Math.max(0, entries.length - REPORTED_WINDOWS_MAX)));
     const limit = listed.hostLimit === undefined ? null : listed.hostLimit ?? 0;
     if (JSON.stringify(capped) === JSON.stringify(before) && (limit === null || limit === row.mlxhPromptLimit)) return;
+    // Only onto the account version the listing was made for: a key or an
+    // address changed meanwhile, and these are another endpoint's numbers.
     const { rows } = await this.deps.pool.query(
-      `update core.provider_accounts set reported_context_windows=$2::jsonb, mlxh_prompt_limit=coalesce($3::integer, mlxh_prompt_limit) where id=$1
+      `update core.provider_accounts set reported_context_windows=$2::jsonb, mlxh_prompt_limit=coalesce($3::integer, mlxh_prompt_limit)
+        where id=$1 and revision=$4 and enabled and not deleting
         returning reported_context_windows as "reportedContextWindows", mlxh_prompt_limit as "mlxhPromptLimit"`,
-      [row.id, JSON.stringify(capped), limit]);
+      [row.id, JSON.stringify(capped), limit, row.revision]);
     const live = this.#rows.get(row.id);
     if (rows[0] && live) this.#rows.set(row.id, { ...live, reportedContextWindows: rows[0].reportedContextWindows, mlxhPromptLimit: rows[0].mlxhPromptLimit });
   }
@@ -559,15 +582,10 @@ export class ProviderAccounts {
     }
     try {
       if (old) {
-        // Another key or another address may be another plan or host: what
-        // the old one's list said is no longer this account's to go by.
         const result = await this.deps.pool.query(`update core.provider_accounts set label=$2,base_url=$3,default_model=$4,
-          enabled=$5,secret_ref=$6,legacy_env=$7,context_window_tokens=$9,
-          reported_context_windows=case when $10::boolean then '{}'::jsonb else reported_context_windows end,
-          mlxh_prompt_limit=case when $10::boolean then null else mlxh_prompt_limit end,
-          revision=revision+1,updated_at=now() where id=$1 and revision=$8 returning id`,
+          enabled=$5,secret_ref=$6,legacy_env=$7,context_window_tokens=$9,revision=revision+1,updated_at=now() where id=$1 and revision=$8 returning id`,
         [id,input.label,baseUrl,input.defaultModel,input.enabled,secretRef,input.secret ? null : old.legacyEnv,old.revision,
-          input.contextWindowTokens ?? null, !!input.secret || old.baseUrl !== baseUrl]);
+          input.contextWindowTokens ?? null]);
         if (!result.rows.length) throw new ProviderAccountError(409, 'This account changed. Reload before saving.');
       } else await this.deps.pool.query(`insert into core.provider_accounts (id,label,kind,auth,base_url,default_model,enabled,secret_ref,context_window_tokens)
         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [id,input.label,input.kind,input.auth,baseUrl,input.defaultModel,input.enabled,secretRef,
@@ -587,8 +605,8 @@ export class ProviderAccounts {
     // An edited account (a new key, a paid plan) starts with a clean slate.
     if (old) await clearLimit(this.deps.pool, id).catch(() => {});
     await this.load();
-    // A new account or a new credential: fetch the provider's windows now.
-    if (!old || input.secret) this.#refreshWindowsSoon(id);
+    // A new account, key or address is another endpoint.
+    if (!old || input.secret || old.baseUrl !== baseUrl) await this.#endpointChanged(id);
     return { id, warning };
     } finally { await lease?.release(); await oauthLease?.release(); }
   }); }
@@ -893,14 +911,10 @@ export class ProviderAccounts {
           }
         }
         // Invalidates pending attempts in other processes, and old run snapshots.
-        // A new sign-in (or none) drops the windows the old one's list said.
-        await this.deps.pool.query(`update core.provider_accounts set revision=revision+1,updated_at=now(),
-          reported_context_windows=case when $2::boolean then '{}'::jsonb else reported_context_windows end,
-          mlxh_prompt_limit=case when $2::boolean then null else mlxh_prompt_limit end where id=$1`,
-        [id, action === 'complete-login' || action === 'logout']);
+        await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
         this.#modelLists.delete(id); this.#tests.delete(id);
         await this.load();
-        if (action === 'complete-login') this.#refreshWindowsSoon(id);
+        if (action === 'complete-login' || action === 'logout') await this.#endpointChanged(id);
         return action === 'login' ? this.anthropic!.start(id, row.revision + 1, owner) : { completed: true };
       } finally { await lease.release(); }
     });
@@ -923,7 +937,7 @@ export class ProviderAccounts {
         let answer;
         try { answer = await this.ollama.poll(id, row.revision, owner, body.attemptId, row.secretRef); }
         catch (error) { throw new ProviderAccountError(409, (error as Error).message); }
-        if (answer.state === 'connected') { this.#modelLists.delete(id); this.#tests.delete(id); await this.load(); }
+        if (answer.state === 'connected') { this.#tests.delete(id); await this.load(); await this.#endpointChanged(id); }
         return answer;
       }
       if (row.revision !== body.revision) throw new ProviderAccountError(409, 'Account changed. Refresh before continuing.');
@@ -935,20 +949,21 @@ export class ProviderAccounts {
         try { await deleteAccountSecret(this.deps.pool as Pool, this.vault!, row.secretRef); }
         catch { throw new ProviderAccountError(409, 'Could not remove the Ollama device key. Unlock the vault and retry.'); }
       }
-      // A new key, or none: runs that started on the old one stop at their next
-      // call, and the windows the old one's list said go with it.
-      await this.deps.pool.query(`update core.provider_accounts set revision=revision+1,updated_at=now(),reported_context_windows='{}'::jsonb,mlxh_prompt_limit=null where id=$1`, [id]);
+      // A new key, or none: runs that started on the old one stop at their next call.
+      await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
       this.#modelLists.delete(id); this.#tests.delete(id);
       if (action === 'disconnect') {
         await this.load();
+        await this.#endpointChanged(id);
         return { removed: true, unpaired, note: unpaired
           ? 'Disconnected. The key is gone from buddi, and ollama.com no longer lists this device.'
           : 'Disconnected. The key is gone from buddi. ollama.com did not confirm it forgot this device; if it is still listed in your ollama.com settings, remove it there.' };
       }
       let started;
       try { started = await this.ollama.start(id, row.revision + 1, owner, row.secretRef); }
-      catch (error) { await this.load(); throw new ProviderAccountError(409, (error as Error).message); }
+      catch (error) { await this.load(); await this.#endpointChanged(id); throw new ProviderAccountError(409, (error as Error).message); }
       await this.load();
+      await this.#endpointChanged(id);
       return started;
     });
   }
@@ -1005,7 +1020,7 @@ export class ProviderAccounts {
       finally { await lease.release(); }
       await this.load();
       this.codex.forget(id);
-      this.#modelLists.delete(id);
+      await this.#endpointChanged(id);
       return { removed: true };
     }
     const lease = await this.#codexAccess(row);
@@ -1013,9 +1028,8 @@ export class ProviderAccounts {
       const started = await this.codex.login(lease.access);
       void started.finished.then(() => lease.release()).then(() => {
         if (this.codex?.view(id)?.state !== 'connected') return;
-        // Fill the provider's windows now, not when the owner next opens the picker.
-        this.#modelLists.delete(id);
-        void this.models(id, true).catch(() => {});
+        // Another ChatGPT sign-in may be another plan: its own windows, now.
+        return this.#endpointChanged(id);
       }).catch(() => {});
       return started.view;
     } catch {
