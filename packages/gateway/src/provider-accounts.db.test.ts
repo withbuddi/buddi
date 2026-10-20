@@ -3,8 +3,8 @@ import { createMemoryVault, createPool, providerFromEnv, runMigrations, type Age
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { ProviderAccounts } from './provider-accounts.js';
-import { MLXH_LIMIT_KEY } from './mlxh.js';
 const url = await testDatabaseUrl();
 const suite = url ? describe : describe.skip;
 const name = `buddi_provider_accounts_${process.pid}`;
@@ -197,9 +197,9 @@ suite('named provider accounts', () => {
       { id: 'gemma4-e2b-it', name: 'gemma4-e2b-it', isDefault: false, contextWindow: 8192 },
       { id: 'klein', name: 'klein', isDefault: false, contextWindow: 8192, image: true },
     ]);
-    const { rows } = await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id]);
-    // Only the limit mlxh enforces is kept, never a number from buddi's table.
-    expect(rows[0].m).toEqual({ [MLXH_LIMIT_KEY]: 8192 });
+    const { rows } = await pool.query('select reported_context_windows as m, mlxh_prompt_limit as l from core.provider_accounts where id=$1', [a.id]);
+    // Only the limit mlxh enforces is kept, in its own column; never a number from buddi's table.
+    expect(rows[0]).toEqual({ m: {}, l: 8192 });
     // A number on the list loses to the limit mlxh enforces.
     f.listModels.mockResolvedValueOnce({ models: [{ id: 'gemma4-e2b-it', name: 'gemma4-e2b-it', isDefault: false, contextWindow: 131_072 }], truncated: false } as never);
     expect((await service.models(a.id, true)).models[0]?.contextWindow).toBe(8192);
@@ -221,6 +221,18 @@ suite('named provider accounts', () => {
     await service.models(other.id, true);
     expect(probe).not.toHaveBeenCalled();
     expect(service.view().accounts.find(x => x.id === other.id)).toMatchObject({ detectedContextWindowSource: 'table' });
+  });
+  it('moves an mlxh limit an earlier build kept in the windows map into its own column (migration 087)', async () => {
+    const f = fixture({}); await f.service.initialize();
+    const a = await f.service.save({ label: 'mlxh', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://127.0.0.1:1060/v1', defaultModel: 'gemma4-e2b-it', enabled: true });
+    const b = await f.service.save({ label: 'Other', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11434/v1', defaultModel: 'qwen3:8b', enabled: true });
+    await pool.query(`update core.provider_accounts set reported_context_windows=$2::jsonb where id=$1`, [a.id, JSON.stringify({ 'gemma4-e2b-it': 131_072, '#mlxh:max_prompt_tokens': 0 })]);
+    await pool.query(`update core.provider_accounts set reported_context_windows=$2::jsonb where id=$1`, [b.id, JSON.stringify({ 'qwen3:8b': 40_000 })]);
+    const sql = readFileSync(new URL('../../core/migrations/087_mlxh_prompt_limit.sql', import.meta.url), 'utf8');
+    await pool.query(sql.slice(sql.indexOf('update core.provider_accounts')));
+    const read = async (id: string) => (await pool.query('select reported_context_windows as m, mlxh_prompt_limit as l from core.provider_accounts where id=$1', [id])).rows[0];
+    expect(await read(a.id)).toEqual({ m: { 'gemma4-e2b-it': 131_072 }, l: 0 });
+    expect(await read(b.id)).toEqual({ m: { 'qwen3:8b': 40_000 }, l: null });
   });
   it('hands a plugin each account with its audio capabilities and never a key (host API 1.30)', async () => {
     const f = fixture({}); await f.service.initialize();

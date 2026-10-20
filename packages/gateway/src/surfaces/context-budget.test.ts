@@ -10,11 +10,10 @@ import type { Queryable } from '@buddi/core';
 import { transcriptTokensForModel } from '@buddi/runtime';
 import { MAX_TRANSCRIPT_CHARS, type ConversationVitals } from './conversation-lifetime.js';
 import { forgetProjectedSizes, projectedTranscriptTokens, transcriptBudget } from './context-budget.js';
-import { MLXH_LIMIT_KEY } from '../mlxh.js';
 
 const CONVERSATION = '11111111-1111-1111-1111-111111111111';
 
-type Account = { model: string; kind: string; override: number | null; reported?: Record<string, unknown>; baseUrl?: string };
+type Account = { model: string; kind: string; override: number | null; reported?: Record<string, unknown>; baseUrl?: string; mlxhLimit?: number | null };
 
 /**
  * A pool that answers the two questions the budget asks: this conversation's
@@ -99,12 +98,11 @@ describe('what a conversation may grow to', () => {
   it('holds an mlxh account to mlxh\'s prompt limit, its default until a probe says one, over any listed number', async () => {
     const mlxh = { model: 'gemma4-e2b-it', kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:1060/v1' };
     expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null } }), CONVERSATION)).toMatchObject({ windowTokens: 8192, windowSource: 'mlxh' });
-    const reported = { 'gemma4-e2b-it': 131_072, [MLXH_LIMIT_KEY]: 40_960 };
-    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported } }), CONVERSATION)).toMatchObject({ windowTokens: 40_960, windowSource: 'mlxh' });
+    const reported = { 'gemma4-e2b-it': 131_072 };
+    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported, mlxhLimit: 40_960 } }), CONVERSATION)).toMatchObject({ windowTokens: 40_960, windowSource: 'mlxh' });
     // The limit off: the list's own number, else the table's.
-    const off = { 'gemma4-e2b-it': 131_072, [MLXH_LIMIT_KEY]: 0 };
-    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported: off } }), CONVERSATION)).toMatchObject({ windowTokens: 131_072, windowSource: 'provider' });
-    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported: { [MLXH_LIMIT_KEY]: 0 } } }), CONVERSATION)).toMatchObject({ windowTokens: 128_000, windowSource: 'default' });
+    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported, mlxhLimit: 0 } }), CONVERSATION)).toMatchObject({ windowTokens: 131_072, windowSource: 'provider' });
+    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, mlxhLimit: 0 } }), CONVERSATION)).toMatchObject({ windowTokens: 128_000, windowSource: 'default' });
     expect((await transcriptBudget(accounts({ binding: { ...mlxh, override: 32_000 } }), CONVERSATION)).windowTokens).toBe(32_000);
     // The same model name on another host keeps the table's number.
     const other = await transcriptBudget(accounts({ binding: { ...mlxh, baseUrl: 'http://localhost:11434/v1', override: null } }), CONVERSATION);

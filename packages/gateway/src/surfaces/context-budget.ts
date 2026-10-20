@@ -124,7 +124,7 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
   // mlxh refuses a prompt past its max_prompt_tokens, so that limit (its
   // default until a probe said one) beats any listed number, unless it is off.
   const isMlxh = typeof row.baseUrl === 'string' && isMlxhAccount({ kind: String(row.kind), baseUrl: row.baseUrl });
-  const mlxh = isMlxh ? mlxhLimitOf(map) : null;
+  const mlxh = isMlxh ? mlxhLimitOf(row.mlxhLimit) : null;
   const override = owner ?? mlxh ?? reported;
   const info = contextWindowInfo(model, providerOf(row.kind), override);
   const windowTokens = info.tokens;
@@ -149,7 +149,7 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
 export async function transcriptBudget(pool: Queryable, conversationId: string): Promise<TranscriptBudget> {
   const { rows } = await pool.query(
     `select b.model as model, a.kind as kind, a.context_window_tokens as override,
-            a.reported_context_windows as reported, a.base_url as "baseUrl"
+            a.reported_context_windows as reported, a.base_url as "baseUrl", a.mlxh_prompt_limit as "mlxhLimit"
        from core.conversations c
        join core.agent_provider_accounts b on b.agent_id = c.agent_id
        left join core.provider_accounts a on a.id = b.account_id
@@ -164,7 +164,7 @@ export async function transcriptBudget(pool: Queryable, conversationId: string):
   // them in — so that is the window it will actually be given.
   const { rows: defaults } = await pool.query(
     `select default_model as model, kind, context_window_tokens as override,
-            reported_context_windows as reported, base_url as "baseUrl"
+            reported_context_windows as reported, base_url as "baseUrl", mlxh_prompt_limit as "mlxhLimit"
        from core.provider_accounts
       where enabled and not deleting
       order by created_at, id

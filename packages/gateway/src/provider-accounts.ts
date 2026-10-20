@@ -15,7 +15,7 @@ import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
 import { AnthropicAccounts } from './anthropic-accounts.js';
 import { OllamaAccounts, deviceView, readOllamaDevice, type OllamaDeviceView } from './ollama-accounts.js';
 import { SIGNIN_HIDDEN, subscriptionSignIns } from './subscription-signins.js';
-import { MLXH_LIMIT_KEY, mlxhBaseUrl, mlxhLimitOf, mlxhWindow, probeMlxh } from './mlxh.js';
+import { mlxhBaseUrl, mlxhLimitOf, mlxhWindow, probeMlxh } from './mlxh.js';
 import { ACCOUNTS_PROVIDER_KIND, accountsProviderDestination, deleteAccountSecret, ownerSecretVault } from './owner-secrets.js';
 
 /** Who answered, in the owner's words, for the diagnostic sentence. */
@@ -27,7 +27,7 @@ function diagnosticContext(row: Pick<ProviderAccount, 'kind' | 'baseUrl' | 'labe
   return { provider, gemini };
 }
 
-type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean; reportedContextWindows: Record<string, unknown> | null };
+type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean; reportedContextWindows: Record<string, unknown> | null; mlxhPromptLimit: number | null };
 /** At most this many models' windows are kept per account. */
 const REPORTED_WINDOWS_MAX = 1000;
 
@@ -54,7 +54,7 @@ type TestResult = ProviderDiagnostic & {
 /** The one prompt a connection test sends: short, fixed, no conversation, no tools. */
 export const READY_PROMPT = 'Reply with the single word: ready';
 const columns = `id, label, kind, auth, base_url as "baseUrl", default_model as "defaultModel",
-  context_window_tokens as "contextWindowTokens", reported_context_windows as "reportedContextWindows",
+  context_window_tokens as "contextWindowTokens", reported_context_windows as "reportedContextWindows", mlxh_prompt_limit as "mlxhPromptLimit",
   enabled, deleting, revision, secret_ref as "secretRef", legacy_env as "legacyEnv"`;
 const saveSchema = z.object({
   id: z.string().min(1).max(100).optional(), revision: z.number().int().positive().optional(),
@@ -289,7 +289,7 @@ export class ProviderAccounts {
       anthropicOAuthEnabled: this.anthropicOAuthEnabled,
       // The Gemini preset's address and key page, as data: the bundle names no host.
       gemini: { baseUrl: GEMINI_BASE_URL, keyUrl: GEMINI_KEY_URL },
-      accounts: [...this.#rows.values()].map(({ secretRef: _secret, legacyEnv: _env, deleting, reportedContextWindows, ...row }) => {
+      accounts: [...this.#rows.values()].map(({ secretRef: _secret, legacyEnv: _env, deleting, reportedContextWindows, mlxhPromptLimit, ...row }) => {
         // The provider's own number for the default model when its model list
         // said one, else what the runtime would assume from the name, so the
         // field can show it as a placeholder instead of a blank.
@@ -297,7 +297,7 @@ export class ProviderAccounts {
         // mlxh refuses a prompt over its max_prompt_tokens: that limit is the
         // window (its default until a probe said one), unless it is turned off.
         const mlxh = isMlxhAccount(row, mlxhBaseUrl(this.deps.env));
-        const limit = mlxh ? mlxhLimitOf(reportedContextWindows) : null;
+        const limit = mlxh ? mlxhLimitOf(mlxhPromptLimit) : null;
         // The table's answer says whether it knew the model or assumed 128k.
         const known = contextWindowInfo(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind);
         const [detectedContextWindowTokens, detectedContextWindowSource]: [number, DetectedContextWindowSource] =
@@ -458,31 +458,31 @@ export class ProviderAccounts {
    * and the transcript budget can use its number instead of a guess from the
    * model name. A forced, full listing replaces what earlier ones said (a
    * model gone from the list, or a number it no longer says, goes too); any
-   * other is merged over them. mlxh's limit is kept under its own key.
+   * other is merged over them. mlxh's limit goes in its own column
+   * (`mlxh_prompt_limit`, 0 when off), never in the map.
    */
   async #rememberWindows(row: Row, listed: { windows: AccountModels; hostLimit?: number | null }, replace: boolean): Promise<void> {
     const full = replace && !listed.windows.truncated;
     const found = listed.windows.models.filter(m => typeof m.contextWindow === 'number');
     const before = row.reportedContextWindows ?? {};
     const merged = new Map<string, number>();
-    let limit: number | undefined;
-    for (const [model, tokens] of Object.entries(before)) {
-      if (typeof tokens !== 'number' || !Number.isFinite(tokens)) continue;
-      if (model === MLXH_LIMIT_KEY) limit = tokens;
-      else if (!full) merged.set(model, tokens);
+    if (!full) {
+      for (const [model, tokens] of Object.entries(before)) {
+        if (typeof tokens === 'number' && Number.isFinite(tokens)) merged.set(model, tokens);
+      }
     }
     // Fresh entries go last, so the cap drops the oldest.
     for (const m of found) { merged.delete(m.id); merged.set(m.id, m.contextWindow!); }
-    if (listed.hostLimit !== undefined) limit = listed.hostLimit ?? 0;
     const entries = [...merged.entries()];
     const capped: Record<string, number> = Object.fromEntries(entries.slice(Math.max(0, entries.length - REPORTED_WINDOWS_MAX)));
-    if (limit !== undefined) capped[MLXH_LIMIT_KEY] = limit;
-    if (JSON.stringify(capped) === JSON.stringify(before)) return;
+    const limit = listed.hostLimit === undefined ? null : listed.hostLimit ?? 0;
+    if (JSON.stringify(capped) === JSON.stringify(before) && (limit === null || limit === row.mlxhPromptLimit)) return;
     const { rows } = await this.deps.pool.query(
-      `update core.provider_accounts set reported_context_windows=$2::jsonb where id=$1 returning reported_context_windows as "reportedContextWindows"`,
-      [row.id, JSON.stringify(capped)]);
+      `update core.provider_accounts set reported_context_windows=$2::jsonb, mlxh_prompt_limit=coalesce($3::integer, mlxh_prompt_limit) where id=$1
+        returning reported_context_windows as "reportedContextWindows", mlxh_prompt_limit as "mlxhPromptLimit"`,
+      [row.id, JSON.stringify(capped), limit]);
     const live = this.#rows.get(row.id);
-    if (rows[0] && live) this.#rows.set(row.id, { ...live, reportedContextWindows: rows[0].reportedContextWindows });
+    if (rows[0] && live) this.#rows.set(row.id, { ...live, reportedContextWindows: rows[0].reportedContextWindows, mlxhPromptLimit: rows[0].mlxhPromptLimit });
   }
 
   /**
@@ -564,6 +564,7 @@ export class ProviderAccounts {
         const result = await this.deps.pool.query(`update core.provider_accounts set label=$2,base_url=$3,default_model=$4,
           enabled=$5,secret_ref=$6,legacy_env=$7,context_window_tokens=$9,
           reported_context_windows=case when $10::boolean then '{}'::jsonb else reported_context_windows end,
+          mlxh_prompt_limit=case when $10::boolean then null else mlxh_prompt_limit end,
           revision=revision+1,updated_at=now() where id=$1 and revision=$8 returning id`,
         [id,input.label,baseUrl,input.defaultModel,input.enabled,secretRef,input.secret ? null : old.legacyEnv,old.revision,
           input.contextWindowTokens ?? null, !!input.secret || old.baseUrl !== baseUrl]);
@@ -894,7 +895,8 @@ export class ProviderAccounts {
         // Invalidates pending attempts in other processes, and old run snapshots.
         // A new sign-in (or none) drops the windows the old one's list said.
         await this.deps.pool.query(`update core.provider_accounts set revision=revision+1,updated_at=now(),
-          reported_context_windows=case when $2::boolean then '{}'::jsonb else reported_context_windows end where id=$1`,
+          reported_context_windows=case when $2::boolean then '{}'::jsonb else reported_context_windows end,
+          mlxh_prompt_limit=case when $2::boolean then null else mlxh_prompt_limit end where id=$1`,
         [id, action === 'complete-login' || action === 'logout']);
         this.#modelLists.delete(id); this.#tests.delete(id);
         await this.load();
@@ -935,7 +937,7 @@ export class ProviderAccounts {
       }
       // A new key, or none: runs that started on the old one stop at their next
       // call, and the windows the old one's list said go with it.
-      await this.deps.pool.query(`update core.provider_accounts set revision=revision+1,updated_at=now(),reported_context_windows='{}'::jsonb where id=$1`, [id]);
+      await this.deps.pool.query(`update core.provider_accounts set revision=revision+1,updated_at=now(),reported_context_windows='{}'::jsonb,mlxh_prompt_limit=null where id=$1`, [id]);
       this.#modelLists.delete(id); this.#tests.delete(id);
       if (action === 'disconnect') {
         await this.load();
