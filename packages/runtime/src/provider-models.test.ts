@@ -78,6 +78,11 @@ it('tags what an Ollama host says can think, and leaves other hosts untagged', a
     { id: 'smollm:135m', name: 'smollm:135m', isDefault: false, thinks: false },
   ]);
   expect(calls.filter((u) => u.endsWith('/api/show'))).toHaveLength(2);
+  // A window refresh lists without the sweep: one request, no /api/show.
+  calls.length = 0;
+  const bare = await listProviderModels(local, transport, { capabilities: false });
+  expect(bare.models.map((m) => m.thinks)).toEqual([undefined, undefined]);
+  expect(calls).toEqual(['http://localhost:11434/v1/models']);
 
   // A host without a `/v1` suffix has no known sibling to ask.
   const other = { ...local, baseUrl: 'https://api.example.com' };

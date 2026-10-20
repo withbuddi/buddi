@@ -45,6 +45,10 @@
       "types": "./dist/text-files.d.ts",
       "default": "./dist/text-files.js"
     },
+    "./mlxh-note": {
+      "types": "./dist/mlxh-note.d.ts",
+      "default": "./dist/mlxh-note.js"
+    },
     "./file-families": {
       "types": "./dist/file-families.d.ts",
       "default": "./dist/file-families.js"

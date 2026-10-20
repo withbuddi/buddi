@@ -10,6 +10,7 @@ import type { Queryable } from '@buddi/core';
 import { transcriptTokensForModel } from '@buddi/runtime';
 import { MAX_TRANSCRIPT_CHARS, type ConversationVitals } from './conversation-lifetime.js';
 import { forgetProjectedSizes, projectedTranscriptTokens, transcriptBudget } from './context-budget.js';
+import { MLXH_LIMIT_KEY } from '../mlxh.js';
 
 const CONVERSATION = '11111111-1111-1111-1111-111111111111';
 
@@ -76,7 +77,8 @@ describe('what a conversation may grow to', () => {
     const routed = await transcriptBudget(accounts({ binding: { model: 'us.anthropic.claude-sonnet-4-5', kind: 'anthropic', override: null, reported } }), CONVERSATION);
     expect(routed).toMatchObject({ windowTokens: 200_000, windowSource: 'provider' });
     const long = await transcriptBudget(accounts({ binding: { model: 'claude-sonnet-4-5[1m]', kind: 'anthropic', override: null, reported } }), CONVERSATION);
-    expect(long).toMatchObject({ windowTokens: 1_000_000, windowSource: 'provider' });
+    // The listed row is the base model's; the [1m] variant's million is the table's.
+    expect(long).toMatchObject({ windowTokens: 1_000_000, windowSource: 'table' });
     const owner = await transcriptBudget(accounts({ binding: { model: 'claude-opus-5', kind: 'anthropic', override: 300_000, reported } }), CONVERSATION);
     expect(owner).toMatchObject({ windowTokens: 300_000, windowSource: 'owner' });
     const table = await transcriptBudget(accounts({ binding: { model: 'claude-haiku-5', kind: 'anthropic', override: null, reported } }), CONVERSATION);
@@ -94,11 +96,15 @@ describe('what a conversation may grow to', () => {
     expect(codex.windowTokens).toBe(128_000);
   });
 
-  it('holds an mlxh account to mlxh\'s prompt limit until its list says a number', async () => {
+  it('holds an mlxh account to mlxh\'s prompt limit, its default until a probe says one, over any listed number', async () => {
     const mlxh = { model: 'gemma4-e2b-it', kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:1060/v1' };
-    expect((await transcriptBudget(accounts({ binding: { ...mlxh, override: null } }), CONVERSATION)).windowTokens).toBe(8192);
-    const reported = { 'gemma4-e2b-it': 40_960 };
-    expect((await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported } }), CONVERSATION)).windowTokens).toBe(40_960);
+    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null } }), CONVERSATION)).toMatchObject({ windowTokens: 8192, windowSource: 'mlxh' });
+    const reported = { 'gemma4-e2b-it': 131_072, [MLXH_LIMIT_KEY]: 40_960 };
+    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported } }), CONVERSATION)).toMatchObject({ windowTokens: 40_960, windowSource: 'mlxh' });
+    // The limit off: the list's own number, else the table's.
+    const off = { 'gemma4-e2b-it': 131_072, [MLXH_LIMIT_KEY]: 0 };
+    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported: off } }), CONVERSATION)).toMatchObject({ windowTokens: 131_072, windowSource: 'provider' });
+    expect(await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported: { [MLXH_LIMIT_KEY]: 0 } } }), CONVERSATION)).toMatchObject({ windowTokens: 128_000, windowSource: 'default' });
     expect((await transcriptBudget(accounts({ binding: { ...mlxh, override: 32_000 } }), CONVERSATION)).windowTokens).toBe(32_000);
     // The same model name on another host keeps the table's number.
     const other = await transcriptBudget(accounts({ binding: { ...mlxh, baseUrl: 'http://localhost:11434/v1', override: null } }), CONVERSATION);

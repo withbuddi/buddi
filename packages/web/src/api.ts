@@ -1640,6 +1640,8 @@ export interface ProviderAccount {
    * model it knows, the 128k default for one it does not, or mlxh's limit.
    */
   detectedContextWindowSource?: 'provider' | 'table' | 'default' | 'mlxh';
+  /** The gateway recognised this account as mlxh's, whatever its window's source. */
+  mlxh?: boolean;
   refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
   assignedAgents: string[]; test: AccountTest | null;
   removalPending?: boolean;

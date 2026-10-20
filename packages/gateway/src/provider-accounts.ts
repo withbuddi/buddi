@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
-  GEMINI_BASE_URL, GEMINI_KEY_URL, MLXH_DEFAULT_MAX_PROMPT_TOKENS, OLLAMA_CLOUD_ACCOUNT_URL, isMlxhAccount, accountBaseUrl, accountCapabilities, accountModelProblem, accountProtocol, createVault, providerFromEnv,
+  GEMINI_BASE_URL, GEMINI_KEY_URL, OLLAMA_CLOUD_ACCOUNT_URL, isMlxhAccount, accountBaseUrl, accountCapabilities, accountModelProblem, accountProtocol, createVault, providerFromEnv,
   putOwnerSecret, registerSecretDestination, scrubText, scrubValueFrom, resolveProviderAccount, useOwnerSecret, vaultState,
   type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
-import { contextWindowInfo, contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, reportedContextWindow, readCodexTokens, type AccountModels, type CompletionResponse, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
+import { contextWindowInfo, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, reportedContextWindow, readCodexTokens, type AccountModels, type CompletionResponse, type ListModelsOptions, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type DiagnosticContext, type ProviderDiagnostic } from './provider-diagnostics.js';
@@ -15,7 +15,7 @@ import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
 import { AnthropicAccounts } from './anthropic-accounts.js';
 import { OllamaAccounts, deviceView, readOllamaDevice, type OllamaDeviceView } from './ollama-accounts.js';
 import { SIGNIN_HIDDEN, subscriptionSignIns } from './subscription-signins.js';
-import { mlxhBaseUrl, mlxhWindow, probeMlxh } from './mlxh.js';
+import { MLXH_LIMIT_KEY, mlxhBaseUrl, mlxhLimitOf, mlxhWindow, probeMlxh } from './mlxh.js';
 import { ACCOUNTS_PROVIDER_KIND, accountsProviderDestination, deleteAccountSecret, ownerSecretVault } from './owner-secrets.js';
 
 /** Who answered, in the owner's words, for the diagnostic sentence. */
@@ -124,6 +124,7 @@ export class ProviderAccounts {
   #tail: Promise<unknown> = Promise.resolve();
   #modelLists = new Map<string, { revision: number; until: number; value: AccountModels }>();
   #modelRequests = new Map<string, Promise<AccountModels>>();
+  #windowRefreshes = new Map<string, Promise<void>>();
   /**
    * Ask the provider for its windows in the background after a credential is
    * saved or signed in. The serving gateway turns it on (`refreshWindows`); a
@@ -293,16 +294,19 @@ export class ProviderAccounts {
         // said one, else what the runtime would assume from the name, so the
         // field can show it as a placeholder instead of a blank.
         const reported = reportedContextWindow(reportedContextWindows, row.defaultModel);
-        // mlxh refuses a prompt over its max_prompt_tokens: until its list
-        // said a number, the window is its default rather than the table's.
+        // mlxh refuses a prompt over its max_prompt_tokens: that limit is the
+        // window (its default until a probe said one), unless it is turned off.
         const mlxh = isMlxhAccount(row, mlxhBaseUrl(this.deps.env));
+        const limit = mlxh ? mlxhLimitOf(reportedContextWindows) : null;
         // The table's answer says whether it knew the model or assumed 128k.
         const known = contextWindowInfo(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind);
-        const detectedContextWindowSource: DetectedContextWindowSource = mlxh ? 'mlxh' : reported ? 'provider' : known.source === 'default' ? 'default' : 'table';
+        const [detectedContextWindowTokens, detectedContextWindowSource]: [number, DetectedContextWindowSource] =
+          limit !== null ? [limit, 'mlxh']
+          : reported !== undefined ? [reported, 'provider']
+          : [known.tokens, known.source === 'default' ? 'default' : 'table'];
         return {
         ...row, configured: this.#configured.get(row.id) ?? false,
-        detectedContextWindowTokens: reported ?? (mlxh ? MLXH_DEFAULT_MAX_PROMPT_TOKENS : known.tokens),
-        detectedContextWindowSource,
+        detectedContextWindowTokens, detectedContextWindowSource, mlxh,
         removalPending: deleting,
         refreshable: row.kind === 'codex' || row.auth === 'anthropic-oauth', tokenExpiresAt: null, subscriptionRenewsAt: null,
         ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
@@ -336,22 +340,12 @@ export class ProviderAccounts {
     if (existing) return existing;
     const pending = (async () => {
       try {
-        let value: AccountModels;
-        if (row.kind === 'codex') {
-          if (!this.codex) throw new ProviderAccountError(409, SIGNIN_HIDDEN.codex);
-          const lease = await this.#codexAccess(row);
-          try { value = await this.codex.models(lease.access); } finally { await lease.release(); }
-        } else {
-          const secret = await this.#usableSecret(row);
-          if (row.auth !== 'none' && !secret) throw new ProviderAccountError(409, 'Save or connect this account’s credential before loading models.');
-          value = await (this.deps.listModels ?? listProviderModels)(resolveProviderAccount(row, row.defaultModel, secret));
-          if (isMlxhAccount(row, mlxhBaseUrl(this.deps.env))) value = await this.#mlxhDetails(row, value);
-        }
+        const listed = await this.#list(row);
         const current = await this.#row(id);
         if (current.revision !== row.revision || !current.enabled || current.deleting) throw new ProviderAccountError(409, 'Account changed. Refresh models again.');
-        value = { ...value, fetchedAt: new Date().toISOString() };
+        const value = { ...listed.value, fetchedAt: new Date().toISOString() };
         this.#modelLists.set(id, { revision: row.revision, until: Date.now() + 60_000, value });
-        await this.#rememberWindows(current, value).catch(() => {});
+        await this.#rememberWindows(current, listed, refresh).catch(() => {});
         return value;
       } catch (error) {
         if (error instanceof ProviderAccountError) throw error;
@@ -364,80 +358,126 @@ export class ProviderAccounts {
   }
 
   /**
+   * One account's model list: `value` for the picker, `windows` as the host
+   * listed them (only its own numbers, never buddi's table), and mlxh's limit
+   * when its probe answered (null when the limit is off).
+   */
+  async #list(row: Row, options?: ListModelsOptions): Promise<{ value: AccountModels; windows: AccountModels; hostLimit?: number | null }> {
+    if (row.kind === 'codex') {
+      if (!this.codex) throw new ProviderAccountError(409, SIGNIN_HIDDEN.codex);
+      const lease = await this.#codexAccess(row);
+      try { const value = await this.codex.models(lease.access); return { value, windows: value }; } finally { await lease.release(); }
+    }
+    const secret = await this.#usableSecret(row);
+    if (row.auth !== 'none' && !secret) throw new ProviderAccountError(409, 'Save or connect this account’s credential before loading models.');
+    const list = this.deps.listModels ?? listProviderModels;
+    const resolved = resolveProviderAccount(row, row.defaultModel, secret);
+    const listed = await (options ? list(resolved, undefined, options) : list(resolved));
+    if (!isMlxhAccount(row, mlxhBaseUrl(this.deps.env))) return { value: listed, windows: listed };
+    const detailed = await this.#mlxhDetails(row, listed);
+    return { value: detailed.list, windows: listed, ...(detailed.limit !== undefined ? { hostLimit: detailed.limit } : {}) };
+  }
+
+  /**
    * Fill the provider's windows for one account without anyone opening the
-   * picker: a forced list in the background, its failure silent (the table
-   * answers meanwhile). Only kinds whose list can say a window are asked.
+   * picker, its failure silent (the table answers meanwhile).
    */
   #refreshWindowsSoon(id: string): void {
     const row = this.#rows.get(id);
     if (!this.#refreshWindows || !row || !this.#reportsWindows(row)) return;
-    this.#modelLists.delete(id);
-    void this.models(id, true).catch(() => {});
+    void this.#windowsOnly(row).catch(() => {});
+  }
+
+  /** Is this account worth asking for its windows? Enabled, with a credential, of a kind whose list can say one. */
+  #reportsWindows(row: Row): boolean {
+    return row.enabled && !row.deleting && WINDOW_REFRESH_KINDS.has(row.kind) && this.#configured.get(row.id) === true;
   }
 
   /**
-   * Is this account worth asking for its windows? Enabled, with a credential,
-   * of a kind whose list can say one. Ollama Cloud is left out: its list
-   * carries no window, and its capability sweep signs a request per model.
+   * A full listing for the windows alone: no capability sweep (that is the
+   * picker's, a request per model on an Ollama host), nothing cached for the
+   * picker, one at a time per account version.
    */
-  #reportsWindows(row: Row): boolean {
-    return row.enabled && !row.deleting && WINDOW_REFRESH_KINDS.has(row.kind) && row.auth !== 'device-key' && this.#configured.get(row.id) === true;
+  #windowsOnly(seen: Row): Promise<void> {
+    const key = `${seen.id}:${seen.revision}`;
+    const running = this.#windowRefreshes.get(key);
+    if (running) return running;
+    const pending = (async () => {
+      const row = await this.#row(seen.id);
+      if (!this.#reportsWindows(row)) return;
+      const listed = await this.#list(row, { capabilities: false });
+      const current = await this.#row(row.id);
+      if (current.revision !== row.revision || !current.enabled || current.deleting) return;
+      await this.#rememberWindows(current, listed, true);
+    })().finally(() => { this.#windowRefreshes.delete(key); });
+    this.#windowRefreshes.set(key, pending);
+    return pending;
   }
 
   /**
    * Once at gateway start: every enabled Anthropic and compatible account
    * with a credential lists its models in the background, so an account
    * saved before the provider's number was kept gets it without the picker.
-   * Fire-and-forget, failures silent; a list another caller already fetched
-   * is reused rather than asked for again. From here on, a saved credential
-   * or a finished sign-in does the same for its account.
+   * Fire-and-forget, failures silent. From here on, a saved credential or a
+   * finished sign-in does the same for its account.
    */
   refreshWindows(): void {
     this.#refreshWindows = true;
     for (const row of this.#rows.values()) {
-      if (this.#reportsWindows(row)) void this.models(row.id).catch(() => {});
+      if (this.#reportsWindows(row)) void this.#windowsOnly(row).catch(() => {});
     }
   }
 
   /**
    * mlxh's list names models and nothing else. Its `/mlxh/info` says how long
    * a prompt it takes (`max_prompt_tokens`, a 400 past it) and which loaded
-   * workers are image models; both go on the list, so the window is kept like
-   * any provider-reported one and the picker can flag what is not a brain.
+   * workers are image models; both go on the picker's list, and the limit is
+   * kept for the account (`limit`; undefined when mlxh did not answer).
    */
-  async #mlxhDetails(row: Row, list: AccountModels): Promise<AccountModels> {
+  async #mlxhDetails(row: Row, list: AccountModels): Promise<{ list: AccountModels; limit?: number | null }> {
     const probe = await (this.deps.probeMlxh ?? probeMlxh)({ baseUrl: row.baseUrl });
-    if (!probe.running) return list;
+    if (!probe.running) return { list };
     const window = mlxhWindow(probe);
     const kinds = new Map(probe.models.map((m) => [m.id, m.kind]));
     return {
-      ...list,
-      models: list.models.map((m) => ({
-        ...m,
-        // The limit is what the host enforces, so it beats any number the
-        // list carried; with the limit off, the list's number, else the table's.
-        contextWindow: window ?? m.contextWindow ?? contextWindowTokens(m.id, 'openai-compatible'),
-        ...(kinds.get(m.id) === 'image' ? { image: true } : {}),
-      })),
+      limit: window,
+      list: {
+        ...list,
+        models: list.models.map((m) => {
+          // The limit is what the host enforces, so it beats any number the
+          // list carried; with the limit off, the list's own number if any.
+          const contextWindow = window ?? m.contextWindow;
+          return { ...m, ...(contextWindow !== undefined ? { contextWindow } : {}), ...(kinds.get(m.id) === 'image' ? { image: true } : {}) };
+        }),
+      },
     };
   }
 
   /**
-   * Keep the windows the provider's own model list reported, merged over what
-   * earlier fetches said, so the account page and the transcript budget can
-   * use the provider's number instead of a guess from the model name.
+   * Keep the windows the host's own model list reported, so the account page
+   * and the transcript budget can use its number instead of a guess from the
+   * model name. A forced, full listing replaces what earlier ones said (a
+   * model gone from the list, or a number it no longer says, goes too); any
+   * other is merged over them. mlxh's limit is kept under its own key.
    */
-  async #rememberWindows(row: Row, list: AccountModels): Promise<void> {
-    const found = list.models.filter(m => typeof m.contextWindow === 'number');
-    if (!found.length) return;
+  async #rememberWindows(row: Row, listed: { windows: AccountModels; hostLimit?: number | null }, replace: boolean): Promise<void> {
+    const full = replace && !listed.windows.truncated;
+    const found = listed.windows.models.filter(m => typeof m.contextWindow === 'number');
+    const before = row.reportedContextWindows ?? {};
     const merged = new Map<string, number>();
-    for (const [model, tokens] of Object.entries(row.reportedContextWindows ?? {})) {
-      if (typeof tokens === 'number' && Number.isFinite(tokens)) merged.set(model, tokens);
+    let limit: number | undefined;
+    for (const [model, tokens] of Object.entries(before)) {
+      if (typeof tokens !== 'number' || !Number.isFinite(tokens)) continue;
+      if (model === MLXH_LIMIT_KEY) limit = tokens;
+      else if (!full) merged.set(model, tokens);
     }
     // Fresh entries go last, so the cap drops the oldest.
     for (const m of found) { merged.delete(m.id); merged.set(m.id, m.contextWindow!); }
+    if (listed.hostLimit !== undefined) limit = listed.hostLimit ?? 0;
     const entries = [...merged.entries()];
-    const capped = Object.fromEntries(entries.slice(Math.max(0, entries.length - REPORTED_WINDOWS_MAX)));
+    const capped: Record<string, number> = Object.fromEntries(entries.slice(Math.max(0, entries.length - REPORTED_WINDOWS_MAX)));
+    if (limit !== undefined) capped[MLXH_LIMIT_KEY] = limit;
+    if (JSON.stringify(capped) === JSON.stringify(before)) return;
     const { rows } = await this.deps.pool.query(
       `update core.provider_accounts set reported_context_windows=$2::jsonb where id=$1 returning reported_context_windows as "reportedContextWindows"`,
       [row.id, JSON.stringify(capped)]);
@@ -519,10 +559,14 @@ export class ProviderAccounts {
     }
     try {
       if (old) {
+        // Another key or another address may be another plan or host: what
+        // the old one's list said is no longer this account's to go by.
         const result = await this.deps.pool.query(`update core.provider_accounts set label=$2,base_url=$3,default_model=$4,
-          enabled=$5,secret_ref=$6,legacy_env=$7,context_window_tokens=$9,revision=revision+1,updated_at=now() where id=$1 and revision=$8 returning id`,
+          enabled=$5,secret_ref=$6,legacy_env=$7,context_window_tokens=$9,
+          reported_context_windows=case when $10::boolean then '{}'::jsonb else reported_context_windows end,
+          revision=revision+1,updated_at=now() where id=$1 and revision=$8 returning id`,
         [id,input.label,baseUrl,input.defaultModel,input.enabled,secretRef,input.secret ? null : old.legacyEnv,old.revision,
-          input.contextWindowTokens ?? null]);
+          input.contextWindowTokens ?? null, !!input.secret || old.baseUrl !== baseUrl]);
         if (!result.rows.length) throw new ProviderAccountError(409, 'This account changed. Reload before saving.');
       } else await this.deps.pool.query(`insert into core.provider_accounts (id,label,kind,auth,base_url,default_model,enabled,secret_ref,context_window_tokens)
         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [id,input.label,input.kind,input.auth,baseUrl,input.defaultModel,input.enabled,secretRef,
@@ -848,7 +892,10 @@ export class ProviderAccounts {
           }
         }
         // Invalidates pending attempts in other processes, and old run snapshots.
-        await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
+        // A new sign-in (or none) drops the windows the old one's list said.
+        await this.deps.pool.query(`update core.provider_accounts set revision=revision+1,updated_at=now(),
+          reported_context_windows=case when $2::boolean then '{}'::jsonb else reported_context_windows end where id=$1`,
+        [id, action === 'complete-login' || action === 'logout']);
         this.#modelLists.delete(id); this.#tests.delete(id);
         await this.load();
         if (action === 'complete-login') this.#refreshWindowsSoon(id);
@@ -886,8 +933,9 @@ export class ProviderAccounts {
         try { await deleteAccountSecret(this.deps.pool as Pool, this.vault!, row.secretRef); }
         catch { throw new ProviderAccountError(409, 'Could not remove the Ollama device key. Unlock the vault and retry.'); }
       }
-      // A new key, or none: runs that started on the old one stop at their next call.
-      await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
+      // A new key, or none: runs that started on the old one stop at their next
+      // call, and the windows the old one's list said go with it.
+      await this.deps.pool.query(`update core.provider_accounts set revision=revision+1,updated_at=now(),reported_context_windows='{}'::jsonb where id=$1`, [id]);
       this.#modelLists.delete(id); this.#tests.delete(id);
       if (action === 'disconnect') {
         await this.load();

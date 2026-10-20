@@ -106,8 +106,13 @@ describe('the window a provider reported, found for the bound model', () => {
     expect(reportedContextWindow(map, 'us.anthropic.claude-sonnet-4-5')).toBe(200_000);
     expect(reportedContextWindow(map, 'models/gemini-2.5-pro')).toBe(1_048_576);
     expect(reportedContextWindow(map, 'Claude-Opus-5')).toBe(1_000_000);
-    // A [1m] binding asked for the long window by name.
-    expect(reportedContextWindow(map, 'claude-sonnet-4-5[1m]')).toBe(1_000_000);
+    // A [1m] binding's own row is the provider's; the base model's row is not
+    // its window, so the table answers (a million, as a known model).
+    expect(reportedContextWindow({ 'claude-sonnet-4-5[1m]': 600_000 }, 'us.anthropic.claude-sonnet-4-5[1m]')).toBe(600_000);
+    expect(reportedContextWindow(map, 'claude-sonnet-4-5[1m]')).toBeUndefined();
+    expect(contextWindowInfo('claude-sonnet-4-5[1m]', 'anthropic')).toEqual({ tokens: 1_000_000, source: 'table' });
+    // Another host's suffixed id finds its base row.
+    expect(reportedContextWindow({ 'qwen3-coder': 262_144 }, 'qwen3-coder-1m')).toBe(262_144);
   });
 
   it('answers nothing for an unknown model or an unusable number', () => {

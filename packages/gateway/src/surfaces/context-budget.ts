@@ -37,7 +37,7 @@
  * Total by construction: every failure here degrades to the old constant and
  * the stored count. A machine that cannot size a transcript must still answer.
  */
-import { MLXH_DEFAULT_MAX_PROMPT_TOKENS, isMlxhAccount, type Queryable } from '@buddi/core';
+import { isMlxhAccount, type Queryable } from '@buddi/core';
 import {
   CHARS_PER_TOKEN,
   compactObservations,
@@ -50,6 +50,7 @@ import {
   type ContextProvider,
 } from '@buddi/runtime';
 import { MAX_TRANSCRIPT_CHARS, type ConversationVitals } from './conversation-lifetime.js';
+import { mlxhLimitOf } from '../mlxh.js';
 
 /**
  * Which provider family an account's `kind` column names. A ChatGPT account
@@ -120,16 +121,16 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
   // matched by the same normalised id the table uses.
   const map = row.reported && typeof row.reported === 'object' ? row.reported as Record<string, unknown> : null;
   const reported = reportedContextWindow(map, model) ?? null;
-  // mlxh refuses a prompt past its max_prompt_tokens; until its model list
-  // said the number, assume its default rather than the model's own window.
+  // mlxh refuses a prompt past its max_prompt_tokens, so that limit (its
+  // default until a probe said one) beats any listed number, unless it is off.
   const isMlxh = typeof row.baseUrl === 'string' && isMlxhAccount({ kind: String(row.kind), baseUrl: row.baseUrl });
-  const mlxh = isMlxh ? MLXH_DEFAULT_MAX_PROMPT_TOKENS : null;
-  const override = owner ?? reported ?? mlxh;
+  const mlxh = isMlxh ? mlxhLimitOf(map) : null;
+  const override = owner ?? mlxh ?? reported;
   const info = contextWindowInfo(model, providerOf(row.kind), override);
   const windowTokens = info.tokens;
   // `owner` from the runtime means "the override was used"; say whose it was.
   const windowSource: TranscriptBudget['windowSource'] = info.source !== 'owner' ? info.source
-    : owner !== null ? 'owner' : reported !== null ? (isMlxh ? 'mlxh' : 'provider') : 'mlxh';
+    : owner !== null ? 'owner' : mlxh !== null ? 'mlxh' : 'provider';
   const maxTokens = transcriptTokenBudget(windowTokens);
   return {
     maxTokens,

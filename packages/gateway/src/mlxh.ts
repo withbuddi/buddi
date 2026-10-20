@@ -122,3 +122,21 @@ export function mlxhWindow(probe: Pick<MlxhProbe, 'maxPromptTokens'>): number | 
   if (probe.maxPromptTokens === 0) return null;
   return probe.maxPromptTokens ?? MLXH_DEFAULT_MAX_PROMPT_TOKENS;
 }
+
+/**
+ * Where an mlxh account's limit is kept, beside the per-model windows in
+ * `reported_context_windows`: the `max_prompt_tokens` its probe last said, or
+ * 0 when the server turned the limit off. Not a model id any host lists.
+ */
+export const MLXH_LIMIT_KEY = '#mlxh:max_prompt_tokens';
+
+/**
+ * The prompt limit an mlxh account is held to, as last probed: the number,
+ * mlxh's default when it was never probed, or null when the limit is off and
+ * the model's own window (listed, else the table's) decides.
+ */
+export function mlxhLimitOf(map: Record<string, unknown> | null | undefined): number | null {
+  const kept = map && typeof map === 'object' && Object.hasOwn(map, MLXH_LIMIT_KEY) ? map[MLXH_LIMIT_KEY] : undefined;
+  if (kept === 0) return null;
+  return typeof kept === 'number' && Number.isInteger(kept) && kept > 0 ? kept : MLXH_DEFAULT_MAX_PROMPT_TOKENS;
+}

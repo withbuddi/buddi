@@ -48,8 +48,18 @@ export function modelOptions(items: unknown[], native = false): AccountModel[] {
   return [...found.values()];
 }
 
+/** What a listing asks for beyond the list itself. */
+export interface ListModelsOptions {
+  /**
+   * Ask an Ollama host what each model can do (one `/api/show` per model).
+   * On by default, for the picker; a background refresh of the windows turns
+   * it off, since the sweep says nothing about a window.
+   */
+  capabilities?: boolean;
+}
+
 /** Discovery is metadata only: no completion, prompt, or credential fallback. */
-export async function listProviderModels(provider: ResolvedProvider, transport: HttpTransport = defaultHttpTransport): Promise<AccountModels> {
+export async function listProviderModels(provider: ResolvedProvider, transport: HttpTransport = defaultHttpTransport, options: ListModelsOptions = {}): Promise<AccountModels> {
   const anthropic = provider.kind === 'anthropic';
   const headers: Record<string, string> = { accept: 'application/json' };
   if (anthropic) {
@@ -77,7 +87,10 @@ export async function listProviderModels(provider: ResolvedProvider, transport: 
     if (!data || !Array.isArray(data.data)) throw new Error('Invalid provider model list.');
     models.push(...modelOptions(data.data));
     if (models.length > 1000) return { models: modelOptions(models).slice(0, 1000), truncated: true };
-    if (data.has_more !== true) return { models: await withCapabilities(provider, modelOptions(models), transport, signal), truncated: false };
+    if (data.has_more !== true) {
+      const found = modelOptions(models);
+      return { models: options.capabilities === false ? found : await withCapabilities(provider, found, transport, signal), truncated: false };
+    }
     if (typeof data.last_id !== 'string' || data.last_id.length > 2048 || seen.has(data.last_id)) throw new Error('Invalid model pagination.');
     cursor = data.last_id as string; seen.add(cursor);
   }

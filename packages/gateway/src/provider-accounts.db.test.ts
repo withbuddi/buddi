@@ -4,6 +4,7 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { createServer } from 'node:http';
 import { ProviderAccounts } from './provider-accounts.js';
+import { MLXH_LIMIT_KEY } from './mlxh.js';
 const url = await testDatabaseUrl();
 const suite = url ? describe : describe.skip;
 const name = `buddi_provider_accounts_${process.pid}`;
@@ -136,9 +137,17 @@ suite('named provider accounts', () => {
     f.listModels.mockRejectedValueOnce(new Error('down'));
     await expect(f.service.models(a.id, true)).rejects.toThrow();
     const { rows } = await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id]);
-    expect(rows[0].m).toEqual({ 'claude-sonnet-5': 600_000, old: 64_000 });
+    // A forced, full listing replaces what the last one said: `old` is gone.
+    expect(rows[0].m).toEqual({ 'claude-sonnet-5': 600_000 });
     await f.service.refresh();
     expect(view()).toMatchObject({ detectedContextWindowTokens: 600_000, detectedContextWindowSource: 'provider' });
+    // A label edit keeps them; another key drops them, until its own list says.
+    const { secret: _secret, ...unchanged } = settings;
+    await f.service.save({ ...unchanged, id: a.id, revision: 1, label: 'Renamed' });
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 600_000, detectedContextWindowSource: 'provider' });
+    await f.service.save({ ...settings, id: a.id, revision: 2, secret: 'another-fixture-key' });
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 1_000_000, detectedContextWindowSource: 'table' });
+    expect((await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id])).rows[0].m).toEqual({});
   });
   it('fills an Anthropic account\'s windows in the background, at start and after a new key, and only for accounts that can say one', async () => {
     const f = fixture({}); await f.service.initialize();
@@ -152,8 +161,9 @@ suite('named provider accounts', () => {
     const windows = async (id: string) => (await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [id])).rows[0]?.m;
     f.service.refreshWindows();
     await vi.waitFor(async () => expect(await windows(a.id)).toEqual({ 'claude-sonnet-5': 1_000_000, 'claude-haiku-4-5': 200_000 }));
-    // One list: the disabled account and the OpenAI one are not asked.
+    // One list, without the capability sweep: the disabled account and the OpenAI one are not asked.
     expect(f.listModels).toHaveBeenCalledTimes(1);
+    expect((f.listModels.mock.calls[0] as unknown[] | undefined)?.[2]).toEqual({ capabilities: false });
     await vi.waitFor(() => expect(f.service.view().accounts.find(x => x.id === a.id)).toMatchObject({ detectedContextWindowTokens: 1_000_000, detectedContextWindowSource: 'provider' }));
     // From now on a new key fetches its account's windows at once.
     f.listModels.mockResolvedValue({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: false, contextWindow: 900_000 }], truncated: false } as never);
@@ -161,8 +171,10 @@ suite('named provider accounts', () => {
     await vi.waitFor(async () => expect((await windows(a.id))['claude-sonnet-5']).toBe(900_000));
     // A label edit does not.
     const calls = f.listModels.mock.calls.length;
-    await f.service.save({ ...settings, id: a.id, revision: 2, label: 'Renamed' });
+    const { secret: _secret, ...unchanged } = settings;
+    await f.service.save({ ...unchanged, id: a.id, revision: 2, label: 'Renamed' });
     expect(f.listModels).toHaveBeenCalledTimes(calls);
+    expect((await windows(a.id))['claude-sonnet-5']).toBe(900_000);
     // A failing list is silent, and the table answers meanwhile.
     f.listModels.mockRejectedValue(new Error('down'));
     const b = await f.service.save({ ...settings, label: 'Second' });
@@ -186,10 +198,18 @@ suite('named provider accounts', () => {
       { id: 'klein', name: 'klein', isDefault: false, contextWindow: 8192, image: true },
     ]);
     const { rows } = await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id]);
-    expect(rows[0].m).toEqual({ 'gemma4-e2b-it': 8192, klein: 8192 });
+    // Only the limit mlxh enforces is kept, never a number from buddi's table.
+    expect(rows[0].m).toEqual({ [MLXH_LIMIT_KEY]: 8192 });
     // A number on the list loses to the limit mlxh enforces.
     f.listModels.mockResolvedValueOnce({ models: [{ id: 'gemma4-e2b-it', name: 'gemma4-e2b-it', isDefault: false, contextWindow: 131_072 }], truncated: false } as never);
     expect((await service.models(a.id, true)).models[0]?.contextWindow).toBe(8192);
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 8192, detectedContextWindowSource: 'mlxh', mlxh: true });
+    // The limit off: the list's own number decides, and says so.
+    probe.mockResolvedValueOnce({ running: true, baseUrl: 'http://127.0.0.1:1060/v1', manager: false, maxPromptTokens: 0,
+      models: [{ id: 'gemma4-e2b-it', loaded: true, kind: 'language' as const }] } as never);
+    f.listModels.mockResolvedValueOnce({ models: [{ id: 'gemma4-e2b-it', name: 'gemma4-e2b-it', isDefault: false, contextWindow: 131_072 }], truncated: false } as never);
+    await service.models(a.id, true);
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 131_072, detectedContextWindowSource: 'provider', mlxh: true });
     // A pinned server that reports its own limit wins.
     probe.mockResolvedValueOnce({ running: true, baseUrl: 'http://127.0.0.1:1060/v1', manager: false, maxPromptTokens: 40960,
       models: [{ id: 'gemma4-e2b-it', loaded: true, kind: 'language' as const }] } as never);

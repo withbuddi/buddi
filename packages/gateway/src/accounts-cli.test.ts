@@ -57,7 +57,8 @@ describe('buddi accounts', () => {
     expect(shown('default')).toContain('1,000,000 tokens (assumed)');
     expect(shown('table')).not.toContain('detected');
     expect(windowSourceWords('codex', 'provider')).toBe('from ChatGPT');
-    expect(windowSourceWords('openai-compatible', 'mlxh')).toBe('mlxh’s max_prompt_tokens');
+    expect(windowSourceWords('openai-compatible', 'mlxh', 40_960)).toBe('mlxh’s max_prompt_tokens');
+    expect(windowSourceWords('openai-compatible', 'mlxh', 8192)).toBe('mlxh’s max_prompt_tokens; raise it with `mlxh config max_prompt_tokens 40960` for long conversations');
   });
 
   it('parses list, show and --json', () => {

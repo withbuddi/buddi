@@ -230,11 +230,13 @@ function withoutLongContextSuffix(name: string): string {
  * The window a provider reported for the bound model, out of the per-account
  * map the gateway keeps (`reported_context_windows`), or undefined.
  *
- * The exact key wins. Otherwise both sides are put through the same
- * `normalise` the table uses, with a long-context suffix taken off the bound
- * name, so a `us.anthropic.…` or `[1m]` binding still finds the row the
- * provider listed under its bare id. A `[1m]` Claude binding asked for the
- * long window by name, so it never comes out under a million.
+ * The exact key wins. Then both sides are put through the same `normalise`
+ * the table uses (routing prefixes off, suffix kept), so a `us.anthropic.…`
+ * binding finds the row the provider listed under its bare id. Then a
+ * long-context suffix comes off the bound name too, so `claude-x-1m` finds
+ * `claude-x` — except for a Claude `[1m]` binding: the provider's row is the
+ * base model's, the long variant holds a million, and that number is the
+ * table's to give (and to label), not the provider's.
  */
 export function reportedContextWindow(map: Record<string, unknown> | null | undefined, model: string): number | undefined {
   if (!map || typeof map !== 'object' || typeof model !== 'string' || model === '') return undefined;
@@ -244,17 +246,20 @@ export function reportedContextWindow(map: Record<string, unknown> | null | unde
     const exact = usable(map[model]);
     if (exact !== undefined) return exact;
   }
+  const find = (wanted: string): number | undefined => {
+    for (const [key, value] of Object.entries(map)) {
+      if (normalise(key) !== wanted) continue;
+      const tokens = usable(value);
+      if (tokens !== undefined) return tokens;
+    }
+    return undefined;
+  };
   const name = normalise(model);
-  const long = longContextSuffix(name) && name.startsWith('claude-');
+  const full = find(name);
+  if (full !== undefined) return full;
   const bare = withoutLongContextSuffix(name);
-  let found: number | undefined;
-  for (const [key, value] of Object.entries(map)) {
-    if (normalise(key) !== bare) continue;
-    found = usable(value);
-    if (found !== undefined) break;
-  }
-  if (found === undefined) return undefined;
-  return long ? Math.max(found, 1_000_000) : found;
+  if (bare === name || (longContextSuffix(name) && name.startsWith('claude-'))) return undefined;
+  return find(bare);
 }
 
 /**

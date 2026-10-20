@@ -8,13 +8,14 @@ What changes in buddi from one release to the next, newest first.
 
 - Agents on Claude Opus 5, Haiku 5.5, Opus 4.6–4.8 and Sonnet 4.6 get their full million-token context: buddi counted them at 200k, so long conversations were trimmed five times sooner than needed.
 - An agent on an Anthropic account now gets the context window Anthropic reports for its model (and an OpenRouter or vLLM endpoint the one its model list says), not only buddi's own table. Existing accounts pick the number up in the background when the gateway starts or a new key or sign-in is saved, without opening the model picker.
-- An agent bound to a routed model id (`us.anthropic.…`) or a `[1m]` variant now finds the window the provider reported for that model.
+- An agent bound to a routed model id (`us.anthropic.…`) now finds the window the provider reported for that model. A Claude `[1m]` binding keeps its million-token window, labelled as a known model, unless the provider listed the `[1m]` id itself.
+- A new key, sign-in or address on an account drops the windows the old one's model list reported, and refreshing the model list replaces them, so a model the provider stopped listing no longer keeps an old number.
 - An agent on a ChatGPT account is sized the same in its conversation budget as on the Providers page, so it no longer rolls over at a different point than the page says.
-- On mlxh, its `max_prompt_tokens` limit now always wins over a window its model list names, since that limit is what mlxh enforces.
+- On mlxh, its `max_prompt_tokens` limit now always wins over a window its model list names, since that limit is what mlxh enforces. With the limit turned off, the page and the budget use the model's own window and say where it came from, instead of calling it mlxh's.
 
 ### Changed
 
-- Providers page and `buddi accounts show` say where a context window comes from: "from the provider" (or "from ChatGPT"), "known model" for buddi's own table, and "assumed" only for the 128k guess for a model buddi does not know. `buddi accounts show --json` gains `detectedContextWindowSource`, and the conversation rollover log line names the window's source.
+- Providers page and `buddi accounts show` say where a context window comes from: "from the provider" (or "from ChatGPT"), "known model" for buddi's own table, and "assumed" only for the 128k guess for a model buddi does not know; an mlxh window carries the same `mlxh config max_prompt_tokens` hint in both. `buddi accounts show --json` gains `detectedContextWindowSource`, and the conversation rollover log line names the window's source.
 
 ## 0.1.0-pre.55 — 2026-10-15
 

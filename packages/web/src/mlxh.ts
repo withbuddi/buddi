@@ -28,17 +28,13 @@ export function firstMlxhModel(probe: Pick<MlxhProbe, 'models'> | null | undefin
   return mlxhBrains(probe)[0];
 }
 
-/** An account the gateway recognised as mlxh's: its window comes from mlxh's limit. */
-export function isMlxhAccount(account: Pick<ProviderAccount, 'detectedContextWindowSource'> | null | undefined): boolean {
-  return account?.detectedContextWindowSource === 'mlxh';
+/** An account the gateway recognised as mlxh's, whether or not its window is mlxh's limit (it is not when the limit is off). */
+export function isMlxhAccount(account: Partial<Pick<ProviderAccount, 'mlxh' | 'detectedContextWindowSource'>> | null | undefined): boolean {
+  return account?.mlxh === true || account?.detectedContextWindowSource === 'mlxh';
 }
 
-/** What mlxh's prompt limit means for a conversation, beside the window. */
-export function mlxhWindowNote(tokens: number | undefined): string {
-  return (tokens ?? 0) < 40_960
-    ? 'mlxh’s max_prompt_tokens; raise it with `mlxh config max_prompt_tokens 40960` for long conversations'
-    : 'mlxh’s max_prompt_tokens';
-}
+/** What mlxh's prompt limit means for a conversation, beside the window: core's words, shared with the CLI. */
+export { mlxhWindowNote } from '@buddi/core/mlxh-note';
 
 /** Said when nothing answers where mlxh should: the host and port come from the probe's address. */
 export function mlxhNotAnswering(baseUrl: string): string {

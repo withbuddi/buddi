@@ -12,6 +12,7 @@
  * a sign-in in progress.
  */
 import { getOwnerProfile, MLXH_BASE_URL, resetPhrase, ownerTimezone, type OwnerFormats } from '@buddi/core';
+import { mlxhWindowNote } from '@buddi/core/mlxh-note';
 import type { AccountRateLimit } from './account-limits.js';
 import { createWiringAsync, hydrateSecrets, loadEnvironment } from './bootstrap.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
@@ -176,10 +177,10 @@ export function renderAccountLines(lines: readonly AccountLine[], style: Pick<Te
  * uses: the provider's (ChatGPT's) own number, buddi's table for a model it
  * knows, mlxh's prompt limit, or assumed — only the 128k default is a guess.
  */
-export function windowSourceWords(kind: string, source: ViewAccount['detectedContextWindowSource']): string {
+export function windowSourceWords(kind: string, source: ViewAccount['detectedContextWindowSource'], tokens?: number): string {
   if (source === 'provider') return kind === 'codex' ? 'from ChatGPT' : 'from the provider';
   if (source === 'table') return 'known model';
-  if (source === 'mlxh') return 'mlxh’s max_prompt_tokens';
+  if (source === 'mlxh') return mlxhWindowNote(tokens);
   return 'assumed';
 }
 
@@ -193,7 +194,7 @@ export function renderAccount(line: AccountLine, extra: Pick<ViewAccount, 'baseU
   if (extra.baseUrl) out.push(row('address', extra.baseUrl));
   out.push(row('default model', line.defaultModel || '—'));
   const window = extra.contextWindowTokens ?? extra.detectedContextWindowTokens;
-  if (window) out.push(row('context window', `${window.toLocaleString('en-US')} tokens${extra.contextWindowTokens ? '' : ` (${windowSourceWords(line.kind, extra.detectedContextWindowSource)})`}`));
+  if (window) out.push(row('context window', `${window.toLocaleString('en-US')} tokens${extra.contextWindowTokens ? '' : ` (${windowSourceWords(line.kind, extra.detectedContextWindowSource, window)})`}`));
   out.push(row('state', stateText(line, timeZone, now, formats)));
   out.push(row('agents', line.agents.length === 0 ? 'no agents' : line.agents.map((a) => `${a.handle ? `@${a.handle}` : a.id} (${a.model})`).join(', ')));
   if (extra.test) out.push(row('last test', `${extra.test.message} ${dim(`(${extra.test.checkedAt})`, color)}`));
