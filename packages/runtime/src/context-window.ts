@@ -96,9 +96,9 @@ const OLLAMA: readonly Entry[] = [
 /**
  * A model id, reduced to something the tables can be asked about:
  * lowercased, with the routing prefixes hosts add (`us.anthropic.`,
- * `anthropic/`, `openrouter/`, Google's `models/`) and OpenRouter's routing
- * variants (`:nitro`, `:floor`, `:online`, …, the same model routed
- * differently) taken off. An Ollama `:tag` and a dated suffix are left in;
+ * `anthropic/`, `openrouter/`, Google's `models/`) taken off, and on a
+ * Claude, GPT or Gemini name OpenRouter's routing variants too (`:nitro`,
+ * `:floor`, `:online`, …, the same model routed differently). An Ollama `:tag` and a dated suffix are left in;
  * byok strips Bedrock's `-v1:0` and Vertex's `@date`.
  */
 function normalise(model: string): string {
@@ -108,7 +108,11 @@ function normalise(model: string): string {
     if (!host) break;
     name = name.slice(host[0].length);
   }
-  return name.replace(/:(?:nitro|floor|online|free|extended|thinking|beta|exacto)$/, '');
+  // Only on a cloud family's name: an Ollama tag (`qwen3:thinking`) names a
+  // model of its own.
+  return /^(?:claude-|gpt-|chatgpt-|o\d|gemini-)/.test(name)
+    ? name.replace(/:(?:nitro|floor|online|free|extended|thinking|beta|exacto)$/, '')
+    : name;
 }
 
 /**

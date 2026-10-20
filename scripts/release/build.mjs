@@ -151,7 +151,7 @@ const entries = new Set(execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8
 const unbundled = packages.flatMap(({ pkg }) => Object.entries(pkg.dependencies || {}).filter(([name]) => !byName.has(name)).flatMap(([name, wanted]) => {
   const found = [`package/node_modules/${pkg.name}/node_modules/${name}/package.json`, `package/node_modules/${name}/package.json`].find(entry => entries.has(entry));
   if (found === undefined) return [`${pkg.name} → ${name} (missing)`];
-  if (!/^\d+\.\d+\.\d+$/.test(wanted)) return [];
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(wanted)) return [];
   const version = JSON.parse(execFileSync('tar', ['-xOzf', tarball, found], { encoding: 'utf8' })).version;
   return version === wanted ? [] : [`${pkg.name} → ${name} (${version}, pinned ${wanted})`];
 }));

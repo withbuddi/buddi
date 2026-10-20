@@ -149,6 +149,8 @@ describe('the window a provider reported, found for the bound model', () => {
     // Another host's suffixed id finds its base row.
     expect(reportedContextWindow({ 'qwen3-coder': 262_144 }, 'qwen3-coder-1m')).toBe(262_144);
     expect(reportedContextWindow({ 'anthropic/claude-sonnet-5': 1_000_000 }, 'anthropic/claude-sonnet-5:nitro')).toBe(1_000_000);
+    // An Ollama tag is a model of its own, not a routing variant.
+    expect(reportedContextWindow({ qwen3: 131_072 }, 'qwen3:thinking')).toBeUndefined();
   });
 
   it('answers nothing for an unknown model or an unusable number', () => {
