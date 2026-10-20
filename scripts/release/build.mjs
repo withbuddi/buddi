@@ -140,6 +140,14 @@ if (filename === undefined) {
   filename = readdirSync(stage).find((name) => name.endsWith('.tgz'));
 }
 if (filename === undefined) throw new Error(`npm pack produced no tarball in ${stage}: ${packed.stdout.slice(0, 200)}`);
+// Every package's own dependencies must be inside the tarball, not left for
+// an install to fetch: the Linux and Windows bundles and the mac payload
+// unpack it as it is, with no npm and no network.
+const entries = new Set(execFileSync('tar', ['-tzf', path.join(stage, filename)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).split('\n'));
+const unbundled = packages.flatMap(({ pkg }) => Object.keys(pkg.dependencies || {})
+  .filter(name => !byName.has(name) && ![...entries].some(entry => entry.endsWith(`node_modules/${name}/package.json`)))
+  .map(name => `${pkg.name} → ${name}`));
+if (unbundled.length > 0) throw new Error(`The tarball is missing dependencies: ${unbundled.join(', ')}. Staging preserved: ${stage}`);
 // The Chrome Web Store upload, beside the tarball: same files, no `key`. The
 // release workflow attaches it to the GitHub release. The last line stays the
 // tarball, which is what callers read.
