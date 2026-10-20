@@ -259,23 +259,32 @@ suite('named provider accounts', () => {
     expect(interleave).toBeNull();
     expect((await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id])).rows[0].m).toEqual({});
   });
-  it('a forced listing during an ordinary one makes its own, and its result replaces the windows', async () => {
-    const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
-    const answers: Array<(value: unknown) => void> = [];
-    f.listModels.mockImplementation(() => new Promise(resolve => { answers.push(resolve); }) as never);
-    const ordinary = f.service.models(a.id);
-    await vi.waitFor(() => expect(answers).toHaveLength(1));
-    const forced = f.service.models(a.id, true);
-    // Its own listing, not the ordinary one's.
-    await vi.waitFor(() => expect(answers).toHaveLength(2));
-    // An ordinary call now joins the forced one.
-    const joined = f.service.models(a.id);
-    answers[0]!({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 400_000 }, { id: 'gone-model', name: 'G', isDefault: false, contextWindow: 64_000 }], truncated: false });
-    await ordinary;
-    answers[1]!({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 500_000 }], truncated: false });
-    expect(await joined).toEqual(await forced);
-    expect(f.listModels).toHaveBeenCalledTimes(2);
-    expect((await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id])).rows[0].m).toEqual({ 'claude-sonnet-5': 500_000 });
+  it('the newest-started listing publishes, whichever finishes last', async () => {
+    const ordinaryList = { models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 400_000 }, { id: 'gone-model', name: 'G', isDefault: false, contextWindow: 64_000 }], truncated: false };
+    const forcedList = { models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 500_000 }], truncated: false };
+    for (const last of ['ordinary', 'forced'] as const) {
+      const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
+      const answers: Array<(value: unknown) => void> = [];
+      f.listModels.mockImplementation(() => new Promise(resolve => { answers.push(resolve); }) as never);
+      const ordinary = f.service.models(a.id);
+      await vi.waitFor(() => expect(answers).toHaveLength(1));
+      // A forced call during the ordinary one makes its own listing.
+      const forced = f.service.models(a.id, true);
+      await vi.waitFor(() => expect(answers).toHaveLength(2));
+      if (last === 'ordinary') {
+        answers[1]!(forcedList); await forced;
+        answers[0]!(ordinaryList); await ordinary;
+      } else {
+        answers[0]!(ordinaryList); await ordinary;
+        answers[1]!(forcedList); await forced;
+      }
+      expect(f.listModels).toHaveBeenCalledTimes(2);
+      const stored = (await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id])).rows[0].m;
+      expect(stored, `${last} finished last`).toEqual({ 'claude-sonnet-5': 500_000 });
+      // The cache is the forced list too: an ordinary call now answers from it.
+      expect((await f.service.models(a.id)).models, `${last} finished last`).toEqual(forcedList.models);
+      expect(f.listModels).toHaveBeenCalledTimes(2);
+    }
   });
   it('hands a plugin each account with its audio capabilities and never a key (host API 1.30)', async () => {
     const f = fixture({}); await f.service.initialize();

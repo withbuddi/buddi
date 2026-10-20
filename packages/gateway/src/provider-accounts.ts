@@ -127,6 +127,16 @@ export class ProviderAccounts {
   #modelRequests = new Map<string, Promise<AccountModels>>();
   #windowRefreshes = new Map<string, Promise<void>>();
   /**
+   * The publish rule for listings: each takes a ticket when it starts, and
+   * publishes (cache, windows) only if no listing started later has published
+   * for the account. Newest started wins; an older one finishing late returns
+   * its list to its own callers and publishes nothing.
+   */
+  #tickets = 0;
+  #published = new Map<string, number>();
+  /** Window writes, one at a time per account, so the newest also lands last. */
+  #windowWrites = new Map<string, Promise<void>>();
+  /**
    * Ask the provider for its windows in the background after a credential is
    * saved or signed in. The serving gateway turns it on (`refreshWindows`); a
    * one-off CLI command and a test leave it off, so neither starts a list it
@@ -341,6 +351,7 @@ export class ProviderAccounts {
     // listing, whose write replaces the windows, and later calls join it.
     const existing = refresh ? undefined : this.#modelRequests.get(key);
     if (existing) return existing;
+    const ticket = ++this.#tickets;
     let pending!: Promise<AccountModels>;
     pending = (async () => {
       try {
@@ -348,8 +359,10 @@ export class ProviderAccounts {
         const current = await this.#row(id);
         if (current.revision !== row.revision || !current.enabled || current.deleting) throw new ProviderAccountError(409, 'Account changed. Refresh models again.');
         const value = { ...listed.value, fetchedAt: new Date().toISOString() };
-        this.#modelLists.set(id, { revision: row.revision, until: Date.now() + 60_000, value });
-        await this.#rememberWindows(current, listed, refresh).catch(() => {});
+        if (this.#claim(id, ticket)) {
+          this.#modelLists.set(id, { revision: row.revision, until: Date.now() + 60_000, value });
+          await this.#publishWindows(id, ticket, row.revision, listed, refresh);
+        }
         return value;
       } catch (error) {
         if (error instanceof ProviderAccountError) throw error;
@@ -393,6 +406,8 @@ export class ProviderAccounts {
    */
   async #endpointChanged(id: string): Promise<void> {
     this.#modelLists.delete(id);
+    // No listing started before this may publish after it.
+    this.#published.set(id, ++this.#tickets);
     await this.deps.pool.query(`update core.provider_accounts set reported_context_windows='{}'::jsonb, mlxh_prompt_limit=null where id=$1`, [id]);
     const live = this.#rows.get(id);
     if (!live) return;
@@ -420,16 +435,38 @@ export class ProviderAccounts {
     const key = `${seen.id}:${seen.revision}`;
     const running = this.#windowRefreshes.get(key);
     if (running) return running;
+    const ticket = ++this.#tickets;
     const pending = (async () => {
       const row = await this.#row(seen.id);
       if (!this.#reportsWindows(row)) return;
       const listed = await this.#list(row, { capabilities: false });
-      const current = await this.#row(row.id);
-      if (current.revision !== row.revision || !current.enabled || current.deleting) return;
-      await this.#rememberWindows(current, listed, true);
+      if (this.#claim(row.id, ticket)) await this.#publishWindows(row.id, ticket, row.revision, listed, true);
     })().finally(() => { this.#windowRefreshes.delete(key); });
     this.#windowRefreshes.set(key, pending);
     return pending;
+  }
+
+  /** May this listing publish? Only when no listing started after it already has. */
+  #claim(id: string, ticket: number): boolean {
+    if (ticket <= (this.#published.get(id) ?? 0)) return false;
+    this.#published.set(id, ticket);
+    return true;
+  }
+
+  /**
+   * Write a listing's windows, after any write already queued for the
+   * account, and only while it is still the newest published one and the
+   * account is the version it listed. Failures are silent: the table answers.
+   */
+  #publishWindows(id: string, ticket: number, revision: number, listed: { windows: AccountModels; hostLimit?: number | null }, replace: boolean): Promise<void> {
+    const next = (this.#windowWrites.get(id) ?? Promise.resolve()).then(async () => {
+      if (this.#published.get(id) !== ticket) return;
+      const current = await this.#row(id);
+      if (current.revision !== revision || !current.enabled || current.deleting) return;
+      await this.#rememberWindows(current, listed, replace);
+    }).catch(() => {});
+    this.#windowWrites.set(id, next);
+    return next;
   }
 
   /**
