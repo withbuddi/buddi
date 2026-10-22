@@ -195,7 +195,7 @@ describe('the list', () => {
 });
 
 describe('the four screens', () => {
-  it('address → sign in: the consent page is fetched first, and the click opens a tab onto it, never an empty one', async () => {
+  it('address → sign in: the consent page is fetched first, and the click opens a tab and points it there at once', async () => {
     const pending = connection({ name: 'Notion', slug: null, state: 'pending-review', signedIn: false, grant: null, agents: [] });
     mocked.addConnection.mockResolvedValue({ connection: pending, signIn: 'dynamic' });
     mocked.connectionConsent.mockResolvedValue({ authorizeUrl: 'https://notion.example/authorize?x=1', redirectUri: 'http://localhost/connections/callback' });
@@ -214,7 +214,8 @@ describe('the four screens', () => {
     await waitFor(() => expect(signIn).toBeEnabled());
     expect(open).not.toHaveBeenCalled();
     fireEvent.click(signIn);
-    expect(open).toHaveBeenCalledWith('https://notion.example/authorize?x=1', '_blank');
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(tab.location.href).toBe('https://notion.example/authorize?x=1');
     expect(tab.opener).toBeNull();
     expect(await screen.findByText(/Waiting for you to say yes/)).toBeInTheDocument();
     open.mockRestore();
@@ -236,7 +237,7 @@ describe('the four screens', () => {
     await waitFor(() => expect(mocked.connectionConsent).toHaveBeenLastCalledWith(pending.id, 'my-app'));
     expect(open).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub’s sign-in page' }));
-    expect(open).toHaveBeenCalledWith('https://x.test/authorize', '_blank');
+    expect(open).toHaveBeenCalledWith('', '_blank');
     // No tab could be opened: a link does it instead.
     expect(await screen.findByRole('link', { name: 'Open GitHub’s sign-in page' })).toHaveAttribute('href', 'https://x.test/authorize');
     open.mockRestore();
@@ -281,7 +282,7 @@ describe('the four screens', () => {
     mocked.connection.mockResolvedValueOnce({ ...pending, device })
       .mockResolvedValue({ ...pending, authKind: 'token', signedIn: true, device: { ...device, state: 'done' } });
     mocked.connectionReview.mockResolvedValue(REVIEW);
-    const tab = { opener: {} as unknown };
+    const tab = { opener: {} as unknown, location: { href: '' }, close: vi.fn() };
     const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
     render(<ConnectFlow start={{ step: 'address', card }} agents={AGENTS} onClose={() => {}} pollMs={10} />);
     expect(screen.getByText(/signs in with a code you type on its site/)).toBeInTheDocument();
@@ -295,9 +296,11 @@ describe('the four screens', () => {
     expect(screen.queryByText('Waiting for you to approve on GitHub…')).not.toBeInTheDocument();
     expect(open).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Open github.com/login/device' }));
-    expect(open).toHaveBeenCalledWith('https://github.com/login/device', '_blank');
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(tab.location.href).toBe('https://github.com/login/device');
     expect(screen.getByText('Waiting for you to approve on GitHub…')).toBeInTheDocument();
     expect(tab.opener).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open github.com/login/device again' })).toBeInTheDocument();
     expect(await screen.findByText('mcp.github.search_issues')).toBeInTheDocument();
     expect(mocked.connectionDevice).toHaveBeenCalledTimes(1);
     open.mockRestore();

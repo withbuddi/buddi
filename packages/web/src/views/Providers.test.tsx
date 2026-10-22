@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProviderAccountsView } from '../api';
@@ -235,7 +235,7 @@ it('connects Ollama from the account card: window in the click, poll, connected-
     login: { state: 'pending', attemptId: 'try', verificationUrl: 'http://localhost/connect-fixture', expiresAt: new Date(Date.now() + 60_000).toISOString() } }] });
   vi.mocked(api.ollamaPoll).mockResolvedValue({ state: 'connected', username: 'amen', deviceName: 'buddi on studio' });
   fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-  expect(await screen.findByRole('link', { name: 'Open the ollama.com page' })).toHaveAttribute('rel', 'noreferrer');
+  expect(await screen.findByRole('link', { name: 'Open the ollama.com page again' })).toHaveAttribute('rel', 'noreferrer');
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...cloud, revision: 2, configured: true, device: { deviceName: 'buddi on studio', username: 'amen', connectedAt: '2026-09-26T10:00:00Z' } }] });
   expect(await screen.findByText('Connected as amen, device buddi on studio.', undefined, { timeout: 4_000 })).toBeInTheDocument();
   expect(api.ollamaPoll).toHaveBeenCalledWith('cloud', 'try');
@@ -407,4 +407,79 @@ it('says a burst limit with its window and no fix, and forgets a limit that has 
   expect(notice).toHaveTextContent(/It said to wait until /);
   expect(notice?.querySelector('a, button')).toBeNull();
   expect(screen.getAllByText('Rate-limited')).toHaveLength(1);
+});
+
+describe('a sign-in started from the account card opens the provider’s page in a tab of its own', () => {
+  const claude = { ...view.accounts[0]!, kind: 'anthropic' as const, auth: 'anthropic-oauth' as const, configured: false };
+  const consentUrl = 'https://claude.ai/oauth/authorize?code=true&state=s';
+  const pendingClaude = { ...claude, revision: 2, login: { state: 'pending' as const, attemptId: 'attempt', verificationUrl: consentUrl, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+  /** A tab whose address the test reads, and a start the test answers by hand. */
+  const setUp = (tab: { location: { href: string }; close: () => void; opener: unknown } | null) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
+    let answer!: (value: unknown) => void;
+    let refuse!: (error: Error) => void;
+    vi.mocked(api.anthropicAccountAction).mockImplementation(() => new Promise((resolve, reject) => { answer = resolve; refuse = reject; }));
+    return { open, answer: (v: unknown) => answer(v), refuse: (e: Error) => refuse(e) };
+  };
+  beforeEach(() => { vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true, accounts: [claude] }); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('Connect Claude: the tab opens in the click, before the start answers, and goes to the consent page after', async () => {
+    const tab = { location: { href: '' }, close: vi.fn(), opener: {} as unknown };
+    const { open, answer } = setUp(tab);
+    render(<Providers />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Claude' }));
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(api.anthropicAccountAction).toHaveBeenCalledWith('one', 'login', 1);
+    expect(open.mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(api.anthropicAccountAction).mock.invocationCallOrder[0]!);
+    expect(tab.opener).toBeNull();
+    expect(tab.location.href).toBe('');
+    vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true, accounts: [pendingClaude] });
+    answer({ verificationUrl: consentUrl, attemptId: 'attempt' });
+    await waitFor(() => expect(tab.location.href).toBe(consentUrl));
+    expect(tab.close).not.toHaveBeenCalled();
+    expect(await screen.findByText(/consent page opened in a new tab/)).toBeInTheDocument();
+    // The way back to it stays.
+    expect(await screen.findByRole('link', { name: 'Open Claude consent page again' })).toHaveAttribute('href', consentUrl);
+  });
+
+  it('a browser that refused the tab: the consent link is the way out', async () => {
+    const { open, answer } = setUp(null);
+    render(<Providers />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Claude' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true, accounts: [pendingClaude] });
+    answer({ verificationUrl: consentUrl, attemptId: 'attempt' });
+    expect(await screen.findByText(/Open the Claude consent link below/)).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Open Claude consent page' })).toHaveAttribute('href', consentUrl);
+  });
+
+  it('a start that fails closes the tab it opened, so no empty window stays', async () => {
+    const tab = { location: { href: '' }, close: vi.fn(), opener: {} as unknown };
+    const { refuse } = setUp(tab);
+    render(<Providers />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Claude' }));
+    refuse(new Error('Claude sign-in is busy. Try again.'));
+    expect(await screen.findByText('Claude sign-in is busy. Try again.')).toBeInTheDocument();
+    expect(tab.close).toHaveBeenCalledTimes(1);
+    expect(tab.location.href).toBe('');
+  });
+
+  it('Connect ChatGPT opens openai.com the same way, and the button opens it again', async () => {
+    const codex = { ...view.accounts[0]!, kind: 'codex' as const, auth: 'chatgpt' as const, configured: false };
+    vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, codexEnabled: true, accounts: [codex] });
+    const tab = { location: { href: '' }, close: vi.fn(), opener: {} as unknown };
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
+    const device = 'https://auth.openai.com/codex/device';
+    vi.mocked(api.codexAccountAction).mockImplementation(async () => {
+      vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, codexEnabled: true, accounts: [{ ...codex, login: { state: 'pending', verificationUrl: device, userCode: 'ABCD-1234', expiresAt: '2026-09-19T12:00:00Z' } }] });
+      return { verificationUrl: device, userCode: 'ABCD-1234' };
+    });
+    render(<Providers />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect ChatGPT' }));
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    await waitFor(() => expect(tab.location.href).toBe(device));
+    expect(await screen.findByRole('link', { name: 'Open openai.com again' })).toHaveAttribute('href', device);
+    expect(await screen.findByDisplayValue('ABCD-1234')).toBeInTheDocument();
+  });
 });

@@ -402,7 +402,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
             return nil
         }
         // The dashboard's own pages (a file preview, a printable view) open in
-        // a plain window of their own, under the same rules.
+        // a plain window of their own, under the same rules. A blank one
+        // (`window.open('', '_blank')` inside a click, pointed at a sign-in
+        // page once buddi names it) stays hidden: its first page off the
+        // dashboard goes to the browser and the window closes, a failed start
+        // closes it, and one never pointed anywhere is closed after a minute.
+        let blank = action.request.url.map { $0.absoluteString.isEmpty || $0.scheme?.lowercased() == "about" } ?? true
         let popup = WKWebView(frame: .zero, configuration: configuration)
         popup.navigationDelegate = self
         popup.uiDelegate = self
@@ -413,10 +418,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, WKNaviga
         window.title = "buddi"
         window.contentView = popup
         window.cascadeTopLeft(from: self.window?.frame.origin ?? .zero)
-        window.makeKeyAndOrderFront(nil)
         window.delegate = self
         popups.append(window)
+        if blank {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak window] in
+                guard let window, !window.isVisible else { return }
+                window.close()
+            }
+        } else {
+            window.makeKeyAndOrderFront(nil)
+        }
         return popup
+    }
+
+    /// A blank popup the page pointed at one of the dashboard's own pages: shown now.
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard webView !== self.webView, let window = webView.window, !window.isVisible,
+              let url = webView.url, isDashboard(url) else { return }
+        window.makeKeyAndOrderFront(nil)
     }
 
     func webViewDidClose(_ webView: WKWebView) {

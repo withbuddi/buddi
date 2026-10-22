@@ -41,6 +41,7 @@ import { AppIcon, Button, Code, Empty, ErrorBanner, Field, FormGrid, Icon, KV, L
 import { settingsRoute } from '../routes';
 import { looksSecret, parsePastedServer, shellWords, type PastedConfig, type PastedHeader, type PastedProgram } from '@buddi/core/connection-config';
 import { SignInCode } from './parts/SignInCode';
+import { openSignInPage } from '../signInTab';
 
 /**
  * Where a connection stands, in the owner's words. A program that stopped
@@ -907,15 +908,9 @@ function ConsentStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  /** Opened inside the click, onto the page itself: never an empty tab. */
+  /** Opened inside the click (`openSignInPage`); the link below is there when the browser refused the tab. */
   const openConsent = (url: string): void => {
-    const tab = window.open(url, '_blank');
-    if (tab) {
-      tab.opener = null;
-      setLink(null);
-    } else {
-      setLink(url);
-    }
+    setLink(openSignInPage(url) ? null : url);
     setWaiting(true);
   };
 
@@ -1057,16 +1052,10 @@ function DeviceSignIn({
     return () => { stopped = true; window.clearTimeout(timer); };
   }, [connection.id, pollMs, attempt]);
 
-  /** Opened inside the click, onto the page itself: never an empty tab. */
+  /** Opened inside the click (`openSignInPage`); the link below is there when the browser refused the tab. */
   const openSite = (url: string): void => {
-    const tab = window.open(url, '_blank');
     setOpened(true);
-    if (tab) {
-      tab.opener = null;
-      setLink(null);
-    } else {
-      setLink(url);
-    }
+    setLink(openSignInPage(url) ? null : url);
   };
 
   const address = code ? shortAddress(code.verificationUri) : '';
@@ -1083,7 +1072,7 @@ function DeviceSignIn({
           {opened ? <Notice tone="accent" role="status">Waiting for you to approve on {service}…</Notice> : null}
           {link ? <p><a href={link} target="_blank" rel="noopener noreferrer">Open {address}</a></p> : null}
           <Toolbar align="end">
-            <Button variant="accent" onClick={() => openSite(code.verificationUri)}>Open {address}</Button>
+            <Button variant="accent" onClick={() => openSite(code.verificationUri)}>{opened ? `Open ${address} again` : `Open ${address}`}</Button>
           </Toolbar>
         </>
       ) : null}

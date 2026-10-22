@@ -575,7 +575,7 @@ describe('chapter 2: a brain', () => {
       saved = true;
       return { id: 'cloud' };
     });
-    vi.mocked(api.ollamaConnect).mockResolvedValue({ state: 'pending', attemptId: 'try-1', verificationUrl: 'connect-page', deviceName: 'buddi on studio', expiresAt: '' });
+    vi.mocked(api.ollamaConnect).mockResolvedValue({ state: 'pending', attemptId: 'try-1', verificationUrl: 'https://ollama.com/connect?key=pub', deviceName: 'buddi on studio', expiresAt: '' });
     vi.mocked(api.ollamaPoll).mockResolvedValue({ state: 'connected', username: 'amen', deviceName: 'buddi on studio' });
     vi.mocked(api.accountModels).mockResolvedValue({ models: [{ id: 'gpt-oss:120b', name: 'gpt-oss:120b', isDefault: false }, { id: 'glm-5.3', name: 'glm-5.3', isDefault: false }], truncated: false });
     vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
@@ -585,7 +585,7 @@ describe('chapter 2: a brain', () => {
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.free.title));
     // Inside the tap, before any request: that is what gets past a popup blocker.
     expect(open).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(opened.location.href).toBe('connect-page'));
+    await waitFor(() => expect(opened.location.href).toBe('https://ollama.com/connect?key=pub'));
     expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ kind: 'openai-compatible', auth: 'device-key', baseUrl: '', defaultModel: 'gpt-oss:120b' });
     expect(api.ollamaConnect).toHaveBeenCalledWith('cloud', 1);
     expect(await screen.findByText(SCRIPT.brain.cloud.waiting)).toBeInTheDocument();

@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Fixed
 
 - A ChatGPT account lists the newest Codex models again: buddi now presents itself as Codex 0.163.0.
+- Connect Claude, Connect ChatGPT and Connect Ollama in Settings → Model accounts now open the provider's page in a new tab themselves, as first run and Connections do, instead of leaving a link to click; the link stays as "Open … again", and is the way in when the browser refuses the tab. A start that fails closes the tab it opened, and buddi.app keeps that blank window hidden, so no empty window is left behind.
 - Agents on Claude Opus 5, Haiku 5.5, Opus 4.6–4.8 and Sonnet 4.6 get their full million-token context: buddi counted them at 200k, so long conversations were trimmed five times sooner than needed.
 - An agent on an Anthropic account now gets the context window Anthropic reports for its model (and an OpenRouter or vLLM endpoint the one its model list says), not only buddi's own table. Existing accounts pick the number up in the background when the gateway starts or a new key or sign-in is saved, without opening the model picker.
 - An agent bound to a routed model id (`us.anthropic.…`) now finds the window the provider reported for that model. A Claude `[1m]` binding keeps its million-token window, labelled as a known model, unless the provider listed the `[1m]` id itself.

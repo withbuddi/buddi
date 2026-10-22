@@ -101,6 +101,7 @@ import { HandoverTeam } from './parts/CatalogueSuggest';
 import { WakesAfterRestart } from './parts/WakesAfterRestart';
 import { announcePagesChanged } from '../pages/usePages';
 import { fmtClock } from '../format';
+import { openSignInTab, type SignInTab } from '../signInTab';
 
 /**
  * How long a silent, *living* run goes before buddi says something about it.
@@ -946,7 +947,7 @@ function BrainChapter(props: QuestionProps): JSX.Element {
   /** Where Gemini answers and where a key is made: the gateway's to say, as ever. */
   const gemini = accounts?.gemini;
   /** The ollama.com or openai.com window, opened inside the tap so no popup blocker stops it. */
-  const [consent, setConsent] = useState<Window | null>(null);
+  const [consent, setConsent] = useState<SignInTab | null>(null);
 
   // The "On this computer" card has to know before it is opened what is
   // there, Ollama or mlxh: its line says what was found. The gateway asks the
@@ -1118,7 +1119,7 @@ function BrainChapter(props: QuestionProps): JSX.Element {
     // Opened inside the tap, so no popup blocker stops it.
     // Not ChatGPT: its code is shown first, and its Open button opens the page in the order the bubble says.
     const opens = next === 'free';
-    setConsent(opens && typeof window.open === 'function' ? window.open('', '_blank') : null);
+    setConsent(opens ? openSignInTab() : null);
     setProblem(null);
     setChoice(null);
     setKeyKindShown('key');
@@ -2028,7 +2029,7 @@ function OllamaCloudCard({
   accounts,
 }: {
   busy: boolean;
-  consent: Window | null;
+  consent: SignInTab | null;
   onBack: () => void;
   onConnected: (brain: BrainAnswer) => Promise<string | null>;
 } & QuestionProps): JSX.Element {
@@ -2038,7 +2039,7 @@ function OllamaCloudCard({
   const [round, setRound] = useState(0);
   const started = useRef(-1);
   /** The window a "Try again" tap opened, for the same reason the card's tap opens one. */
-  const retried = useRef<Window | null>(null);
+  const retried = useRef<SignInTab | null>(null);
   const label = SCRIPT.brain.cloud.label;
 
   // Start once per round: the account (reused when there is one), then the key.
@@ -2065,7 +2066,7 @@ function OllamaCloudCard({
         const row = (await api.providerAccounts()).accounts.find((account) => account.id === saved.id)!;
         const connect = await api.ollamaConnect(row.id, row.revision);
         setAttempt({ id: row.id, attemptId: connect.attemptId, url: connect.verificationUrl });
-        if (opened) opened.location.href = connect.verificationUrl;
+        opened?.go(connect.verificationUrl);
       } catch (err) {
         opened?.close();
         setTrouble(err instanceof ApiError ? err.message : String(err));
@@ -2156,7 +2157,7 @@ function OllamaCloudCard({
               </ButtonLink>
             ) : trouble ? (
               <Button variant="accent" size="lg" disabled={working || busy} onClick={() => {
-                retried.current = typeof window.open === 'function' ? window.open('', '_blank') : null;
+                retried.current = openSignInTab();
                 setRound((n) => n + 1);
               }}>
                 {SCRIPT.brain.cloud.again}
@@ -2263,7 +2264,7 @@ function ChatGPTCard({
   accounts,
 }: {
   busy: boolean;
-  consent: Window | null;
+  consent: SignInTab | null;
   onBack: () => void;
   onConnected: (brain: BrainAnswer) => Promise<string | null>;
 } & QuestionProps): JSX.Element {
@@ -2277,7 +2278,7 @@ function ChatGPTCard({
   const [round, setRound] = useState(0);
   const started = useRef(-1);
   /** The window a "Try again" tap opened, for the same reason the card's tap opens one. */
-  const retried = useRef<Window | null>(null);
+  const retried = useRef<SignInTab | null>(null);
   /** The sign-in still waiting for its code, to cancel if the owner leaves. */
   const pending = useRef<{ id: string; revision: number } | null>(null);
   const label = SCRIPT.brain.chatgpt.label;
@@ -2317,8 +2318,7 @@ function ChatGPTCard({
         if (!login?.verificationUrl || !login.userCode) throw new Error(login?.message ?? SCRIPT.brain.chatgpt.failed);
         pending.current = { id: row.id, revision: row.revision };
         setAttempt({ id: row.id, revision: row.revision, url: login.verificationUrl, code: login.userCode });
-        setOpened(Boolean(opened));
-        if (opened) opened.location.href = login.verificationUrl;
+        setOpened(opened?.go(login.verificationUrl) ?? false);
       } catch (err) {
         opened?.close();
         setTrouble(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
@@ -2427,7 +2427,7 @@ function ChatGPTCard({
               </ButtonLink>
             ) : trouble ? (
               <Button variant="accent" size="lg" disabled={working || busy} onClick={() => {
-                retried.current = typeof window.open === 'function' ? window.open('', '_blank') : null;
+                retried.current = openSignInTab();
                 setRound((n) => n + 1);
               }}>
                 {SCRIPT.brain.chatgpt.again}
@@ -2496,7 +2496,7 @@ function ClaudeCard({
     // Opened here, inside the click, so no popup blocker stops it; it is
     // pointed at the consent page the moment the server names it. The button
     // below stays for a browser that refused the window anyway.
-    const consent = typeof window.open === 'function' ? window.open('', '_blank') : null;
+    const consent = openSignInTab();
     void (async () => {
       try {
         const existing = (accounts?.accounts ?? []).find((account) => account.auth === 'anthropic-oauth');
@@ -2523,10 +2523,9 @@ function ClaudeCard({
           url: login.verificationUrl ?? '',
           attemptId: login.attemptId ?? '',
         });
-        if (consent && login.verificationUrl) consent.location.href = login.verificationUrl;
-        else consent?.close();
+        consent.go(login.verificationUrl);
       } catch (err) {
-        consent?.close();
+        consent.close();
         setTrouble(err instanceof ApiError ? err.message : String(err));
       } finally {
         setWorking(false);
