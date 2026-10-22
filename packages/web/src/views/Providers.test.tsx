@@ -482,4 +482,55 @@ describe('a sign-in started from the account card opens the provider’s page in
     expect(await screen.findByRole('link', { name: 'Open openai.com again' })).toHaveAttribute('href', device);
     expect(await screen.findByDisplayValue('ABCD-1234')).toBeInTheDocument();
   });
+
+  it('leaving while the start is on its way closes the blank tab, and the late answer opens nothing', async () => {
+    const tab = { location: { href: '' }, close: vi.fn(), opener: {} as unknown };
+    const { answer } = setUp(tab);
+    const { unmount } = render(<Providers />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Claude' }));
+    unmount();
+    expect(tab.close).toHaveBeenCalledTimes(1);
+    answer({ verificationUrl: consentUrl, attemptId: 'attempt' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tab.location.href).toBe('');
+  });
+
+  it('Cancel sign-in closes the consent tab; Connect again opens a new one onto the new page', async () => {
+    const first = { location: { href: '' }, close: vi.fn(), opener: {} as unknown };
+    const { open, answer } = setUp(first);
+    render(<Providers />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Claude' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true, accounts: [pendingClaude] });
+    answer({ verificationUrl: consentUrl, attemptId: 'attempt' });
+    await waitFor(() => expect(first.location.href).toBe(consentUrl));
+    vi.mocked(api.anthropicAccountAction).mockImplementation(async () => {
+      vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true, accounts: [{ ...claude, revision: 3 }] });
+      return {};
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel sign-in' }));
+    expect(first.close).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.anthropicAccountAction).toHaveBeenCalledWith('one', 'cancel-login', 2));
+
+    const second = { location: { href: '' }, close: vi.fn(), opener: {} as unknown };
+    open.mockReturnValue(second as unknown as Window);
+    const again = 'https://claude.ai/oauth/authorize?code=true&state=t';
+    vi.mocked(api.anthropicAccountAction).mockResolvedValue({ verificationUrl: again, attemptId: 'attempt-2' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Claude' }));
+    await waitFor(() => expect(second.location.href).toBe(again));
+    expect(first.location.href).toBe(consentUrl);
+    expect(second.close).not.toHaveBeenCalled();
+  });
+
+  it('a tab closed before the start answers: the card does not say it opened', async () => {
+    const tab = { location: { href: '' }, close: vi.fn(), opener: {} as unknown, closed: false };
+    const { answer } = setUp(tab);
+    render(<Providers />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Claude' }));
+    tab.closed = true;
+    vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true, accounts: [pendingClaude] });
+    answer({ verificationUrl: consentUrl, attemptId: 'attempt' });
+    expect(await screen.findByText(/Open the Claude consent link below/)).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Open Claude consent page' })).toHaveAttribute('href', consentUrl);
+    expect(tab.location.href).toBe('');
+  });
 });

@@ -16,7 +16,7 @@ import { GEMINI_FALLBACK_MODEL, isGeminiAccount, isGeminiPro, limited, pickGemin
 import { MLXH_IMAGE_MODEL, firstMlxhModel, isMlxhAccount, mlxhNotAnswering } from '../mlxh';
 import { windowSourceWords } from '@buddi/core/window-words';
 import { SignInCode } from './parts/SignInCode';
-import { startSignIn } from '../signInTab';
+import { useSignIn, type SignInSlot } from '../signInTab';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
 import { fmtClock, fmtMoment, fmtTime } from '../format';
 
@@ -42,8 +42,8 @@ export function Providers({ embedded, account }: { embedded?: boolean; account?:
     const timer = setInterval(reload, 2_000);
     return () => clearInterval(timer);
   }, [pendingLogin, reload]);
-  /** The account whose sign-in page a Connect click opened in a tab: its link then says "again". Outlives the card's remount on a new revision. */
-  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  /** A Connect click's tab, kept here so it outlives the card's remount on a new revision: its link then says "again", and Cancel sign-in closes it. */
+  const signIn = useSignIn();
   const run: Run = async (work, message) => {
     setBusy(true); setFailure(null); setNotice(''); setRefreshRequested(false);
     try {
@@ -133,8 +133,7 @@ export function Providers({ embedded, account }: { embedded?: boolean; account?:
               ))}
             </nav>
             {selected ? (
-              <AccountDetail key={`${selected.id}:${selected.revision}`} account={selected} provider={nameOf(selected)} anthropicOAuthEnabled={data.anthropicOAuthEnabled} busy={busy} run={run}
-                opened={openedFor === selected.id} onOpened={(went) => setOpenedFor(went ? selected.id : null)} />
+              <AccountDetail key={`${selected.id}:${selected.revision}`} account={selected} provider={nameOf(selected)} anthropicOAuthEnabled={data.anthropicOAuthEnabled} busy={busy} run={run} signIn={signIn} />
             ) : null}
           </div>
         )}
@@ -302,10 +301,10 @@ function accountSettings(a: ProviderAccount): SaveProviderAccount {
     contextWindowTokens: a.contextWindowTokens ?? null };
 }
 
-/** A Connect click's tab: whether it opened, and how the click says so. */
-type Opened = { opened: boolean; onOpened: (went: boolean) => void };
+/** The screen's sign-in tab (`useSignIn`). */
+type Opened = { signIn: SignInSlot };
 
-function AccountDetail({ account: a, provider, busy, run, anthropicOAuthEnabled, opened, onOpened }: { account: ProviderAccount; provider: string; busy: boolean; run: Run; anthropicOAuthEnabled?: boolean } & Opened): JSX.Element {
+function AccountDetail({ account: a, provider, busy, run, anthropicOAuthEnabled, signIn }: { account: ProviderAccount; provider: string; busy: boolean; run: Run; anthropicOAuthEnabled?: boolean } & Opened): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
   return (
@@ -339,9 +338,9 @@ function AccountDetail({ account: a, provider, busy, run, anthropicOAuthEnabled,
       />
       {a.removalPending && <Notice tone="warning">Removal is pending. Unlock the vault, then retry Remove account.</Notice>}
       {a.reconnectRequired && <Notice tone="warning">Token refresh did not finish. Reconnect this {a.kind === 'codex' ? 'ChatGPT' : 'Claude'} account.</Notice>}
-      {a.auth === 'anthropic-oauth' && <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} opened={opened} onOpened={onOpened} />}
-      {a.kind === 'codex' && <CodexLogin account={a} busy={busy} run={run} opened={opened} onOpened={onOpened} />}
-      {a.auth === 'device-key' && <OllamaLogin account={a} busy={busy} run={run} opened={opened} onOpened={onOpened} />}
+      {a.auth === 'anthropic-oauth' && <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} signIn={signIn} />}
+      {a.kind === 'codex' && <CodexLogin account={a} busy={busy} run={run} signIn={signIn} />}
+      {a.auth === 'device-key' && <OllamaLogin account={a} busy={busy} run={run} signIn={signIn} />}
       <Toolbar>
         <Button disabled={busy || a.removalPending} onClick={() => setEditing(true)}>Edit account</Button>
         <Button disabled={busy || a.removalPending} onClick={() => void run(() => api.saveProviderAccount({ ...accountSettings(a), enabled: !a.enabled }), a.enabled ? 'Account disabled. Subsequent model calls will stop; already-sent requests cannot be recalled.' : 'Account enabled.')}>{a.enabled ? 'Disable' : 'Enable'}</Button>
@@ -381,24 +380,23 @@ function AccountDetail({ account: a, provider, busy, run, anthropicOAuthEnabled,
   );
 }
 
-function CodexLogin({ account: a, busy, run, opened, onOpened: setOpened }: { account: ProviderAccount; busy: boolean; run: Run } & Opened): JSX.Element {
+function CodexLogin({ account: a, busy, run, signIn }: { account: ProviderAccount; busy: boolean; run: Run } & Opened): JSX.Element {
   const connect = (): void => {
     void run(async () => {
-      const { opened: went } = await startSignIn(() => api.codexAccountAction(a.id, 'login', a.revision) as Promise<{ verificationUrl?: string } | undefined>, (login) => login?.verificationUrl);
-      setOpened(went);
-      return { warning: went ? 'openai.com opened in a new tab. Type the code below there.' : 'Complete device sign-in below.' };
+      const { opened: went, cancelled } = await signIn.start(a.id, () => api.codexAccountAction(a.id, 'login', a.revision) as Promise<{ verificationUrl?: string } | undefined>, (login) => login?.verificationUrl);
+      return { warning: cancelled ? '' : went ? 'openai.com opened in a new tab. Type the code below there.' : 'Complete device sign-in below.' };
     }, '');
   };
   return <>
     <Toolbar>
       <Button disabled={busy || !a.enabled || a.removalPending || a.login?.state === 'pending'} onClick={connect}>{a.configured ? 'Reconnect ChatGPT' : 'Connect ChatGPT'}</Button>
-      {a.login?.state === 'pending' && <Button disabled={busy} onClick={() => void run(() => api.codexAccountAction(a.id, 'cancel-login', a.revision), 'Sign-in cancelled.')}>Cancel sign-in</Button>}
+      {a.login?.state === 'pending' && <Button disabled={busy} onClick={() => { signIn.cancel(); void run(() => api.codexAccountAction(a.id, 'cancel-login', a.revision), 'Sign-in cancelled.'); }}>Cancel sign-in</Button>}
       <Button disabled={busy || !a.configured} onClick={() => void run(() => api.codexAccountAction(a.id, 'logout', a.revision), 'Subscription disconnected from Buddi. Your regular Codex login is unchanged.')}>Disconnect</Button>
     </Toolbar>
     {a.login?.state === 'pending' && <Notice tone="accent" role="status">
       <p>Open openai.com, type this code there and approve buddi.</p>
       {a.login.userCode && <SignInCode code={a.login.userCode} large />}
-      {a.login.verificationUrl && <Toolbar><ButtonLink variant="accent" href={a.login.verificationUrl} target="_blank" rel="noreferrer">{opened ? 'Open openai.com again' : 'Open openai.com'}</ButtonLink></Toolbar>}
+      {a.login.verificationUrl && <Toolbar><ButtonLink variant="accent" href={a.login.verificationUrl} target="_blank" rel="noreferrer">{signIn.openedFor === a.id ? 'Open openai.com again' : 'Open openai.com'}</ButtonLink></Toolbar>}
       {a.login.expiresAt && <p className="muted">The code works until {fmtClock(new Date(a.login.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}. Start again after that; this is the sign-in timeout, not your subscription expiry.</p>}
     </Notice>}
     {a.login && a.login.state !== 'pending' && <p role="status" className="muted">{a.login.message ?? `Sign-in ${a.login.state}.`}</p>}
@@ -487,7 +485,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
  * inside the click, and this card asks every two seconds whether the owner
  * pressed Connect there.
  */
-function OllamaLogin({ account: a, busy, run, opened, onOpened: setOpened }: { account: ProviderAccount; busy: boolean; run: Run } & Opened): JSX.Element {
+function OllamaLogin({ account: a, busy, run, signIn }: { account: ProviderAccount; busy: boolean; run: Run } & Opened): JSX.Element {
   const pending = a.login?.state === 'pending' && a.login.attemptId ? a.login : null;
   // The page re-renders on every reload; the poll must not restart with it.
   const runRef = useRef(run);
@@ -513,9 +511,8 @@ function OllamaLogin({ account: a, busy, run, opened, onOpened: setOpened }: { a
   }, [a.id, pending?.attemptId]);
   const connect = (): void => {
     void run(async () => {
-      const { result, opened: went } = await startSignIn(() => api.ollamaConnect(a.id, a.revision), (started) => started.verificationUrl);
-      setOpened(went);
-      return result;
+      const { result, cancelled } = await signIn.start(a.id, () => api.ollamaConnect(a.id, a.revision), (started) => started.verificationUrl);
+      return cancelled ? { warning: '' } : result;
     }, 'Press Connect on the ollama.com page. This card notices on its own.');
   };
   const device = a.device;
@@ -526,34 +523,33 @@ function OllamaLogin({ account: a, busy, run, opened, onOpened: setOpened }: { a
       <Button disabled={busy || !device || a.removalPending} onClick={() => void run(async () => ({ warning: (await api.ollamaDisconnect(a.id, a.revision)).note }), 'Disconnected.')}>Disconnect</Button>
     </Toolbar>
     {pending && <Notice tone="accent" role="status">
-      <p><a href={pending.verificationUrl} target="_blank" rel="noreferrer">{opened ? 'Open the ollama.com page again' : 'Open the ollama.com page'}</a> and press Connect. Sign in there first if it asks.</p>
+      <p><a href={pending.verificationUrl} target="_blank" rel="noreferrer">{signIn.openedFor === a.id ? 'Open the ollama.com page again' : 'Open the ollama.com page'}</a> and press Connect. Sign in there first if it asks.</p>
       <p className="muted">buddi stops waiting at {pending.expiresAt && fmtClock(new Date(pending.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}.</p>
     </Notice>}
   </>;
 }
 
-function ClaudeLogin({ account: a, enabled, busy, run, opened, onOpened: setOpened }: { account: ProviderAccount; enabled: boolean; busy: boolean; run: Run } & Opened) {
+function ClaudeLogin({ account: a, enabled, busy, run, signIn }: { account: ProviderAccount; enabled: boolean; busy: boolean; run: Run } & Opened) {
   const [code, setCode] = useState('');
   useEffect(() => { setCode(''); }, [a.login?.attemptId, a.login?.state]);
   const connect = (): void => {
     void run(async () => {
-      const { opened: went } = await startSignIn(() => api.anthropicAccountAction(a.id, 'login', a.revision) as Promise<{ verificationUrl?: string } | undefined>, (login) => login?.verificationUrl);
-      setOpened(went);
-      return { warning: went ? 'Claude’s consent page opened in a new tab. Paste the code it shows below. Existing credentials remain until sign-in succeeds.' : 'Open the Claude consent link below. Existing credentials remain until sign-in succeeds.' };
+      const { opened: went, cancelled } = await signIn.start(a.id, () => api.anthropicAccountAction(a.id, 'login', a.revision) as Promise<{ verificationUrl?: string } | undefined>, (login) => login?.verificationUrl);
+      return { warning: cancelled ? '' : went ? 'Claude’s consent page opened in a new tab. Paste the code it shows below. Existing credentials remain until sign-in succeeds.' : 'Open the Claude consent link below. Existing credentials remain until sign-in succeeds.' };
     }, '');
   };
   return <>
     {!enabled && <Notice tone="warning">Claude subscription sign-in is turned off on this host.</Notice>}
     <Toolbar>
       <Button disabled={busy || !enabled || !a.enabled || a.removalPending || a.login?.state === 'pending'} onClick={connect}>{a.configured ? 'Reconnect Claude' : 'Connect Claude'}</Button>
-      {a.login?.state === 'pending' && <Button disabled={busy} onClick={() => { setCode(''); void run(() => api.anthropicAccountAction(a.id, 'cancel-login', a.revision), 'Claude sign-in cancelled.'); }}>Cancel sign-in</Button>}
+      {a.login?.state === 'pending' && <Button disabled={busy} onClick={() => { setCode(''); signIn.cancel(); void run(() => api.anthropicAccountAction(a.id, 'cancel-login', a.revision), 'Claude sign-in cancelled.'); }}>Cancel sign-in</Button>}
       <Button disabled={busy || !a.configured || a.removalPending} onClick={() => { setCode(''); void run(() => api.anthropicAccountAction(a.id, 'logout', a.revision), 'Claude disconnected from Buddi. This does not revoke access at Anthropic.'); }}>Disconnect Claude</Button>
     </Toolbar>
     {a.login?.state === 'pending' && <form className="ui-notice" data-tone="accent" onSubmit={e => {
       e.preventDefault(); const pasted = code; setCode('');
       void run(() => api.anthropicAccountAction(a.id, 'complete-login', a.revision, { attemptId: a.login!.attemptId!, code: pasted }), 'Claude connected. Edit account to load its model list, then assign it to an agent.');
     }}>
-      <p><a href={a.login.verificationUrl} target="_blank" rel="noreferrer">{opened ? 'Open Claude consent page again' : 'Open Claude consent page'}</a></p>
+      <p><a href={a.login.verificationUrl} target="_blank" rel="noreferrer">{signIn.openedFor === a.id ? 'Open Claude consent page again' : 'Open Claude consent page'}</a></p>
       <p className="muted">Use the Claude account you want to connect. Paste the entire code including #state. This attempt expires at {a.login.expiresAt && fmtClock(new Date(a.login.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}; restarting Buddi also ends it.</p>
       <Field label="Claude authorization code">
         <input type="password" autoComplete="off" spellCheck={false} maxLength={8192} value={code} onChange={e => setCode(e.target.value)} disabled={busy} />
@@ -834,14 +830,14 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
 
 function ModelStep({ account: a, busy, run, anthropicOAuthEnabled, onDone }: { account: ProviderAccount; busy: boolean; run: Run; anthropicOAuthEnabled?: boolean; onDone: () => void }): JSX.Element {
   const [model, setModel] = useState(a.defaultModel);
-  const [opened, setOpened] = useState(false);
+  const signIn = useSignIn();
   const connected = a.configured;
   return (
     <Stack gap="lg">
       <Notice tone="good">Saved “{a.label}”.</Notice>
-      {a.auth === 'anthropic-oauth' && !connected ? <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} opened={opened} onOpened={setOpened} /> : null}
-      {a.kind === 'codex' && !connected ? <CodexLogin account={a} busy={busy} run={run} opened={opened} onOpened={setOpened} /> : null}
-      {a.auth === 'device-key' && !connected ? <OllamaLogin account={a} busy={busy} run={run} opened={opened} onOpened={setOpened} /> : null}
+      {a.auth === 'anthropic-oauth' && !connected ? <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} signIn={signIn} /> : null}
+      {a.kind === 'codex' && !connected ? <CodexLogin account={a} busy={busy} run={run} signIn={signIn} /> : null}
+      {a.auth === 'device-key' && !connected ? <OllamaLogin account={a} busy={busy} run={run} signIn={signIn} /> : null}
       {connected ? (
         <>
           <p className="ui-page-lede">Pick the model this account offers by default. An agent can still choose another when you assign it.</p>

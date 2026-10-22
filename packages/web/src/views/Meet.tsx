@@ -2040,6 +2040,8 @@ function OllamaCloudCard({
   const started = useRef(-1);
   /** The window a "Try again" tap opened, for the same reason the card's tap opens one. */
   const retried = useRef<SignInTab | null>(null);
+  // Leaving before ollama.com is named: the retry's blank tab closes, and a late answer opens nothing.
+  useEffect(() => () => retried.current?.abandon(), []);
   const label = SCRIPT.brain.cloud.label;
 
   // Start once per round: the account (reused when there is one), then the key.
@@ -2285,6 +2287,7 @@ function ChatGPTCard({
 
   useEffect(
     () => () => {
+      retried.current?.abandon();
       const open = pending.current;
       pending.current = null;
       if (open) void api.codexAccountAction(open.id, 'cancel-login', open.revision).catch(() => {});
@@ -2471,8 +2474,13 @@ function ClaudeCard({
   const [code, setCode] = useState('');
   /** The sign-in still waiting for its code, to cancel if the owner leaves. */
   const pending = useRef<{ id: string; revision: number } | null>(null);
+  /** The consent tab Start opened, and whether the owner has left since: a late answer then opens nothing. */
+  const tab = useRef<SignInTab | null>(null);
+  const left = useRef(false);
   useEffect(
     () => () => {
+      left.current = true;
+      tab.current?.abandon();
       const open = pending.current;
       pending.current = null;
       if (open) void api.anthropicAccountAction(open.id, 'cancel-login', open.revision).catch(() => {});
@@ -2480,6 +2488,8 @@ function ClaudeCard({
     [],
   );
   const leave = (): void => {
+    left.current = true;
+    tab.current?.close();
     const open = pending.current;
     pending.current = null;
     if (open) void api.anthropicAccountAction(open.id, 'cancel-login', open.revision).catch(() => {});
@@ -2496,7 +2506,10 @@ function ClaudeCard({
     // Opened here, inside the click, so no popup blocker stops it; it is
     // pointed at the consent page the moment the server names it. The button
     // below stays for a browser that refused the window anyway.
+    tab.current?.close();
     const consent = openSignInTab();
+    tab.current = consent;
+    left.current = false;
     void (async () => {
       try {
         const existing = (accounts?.accounts ?? []).find((account) => account.auth === 'anthropic-oauth');
@@ -2516,6 +2529,12 @@ function ClaudeCard({
           verificationUrl?: string;
           attemptId?: string;
         };
+        if (left.current) {
+          // Left while the start was on its way: nothing opens, and the attempt is given back.
+          consent.close();
+          void api.anthropicAccountAction(row.id, 'cancel-login', row.revision + 1).catch(() => {});
+          return;
+        }
         pending.current = { id: row.id, revision: row.revision + 1 };
         setAttempt({
           id: row.id,
