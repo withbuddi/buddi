@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.56 — 2026-11-08
+
 ### Fixed
 
 - Updating buddi.app works again: since 0.1.0-pre.54 every update stopped at installing with "npm audit signatures did not answer with JSON", because npm's report was thrown away before it was read. A pre.54 install needs the new version installed once by hand (download the DMG); updates from inside the app work from there.
