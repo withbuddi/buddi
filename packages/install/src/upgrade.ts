@@ -635,6 +635,16 @@ export function cacheArgs(spec: string, opts: { registry: string }): string[] {
 /** `execFile`, as much of it as this needs. A seam, so no test runs npm. */
 export type NpmRunner = (binary: string, args: string[], opts: { timeout: number; maxBuffer: number }) => Promise<unknown>;
 
+/**
+ * npm as the upgrade runs it. It answers with what npm printed: the audit
+ * reads its JSON report from stdout, and a runner that drops it fails every
+ * upgrade with "did not answer with JSON" (pre.54).
+ */
+export const defaultNpmRunner: NpmRunner = async (bin, argv, where) => {
+  const [file, args] = npmInvocation(bin, argv);
+  return await run(file, args, { ...where, windowsHide: true });
+};
+
 /** A tarball on disk (`BUDDI_UPGRADE_SOURCE`) has no registry to verify against. */
 function isLocalTarball(spec: string): boolean {
   return spec.endsWith('.tgz') || spec.endsWith('.tar.gz');
@@ -934,7 +944,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
   const backupWait = opts.backupWaitMs ?? BACKUP_WAIT_MS;
   /** buddi.app's releases folder, when the app runs this installation. */
   const releases = appLayout(ctx.env);
-  const npm: NpmRunner = opts.npm ?? (async (bin, argv, where) => { const [file, args] = npmInvocation(bin, argv); await run(file, args, { ...where, windowsHide: true }); });
+  const npm: NpmRunner = opts.npm ?? defaultNpmRunner;
   // The Linux install shares the layout, not the app's menu: its view is npm's words.
   const dressed = (view: VersionView): VersionView => appRuns(ctx.env) ? { ...view, app: true } : view;
   let running: UpgradeJob | undefined;

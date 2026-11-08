@@ -27,6 +27,7 @@ import {
   upgradeTarget,
   npmBinary,
   npmInvocation,
+  defaultNpmRunner,
   versionView,
   writeUpgradeState,
   type UpgradeHistoryEntry,
@@ -832,5 +833,16 @@ describe('npm\'s 404', () => {
   test('npm output is kept short and plain', () => {
     expect(sanitizeNpmOutput('\u001b[31mnpm error\u001b[0m Bearer abc.def\n' + Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')).split('\n')).toHaveLength(8);
     expect(sanitizeNpmOutput('\u001b[31mnpm error\u001b[0m Authorization: Bearer abc.def')).toBe('npm error Authorization: Bearer ***');
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('defaultNpmRunner', () => {
+  test('answers with what npm printed, so the audit can read its report', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-npm-'));
+    const bin = path.join(dir, 'npm');
+    await writeFile(bin, '#!/bin/sh\necho \'{"invalid":[],"missing":[]}\'\n');
+    await chmod(bin, 0o755);
+    const out = await defaultNpmRunner(bin, ['audit', 'signatures', '--json'], { timeout: 10_000, maxBuffer: 1024 * 1024 });
+    expect(JSON.parse(String((out as { stdout: string }).stdout))).toEqual({ invalid: [], missing: [] });
   });
 });

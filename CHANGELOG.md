@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Updating buddi.app works again: since 0.1.0-pre.54 every update stopped at installing with "npm audit signatures did not answer with JSON", because npm's report was thrown away before it was read. A pre.54 install needs the new version installed once by hand (download the DMG); updates from inside the app work from there.
 - A ChatGPT account lists the newest Codex models again: buddi now presents itself as Codex 0.163.0.
 - Connect Claude, Connect ChatGPT and Connect Ollama in Settings → Model accounts now open the provider's page in a new tab themselves, as first run and Connections do, instead of leaving a link to click; the link stays as "Open … again", and is the way in when the browser refuses the tab. A start that fails, Cancel sign-in, or leaving before the page is named closes the tab it opened, and buddi.app keeps that blank window hidden, so no empty window is left behind.
 - Agents on Claude Opus 5, Haiku 5.5, Opus 4.6–4.8 and Sonnet 4.6 get their full million-token context: buddi counted them at 200k, so long conversations were trimmed five times sooner than needed.
