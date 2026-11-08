@@ -11,7 +11,7 @@ jobs:
   # Code an owner or a plugin author runs changed, so CHANGELOG.md has to say
   # how. Seconds, with no install: git alone answers it.
   changelog:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4

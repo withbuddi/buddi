@@ -27,7 +27,7 @@ on:
 jobs:
   web:
     name: web (${{ matrix.lane.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -77,7 +77,7 @@ jobs:
           while IFS= read -r line; do echo "::warning title=Retried test::$line"; done < "$VITEST_RETRIED"
 
   gateway:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
@@ -103,7 +103,7 @@ jobs:
       - run: pnpm --filter @buddi/gateway test
 
   rest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:

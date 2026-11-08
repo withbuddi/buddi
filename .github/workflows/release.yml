@@ -58,7 +58,7 @@ jobs:
   # What this run is: a push that tags a release (`action: tag`) or not, a
   # publish run on a tag (`mode: publish`), or a Mac-app-only run (`mode: mac`).
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       action: ${{ steps.push.outputs.action }}
@@ -103,7 +103,7 @@ jobs:
   runtime:
     needs: [plan]
     if: needs.plan.outputs.action == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -116,7 +116,7 @@ jobs:
   tag:
     needs: [plan, gate, runtime]
     if: needs.plan.outputs.action == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write   # push the tag
@@ -157,7 +157,7 @@ jobs:
   publish:
     needs: [plan]
     if: needs.plan.outputs.mode == 'publish'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: npm
     outputs:
@@ -311,7 +311,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x64, runner: ubuntu-latest }
+          - { arch: x64, runner: ubuntu-24.04 }
           - { arch: arm64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
@@ -532,7 +532,7 @@ jobs:
   mac-check:
     needs: [plan, publish]
     if: always() && (needs.plan.outputs.mode == 'mac' || needs.publish.result == 'success')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       ok: ${{ steps.check.outputs.ok }}
       version: ${{ steps.check.outputs.version }}
